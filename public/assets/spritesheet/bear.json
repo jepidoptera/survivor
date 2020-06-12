@@ -1,0 +1,45 @@
+{"frames": {
+
+    "bear_walk_left.png":
+    {
+        "frame": {"x":0,"y":0,"w":342,"h":275},
+        "rotated": false,
+        "trimmed": false,
+        "spriteSourceSize": {"x":0,"y":0,"w":342,"h":275},
+        "sourceSize": {"w":342,"h":275}
+    },
+    "bear_walk_right.png":
+    {
+        "frame": {"x":0,"y":275,"w":342,"h":275},
+        "rotated": false,
+        "trimmed": false,
+        "spriteSourceSize": {"x":0,"y":0,"w":342,"h":275},
+        "sourceSize": {"w":342,"h":275}
+    },
+    "bear_attack_left.png":
+    {
+        "frame": {"x":342,"y":0,"w":342,"h":275},
+        "rotated": false,
+        "trimmed": false,
+        "spriteSourceSize": {"x":0,"y":0,"w":342,"h":275},
+        "sourceSize": {"w":342,"h":275}
+    },
+    "bear_attack_right.png":
+    {
+        "frame": {"x":342,"y":275,"w":342,"h":275},
+        "rotated": false,
+        "trimmed": false,
+        "spriteSourceSize": {"x":0,"y":0,"w":342,"h":275},
+        "sourceSize": {"w":342,"h":275}
+    }
+    },
+    "meta": {
+        "app": "http://www.texturepacker.com",
+        "version": "1.0",
+        "image": "/assets/images/animals/bear.png",
+        "format": "RGBA8888",
+        "size": {"w":685,"h":550},
+        "scale": "1"
+    }
+}
+    

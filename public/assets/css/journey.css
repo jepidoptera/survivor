@@ -1,0 +1,107 @@
+html, body {
+    overflow: hidden;
+}
+#canvasArea {
+    width: 161.8vh;
+    height: 100vh;
+    display: block;
+    position: absolute;
+    transition: filter 5s;
+}
+#narrative {
+    display: block;
+    position: absolute;
+    height: 100vh;
+    width: Calc(100vw - 161.8vh);
+    left: 161.8vh;
+    z-index: 3;
+    background-color: black;
+    color: #009900;
+    cursor: pointer;
+    font-family: 'VT323', monospace;
+    font-size: 12pt;
+    padding: 10px;
+}
+#sky {
+    background-color: skyblue;
+    transition: background-color 5s;
+    background-size: 100%;
+    background-position: 0 62%;
+    position: absolute;
+    display: block;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 40%;
+}
+#sun {
+    /* a yellow circle */
+    position: absolute;
+    display: block;
+    box-sizing: border-box;
+    width: 5vmin;
+    height: 5vmin;
+    border: 2.5vmin solid yellow;
+    border-radius: 2.5vmin;
+}
+#darkMoon {
+    /* a black circle */
+    position: absolute;
+    display: block;
+    box-sizing: border-box;
+    width: 4vh;
+    height: 4vh;
+    border: 2vh solid #333;
+    border-radius: 2vh;
+    box-shadow: 0 0 1vmin .25vmin #007;
+    background-color: #333;
+    transition: box-shadow 5s;
+}
+#ground {
+    background-color: green;
+    position: absolute;
+    display: block;
+    top: 40%;
+    width: 100%;
+    height: 60%;
+}
+#path {
+    background-color: tan;
+    display: block;
+    position: absolute;
+    width: 100%;
+    height: 5%;
+    top: 80%;
+}
+#canvas {
+    position: absolute;
+    display: block;
+    width: 100%;
+    height: 100%;
+    top: 0%;
+    z-index: 2;
+}
+.you {
+    top: 82%; 
+    left: 25%; 
+    position: absolute; 
+    height: 5%; 
+    width: 3.09%; 
+    transform: translate(-50%, -50%);
+    z-index: 1;
+}
+
+@media (max-aspect-ratio: 34/21) {
+    #canvasArea {
+        width: 100vw;
+        height: 61.8vw;
+    }
+    #narrative {
+        width: 100vw;
+        height: Calc(100vh - 61.8vw);
+        bottom: 0;
+        left: 0;
+        min-height: 15vh;
+    }
+
+}

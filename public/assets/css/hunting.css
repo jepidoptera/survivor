@@ -1,0 +1,89 @@
+/* no scrollbar.  if scrolling happens it will be 'virtual' (javascript) */
+html, body {margin: 0; height: 100%; overflow: hidden}
+
+body {
+    background-color: black;
+}
+
+#msg {
+    font-size: 15pt;
+    color: white;
+    text-align: center;
+    z-index: 1; 
+    user-select: none;
+    position: relative;
+    margin: 0;
+    width: 100%;
+}
+
+.outline {
+    text-shadow:
+        -1px -1px 0 #000,
+        1px -1px 0 #000,
+        -1px 1px 0 #000,
+        1px 1px 0 #000;
+}
+
+#time, #ammoSelect {
+    position: absolute;
+    display: block;
+    color: white;
+    z-index: 2;
+    background: transparent;
+}
+
+#time {
+    right: 0;
+}
+
+#ammoSelect {
+    left: 0;
+    text-shadow: 
+        -1px 1px 0 #000,
+        1px 1px 0 #000,
+        1px -1px 0 #000,
+        -1px -1px 0 #000;
+    cursor: pointer;
+    text-align: right;
+}
+
+
+.msgBox {
+    background-color: whitesmoke;
+    z-index: 1001;
+}
+#canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    position: absolute;
+}
+#canvasFrame {
+    width: 100vmax;
+    height: 61.8vmax;
+    background-color: black;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+@media (max-aspect-ratio: 1/1) {
+    #canvasFrame {
+        height: 100vmax;
+        width: 61.8vmax;
+    }
+}
+
+@media (max-aspect-ratio: 21/34) {
+    #canvasFrame {
+        height: 161.8vmin;
+        width: 100vmin;
+    }
+}
+
+@media (min-aspect-ratio: 34/21) {
+    #canvasFrame {
+        height: 100vmin;
+        width: 161.8vmin;
+    }
+}

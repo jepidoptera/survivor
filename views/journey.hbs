@@ -1,0 +1,48 @@
+    <script src="assets/javascript/components.js"></script>
+    <script src="assets/javascript/journey.js"></script>
+    <link rel="stylesheet" href="assets/css/journey.css">
+</head>
+<body>
+    <section id='canvasArea'>
+        <div id='sky'></div>
+        <div id='sun'></div>
+        <div id='darkMoon'></div>
+        <div id='ground'></div>
+        <div id='path'></div>
+        <canvas id='canvas' width="1920" height="1080"></canvas>
+        <div id="msgbox" class="hidden dialogBox"><div id="msgbuttons"></div></div>    
+        <div id='optionsMenu' class='hidden dialogBox'>
+            <button class="optionButton" onclick="restDialog()">Rest</button>
+            <button id="huntButton" class="optionButton" onclick="saveGame(); window.location.href=`/hunt?name=${player.name}&auth=${player.authtoken}`">Hunt</button>
+            <button class="optionButton" onclick="saveGame(); closeOptions(); msgBox('Game saved.');">Save</button>
+            <button class="optionButton" onclick="window.location.href=window.location.href">Reload</button>
+            <button class="optionButton" onclick="closeOptions()">Continue</button>
+            <section id="infoPanel">
+                <p>Your Mokemon posse:</p>
+                <div id="mokePosse"></div>
+                <div id="mokeStats"></div>
+                <p id="foodInfo"></p>
+                <p id="moneyInfo"></p>
+                <p id="ammoInfo"></p>
+            </section>
+        </div>
+    </section>
+    <section id='narrative' onclick="options()">
+    </section>
+    <div id='posse'>
+        Your Pokemon Posse:
+    </div>
+    <div id='rest'>
+        Rest for how long?:
+        <form id='restform' action="">
+            <input id="restLength" type="number"> days
+            <br><br>
+            <button type="submit">ok</button>
+            <button type="cancel" onclick="$('#restform').hide()"></button>
+        </form>        
+    </div>
+    <div id='inventory'>
+        Your items:
+    </div>
+</body>
+
