@@ -58,14 +58,14 @@ body {
     display: block;
     position: absolute;
 }
-#canvasFrame {
-    width: 100vmax;
-    height: 61.8vmax;
+#display {
+    width: 100vmin;
+    height: 100vmin;
     background-color: black;
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    top: 0;
+    left: 0;
+    background-color: whitesmoke;
 }
 @media (max-aspect-ratio: 1/1) {
     #canvasFrame {
