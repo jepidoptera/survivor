@@ -16,6 +16,54 @@ var mapHexWidth, mapHexHeight;
 var messages = [];
 var landImage;
 
+let textures = {};
+
+PIXI.Loader.shared
+    .add('/assets/spritesheet/bear.json')
+    .load(onAssetsLoaded);
+
+function onAssetsLoaded() {
+    // create an array to store the textures
+    let spriteNames = ["walk_left", "walk_right", "attack_left", "attack_right"];
+    let animalNames = ["bear", "goat", "deer", "porcupine", "yeti"]
+    animalNames.forEach(animal => {
+        let sheet = PIXI.Loader.shared.resources["/assets/spritesheet/bear.json"].spritesheet;
+        textures[animal] = [];
+        for (let i = 0; i < spriteNames.length; i++) {
+            const texture = sheet.textures[`${animal}_${spriteNames[i]}.png`];
+            textures[animal].push(texture);
+        }    
+    })
+
+   $("#display").append(app.view);
+
+    // create a new Sprite from an image path
+    // const bear = PIXI.Sprite.from('/assets/images/animals/bear.png')
+    bear = new Animal('bear', textures['bear'], 512, 512);
+    bear.img.width = mapTileWidth;
+    bear.img.height = mapTileHeight;
+    
+    // center the sprite's anchor point
+    bear.img.anchor.set(0.5);
+    
+    app.stage.addChild(bear.img);
+    
+    // Listen for animate update
+    app.ticker.add((delta) => {
+        // just for fun, let's rotate mr rabbit a little
+        // delta is 1 if running at 100% performance
+        // creates frame-independent transformation
+        // bear.rotation += 0.1 * delta;
+        // bear.img.x += bear.xmove;
+        // bear.img.y += bear.ymove;
+        // if (bear.x < bear.img.anchor.x * bear.width || bear.x > app.screen.width - bear.img.anchor.x * bear.width) {
+        //     bear.xmove = -bear.xmove;
+        // }
+        bear.move();
+    });
+
+}
+
 class Projectile {
     constructor(x, y) {
         this.x = x;
