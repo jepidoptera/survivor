@@ -25,9 +25,9 @@ PIXI.Loader.shared
 function onAssetsLoaded() {
     // create an array to store the textures
     let spriteNames = ["walk_left", "walk_right", "attack_left", "attack_right"];
-    let animalNames = ["bear", "goat", "deer", "porcupine", "yeti"]
+    let animalNames = ["bear", "deer"]
     animalNames.forEach(animal => {
-        let sheet = PIXI.Loader.shared.resources["/assets/spritesheet/bear.json"].spritesheet;
+        let sheet = PIXI.Loader.shared.resources[`/assets/spritesheet/${animal}.json`].spritesheet;
         textures[animal] = [];
         for (let i = 0; i < spriteNames.length; i++) {
             const texture = sheet.textures[`${animal}_${spriteNames[i]}.png`];
@@ -1067,14 +1067,14 @@ function drawMokeballs() {
 }
 
 function genMap(terrain, callback) {
-    let map = {scenery: {}, animalImages: [], backgrounds: [], nodes: []};
+    let map = {scenery: {}, animalImages: {}, backgrounds: [], nodes: []};
     terrain.scenery.forEach((item, i) => {
         if (item.frequency > 0) {
             map.scenery[item.type] = [];
             try {
                 map.scenery[item.type] = {type: item.type, images: [], frequency: item.frequency};
                 for (let n = 0; n < 5; n++) {
-                    map.scenery[item.type].images[n] = $("<img>").attr("src", `/assets/images/${item.type.replace(' ', '')}${n}.png`)[0];
+                    map.scenery[item.type].images[n] = PIXI.Texture.from(`/assets/images/${item.type.replace(' ', '')}${n}.png`);
                 }
             }
             catch{
