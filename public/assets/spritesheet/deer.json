@@ -1,0 +1,44 @@
+{"frames": {
+
+"deer_walk_left.png":
+{
+	"frame": {"x":0,"y":0,"w":300,"h":307},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":300,"h":307},
+	"sourceSize": {"w":300,"h":307}
+},
+"deer_walk_right.png":
+{
+	"frame": {"x":300,"y":0,"w":300,"h":307},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":300,"h":307},
+	"sourceSize": {"w":300,"h":307}
+},
+"deer_attack_left.png":
+{
+	"frame": {"x":0,"y":0,"w":300,"h":307},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":300,"h":307},
+	"sourceSize": {"w":300,"h":307}
+},
+"deer_attack_right.png":
+{
+	"frame": {"x":300,"y":0,"w":300,"h":307},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":300,"h":307},
+	"sourceSize": {"w":300,"h":307}
+}},
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "./images/deer.png",
+	"format": "RGBA8888",
+	"size": {"w":600,"h":307},
+	"scale": "1",
+	"smartupdate": "$TexturePacker:SmartUpdate:070036dd76d46261e0efcadde8013eab:096554a5d30a08b343ceab62cdd1f72b:71f098008ec1a0f0241c5bb983475caf$"
+}
+}

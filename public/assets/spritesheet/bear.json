@@ -36,7 +36,7 @@
     "meta": {
         "app": "http://www.texturepacker.com",
         "version": "1.0",
-        "image": "/assets/images/animals/bear.png",
+        "image": "./images/bear.png",
         "format": "RGBA8888",
         "size": {"w":685,"h":550},
         "scale": "1"
