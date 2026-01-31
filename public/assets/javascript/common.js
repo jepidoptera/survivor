@@ -17,17 +17,17 @@ class Player{
         this.authtoken = urlParams.get('auth')    
     }
     get foodPerDay() {
-        return 5 + player.posse.reduce((sum, moke) => sum + moke.hunger, 0)
+        return 5 + this.posse.reduce((sum, moke) => sum + moke.hunger, 0)
     }
     get currentMessage() {
-        return player.messages[player.messages.length - 1]
+        return this.messages[this.messages.length - 1]
     }
     uploadJson() {
         return {
-            ...player,
+            ...this,
             isLoaded: false,
-            currentLocation: player.currentLocation.name,
-            posse: player.posse.map(moke => {return {
+            currentLocation: this.currentLocation.name,
+            posse: this.posse.map(moke => {return {
                 type: moke.type,
                 name: moke.name,
                 health: moke.health,

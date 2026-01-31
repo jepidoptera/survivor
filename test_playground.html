@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Playground Test</title>
+</head>
+<body>
+    <h1>Survivor - Playground Feature Test</h1>
+    <div id="results"></div>
+    <script>
+        const tests = [];
+        
+        function test(name, condition) {
+            tests.push({ name, passed: condition });
+            console.log(`${condition ? '✓' : '✗'} ${name}`);
+        }
+        
+        // Check if playground image exists
+        const img = new Image();
+        img.onload = function() {
+            test("playground.png loads correctly", true);
+            updateResults();
+        };
+        img.onerror = function() {
+            test("playground.png loads correctly", false);
+            updateResults();
+        };
+        img.src = "/assets/images/playground.png";
+        
+        function updateResults() {
+            const resultsDiv = document.getElementById("results");
+            const passed = tests.filter(t => t.passed).length;
+            const total = tests.length;
+            
+            resultsDiv.innerHTML = `
+                <p>Test Results: ${passed}/${total} passed</p>
+                <ul>
+                    ${tests.map(t => `<li>${t.passed ? '✓' : '✗'} ${t.name}</li>`).join('')}
+                </ul>
+                ${passed === total ? '<p style="color: green;">All tests passed!</p>' : '<p style="color: red;">Some tests failed.</p>'}
+            `;
+        }
+    </script>
+</body>
+</html>
