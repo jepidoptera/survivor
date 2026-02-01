@@ -248,59 +248,59 @@ class Map {
             }
         })
         
-        // Special handling: spawn playground near player start
-        const startX = Math.floor(this.width / 2);
-        const startY = Math.floor(this.height / 2);
-        let playgroundSpawned = false;
-        for (let dx = -5; dx <= 5 && !playgroundSpawned; dx++) {
-            for (let dy = -5; dy <= 5; dy++) {
-                const px = startX + dx;
-                const py = startY + dy;
-                if (this.nodes[px] && this.nodes[px][py] && !this.nodes[px][py].object && !this.nodes[px][py].blocked) {
-                    let pixiSprite = new PIXI.Sprite(this.scenery["playground"].textures[0]);
-                    let playground = {
-                        pixiSprite: pixiSprite,
-                        type: "playground",
-                        width: 4,
-                        height: 3,
-                        x: px,
-                        y: py,
-                        blocksDiamond: true
-                    };
-                    playground.pixiSprite.anchor.set(0.5, 1);
-                    this.nodes[px][py].object = playground;
+        // // Special handling: spawn playground near player start
+        // const startX = Math.floor(this.width / 2);
+        // const startY = Math.floor(this.height / 2);
+        // let playgroundSpawned = false;
+        // for (let dx = -5; dx <= 5 && !playgroundSpawned; dx++) {
+        //     for (let dy = -5; dy <= 5; dy++) {
+        //         const px = startX + dx;
+        //         const py = startY + dy;
+        //         if (this.nodes[px] && this.nodes[px][py] && !this.nodes[px][py].object && !this.nodes[px][py].blocked) {
+        //             let pixiSprite = new PIXI.Sprite(this.scenery["playground"].textures[0]);
+        //             let playground = {
+        //                 pixiSprite: pixiSprite,
+        //                 type: "playground",
+        //                 width: 4,
+        //                 height: 3,
+        //                 x: px,
+        //                 y: py,
+        //                 blocksDiamond: true
+        //             };
+        //             playground.pixiSprite.anchor.set(0.5, 1);
+        //             this.nodes[px][py].object = playground;
                     
-                    // Block the 4 tiles in a horizontal diamond pattern for pathfinding
-                    // Use proper hex neighbor offsets based on whether px is even or odd
-                    // Diamond: one above, one up-left, one up-right (current tile has object, doesn't need blocked flag)
-                    let diamondTiles = [];
-                    diamondTiles.push({x: px, y: py - 1}); // Up
+        //             // Block the 4 tiles in a horizontal diamond pattern for pathfinding
+        //             // Use proper hex neighbor offsets based on whether px is even or odd
+        //             // Diamond: one above, one up-left, one up-right (current tile has object, doesn't need blocked flag)
+        //             let diamondTiles = [];
+        //             diamondTiles.push({x: px, y: py - 1}); // Up
                     
-                    if (px % 2 === 0) {
-                        // Even column: left and right at same y level
-                        diamondTiles.push(
-                            {x: px - 1, y: py},      // Left
-                            {x: px + 1, y: py}       // Right
-                        );
-                    } else {
-                        // Odd column: up-left and up-right are offset up
-                        diamondTiles.push(
-                            {x: px - 1, y: py - 1},  // Up-left
-                            {x: px + 1, y: py - 1}   // Up-right
-                        );
-                    }
+        //             if (px % 2 === 0) {
+        //                 // Even column: left and right at same y level
+        //                 diamondTiles.push(
+        //                     {x: px - 1, y: py},      // Left
+        //                     {x: px + 1, y: py}       // Right
+        //                 );
+        //             } else {
+        //                 // Odd column: up-left and up-right are offset up
+        //                 diamondTiles.push(
+        //                     {x: px - 1, y: py - 1},  // Up-left
+        //                     {x: px + 1, y: py - 1}   // Up-right
+        //                 );
+        //             }
                     
-                    for (let tile of diamondTiles) {
-                        if (this.nodes[tile.x] && this.nodes[tile.x][tile.y]) {
-                            this.nodes[tile.x][tile.y].blocked = true;
-                        }
-                    }
+        //             for (let tile of diamondTiles) {
+        //                 if (this.nodes[tile.x] && this.nodes[tile.x][tile.y]) {
+        //                     this.nodes[tile.x][tile.y].blocked = true;
+        //                 }
+        //             }
                     
-                    playgroundSpawned = true;
-                    break;
-                }
-            }
-        }
+        //             playgroundSpawned = true;
+        //             break;
+        //         }
+        //     }
+        // }
         
         if (callback) setTimeout(() => callback(this), 100 );
     }
@@ -998,6 +998,21 @@ class Hunter extends Character {
         this.food = 0;
         this.hp = 40;
         this.name = 'you';
+        
+        // Wizard hat positioning constants
+        this.hatBrimOffsetX = 0;
+        this.hatBrimOffsetY = -0.375;
+        this.hatBrimWidth = 0.5;
+        this.hatBrimHeight = 0.15;
+        this.hatPointOffsetX = 0;
+        this.hatPointOffsetY = -0.4;
+        this.hatPointHeight = 0.35;
+        this.hatColor = 0x000099; // Royal Blue
+        this.hatBandColor = 0xFFD700; // Gold
+        
+        // Create wizard hat graphics
+        this.hatGraphics = new PIXI.Graphics();
+        characterLayer.addChild(this.hatGraphics);
     }
     turnToward(targetX, targetY) {
         const dx = targetX - this.x;
@@ -1997,6 +2012,7 @@ function drawCanvas() {
     });
 
     drawHunter();
+    drawWizardHat(hunter, 0, 0); // Hat position will be calculated inside the function
     drawProjectiles();
     
     $('#msg').html(messages.join("<br>"))
@@ -2272,6 +2288,63 @@ function drawHunter() {
     hunter.pixiSprite.anchor.set(0.5, 0.5);
     hunter.pixiSprite.width = mapHexHeight * 1.1547;
     hunter.pixiSprite.height = mapHexHeight;
+}
+
+
+function drawWizardHat(hunter, hunterScreenX, hunterScreenY) {
+    // Recalculate screen position
+    hunterScreenX = (hunter.x - viewport.x + hunter.offset.x) * mapHexWidth;
+    hunterScreenY = (hunter.y - viewport.y + hunter.offset.y + (hunter.x % 2 === 0 ? 0.5 : 0)) * mapHexHeight;
+    
+    hunter.hatGraphics.clear();
+    
+    // Calculate hat brim position (blue oval)
+    const brimX = hunterScreenX + hunter.hatBrimOffsetX * mapHexWidth;
+    const brimY = hunterScreenY + hunter.hatBrimOffsetY * mapHexHeight;
+    const brimWidth = hunter.hatBrimWidth * mapHexWidth;
+    const brimHeight = hunter.hatBrimHeight * mapHexHeight;
+    const pointWidth = hunter.hatBrimWidth * mapHexWidth * 0.6;
+    const bandInnerHeight = brimHeight * 0.4;
+    const bandInnerWidth = pointWidth * 0.8;
+    const bandOuterWidth = pointWidth;
+    const bandOuterHeight = brimHeight / brimWidth * bandOuterWidth;
+
+    // Draw hat brim (oval/ellipse)
+    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
+    hunter.hatGraphics.drawEllipse(brimX, brimY, brimWidth / 2, brimHeight / 2);
+    hunter.hatGraphics.endFill();
+    
+    // Draw hat band outer (gold oval, slightly smaller than brim)
+
+    hunter.hatGraphics.beginFill(hunter.hatBandColor, 1);
+    hunter.hatGraphics.drawEllipse(brimX, brimY, bandOuterWidth / 2, bandOuterHeight / 2);
+    hunter.hatGraphics.endFill();
+    
+    // Draw hat band inner (blue oval, smaller, same width as point)
+
+    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
+    hunter.hatGraphics.drawEllipse(brimX, brimY, bandInnerWidth / 2, bandInnerHeight / 2);
+    hunter.hatGraphics.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
+    hunter.hatGraphics.endFill();
+    
+    // Calculate hat point position (blue triangle)
+    const pointX = hunterScreenX + hunter.hatPointOffsetX * mapHexWidth;
+    const pointY = hunterScreenY + hunter.hatPointOffsetY * mapHexHeight;
+    const pointHeight = hunter.hatPointHeight * mapHexHeight;
+    
+    // Draw hat point (triangle)
+    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
+    hunter.hatGraphics.moveTo(pointX, pointY - pointHeight); // Top point
+    hunter.hatGraphics.lineTo(pointX - pointWidth / 2, pointY); // Bottom left
+    hunter.hatGraphics.lineTo(pointX + pointWidth / 2, pointY); // Bottom right
+    hunter.hatGraphics.closePath();
+    hunter.hatGraphics.endFill();
+    
+    // Ensure hat graphics are rendered on top by moving to end of container
+    if (hunter.hatGraphics.parent && characterLayer.children.indexOf(hunter.hatGraphics) !== characterLayer.children.length - 1) {
+        characterLayer.removeChild(hunter.hatGraphics);
+        characterLayer.addChild(hunter.hatGraphics);
+    }
 }
 
 function drawProjectiles() {
