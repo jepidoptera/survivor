@@ -33,6 +33,7 @@ let gridLayer = new PIXI.Container();
 let objectLayer = new PIXI.Container();
 let characterLayer = new PIXI.Container();
 let projectileLayer = new PIXI.Container();
+let hitboxLayer = new PIXI.Container();
 
 app.stage.addChild(gameContainer);
 gameContainer.addChild(landLayer);
@@ -40,9 +41,11 @@ gameContainer.addChild(gridLayer);
 gameContainer.addChild(objectLayer);
 gameContainer.addChild(characterLayer);
 gameContainer.addChild(projectileLayer);
+gameContainer.addChild(hitboxLayer);
 
 let landTileSprite = null;
 let gridGraphics = null;
+let hitboxGraphics = null;
 let hunterFrames = []; // Array of frame textures for hunter animation
 
 // Load sprite sheets before starting game
@@ -104,9 +107,9 @@ class Map {
             {type: "playground", frequency: 0}
         ]
         const animal_types = [
-            {type: "deer", frequency: 50, isMokemon: false},
-            {type: "bear", frequency: 8, isMokemon: false},
-            {type: "squirrel", frequency: 80, isMokemon: false},
+            {type: "deer", frequency: 250, isMokemon: false},
+            {type: "bear", frequency: 28, isMokemon: false},
+            {type: "squirrel", frequency: 580, isMokemon: false},
         ]
         const terrain = {type: "forest"};
         scenery.forEach((item, i) => {
@@ -684,14 +687,14 @@ class Fireball extends Projectile {
         this.image = document.createElement('img');
         this.image.src = "./assets/images/explosion.png";
         this.gravity = 0; // No arc - straight line
-        this.speed = 5;
+        this.speed = 2; // 5
         this.range = 10;
         this.bounces = 0;
         this.apparentSize = 60;
         this.explosionFrame = 0;
         this.explosionFrames = null;
         this.isAnimating = true;
-        this.damageRadius = 1.5;
+        this.damageRadius = 0.75;
         this.delayTime = 2;
     }
     throw(targetX, targetY) {
@@ -705,6 +708,7 @@ class Fireball extends Projectile {
                     if (this._pendingThrow) {
                         const {targetX: pendingX, targetY: pendingY} = this._pendingThrow;
                         this._pendingThrow = null;
+                        this.visible = true;
                         this.throw(pendingX, pendingY);
                     }
                 });
@@ -806,8 +810,13 @@ class Fireball extends Projectile {
         // Check for damage on every frame while moving
         animals.forEach((animal, n) => {
             if (animal._onScreen && !animal.dead) {
-                let dist = approxDist(this.x, this.y, animal.x, animal.y);
-                if (dist < this.damageRadius) {
+                // Use world coordinates for accurate collision detection
+                const ballWorld = worldCoors(this);
+                const animalWorld = worldCoors(animal);
+                let dist = approxDist(ballWorld.x, ballWorld.y, animalWorld.x, animalWorld.y);
+                const animalRadiusPx = (animal.hitboxRadius || 0) * mapHexHeight;
+                const ballRadiusPx = this.damageRadius * mapHexHeight;
+                if (dist < ballRadiusPx + animalRadiusPx) {
                     let damage = 0.1; // Damage per frame
                     animal.hp -= damage;
                     animal.ignite(5);
@@ -898,6 +907,7 @@ class Character {
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 0;
+        this.hitboxRadius = 0.35; // Default hitbox radius in hex units
     }
     getDirectionRow() {
         if (!this.direction) return 0;
@@ -996,23 +1006,32 @@ class Hunter extends Character {
         this.image = $("<img>").attr('src', './assets/images/hunter.png')[0];
         this.moveInterval = setInterval(() => {this.move()}, 1000 / this.frameRate);
         this.food = 0;
-        this.hp = 40;
+        this.hp = 100;
+        this.maxHp = 100;
+        this.magic = 100;
+        this.maxMagic = 100;
         this.name = 'you';
         
-        // Wizard hat positioning constants
-        this.hatBrimOffsetX = 0;
-        this.hatBrimOffsetY = -0.375;
-        this.hatBrimWidth = 0.5;
-        this.hatBrimHeight = 0.15;
-        this.hatPointOffsetX = 0;
-        this.hatPointOffsetY = -0.4;
-        this.hatPointHeight = 0.35;
-        this.hatColor = 0x000099; // Royal Blue
-        this.hatBandColor = 0xFFD700; // Gold
-        
+
         // Create wizard hat graphics
         this.hatGraphics = new PIXI.Graphics();
         characterLayer.addChild(this.hatGraphics);
+        this.hatColor = 0x000099; // Royal Blue
+        this.hatBandColor = 0xFFD700; // Gold
+        
+        // Create status bar graphics
+        this.statusBarGraphics = new PIXI.Graphics();
+        if (app && app.stage) {
+            app.stage.addChild(this.statusBarGraphics);
+        }
+        
+        // Create icon sprites for status bars
+        this.heartIcon = new PIXI.Sprite(PIXI.Texture.from('./assets/images/red heart.png'));
+        this.beakerIcon = new PIXI.Sprite(PIXI.Texture.from('./assets/images/beaker.png'));
+        if (app && app.stage) {
+            app.stage.addChild(this.heartIcon);
+            app.stage.addChild(this.beakerIcon);
+        }
     }
     turnToward(targetX, targetY) {
         const dx = targetX - this.x;
@@ -1103,11 +1122,133 @@ class Hunter extends Character {
             this.throwing = false;
         }, 1000 * delayTime);
     }
+    
+    drawHat() {
+        // Wizard hat positioning constants
+        const hatBrimOffsetX = 0;
+        const hatBrimOffsetY = -0.375;
+        const hatBrimWidth = 0.5;
+        const hatBrimHeight = 0.15;
+        const hatPointOffsetX = 0;
+        const hatPointOffsetY = -0.4;
+        const hatPointHeight = 0.35;
+
+        // Recalculate screen position
+        let hunterScreenX = (this.x - viewport.x + this.offset.x) * mapHexWidth;
+        let hunterScreenY = (this.y - viewport.y + this.offset.y + (this.x % 2 === 0 ? 0.5 : 0)) * mapHexHeight;
+        
+        this.hatGraphics.clear();
+        
+        // Calculate hat brim position (blue oval)
+        const brimX = hunterScreenX + hatBrimOffsetX * mapHexWidth;
+        const brimY = hunterScreenY + hatBrimOffsetY * mapHexHeight;
+        const brimWidth = hatBrimWidth * mapHexWidth;
+        const brimHeight = hatBrimHeight * mapHexHeight;
+        const pointWidth = hatBrimWidth * mapHexWidth * 0.6;
+        const bandInnerHeight = brimHeight * 0.4;
+        const bandInnerWidth = pointWidth * 0.8;
+        const bandOuterWidth = pointWidth;
+        const bandOuterHeight = brimHeight / brimWidth * bandOuterWidth;
+
+        // Draw hat brim (oval/ellipse)
+        this.hatGraphics.beginFill(this.hatColor, 1);
+        this.hatGraphics.drawEllipse(brimX, brimY, brimWidth / 2, brimHeight / 2);
+        this.hatGraphics.endFill();
+        
+        // Draw hat band outer (gold oval, slightly smaller than brim)
+        this.hatGraphics.beginFill(this.hatBandColor, 1);
+        this.hatGraphics.drawEllipse(brimX, brimY, bandOuterWidth / 2, bandOuterHeight / 2);
+        this.hatGraphics.endFill();
+        
+        // Draw hat band inner (blue oval, smaller, same width as point)
+        this.hatGraphics.beginFill(this.hatColor, 1);
+        this.hatGraphics.drawEllipse(brimX, brimY, bandInnerWidth / 2, bandInnerHeight / 2);
+        this.hatGraphics.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
+        this.hatGraphics.endFill();
+        
+        // Calculate hat point position (blue triangle)
+        const pointX = hunterScreenX + hatPointOffsetX * mapHexWidth;
+        const pointY = hunterScreenY + hatPointOffsetY * mapHexHeight;
+        const pointHeight = hatPointHeight * mapHexHeight;
+        
+        // Draw hat point (triangle)
+        this.hatGraphics.beginFill(this.hatColor, 1);
+        this.hatGraphics.moveTo(pointX, pointY - pointHeight); // Top point
+        this.hatGraphics.lineTo(pointX - pointWidth / 2, pointY); // Bottom left
+        this.hatGraphics.lineTo(pointX + pointWidth / 2, pointY); // Bottom right
+        this.hatGraphics.closePath();
+        this.hatGraphics.endFill();
+        
+        // Ensure hat graphics are rendered on top by moving to end of container
+        if (this.hatGraphics.parent && characterLayer.children.indexOf(this.hatGraphics) !== characterLayer.children.length - 1) {
+            characterLayer.removeChild(this.hatGraphics);
+            characterLayer.addChild(this.hatGraphics);
+        }
+    }
+    
+    drawStatusBars() {
+                // Status bar configuration
+        const positionX = 40;
+        const positionY = 20;
+        const statusBarWidth = 200;
+        const statusBarHeight = 20;
+        const statusBarGap = 10;
+        const statusBarBackgroundColor = 0x444444; // Dark gray
+        const healthBarColor = 0xFF0000; // Red
+        const magicBarColor = 0x0000FF; // Blue
+
+        // Ensure status bar graphics are added to stage
+        if (this.statusBarGraphics.parent === null && app && app.stage) {
+            app.stage.addChild(this.statusBarGraphics);
+        }
+        
+        this.statusBarGraphics.clear();
+        
+        // Draw health bar background
+        this.statusBarGraphics.beginFill(statusBarBackgroundColor, 0.8);
+        this.statusBarGraphics.drawRect(positionX - 1, positionY - 1, statusBarWidth + 2, statusBarHeight + 2);
+        this.statusBarGraphics.endFill();
+        
+        // Draw health bar foreground (red)
+        const healthRatio = Math.max(0, Math.min(1, this.hp / this.maxHp));
+        const healthWidth = statusBarWidth * healthRatio;
+        this.statusBarGraphics.beginFill(healthBarColor, 0.9);
+        this.statusBarGraphics.drawRect(positionX, positionY, healthWidth, statusBarHeight);
+        this.statusBarGraphics.endFill();
+        
+        // Draw magic bar background
+        const magicBarY = positionY + statusBarHeight + statusBarGap;
+        this.statusBarGraphics.beginFill(statusBarBackgroundColor, 0.8);
+        this.statusBarGraphics.drawRect(positionX - 1, magicBarY - 1, statusBarWidth + 2, statusBarHeight + 2);
+        this.statusBarGraphics.endFill();
+        
+        // Draw magic bar foreground (blue)
+        const magicRatio = Math.max(0, Math.min(1, this.magic / this.maxMagic));
+        const magicWidth = statusBarWidth * magicRatio;
+        this.statusBarGraphics.beginFill(magicBarColor, 0.9);
+        this.statusBarGraphics.drawRect(positionX, magicBarY, magicWidth, statusBarHeight);
+        this.statusBarGraphics.endFill();
+        
+        // Position and size heart icon (to the left of health bar)
+        const iconSize = statusBarHeight;
+        const iconGap = 5;
+        this.heartIcon.width = iconSize;
+        this.heartIcon.height = iconSize;
+        this.heartIcon.x = positionX - iconSize - iconGap;
+        this.heartIcon.y = positionY;
+        
+        // Position and size beaker icon (to the left of magic bar)
+        this.beakerIcon.width = iconSize;
+        this.beakerIcon.height = iconSize;
+        this.beakerIcon.x = positionX - iconSize - iconGap;
+        this.beakerIcon.y = magicBarY;
+    }
 }
 
 class Animal extends Character {
     constructor(type, x, y, map) {
         super(type, x, y, map);
+        this.hitboxRadius = 0.45; // Animal hitbox radius in hex units
         this.frameRate = 60;
         this.isOnFire = false;
         this.fireSprite = null;
@@ -1291,12 +1432,13 @@ class Deer extends Animal {
                 "walk_right"
             ]
         };
+        this.hitboxRadius = 0.55; // Animal hitbox radius in hex units
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .5 + .75;
         this.width = this.size;
         this.height = this.size;
         this.walkSpeed = 1;
-        this.runSpeed = 3.5;
+        this.runSpeed = 0.5;  // 3.5
         this.fleeRadius = 9;
         this.foodValue = Math.floor(90 * this.size);
         this.hp = 10 * this.size;
@@ -1318,6 +1460,7 @@ class Bear extends Animal {
                 "attack_right"
             ]
         };
+        this.hitboxRadius = 1.0; // Animal hitbox radius in hex units
         this.frameCount = {x: 2, y: 2};
         this.size = Math.random() * .3 + 1.2;
         this.width = this.size * 1.4;
@@ -1341,17 +1484,18 @@ class Squirrel extends Animal {
         this.spriteSheet = {
             rows: 2,
             cols: 1,
-            framePaths: [
-                "./assets/images/animals/squirrel_left.png",
-                "./assets/images/animals/squirrel_right.png"
+            frameKeys: [
+                "walk_left",
+                "walk_right"
             ]
         };
+        this.hitboxRadius = 0.25; 
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .2 + .4;
         this.width = this.size;
         this.height = this.size;
         this.walkSpeed = 2;
-        this.runSpeed = 2.5;
+        this.runSpeed = 0.5; // 2.5
         this.fleeRadius = 5;
         this.foodValue = Math.floor(6 * this.size);
         this.hp = 1;
@@ -1972,16 +2116,17 @@ function drawCanvas() {
                 // Calculate fire position accounting for tree rotation
                 // Tree rotates around its anchor point (bottom center for trees)
                 // Fire should stay at the center of the tree but remain upright
-                if (item.rotation && item.type === "tree") {
-                    const rotRad = item.rotation * (Math.PI / 180);
+                if (item.type === "tree") {
+                    const rotRad = (item.rotation ?? 0) * (Math.PI / 180);
                     // Center of tree rotates around anchor point
                     const centerOffsetX = (itemHeight / 2) * Math.sin(rotRad);
                     const centerOffsetY = -(itemHeight / 2) * Math.cos(rotRad);
                     item.fireSprite.x = fireCoors.x + centerOffsetX;
                     item.fireSprite.y = fireCoors.y + centerOffsetY;
                 } else {
+                    // For animals, position fire lower (closer to ground)
                     item.fireSprite.x = fireCoors.x;
-                    item.fireSprite.y = fireCoors.y - itemHeight / 2;
+                    item.fireSprite.y = fireCoors.y;
                 }
                 
                 item.fireSprite.anchor.set(0.5, 1); // Bottom center of fire at position
@@ -2012,8 +2157,10 @@ function drawCanvas() {
     });
 
     drawHunter();
-    drawWizardHat(hunter, 0, 0); // Hat position will be calculated inside the function
+    hunter.drawHat();
+    hunter.drawStatusBars();
     drawProjectiles();
+    drawHitboxes();
     
     $('#msg').html(messages.join("<br>"))
 }
@@ -2290,63 +2437,6 @@ function drawHunter() {
     hunter.pixiSprite.height = mapHexHeight;
 }
 
-
-function drawWizardHat(hunter, hunterScreenX, hunterScreenY) {
-    // Recalculate screen position
-    hunterScreenX = (hunter.x - viewport.x + hunter.offset.x) * mapHexWidth;
-    hunterScreenY = (hunter.y - viewport.y + hunter.offset.y + (hunter.x % 2 === 0 ? 0.5 : 0)) * mapHexHeight;
-    
-    hunter.hatGraphics.clear();
-    
-    // Calculate hat brim position (blue oval)
-    const brimX = hunterScreenX + hunter.hatBrimOffsetX * mapHexWidth;
-    const brimY = hunterScreenY + hunter.hatBrimOffsetY * mapHexHeight;
-    const brimWidth = hunter.hatBrimWidth * mapHexWidth;
-    const brimHeight = hunter.hatBrimHeight * mapHexHeight;
-    const pointWidth = hunter.hatBrimWidth * mapHexWidth * 0.6;
-    const bandInnerHeight = brimHeight * 0.4;
-    const bandInnerWidth = pointWidth * 0.8;
-    const bandOuterWidth = pointWidth;
-    const bandOuterHeight = brimHeight / brimWidth * bandOuterWidth;
-
-    // Draw hat brim (oval/ellipse)
-    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
-    hunter.hatGraphics.drawEllipse(brimX, brimY, brimWidth / 2, brimHeight / 2);
-    hunter.hatGraphics.endFill();
-    
-    // Draw hat band outer (gold oval, slightly smaller than brim)
-
-    hunter.hatGraphics.beginFill(hunter.hatBandColor, 1);
-    hunter.hatGraphics.drawEllipse(brimX, brimY, bandOuterWidth / 2, bandOuterHeight / 2);
-    hunter.hatGraphics.endFill();
-    
-    // Draw hat band inner (blue oval, smaller, same width as point)
-
-    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
-    hunter.hatGraphics.drawEllipse(brimX, brimY, bandInnerWidth / 2, bandInnerHeight / 2);
-    hunter.hatGraphics.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
-    hunter.hatGraphics.endFill();
-    
-    // Calculate hat point position (blue triangle)
-    const pointX = hunterScreenX + hunter.hatPointOffsetX * mapHexWidth;
-    const pointY = hunterScreenY + hunter.hatPointOffsetY * mapHexHeight;
-    const pointHeight = hunter.hatPointHeight * mapHexHeight;
-    
-    // Draw hat point (triangle)
-    hunter.hatGraphics.beginFill(hunter.hatColor, 1);
-    hunter.hatGraphics.moveTo(pointX, pointY - pointHeight); // Top point
-    hunter.hatGraphics.lineTo(pointX - pointWidth / 2, pointY); // Bottom left
-    hunter.hatGraphics.lineTo(pointX + pointWidth / 2, pointY); // Bottom right
-    hunter.hatGraphics.closePath();
-    hunter.hatGraphics.endFill();
-    
-    // Ensure hat graphics are rendered on top by moving to end of container
-    if (hunter.hatGraphics.parent && characterLayer.children.indexOf(hunter.hatGraphics) !== characterLayer.children.length - 1) {
-        characterLayer.removeChild(hunter.hatGraphics);
-        characterLayer.addChild(hunter.hatGraphics);
-    }
-}
-
 function drawProjectiles() {
     remainingBalls = [];
     projectiles.forEach(ball => {
@@ -2395,8 +2485,35 @@ function drawProjectiles() {
     projectiles = remainingBalls;
 }
 
+function drawHitboxes() {
+    if (!hitboxGraphics) {
+        hitboxGraphics = new PIXI.Graphics();
+        hitboxLayer.addChild(hitboxGraphics);
+    }
+    hitboxGraphics.clear();
+
+    // Fireball hitboxes (damage radius)
+    projectiles.forEach(ball => {
+        if (!ball.visible || !ball.damageRadius) return;
+        const ballCoors = displayCoors(ball);
+        const radiusPx = ball.damageRadius * mapHexHeight;
+        hitboxGraphics.lineStyle(2, 0xffaa00, 0.9);
+        hitboxGraphics.drawCircle(ballCoors.x, ballCoors.y, radiusPx);
+    });
+
+    // Animal hitboxes
+    animals.forEach(animal => {
+        if (!animal || animal.dead || !animal._onScreen) return;
+        const animalCoors = displayCoors(animal);
+        const radiusPx = (animal.hitboxRadius || 0.35) * mapHexHeight;
+        hitboxGraphics.lineStyle(2, 0x00ff66, 0.9);
+        hitboxGraphics.drawCircle(animalCoors.x, animalCoors.y, radiusPx);
+    });
+}
+
 function approxDist (x1, y1, x2, y2) {
-    return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), (Math.abs(x1 - x2) + Math.abs(y1 - y2)) * .707)
+    return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
+    // return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), (Math.abs(x1 - x2) + Math.abs(y1 - y2)) * .707)
 }
 
 function message (text) {
