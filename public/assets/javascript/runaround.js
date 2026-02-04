@@ -118,8 +118,8 @@ class Projectile {
     }
     throw(targetX, targetY) {
         this.visible = true;
-        this.x = wizard.x + wizard.offset.x;
-        this.y = wizard.y + wizard.offset.y + (wizard.x % 2 === 0 ? 0.5 : 0);
+        this.x = wizard.x;
+        this.y = wizard.y;
         this.z = 0;
         
         let xdist = (targetX - this.x);
@@ -395,8 +395,8 @@ class Fireball extends Projectile {
         this.traveledDist = 0;
         
         this.visible = true;
-        this.x = wizard.x + wizard.offset.x;
-        this.y = wizard.y + wizard.offset.y + (wizard.x % 2 === 0 ? 0.5 : 0);
+        this.x = wizard.x;
+        this.y = wizard.y;
         this.z = 0;
         
         let xdist = (targetX - this.x);
@@ -491,15 +491,13 @@ class Fireball extends Projectile {
                         if (!obj) return;
                         if (obj.type === "tree" || obj.type === "playground") {
                         // Check if fireball is within object's bounding box (world coords)
-                        const objWorld = worldCoors(obj);
-                        const objLeft = objWorld.x - (obj.width || 4) * map.hexHeight / 2;
-                        const objRight = objWorld.x + (obj.width || 4) * map.hexHeight / 2;
-                        const objBottom = objWorld.y;
-                        const objTop = objWorld.y - (obj.height || 4) * map.hexHeight;
+                        const objLeft = obj.x - (obj.width || 4) * map.hexHeight / 2;
+                        const objRight = obj.x + (obj.width || 4) * map.hexHeight / 2;
+                        const objBottom = obj.y;
+                        const objTop = obj.y - (obj.height || 4) * map.hexHeight;
                         
-                        const ballWorld = worldCoors(this);
-                        const withinX = ballWorld.x >= objLeft && ballWorld.x <= objRight;
-                        const withinY = ballWorld.y >= objTop && ballWorld.y <= objBottom;
+                        const withinX = this.x >= objLeft && this.x <= objRight;
+                        const withinY = this.y >= objTop && this.y <= objBottom;
                         
                         if (withinX && withinY) {
                             // Don't re-ignite objects that are already burned or falling
@@ -544,8 +542,8 @@ class Vanish extends Projectile {
         wizard.magic -= this.magicCost;
         
         this.visible = true;
-        this.x = wizard.x + wizard.offset.x;
-        this.y = wizard.y + wizard.offset.y + (wizard.x % 2 === 0 ? 0.5 : 0);
+        this.x = wizard.x;
+        this.y = wizard.y;
         this.z = 0;
         
         let xdist = (targetX - this.x);
@@ -601,12 +599,10 @@ class Vanish extends Projectile {
         // Check for animals in range
         animals.forEach((animal, n) => {
             if (animal._onScreen && !animal.dead) {
-                const ballWorld = worldCoors(this);
-                const animalWorld = worldCoors(animal);
                 const animalRadiusPx = (animal.hitboxRadius || 0.35) * map.hexHeight;
                 const ballRadiusPx = this.effectRadius * map.hexHeight;
                 
-                if (withinRadius(ballWorld.x, ballWorld.y, animalWorld.x, animalWorld.y, ballRadiusPx + animalRadiusPx)) {
+                if (withinRadius(this.x, this.y, animal.x, animal.y, ballRadiusPx + animalRadiusPx)) {
                     this.vanishTarget(animal);
                 }
             }
@@ -621,15 +617,13 @@ class Vanish extends Projectile {
                         if (!obj) return;
                         
                         // Check if vanish spell is within object's bounding box (world coords)
-                        const objWorld = worldCoors(obj);
-                        const objLeft = objWorld.x - (obj.width || 4) * map.hexHeight / 2;
-                        const objRight = objWorld.x + (obj.width || 4) * map.hexHeight / 2;
-                        const objBottom = objWorld.y;
-                        const objTop = objWorld.y - (obj.height || 4) * map.hexHeight;
+                        const objLeft = obj.x - (obj.width || 4) * map.hexHeight / 2;
+                        const objRight = obj.x + (obj.width || 4) * map.hexHeight / 2;
+                        const objBottom = obj.y;
+                        const objTop = obj.y - (obj.height || 4) * map.hexHeight;
                         
-                        const ballWorld = worldCoors(this);
-                        const withinX = ballWorld.x >= objLeft && ballWorld.x <= objRight;
-                        const withinY = ballWorld.y >= objTop && ballWorld.y <= objBottom;
+                        const withinX = this.x >= objLeft && this.x <= objRight;
+                        const withinY = this.y >= objTop && this.y <= objBottom;
                         
                         if (withinX && withinY && !obj.vanishing) {
                             this.vanishTarget(obj);
@@ -684,17 +678,12 @@ class Arrow extends Projectile {
 }
 
 class Character {
-    constructor(type, x, y, map) {
+    constructor(type, location, map) {
         this.type = type;
-        this.x = x;
-        this.y = y;
+        this.map = map;
         this.z = 0;
-        this.destination = {x: this.x, y: this.y};
-        this.offset = {x: 0, y: 0};
         this.travelFrames = 0;
         this.moving = false;
-        this.nextNode = null;
-        this.map = map;
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
@@ -702,6 +691,23 @@ class Character {
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
+
+        // Try to get node - if coords look like array indices (integers in map range), use them directly
+        let node;
+        if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
+            // Treat as array indices
+            node = map.nodes[location.x][location.y];
+        } else {
+            // Treat as world coordinates
+            node = map.worldToNode(location.x, location.y);
+        }
+        
+        this.node = node;
+        this.x = this.node.x;
+        this.y = this.node.y;
+        this.destination = null;
+        this.path = []; // Array of MapNodes to follow
+        this.nextNode = null;
     }
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
@@ -714,59 +720,70 @@ class Character {
         if (!this.direction) return 0;
         return (this.direction.x > 0 || (this.direction.x === 0 && this.direction.y > 0)) ? 1 : 0;
     }
+    goto(destinationNode) {
+        if (!destinationNode) return;
+        
+        this.node = this.map.worldToNode(this.x, this.y);
+        this.destination = destinationNode;
+        this.path = this.map.findPath(this.node, destinationNode);
+        if (!Array.isArray(this.path)) {
+            this.path = [];
+        }
+        this.travelFrames = 0;
+        this.nextNode = null;
+    }
     move() {
         this.moveTimeout = this.nextMove();
         
         if (paused) {
             return;
         }
-        if (this.x !== this.destination.x || this.y !== this.destination.y) {
-
-            this.moving = true;
-            if (this.travelFrames === 0) {
-                this.offset = {x: 0, y: 0};
-                this.casting = false;
-                // console.log(this.x, this.y);
-
-                if (this.nextNode) {
-                    this.x = this.nextNode.xindex;
-                    this.y = this.nextNode.yindex;
-                }
-                if (this.y === this.destination.y && this.x === this.destination.x) return;
-                else {
-                    let currentDirection = Number.isInteger(this.direction) ? this.direction : 0;
-                    const pathResult = this.map.findPath(this, this.destination);
-                    this.direction = Number.isInteger(pathResult.direction) ? pathResult.direction : currentDirection;
-                    
-                    // don't do a 180 course reversal. just don't. it looks stupid and gets you stuck in a loop.
-                    // if (Math.abs(this.direction - currentDirection) === 4 || Math.abs(this.direction - currentDirection) === -4) {
-                    //     this.direction = currentDirection;
-                    // }
-                    
-                    if (pathResult.x === 0 && pathResult.y === 0) {
-                        this.destination = {x: this.x, y: this.y}
-                        return;
-                    }
-                    
-                    this.nextNode = this.map.nodes[this.x + pathResult.x][this.y + pathResult.y];
-                    let xdist = this.nextNode.x - this.map.nodes[this.x][this.y].x;
-                    let ydist = this.nextNode.y - this.map.nodes[this.x][this.y].y;
-                    let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
-                    this.travelFrames = Math.ceil(direction_distance / this.speed * this.frameRate);
-                    this.travelX = xdist / this.travelFrames / .866;
-                    this.travelY = ydist / this.travelFrames;
-                }
-            }
-            this.travelFrames --;
-            this.offset.x += this.travelX;
-            this.offset.y += this.travelY;
-        }
-        else {
-            this.moving = false;
-        }
+        
         if (this.isOnFire) {
             this.burn();
+        }        
+
+        // Check if we have a destination to move toward
+        if (!this.destination) {
+            this.moving = false;
+            return;
         }
+        
+        this.moving = true;
+        
+        if (this.travelFrames === 0) {
+            this.casting = false;
+            
+            // If we've reached the nextNode, update our position and request next step
+            if (this.nextNode) {
+                this.node = this.nextNode;
+                this.x = this.node.x;
+                this.y = this.node.y;
+            }
+            
+            // Get next node from path
+            this.nextNode = this.path.shift();
+            this.direction = this.node.neighbors.indexOf(this.nextNode);
+
+            if (!this.nextNode) {
+                // Reached destination
+                this.destination = null;
+                this.moving = false;
+                return;
+            }
+            
+            // Calculate travel parameters using world coordinates
+            let xdist = this.nextNode.x - this.x;
+            let ydist = this.nextNode.y - this.y;
+            let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
+            this.travelFrames = Math.ceil(direction_distance / this.speed * this.frameRate);
+            this.travelX = xdist / this.travelFrames;
+            this.travelY = ydist / this.travelFrames;
+        }
+        
+        this.travelFrames--;
+        this.x += this.travelX;
+        this.y += this.travelY;
     }
     ignite(duration) {
         this.isOnFire = true;
@@ -800,8 +817,8 @@ class Character {
 }
 
 class Wizard extends Character {
-    constructor(x, y, map) {
-        super('human', x, y, map);
+    constructor(location, map) {
+        super('human', location, map);
         this.speed = 2.5;
         this.frameRate = 60;
         this.cooldownTime = 0; // configurable delay in seconds before throwing
@@ -870,18 +887,14 @@ class Wizard extends Character {
         let delayTime;
         
         if (wizard.currentSpell === "wall") {
-            const screenX = (worldX - viewport.x) * map.hexWidth;
-            const screenY = (worldY - viewport.y) * map.hexHeight;
-            const dest = screenToHex(screenX, screenY);
-            const wallX = dest.x;
-            const wallY = dest.y;
-            
-            if (!this.map.nodes[wallX] || !this.map.nodes[wallX][wallY]) return;
+            // Resolve world coordinates to the nearest map node
+            const wallNode = this.map.worldToNode(worldX, worldY);
+            if (!wallNode) return;
             
             // First click: enter layout mode
             if (!this.wallLayoutMode) {
                 this.wallLayoutMode = true;
-                this.wallStartPoint = {x: wallX, y: wallY};
+                this.wallStartPoint = wallNode;
                 // Create phantom wall graphics
                 this.phantomWall = new PIXI.Graphics();
                 this.phantomWall.skipTransform = true;
@@ -891,13 +904,11 @@ class Wizard extends Character {
             
             // Second click: place the wall
             if (this.wallLayoutMode && this.wallStartPoint) {
-                const x1 = this.wallStartPoint.x;
-                const y1 = this.wallStartPoint.y;
-                const x2 = wallX;
-                const y2 = wallY;
+                const nodeA = this.wallStartPoint;
+                const nodeB = wallNode;
                 
-                // Validate both endpoints
-                if (!this.map.nodes[x2] || !this.map.nodes[x2][y2]) {
+                if (nodeA === nodeB) {
+                    // Can't place a wall from a node to itself
                     this.wallLayoutMode = false;
                     this.wallStartPoint = null;
                     if (this.phantomWall) {
@@ -908,8 +919,8 @@ class Wizard extends Character {
                 }
                 
                 // Create a chain of walls along the straightest path
-                const wallPath = getHexLine(x1, y1, x2, y2);
-                NewWall.createWallLine(wallPath, 1.5, 0.2, this.map);
+                const wallPath = getHexLine(nodeA, nodeB);
+                Wall.createWallLine(wallPath, 1.5, 0.2, this.map);
                 
                 // Clean up layout mode
                 this.wallLayoutMode = false;
@@ -948,10 +959,6 @@ class Wizard extends Character {
         this.throwDelay = true;
         projectiles.push(projectile.throw(worldX, worldY))
         wizard.casting = true;
-        if (wizard.nextNode) {
-            wizard.destination.x = wizard.nextNode.xindex || wizard.x;
-            wizard.destination.y = wizard.nextNode.yindex || wizard.y;
-        }
         setTimeout(() => {
             this.throwDelay = false;
             this.casting = false;
@@ -968,9 +975,10 @@ class Wizard extends Character {
         const hatPointOffsetY = -0.4;
         const hatPointHeight = 0.35;
 
-        // Recalculate screen position
-        let wizardScreenX = (this.x - viewport.x + this.offset.x) * map.hexWidth;
-        let wizardScreenY = (this.y - viewport.y + this.offset.y + (this.x % 2 === 0 ? 0.5 : 0)) * map.hexHeight;
+        // Recalculate screen position from world coordinates
+        const screenCoors = displayCoors(this);
+        let wizardScreenX = screenCoors.x;
+        let wizardScreenY = screenCoors.y;
         
         this.hatGraphics.clear();
         
@@ -1060,11 +1068,10 @@ class Wizard extends Character {
         }
         
         // Update wizard sprite position
-        let wizardScreenX = (this.x - viewport.x + this.offset.x) * map.hexWidth;
-        let wizardScreenY = (this.y - viewport.y + this.offset.y + (this.x % 2 === 0 ? 0.5 : 0)) * map.hexHeight;
+        const screenCoors = displayCoors(this);
         
-        this.pixiSprite.x = wizardScreenX;
-        this.pixiSprite.y = wizardScreenY;
+        this.pixiSprite.x = screenCoors.x;
+        this.pixiSprite.y = screenCoors.y;
         this.pixiSprite.anchor.set(0.5, 0.5);
         this.pixiSprite.width = map.hexHeight * 1.1547;
         this.pixiSprite.height = map.hexHeight;
@@ -1074,8 +1081,8 @@ class Wizard extends Character {
 }
 
 class Animal extends Character {
-    constructor(type, x, y, map) {
-        super(type, x, y, map);
+    constructor(type, location, map) {
+        super(type, location, map);
         this.hitboxRadius = 0.45; // Animal hitbox radius in hex units
         this.isOnFire = false;
         this.fireSprite = null;
@@ -1129,8 +1136,9 @@ class Animal extends Character {
         super.move();
         // wander around
         if (!this.moving || Math.random() * this.randomMotion * this.frameRate < 1 && this.speed == this.walkSpeed) {
-            this.destination.x = Math.min(Math.max(Math.floor(Math.random() * 50 - 25 + this.x), 0), this.map.width - 1);
-            this.destination.y = Math.min(Math.max(Math.floor(Math.random() * 50 - 25 + this.y), 0), this.map.height - 1);
+            const direction = Math.floor(Math.random() * 12);
+            const wanderNode = this.node.neighbors[direction];
+            if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
         }
 
@@ -1156,10 +1164,11 @@ class Animal extends Character {
         }
     }
     get onScreen() {
+        const safetyMargin = 5; // world units
         this._onScreen = false;
         if (this.gone) return false;
-        if (this.x + this.width + 5 > viewport.x && this.y + this.height + 5 > viewport.y) {
-            if (this.x - this.width - 5 < viewport.x + viewport.width && this.y - this.height - 5 < viewport.y + viewport.height) {
+        if (this.x + this.width + safetyMargin > viewport.x && this.y + this.height + safetyMargin > viewport.y) {
+            if (this.x - this.width - safetyMargin < viewport.x + viewport.width && this.y - this.height - safetyMargin < viewport.y + viewport.height) {
                 this._onScreen = true;
             }
         }
@@ -1171,19 +1180,21 @@ class Animal extends Character {
 
         let xdist = this.x - wizard.x;
         let ydist = this.y - wizard.y;
-        this.destination.x = Math.floor(Math.max(Math.min(this.x + xdist / dist * 10, this.map.width - 1), 0));  
-        this.destination.y = Math.floor(Math.max(Math.min(this.y + ydist / dist * 10, this.map.height - 1), 0));  
+        const fleeX = Math.floor(Math.max(Math.min(this.x + xdist / dist * 10, this.map.width - 1), 0));
+        const fleeY = Math.floor(Math.max(Math.min(this.y + ydist / dist * 10, this.map.height - 1), 0));
+        const fleeNode = this.map.nodes[fleeX] ? this.map.nodes[fleeX][fleeY] : null;
+        if (fleeNode) this.goto(fleeNode);
         this.speed = this.runSpeed;
     }
     attack(target) {
-        this.destination.x = Math.floor(target.x);
-        this.destination.y = Math.floor(target.y);
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (targetNode) this.goto(targetNode);
         this.speed = this.runSpeed;
         this.attacking = this.attacking || 1;
         if (withinRadius(this.x, this.y, target.x, target.y, 1) && this.attacking == 1) {
             this.attacking = 2
             if (this.spriteCols > 1) this.spriteCol = 1;
-            this.imageFrame.y = (this.x + this.offset.x > target.x + target.offset.x) ? 0 : 1;
+            this.imageFrame.y = (this.x > target.x) ? 0 : 1;
             let damage = Math.floor((1 - Math.random() * Math.random()) * this.damage + 1);
             // message(`${this.type} ${this.attackVerb} ${target.name} for ${damage} damage!`)
             target.hp = Math.max(0, target.hp - damage);
@@ -1211,18 +1222,17 @@ class Animal extends Character {
                 this.gone = true;
                 clearInterval(this.dieAnimation);
             }
-            this.offset.y = this.offset.y * .95 + ((y - (this.x % 2 === 0 ? 0.5 : 0) - this.width/ 2) - this.y) * .05;
-            this.offset.x = this.offset.x * .95 + ((x - this.width / 2) - this.x) * .05;
+            this.y = this.y * .95 + ((y - this.width/ 2) - this.y) * .05;
+            this.x = this.x * .95 + ((x - this.width / 2) - this.x) * .05;
             }, 1000 / this.frameRate);
         this.rotation = 180;
     }
     explode(x, y) {
         this.dead = 1;
         // this.rotation = 180;
-        let xdist = this.x + this.offset.x - this.width/2 - x;
-        const realY = worldCoors(this).y;
-        let ydist = realY - this.height/2 - y;
-        let dist = distance(this.x + this.offset.x, realY, x, y);
+        let xdist = this.x - this.width/2 - x;
+        let ydist = this.y - this.height/2 - y;
+        let dist = distance(this.x, this.y, x, y);
         this.z = 0;
         this.motion = {
             x: xdist / Math.min(dist, 2) / this.size / this.frameRate * 1.155,
@@ -1247,8 +1257,8 @@ class Animal extends Character {
 }
 
 class Squirrel extends Animal {
-    constructor(x, y, map) {
-        super('squirrel', x, y, map);
+    constructor(location, map) {
+        super('squirrel', location, map);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -1274,8 +1284,8 @@ class Squirrel extends Animal {
 }
 
 class Deer extends Animal {
-    constructor(x, y, map) {
-        super('deer', x, y, map);
+    constructor(location, map) {
+        super('deer', location, map);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -1300,8 +1310,8 @@ class Deer extends Animal {
 }
 
 class Bear extends Animal {
-    constructor(x, y, map) {
-        super('bear', x, y, map);
+    constructor(location, map) {
+        super('bear', location, map);
         this.spriteSheet = {
             rows: 2,
             cols: 2,
@@ -1332,8 +1342,8 @@ class Bear extends Animal {
 
 
 class Scorpion extends Animal {
-    constructor(x, y, map) {
-        super('scorpion', x, y, map);
+    constructor(location, map) {
+        super('scorpion', location, map);
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .1 + .4;
         this.width = this.size;
@@ -1350,8 +1360,8 @@ class Scorpion extends Animal {
 }
 
 class Armadillo extends Animal {
-    constructor(x, y, map) {
-        super('armadillo', x, y, map);
+    constructor(location, map) {
+        super('armadillo', location, map);
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .2 + .5;
         this.width = this.size;
@@ -1366,8 +1376,8 @@ class Armadillo extends Animal {
 }
 
 class Coyote extends Animal {
-    constructor(x, y, map) {
-        super('coyote', x, y, map);
+    constructor(location, map) {
+        super('coyote', location, map);
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .25 + .7;
         this.width = this.size * 1.75;
@@ -1382,8 +1392,8 @@ class Coyote extends Animal {
 }
 
 class Goat extends Animal {
-    constructor(x, y, map) {
-        super('goat', x, y, map);
+    constructor(location, map) {
+        super('goat', location, map);
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .25 + .7;
         this.width = this.size * 1.2;
@@ -1398,8 +1408,8 @@ class Goat extends Animal {
 }
 
 class Porcupine extends Animal {
-    constructor(x, y, map) {
-        super('porcupine', x, y, map);
+    constructor(location, map) {
+        super('porcupine', location, map);
         this.frameCount = {x: 2, y: 2};
         this.size = Math.random() * .2 + .5;
         this.width = this.size * 1.15;
@@ -1417,8 +1427,8 @@ class Porcupine extends Animal {
 }
 
 class Yeti extends Animal {
-    constructor(x, y, map) {
-        super('yeti', x, y, map);
+    constructor(location, map) {
+        super('yeti', location, map);
         this.frameCount = {x: 2, y: 2};
         this.size = Math.random() * .5 + 1.5;
         this.width = this.size * 1.2;
@@ -1482,16 +1492,9 @@ jQuery(() => {
             drawCanvas();
             frameCount ++;
         }, 1000 / frameRate);
-        
-        setTimeout(() => {
-            message("Click to move.  Right-click or double-tap to throw.")
-        }, 1000);
-        setTimeout(() => {
-            message("Use F and G, or tap the menu to switch weapons.")
-        }, 3000);
     });
 
-    wizard = new Wizard(mapWidth/2, mapHeight/2, map);
+    wizard = new Wizard({x: mapWidth/2, y: mapHeight/2}, map);
     viewport.x = Math.max(0, wizard.x - viewport.width / 2);
     viewport.y = Math.max(0, wizard.y - viewport.height / 2);
     centerViewport(wizard, 0);
@@ -1576,18 +1579,23 @@ jQuery(() => {
         
         // Update phantom wall preview if in layout mode
         if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
-            updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.x, mousePos.y);
+            updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
         }
     })
 
     app.view.addEventListener("click", event => {
         let rect = app.view.getBoundingClientRect();
-        const dest = screenToHex(event.clientX - rect.left, event.clientY - rect.top);
-        wizard.destination.x = dest.x;
-        wizard.destination.y = dest.y;
-
-        if (map.nodes[wizard.destination.x] && map.nodes[wizard.destination.x][wizard.destination.y] && map.nodes[wizard.destination.x][wizard.destination.y].hasBlockingObject()) {
-            console.log("blocked", "x", wizard.destination.x, "y", wizard.destination.y);
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+        // Convert screen coordinates to world coordinates
+        const worldX = screenX / map.hexWidth + viewport.x;
+        const worldY = screenY / map.hexHeight + viewport.y;
+        
+        // Check if destination tile has blocking objects
+        const destNode = map.worldToNode(worldX, worldY);
+        if (destNode) wizard.goto(destNode);
+        if (destNode && destNode.hasBlockingObject()) {
+            console.log("blocked at world coordinates", worldX, worldY);
         }
     })
 
@@ -1612,11 +1620,12 @@ jQuery(() => {
     $(document).keydown(event => {
         if (event.key === " " || event.code === "Space") {
             event.preventDefault();
-            // Stop wizard movement
-            wizard.destination.x = wizard.x;
-            wizard.destination.y = wizard.y;
-            // Turn toward mouse position
-            wizard.turnToward(mousePos.x, mousePos.y);
+            // Stop wizard movement by setting destination to current node
+            wizard.destination = null;
+            wizard.path = [];
+            wizard.travelFrames = 0;
+            // Turn toward mouse position using world coordinates
+            wizard.turnToward(mousePos.worldX, mousePos.worldY);
             // Throw after delay
             setTimeout(() => {
                 wizard.cast(mousePos.worldX, mousePos.worldY);
@@ -1645,22 +1654,32 @@ function drawCanvas() {
 
     // Keep phantom wall visible during layout mode
     if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
-        updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.x, mousePos.y);
+        updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
         objectLayer.addChild(wizard.phantomWall);
     }
     
     let mapItems = [];
-    for (let y = Math.floor(viewport.y) - 1; y < Math.min(viewport.y + viewport.height + 3, mapHeight); y++) {
-        for (let x = Math.floor(viewport.x / 2) * 2 - 1; x < viewport.x + viewport.width + 2; x+= 2) {
-            if (map.nodes[x]) {
-                if (map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
+
+    const topLeftNode = map.worldToNode(viewport.x, viewport.y);
+    const bottomRightNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
+
+    if (topLeftNode && bottomRightNode) {
+        const xStart = Math.max(-1, topLeftNode.xindex - 2);
+        const xEnd = Math.min(mapWidth - 1, bottomRightNode.xindex + 2);
+        const yStart = Math.max(-1, topLeftNode.yindex - 2);
+        const yEnd = Math.min(mapHeight - 1, bottomRightNode.yindex + 3);
+
+        const startColA = Math.floor(xStart / 2) * 2 - 1;
+        const startColB = startColA - 1;
+
+        for (let y = yStart; y <= yEnd; y++) {
+            for (let x = startColA; x <= xEnd + 2; x += 2) {
+                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
                     map.nodes[x][y].objects.forEach(obj => mapItems.push(obj));
                 }
             }
-        }
-        for (let x = Math.floor(viewport.x / 2) * 2 - 2; x < viewport.x + viewport.width + 2; x+= 2) {
-            if (map.nodes[x]) {
-                if (map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
+            for (let x = startColB; x <= xEnd + 2; x += 2) {
+                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
                     map.nodes[x][y].objects.forEach(obj => mapItems.push(obj));
                 }
             }
@@ -1700,8 +1719,9 @@ function drawCanvas() {
                 // Remove from map node
                 if (typeof item.removeFromNodes === "function") {
                     item.removeFromNodes();
-                } else if (map.nodes[item.x] && map.nodes[item.x][item.y]) {
-                    map.nodes[item.x][item.y].removeObject(item);
+                } else {
+                    const itemNode = map.worldToNode(item.x, item.y);
+                    if (itemNode) itemNode.removeObject(item);
                 }
                 item.gone = true;
             }
@@ -1899,10 +1919,13 @@ function drawHexGrid() {
     const quarterW = hexWidth / 4;
     const halfH = hexHeight / 2;
 
-    const yStart = Math.max(Math.floor(viewport.y) - 2, 0);
-    const yEnd = Math.min(Math.ceil(viewport.y + viewport.height) + 2, mapHeight - 1);
-    const xStart = Math.max(Math.floor(viewport.x) - 2, 0);
-    const xEnd = Math.min(Math.ceil(viewport.x + viewport.width) + 2, mapWidth - 1);
+    startNode = map.worldToNode(viewport.x, viewport.y);
+    endNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
+
+    const yStart = Math.max(Math.floor(startNode.yindex) - 2, 0);
+    const yEnd = Math.min(Math.ceil(endNode.yindex) + 2, mapHeight - 1);
+    const xStart = Math.max(Math.floor(startNode.xindex) - 2, 0);
+    const xEnd = Math.min(Math.ceil(endNode.xindex) + 2, mapWidth - 1);
 
     const animalTiles = new Set();
     animals.forEach(animal => {
@@ -1914,8 +1937,9 @@ function drawHexGrid() {
         for (let x = xStart; x <= xEnd; x++) {
             if (!map.nodes[x] || !map.nodes[x][y]) continue;
             const node = map.nodes[x][y];
-            const centerX = node.xindex * map.hexWidth - viewport.x * map.hexWidth;
-            const centerY = (node.yindex + (node.xindex % 2 === 0 ? 0.5 : 0)) * map.hexHeight - viewport.y * map.hexHeight;
+            const screenCoors = displayCoors(node);
+            const centerX = screenCoors.x;
+            const centerY = screenCoors.y;
 
             const isBlocked = node.hasBlockingObject() || !!node.blocked;
             const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
@@ -1945,29 +1969,21 @@ function drawHexGrid() {
     }
 }
 
-function worldCoors(item) {
-    return {
-        x: (item.x + (item.offset?.x || 0)) * 0.866,
-        y: (item.y + (item.offset?.y || 0) + (item.x % 2 === 0 ? 0.5 : 0))
-    }
-}
-
 function displayCoors(item) {
-    const world = worldCoors(item);
     return {
-        x: (world.x / 0.866) * map.hexWidth - viewport.x * map.hexWidth,
-        y: world.y * map.hexHeight - viewport.y * map.hexHeight
+        x: (item.x - viewport.x) * map.hexWidth,
+        y: (item.y - viewport.y) * map.hexHeight
     }
 }
 
 function centerViewport(obj, margin) {
-    // Calculate viewport center
+    // viewport is in array index units
     const centerX = viewport.x + viewport.width / 2;
     const centerY = viewport.y + viewport.height / 2;
     
-    // Calculate object's real position (including offset)
-    const realX = obj.x + (obj.offset?.x || 0);
-    const realY = obj.y + (obj.offset?.y || 0);
+    // Convert obj world coordinates to index units
+    const objIndexX = obj.x;
+    const objIndexY = obj.y;
     
     // Check if object is outside the margin box
     const leftBound = centerX - margin;
@@ -1982,16 +1998,16 @@ function centerViewport(obj, margin) {
     let targetOffsetX = 0;
     let targetOffsetY = 0;
     
-    if (realX < leftBound) {
-        targetOffsetX = (realX - leftBound);
-    } else if (realX > rightBound) {
-        targetOffsetX = (realX - rightBound);
+    if (objIndexX < leftBound) {
+        targetOffsetX = (objIndexX - leftBound);
+    } else if (objIndexX > rightBound) {
+        targetOffsetX = (objIndexX - rightBound);
     }
     
-    if (realY < topBound) {
-        targetOffsetY = (realY - topBound);
-    } else if (realY > bottomBound) {
-        targetOffsetY = (realY - bottomBound);
+    if (objIndexY < topBound) {
+        targetOffsetY = (objIndexY - topBound);
+    } else if (objIndexY > bottomBound) {
+        targetOffsetY = (objIndexY - bottomBound);
     }
     
     // Smoothly interpolate viewport position
@@ -2003,12 +2019,14 @@ function centerViewport(obj, margin) {
     viewport.y = Math.max(0, Math.min(viewport.y, mapHeight - viewport.height));
 }
 
-function getHexLine(x1, y1, x2, y2) {
-    if (!map || !map.nodes[x1] || !map.nodes[x1][y1]) return [];
-    if (!map.nodes[x2] || !map.nodes[x2][y2]) return [];
-
-    let current = map.nodes[x1][y1];
-    const target = map.nodes[x2][y2];
+function getHexLine(nodeA, nodeB) {
+    if (!map || !nodeA || !nodeB) return [];
+    
+    // Convert world coordinates to map nodes if needed
+    let current = map.worldToNode(nodeA.x, nodeA.y);
+    const target = map.worldToNode(nodeB.x, nodeB.y);
+    
+    if (!current || !target) return [];
     const path = [current];
     const startPos = {x: current.x, y: current.y};
     const lineVec = {x: target.x - startPos.x, y: target.y - startPos.y};
@@ -2068,13 +2086,17 @@ function updatePhantomWall(ax, ay, bx, by) {
     
     wizard.phantomWall.clear();
 
-    const wallPath = getHexLine(ax, ay, bx, by);
+    const nodeA = map.worldToNode(ax, ay);
+    const nodeB = map.worldToNode(bx, by);
+    if (!nodeA || !nodeB) return;
+    
+    const wallPath = getHexLine(nodeA, nodeB);
     for (let i = 0; i < wallPath.length - 1; i++) {
         const nodeA = wallPath[i];
         const nodeB = wallPath[i + 1];
         
         // Use the static NewWall.drawWall method with phantom styling
-        NewWall.drawWall(wizard.phantomWall, nodeA, nodeB, 1.5, 0.2, 0x888888, 0.5);
+        Wall.drawWall(wizard.phantomWall, nodeA, nodeB, 1.5, 0.2, 0x888888, 0.5);
     }
 }
 
