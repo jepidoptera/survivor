@@ -6,6 +6,8 @@
     <script src="assets/javascript/common.js"></script>
     <script src="assets/javascript/components.js"></script>
     <script src="assets/javascript/meshDeformation.js"></script>
+    <script src="assets/javascript/Map.js"></script>
+    <script src="assets/javascript/staticObjects.js"></script>
     <script src="assets/javascript/runaround.js"></script>
     <link rel="stylesheet" href="assets/css/survivor.css">
     <link rel="stylesheet" href="assets/css/dialogBoxes.css">
@@ -13,9 +15,27 @@
 <body>
     <div id="msgbox" class="hidden dialogBox"><div id="msgbuttons"></div></div>
     <div id="time"></div>
-    <div id="ammoSelect">
-        <div id="selectedAmmo"></div>
+    <div id="statusBars">
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/red heart.png"></div>
+            <div class="statusBar-background">
+                <div id="healthBar" class="statusBar-fill"></div>
+            </div>
+        </div>
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/beaker.png"></div>
+            <div class="statusBar-background">
+                <div id="magicBar" class="statusBar-fill"></div>
+            </div>
+        </div>
     </div>
+    <div id="spellSelector">
+        <div id="selectedSpell"></div>
+        <div id="spellMenu" class="hidden">
+            <div id="spellGrid"></div>
+        </div>
+    </div>
+
     <div id="display"></div>
     <div id="msg"></div>
 </body>
