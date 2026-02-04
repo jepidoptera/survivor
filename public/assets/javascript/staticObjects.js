@@ -1,14 +1,19 @@
 class StaticObject {
-    constructor(type, x, y, width, height, textures, map) {
+    constructor(type, location, width, height, textures, map) {
         this.type = type;
-        this.x = x;
-        this.y = y;
+        this.map = map;
         this.width = width;
         this.height = height;
-        this.map = map;
         this.blocksTile = true;
-        if (this.map.nodes[x] && this.map.nodes[x][y]) {
-            this.map.nodes[x][y].addObject(this);
+
+        const loc = location || {x: 0, y: 0};
+        this.x = loc.x;
+        this.y = loc.y;
+        this.node = this.map && typeof this.map.worldToNode === "function"
+            ? this.map.worldToNode(this.x, this.y)
+            : null;
+        if (this.node) {
+            this.node.addObject(this);
         }
         
         // Create Pixi sprite with random texture variant
@@ -21,6 +26,20 @@ class StaticObject {
         this.hp = 100;
         this.isOnFire = false;
         this.burned = false;
+    }
+
+    getNode() {
+        if (!this.node && this.map && typeof this.map.worldToNode === "function") {
+            this.node = this.map.worldToNode(this.x, this.y);
+        }
+        return this.node;
+    }
+
+    removeFromNodes() {
+        const node = this.getNode();
+        if (node) {
+            node.removeObject(this);
+        }
     }
     
     ignite() {
@@ -65,8 +84,8 @@ class StaticObject {
 }
 
 class Tree extends StaticObject {
-    constructor(x, y, textures, map) {
-        super('tree', x, y, 4, 4, textures, map);
+    constructor(location, textures, map) {
+        super('tree', location, 4, 4, textures, map);
         this.height = 4;
         this.hp = 100;
     }
@@ -113,339 +132,10 @@ class Tree extends StaticObject {
     }
 }
 
-class Wall extends StaticObject {
-    constructor(x, y, textures, map) {
-        const wallWidth = 2 * 0.866;
-        const wallHeight = 2;
-        super('wall', x, y, wallWidth, wallHeight, textures || [PIXI.Texture.EMPTY], map);
-        this.hp = 150;
-        this.wallRenderTexture = null; // Track render texture for cleanup
-        
-        // Generate this wall's responsive texture with neighbor connectors
-        this.generateResponsiveTexture();
-        
-        // Update all neighboring walls to reflect the new wall
-        const neighbors = this.detectNeighbors();
-        neighbors.forEach(neighbor => {
-            neighbor.object.generateResponsiveTexture();
-        });
-    }
-
-    getWallObject(node) {
-        if (!node || !node.objects) return null;
-        return node.objects.find(obj => obj && obj.type === 'wall') || null;
-    }
-
-    generateResponsiveTexture() {
-        const neighbors = this.detectNeighbors();
-        
-        // Texture size
-        const textureWidth = 64 * this.width;
-        const textureHeight = 64 * this.height;
-        
-        // Post dimensions in pixels
-        const postRadiusX = 7;
-        const postRadiusY = 7;
-        const postHeight = 40;
-        
-        // Center of texture (center of hex)
-        const centerX = textureWidth / 2;
-        const centerY = textureHeight / 2;
-        
-        const topY = centerY;
-        const baseY = topY + postHeight;
-        this.pixiSprite.anchor.set(0.5, baseY / textureHeight);
-
-        const bodyColor = 0x5c5c5c;
-        const topColor = 0x7a7a7a;
-        const connectorColor = 0x888888;
-
-        // Create graphics for rendering
-        const gfx = new PIXI.Graphics();
-
-        // Transparent background
-        gfx.beginFill(0xFFFFFF, 0);
-        gfx.drawRect(0, 0, textureWidth, textureHeight);
-        gfx.endFill();
-
-        // Draw post
-        // Bottom ellipse (base)
-        gfx.beginFill(bodyColor, 1);
-        gfx.drawEllipse(centerX, baseY, postRadiusX, postRadiusY);
-        gfx.endFill();
-
-        // Body rectangle
-        gfx.beginFill(bodyColor, 1);
-        gfx.drawRect(centerX - postRadiusX, topY, postRadiusX * 2, baseY - topY);
-        gfx.endFill();
-
-        // Top ellipse (cap)
-        gfx.beginFill(topColor, 1);
-        gfx.drawEllipse(centerX, topY, postRadiusX, postRadiusY);
-        gfx.endFill();
-
-        const worldPos = worldCoors(this)
-        const ourWorldX = worldPos.x;
-        const ourWorldY = worldPos.y;
-        
-        // Get the map node for this wall
-        const myNode = this.map.nodes[this.x][this.y];
-
-        // If an even (far) neighbor is present alongside an adjacent odd neighbor,
-        // prefer the odd (adjacent) connection and skip the even one.
-        const skipEvenDirs = new Set();
-        const evenToOddPairs = {
-            0: [11, 1],
-            2: [1, 3],
-            4: [3, 5],
-            6: [5, 7],
-            8: [7, 9],
-            10: [9, 11]
-        };
-        Object.keys(evenToOddPairs).forEach(key => {
-            const evenDir = Number(key);
-            const evenNeighbor = myNode.neighbors[evenDir];
-            const evenWall = this.getWallObject(evenNeighbor);
-            if (!evenNeighbor || !evenWall) return;
-
-            const [oddA, oddB] = evenToOddPairs[evenDir];
-            const oddNeighborA = myNode.neighbors[oddA];
-            const oddNeighborB = myNode.neighbors[oddB];
-            const oddHasWallA = !!this.getWallObject(oddNeighborA);
-            const oddHasWallB = !!this.getWallObject(oddNeighborB);
-
-            if (oddHasWallA || oddHasWallB) {
-                skipEvenDirs.add(evenDir);
-            }
-        });
-        
-        // When a wall connects along an even direction, it blocks the two flanking neighbors from accessing each other
-        Object.keys(evenToOddPairs).forEach(key => {
-            const evenDir = Number(key);
-            if (skipEvenDirs.has(evenDir)) return; // Skip if we're not drawing a connector here
-            
-            const evenNeighbor = myNode.neighbors[evenDir];
-            const evenWall = this.getWallObject(evenNeighbor);
-            if (!evenNeighbor || !evenWall) return;
-            
-            // Wall connects along even direction evenDir, blocking passage between its flanking odd neighbors
-            const [oddA, oddB] = evenToOddPairs[evenDir];
-            const neighborA = myNode.neighbors[oddA];
-            const neighborB = myNode.neighbors[oddB];
-            
-            if (neighborA && neighborB) {
-                // Find which direction neighborB is from neighborA's perspective
-                for (let i = 0; i < 12; i++) {
-                    if (neighborA.neighbors[i] === neighborB) {
-                        if (!neighborA.blockedNeighbors) {
-                            neighborA.blockedNeighbors = new Map();
-                        }
-                        let blockingWalls = neighborA.blockedNeighbors.get(i);
-                        if (!blockingWalls) {
-                            blockingWalls = new Set();
-                            neighborA.blockedNeighbors.set(i, blockingWalls);
-                        }
-                        blockingWalls.add(this);
-                        break;
-                    }
-                }
-                // Find which direction neighborA is from neighborB's perspective
-                for (let i = 0; i < 12; i++) {
-                    if (neighborB.neighbors[i] === neighborA) {
-                        if (!neighborB.blockedNeighbors) {
-                            neighborB.blockedNeighbors = new Map();
-                        }
-                        let blockingWalls = neighborB.blockedNeighbors.get(i);
-                        if (!blockingWalls) {
-                            blockingWalls = new Set();
-                            neighborB.blockedNeighbors.set(i, blockingWalls);
-                        }
-                        blockingWalls.add(this);
-                        break;
-                    }
-                }
-            }
-        });
-        
-        // Draw connectors to neighboring walls
-        for (let dirIndex = 0; dirIndex < 12; dirIndex++) {
-            if (skipEvenDirs.has(dirIndex)) continue;
-            const neighborNode = myNode.neighbors[dirIndex];
-            
-            // Skip if no neighbor in this direction or if it's not a wall
-            const neighborWall = this.getWallObject(neighborNode);
-            if (!neighborNode || !neighborWall) {
-                continue;
-            }
-            
-            const neighbor = neighborWall;
-            // Get neighbor world position
-            const neighborPos = worldCoors(neighbor);
-            const neighborWorldX = neighborPos.x;
-            const neighborWorldY = neighborPos.y;
-            
-            // Direction vector from us to neighbor
-            const dirX = neighborWorldX - ourWorldX;
-            const dirY = neighborWorldY - ourWorldY;
-            const dist = Math.sqrt(dirX * dirX + dirY * dirY);
-            const normalX = dirX / dist;
-            const normalY = dirY / dist;
-            
-            // Perpendicular vector (rotated 90 degrees)
-            const perpX = -normalY;
-            const perpY = normalX;
-            
-            // Calculate pixel scale: map world hex dimensions to texture pixels
-            // World hex width = this.width * 0.866, height = this.height
-            // Texture size = textureWidth x textureHeight
-            const pixelScaleX = textureWidth / (this.width * 0.866);
-            const pixelScaleY = textureHeight / this.height;
-            const pixelScale = Math.min(pixelScaleX, pixelScaleY);
-            
-            // Tangent points on our post's top ellipse
-            const tangentDepth = postRadiusY;
-            const tangentWidth = postRadiusX;
-            
-            const tangent1X = centerX + perpX * tangentWidth;
-            const tangent1Y = topY + perpY * tangentDepth;
-            
-            const tangent2X = centerX - perpX * tangentWidth;
-            const tangent2Y = topY - perpY * tangentDepth;
-
-            const outerWallY = Math.max(tangent1Y, tangent2Y);
-            const outerWallX = outerWallY == tangent1Y ? tangent1X : tangent2X;
-            
-            const neighborTopX = centerX + normalX * dist * pixelScale / 1.5;  // /2
-            const neighborTopY = centerY + normalY * dist * pixelScale / 1.5;  // /2
-            
-            // Draw side connector rectangle
-            gfx.beginFill(0x111111, 1);
-            gfx.moveTo(outerWallX, outerWallY);
-            gfx.lineTo(outerWallX, outerWallY + postHeight);
-            gfx.lineTo(neighborTopX + outerWallX - centerX, neighborTopY + outerWallY - centerY + postHeight);
-            gfx.lineTo(neighborTopX + outerWallX - centerX, neighborTopY + outerWallY - centerY);
-            gfx.closePath();
-            gfx.endFill();
-
-            // Draw top connector rectangle
-            gfx.beginFill(connectorColor, 1);
-            gfx.moveTo(tangent1X, tangent1Y);
-            gfx.lineTo(tangent2X, tangent2Y);
-            gfx.lineTo(neighborTopX - perpX * tangentWidth, neighborTopY - perpY * tangentDepth);
-            gfx.lineTo(neighborTopX + perpX * tangentWidth, neighborTopY + perpY * tangentDepth);
-            gfx.closePath();
-            gfx.endFill();
-        }
-
-        // Destroy old render texture to prevent GPU memory leak
-        if (this.wallRenderTexture) {
-            this.wallRenderTexture.destroy(true);
-        }
-
-        // Create render texture and render to it
-        const renderTexture = PIXI.RenderTexture.create({width: textureWidth, height: textureHeight});
-        app.renderer.render(gfx, renderTexture);
-        
-        // Destroy graphics object after rendering
-        gfx.destroy();
-        
-        // Set the texture on sprite
-        this.pixiSprite.texture = renderTexture;
-        this.wallRenderTexture = renderTexture;
-    }
-
-    detectNeighbors() {
-        const myNode = this.map.nodes[this.x][this.y];
-        const neighbors = [];
-        
-        // Check all 12 neighbor directions
-        for (let i = 0; i < 12; i++) {
-            const neighborNode = myNode.neighbors[i];
-            const neighborWall = this.getWallObject(neighborNode);
-            if (neighborWall) {
-                neighbors.push({node: neighborNode, object: neighborWall});
-            }
-        }
-        
-        return neighbors;
-    }
-    
-    clearBlockedNeighbors() {
-        // Clear all blocked neighbor entries created by this wall's connectors
-        const myNode = this.map.nodes[this.x][this.y];
-        const evenToOddPairs = {
-            0: [11, 1],
-            2: [1, 3],
-            4: [3, 5],
-            6: [5, 7],
-            8: [7, 9],
-            10: [9, 11]
-        };
-        
-        Object.keys(evenToOddPairs).forEach(key => {
-            const evenDir = Number(key);
-            const evenNeighbor = myNode.neighbors[evenDir];
-            const evenWall = this.getWallObject(evenNeighbor);
-            if (!evenNeighbor || !evenWall) return;
-            
-            const [oddA, oddB] = evenToOddPairs[evenDir];
-            const neighborA = myNode.neighbors[oddA];
-            const neighborB = myNode.neighbors[oddB];
-            
-            if (neighborA && neighborB) {
-                // Find and remove the blocked direction from each neighbor
-                for (let i = 0; i < 12; i++) {
-                    if (neighborA.neighbors[i] === neighborB) {
-                        if (neighborA.blockedNeighbors) {
-                            const blockingWalls = neighborA.blockedNeighbors.get(i);
-                            if (blockingWalls) {
-                                blockingWalls.delete(this);
-                                if (blockingWalls.size === 0) {
-                                    neighborA.blockedNeighbors.delete(i);
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-                for (let i = 0; i < 12; i++) {
-                    if (neighborB.neighbors[i] === neighborA) {
-                        if (neighborB.blockedNeighbors) {
-                            const blockingWalls = neighborB.blockedNeighbors.get(i);
-                            if (blockingWalls) {
-                                blockingWalls.delete(this);
-                                if (blockingWalls.size === 0) {
-                                    neighborB.blockedNeighbors.delete(i);
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        });
-    }
-    
-    update() {
-        super.update();
-        
-        // When wall is destroyed, clear blocked neighbors and update adjacent walls
-        if (this.hp <= 0 && !this.destroyed) {
-            this.destroyed = true;
-            this.clearBlockedNeighbors();
-            
-            // Update neighboring walls
-            const neighbors = this.detectNeighbors();
-            neighbors.forEach(neighbor => {
-                neighbor.object.generateResponsiveTexture();
-            });
-        }
-    }
-}
 
 class Playground extends StaticObject {
-    constructor(x, y, textures, map) {
-        super('playground', x, y, 4, 3, textures, map);
+    constructor(location, textures, map) {
+        super('playground', location, 4, 3, textures, map);
         this.hp = 100;
         this.blocksDiamond = true;
         
@@ -457,22 +147,27 @@ class Playground extends StaticObject {
     }
     
     blockDiamondTiles() {
+        const node = this.getNode();
+        if (!node) return;
+        const baseX = node.xindex;
+        const baseY = node.yindex;
+
         // Block the 4 tiles in a horizontal diamond pattern
         // Diamond: one above, one up-left, one up-right (current tile already has object)
         const diamondTiles = [];
-        diamondTiles.push({x: this.x, y: this.y - 1}); // Up
+        diamondTiles.push({x: baseX, y: baseY - 1}); // Up
         
-        if (this.x % 2 === 0) {
+        if (baseX % 2 === 0) {
             // Even column: left and right at same y level
             diamondTiles.push(
-                {x: this.x - 1, y: this.y},      // Left
-                {x: this.x + 1, y: this.y}       // Right
+                {x: baseX - 1, y: baseY},      // Left
+                {x: baseX + 1, y: baseY}       // Right
             );
         } else {
             // Odd column: up-left and up-right are offset up
             diamondTiles.push(
-                {x: this.x - 1, y: this.y - 1},  // Up-left
-                {x: this.x + 1, y: this.y - 1}   // Up-right
+                {x: baseX - 1, y: baseY - 1},  // Up-left
+                {x: baseX + 1, y: baseY - 1}   // Up-right
             );
         }
         
@@ -499,7 +194,7 @@ class Playground extends StaticObject {
     }
 }
 
-class NewWall {
+class Wall {
     constructor(endpointA, endpointB, height, thickness, map, diagonalWallInfo = null) {
         this.type = 'newwall';
         this.map = map;
@@ -691,7 +386,7 @@ class NewWall {
         // Clear previous frame's drawing
         this.pixiSprite.clear();
         // Use the static method to draw this wall
-        NewWall.drawWall(this.pixiSprite, this.a, this.b, this.height, this.thickness, 0x555555, 1.0);
+        Wall.drawWall(this.pixiSprite, this.a, this.b, this.height, this.thickness, 0x555555, 1.0);
     }
     
     static createWallLine(wallPath, height, thickness, map) {
@@ -715,7 +410,7 @@ class NewWall {
                 const intermediateB = nodeB.neighbors[(directionAtoB + 6) % 12];
                 
                 // Wall 1: from nodeA to midpoint
-                const wall1 = new NewWall(nodeA, midpoint, height, thickness, map, {
+                const wall1 = new Wall(nodeA, midpoint, height, thickness, map, {
                     baseNode: nodeA,
                     intermediate: intermediateA,
                     direction: directionAtoB,
@@ -724,7 +419,7 @@ class NewWall {
                 walls.push(wall1);
                 
                 // Wall 2: from midpoint to nodeB
-                const wall2 = new NewWall(midpoint, nodeB, height, thickness, map, {
+                const wall2 = new Wall(midpoint, nodeB, height, thickness, map, {
                     baseNode: nodeB,
                     intermediate: intermediateB,
                     direction: (directionAtoB + 6) % 12,
@@ -733,7 +428,7 @@ class NewWall {
                 walls.push(wall2);
             } else {
                 // Regular adjacent wall
-                const wall = new NewWall(nodeA, nodeB, height, thickness, map);
+                const wall = new Wall(nodeA, nodeB, height, thickness, map);
                 walls.push(wall);
             }
         }
@@ -744,9 +439,9 @@ class NewWall {
     static drawWall(graphics, endpointA, endpointB, height, thickness, color, alpha) {
         thickness = thickness * map.hexWidth; // Use wall's thickness property
         // Convert world coordinates to screen coordinates
-        const screenAx = (endpointA.x / 0.866) * map.hexWidth - viewport.x * map.hexWidth;
+        const screenAx = endpointA.x * map.hexWidth - viewport.x * map.hexWidth;
         const screenAy = endpointA.y * map.hexHeight - viewport.y * map.hexHeight;
-        const screenBx = (endpointB.x / 0.866) * map.hexWidth - viewport.x * map.hexWidth;
+        const screenBx = endpointB.x * map.hexWidth - viewport.x * map.hexWidth;
         const screenBy = endpointB.y * map.hexHeight - viewport.y * map.hexHeight;
         
         // Draw post at the lower endpoint
