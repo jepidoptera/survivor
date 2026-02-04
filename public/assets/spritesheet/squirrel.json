@@ -1,0 +1,40 @@
+{
+  "frames": {
+    "squirrel_walk_left.png": {
+      "frame": {"x": 0, "y": 0, "w": 150, "h": 145},
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {"x": 0, "y": 0, "w": 150, "h": 145},
+      "sourceSize": {"w": 150, "h": 145}
+    },
+    "squirrel_walk_right.png": {
+      "frame": {"x": 0, "y": 145, "w": 150, "h": 146},
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {"x": 0, "y": 0, "w": 150, "h": 146},
+      "sourceSize": {"w": 150, "h": 146}
+    },
+    "squirrel_attack_left.png": {
+      "frame": {"x": 0, "y": 0, "w": 150, "h": 145},
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {"x": 0, "y": 0, "w": 150, "h": 145},
+      "sourceSize": {"w": 150, "h": 145}
+    },
+    "squirrel_attack_right.png": {
+      "frame": {"x": 0, "y": 145, "w": 150, "h": 146},
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {"x": 0, "y": 0, "w": 150, "h": 146},
+      "sourceSize": {"w": 150, "h": 146}
+    }
+  },
+  "meta": {
+    "app": "Survivor Game",
+    "version": "1.0",
+    "image": "/assets/spritesheet/images/squirrel.png",
+    "format": "RGBA8888",
+    "size": {"w": 150, "h": 291},
+    "scale": "1"
+  }
+}
