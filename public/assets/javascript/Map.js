@@ -181,10 +181,12 @@ class GameMap {
 
         console.log("generating nodes...");
 
+        let index = 0;
         for (let x = -1; x < this.width; x++) {
             this.nodes[x] = [];
             for (let y = -1; y < this.height; y++) {
                 this.nodes[x][y] = new MapNode(x, y, this.width, this.height);
+                this.nodes[x][y].index = index;
                 
                 // Randomly spawn scenery on this node
                 Object.keys(this.scenery).forEach(index => {
@@ -198,29 +200,30 @@ class GameMap {
                         let width = 4;
                         let height = 4;
                         
+                        const node = this.nodes[x][y];
                         if (item.type === "tree") {
-                            staticObject = new Tree(x, y, item.textures, this);
+                            staticObject = new Tree(node, item.textures, this);
                         }
                         else if (item.type === "wall") {
                             width = 1;
                             height = 2;
-                            staticObject = new Wall(x, y, item.textures, this);
+                            staticObject = new Wall(node, item.textures, this);
                         }
                         else if (item.type === "rock") {
                             width = .25 + Math.random() * .5;
                             height = .25 + Math.random() * .5;
-                            staticObject = new StaticObject(item.type, x, y, width, height, item.textures, this);
+                            staticObject = new StaticObject(item.type, node, width, height, item.textures, this);
                         }
                         else if (item.type === "cactus") {
                             width = 1;
                             height = 2;
-                            staticObject = new StaticObject(item.type, x, y, width, height, item.textures, this);
+                            staticObject = new StaticObject(item.type, node, width, height, item.textures, this);
                         }
                         else if (item.type === "playground") {
-                            staticObject = new Playground(x, y, item.textures, this);
+                            staticObject = new Playground(node, item.textures, this);
                         }
                         else {
-                            staticObject = new StaticObject(item.type, x, y, width, height, item.textures, this);
+                            staticObject = new StaticObject(item.type, node, width, height, item.textures, this);
                         }
                     }
                 })
@@ -238,39 +241,40 @@ class GameMap {
             for (let n = 0; n < animal.frequency; n++) {
                 const x = Math.floor(Math.random() * this.width);
                 const y = Math.floor(Math.random() * this.height);
+                const node = this.nodes[x][y];
                 let animalInstance;
                 
                 // Create the appropriate animal subclass
                 switch(animal.type) {
                     case 'deer':
-                        animalInstance = new Deer(x, y, this);
+                        animalInstance = new Deer(node, this);
                         break;
                     case 'bear':
-                        animalInstance = new Bear(x, y, this);
+                        animalInstance = new Bear(node, this);
                         break;
                     case 'squirrel':
-                        animalInstance = new Squirrel(x, y, this);
+                        animalInstance = new Squirrel(node, this);
                         break;
                     case 'scorpion':
-                        animalInstance = new Scorpion(x, y, this);
+                        animalInstance = new Scorpion(node, this);
                         break;
                     case 'armadillo':
-                        animalInstance = new Armadillo(x, y, this);
+                        animalInstance = new Armadillo(node, this);
                         break;
                     case 'coyote':
-                        animalInstance = new Coyote(x, y, this);
+                        animalInstance = new Coyote(node, this);
                         break;
                     case 'goat':
-                        animalInstance = new Goat(x, y, this);
+                        animalInstance = new Goat(node, this);
                         break;
                     case 'porcupine':
-                        animalInstance = new Porcupine(x, y, this);
+                        animalInstance = new Porcupine(node, this);
                         break;
                     case 'yeti':
-                        animalInstance = new Yeti(x, y, this);
+                        animalInstance = new Yeti(node, this);
                         break;
                     default:
-                        animalInstance = new Animal(animal.type, x, y, this);
+                        animalInstance = new Animal(animal.type, node, this);
                 }
                 
                 animals.push(animalInstance);
@@ -281,10 +285,6 @@ class GameMap {
     }
 
     findPath(startingNode, destinationNode) {
-        const startingNodeObj = this.nodes[startingNode.x][startingNode.y];
-        const destinationNodeObj = this.nodes[destinationNode.x][destinationNode.y];
-        const startingPoint = {x: startingNodeObj.x, y: startingNodeObj.y};
-        const destinationPoint = {x: destinationNodeObj.x, y: destinationNodeObj.y};
         
         // Even indices are far (diagonal) moves, odd indices are adjacent moves
         // Blocker pairs for far moves: the two adjacent directions that flank the far direction
@@ -304,72 +304,86 @@ class GameMap {
         ];
         const distFactors = [0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1];
         
-        let bestDistance = Infinity;
-        let bestDirection = -1;
-        
-        // Try each of the 12 neighbor directions
-        for (let n = 0; n < 12; n++) {
-            const neighborNode = startingNodeObj.neighbors[n];
-            
-            // Skip if this direction has no neighbor (edge of map)
-            if (!neighborNode) continue;
-            
-            // Skip if this direction is blocked by wall connectors
-            const blockingWalls = startingNodeObj.blockedNeighbors ? startingNodeObj.blockedNeighbors.get(n) : null;
-            if (blockingWalls && blockingWalls.size > 0) continue;
-            
-            // Skip if the neighbor is blocked or has an object
+        const path = [];
+        let currentNode = startingNode;
+        const visited = new Set();
+        if (currentNode) {
+            visited.add(`${currentNode.xindex},${currentNode.yindex}`);
+        }
+
+        while (currentNode) {
+            let bestDistance = Infinity;
+            let bestDirection = -1;
+
+            // Try each of the 12 neighbor directions
+            for (let n = 0; n < 12; n++) {
+                const neighborNode = currentNode.neighbors[n];
+
+                // Skip if this direction has no neighbor (edge of map)
+                if (!neighborNode) continue;
+
+                // Skip if this direction is blocked by wall connectors
+                const blockingWalls = currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(n) : null;
+                if (blockingWalls && blockingWalls.size > 0) continue;
+
+                // Skip if the neighbor is blocked or has an object
                 if (neighborNode.hasBlockingObject() || neighborNode.blocked) continue;
-            
-            let canMove = true;
-            
-            // For double-distance moves, check if adjacent tiles are blocked
-            if (blockerPairs[n]) {
-                const [blocker1, blocker2] = blockerPairs[n];
-                const blockerNode1 = startingNodeObj.neighbors[blocker1];
-                const blockerNode2 = startingNodeObj.neighbors[blocker2];
-                
+
+                let canMove = true;
+
+                // For double-distance moves, check if adjacent tiles are blocked
+                if (blockerPairs[n]) {
+                    const [blocker1, blocker2] = blockerPairs[n];
+                    const blockerNode1 = currentNode.neighbors[blocker1];
+                    const blockerNode2 = currentNode.neighbors[blocker2];
+
                     if ((blockerNode1 && blockerNode1.hasBlockingObject()) || (blockerNode2 && blockerNode2.hasBlockingObject())) {
-                    canMove = false;
+                        canMove = false;
+                    }
+                }
+
+                if (!canMove) continue;
+
+                // Check if we reached the destination
+                if (neighborNode == destinationNode) {
+                    path.push(destinationNode);
+                    return path;
+                }
+
+                // Calculate distance to destination
+                const moveToPoint = {x: neighborNode.x, y: neighborNode.y};
+                const distFactor = distFactors[n];
+                const xdist = destinationNode.x - currentNode.x - (moveToPoint.x - currentNode.x) * distFactor;
+                const ydist = destinationNode.y - currentNode.y - (moveToPoint.y - currentNode.y) * distFactor;
+                const dist = xdist ** 2 + ydist ** 2;
+
+                if (dist < bestDistance) {
+                    bestDistance = dist;
+                    bestDirection = n;
                 }
             }
-            
-            if (!canMove) continue;
-            
-            // Check if we reached the destination
-            if (neighborNode.xindex === destinationNode.x && neighborNode.yindex === destinationNode.y) {
-                return {
-                    x: neighborNode.xindex - startingNode.x,
-                    y: neighborNode.yindex - startingNode.y,
-                    direction: n
-                };
+
+            // If no valid direction found, return what we have
+            if (bestDirection === -1) {
+                return path.length ? path : null;
             }
-            
-            // Calculate distance to destination
-            const moveToPoint = {x: neighborNode.x, y: neighborNode.y};
-            const distFactor = distFactors[n];
-            const xdist = destinationPoint.x - startingPoint.x - (moveToPoint.x - startingPoint.x) * distFactor;
-            const ydist = destinationPoint.y - startingPoint.y - (moveToPoint.y - startingPoint.y) * distFactor;
-            const dist = xdist ** 2 + ydist ** 2;
-            
-            if (dist < bestDistance) {
-                bestDistance = dist;
-                bestDirection = n;
+
+            const bestNeighbor = currentNode.neighbors[bestDirection];
+            if (!bestNeighbor) {
+                return path.length ? path : null;
             }
+
+            const bestKey = `${bestNeighbor.xindex},${bestNeighbor.yindex}`;
+            if (visited.has(bestKey)) {
+                return path;
+            }
+
+            path.push(bestNeighbor);
+            visited.add(bestKey);
+            currentNode = bestNeighbor;
         }
-        
-        // If no valid direction found, return no movement
-        if (bestDirection === -1) {
-            return {x: 0, y: 0, direction: -1};
-        }
-        
-        // Return the offset for the best direction
-        const bestNeighbor = startingNodeObj.neighbors[bestDirection];
-        return {
-            x: bestNeighbor.xindex - startingNode.x,
-            y: bestNeighbor.yindex - startingNode.y,
-            direction: bestDirection
-        };
+
+        return path.length ? path : null;
     }
     
     // Convert world coordinates to the nearest MapNode
