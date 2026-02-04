@@ -24,29 +24,130 @@ body {
         1px 1px 0 #000;
 }
 
-#time, #ammoSelect {
+#time {
     position: absolute;
     display: block;
     color: white;
     z-index: 2;
     background: transparent;
-}
-
-#time {
     right: 0;
 }
 
-#ammoSelect {
-    left: 0;
-    text-shadow: 
-        -1px 1px 0 #000,
-        1px 1px 0 #000,
-        1px -1px 0 #000,
-        -1px -1px 0 #000;
-    cursor: pointer;
-    text-align: right;
+#statusBars {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
+#spellSelector {
+    position: absolute;
+    left: 10px;
+    top: 120px;
+    z-index: 2;
+}
+
+#selectedSpell {
+    width: 60px;
+    height: 60px;
+    cursor: pointer;
+    border: 3px solid #FFD700;
+    border-radius: 8px;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+    transition: transform 0.1s;
+}
+
+#selectedSpell:hover {
+    transform: scale(1.05);
+}
+
+#spellMenu {
+    position: absolute;
+    left: 0;
+    top: 70px;
+    background: rgba(0, 0, 0, 0.85);
+    border: 2px solid #FFD700;
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+}
+
+#spellMenu.hidden {
+    display: none;
+}
+
+#spellGrid {
+    display: grid;
+    grid-template-columns: repeat(4, 60px);
+    gap: 10px;
+}
+
+.spellIcon {
+    width: 60px;
+    height: 60px;
+    cursor: pointer;
+    border: 2px solid #888;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    transition: border-color 0.2s, transform 0.1s;
+}
+
+.spellIcon:hover {
+    border-color: #FFD700;
+    transform: scale(1.1);
+}
+
+.spellIcon.selected {
+    border-color: #FFD700;
+    box-shadow: 0 0 10px #FFD700;
+}
+
+.statusBar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.statusIcon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.statusIcon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.statusBar-background {
+    width: 200px;
+    height: 20px;
+    background-color: rgba(68, 68, 68, 0.8);
+    border: 1px solid #666;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#healthBar {
+    height: 100%;
+    width: 100%;
+    background-color: #FF0000;
+    transition: width 0.1s ease;
+}
+
+#magicBar {
+    height: 100%;
+    width: 100%;
+    background-color: #0000FF;
+    transition: width 0.1s ease;
+}
 
 .msgBox {
     background-color: whitesmoke;
