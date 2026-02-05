@@ -21,11 +21,30 @@ class StaticObject {
         this.pixiSprite = new PIXI.Sprite(texture);
         this.pixiSprite.anchor.set(0.5, 1);
         objectLayer.addChild(this.pixiSprite);
+
+        this.hitbox = new PolygonHitbox([]);
+        this.updateHitbox();
         
         // Default properties (can be overridden in subclasses)
         this.hp = 100;
         this.isOnFire = false;
         this.burned = false;
+    }
+
+    updateHitbox() {
+        const width = this.width || 1;
+        const height = this.height || 1;
+        const left = this.x - width / 2;
+        const right = this.x + width / 2;
+        const top = this.y - height;
+        const bottom = this.y;
+
+        this.hitbox.points = [
+            {x: left, y: top},
+            {x: right, y: top},
+            {x: right, y: bottom},
+            {x: left, y: bottom}
+        ];
     }
 
     getNode() {
@@ -48,6 +67,7 @@ class StaticObject {
     }
     
     update() {
+        this.updateHitbox();
         // Initialize max HP on first fire ignition
         if (this.isOnFire && !this.maxHP) {
             this.maxHP = this.hp;
@@ -88,6 +108,8 @@ class Tree extends StaticObject {
         super('tree', location, 4, 4, textures, map);
         this.height = 4;
         this.hp = 100;
+        this.hitboxRadius = 3.5
+        this.hitbox = new CircleHitbox(this.x, this.y - 2, this.hitboxRadius / 2);
     }
     
     update() {
@@ -214,6 +236,13 @@ class Wall {
         this.pixiSprite = new PIXI.Graphics();
         this.skipTransform = true;
         
+        this.hitbox = new PolygonHitbox([
+            {x: this.a.x, y: this.a.y},
+            {x: this.a.x, y: this.a.y - this.height},
+            {x: this.b.x, y: this.b.y - this.height},
+            {x: this.b.x, y: this.b.y}
+        ]);
+
         // Arrays to track what this wall affects
         this.nodes = [];           // All nodes this wall sits on
         this.blockedLinks = [];    // All node connections this wall blocks
