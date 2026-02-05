@@ -217,22 +217,30 @@ class Playground extends StaticObject {
 }
 
 class Wall {
-    constructor(endpointA, endpointB, height, thickness, map, diagonalWallInfo = null) {
-        this.type = 'newwall';
+    constructor(endpointA, endpointB, height, thickness, map, direction) {
+        this.type = 'wall';
         this.map = map;
         
-        // Store world coordinates for endpoints
-        // Endpoints can be either MapNodes or plain {x, y} objects
-        this.a = {x: endpointA.x, y: endpointA.y};
-        this.b = {x: endpointB.x, y: endpointB.y};
-        
+        if (endpointB instanceof MapNode && !(endpointA instanceof MapNode)) {
+            this.a = endpointB;
+            this.b = endpointA;
+            this.isDiagonal = true;
+        } else if (endpointA instanceof MapNode && !(endpointB instanceof MapNode)) {
+            this.a = endpointA;
+            this.b = endpointB;
+            this.isDiagonal = true;
+        } else {
+            this.a = endpointA;
+            this.b = endpointB;
+            this.isDiagonal = false;
+        }
         // Position is at the center between endpoints
         this.x = (this.a.x + this.b.x) / 2;
         this.y = (this.a.y + this.b.y) / 2;
         
         this.height = height;
         this.thickness = thickness;
-        this.blocksTile = true;
+        this.blocksTile = false;
         this.pixiSprite = new PIXI.Graphics();
         this.skipTransform = true;
         
@@ -247,16 +255,34 @@ class Wall {
         this.nodes = [];           // All nodes this wall sits on
         this.blockedLinks = [];    // All node connections this wall blocks
         
-        // Store diagonal wall info if this is part of a split diagonal
-        this.diagonalWallInfo = diagonalWallInfo;
+        for (let direction = 0; direction < 12; direction++) {
+            this.addBlockedLink(this.a.neighbors[direction], (direction + 6) % 12);
+            if (this.b instanceof MapNode) {
+                this.addBlockedLink(this.b.neighbors[direction], (direction + 6) % 12);
+            }
+        }
         
+        if (this.isDiagonal) {
+            const d1 = (9 + direction) % 12;  // neighbor 9+dir
+            const d2 = (1 + direction) % 12;  // neighbor 1+dir
+            const d3 = (11 + direction) % 12; // neighbor 11+dir
+            const d4 = (3 + direction) % 12;  // neighbor 3+dir
+            
+            // Block the three cross-diagonal connections
+            this.blockCrossConnection(this.a, d1, d2);  // 9+dir ↔ 5+dir
+            this.blockCrossConnection(this.a, d3, d4);  // 7+dir ↔ 3+dir
+            this.blockCrossConnection(this.a, d2, d3);  // 5+dir ↔ 7+dir
+        } else {
+            // block one diagonal connection across the wall
+            const crossNodeA = this.a.neighbors[(direction + 2) % 12];
+            const crossNodeB = this.a.neighbors[(direction + 10) % 12];
+            this.addBlockedLink(crossNodeA, (direction + 9) % 12);
+            this.addBlockedLink(crossNodeB, (direction + 3) % 12);
+        }
+
         this.findNodesAlongWall(endpointA, endpointB);
         this.addToNodes();
-        if (diagonalWallInfo) {
-            this.blockDiagonal();
-        } else {
-            this.blockPerpendicular();
-        }
+
         objectLayer.addChild(this.pixiSprite);
     }
     
@@ -307,41 +333,6 @@ class Wall {
         this.blockedLinks = [];
     }
     
-    blockPerpendicular() {
-        // Find shared neighbors in odd directions and block between them
-        if (this.nodes.length < 2) return;
-        
-        const nodeA = this.nodes[0];
-        const nodeB = this.nodes[1];
-        
-        // Get the odd-direction neighbors of both endpoints
-        const aOddNeighbors = this.getOddNeighbors(nodeA);
-        const bOddNeighbors = this.getOddNeighbors(nodeB);
-        
-        // Find which odd directions are shared
-        for (let dir of [1, 3, 9, 11]) {
-            if (aOddNeighbors.has(dir) && bOddNeighbors.has(dir)) {
-                this.addBlockedLink(nodeA, dir);
-            }
-        }
-    }
-    
-    getOddNeighbors(node) {
-        const oddDirs = new Set();
-        if (node.xindex % 2 === 0) {
-            oddDirs.add(1);  // NE
-            oddDirs.add(3);  // E
-            oddDirs.add(9);  // W
-            oddDirs.add(11); // NW
-        } else {
-            oddDirs.add(1);  // NW
-            oddDirs.add(3);  // NE
-            oddDirs.add(9);  // SW
-            oddDirs.add(11); // SE
-        }
-        return oddDirs;
-    }
-    
     addBlockedLink(node, direction) {
         if (!node.blockedNeighbors) {
             node.blockedNeighbors = new Map();
@@ -353,43 +344,6 @@ class Wall {
         
         // Track this blocked link for cleanup later
         this.blockedLinks.push({node, direction});
-    }
-    
-    blockDiagonal() {
-        // For diagonal walls, block three specific node connections based on direction
-        // diagonalWallInfo contains: {baseNode, intermediate, segment, direction}
-        const {baseNode, intermediate, segment, direction} = this.diagonalWallInfo;
-        
-        if (!baseNode || !intermediate || direction === undefined) return;
-        
-        // The blocking pattern depends on the direction of the diagonal
-        // Direction can be 0, 2, 4, 6, 8, or 10 (even neighbors)
-        
-        if (segment === 1) {
-            // Wall 1 blocks three pairs based on direction
-            // If direction is 0: blocks 9↔5, 7↔3, 5↔7
-            // If direction is 2: blocks all numbers +2 mod 12
-            const d1 = (9 + direction) % 12;  // neighbor at position 9+dir
-            const d2 = (5 + direction) % 12;  // neighbor at position 5+dir
-            const d3 = (7 + direction) % 12;  // neighbor at position 7+dir
-            const d4 = (3 + direction) % 12;  // neighbor at position 3+dir
-            
-            // Block the three cross-diagonal connections
-            this.blockCrossConnection(baseNode, d1, d2);  // 9+dir ↔ 5+dir
-            this.blockCrossConnection(baseNode, d3, d4);  // 7+dir ↔ 3+dir
-            this.blockCrossConnection(baseNode, d2, d3);  // 5+dir ↔ 7+dir
-        } else if (segment === 2) {
-            // Wall 2 blocks three pairs for the ending node
-            const d1 = (9 + direction) % 12;  // neighbor 9+dir
-            const d2 = (1 + direction) % 12;  // neighbor 1+dir
-            const d3 = (11 + direction) % 12; // neighbor 11+dir
-            const d4 = (3 + direction) % 12;  // neighbor 3+dir
-            
-            // Block the three cross-diagonal connections
-            this.blockCrossConnection(baseNode, d1, d2);  // 9+dir ↔ 1+dir
-            this.blockCrossConnection(baseNode, d3, d4);  // 11+dir ↔ 3+dir
-            this.blockCrossConnection(baseNode, d3, d2);  // 11+dir ↔ 1+dir
-        }
     }
     
     blockCrossConnection(node, dirA, dirB) {
@@ -423,41 +377,37 @@ class Wall {
         const walls = [];
         
         for (let i = 0; i < wallPath.length - 1; i++) {
-            const nodeA = wallPath[i];
-            const nodeB = wallPath[i + 1];
+            let nodeA = wallPath[i];
+            let nodeB = wallPath[i + 1];
             
             // Check if this is a long diagonal (not adjacent)
             const directionAtoB = nodeA.neighbors.indexOf(nodeB);
+            const directionBtoA = nodeB.neighbors.indexOf(nodeA);
+            let wallDirection;
+            if (directionBtoA < directionAtoB) {
+                wallDirection = directionBtoA;
+                let nodeC = nodeA;
+                nodeA = nodeB;
+                nodeB = nodeC;
+            } else {
+                wallDirection = directionAtoB;
+            }
             if (directionAtoB % 2 == 0) {
                 
                 const midpointX = (nodeA.x + nodeB.x) / 2;
                 const midpointY = (nodeA.y + nodeB.y) / 2;
                 const midpoint = {x: midpointX, y: midpointY};
                 
-                // Get intermediate nodes for blocking
-                const intermediateA = nodeA.neighbors[directionAtoB];
-                const intermediateB = nodeB.neighbors[(directionAtoB + 6) % 12];
-                
                 // Wall 1: from nodeA to midpoint
-                const wall1 = new Wall(nodeA, midpoint, height, thickness, map, {
-                    baseNode: nodeA,
-                    intermediate: intermediateA,
-                    direction: directionAtoB,
-                    segment: 1
-                });
+                const wall1 = new Wall(nodeA, midpoint, height, thickness, map, wallDirection);
                 walls.push(wall1);
                 
                 // Wall 2: from midpoint to nodeB
-                const wall2 = new Wall(midpoint, nodeB, height, thickness, map, {
-                    baseNode: nodeB,
-                    intermediate: intermediateB,
-                    direction: (directionAtoB + 6) % 12,
-                    segment: 2
-                });
+                const wall2 = new Wall(midpoint, nodeB, height, thickness, map, wallDirection + 6);
                 walls.push(wall2);
             } else {
                 // Regular adjacent wall
-                const wall = new Wall(nodeA, nodeB, height, thickness, map);
+                const wall = new Wall(nodeA, nodeB, height, thickness, map, wallDirection);
                 walls.push(wall);
             }
         }
