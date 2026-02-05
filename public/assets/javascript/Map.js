@@ -117,7 +117,7 @@ class GameMap {
         this.animalImages = {};
         this.nodes = [];
         this.hexHeight = 1;
-        this.hexWidthRatio = 1.2;
+        this.hexWidthRatio = 1.5;
         this.hexWidth = this.hexHeight * this.hexWidthRatio;
 
         const scenery = [
