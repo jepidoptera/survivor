@@ -115,6 +115,7 @@ class Projectile {
         this.landedWorldX = 0;
         this.landedWorldY = 0;
         this.delayTime = 0;
+        this.radius = 0.25; // Default hitbox radius in hex units
     }
     throw(targetX, targetY) {
         this.visible = true;
@@ -347,6 +348,7 @@ class Fireball extends Projectile {
         this.isAnimating = true;
         this.damageRadius = 0.75;
         this.delayTime = 2;
+        this.radius = this.damageRadius;
     }
     throw(targetX, targetY) {
         // check magic
@@ -467,12 +469,11 @@ class Fireball extends Projectile {
         // Check for damage on every frame while moving
         animals.forEach((animal, n) => {
             if (animal._onScreen && !animal.dead) {
-                // Use world coordinates for accurate collision detection
-                const ballWorld = displayCoors(this);
-                const animalWorld = displayCoors(animal);
-                const animalRadiusPx = (animal.hitboxRadius || 0) * map.hexHeight;
-                const ballRadiusPx = this.damageRadius * map.hexHeight;
-                if (withinRadius(ballWorld.x, ballWorld.y, animalWorld.x, animalWorld.y, ballRadiusPx + animalRadiusPx)) {
+                const hit = checkCircleVsCircle(
+                    {x: this.x, y: this.y, radius: this.radius},
+                    {x: animal.x, y: animal.y, radius: animal.radius || 0}
+                );
+                if (hit) {
                     let damage = 0.1; // Damage per frame
                     animal.hp -= damage;
                     animal.ignite(5);
@@ -483,34 +484,38 @@ class Fireball extends Projectile {
         });
         
         // Check for trees/objects in range
-        for (let x = Math.floor(this.x - 2); x <= Math.ceil(this.x + 2); x++) {
-            for (let y = Math.floor(this.y); y <= Math.ceil(this.y + 4); y++) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
-                    const nodeObjects = map.nodes[x][y].objects;
-                    nodeObjects.forEach(obj => {
-                        if (!obj) return;
-                        if (obj.type === "tree" || obj.type === "playground") {
-                        // Check if fireball is within object's bounding box (world coords)
-                        const objLeft = obj.x - (obj.width || 4) * map.hexHeight / 2;
-                        const objRight = obj.x + (obj.width || 4) * map.hexHeight / 2;
-                        const objBottom = obj.y;
-                        const objTop = obj.y - (obj.height || 4) * map.hexHeight;
-                        
-                        const withinX = this.x >= objLeft && this.x <= objRight;
-                        const withinY = this.y >= objTop && this.y <= objBottom;
-                        
-                        if (withinX && withinY) {
-                            // Don't re-ignite objects that are already burned or falling
-                            if (obj.burned || (obj.rotation && obj.rotation > 0) || obj.fireFadeStart !== undefined || obj.hp <= 0) {
-                                return;
+        const minNode = map.worldToNode(this.x - 2, this.y);
+        const maxNode = map.worldToNode(this.x + 2, this.y + 4);
+        if (minNode && maxNode) {
+            const xStart = Math.max(minNode.xindex - 1, 0);
+            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
+            const yStart = Math.max(minNode.yindex - 1, 0);
+            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
+
+            for (let x = xStart; x <= xEnd; x++) {
+                for (let y = yStart; y <= yEnd; y++) {
+                    if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
+                        const nodeObjects = map.nodes[x][y].objects;
+                        nodeObjects.forEach(obj => {
+                            if (!obj || !obj.hitbox) return;
+                            if (obj.type === "tree" || obj.type === "playground") {
+                                const hit = checkCircleVsPolygon(
+                                    {x: this.x, y: this.y, radius: this.radius},
+                                    obj.hitbox
+                                );
+                                if (hit) {
+                                    // Don't re-ignite objects that are already burned or falling
+                                    if (obj.burned || (obj.rotation && obj.rotation > 0) || obj.fireFadeStart !== undefined || obj.hp <= 0) {
+                                        return;
+                                    }
+                                    if (!obj.hp) obj.hp = 100;
+                                    obj.hp -= 1;
+                                    obj.isOnFire = true;
+                                    obj.fireDuration = 25 * frameRate;
+                                }
                             }
-                            if (!obj.hp) obj.hp = 100;
-                            obj.hp -= 1;
-                            obj.isOnFire = true;
-                            obj.fireDuration = 25 * frameRate;
-                        }
+                        });
                     }
-                    });
                 }
             }
         }
@@ -529,8 +534,9 @@ class Vanish extends Projectile {
         this.bounces = 0;
         this.apparentSize = 40;
         this.delayTime = 0;
-        this.effectRadius = 0.1;
+        this.effectRadius = 0.5;
         this.magicCost = 5;
+        this.radius = this.effectRadius;
     }
     
     throw(targetX, targetY) {
@@ -599,36 +605,42 @@ class Vanish extends Projectile {
         // Check for animals in range
         animals.forEach((animal, n) => {
             if (animal._onScreen && !animal.dead) {
-                const animalRadiusPx = (animal.hitboxRadius || 0.35) * map.hexHeight;
-                const ballRadiusPx = this.effectRadius * map.hexHeight;
-                
-                if (withinRadius(this.x, this.y, animal.x, animal.y, ballRadiusPx + animalRadiusPx)) {
+                const hit = checkCircleVsCircle(
+                    {x: this.x, y: this.y, radius: this.radius},
+                    {x: animal.x, y: animal.y, radius: animal.radius || 0.35}
+                );
+                if (hit) {
                     this.vanishTarget(animal);
                 }
             }
         });
         
         // Check for objects in range
-        for (let x = Math.floor(this.x - 2); x <= Math.ceil(this.x + 2); x++) {
-            for (let y = Math.floor(this.y); y <= Math.ceil(this.y + 4); y++) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
-                    const nodeObjects = map.nodes[x][y].objects;
-                    nodeObjects.forEach(obj => {
-                        if (!obj) return;
-                        
-                        // Check if vanish spell is within object's bounding box (world coords)
-                        const objLeft = obj.x - (obj.width || 4) * map.hexHeight / 2;
-                        const objRight = obj.x + (obj.width || 4) * map.hexHeight / 2;
-                        const objBottom = obj.y;
-                        const objTop = obj.y - (obj.height || 4) * map.hexHeight;
-                        
-                        const withinX = this.x >= objLeft && this.x <= objRight;
-                        const withinY = this.y >= objTop && this.y <= objBottom;
-                        
-                        if (withinX && withinY && !obj.vanishing) {
-                            this.vanishTarget(obj);
-                        }
-                    });
+        const minNode = map.worldToNode(this.x - 2, this.y);
+        const maxNode = map.worldToNode(this.x + 2, this.y + 4);
+        if (minNode && maxNode) {
+            const xStart = Math.max(minNode.xindex - 1, 0);
+            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
+            const yStart = Math.max(minNode.yindex - 1, 0);
+            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
+
+            for (let x = xStart; x <= xEnd; x++) {
+                for (let y = yStart; y <= yEnd; y++) {
+                    if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
+                        const nodeObjects = map.nodes[x][y].objects;
+                        nodeObjects.forEach(obj => {
+                            if (!obj || !obj.hitbox) return;
+                            let hit = false;
+                            if (obj.hitbox instanceof PolygonHitbox) {
+                                hit = checkCircleVsPolygon(this, obj.hitbox);
+                            } else if (obj.hitbox instanceof CircleHitbox) {
+                                hit = checkCircleVsCircle(this, obj.hitbox);
+                            }
+                            if (hit && !obj.vanishing) {
+                                this.vanishTarget(obj);
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -687,7 +699,7 @@ class Character {
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
-        this.hitboxRadius = 0.35; // Default hitbox radius in hex units
+        this.radius = 0.35; // Default hitbox radius in hex units
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
@@ -1083,7 +1095,7 @@ class Wizard extends Character {
 class Animal extends Character {
     constructor(type, location, map) {
         super(type, location, map);
-        this.hitboxRadius = 0.45; // Animal hitbox radius in hex units
+        this.radius = 0.45; // Animal hitbox radius in hex units
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 0;
@@ -1267,7 +1279,7 @@ class Squirrel extends Animal {
                 "walk_right"
             ]
         };
-        this.hitboxRadius = 0.25; 
+        this.radius = 0.25; 
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .2 + .4;
         this.width = this.size;
@@ -1294,7 +1306,7 @@ class Deer extends Animal {
                 "walk_right"
             ]
         };
-        this.hitboxRadius = 0.55; // Animal hitbox radius in hex units
+        this.radius = 0.55; // Animal hitbox radius in hex units
         this.frameCount = {x: 1, y: 2};
         this.size = Math.random() * .5 + .75;
         this.width = this.size;
@@ -1322,7 +1334,7 @@ class Bear extends Animal {
                 "attack_right"
             ]
         };
-        this.hitboxRadius = 1.0; // Animal hitbox radius in hex units
+        this.radius = 1.0; // Animal hitbox radius in hex units
         this.frameCount = {x: 2, y: 2};
         this.size = Math.random() * .3 + 1.2;
         this.width = this.size * 1.4;
@@ -1913,7 +1925,7 @@ function drawHexGrid() {
     gridGraphics.visible = true;
     gridGraphics.clear();
 
-    const hexWidth = map.hexWidth * 1.1547 * 1.1547;
+    const hexWidth = map.hexWidth * 1.1547;
     const hexHeight = map.hexHeight;
     const halfW = hexWidth / 2;
     const quarterW = hexWidth / 4;
@@ -2313,11 +2325,11 @@ function drawHitboxes() {
     }
     hitboxGraphics.clear();
 
-    // Fireball hitboxes (damage radius)
+    // Projectile hitboxes
     projectiles.forEach(ball => {
-        if (!ball.visible || !ball.damageRadius) return;
+        if (!ball.visible || !ball.radius) return;
         const ballCoors = displayCoors(ball);
-        const radiusPx = ball.damageRadius * map.hexHeight;
+        const radiusPx = ball.radius * map.hexHeight;
         hitboxGraphics.lineStyle(2, 0xffaa00, 0.9);
         hitboxGraphics.drawCircle(ballCoors.x, ballCoors.y, radiusPx);
     });
@@ -2326,41 +2338,64 @@ function drawHitboxes() {
     animals.forEach(animal => {
         if (!animal || animal.dead || !animal._onScreen) return;
         const animalCoors = displayCoors(animal);
-        const radiusPx = (animal.hitboxRadius || 0.35) * map.hexHeight;
+        const radiusPx = (animal.radius || 0.35) * map.hexHeight;
         hitboxGraphics.lineStyle(2, 0x00ff66, 0.9);
         hitboxGraphics.drawCircle(animalCoors.x, animalCoors.y, radiusPx);
     });
 
     // Tree hitboxes (match occlusion/catching fire bounds)
     hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-    const yStart = Math.max(Math.floor(viewport.y) - 2, 0);
-    const yEnd = Math.min(Math.ceil(viewport.y + viewport.height) + 2, mapHeight - 1);
-    const xStart = Math.max(Math.floor(viewport.x) - 2, 0);
-    const xEnd = Math.min(Math.ceil(viewport.x + viewport.width) + 2, mapWidth - 1);
+    const topLeftNode = map.worldToNode(viewport.x, viewport.y);
+    const bottomRightNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
 
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const nodeObjects = map.nodes[x][y].objects || [];
-            const obj = nodeObjects.find(item => item && item.type === "tree");
-            if (!obj) continue;
+    if (topLeftNode && bottomRightNode) {
+        const yStart = Math.max(topLeftNode.yindex - 2, 0);
+        const yEnd = Math.min(bottomRightNode.yindex + 3, mapHeight - 1);
+        const xStart = Math.max(topLeftNode.xindex - 2, 0);
+        const xEnd = Math.min(bottomRightNode.xindex + 2, mapWidth - 1);
 
-            if (obj.taperBounds) {
-                // Trapezoid bounds used for fallen trees
-                hitboxGraphics.moveTo(obj.taperBounds.left, obj.taperBounds.bottom);
-                hitboxGraphics.lineTo(obj.taperBounds.right, obj.taperBounds.bottom);
-                hitboxGraphics.lineTo(obj.taperBounds.right, obj.taperBounds.top);
-                hitboxGraphics.lineTo(obj.taperBounds.left, obj.taperBounds.top);
-                hitboxGraphics.closePath();
-            } else {
-                // Rectangular bounds (same as occlusion/catching fire)
-                const itemCoors = displayCoors(obj);
-                const itemLeft = itemCoors.x - ((obj.width || 1) * map.hexHeight) / 2;
-                const itemRight = itemCoors.x + ((obj.width || 1) * map.hexHeight) / 2;
-                const itemTop = itemCoors.y - (obj.height || 1) * map.hexHeight;
-                const itemBottom = itemCoors.y;
-                hitboxGraphics.drawRect(itemLeft, itemTop, itemRight - itemLeft, itemBottom - itemTop);
+        onscreenObjects = new Set();
+        for (let y = yStart; y <= yEnd; y++) {
+            for (let x = xStart; x <= xEnd; x++) {
+                if (!map.nodes[x] || !map.nodes[x][y]) continue;
+                const nodeObjects = map.nodes[x][y].objects || [];
+                nodeObjects.forEach(obj => {
+                    if (obj.hitbox) {
+                        onscreenObjects.add(obj);
+                    }
+                });
             }
+        }
+
+        // Draw polygon hitboxes for all onscreen objects that have them
+        if (onscreenObjects.size > 0) {
+            onscreenObjects.entries().forEach(([key, obj]) => {
+                if (!obj) {
+                    console.log('Undefined object in onscreenObjects set:', key);
+                    return;
+                }
+                if (obj.hitbox instanceof PolygonHitbox) {
+                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
+                    const points = obj.hitbox.points;
+                    if (!points || points.length === 0) return;
+                    
+                    // Convert world coordinates to screen coordinates using displayCoors logic
+                    const screenPoints = points.map(p => ({
+                        x: (p.x - viewport.x) * map.hexWidth,
+                        y: (p.y - viewport.y) * map.hexHeight
+                    }));
+                    
+                    // Draw polygon
+                    const flatPoints = screenPoints.flatMap(p => [p.x, p.y]);
+                    hitboxGraphics.drawPolygon(flatPoints);
+                } else if (obj.hitbox instanceof CircleHitbox) {
+                    const centerX = (obj.hitbox.x - viewport.x) * map.hexWidth;
+                    const centerY = (obj.hitbox.y - viewport.y) * map.hexHeight;
+                    const radiusPx = obj.hitbox.radius * map.hexHeight;
+                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
+                    hitboxGraphics.drawCircle(centerX, centerY, radiusPx);
+                }
+            });
         }
     }
 }
