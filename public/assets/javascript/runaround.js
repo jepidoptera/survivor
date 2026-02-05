@@ -33,6 +33,7 @@ let objectLayer = new PIXI.Container();
 let characterLayer = new PIXI.Container();
 let projectileLayer = new PIXI.Container();
 let hitboxLayer = new PIXI.Container();
+let cursorLayer = new PIXI.Container();
 
 app.stage.addChild(gameContainer);
 gameContainer.addChild(landLayer);
@@ -42,12 +43,14 @@ gameContainer.addChild(objectLayer);
 gameContainer.addChild(characterLayer);
 gameContainer.addChild(projectileLayer);
 gameContainer.addChild(hitboxLayer);
+gameContainer.addChild(cursorLayer);
 
 let landTileSprite = null;
 let gridGraphics = null;
 let hitboxGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
 let wizard = null;
+let cursorSprite = null; // Cursor sprite that points away from wizard
 
 // Load sprite sheets before starting game
 PIXI.Loader.shared
@@ -55,6 +58,7 @@ PIXI.Loader.shared
     .add('/assets/spritesheet/deer.json')
     .add('/assets/spritesheet/squirrel.json')
     .add('/assets/images/runningman.png')
+    .add('/assets/images/arrow.png')
     .load(onAssetsLoaded);
 
 function onAssetsLoaded() {
@@ -93,6 +97,12 @@ function onAssetsLoaded() {
             wizardFrames.push(frameTexture);
         }
     }
+    
+    // Initialize cursor sprite
+    const cursorTexture = PIXI.Texture.from('/assets/images/arrow.png');
+    cursorSprite = new PIXI.Sprite(cursorTexture);
+    cursorSprite.anchor.set(0.5, 0.5);
+    cursorLayer.addChild(cursorSprite);
     
     console.log("Pixi assets loaded successfully");
 }
@@ -585,20 +595,25 @@ class Vanish extends Projectile {
             this.y += this.movement.y;
             this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
             
+            // Check for hits throughout
+            this.land();
+
             // Check if reached target
             if (this.traveledDist >= this.totalDist) {
-                // Check for hits only at destination
-                this.land();
                 
-                this.visible = false;
-                if (this.pixiSprite) {
-                    projectileLayer.removeChild(this.pixiSprite);
-                    this.pixiSprite = null;
-                }
-                clearInterval(this.throwInterval);
+
             }
         }, 1000 / frameRate);
         return this;
+    }
+
+    deactivate() {
+        this.visible = false;
+        if (this.pixiSprite) {
+            projectileLayer.removeChild(this.pixiSprite);
+            this.pixiSprite = null;
+        }
+        clearInterval(this.throwInterval);
     }
     
     land() {
@@ -611,6 +626,7 @@ class Vanish extends Projectile {
                 );
                 if (hit) {
                     this.vanishTarget(animal);
+                    this.deactivate();
                 }
             }
         });
@@ -629,7 +645,7 @@ class Vanish extends Projectile {
                     if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
                         const nodeObjects = map.nodes[x][y].objects;
                         nodeObjects.forEach(obj => {
-                            if (!obj || !obj.hitbox) return;
+                            if (!obj || !obj.hitbox || !this.visible) return;
                             let hit = false;
                             if (obj.hitbox instanceof PolygonHitbox) {
                                 hit = checkCircleVsPolygon(this, obj.hitbox);
@@ -638,6 +654,7 @@ class Vanish extends Projectile {
                             }
                             if (hit && !obj.vanishing) {
                                 this.vanishTarget(obj);
+                                this.deactivate();
                             }
                         });
                     }
@@ -1459,6 +1476,9 @@ jQuery(() => {
     // Append Pixi canvas to display
     $("#display").append(app.view);
     
+    // Hide default cursor, show only custom drawn cursor
+    app.view.style.cursor = 'none';
+    
     // Handle window resize
     window.addEventListener('resize', sizeView);
 
@@ -1535,7 +1555,7 @@ jQuery(() => {
         { name: 'wall', icon: '/assets/images/thumbnails/wall.png' },
         { name: 'vanish', icon: '/assets/images/thumbnails/vanish.png' }
     ];
-    wizard.currentSpell = 'vanish';
+    wizard.currentSpell = 'wall';
     
     // Initialize spell selector UI
     function updateSpellSelector() {
@@ -1581,6 +1601,9 @@ jQuery(() => {
         let rect = app.view.getBoundingClientRect();
         const screenX = event.clientX - rect.left;
         const screenY = event.clientY - rect.top;
+        // Store screen coordinates for cursor
+        mousePos.screenX = screenX;
+        mousePos.screenY = screenY;
         // Store exact world coordinates for pixel-accurate aiming
         mousePos.worldX = screenX / map.hexWidth + viewport.x;
         mousePos.worldY = screenY / map.hexHeight + viewport.y;
@@ -1588,6 +1611,9 @@ jQuery(() => {
         const dest = screenToHex(screenX, screenY);
         mousePos.x = dest.x;
         mousePos.y = dest.y;
+        
+        // Update cursor immediately (don't wait for render loop)
+        updateCursor();
         
         // Update phantom wall preview if in layout mode
         if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
@@ -1908,77 +1934,9 @@ function drawCanvas() {
     wizard.updateStatusBars();
     drawProjectiles();
     drawHitboxes();
+    updateCursor();
     
     $('#msg').html(messages.join("<br>"))
-}
-
-function drawHexGrid() {
-    if (!debugMode) {
-        if (gridGraphics) gridGraphics.visible = false;
-        return;
-    }
-
-    if (!gridGraphics) {
-        gridGraphics = new PIXI.Graphics();
-        gridLayer.addChild(gridGraphics);
-    }
-    gridGraphics.visible = true;
-    gridGraphics.clear();
-
-    const hexWidth = map.hexWidth * 1.1547;
-    const hexHeight = map.hexHeight;
-    const halfW = hexWidth / 2;
-    const quarterW = hexWidth / 4;
-    const halfH = hexHeight / 2;
-
-    startNode = map.worldToNode(viewport.x, viewport.y);
-    endNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
-
-    const yStart = Math.max(Math.floor(startNode.yindex) - 2, 0);
-    const yEnd = Math.min(Math.ceil(endNode.yindex) + 2, mapHeight - 1);
-    const xStart = Math.max(Math.floor(startNode.xindex) - 2, 0);
-    const xEnd = Math.min(Math.ceil(endNode.xindex) + 2, mapWidth - 1);
-
-    const animalTiles = new Set();
-    animals.forEach(animal => {
-        if (!animal || animal.gone || animal.dead) return;
-        animalTiles.add(`${animal.x},${animal.y}`);
-    });
-
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const node = map.nodes[x][y];
-            const screenCoors = displayCoors(node);
-            const centerX = screenCoors.x;
-            const centerY = screenCoors.y;
-
-            const isBlocked = node.hasBlockingObject() || !!node.blocked;
-            const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
-            const color = isBlocked ? 0xff0000 : 0xffffff;
-            const alpha = isBlocked ? 0.9 : 0.35;
-            if (hasAnimal) {
-                gridGraphics.beginFill(0x3399ff, 0.25);
-                gridGraphics.moveTo(centerX - halfW, centerY);
-                gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + halfW, centerY);
-                gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-                gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-                gridGraphics.closePath();
-                gridGraphics.endFill();
-            }
-
-            gridGraphics.lineStyle(1, color, alpha);
-            gridGraphics.moveTo(centerX - halfW, centerY);
-            gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + halfW, centerY);
-            gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-            gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-            gridGraphics.closePath();
-        }
-    }
 }
 
 function displayCoors(item) {
@@ -2313,6 +2271,128 @@ function drawProjectiles() {
     projectiles = remainingBalls;
 }
 
+function drawHexGrid() {
+    if (!debugMode) {
+        if (gridGraphics) gridGraphics.visible = false;
+        return;
+    }
+
+    if (!gridGraphics) {
+        gridGraphics = new PIXI.Graphics();
+        gridLayer.addChild(gridGraphics);
+    }
+    gridGraphics.visible = true;
+    gridGraphics.clear();
+
+    const hexWidth = map.hexWidth * 1.1547;
+    const hexHeight = map.hexHeight;
+    const halfW = hexWidth / 2;
+    const quarterW = hexWidth / 4;
+    const halfH = hexHeight / 2;
+
+    startNode = map.worldToNode(viewport.x, viewport.y);
+    endNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
+
+    const yStart = Math.max(Math.floor(startNode.yindex) - 2, 0);
+    const yEnd = Math.min(Math.ceil(endNode.yindex) + 2, mapHeight - 1);
+    const xStart = Math.max(Math.floor(startNode.xindex) - 2, 0);
+    const xEnd = Math.min(Math.ceil(endNode.xindex) + 2, mapWidth - 1);
+
+    const animalTiles = new Set();
+    animals.forEach(animal => {
+        if (!animal || animal.gone || animal.dead) return;
+        animalTiles.add(`${animal.x},${animal.y}`);
+    });
+
+    for (let y = yStart; y <= yEnd; y++) {
+        for (let x = xStart; x <= xEnd; x++) {
+            if (!map.nodes[x] || !map.nodes[x][y]) continue;
+            const node = map.nodes[x][y];
+            const screenCoors = displayCoors(node);
+            const centerX = screenCoors.x;
+            const centerY = screenCoors.y;
+
+            const isBlocked = node.hasBlockingObject() || !!node.blocked;
+            const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
+            const color = isBlocked ? 0xff0000 : 0xffffff;
+            const alpha = isBlocked ? 0.5 : 0.35;
+            if (hasAnimal) {
+                gridGraphics.beginFill(0x3399ff, 0.25);
+                gridGraphics.moveTo(centerX - halfW, centerY);
+                gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
+                gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
+                gridGraphics.lineTo(centerX + halfW, centerY);
+                gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
+                gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
+                gridGraphics.closePath();
+                gridGraphics.endFill();
+            }
+
+            gridGraphics.lineStyle(1, color, alpha);
+            gridGraphics.moveTo(centerX - halfW, centerY);
+            gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
+            gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
+            gridGraphics.lineTo(centerX + halfW, centerY);
+            gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
+            gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
+            gridGraphics.closePath();
+        }
+    }
+
+    // Draw blocked neighbor connections with red perpendicular lines
+    gridGraphics.lineStyle(4, 0xff0000, 0.4);
+    for (let y = yStart; y <= yEnd; y++) {
+        for (let x = xStart; x <= xEnd; x++) {
+            if (!map.nodes[x] || !map.nodes[x][y]) continue;
+            const node = map.nodes[x][y];
+            
+            if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
+            
+            // For each blocked neighbor direction
+            node.blockedNeighbors.forEach((blockingSet, direction) => {
+                if (blockingSet.size === 0) return;
+                
+                const neighbor = node.neighbors[direction];
+                if (!neighbor) return;
+                
+                // Calculate midpoint between the two hexes in world space
+                const midX = (node.x + neighbor.x) / 2;
+                const midY = (node.y + neighbor.y) / 2;
+                
+                // Calculate vector from node to neighbor
+                const dx = neighbor.x - node.x;
+                const dy = neighbor.y - node.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                
+                if (len === 0) return;
+                
+                // Perpendicular vector (rotate 90 degrees)
+                const perpX = -dy / len;
+                const perpY = dx / len;
+                
+                // Line length (in world units)
+                const lineLength = 0.4;
+                
+                // Calculate endpoints of perpendicular line
+                const x1 = midX + perpX * lineLength;
+                const y1 = midY + perpY * lineLength;
+                const x2 = midX - perpX * lineLength;
+                const y2 = midY - perpY * lineLength;
+                
+                // Convert to screen coordinates
+                const screenX1 = (x1 - viewport.x) * map.hexWidth;
+                const screenY1 = (y1 - viewport.y) * map.hexHeight;
+                const screenX2 = (x2 - viewport.x) * map.hexWidth;
+                const screenY2 = (y2 - viewport.y) * map.hexHeight;
+                
+                // Draw the line
+                gridGraphics.moveTo(screenX1, screenY1);
+                gridGraphics.lineTo(screenX2, screenY2);
+            });
+        }
+    }
+}
+
 function drawHitboxes() {
     if (!debugMode) {
         if (hitboxGraphics) hitboxGraphics.visible = false;
@@ -2323,6 +2403,7 @@ function drawHitboxes() {
         hitboxGraphics = new PIXI.Graphics();
         hitboxLayer.addChild(hitboxGraphics);
     }
+    hitboxGraphics.visible = true;
     hitboxGraphics.clear();
 
     // Projectile hitboxes
@@ -2398,6 +2479,34 @@ function drawHitboxes() {
             });
         }
     }
+}
+
+function updateCursor() {
+    if (!cursorSprite || !mousePos.screenX || !mousePos.screenY || !wizard) return;
+    
+    // Set cursor position to mouse position
+    cursorSprite.x = mousePos.screenX;
+    cursorSprite.y = mousePos.screenY;
+    
+    // Calculate wizard position in screen coordinates
+    wizardScreenCoors = displayCoors(wizard);
+    const wizardScreenX = wizardScreenCoors.x;
+    const wizardScreenY = wizardScreenCoors.y;
+    
+    // Calculate vector from mouse to wizard
+    const dx = wizardScreenX - mousePos.screenX;
+    const dy = wizardScreenY - mousePos.screenY;
+    
+    // Calculate rotation angle (atan2 returns angle from -PI to PI)
+    // Add PI to point away from wizard, then add PI/2 for visual alignment
+    const angle = Math.atan2(dy, dx) + Math.PI * 1.5;
+    cursorSprite.rotation = angle;
+    
+    // Scale cursor appropriately
+    const cursorWidth = map.hexWidth / 2;
+    const cursorHeight = map.hexHeight;
+    cursorSprite.width = cursorWidth;
+    cursorSprite.height = cursorHeight;
 }
 
 function distance(x1, y1, x2, y2) {
