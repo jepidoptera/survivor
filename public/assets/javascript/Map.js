@@ -117,8 +117,7 @@ class GameMap {
         this.animalImages = {};
         this.nodes = [];
         this.hexHeight = 1;
-        this.hexWidthRatio = 1.5;
-        this.hexWidth = this.hexHeight * this.hexWidthRatio;
+        this.hexWidth = 1 / 0.866;
 
         const scenery = [
             {type: "tree", frequency: 4},
@@ -413,5 +412,108 @@ class GameMap {
         }
         
         return best;
+    }
+
+    getHexLine(nodeA, nodeB, width = 0) {
+        if (!nodeA || !nodeB) return [];
+        
+        // Get the center line first
+        if (width == 0) return this._getSingleHexLine(nodeA, nodeB);
+
+        // get direction (0-11) corresponding to the travel vector from A to B
+        const firstNeighborDirection = -1
+        const dx = nodeB.x - nodeA.x;
+        const dy = nodeB.y - nodeA.y;
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        let direction = Math.round(angle / 30);
+        if (direction < 0) direction += 12;
+        let sideLineStarts = [];
+        if (direction >= 2) {
+            sideLineStarts.push(-1);
+            if (direction % 2 === 0) {
+                sideLineStarts.push(1);
+            }
+        }
+        if (direction >= 3) {
+            sideLineStarts.push(-2);
+            if (direction % 2 === 0) {
+                sideLineStarts.push(1);
+            } else if (direction % 2 === 0) {
+                sideLineStarts.push(2);
+                sideLineStarts.push(-2);
+            }
+        }
+        
+        const allNodes = new Set(this._getSingleHexLine(nodeA, nodeB));
+        sideLineStarts.forEach(sideStart => {
+            if (sideStart) {
+                const sideLine = this._getSingleHexLine(nodeA.neighbors[sideStart], nodeB.neighbors[sideStart]);
+                sideLine.forEach(n => allNodes.add(n));
+            }
+        })
+        
+        return Array.from(allNodes);
+    }
+    
+    _getSingleHexLine(nodeA, nodeB) {
+        if (!nodeA || !nodeB) return [];
+        
+        // Convert world coordinates to map nodes if needed
+        let current = this.worldToNode(nodeA.x, nodeA.y);
+        const target = this.worldToNode(nodeB.x, nodeB.y);
+        
+        if (!current || !target) return [];
+        const path = [current];
+        const startPos = {x: current.x, y: current.y};
+        const lineVec = {x: target.x - startPos.x, y: target.y - startPos.y};
+        const lineLen = Math.hypot(lineVec.x, lineVec.y) || 1;
+        const maxSteps = (mapWidth + mapHeight) * 2;
+        const visited = new Set();
+
+        for (let step = 0; step < maxSteps; step++) {
+            if (current === target) break;
+            visited.add(`${current.xindex},${current.yindex}`);
+
+            const dx = target.x - current.x;
+            const dy = target.y - current.y;
+            const dist = Math.hypot(dx, dy) || 1;
+
+            let best = null;
+            let bestScore = -Infinity;
+            let bestDist = Infinity;
+            let bestLineDist = Infinity;
+
+            for (let i = 0; i < current.neighbors.length; i++) {
+                const neighbor = current.neighbors[i];
+                if (!neighbor) continue;
+                if (visited.has(`${neighbor.xindex},${neighbor.yindex}`)) continue;
+
+                const ndx = neighbor.x - current.x;
+                const ndy = neighbor.y - current.y;
+                const ndist = Math.hypot(ndx, ndy) || 1;
+                const dirScore = (ndx * dx + ndy * dy) / (ndist * dist);
+                const distToTarget = Math.hypot(target.x - neighbor.x, target.y - neighbor.y);
+                const reduces = distToTarget < dist - 1e-6;
+                const lineDist = Math.abs((neighbor.x - startPos.x) * lineVec.y - (neighbor.y - startPos.y) * lineVec.x) / lineLen;
+                const score = dirScore + (reduces ? 1 : 0) - lineDist * 1.2;
+
+                if (
+                    score > bestScore ||
+                    (score === bestScore && lineDist < bestLineDist) ||
+                    (score === bestScore && lineDist === bestLineDist && distToTarget < bestDist)
+                ) {
+                    bestScore = score;
+                    bestDist = distToTarget;
+                    bestLineDist = lineDist;
+                    best = neighbor;
+                }
+            }
+
+            if (!best) break;
+            current = best;
+            path.push(current);
+        }
+
+        return path;
     }
 }

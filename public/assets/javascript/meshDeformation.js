@@ -28,8 +28,8 @@ function applyTreeTaperMesh(item, coors) {
     }
 
     const rotationProgress = Math.min(item.rotation / 90, 1); // 0 to 1 as tree falls
-    let width = (item.width || 1) * item.map.hexWidth;
-    let height = (item.height || 1) * item.map.hexWidth;
+    let width = (item.width || 1) * viewscale;
+    let height = (item.height || 1) * viewscale;
     
     // Only skew happens in the last 15 degrees (75-90° or -75 to -90°)
     let topWidth = width;
