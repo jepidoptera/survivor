@@ -10,6 +10,10 @@ class Hitbox {
     getBounds() {
         throw new Error('Hitbox.getBounds() must be implemented by subclasses');
     }
+
+    intersects(otherHitbox) {
+        throw new Error('Hitbox.intersects() must be implemented by subclasses');
+    }
 }
 
 function getClosestPointOnSegment(px, py, ax, ay, bx, by) {
@@ -65,15 +69,27 @@ function checkCircleVsPolygon(circle, polygon) {
     }
 
     // Now we have the closest point on the ENTIRE perimeter.
+    // Check if circle center is inside polygon (ray casting)
+    let inside = false;
+    for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
+        const xi = polygonPoints[i].x;
+        const yi = polygonPoints[i].y;
+        const xj = polygonPoints[j].x;
+        const yj = polygonPoints[j].y;
+        const intersect = ((yi > circle.y) !== (yj > circle.y)) &&
+            (circle.x < (xj - xi) * (circle.y - yi) / (yj - yi + 0.0000001) + xi);
+        if (intersect) inside = !inside;
+    }
+
     // Check if we are colliding.
-    if (minDistSq < circle.radius * circle.radius) {
+    if (inside || minDistSq < circle.radius * circle.radius) {
         // Calculate the push vector
         const dist = Math.sqrt(minDistSq);
         
         // Prevent divide by zero if circle center is exactly on the edge
         if (dist === 0) return { pushX: 0, pushY: 0 }; 
 
-        const overlap = circle.radius - dist;
+        const overlap = inside ? (circle.radius + dist) : (circle.radius - dist);
         
         // Normalize vector (Center - Closest)
         const nx = (circle.x - closestX) / dist;
