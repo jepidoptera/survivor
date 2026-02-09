@@ -5,12 +5,25 @@ let frameCount = 0;
 const animationSpeedMultiplier = 0.75; // Adjustable: lower = faster, higher = slower
 const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align sprite sheet rows.
 let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal markers)
+let showHexGrid = false; // Toggle hex grid only (g key)
+let showBlockedNeighbors = false; // Toggle display of blocked neighbor connections
 
 let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494}
+let viewScale = 1;
+let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
 let projectiles = [];
 let animals = [];
 let mousePos = {x: 0, y: 0};
 var messages = [];
+let keysPressed = {}; // Track which keys are currently pressed
+let spacebarDownAt = null;
+let spellKeyBindings = {
+    "F": "fireball",
+    "B": "wall",
+    "V": "vanish",
+    "T": "treegrow",
+    "R": "buildroad"
+}
 
 let textures = {};
 let fireFrames = null;
@@ -26,10 +39,12 @@ const app = new PIXI.Application({
 // Game rendering layers
 let gameContainer = new PIXI.Container();
 let landLayer = new PIXI.Container();
+let roadLayer = new PIXI.Container();
 let gridLayer = new PIXI.Container();
 let neighborDebugLayer = new PIXI.Container();
 let lastDebugWizardPos = {x: -1, y: -1}; // Track wizard position to cache debug labels
 let objectLayer = new PIXI.Container();
+let roofLayer = new PIXI.Container();
 let characterLayer = new PIXI.Container();
 let projectileLayer = new PIXI.Container();
 let hitboxLayer = new PIXI.Container();
@@ -37,9 +52,11 @@ let cursorLayer = new PIXI.Container();
 
 app.stage.addChild(gameContainer);
 gameContainer.addChild(landLayer);
+gameContainer.addChild(roadLayer);
 gameContainer.addChild(gridLayer);
 gameContainer.addChild(neighborDebugLayer);
 gameContainer.addChild(objectLayer);
+gameContainer.addChild(roofLayer);
 gameContainer.addChild(characterLayer);
 gameContainer.addChild(projectileLayer);
 gameContainer.addChild(hitboxLayer);
@@ -48,9 +65,20 @@ gameContainer.addChild(cursorLayer);
 let landTileSprite = null;
 let gridGraphics = null;
 let hitboxGraphics = null;
+let groundPlaneHitboxGraphics = null;
+let wizardBoundaryGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
 let wizard = null;
+let roof = null; // Roof preview mesh
 let cursorSprite = null; // Cursor sprite that points away from wizard
+let spellCursor = null; // Alternate cursor for spacebar mode (line art)
+let onscreenObjects = new Set(); // Track visible staticObjects each frame
+let roadTileSprite = null;
+let roadMaskGraphics = null;
+const roadRepeatWorldUnits = 1;
+const roadTextureRotation = 10 * Math.PI / 180;
+const roadLayerOversize = 1.5;
+const roadWidth = 1.5;
 
 // Load sprite sheets before starting game
 PIXI.Loader.shared
@@ -100,14 +128,70 @@ function onAssetsLoaded() {
     
     // Initialize cursor sprite
     const cursorTexture = PIXI.Texture.from('/assets/images/arrow.png');
+    cursorTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR; // Enable antialiasing
     cursorSprite = new PIXI.Sprite(cursorTexture);
-    cursorSprite.anchor.set(0.5, 0.5);
+    cursorSprite.anchor.set(0.5, 0);
     cursorLayer.addChild(cursorSprite);
+    
+    // Initialize spacebar cursor (line art)
+    spellCursor = new PIXI.Graphics();
+    cursorLayer.addChild(spellCursor);
+    spellCursor.visible = false; // Hidden by default
+    
+    // Draw your custom cursor design here
+    const cursorSize = 20;
+    tenpoints = Array.from(
+        { length: 10 }, (_, i) => i * 36
+    ).map(angle => ({x: Math.cos(angle * Math.PI / 180) * cursorSize, y: Math.sin(angle * Math.PI / 180) * cursorSize}));
+    fivepoints = Array.from(
+        { length: 5 }, (_, i) => i * 72 + 18
+    ).map(angle => ({x: Math.cos(angle * Math.PI / 180) * cursorSize * 0.5, y: Math.sin(angle * Math.PI / 180) * cursorSize * 0.5}));
+    
+    spellCursor.lineStyle(2, 0x44aaff, 1);
+    for (let i = 0; i < 5; i++) {
+        spellCursor.moveTo(tenpoints[i*2].x, tenpoints[i*2].y);
+        spellCursor.lineTo(fivepoints[i].x, fivepoints[i].y);
+        spellCursor.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
+    }
     
     console.log("Pixi assets loaded successfully");
 }
 
-class Projectile {
+function initRoadLayer() {
+    const texture = PIXI.Texture.from('/assets/images/dirt.jpg');
+    if (texture && texture.baseTexture) {
+        texture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+        texture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    }
+
+    if (!roadTileSprite) {
+        roadTileSprite = new PIXI.TilingSprite(
+            texture,
+            app.screen.width * roadLayerOversize,
+            app.screen.height * roadLayerOversize
+        );
+        const oversizeOffsetX = (roadTileSprite.width - app.screen.width) / 2;
+        const oversizeOffsetY = (roadTileSprite.height - app.screen.height) / 2;
+        roadTileSprite.x = -oversizeOffsetX;
+        roadTileSprite.y = -oversizeOffsetY;
+        roadTileSprite.tileTransform.rotation = roadTextureRotation;
+        roadLayer.addChild(roadTileSprite);
+    }
+
+    if (!roadMaskGraphics) {
+        roadMaskGraphics = new PIXI.Graphics();
+        roadLayer.addChild(roadMaskGraphics);
+        roadTileSprite.mask = roadMaskGraphics;
+    }
+
+    if (texture && texture.baseTexture && !texture.baseTexture.valid) {
+        texture.baseTexture.once('loaded', () => {
+            initRoadLayer();
+        });
+    }
+}
+
+class Spell {
     constructor(x, y) {
         this.x = x;
         this.y = y;
@@ -127,7 +211,7 @@ class Projectile {
         this.delayTime = 0;
         this.radius = 0.25; // Default hitbox radius in hex units
     }
-    throw(targetX, targetY) {
+    cast(targetX, targetY) {
         this.visible = true;
         this.x = wizard.x;
         this.y = wizard.y;
@@ -157,7 +241,7 @@ class Projectile {
         }
 
 
-        this.throwInterval = setInterval(() => {
+        this.castInterval = setInterval(() => {
             if (paused) return;
             this.x += this.movement.x;
             this.y += this.movement.y;
@@ -191,8 +275,8 @@ class Projectile {
         }
         else {
             this.landed = true;
-            this.landedWorldX = this.x * map.hexWidth;
-            this.landedWorldY = this.y * map.hexHeight;
+            this.landedWorldX = this.x;
+            this.landedWorldY = this.y;
             this.vanishTimeout = setTimeout(() => {
                 this.visible = false;
                 if (this.pixiSprite) {
@@ -200,14 +284,14 @@ class Projectile {
                     this.pixiSprite = null;
                 }
             }, 3000);
-            clearInterval(this.throwInterval);
+            clearInterval(this.castInterval);
         }
     }
     land() {
     }
 }
 
-class Grenade extends Projectile {
+class Grenade extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
@@ -261,7 +345,7 @@ class Grenade extends Projectile {
             animals.forEach((animal, n) => {
                 let margin = 4;
                 if (animal._onScreen && !animal.dead) {
-                    const targetCoors = displayCoors(animal);
+                    const targetCoors = worldToScreen(animal);
                     targetCoors.y += animal.height / 2;
                     targetCoors.x += animal.width / 2;
                     const dist = distance(this.x, this.y, targetCoors.x, targetCoors.y);
@@ -288,7 +372,7 @@ class Grenade extends Projectile {
     }
 }
 
-class Rock extends Projectile {
+class Rock extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
@@ -301,7 +385,7 @@ class Rock extends Projectile {
             animals.forEach((animal, n) => {
                 let margin = animal.size + .15;
                 if (animal._onScreen && !animal.dead) {
-                    const targetCoors = displayCoors(animal);
+                    const targetCoors = worldToScreen(animal);
                     targetCoors.y += animal.height / 2;
                     targetCoors.x += animal.width / 2;
                     if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
@@ -343,11 +427,11 @@ class Rock extends Projectile {
     }
 }
 
-class Fireball extends Projectile {
+class Fireball extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
-        this.image.src = "./assets/images/explosion.png";
+        this.image.src = "./assets/images/fireball.png";
         this.gravity = 0; // No arc - straight line
         this.speed = 5;
         this.range = 10;
@@ -357,10 +441,10 @@ class Fireball extends Projectile {
         this.explosionFrames = null;
         this.isAnimating = true;
         this.damageRadius = 0.75;
-        this.delayTime = 2;
+        this.delayTime = 0.5;
         this.radius = this.damageRadius;
     }
-    throw(targetX, targetY) {
+    cast(targetX, targetY) {
         // check magic
         if (wizard.magic < 10) {
             message("Not enough magic to cast Fireball!");
@@ -371,14 +455,14 @@ class Fireball extends Projectile {
         const baseTexture = PIXI.Texture.from(this.image.src).baseTexture;
         if (!baseTexture.valid) {
             this.visible = false;
-            if (!this._pendingThrow) {
-                this._pendingThrow = {targetX, targetY};
+            if (!this._pendingCast) {
+                this._pendingCast = {targetX, targetY};
                 baseTexture.once('loaded', () => {
-                    if (this._pendingThrow) {
-                        const {targetX: pendingX, targetY: pendingY} = this._pendingThrow;
-                        this._pendingThrow = null;
+                    if (this._pendingCast) {
+                        const {targetX: pendingX, targetY: pendingY} = this._pendingCast;
+                        this._pendingCast = null;
                         this.visible = true;
-                        this.throw(pendingX, pendingY);
+                        this.cast(pendingX, pendingY);
                     }
                 });
             }
@@ -411,9 +495,19 @@ class Fireball extends Projectile {
         this.y = wizard.y;
         this.z = 0;
         
-        let xdist = (targetX - this.x);
+        let xdist = targetX - this.x;
         let ydist = targetY - this.y;
         this.totalDist = distance(0, 0, xdist, ydist);
+
+        this.x += (xdist / this.totalDist) * 0.5; // Start slightly away from wizard to avoid self-collision
+        this.y += (ydist / this.totalDist) * 0.5;
+        this.totalDist -= 0.5; // Adjust total distance accordingly
+
+        this.movement = {
+            x: xdist / this.totalDist * this.speed / frameRate,
+            y: ydist / this.totalDist * this.speed / frameRate,
+            z: 0,
+        }
         
         // Prevent division by zero
         if (this.totalDist < 0.1) {
@@ -429,111 +523,84 @@ class Fireball extends Projectile {
             this.totalDist = this.range;
         }
                 
-        // Start animation
-        this.animationInterval = setInterval(() => {
-            if (paused) return;
-            this.explosionFrame = (this.explosionFrame + 1) % this.explosionFrames.length;
-        }, 1000 / this.speed * this.totalDist / 6);
-
-        this.movement = {
-            x: xdist / this.totalDist * this.speed / frameRate,
-            y: ydist / this.totalDist * this.speed / frameRate,
-            z: 0,
-        }
-        this.x += this.movement.x;
-        this.y += this.movement.y;
+        // Both animation and travel controlled by the same time basis
+        const cycleDurationMs = 2000;
+        const startX = this.x;
+        const startY = this.y;
+        this.travelStartTime = performance.now();
+        this.travelPausedTime = 0;
+        this._pausedAt = null;
         
-        this.throwInterval = setInterval(() => {
-            if (paused) return;
-            this.x += this.movement.x;
+        // Single interval: update both movement and animation based on elapsed time
+        this.castInterval = setInterval(() => {
+            if (paused) {
+                if (!this._pausedAt) {
+                    this._pausedAt = performance.now();
+                }
+                return;
+            }
+            if (this._pausedAt) {
+                this.travelPausedTime += performance.now() - this._pausedAt;
+                this._pausedAt = null;
+            }
+            
+            const now = performance.now();
+            const elapsedMs = now - this.travelStartTime - this.travelPausedTime;
+            const progress = Math.min(elapsedMs / cycleDurationMs, 1);
+            
+            // Update animation frame based on same progress
+            if (this.explosionFrames && this.explosionFrames.length > 0) {
+                this.explosionFrame = Math.floor(progress * this.explosionFrames.length) % this.explosionFrames.length;
+            }
+            
+            // Update position
+            this.x+= this.movement.x;
             this.y += this.movement.y;
-            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
+            this.traveledDist = this.totalDist * progress;
             
             // Check for continuous damage while moving
             this.land();
             
             // Check if reached target
-            if (this.traveledDist >= this.totalDist) {
+            if (progress >= 1) {
+                // Snap to exact target position before finishing
                 this.visible = false;
                 if (this.pixiSprite) {
                     projectileLayer.removeChild(this.pixiSprite);
                     this.pixiSprite = null;
                 }
-                clearInterval(this.throwInterval);
-                if (this.animationInterval) clearInterval(this.animationInterval);
+                clearInterval(this.castInterval);
             }
         }, 1000 / frameRate);
         return this;
     }
-    bounce() {
-        // Fireball doesn't bounce, it just disappears
-        this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
-        clearInterval(this.throwInterval);
-        if (this.animationInterval) clearInterval(this.animationInterval);
-    }
     land() {
-        // Check for damage on every frame while moving
-        animals.forEach((animal, n) => {
-            if (animal._onScreen && !animal.dead) {
-                const hit = checkCircleVsCircle(
-                    {x: this.x, y: this.y, radius: this.radius},
-                    {x: animal.x, y: animal.y, radius: animal.radius || 0}
-                );
-                if (hit) {
-                    let damage = 0.1; // Damage per frame
-                    animal.hp -= damage;
-                    animal.ignite(5);
-                    if (animal.chaseRadius > 0) animal.attack(wizard);
-                    if (animal.fleeRadius > 0 && !animal.attacking) animal.flee();
-                }
-            }
-        });
-        
-        // Check for trees/objects in range
-        const minNode = map.worldToNode(this.x - 2, this.y);
-        const maxNode = map.worldToNode(this.x + 2, this.y + 4);
-        if (minNode && maxNode) {
-            const xStart = Math.max(minNode.xindex - 1, 0);
-            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
-            const yStart = Math.max(minNode.yindex - 1, 0);
-            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
 
-            for (let x = xStart; x <= xEnd; x++) {
-                for (let y = yStart; y <= yEnd; y++) {
-                    if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
-                        const nodeObjects = map.nodes[x][y].objects;
-                        nodeObjects.forEach(obj => {
-                            if (!obj || !obj.hitbox) return;
-                            if (obj.type === "tree" || obj.type === "playground") {
-                                const hit = checkCircleVsPolygon(
-                                    {x: this.x, y: this.y, radius: this.radius},
-                                    obj.hitbox
-                                );
-                                if (hit) {
-                                    // Don't re-ignite objects that are already burned or falling
-                                    if (obj.burned || (obj.rotation && obj.rotation > 0) || obj.fireFadeStart !== undefined || obj.hp <= 0) {
-                                        return;
-                                    }
-                                    if (!obj.hp) obj.hp = 100;
-                                    obj.hp -= 1;
-                                    obj.isOnFire = true;
-                                    obj.fireDuration = 25 * frameRate;
-                                }
-                            }
-                        });
-                    }
+        for (let obj of onscreenObjects) {
+            if (!obj || obj.gone || obj.vanishing) continue;
+            const visualHitbox = obj.visualHitbox || obj.hitbox;
+            if (!visualHitbox) continue;
+            if (obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius})) {
+                // Don't re-ignite objects that are already dead
+                if (obj.burned || obj.hp <= 0) {
+                    continue;
                 }
+                if (!obj.hp) {
+                    obj.hp = obj.maxHP || 100;
+                    obj.maxHP = obj.hp;
+                }
+                obj.hp -= 0.1 * (obj.flamability || 1); // Damage per frame
+                if (obj.hp < obj.maxHP) obj.isOnFire = true;
+                const fireDuration = 5 * (obj.flamability || 1)
+                obj.fireDuration = fireDuration * frameRate;
+                obj.ignite(fireDuration);
             }
         }
     }
 }
 
 
-class Vanish extends Projectile {
+class Vanish extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
@@ -549,7 +616,7 @@ class Vanish extends Projectile {
         this.radius = this.effectRadius;
     }
     
-    throw(targetX, targetY) {
+    cast(targetX, targetY) {
         // Check magic
         if (wizard.magic < 15) {
             message("Not enough magic to cast Vanish!");
@@ -589,19 +656,28 @@ class Vanish extends Projectile {
         this.y += this.movement.y;
         this.traveledDist = 0;
         
-        this.throwInterval = setInterval(() => {
+        this.castInterval = setInterval(() => {
             if (paused) return;
             this.x += this.movement.x;
             this.y += this.movement.y;
             this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
             
-            // Check for hits throughout
-            this.land();
+            if (!this.forcedTarget) {
+                // they didn't pinpoint a target, so this is a loose spell
+                this.land();
+            }
 
             // Check if reached target
             if (this.traveledDist >= this.totalDist) {
-                
-
+                // If cursor was over a staticObject, only hit that object
+                if (this.forcedTarget) {
+                    const obj = this.forcedTarget;
+                    if (!obj.vanishing) {
+                        this.vanishTarget(obj);
+                    }
+                    this.deactivate();
+                    return;
+                }
             }
         }, 1000 / frameRate);
         return this;
@@ -613,52 +689,19 @@ class Vanish extends Projectile {
             projectileLayer.removeChild(this.pixiSprite);
             this.pixiSprite = null;
         }
-        clearInterval(this.throwInterval);
+        clearInterval(this.castInterval);
     }
     
     land() {
-        // Check for animals in range
-        animals.forEach((animal, n) => {
-            if (animal._onScreen && !animal.dead) {
-                const hit = checkCircleVsCircle(
-                    {x: this.x, y: this.y, radius: this.radius},
-                    {x: animal.x, y: animal.y, radius: animal.radius || 0.35}
-                );
-                if (hit) {
-                    this.vanishTarget(animal);
-                    this.deactivate();
-                }
-            }
-        });
-        
-        // Check for objects in range
-        const minNode = map.worldToNode(this.x - 2, this.y);
-        const maxNode = map.worldToNode(this.x + 2, this.y + 4);
-        if (minNode && maxNode) {
-            const xStart = Math.max(minNode.xindex - 1, 0);
-            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
-            const yStart = Math.max(minNode.yindex - 1, 0);
-            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
-
-            for (let x = xStart; x <= xEnd; x++) {
-                for (let y = yStart; y <= yEnd; y++) {
-                    if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects) {
-                        const nodeObjects = map.nodes[x][y].objects;
-                        nodeObjects.forEach(obj => {
-                            if (!obj || !obj.hitbox || !this.visible) return;
-                            let hit = false;
-                            if (obj.hitbox instanceof PolygonHitbox) {
-                                hit = checkCircleVsPolygon(this, obj.hitbox);
-                            } else if (obj.hitbox instanceof CircleHitbox) {
-                                hit = checkCircleVsCircle(this, obj.hitbox);
-                            }
-                            if (hit && !obj.vanishing) {
-                                this.vanishTarget(obj);
-                                this.deactivate();
-                            }
-                        });
-                    }
-                }
+        // Check all onscreen objects
+        for(let obj of onscreenObjects) {
+            if (!obj || obj.gone || obj.vanishing) continue;
+            if (obj.type === "road") continue;
+            if (!obj.visualHitbox) continue;
+            let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
+            if (hit && !obj.vanishing) {
+                this.vanishTarget(obj);
+                this.deactivate();
             }
         }
     }
@@ -673,7 +716,7 @@ class Vanish extends Projectile {
 }
 
 
-class Arrow extends Projectile {
+class Arrow extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
@@ -688,7 +731,7 @@ class Arrow extends Projectile {
     bounce () {}
     land() {
         super.land()
-        clearInterval(this.throwInterval)
+        clearInterval(this.castInterval)
         animals.forEach((animal, n) => {
             let margin = animal.size
             if (animal._onScreen && !animal.dead) {
@@ -706,6 +749,126 @@ class Arrow extends Projectile {
     }
 }
 
+class TreeGrow extends Spell {
+    constructor(x, y) {
+        super(x, y);
+        this.image = document.createElement('img');
+        this.image.src = "./assets/images/thumbnails/tree.png";
+        this.gravity = 0;
+        this.speed = 0; // Instant placement, no travel
+        this.range = 20;
+        this.bounces = 0;
+        this.apparentSize = 0;
+        this.delayTime = 0;
+        this.magicCost = 20;
+        this.growthDuration = 2; // 2 seconds to grow
+        this.radius = 0;
+    }
+    
+    cast(targetX, targetY) {
+        // Check magic
+        if (wizard.magic < this.magicCost) {
+            message("Not enough magic to cast Tree Grow!");
+            return this;
+        }
+        wizard.magic -= this.magicCost;
+        
+        // Snap to nearest hex tile
+        const targetNode = wizard.map.worldToNode(targetX, targetY);
+        if (!targetNode) {
+            message("Cannot grow tree there!");
+            return this;
+        }
+        
+        // Check if there's already an object at this location
+        if (targetNode.objects && targetNode.objects.length > 0) {
+            message("Something is already growing there!");
+            return this;
+        }
+        
+        // Load tree textures (5 variants like trees normally loaded)
+        const treeTextures = [];
+        for (let n = 0; n < 5; n++) {
+            const texture = PIXI.Texture.from(`/assets/images/tree${n}.png`);
+            treeTextures.push(texture);
+        }
+        
+        // Create tree
+        const newTree = new Tree({x: targetNode.x, y: targetNode.y}, treeTextures, wizard.map);
+        
+        // Store full dimensions for growth animation
+        newTree.growthFullWidth = newTree.width;
+        newTree.growthFullHeight = newTree.height;
+        
+        // Start at size 0
+        newTree.width = 0;
+        newTree.height = 0;
+        
+        // Mark tree as growing with animation properties
+        newTree.isGrowing = true;
+        newTree.growthStartFrame = frameCount;
+        newTree.growthFrames = this.growthDuration * frameRate; // 2 seconds * 30fps = 60 frames
+        
+        // Deactivate this spell projectile immediately (tree is now placed)
+        this.visible = false;
+        if (this.pixiSprite) {
+            projectileLayer.removeChild(this.pixiSprite);
+            this.pixiSprite = null;
+        }
+        
+        return this;
+    }
+}
+
+class BuildRoad extends Spell {
+    constructor(x, y) {
+        super(x, y);
+        this.image = document.createElement('img');
+        this.gravity = 0;
+        this.speed = 0; // Instant placement
+        this.range = 20;
+        this.bounces = 0;
+        this.apparentSize = 0;
+        this.delayTime = 0;
+        this.magicCost = 5;
+        this.radius = 0;
+    }
+    
+    cast(targetX, targetY) {
+        // Check magic
+        if (wizard.magic < this.magicCost) {
+            message("Not enough magic to cast Build Road!");
+            return this;
+        }
+        wizard.magic -= this.magicCost;
+        
+        // Snap to nearest hex tile
+        const targetNode = wizard.map.worldToNode(targetX, targetY);
+        if (!targetNode) {
+            message("Cannot place road there!");
+            return this;
+        }
+        
+        // Check if there's already road at this location
+        if (targetNode.objects && targetNode.objects.some(obj => obj.type === 'road')) {
+            message("Road already there!");
+            return this;
+        }
+        
+        // Create road (textures are generated dynamically in the constructor)
+        const newRoad = new Road({x: targetNode.x, y: targetNode.y}, [], wizard.map);
+        
+        // Deactivate this spell projectile immediately
+        this.visible = false;
+        if (this.pixiSprite) {
+            projectileLayer.removeChild(this.pixiSprite);
+            this.pixiSprite = null;
+        }
+        
+        return this;
+    }
+}
+
 class Character {
     constructor(type, location, map) {
         this.type = type;
@@ -716,7 +879,8 @@ class Character {
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
-        this.radius = 0.35; // Default hitbox radius in hex units
+        this.groundRadius = 0.35; // Default hitbox radius in hex units
+        this.visualRadius = 0.5; // Default visual hitbox radius in hex units
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
@@ -737,7 +901,24 @@ class Character {
         this.destination = null;
         this.path = []; // Array of MapNodes to follow
         this.nextNode = null;
+        
+        // Create hitboxes
+        this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
+        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
     }
+    
+    updateHitboxes() {
+        // Update hitbox positions to match character position
+        if (this.visualHitbox) {
+            this.visualHitbox.x = this.x;
+            this.visualHitbox.y = this.y;
+        }
+        if (this.groundPlaneHitbox) {
+            this.groundPlaneHitbox.x = this.x;
+            this.groundPlaneHitbox.y = this.y;
+        }
+    }
+    
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
@@ -813,6 +994,9 @@ class Character {
         this.travelFrames--;
         this.x += this.travelX;
         this.y += this.travelY;
+        
+        // Update hitboxes after movement
+        this.updateHitboxes();
     }
     ignite(duration) {
         this.isOnFire = true;
@@ -848,20 +1032,33 @@ class Character {
 class Wizard extends Character {
     constructor(location, map) {
         super('human', location, map);
-        this.speed = 2.5;
+        this.speed = 5;
+        this.roadSpeedMultiplier = 1.5;
         this.frameRate = 60;
-        this.cooldownTime = 0; // configurable delay in seconds before throwing
+        this.cooldownTime = 0; // configurable delay in seconds before casting
         this.food = 0;
         this.hp = 100;
         this.maxHp = 100;
         this.magic = 100;
         this.maxMagic = 100;
         this.name = 'you';
+        this.groundRadius = 0.3;
+        this.visualRadius = 0.5; // Hitbox radius in hex units
+        this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
+        
+        // Movement acceleration via vector interpolation
+        this.acceleration = 50; // Rate of acceleration in units/second²
+        this.movementVector = {x: 0, y: 0}; // Accumulated momentum vector
         
         // Wall placement state
         this.wallLayoutMode = false;
         this.wallStartPoint = null;
         this.phantomWall = null;
+        
+        // Road placement state
+        this.roadLayoutMode = false;
+        this.roadStartPoint = null;
+        this.phantomRoad = null;
 
         // Create wizard hat graphics
         this.hatGraphics = new PIXI.Graphics();
@@ -872,49 +1069,54 @@ class Wizard extends Character {
         clearTimeout(this.moveTimeout);
     }
     turnToward(targetX, targetY) {
-        const dx = targetX - this.x;
-        const dy = targetY - this.y;
-        const directionOptions = this.x % 2 === 0 ? [
-            {x: 0, y: -1, index: 3},
-            {x: 1, y: 0, index: 5},
-            {x: 1, y: 1, index: 7},
-            {x: 0, y: 1, index: 9},
-            {x: -1, y: 1, index: 11},
-            {x: -1, y: 0, index: 1}
-        ] : [
-            {x: 0, y: -1, index: 3},
-            {x: 1, y: -1, index: 5},
-            {x: 1, y: 0, index: 7},
-            {x: 0, y: 1, index: 9},
-            {x: -1, y: 0, index: 11},
-            {x: -1, y: -1, index: 1}
+        // Calculate vector from wizard to target (in world coordinates)
+        
+        // Calculate angle in radians, then convert to degrees
+        const angle = Math.atan2(targetY, targetX);
+        const angleInDegrees = angle * 180 / Math.PI;
+        
+        // 12 sprite directions with their center angles
+        // East = 0°, going counterclockwise
+        const directions = [
+            { angle: 0, index: 6 },      // E
+            { angle: 30, index: 7 },     // ESE  
+            { angle: 60, index: 8 },     // SE
+            { angle: 90, index: 9 },     // SSE
+            { angle: 120, index: 10 },    // S
+            { angle: 150, index: 11 },   // SSW
+            { angle: 180, index: 0 },   // W
+            { angle: -150, index: 1 },   // WNW
+            { angle: -120, index: 2 },   // NW
+            { angle: -90, index: 3 },    // NNW
+            { angle: -60, index: 4 },    // N
+            { angle: -30, index: 5 }     // NNE
         ];
-        let bestDir = directionOptions[0];
-        let bestDot = -Infinity;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 0) {
-            const ndx = dx / len;
-            const ndy = dy / len;
-            directionOptions.forEach(dir => {
-                const dot = dir.x * ndx + dir.y * ndy;
-                if (dot > bestDot) {
-                    bestDot = dot;
-                    bestDir = dir;
-                }
-            });
+        
+        // Find closest direction
+        let closestDir = directions[0];
+        let minDiff = Math.abs(angleInDegrees - directions[0].angle);
+        
+        for (const dir of directions) {
+            // Handle angle wrapping (e.g., -170° is close to 170°)
+            let diff = Math.abs(angleInDegrees - dir.angle);
+            if (diff > 180) diff = 360 - diff;
+            
+            if (diff < minDiff) {
+                minDiff = diff;
+                closestDir = dir;
+            }
         }
-        this.direction = bestDir;
-        this.lastDirectionRow = (bestDir.index + wizardDirectionRowOffset + 12) % 12;
+        
+        this.lastDirectionRow = (closestDir.index + wizardDirectionRowOffset + 12) % 12;
     }
     move() {
         super.move();
         centerViewport(this, 2);
     }
     cast(worldX, worldY) {
-        if (this.throwDelay) return;
-        let projectile;
-        let delayTime;
-        
+        if (this.castDelay) return;
+
+                
         if (wizard.currentSpell === "wall") {
             // Resolve world coordinates to the nearest map node
             const wallNode = this.map.worldToNode(worldX, worldY);
@@ -948,8 +1150,8 @@ class Wizard extends Character {
                 }
                 
                 // Create a chain of walls along the straightest path
-                const wallPath = getHexLine(nodeA, nodeB);
-                Wall.createWallLine(wallPath, 1.5, 0.2, this.map);
+                const wallPath = this.map.getHexLine(nodeA, nodeB);
+                Wall.createWallLine(wallPath, 2.0, 0.2, this.map);
                 
                 // Clean up layout mode
                 this.wallLayoutMode = false;
@@ -959,17 +1161,85 @@ class Wizard extends Character {
                     this.phantomWall = null;
                 }
                 
-                delayTime = this.cooldownTime;
-                this.throwDelay = true;
+                const delayTime = this.cooldownTime;
+                this.castDelay = true;
                 this.casting = true;
                 setTimeout(() => {
-                    this.throwDelay = false;
+                    this.castDelay = false;
                     this.casting = false;
                 }, 1000 * delayTime);
             }
             return;
         }
-        else if (wizard.currentSpell === "grenades") {
+        
+        if (wizard.currentSpell === "buildroad") {
+            // Resolve world coordinates to the nearest map node
+            const roadNode = this.map.worldToNode(worldX, worldY);
+            if (!roadNode) return;
+            
+            // Place the road (this is called from mouseup when in layout mode)
+            if (this.roadLayoutMode && this.roadStartPoint) {
+                const nodeA = this.roadStartPoint;
+                const nodeB = roadNode;
+                
+                // Determine width based on whether it's a single tile or a line
+                const width = (nodeA === nodeB) ? 1 : roadWidth; // 1 tile wide for single click, wider for drag
+                
+                // Get line of hexes (1 tile wide for single click, 3 tiles wide for drag)
+                const roadNodes = this.map.getHexLine(nodeA, nodeB, width);
+                
+                // Place road on each node
+                roadNodes.forEach(node => {
+                    // Check if there's already road at this location
+                    const hasRoad = node.objects && node.objects.some(obj => obj.type === 'road');
+                    if (!hasRoad) {
+                        new Road({x: node.x, y: node.y}, [], this.map);
+                    }
+                });
+                
+                // Deduct magic cost once for the whole line
+                wizard.magic -= 5;
+                
+                // Clean up layout mode
+                this.roadLayoutMode = false;
+                this.roadStartPoint = null;
+                if (this.phantomRoad) {
+                    objectLayer.removeChild(this.phantomRoad);
+                    this.phantomRoad = null;
+                }
+                
+                const delayTime = this.cooldownTime;
+                this.castDelay = true;
+                this.casting = true;
+                setTimeout(() => {
+                    this.castDelay = false;
+                    this.casting = false;
+                }, 1000 * delayTime);
+            }
+            return;
+        }
+        
+        // Check if cursor is inside any visible staticObject hitbox
+        // Check if cursor is inside any visible staticObject sprite (topmost by y first)
+        let clickTarget = null;
+ 
+        const clickScreen = worldToScreen({x: worldX, y: worldY});
+        const targetCandidates = Array.from(onscreenObjects)
+            .filter(obj => obj && !obj.gone && !obj.vanishing)
+            .sort((a, b) => worldToScreen(b).y - worldToScreen(a).y);
+
+        for (let obj of targetCandidates) {
+            if (obj.pixiSprite.containsPoint(clickScreen)) {
+                clickTarget = obj;
+                console.log("target acquired: ", obj);
+                break;
+            }
+        }
+        
+        let projectile;
+        let delayTime;
+
+        if (wizard.currentSpell === "grenades") {
             if (!wizard.inventory.includes("grenades") || wizard.inventory.grenades <= 0) return;
             wizard.inventory.grenades--;
             projectile = new Grenade();
@@ -983,40 +1253,317 @@ class Wizard extends Character {
         else if (wizard.currentSpell === "vanish") {
             projectile = new Vanish();
         }
+        else if (wizard.currentSpell === "treegrow") {
+            projectile = new TreeGrow();
+        }
+        else if (wizard.currentSpell === "buildroad") {
+            projectile = new BuildRoad();
+        }
+        
+        // Pass forced target to projectile if cursor was over an object
+        if (clickTarget) {
+            projectile.forcedTarget = clickTarget;
+        }
+        
         delayTime = projectile.delayTime || this.cooldownTime;
 
-        this.throwDelay = true;
-        projectiles.push(projectile.throw(worldX, worldY))
+        this.castDelay = true;
+        projectiles.push(projectile.cast(worldX, worldY))
         wizard.casting = true;
         setTimeout(() => {
-            this.throwDelay = false;
+            this.castDelay = false;
             this.casting = false;
         }, 1000 * delayTime);
+    }
+    
+    getTouchingTiles() {
+        // Get all hex tiles that the wizard's circular hitbox is touching
+        // Use wizard's radius and current position
+        const radius = 0.9; // Wizard ground-plane hitbox radius
+        const touchingTiles = new Set();
+        
+        // Get the center tile
+        const centerNode = this.map.worldToNode(this.x, this.y);
+        if (centerNode) {
+            touchingTiles.add(`${centerNode.xindex},${centerNode.yindex}`);
+        }
+        
+        // Check all neighboring hexes - a circle can touch up to 7 hexes
+        // (center + up to 6 neighbors)
+        for (let dir = 0; dir < 6; dir++) {
+            // Check each neighbor
+            const testNode = centerNode?.neighbors[1 + dir * 2];
+            if (testNode) {
+                // Simple distance check - if neighbor center is within radius + hex distance, include it
+                const dx = testNode.x - this.x;
+                const dy = testNode.y - this.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist <= radius) { // 1.0 is approximate hex-to-hex distance
+                    touchingTiles.add(`${testNode.xindex},${testNode.yindex}`);
+                }
+            }
+        }
+        
+        return touchingTiles;
+    }
+
+    isOnRoad() {
+        const node = this.map.worldToNode(this.x, this.y);
+        if (!node || !node.objects) return false;
+        if (node.objects.some(obj => obj.type === "road")) {
+            return true;
+        }
+
+        return false;
+    }
+    
+    moveDirection(vector) {
+        // Apply physics and collision resolution to the wizard's movement vector
+        // Called every frame to process movement, regardless of input
+
+        const maxSpeed = this.speed * (this.isOnRoad() ? this.roadSpeedMultiplier : 1);
+        this.currentMaxSpeed = maxSpeed;
+        
+        if (vector && vector.x !== 0 && vector.y !== 0) {
+            // Input provided: add acceleration toward desired direction
+            const len = Math.hypot(vector.x, vector.y);
+            if (len > 0) {
+                const nx = vector.x / len;
+                const ny = vector.y / len;
+                
+                // If current momentum is opposite of desired direction, remove that component
+                const desiredDot = this.movementVector.x * nx + this.movementVector.y * ny;
+                if (desiredDot < 0) {
+                    // Cancel the opposing component so we don't briefly move backward
+                    this.movementVector.x -= nx * desiredDot;
+                    this.movementVector.y -= ny * desiredDot;
+                    // Damp leftover tangential momentum slightly to reduce yo-yo oscillation
+                    this.movementVector.x *= 0.5;
+                    this.movementVector.y *= 0.5;
+                }
+                
+                // Add acceleration in the desired direction to movement vector
+                const accelerationFactor = this.acceleration / this.frameRate;
+                this.movementVector.x += nx * accelerationFactor;
+                this.movementVector.y += ny * accelerationFactor;
+                
+                this.turnToward(nx, ny);
+            }
+        } else {
+            // No input: decelerate quickly using same acceleration rate
+            const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+            if (currentMag > 0) {
+                const decelerationFactor = this.acceleration / this.frameRate;
+                const newMag = Math.max(0, currentMag - decelerationFactor);
+                if (newMag === 0) {
+                    this.movementVector.x = 0;
+                    this.movementVector.y = 0;
+                } else {
+                    const scale = newMag / currentMag;
+                    this.movementVector.x *= scale;
+                    this.movementVector.y *= scale;
+                }
+            }
+        }
+        
+        // Clamp magnitude to max speed
+        const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+        if (currentMag > maxSpeed) {
+            const scale = maxSpeed / currentMag;
+            this.movementVector.x *= scale;
+            this.movementVector.y *= scale;
+        }
+        
+        // If no movement, skip physics
+        if (currentMag < 0.01) {
+            this.moving = false;
+            return false;
+        }
+        
+        this.moving = true;
+        
+        // Use accumulated movement vector for this frame's position change
+        let newX = this.x + this.movementVector.x / this.frameRate;
+        let newY = this.y + this.movementVector.y / this.frameRate;
+        
+        const wizardRadius = this.groundRadius;
+        
+        // Collect nearby objects once to avoid repeated grid traversal
+        const nearbyObjects = [];
+        const minNode = this.map.worldToNode(newX - 2, newY - 2);
+        const maxNode = this.map.worldToNode(newX + 2, newY + 2);
+        
+        if (minNode && maxNode) {
+            const xStart = Math.max(minNode.xindex - 1, 0);
+            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
+            const yStart = Math.max(minNode.yindex - 1, 0);
+            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
+
+            for (let x = xStart; x <= xEnd; x++) {
+                for (let y = yStart; y <= yEnd; y++) {
+                    if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
+                    const nodeObjects = this.map.nodes[x][y].objects;
+                    for (const obj of nodeObjects) {
+                        if (obj && obj.groundPlaneHitbox && !obj.isPassable) {
+                            nearbyObjects.push(obj);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Iteratively resolve collisions until we find a clear position
+        let testX = newX;
+        let testY = newY;
+        let iteration = 0;
+        const maxIterations = 3; // Prevent infinite loops
+        
+        while (iteration < maxIterations) {
+            iteration++;
+            const testHitbox = new CircleHitbox(testX, testY, wizardRadius);
+            
+            // Check all nearby objects for collisions at current test position
+            let totalPushX = 0;
+            let totalPushY = 0;
+            let maxPushLen = 0;
+            let hasCollision = false;
+            
+            for (const obj of nearbyObjects) {
+                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+                if (collision && collision.pushX !== undefined) {
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                }
+            }
+            
+            // If no collisions, we're done
+            if (!hasCollision) {
+                this.x = testX;
+                this.y = testY;
+                this.updateHitboxes();
+                centerViewport(this, 2);
+                return true;
+            }
+            
+            // Resolve collision
+            let pushLen = Math.hypot(totalPushX, totalPushY);
+            
+            // Cap push vector to the maximum individual penetration depth
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+                pushLen = maxPushLen;
+            }
+            
+            if (pushLen > 0) {
+                const normalX = totalPushX / pushLen;
+                const normalY = totalPushY / pushLen;
+                
+                // Soft collision: allow compression up to a threshold with proportional resistance
+                const compressionThreshold = 0.15;
+                const compression = Math.max(0, pushLen - compressionThreshold);
+                
+                if (compression > 0) {
+                    // Hard push-back: reduce velocity component along normal
+                    const resistanceFactor = Math.min(1, compression / 0.1);
+                    const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                    
+                    if (normalComponent > 0) {
+                        this.movementVector.x -= normalX * normalComponent * resistanceFactor;
+                        this.movementVector.y -= normalY * normalComponent * resistanceFactor;
+                    }
+                } else {
+                    // Within compression threshold - apply gentle damping
+                    const dampingFactor = 1 - (pushLen / compressionThreshold) * 0.4;
+                    this.movementVector.x *= dampingFactor;
+                    this.movementVector.y *= dampingFactor;
+                    
+                    const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                    if (normalComponent > 0) {
+                        this.movementVector.x -= normalX * normalComponent * 0.2;
+                        this.movementVector.y -= normalY * normalComponent * 0.2;
+                    }
+                }
+                
+                // Push out minimally and apply modified movement
+                const pushOutDistance = pushLen + 0.01;
+                testX = this.x + normalX * pushOutDistance + this.movementVector.x / this.frameRate;
+                testY = this.y + normalY * pushOutDistance + this.movementVector.y / this.frameRate;
+            } else {
+                break;
+            }
+        }
+        
+        // If we exhausted iterations, at least push out to clear the collision
+        const testHitbox = new CircleHitbox(testX, testY, wizardRadius);
+        let totalPushX = 0;
+        let totalPushY = 0;
+        let maxPushLen = 0;
+        
+        for (const obj of nearbyObjects) {
+            const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+            if (collision && collision.pushX !== undefined) {
+                totalPushX += collision.pushX;
+                totalPushY += collision.pushY;
+                const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                maxPushLen = Math.max(maxPushLen, pushLen);
+            }
+        }
+        
+        if (maxPushLen > 0) {
+            const pushLen = Math.hypot(totalPushX, totalPushY);
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+            }
+            
+            const normalX = totalPushX / Math.hypot(totalPushX, totalPushY);
+            const normalY = totalPushY / Math.hypot(totalPushX, totalPushY);
+            const pushOutDistance = maxPushLen + 0.01;
+            
+            this.x = this.x + normalX * pushOutDistance;
+            this.y = this.y + normalY * pushOutDistance;
+            this.updateHitboxes();
+            centerViewport(this, 2);
+            return true;
+        }
+        
+        // No collision - apply the movement
+        this.x = newX;
+        this.y = newY;
+        this.updateHitboxes();
+        centerViewport(this, 2);
+        return true;
     }
     
     drawHat() {
         // Wizard hat positioning constants
         const hatBrimOffsetX = 0;
-        const hatBrimOffsetY = -0.375;
+        const hatBrimOffsetY = -0.625;
         const hatBrimWidth = 0.5;
         const hatBrimHeight = 0.15;
         const hatPointOffsetX = 0;
-        const hatPointOffsetY = -0.4;
+        const hatPointOffsetY = -0.65;
         const hatPointHeight = 0.35;
 
         // Recalculate screen position from world coordinates
-        const screenCoors = displayCoors(this);
+        const screenCoors = worldToScreen(this);
         let wizardScreenX = screenCoors.x;
         let wizardScreenY = screenCoors.y;
         
         this.hatGraphics.clear();
         
         // Calculate hat brim position (blue oval)
-        const brimX = wizardScreenX + hatBrimOffsetX * map.hexWidth;
-        const brimY = wizardScreenY + hatBrimOffsetY * map.hexHeight;
-        const brimWidth = hatBrimWidth * map.hexWidth;
-        const brimHeight = hatBrimHeight * map.hexHeight;
-        const pointWidth = hatBrimWidth * map.hexWidth * 0.6;
+        const brimX = wizardScreenX + hatBrimOffsetX * viewscale;
+        const brimY = wizardScreenY + hatBrimOffsetY * viewscale;
+        const brimWidth = hatBrimWidth * viewscale;
+        const brimHeight = hatBrimHeight * viewscale;
+        const pointWidth = hatBrimWidth * viewscale * 0.6;
         const bandInnerHeight = brimHeight * 0.4;
         const bandInnerWidth = pointWidth * 0.8;
         const bandOuterWidth = pointWidth;
@@ -1039,9 +1586,9 @@ class Wizard extends Character {
         this.hatGraphics.endFill();
         
         // Calculate hat point position (blue triangle)
-        const pointX = wizardScreenX + hatPointOffsetX * map.hexWidth;
-        const pointY = wizardScreenY + hatPointOffsetY * map.hexHeight;
-        const pointHeight = hatPointHeight * map.hexHeight;
+        const pointX = wizardScreenX + hatPointOffsetX * viewscale;
+        const pointY = wizardScreenY + hatPointOffsetY * viewscale;
+        const pointHeight = hatPointHeight * viewscale;
         
         // Draw hat point (triangle)
         this.hatGraphics.beginFill(this.hatColor, 1);
@@ -1087,7 +1634,8 @@ class Wizard extends Character {
         if (this.moving) {
             // Columns 1-8 = running animation (8 frames)
             // Column 0 = standing still
-            const animFrame = Math.floor(frameCount * animationSpeedMultiplier / 2) % 8;
+            const speedRatio = (this.currentMaxSpeed && this.speed) ? (this.currentMaxSpeed / this.speed) : 1;
+            const animFrame = Math.floor(frameCount * animationSpeedMultiplier * speedRatio / 2) % 8;
             frameIndex = rowIndex * 9 + 1 + animFrame;
         }
         
@@ -1097,13 +1645,13 @@ class Wizard extends Character {
         }
         
         // Update wizard sprite position
-        const screenCoors = displayCoors(this);
+        const screenCoors = worldToScreen(this);
         
         this.pixiSprite.x = screenCoors.x;
         this.pixiSprite.y = screenCoors.y;
-        this.pixiSprite.anchor.set(0.5, 0.5);
-        this.pixiSprite.width = map.hexHeight * 1.1547;
-        this.pixiSprite.height = map.hexHeight;
+        this.pixiSprite.anchor.set(0.5, 0.75);
+        this.pixiSprite.width = viewscale;
+        this.pixiSprite.height = viewscale;
 
         this.drawHat();
     }
@@ -1196,8 +1744,8 @@ class Animal extends Character {
         const safetyMargin = 5; // world units
         this._onScreen = false;
         if (this.gone) return false;
-        if (this.x + this.width + safetyMargin > viewport.x && this.y + this.height + safetyMargin > viewport.y) {
-            if (this.x - this.width - safetyMargin < viewport.x + viewport.width && this.y - this.height - safetyMargin < viewport.y + viewport.height) {
+        if (this.x + this.width + safetyMargin > viewport.x && this.y + safetyMargin / xyratio > viewport.y) {
+            if (this.x - this.width - safetyMargin < viewport.x + viewport.width && this.y - this.height - safetyMargin / xyratio < viewport.y + viewport.height) {
                 this._onScreen = true;
             }
         }
@@ -1475,9 +2023,13 @@ class Yeti extends Animal {
 jQuery(() => {
     // Append Pixi canvas to display
     $("#display").append(app.view);
-    
-    // Hide default cursor, show only custom drawn cursor
-    app.view.style.cursor = 'none';
+
+    app.ticker.add(() => {
+        // Force the cursor style directly on the canvas 60 times a second
+        if (app.view && app.view.style) {
+            app.view.style.cursor = "url('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), default";
+        }
+    });
     
     // Handle window resize
     window.addEventListener('resize', sizeView);
@@ -1500,18 +2052,28 @@ jQuery(() => {
             viewport.width = 20;
         }
 
-        viewport.height = Math.ceil(viewport.width * (app.screen.height / app.screen.width) * (map.hexWidthRatio));
+        viewport.height = Math.ceil(viewport.width * (app.screen.height / app.screen.width) / xyratio);
 
         centerViewport(wizard, 0);
 
-        map.hexWidth = app.screen.width / viewport.width;
-        map.hexHeight = map.hexWidth / map.hexWidthRatio;
+        viewscale = app.screen.width / viewport.width;
 
         // Reposition background tiles after resize
         updateLandLayer();
+
+        if (roadTileSprite) {
+            roadTileSprite.width = app.screen.width * roadLayerOversize;
+            roadTileSprite.height = app.screen.height * roadLayerOversize;
+            const oversizeOffsetX = (roadTileSprite.width - app.screen.width) / 2;
+            const oversizeOffsetY = (roadTileSprite.height - app.screen.height) / 2;
+            roadTileSprite.x = -oversizeOffsetX;
+            roadTileSprite.y = -oversizeOffsetY;
+            roadTileSprite.tileTransform.rotation = roadTextureRotation;
+        }
     }
 
     console.log("Generating map...");
+    initRoadLayer();
     map = new GameMap(mapHeight, mapWidth, {}, () => {
         frameRate = 30;
         
@@ -1521,6 +2083,21 @@ jQuery(() => {
         // Set up rendering loop
         setInterval(() => {
             if (paused) return;
+            
+            // Calculate desired movement direction from input
+            let moveVector = null;
+            if (keysPressed['w']) {
+                moveVector = {
+                    x: mousePos.worldX - wizard.x,
+                    y: mousePos.worldY - wizard.y
+                };
+                wizard.path = [];
+                wizard.nextNode = null;
+            }
+            
+            // Process movement every frame (with or without input)
+            wizard.moveDirection(moveVector);
+            
             drawCanvas();
             frameCount ++;
         }, 1000 / frameRate);
@@ -1531,6 +2108,9 @@ jQuery(() => {
     viewport.y = Math.max(0, wizard.y - viewport.height / 2);
     centerViewport(wizard, 0);
     sizeView();
+    
+    // Create roof preview
+    roof = new Roof(0, 0, 0);
     
     // once-per-second time update
     function timeDown() {
@@ -1551,10 +2131,15 @@ jQuery(() => {
 
     // Spell system
     wizard.spells = [
-        { name: 'fireball', icon: '/assets/images/thumbnails/fireball.png' },
-        { name: 'wall', icon: '/assets/images/thumbnails/wall.png' },
-        { name: 'vanish', icon: '/assets/images/thumbnails/vanish.png' }
-    ];
+        { name: 'fireball', icon: '/assets/images/thumbnails/fireball.png'},
+        { name: 'wall', icon: '/assets/images/thumbnails/wall.png'},
+        { name: 'vanish', icon: '/assets/images/thumbnails/vanish.png'},
+        { name: 'treegrow', icon: '/assets/images/thumbnails/tree.png'},
+        { name: 'buildroad', icon: '/assets/images/thumbnails/road.png'}
+    ].map((spell) => {
+        spell.key = Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
+        return spell;
+    });
     wizard.currentSpell = 'wall';
     
     // Initialize spell selector UI
@@ -1569,13 +2154,35 @@ jQuery(() => {
         wizard.spells.forEach(spell => {
             const spellIcon = $("<div>")
                 .addClass("spellIcon")
-                .css('background-image', `url('${spell.icon}')`)
+                .css({
+                    'background-image': `url('${spell.icon}')`,
+                    'position': 'relative'
+                })
                 .attr('data-spell', spell.name)
                 .click(() => {
                     wizard.currentSpell = spell.name;
                     updateSpellSelector();
                     $("#spellMenu").addClass('hidden');
                 });
+            
+            // Add key binding label to upper left corner
+            if (spell.key) {
+                const keyLabel = $("<span>")
+                    .addClass("spellKeyBinding")
+                    .text(spell.key)
+                    .css({
+                        'position': 'absolute',
+                        'top': '4px',
+                        'left': '4px',
+                        'color': 'white',
+                        'font-size': '12px',
+                        'font-weight': 'bold',
+                        'pointer-events': 'none',
+                        'text-shadow': '1px 1px 2px rgba(0, 0, 0, 0.8)',
+                        'z-index': '10'
+                    });
+                spellIcon.append(keyLabel);
+            }
             
             if (spell.name === wizard.currentSpell) {
                 spellIcon.addClass('selected');
@@ -1605,8 +2212,9 @@ jQuery(() => {
         mousePos.screenX = screenX;
         mousePos.screenY = screenY;
         // Store exact world coordinates for pixel-accurate aiming
-        mousePos.worldX = screenX / map.hexWidth + viewport.x;
-        mousePos.worldY = screenY / map.hexHeight + viewport.y;
+        const worldCoors = screenToWorld(screenX, screenY);
+        mousePos.worldX = worldCoors.x;
+        mousePos.worldY = worldCoors.y;
         // Also store hex tile for movement
         const dest = screenToHex(screenX, screenY);
         mousePos.x = dest.x;
@@ -1619,911 +2227,134 @@ jQuery(() => {
         if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
             updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
         }
-    })
 
-    app.view.addEventListener("click", event => {
-        let rect = app.view.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-        // Convert screen coordinates to world coordinates
-        const worldX = screenX / map.hexWidth + viewport.x;
-        const worldY = screenY / map.hexHeight + viewport.y;
-        
-        // Check if destination tile has blocking objects
-        const destNode = map.worldToNode(worldX, worldY);
-        if (destNode) wizard.goto(destNode);
-        if (destNode && destNode.hasBlockingObject()) {
-            console.log("blocked at world coordinates", worldX, worldY);
+        // Update phantom road preview if in layout mode
+        if (wizard.roadLayoutMode && wizard.roadStartPoint && wizard.phantomRoad) {
+            updatePhantomRoad(wizard.roadStartPoint.x, wizard.roadStartPoint.y, mousePos.worldX, mousePos.worldY);
         }
     })
 
-    app.view.addEventListener("dblclick", event => {
-        let rect = app.view.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-        const worldX = screenX / map.hexWidth + viewport.x;
-        const worldY = screenY / map.hexHeight + viewport.y;
-        wizard.cast(worldX, worldY);
-    })        
-    app.view.addEventListener("contextmenu", event => {
+    app.view.addEventListener("mousedown", event => {
+        // For walls: requires spacebar
+        if (wizard.currentSpell === "wall") {
+            if (!keysPressed[' ']) return;
+            event.preventDefault();
+
+            const rect = app.view.getBoundingClientRect();
+            const screenX = event.clientX - rect.left;
+            const screenY = event.clientY - rect.top;
+            const worldCoors = screenToWorld(screenX, screenY);
+
+            wizard.cast(worldCoors.x, worldCoors.y);
+            return;
+        }
+        
+        // For roads: set the start point on mousedown
+        if (wizard.currentSpell === "buildroad" && !wizard.roadLayoutMode) {
+            const rect = app.view.getBoundingClientRect();
+            const screenX = event.clientX - rect.left;
+            const screenY = event.clientY - rect.top;
+            const worldCoors = screenToWorld(screenX, screenY);
+            const roadNode = wizard.map.worldToNode(worldCoors.x, worldCoors.y);
+            if (roadNode) {
+                wizard.roadLayoutMode = true;
+                wizard.roadStartPoint = roadNode;
+                if (!wizard.phantomRoad) {
+                    wizard.phantomRoad = new PIXI.Container();
+                    wizard.phantomRoad.skipTransform = true;
+                    objectLayer.addChild(wizard.phantomRoad);
+                }
+            }
+            return;
+        }
+    });
+
+    app.view.addEventListener("mouseup", event => {
+        if (wizard.currentSpell === "wall") {
+            if (!wizard.wallLayoutMode || !wizard.wallStartPoint) return;
+        } else if (wizard.currentSpell === "buildroad") {
+            if (!wizard.roadLayoutMode || !wizard.roadStartPoint) return;
+        } else {
+            return;
+        }
         event.preventDefault();
-        let rect = app.view.getBoundingClientRect();
+
+        const rect = app.view.getBoundingClientRect();
         const screenX = event.clientX - rect.left;
         const screenY = event.clientY - rect.top;
-        const worldX = screenX / map.hexWidth + viewport.x;
-        const worldY = screenY / map.hexHeight + viewport.y;
-        wizard.cast(worldX, worldY);
-    })        
-    $("#msg").contextmenu(event => event.preventDefault())
-    $(document).keydown(event => {
-        if (event.key === " " || event.code === "Space") {
+        const worldCoors = screenToWorld(screenX, screenY);
+
+        wizard.cast(worldCoors.x, worldCoors.y);
+    });
+
+    app.view.addEventListener("click", event => {
+        if (keysPressed[' ']) {
             event.preventDefault();
             // Stop wizard movement by setting destination to current node
             wizard.destination = null;
             wizard.path = [];
             wizard.travelFrames = 0;
             // Turn toward mouse position using world coordinates
-            wizard.turnToward(mousePos.worldX, mousePos.worldY);
-            // Throw after delay
+            wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
+            if (wizard.currentSpell === "wall") return;
+            // Cast after delay
             setTimeout(() => {
                 wizard.cast(mousePos.worldX, mousePos.worldY);
             }, wizard.cooldownTime * 1000);
         }
+    })
+     
+    $("#msg").contextmenu(event => event.preventDefault())
+    $(document).keydown(event => {
+        // Track key state
+        keysPressed[event.key.toLowerCase()] = true;
         
-        // Toggle debug graphics with 'd' key
-        if (event.key === 'd' || event.key === 'D') {
+        if (event.key === " " || event.code === "Space") {
+            event.preventDefault();
+            if (!event.repeat) {
+                spacebarDownAt = Date.now();
+            }
+        } else if (Object.keys(spellKeyBindings).includes(event.key.toUpperCase())) {
+            wizard.currentSpell = spellKeyBindings[event.key.toUpperCase()];
+            updateSpellSelector();
+        }
+        
+        // Toggle debug graphics with ctrl+d
+        if ((event.key === 'd' || event.key === 'D') && event.ctrlKey) {
             event.preventDefault();
             debugMode = !debugMode;
             console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
+        }
+
+        // Toggle hex grid only with 'g' key
+        if (event.key === 'g' || event.key === 'G') {
+            event.preventDefault();
+            showHexGrid = !showHexGrid;
+            console.log('Hex grid:', showHexGrid ? 'ON' : 'OFF');
+        }
+    })
+    
+    $(document).keyup(event => {
+        // Track key state
+        keysPressed[event.key.toLowerCase()] = false;
+
+        if (event.key === " " || event.code === "Space") {
+            if (wizard.currentSpell === "wall") return;
+            event.preventDefault();
+            const now = Date.now();
+            const downAt = spacebarDownAt;
+            spacebarDownAt = null;
+
+            if (downAt && (now - downAt) <= 250) {
+                // Quick tap: cast immediately
+                if (wizard && mousePos.worldX !== undefined && mousePos.worldY !== undefined) {
+                    wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
+                    wizard.cast(mousePos.worldX, mousePos.worldY);
+                }
+            }
         }
     })
 
 })
 
-function drawCanvas() {
-    if (!wizard) return;
-    // Update land layer position (tiling background)
-    updateLandLayer();
-
-    drawHexGrid();
-    
-    // Clear and rebuild object layer with sorted items
-    objectLayer.removeChildren();
-
-    // Keep phantom wall visible during layout mode
-    if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
-        updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
-        objectLayer.addChild(wizard.phantomWall);
-    }
-    
-    let mapItems = [];
-
-    const topLeftNode = map.worldToNode(viewport.x, viewport.y);
-    const bottomRightNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
-
-    if (topLeftNode && bottomRightNode) {
-        const xStart = Math.max(-1, topLeftNode.xindex - 2);
-        const xEnd = Math.min(mapWidth - 1, bottomRightNode.xindex + 2);
-        const yStart = Math.max(-1, topLeftNode.yindex - 2);
-        const yEnd = Math.min(mapHeight - 1, bottomRightNode.yindex + 3);
-
-        const startColA = Math.floor(xStart / 2) * 2 - 1;
-        const startColB = startColA - 1;
-
-        for (let y = yStart; y <= yEnd; y++) {
-            for (let x = startColA; x <= xEnd + 2; x += 2) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
-                    map.nodes[x][y].objects.forEach(obj => mapItems.push(obj));
-                }
-            }
-            for (let x = startColB; x <= xEnd + 2; x += 2) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
-                    map.nodes[x][y].objects.forEach(obj => mapItems.push(obj));
-                }
-            }
-        }
-    }
-    animals.forEach(animal => {
-        if (animal.onScreen) {
-            mapItems.push(animal);
-        }
-    })
-
-    mapItems.sort((a, b) => displayCoors(a).y > displayCoors(b).y ? 1: -1);
-    
-    const wizardCoors = displayCoors(wizard);
-    
-    // Update all static objects (handles burning, falling, etc.)
-    mapItems.forEach(item => {
-        if (item.update) {
-            item.update();
-        }
-        
-        // Handle vanish spell fading
-        if (item.vanishing && item.vanishStartTime !== undefined) {
-            const elapsedFrames = frameCount - item.vanishStartTime;
-            const progress = Math.min(1, elapsedFrames / item.vanishDuration);
-            
-            // Alpha will be set later when combining with occlusion alpha
-            
-            // Mark for removal when fully vanished (don't remove yet to avoid modifying arrays during iteration)
-            if (progress >= 1) {
-                if (item.pixiSprite && item.pixiSprite.parent === characterLayer) {
-                    characterLayer.removeChild(item.pixiSprite);
-                }
-                if (item.pixiSprite && item.pixiSprite.parent === objectLayer) {
-                    objectLayer.removeChild(item.pixiSprite);
-                }
-                // Remove from map node
-                if (typeof item.removeFromNodes === "function") {
-                    item.removeFromNodes();
-                } else {
-                    const itemNode = map.worldToNode(item.x, item.y);
-                    if (itemNode) itemNode.removeObject(item);
-                }
-                item.gone = true;
-            }
-        }
-    });
-    
-    // Add sorted items to object layer
-    mapItems.forEach(item => {
-        // Skip items that have been fully vanished
-        if (item.gone) return;
-        
-        if (item.pixiSprite) {
-            if (item.skipTransform && typeof item.draw === "function") {
-                item.draw();
-            } else {
-                applySpriteTransform(item);
-            }
-            // Update sprite alpha for occlusion
-            itemCoors = displayCoors(item);
-            let itemLeft = itemCoors.x - ((item.width || 1) * map.hexHeight) / 2;
-            let itemRight = itemCoors.x + ((item.width || 1) * map.hexHeight) / 2;
-            let itemTop = itemCoors.y - (item.height || 1) * map.hexHeight;
-            let itemBottom = itemCoors.y;
-
-            // Use trapezoid bounds for falling trees when available
-            if (item.type === "tree" && item.taperBounds) {
-                itemLeft = item.taperBounds.left;
-                itemRight = item.taperBounds.right;
-                itemTop = item.taperBounds.top;
-                itemBottom = item.taperBounds.bottom;
-            }
-
-            const itemPixelWidth = Math.max(1, itemRight - itemLeft);
-            const itemPixelHeight = Math.max(1, itemBottom - itemTop);
-            const wizardPixelWidth = (wizard.width || 1) * map.hexHeight;
-            const wizardPixelHeight = (wizard.height || 1) * map.hexHeight;
-
-            const wizardLeft = wizardCoors.x - wizardPixelWidth / 2;
-            const wizardRight = wizardCoors.x + wizardPixelWidth / 2;
-            const wizardTop = wizardCoors.y - wizardPixelHeight / 2;
-            const wizardBottom = wizardCoors.y + wizardPixelHeight / 2;
-
-            const overlapX = Math.max(0, Math.min(itemRight, wizardRight) - Math.max(itemLeft, wizardLeft));
-            const overlapY = Math.max(0, Math.min(itemBottom, wizardBottom) - Math.max(itemTop, wizardTop));
-            const overlapArea = overlapX * overlapY;
-            const wizardArea = Math.max(1, wizardPixelWidth * wizardPixelHeight);
-            const overlapRatio = Math.max(0, Math.min(overlapArea / wizardArea, 1));
-
-            let fadeRatio = overlapRatio;
-            let shouldFade = itemCoors.y > wizardCoors.y && itemCoors.y - itemPixelHeight < wizardCoors.y && overlapRatio > 0;
-
-            // Softer approach fade for fallen trees using trapezoid bounds
-            if (item.type === "tree" && item.taperBounds) {
-                const xOverlapRatio = Math.max(0, Math.min(overlapX / wizardPixelWidth, 1));
-                const fadeRange = wizardPixelHeight * 0.1; // Very tight approach range
-                let verticalProximity = 0;
-
-                // Calculate distance from wizard top to item bottom
-                const distToBottom = wizardTop - itemBottom;
-                
-                // Only fade when wizard is below or within the tree's vertical bounds
-                if (distToBottom > 0 && distToBottom < fadeRange) {
-                    // Approaching from below - fade increases as distance decreases
-                    verticalProximity = 1 - (distToBottom / fadeRange);
-                } else if (wizardTop >= itemTop && wizardTop <= itemBottom) {
-                    // wizard is within the vertical bounds of the tree - maintain full fade
-                    verticalProximity = 1;
-                }
-
-                // Combine horizontal overlap with vertical proximity
-                fadeRatio = Math.max(fadeRatio, xOverlapRatio * verticalProximity);
-                
-                // Fade if there's any horizontal overlap and vertical proximity
-                if (xOverlapRatio > 0 && verticalProximity > 0) {
-                    shouldFade = true;
-                }
-            }
-
-            // Smoothstep for less sudden transitions
-            const smoothFade = fadeRatio * fadeRatio * (3 - 2 * fadeRatio);
-
-            let occlusionAlpha = 1;
-            if (shouldFade) {
-                occlusionAlpha = 1 - 0.5 * smoothFade;
-            }
-            
-            // Combine vanish alpha with occlusion alpha
-            if (item.vanishing === true && item.vanishStartTime !== undefined && item.vanishDuration !== undefined) {
-                const elapsedFrames = frameCount - item.vanishStartTime;
-                
-                if (elapsedFrames < 1) {
-                    // First frame: show blue tint
-                    item.pixiSprite.tint = 0x0099FF;
-                    item.pixiSprite.alpha = occlusionAlpha;
-                } else {
-                    // Fade phase: fade from blue to transparent over 1/4 second
-                    const fadeElapsed = elapsedFrames - 1;
-                    const fadeDuration = 0.25 * frameRate; // 1/4 second
-                    this.percentVanished = Math.min(1, fadeElapsed / fadeDuration);
-                    const vanishAlpha = Math.max(0, 1 - this.percentVanished);
-                    item.pixiSprite.tint = 0x0099FF; // Keep blue tint while fading
-                    item.pixiSprite.alpha = occlusionAlpha * vanishAlpha;
-                }
-            } else {
-                item.pixiSprite.alpha = occlusionAlpha;
-            }
-            // item.pixiSprite.anchor.set(0.1, 0.1);
-            objectLayer.addChild(item.pixiSprite);
-
-            // Render fire if burning or fading out
-            if (item.isOnFire || item.fireFadeStart !== undefined) {
-                ensureFireFrames();
-                if (!fireFrames || fireFrames.length === 0) return;
-                if (item.fireFrameIndex === undefined || item.fireFrameIndex === null) {
-                    item.fireFrameIndex = 0;
-                }
-                if (!item.fireSprite) {
-                    item.fireSprite = new PIXI.Sprite(fireFrames[0]);
-                    item.fireSprite.anchor.set(0.5, 0.5);
-                }
-                if (frameCount % 2 === 0) {
-                    item.fireFrameIndex = (item.fireFrameIndex + 1) % fireFrames.length;
-                }
-                item.fireSprite.texture = fireFrames[item.fireFrameIndex];
-                const fireCoors = displayCoors(item);
-                const itemHeight = (item.height || 1) * map.hexHeight;
-                
-                // Calculate fire position accounting for tree rotation
-                // Tree rotates around its anchor point (bottom center for trees)
-                // Fire should stay at the center of the tree but remain upright
-                if (item.type === "tree") {
-                    const rotRad = (item.rotation ?? 0) * (Math.PI / 180);
-                    // Center of tree rotates around anchor point
-                    const centerOffsetX = (itemHeight / 2) * Math.sin(rotRad);
-                    const centerOffsetY = -(itemHeight / 2) * Math.cos(rotRad);
-                    item.fireSprite.x = fireCoors.x + centerOffsetX;
-                    item.fireSprite.y = fireCoors.y + centerOffsetY;
-                } else {
-                    // For animals, position fire lower (closer to ground)
-                    item.fireSprite.x = fireCoors.x;
-                    item.fireSprite.y = fireCoors.y;
-                }
-                
-                item.fireSprite.anchor.set(0.5, 1); // Bottom center of fire at position
-                
-                // Scale fire size based on HP loss
-                if (item.maxHP && item.hp !== undefined) {
-                    const hpLossRatio = Math.max(0, (item.maxHP - item.hp) / item.maxHP);
-                    let fireScale = 0.5 + hpLossRatio * 1.5; // Scale from 0.5x to 2x
-                    
-                    // During fade phase, shrink fire proportionally
-                    const alphaMult = item.fireAlphaMult !== undefined ? item.fireAlphaMult : 1;
-                    fireScale *= alphaMult;
-                    
-                    item.fireSprite.width = (item.width || 1) * map.hexHeight * fireScale;
-                    item.fireSprite.height = (item.height || 1) * map.hexHeight * fireScale;
-                } else {
-                    item.fireSprite.width = (item.width || 1) * map.hexHeight;
-                    item.fireSprite.height = (item.height || 1) * map.hexHeight;
-                }
-                
-                // Apply alpha fade
-                const alphaMult = item.fireAlphaMult !== undefined ? item.fireAlphaMult : 1;
-                item.fireSprite.alpha = item.pixiSprite.alpha * alphaMult;
-                item.fireSprite.rotation = 0; // Fire stays upright
-                objectLayer.addChild(item.fireSprite);
-            }
-        }
-    });
-
-    wizard.draw();
-    wizard.updateStatusBars();
-    drawProjectiles();
-    drawHitboxes();
-    updateCursor();
-    
-    $('#msg').html(messages.join("<br>"))
-}
-
-function displayCoors(item) {
-    return {
-        x: (item.x - viewport.x) * map.hexWidth,
-        y: (item.y - viewport.y) * map.hexHeight
-    }
-}
-
-function centerViewport(obj, margin) {
-    // viewport is in array index units
-    const centerX = viewport.x + viewport.width / 2;
-    const centerY = viewport.y + viewport.height / 2;
-    
-    // Convert obj world coordinates to index units
-    const objIndexX = obj.x;
-    const objIndexY = obj.y;
-    
-    // Check if object is outside the margin box
-    const leftBound = centerX - margin;
-    const rightBound = centerX + margin;
-    const topBound = centerY - margin;
-    const bottomBound = centerY + margin;
-    
-    // Smooth interpolation factor (lower = smoother but slower to respond)
-    const smoothFactor = 0.15;
-    
-    // Calculate desired viewport adjustment
-    let targetOffsetX = 0;
-    let targetOffsetY = 0;
-    
-    if (objIndexX < leftBound) {
-        targetOffsetX = (objIndexX - leftBound);
-    } else if (objIndexX > rightBound) {
-        targetOffsetX = (objIndexX - rightBound);
-    }
-    
-    if (objIndexY < topBound) {
-        targetOffsetY = (objIndexY - topBound);
-    } else if (objIndexY > bottomBound) {
-        targetOffsetY = (objIndexY - bottomBound);
-    }
-    
-    // Smoothly interpolate viewport position
-    viewport.x += targetOffsetX * smoothFactor;
-    viewport.y += targetOffsetY * smoothFactor;
-    
-    // Clamp viewport to map bounds
-    viewport.x = Math.max(0, Math.min(viewport.x, mapWidth - viewport.width));
-    viewport.y = Math.max(0, Math.min(viewport.y, mapHeight - viewport.height));
-}
-
-function getHexLine(nodeA, nodeB) {
-    if (!map || !nodeA || !nodeB) return [];
-    
-    // Convert world coordinates to map nodes if needed
-    let current = map.worldToNode(nodeA.x, nodeA.y);
-    const target = map.worldToNode(nodeB.x, nodeB.y);
-    
-    if (!current || !target) return [];
-    const path = [current];
-    const startPos = {x: current.x, y: current.y};
-    const lineVec = {x: target.x - startPos.x, y: target.y - startPos.y};
-    const lineLen = Math.hypot(lineVec.x, lineVec.y) || 1;
-    const maxSteps = (mapWidth + mapHeight) * 2;
-    const visited = new Set();
-
-    for (let step = 0; step < maxSteps; step++) {
-        if (current === target) break;
-        visited.add(`${current.xindex},${current.yindex}`);
-
-        const dx = target.x - current.x;
-        const dy = target.y - current.y;
-        const dist = Math.hypot(dx, dy) || 1;
-
-        let best = null;
-        let bestScore = -Infinity;
-        let bestDist = Infinity;
-        let bestLineDist = Infinity;
-
-        for (let i = 0; i < current.neighbors.length; i++) {
-            const neighbor = current.neighbors[i];
-            if (!neighbor) continue;
-            if (visited.has(`${neighbor.xindex},${neighbor.yindex}`)) continue;
-
-            const ndx = neighbor.x - current.x;
-            const ndy = neighbor.y - current.y;
-            const ndist = Math.hypot(ndx, ndy) || 1;
-            const dirScore = (ndx * dx + ndy * dy) / (ndist * dist);
-            const distToTarget = Math.hypot(target.x - neighbor.x, target.y - neighbor.y);
-            const reduces = distToTarget < dist - 1e-6;
-            const lineDist = Math.abs((neighbor.x - startPos.x) * lineVec.y - (neighbor.y - startPos.y) * lineVec.x) / lineLen;
-            const score = dirScore + (reduces ? 1 : 0) - lineDist * 1.2;
-
-            if (
-                score > bestScore ||
-                (score === bestScore && lineDist < bestLineDist) ||
-                (score === bestScore && lineDist === bestLineDist && distToTarget < bestDist)
-            ) {
-                bestScore = score;
-                bestDist = distToTarget;
-                bestLineDist = lineDist;
-                best = neighbor;
-            }
-        }
-
-        if (!best) break;
-        current = best;
-        path.push(current);
-    }
-
-    return path;
-}
-
-function updatePhantomWall(ax, ay, bx, by) {
-    if (!wizard.phantomWall) return;
-    
-    wizard.phantomWall.clear();
-
-    const nodeA = map.worldToNode(ax, ay);
-    const nodeB = map.worldToNode(bx, by);
-    if (!nodeA || !nodeB) return;
-    
-    const wallPath = getHexLine(nodeA, nodeB);
-    for (let i = 0; i < wallPath.length - 1; i++) {
-        const nodeA = wallPath[i];
-        const nodeB = wallPath[i + 1];
-        
-        // Use the static NewWall.drawWall method with phantom styling
-        Wall.drawWall(wizard.phantomWall, nodeA, nodeB, 1.5, 0.2, 0x888888, 0.5);
-    }
-}
-
-function screenToHex(screenX, screenY) {
-    const worldX = screenX / map.hexWidth + viewport.x;
-    const worldY = screenY / map.hexHeight + viewport.y;
-
-    const approxCol = Math.round(worldX);
-    const approxRow = Math.round(worldY - (approxCol % 2 === 0 ? 0.5 : 0));
-
-    let best = {x: approxCol, y: approxRow};
-    let bestDist = Infinity;
-
-    for (let cx = approxCol - 1; cx <= approxCol + 1; cx++) {
-        for (let cy = approxRow - 1; cy <= approxRow + 1; cy++) {
-            if (cx < 0 || cy < 0 || cx >= mapWidth || cy >= mapHeight) continue;
-            const centerX = cx * map.hexWidth - viewport.x * map.hexWidth;
-            const centerY = (cy + (cx % 2 === 0 ? 0.5 : 0)) * map.hexHeight - viewport.y * map.hexHeight;
-            const dx = centerX - screenX;
-            const dy = centerY - screenY;
-            const dist = dx * dx + dy * dy;
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = {x: cx, y: cy};
-            }
-        }
-    }
-
-    return best;
-}
-
-function buildSpriteFramesFromList(list, rows, cols) {
-    if (!list || list.length < rows * cols) return null;
-    const frames = [];
-    for (let r = 0; r < rows; r++) {
-        frames[r] = [];
-        for (let c = 0; c < cols; c++) {
-            frames[r][c] = list[r * cols + c];
-        }
-    }
-    return frames;
-}
-
-function ensureSpriteFrames(item) {
-    if (!item || !item.spriteSheet || item.spriteSheetReady) return;
-
-    const sheet = item.spriteSheet;
-    const rows = sheet.rows || 1;
-    const cols = sheet.cols || 1;
-    let frameList = null;
-
-    if (Array.isArray(sheet.frameTextures)) {
-        frameList = sheet.frameTextures;
-    } else if (Array.isArray(sheet.frameKeys)) {
-        const texGroup = textures[item.type];
-        if (texGroup && texGroup.byKey) {
-            frameList = sheet.frameKeys.map(key => texGroup.byKey[key]).filter(Boolean);
-        }
-    } else if (Array.isArray(sheet.framePaths)) {
-        frameList = sheet.framePaths.map(path => PIXI.Texture.from(path));
-    }
-
-    const frames = buildSpriteFramesFromList(frameList, rows, cols);
-    if (!frames) return;
-
-    item.spriteRows = rows;
-    item.spriteCols = cols;
-    item.spriteCol = item.spriteCol || 0;
-    item.spriteFrames = frames;
-    item.spriteSheetReady = true;
-
-    if (item.pixiSprite && frames[0] && frames[0][0]) {
-        item.pixiSprite.texture = frames[0][0];
-    }
-}
-
-function ensureFireFrames() {
-    if (fireFrames) return;
-    const baseTexture = PIXI.Texture.from('./assets/images/fire.png').baseTexture;
-    if (!baseTexture.valid) {
-        baseTexture.once('loaded', () => {
-            fireFrames = null;
-            ensureFireFrames();
-        });
-        return;
-    }
-    const cols = 5;
-    const rows = 5;
-    const frameWidth = baseTexture.width / cols;
-    const frameHeight = baseTexture.height / rows;
-    fireFrames = [];
-    for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-            fireFrames.push(
-                new PIXI.Texture(
-                    baseTexture,
-                    new PIXI.Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight)
-                )
-            );
-        }
-    }
-}
-
-function applySpriteTransform(item) {
-    const coors = displayCoors(item);
-    ensureSpriteFrames(item);
-    if (item.spriteFrames && item.pixiSprite) {
-        const rowIndex = typeof item.getDirectionRow === "function" ? item.getDirectionRow() : 0;
-        const safeRow = Math.max(0, Math.min(rowIndex, (item.spriteRows || 1) - 1));
-        const safeCol = Math.max(0, Math.min(item.spriteCol || 0, (item.spriteCols || 1) - 1));
-        const rowFrames = item.spriteFrames[safeRow] || item.spriteFrames[0];
-        const nextTexture = rowFrames && (rowFrames[safeCol] || rowFrames[0]);
-        if (nextTexture) item.pixiSprite.texture = nextTexture;
-    }
-    item.pixiSprite.x = coors.x;
-    item.pixiSprite.y = coors.y;
-    // item.pixiSprite.anchor.set(0, 1);
-    item.pixiSprite.width = (item.width || 1) * map.hexHeight;
-    item.pixiSprite.height = (item.height || 1) * map.hexHeight;
-    item.pixiSprite.skew.x = 0;
-    
-    // Apply tree taper mesh deformation during fall
-    if (item.type === "tree") {
-        applyTreeTaperMesh(item, coors);
-    }
-    
-    if (item.rotation) {
-        item.pixiSprite.rotation = item.rotation * (Math.PI / 180);
-    } else {
-        item.pixiSprite.rotation = 0;
-    }
-}
-
-function updateLandLayer() {
-    if (!landTileSprite || !Array.isArray(landTileSprite)) return;
-    
-    // Update positions of the 4 background tiles to stay centered on viewport
-    // Calculate which tile should appear at each position
-    const bgWidth = app.screen.width;
-    const bgHeight = app.screen.height;
-    
-    // Calculate offset in pixels from viewport
-    const offsetX = -(viewport.x * map.hexWidth) % bgWidth;
-    const offsetY = -(viewport.y * map.hexHeight) % bgHeight;
-    
-    // Position the 4 tiles in a 2x2 grid
-    for (let ty = 0; ty < 2; ty++) {
-        for (let tx = 0; tx < 2; tx++) {
-            const spriteIndex = ty * 2 + tx;
-            const sprite = landTileSprite[spriteIndex];
-            sprite.x = offsetX + tx * bgWidth;
-            sprite.y = offsetY + ty * bgHeight;
-        }
-    }
-}
-
-function drawProjectiles() {
-    remainingBalls = [];
-    projectiles.forEach(ball => {
-        if (!ball.visible) return;
-        
-        if (!ball.pixiSprite) {
-            // Create sprite from actual texture
-            const texture = PIXI.Texture.from(ball.image.src);
-            ball.pixiSprite = new PIXI.Sprite(texture);
-            ball.pixiSprite.anchor.set(0.5, 0.5);
-            ball.pixiSprite._lastImageSrc = ball.image.src;
-            projectileLayer.addChild(ball.pixiSprite);
-        }
-        
-        // Handle fireball animation (animates while moving)
-        if (ball.explosionFrames && ball.explosionFrames.length > 0) {
-            ball.pixiSprite.texture = ball.explosionFrames[Math.floor(ball.explosionFrame) % ball.explosionFrames.length];
-        }
-        // Handle grenade explosion animation (animates when landed)
-        else if (ball.isExploding && ball.explosionFrames) {
-            ball.pixiSprite.texture = ball.explosionFrames[ball.explosionFrame];
-        }
-        // Update texture if image changed (for non-animated transitions)
-        else if (ball.pixiSprite._lastImageSrc !== ball.image.src) {
-            ball.pixiSprite.texture = PIXI.Texture.from(ball.image.src);
-            ball.pixiSprite._lastImageSrc = ball.image.src;
-        }
-        
-        // If landed, use fixed world position; otherwise follow projectile
-        if (ball.landed) {
-            ball.pixiSprite.x = ball.landedWorldX - viewport.x * map.hexWidth;
-            ball.pixiSprite.y = ball.landedWorldY - viewport.y * map.hexHeight;
-        } else {
-            const ballWorldX = ball.x * map.hexWidth;
-            const ballWorldY = (ball.y - ball.z) * map.hexHeight;
-            ball.pixiSprite.x = ballWorldX - viewport.x * map.hexWidth;
-            ball.pixiSprite.y = ballWorldY - viewport.y * map.hexHeight;
-        }
-        
-        ball.pixiSprite.width = ball.apparentSize;
-        ball.pixiSprite.height = ball.apparentSize;
-        ball.pixiSprite.visible = true;
-        
-        remainingBalls.push(ball)
-    })
-    projectiles = remainingBalls;
-}
-
-function drawHexGrid() {
-    if (!debugMode) {
-        if (gridGraphics) gridGraphics.visible = false;
-        return;
-    }
-
-    if (!gridGraphics) {
-        gridGraphics = new PIXI.Graphics();
-        gridLayer.addChild(gridGraphics);
-    }
-    gridGraphics.visible = true;
-    gridGraphics.clear();
-
-    const hexWidth = map.hexWidth * 1.1547;
-    const hexHeight = map.hexHeight;
-    const halfW = hexWidth / 2;
-    const quarterW = hexWidth / 4;
-    const halfH = hexHeight / 2;
-
-    startNode = map.worldToNode(viewport.x, viewport.y);
-    endNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
-
-    const yStart = Math.max(Math.floor(startNode.yindex) - 2, 0);
-    const yEnd = Math.min(Math.ceil(endNode.yindex) + 2, mapHeight - 1);
-    const xStart = Math.max(Math.floor(startNode.xindex) - 2, 0);
-    const xEnd = Math.min(Math.ceil(endNode.xindex) + 2, mapWidth - 1);
-
-    const animalTiles = new Set();
-    animals.forEach(animal => {
-        if (!animal || animal.gone || animal.dead) return;
-        animalTiles.add(`${animal.x},${animal.y}`);
-    });
-
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const node = map.nodes[x][y];
-            const screenCoors = displayCoors(node);
-            const centerX = screenCoors.x;
-            const centerY = screenCoors.y;
-
-            const isBlocked = node.hasBlockingObject() || !!node.blocked;
-            const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
-            const color = isBlocked ? 0xff0000 : 0xffffff;
-            const alpha = isBlocked ? 0.5 : 0.35;
-            if (hasAnimal) {
-                gridGraphics.beginFill(0x3399ff, 0.25);
-                gridGraphics.moveTo(centerX - halfW, centerY);
-                gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + halfW, centerY);
-                gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-                gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-                gridGraphics.closePath();
-                gridGraphics.endFill();
-            }
-
-            gridGraphics.lineStyle(1, color, alpha);
-            gridGraphics.moveTo(centerX - halfW, centerY);
-            gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + halfW, centerY);
-            gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-            gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-            gridGraphics.closePath();
-        }
-    }
-
-    // Draw blocked neighbor connections with red perpendicular lines
-    gridGraphics.lineStyle(4, 0xff0000, 0.4);
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const node = map.nodes[x][y];
-            
-            if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
-            
-            // For each blocked neighbor direction
-            node.blockedNeighbors.forEach((blockingSet, direction) => {
-                if (blockingSet.size === 0) return;
-                
-                const neighbor = node.neighbors[direction];
-                if (!neighbor) return;
-                
-                // Calculate midpoint between the two hexes in world space
-                const midX = (node.x + neighbor.x) / 2;
-                const midY = (node.y + neighbor.y) / 2;
-                
-                // Calculate vector from node to neighbor
-                const dx = neighbor.x - node.x;
-                const dy = neighbor.y - node.y;
-                const len = Math.sqrt(dx * dx + dy * dy);
-                
-                if (len === 0) return;
-                
-                // Perpendicular vector (rotate 90 degrees)
-                const perpX = -dy / len;
-                const perpY = dx / len;
-                
-                // Line length (in world units)
-                const lineLength = 0.4;
-                
-                // Calculate endpoints of perpendicular line
-                const x1 = midX + perpX * lineLength;
-                const y1 = midY + perpY * lineLength;
-                const x2 = midX - perpX * lineLength;
-                const y2 = midY - perpY * lineLength;
-                
-                // Convert to screen coordinates
-                const screenX1 = (x1 - viewport.x) * map.hexWidth;
-                const screenY1 = (y1 - viewport.y) * map.hexHeight;
-                const screenX2 = (x2 - viewport.x) * map.hexWidth;
-                const screenY2 = (y2 - viewport.y) * map.hexHeight;
-                
-                // Draw the line
-                gridGraphics.moveTo(screenX1, screenY1);
-                gridGraphics.lineTo(screenX2, screenY2);
-            });
-        }
-    }
-}
-
-function drawHitboxes() {
-    if (!debugMode) {
-        if (hitboxGraphics) hitboxGraphics.visible = false;
-        return;
-    }
-
-    if (!hitboxGraphics) {
-        hitboxGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(hitboxGraphics);
-    }
-    hitboxGraphics.visible = true;
-    hitboxGraphics.clear();
-
-    // Projectile hitboxes
-    projectiles.forEach(ball => {
-        if (!ball.visible || !ball.radius) return;
-        const ballCoors = displayCoors(ball);
-        const radiusPx = ball.radius * map.hexHeight;
-        hitboxGraphics.lineStyle(2, 0xffaa00, 0.9);
-        hitboxGraphics.drawCircle(ballCoors.x, ballCoors.y, radiusPx);
-    });
-
-    // Animal hitboxes
-    animals.forEach(animal => {
-        if (!animal || animal.dead || !animal._onScreen) return;
-        const animalCoors = displayCoors(animal);
-        const radiusPx = (animal.radius || 0.35) * map.hexHeight;
-        hitboxGraphics.lineStyle(2, 0x00ff66, 0.9);
-        hitboxGraphics.drawCircle(animalCoors.x, animalCoors.y, radiusPx);
-    });
-
-    // Tree hitboxes (match occlusion/catching fire bounds)
-    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-    const topLeftNode = map.worldToNode(viewport.x, viewport.y);
-    const bottomRightNode = map.worldToNode(viewport.x + viewport.width, viewport.y + viewport.height);
-
-    if (topLeftNode && bottomRightNode) {
-        const yStart = Math.max(topLeftNode.yindex - 2, 0);
-        const yEnd = Math.min(bottomRightNode.yindex + 3, mapHeight - 1);
-        const xStart = Math.max(topLeftNode.xindex - 2, 0);
-        const xEnd = Math.min(bottomRightNode.xindex + 2, mapWidth - 1);
-
-        onscreenObjects = new Set();
-        for (let y = yStart; y <= yEnd; y++) {
-            for (let x = xStart; x <= xEnd; x++) {
-                if (!map.nodes[x] || !map.nodes[x][y]) continue;
-                const nodeObjects = map.nodes[x][y].objects || [];
-                nodeObjects.forEach(obj => {
-                    if (obj.hitbox) {
-                        onscreenObjects.add(obj);
-                    }
-                });
-            }
-        }
-
-        // Draw polygon hitboxes for all onscreen objects that have them
-        if (onscreenObjects.size > 0) {
-            onscreenObjects.entries().forEach(([key, obj]) => {
-                if (!obj) {
-                    console.log('Undefined object in onscreenObjects set:', key);
-                    return;
-                }
-                if (obj.hitbox instanceof PolygonHitbox) {
-                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-                    const points = obj.hitbox.points;
-                    if (!points || points.length === 0) return;
-                    
-                    // Convert world coordinates to screen coordinates using displayCoors logic
-                    const screenPoints = points.map(p => ({
-                        x: (p.x - viewport.x) * map.hexWidth,
-                        y: (p.y - viewport.y) * map.hexHeight
-                    }));
-                    
-                    // Draw polygon
-                    const flatPoints = screenPoints.flatMap(p => [p.x, p.y]);
-                    hitboxGraphics.drawPolygon(flatPoints);
-                } else if (obj.hitbox instanceof CircleHitbox) {
-                    const centerX = (obj.hitbox.x - viewport.x) * map.hexWidth;
-                    const centerY = (obj.hitbox.y - viewport.y) * map.hexHeight;
-                    const radiusPx = obj.hitbox.radius * map.hexHeight;
-                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-                    hitboxGraphics.drawCircle(centerX, centerY, radiusPx);
-                }
-            });
-        }
-    }
-}
-
-function updateCursor() {
-    if (!cursorSprite || !mousePos.screenX || !mousePos.screenY || !wizard) return;
-    
-    // Set cursor position to mouse position
-    cursorSprite.x = mousePos.screenX;
-    cursorSprite.y = mousePos.screenY;
-    
-    // Calculate wizard position in screen coordinates
-    wizardScreenCoors = displayCoors(wizard);
-    const wizardScreenX = wizardScreenCoors.x;
-    const wizardScreenY = wizardScreenCoors.y;
-    
-    // Calculate vector from mouse to wizard
-    const dx = wizardScreenX - mousePos.screenX;
-    const dy = wizardScreenY - mousePos.screenY;
-    
-    // Calculate rotation angle (atan2 returns angle from -PI to PI)
-    // Add PI to point away from wizard, then add PI/2 for visual alignment
-    const angle = Math.atan2(dy, dx) + Math.PI * 1.5;
-    cursorSprite.rotation = angle;
-    
-    // Scale cursor appropriately
-    const cursorWidth = map.hexWidth / 2;
-    const cursorHeight = map.hexHeight;
-    cursorSprite.width = cursorWidth;
-    cursorSprite.height = cursorHeight;
-}
-
-function distance(x1, y1, x2, y2) {
-    const dx = x1 - x2;
-    const dy = y1 - y2;
-    return Math.hypot(dx, dy);
-}
-
-function withinRadius(x1, y1, x2, y2, radius) {
-    const dx = x1 - x2;
-    const dy = y1 - y2;
-    return dx * dx + dy * dy <= radius * radius;
-}
-
-function message (text) {
-    messages.push(text);
-    setTimeout(() => {
-        messages.shift();
-    }, 8000);
-}
+// Rendering and utility helpers moved to rendering.js
