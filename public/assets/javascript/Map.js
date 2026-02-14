@@ -1,3 +1,122 @@
+function pointInPolygon2D(x, y, points) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const xi = points[i].x;
+        const yi = points[i].y;
+        const xj = points[j].x;
+        const yj = points[j].y;
+        const intersect = ((yi > y) !== (yj > y)) &&
+            (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-7) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
+}
+
+function distanceToSegment2D(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const apx = px - ax;
+    const apy = py - ay;
+    const abLen2 = abx * abx + aby * aby;
+    if (abLen2 <= 1e-7) return Math.hypot(px - ax, py - ay);
+    const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / abLen2));
+    const cx = ax + abx * t;
+    const cy = ay + aby * t;
+    return Math.hypot(px - cx, py - cy);
+}
+
+function buildBlendedGroundTextureFromBase(baseTexture, options = {}) {
+    const source = baseTexture && baseTexture.baseTexture && baseTexture.baseTexture.resource
+        ? baseTexture.baseTexture.resource.source
+        : null;
+    if (!source) return null;
+
+    const outSize = options.outSize || 200;
+    const scale = options.scale || 1.1;
+    const featherRatio = Number.isFinite(options.featherRatio) ? options.featherRatio : 0.25;
+    const featherPx = Math.max(1, featherRatio * outSize);
+    const minFeatherAlpha = Number.isFinite(options.minFeatherAlpha) ? options.minFeatherAlpha : 0.0;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outSize;
+    canvas.height = outSize;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const drawSize = outSize * scale;
+    const drawOffset = (outSize - drawSize) / 2;
+    ctx.clearRect(0, 0, outSize, outSize);
+    ctx.drawImage(source, drawOffset, drawOffset, drawSize, drawSize);
+
+    const imageData = ctx.getImageData(0, 0, outSize, outSize);
+    const data = imageData.data;
+
+    // Hex matching existing forest tile orientation (flat top/bottom, points on left/right).
+    const hex = [
+        { x: 0, y: outSize * 0.5 },
+        { x: outSize * 0.25, y: 0 },
+        { x: outSize * 0.75, y: 0 },
+        { x: outSize, y: outSize * 0.5 },
+        { x: outSize * 0.75, y: outSize },
+        { x: outSize * 0.25, y: outSize }
+    ];
+
+    // Feather only the top-facing edges for top-down painter's-order blending.
+    // Edge indices in this hex:
+    // 0: left-mid -> top-left
+    // 1: top-left -> top-right
+    // 2: top-right -> right-mid
+    // 3: right-mid -> bottom-right
+    // 4: bottom-right -> bottom-left
+    // 5: bottom-left -> left-mid
+    const featherEdgeIndices = [0, 1, 2];
+
+    for (let y = 0; y < outSize; y++) {
+        for (let x = 0; x < outSize; x++) {
+            const idx = (y * outSize + x) * 4;
+            if (!pointInPolygon2D(x + 0.5, y + 0.5, hex)) {
+                data[idx + 3] = 0;
+                continue;
+            }
+
+            let minDist = Infinity;
+            for (const i of featherEdgeIndices) {
+                const a = hex[i];
+                const b = hex[(i + 1) % hex.length];
+                const d = distanceToSegment2D(x + 0.5, y + 0.5, a.x, a.y, b.x, b.y);
+                if (d < minDist) minDist = d;
+            }
+            const edgeFactor = Math.max(0, Math.min(1, minDist / featherPx));
+            const alphaFactor = minFeatherAlpha + (1 - minFeatherAlpha) * edgeFactor;
+            data[idx + 3] = Math.round(255 * alphaFactor);
+        }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+    return PIXI.Texture.from(canvas);
+}
+
+function createRuntimeGroundTexture(texturePath, onReady) {
+    const base = PIXI.Texture.from(texturePath);
+    const apply = () => {
+        const blended = buildBlendedGroundTextureFromBase(base, {
+            outSize: 200,
+            scale: 1.0,
+            featherRatio: 0.25,
+            minFeatherAlpha: 0.0
+        });
+        if (blended && typeof onReady === "function") {
+            onReady(blended);
+        }
+    };
+    if (base.baseTexture && base.baseTexture.valid) {
+        apply();
+    } else if (base.baseTexture) {
+        base.baseTexture.once("loaded", apply);
+    }
+    return base;
+}
+
 class MapNode {
     constructor(x, y, mapWidth, mapHeight) {
         this.x = x * 0.866;
@@ -20,6 +139,7 @@ class MapNode {
         this.objects = [];
         this.blockedByObjects = 0;
         this.blocked = false;
+        this.groundTextureId = 0;
         
         // Define direction offsets based on even/odd column
         // All indices follow counterclockwise from left
@@ -58,27 +178,40 @@ class MapNode {
             ];
         }
         
-        // Store offsets and validate neighbors are within map bounds
+        // Store neighbor offsets. Active map tiles keep full offsets so torus
+        // stitching can reconnect edges later in setNeighbors.
         for (let i = 0; i < offsets.length; i++) {
             const offset = offsets[i];
             const nx = x + offset.x;
             const ny = y + offset.y;
-            
-            // Only store offset if the neighbor would be within map bounds
-            if (nx >= -1 && nx < mapWidth && ny >= -1 && ny < mapHeight) {
+
+            const isActiveTile = x >= 0 && x < mapWidth && y >= 0 && y < mapHeight;
+            if (isActiveTile) {
+                this.neighborOffsets[i] = offset;
+            } else if (nx >= -1 && nx < mapWidth && ny >= -1 && ny < mapHeight) {
                 this.neighborOffsets[i] = offset;
             }
         }
     }
     
-    setNeighbors(nodes) {
+    setNeighbors(nodes, mapRef = null) {
         // Populate the neighbors array after all nodes are created
         for (let i = 0; i < this.neighborOffsets.length; i++) {
             if (this.neighborOffsets[i]) {
                 const offset = this.neighborOffsets[i];
-                const nx = this.xindex + offset.x;
-                const ny = this.yindex + offset.y;
-                this.neighbors[i] = nodes[nx][ny];
+                let nx = this.xindex + offset.x;
+                let ny = this.yindex + offset.y;
+
+                if (mapRef && this.xindex >= 0 && this.yindex >= 0) {
+                    if (mapRef.wrapX) {
+                        nx = mapRef.wrapIndexX(nx);
+                    }
+                    if (mapRef.wrapY) {
+                        ny = mapRef.wrapIndexY(ny);
+                    }
+                }
+
+                this.neighbors[i] = (nodes[nx] && nodes[nx][ny]) ? nodes[nx][ny] : null;
             }
         }
     }
@@ -86,18 +219,27 @@ class MapNode {
     addObject(obj) {
         if (!this.objects) this.objects = [];
         this.objects.push(obj);
-        if (obj.blocksTile !== false) {
-            this.blockedByObjects += 1;
-        }
+        this.recountBlockingObjects();
     }
 
     removeObject(obj) {
         if (!this.objects) return;
         const idx = this.objects.indexOf(obj);
         if (idx !== -1) this.objects.splice(idx, 1);
-        if (obj.blocksTile !== false) {
-            this.blockedByObjects = Math.max(0, this.blockedByObjects - 1);
+        this.recountBlockingObjects();
+    }
+
+    recountBlockingObjects() {
+        if (!this.objects || this.objects.length === 0) {
+            this.blockedByObjects = 0;
+            return;
         }
+        let count = 0;
+        for (let i = 0; i < this.objects.length; i++) {
+            const obj = this.objects[i];
+            if (obj && obj.blocksTile !== false) count += 1;
+        }
+        this.blockedByObjects = count;
     }
 
     hasObjects() {
@@ -111,13 +253,36 @@ class MapNode {
 
 class GameMap {
     constructor(width, height, options, callback) {
+        const opts = options || {};
         this.width = width;
         this.height = height;
+        this.wrapX = opts.wrapX !== false;
+        this.wrapY = opts.wrapY !== false;
+        if ((this.wrapX || this.wrapY) && ((this.width % 2 !== 0) || (this.height % 2 !== 0)) && typeof console !== "undefined") {
+            console.warn("Torus wrap works best with even map dimensions; current size is", this.width, "x", this.height);
+        }
         this.scenery = {};
         this.animalImages = {};
         this.nodes = [];
         this.hexHeight = 1;
         this.hexWidth = 1 / 0.866;
+        this.worldWidth = this.width * 0.866;
+        this.worldHeight = this.height;
+        this.groundPalette = [
+            "forest0", "forest1", "forest2", "forest3",
+            "forest4", "forest5", "forest6", "forest7", "forest8", "forest9",
+            "forest10", "forest11", "forest12"
+        ];
+        this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
+        this.groundPalette.forEach((name, idx) => {
+            const path = `/assets/images/land tiles/${name}.png`;
+            this.groundTextures[idx] = createRuntimeGroundTexture(path, (processed) => {
+                this.groundTextures[idx] = processed;
+                if (typeof invalidateGroundChunks === "function") {
+                    invalidateGroundChunks();
+                }
+            });
+        });
 
         const scenery = [
             {type: "tree", frequency: 4},
@@ -159,24 +324,8 @@ class GameMap {
             }
         })
 
-        // loading background images as Pixi textures
-        let backgroundTexture = PIXI.Texture.from(`/assets/images/land tiles/${terrain.type}.png`);
-        
-        // Create 2x2 grid of background tiles positioned edge-to-edge
-        // This ensures the background fills the screen without gaps
-        const bgSprites = [];
-        for (let ty = 0; ty < 2; ty++) {
-            for (let tx = 0; tx < 2; tx++) {
-                const bgSprite = new PIXI.Sprite(backgroundTexture);
-                bgSprite.x = tx * app.screen.width;
-                bgSprite.y = ty * app.screen.height;
-                bgSprite.width = app.screen.width;
-                bgSprite.height = app.screen.height;
-                landLayer.addChild(bgSprite);
-                bgSprites.push(bgSprite);
-            }
-        }
-        landTileSprite = bgSprites;
+        // Ground is rendered per-tile in rendering.js using node.groundTextureId.
+        landTileSprite = null;
 
         console.log("generating nodes...");
 
@@ -186,6 +335,9 @@ class GameMap {
             for (let y = -1; y < this.height; y++) {
                 this.nodes[x][y] = new MapNode(x, y, this.width, this.height);
                 this.nodes[x][y].index = index;
+                if (x >= 0 && y >= 0) {
+                    this.nodes[x][y].groundTextureId = Math.floor(Math.random() * this.groundTextures.length);
+                }
                 
                 // Randomly spawn scenery on this node
                 Object.keys(this.scenery).forEach(index => {
@@ -221,6 +373,9 @@ class GameMap {
                         else if (item.type === "playground") {
                             staticObject = new Playground(node, item.textures, this);
                         }
+                        else if (item.type === "road") {
+                            staticObject = new Road(node, item.textures, this);
+                        }
                         else {
                             staticObject = new StaticObject(item.type, node, width, height, item.textures, this);
                         }
@@ -232,7 +387,7 @@ class GameMap {
         // Now that all nodes are created, populate their neighbor references
         for (let x = -1; x < this.width; x++) {
             for (let y = -1; y < this.height; y++) {
-                this.nodes[x][y].setNeighbors(this.nodes);
+                this.nodes[x][y].setNeighbors(this.nodes, this);
             }
         }
         animal_types.forEach((animal, i) => {
@@ -352,8 +507,8 @@ class GameMap {
                 // Calculate distance to destination
                 const moveToPoint = {x: neighborNode.x, y: neighborNode.y};
                 const distFactor = distFactors[n];
-                const xdist = destinationNode.x - currentNode.x - (moveToPoint.x - currentNode.x) * distFactor;
-                const ydist = destinationNode.y - currentNode.y - (moveToPoint.y - currentNode.y) * distFactor;
+                const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x) - this.shortestDeltaX(currentNode.x, moveToPoint.x) * distFactor;
+                const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y) - this.shortestDeltaY(currentNode.y, moveToPoint.y) * distFactor;
                 const dist = xdist ** 2 + ydist ** 2;
 
                 if (dist < bestDistance) {
@@ -387,9 +542,12 @@ class GameMap {
     
     // Convert world coordinates to the nearest MapNode
     worldToNode(worldX, worldY) {
+        const wrappedWorldX = this.wrapWorldX(worldX);
+        const wrappedWorldY = this.wrapWorldY(worldY);
+
         // Reverse the world coordinate calculation to get approximate indices
-        const approxX = Math.round(worldX / 0.866);
-        const approxY = Math.round(worldY - (approxX % 2 === 0 ? 0.5 : 0));
+        const approxX = this.wrapIndexX(Math.round(wrappedWorldX / 0.866));
+        const approxY = this.wrapIndexY(Math.round(wrappedWorldY - (approxX % 2 === 0 ? 0.5 : 0)));
         
         // Search nearby nodes to find the closest one
         let best = null;
@@ -397,13 +555,18 @@ class GameMap {
         
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
-                const nx = approxX + dx;
-                const ny = approxY + dy;
+                let nx = approxX + dx;
+                let ny = approxY + dy;
+                if (this.wrapX) nx = this.wrapIndexX(nx);
+                if (this.wrapY) ny = this.wrapIndexY(ny);
                 if (nx < -1 || nx >= this.width || ny < -1 || ny >= this.height) continue;
                 if (!this.nodes[nx] || !this.nodes[nx][ny]) continue;
                 
                 const node = this.nodes[nx][ny];
-                const dist = Math.hypot(node.x - worldX, node.y - worldY);
+                const dist = Math.hypot(
+                    this.shortestDeltaX(node.x, wrappedWorldX),
+                    this.shortestDeltaY(node.y, wrappedWorldY)
+                );
                 if (dist < bestDist) {
                     bestDist = dist;
                     best = node;
@@ -414,43 +577,63 @@ class GameMap {
         return best;
     }
 
+    getHexDirection(x, y) {
+        if (x === 0 && y === 0) return 0;
+        const angle = Math.atan2(-y, x) * (180 / Math.PI);
+        let direction = Math.round((180 - angle) / 30);
+        if (direction < 0) direction += 12;
+        return direction % 12;
+    }
+
     getHexLine(nodeA, nodeB, width = 0) {
-        if (!nodeA || !nodeB) return [];
         
+        if (nodeA == nodeB) return [nodeA];
+
         // Get the center line first
         if (width == 0) return this._getSingleHexLine(nodeA, nodeB);
 
         // get direction (0-11) corresponding to the travel vector from A to B
         const firstNeighborDirection = -1
-        const dx = nodeB.x - nodeA.x;
-        const dy = nodeB.y - nodeA.y;
-        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        let direction = Math.round(angle / 30);
-        if (direction < 0) direction += 12;
+        const dx = this.shortestDeltaX(nodeA.x, nodeB.x);
+        const dy = this.shortestDeltaY(nodeA.y, nodeB.y);
+        let direction = this.getHexDirection(dx, dy);
         let sideLineStarts = [];
-        if (direction >= 2) {
-            sideLineStarts.push(-1);
+        if (width == 2) {
             if (direction % 2 === 0) {
-                sideLineStarts.push(1);
+                sideLineStarts.push((direction + 3) % 12);
+            } else {
+                sideLineStarts.push((direction + 2) % 12);
             }
+
         }
-        if (direction >= 3) {
-            sideLineStarts.push(-2);
-            if (direction % 2 === 0) {
-                sideLineStarts.push(1);
-            } else if (direction % 2 === 0) {
-                sideLineStarts.push(2);
-                sideLineStarts.push(-2);
-            }
-        }
+        if (width == 3) {
+            sideLineStarts.push(1);
+            sideLineStarts.push(3);
+            sideLineStarts.push(5);
+            sideLineStarts.push(7);
+            sideLineStarts.push(9);
+            sideLineStarts.push(11);
+        }        
         
-        const allNodes = new Set(this._getSingleHexLine(nodeA, nodeB));
-        sideLineStarts.forEach(sideStart => {
-            if (sideStart) {
-                const sideLine = this._getSingleHexLine(nodeA.neighbors[sideStart], nodeB.neighbors[sideStart]);
-                sideLine.forEach(n => allNodes.add(n));
+        const startNodes = new Set(this._getSingleHexLine(nodeA, nodeB));
+        let allNodes = new Set(startNodes);
+        for (let node of startNodes) {
+            for (let sideStart of sideLineStarts) {
+                const sideNode = node.neighbors[sideStart];
+                allNodes.add(sideNode);
             }
-        })
+        }
+        // sideLineStarts.forEach(sideStart => {
+        //     // allNodes.add(nodeA.neighbors[(direction + sideStart) % 12])
+        //     // allNodes.add(nodeB.neighbors[(direction +sideStart) % 12])
+        //     if (sideStart) {
+        //         const sideLine = this._getSingleHexLine(
+        //             nodeA.neighbors[(direction + sideStart) % 12], 
+        //             nodeB.neighbors[(direction + sideStart) % 12]
+        //         );
+        //         sideLine.forEach(n => allNodes.add(n));
+        //     }
+        // })
         
         return Array.from(allNodes);
     }
@@ -464,56 +647,91 @@ class GameMap {
         
         if (!current || !target) return [];
         const path = [current];
-        const startPos = {x: current.x, y: current.y};
-        const lineVec = {x: target.x - startPos.x, y: target.y - startPos.y};
-        const lineLen = Math.hypot(lineVec.x, lineVec.y) || 1;
         const maxSteps = (mapWidth + mapHeight) * 2;
-        const visited = new Set();
 
         for (let step = 0; step < maxSteps; step++) {
-            if (current === target) break;
-            visited.add(`${current.xindex},${current.yindex}`);
-
-            const dx = target.x - current.x;
-            const dy = target.y - current.y;
-            const dist = Math.hypot(dx, dy) || 1;
-
-            let best = null;
-            let bestScore = -Infinity;
-            let bestDist = Infinity;
-            let bestLineDist = Infinity;
-
-            for (let i = 0; i < current.neighbors.length; i++) {
-                const neighbor = current.neighbors[i];
-                if (!neighbor) continue;
-                if (visited.has(`${neighbor.xindex},${neighbor.yindex}`)) continue;
-
-                const ndx = neighbor.x - current.x;
-                const ndy = neighbor.y - current.y;
-                const ndist = Math.hypot(ndx, ndy) || 1;
-                const dirScore = (ndx * dx + ndy * dy) / (ndist * dist);
-                const distToTarget = Math.hypot(target.x - neighbor.x, target.y - neighbor.y);
-                const reduces = distToTarget < dist - 1e-6;
-                const lineDist = Math.abs((neighbor.x - startPos.x) * lineVec.y - (neighbor.y - startPos.y) * lineVec.x) / lineLen;
-                const score = dirScore + (reduces ? 1 : 0) - lineDist * 1.2;
-
-                if (
-                    score > bestScore ||
-                    (score === bestScore && lineDist < bestLineDist) ||
-                    (score === bestScore && lineDist === bestLineDist && distToTarget < bestDist)
-                ) {
-                    bestScore = score;
-                    bestDist = distToTarget;
-                    bestLineDist = lineDist;
-                    best = neighbor;
-                }
-            }
-
-            if (!best) break;
-            current = best;
-            path.push(current);
+            let nextDirection = this.getHexDirection(
+                this.shortestDeltaX(current.x, target.x),
+                this.shortestDeltaY(current.y, target.y)
+            );
+            const next = current.neighbors[nextDirection % 12];
+            if (!next) break;
+            path.push(next);
+            
+            if (next === target) break;
+            current = next;
         }
 
         return path;
+    }
+
+    getGroundTextureId(x, y) {
+        const tx = this.wrapX ? this.wrapIndexX(x) : x;
+        const ty = this.wrapY ? this.wrapIndexY(y) : y;
+        const node = this.nodes[tx] && this.nodes[tx][ty] ? this.nodes[tx][ty] : null;
+        if (!node) return 0;
+        return Number.isFinite(node.groundTextureId) ? node.groundTextureId : 0;
+    }
+
+    setGroundTextureId(x, y, textureId) {
+        const tx = this.wrapX ? this.wrapIndexX(x) : x;
+        const ty = this.wrapY ? this.wrapIndexY(y) : y;
+        const node = this.nodes[tx] && this.nodes[tx][ty] ? this.nodes[tx][ty] : null;
+        if (!node) return false;
+        const maxId = Math.max(0, (Array.isArray(this.groundTextures) ? this.groundTextures.length : 1) - 1);
+        const nextId = Math.max(0, Math.min(maxId, Math.floor(Number(textureId) || 0)));
+        if (node.groundTextureId === nextId) return false;
+        node.groundTextureId = nextId;
+        if (typeof invalidateGroundChunks === "function") {
+            invalidateGroundChunks();
+        }
+        return true;
+    }
+
+    normalizeIndex(value, size) {
+        const n = Number.isFinite(value) ? Math.floor(value) : 0;
+        if (!Number.isFinite(size) || size <= 0) return n;
+        const wrapped = ((n % size) + size) % size;
+        return wrapped;
+    }
+
+    wrapIndexX(value) {
+        return this.normalizeIndex(value, this.width);
+    }
+
+    wrapIndexY(value) {
+        return this.normalizeIndex(value, this.height);
+    }
+
+    wrapWorldX(worldX) {
+        if (!this.wrapX || !Number.isFinite(worldX) || this.worldWidth <= 0) return worldX;
+        return ((worldX % this.worldWidth) + this.worldWidth) % this.worldWidth;
+    }
+
+    wrapWorldY(worldY) {
+        if (!this.wrapY || !Number.isFinite(worldY) || this.worldHeight <= 0) return worldY;
+        return ((worldY % this.worldHeight) + this.worldHeight) % this.worldHeight;
+    }
+
+    shortestDeltaX(fromX, toX) {
+        let delta = (toX - fromX);
+        if (!this.wrapX || !Number.isFinite(delta) || this.worldWidth <= 0) return delta;
+        delta = ((delta + this.worldWidth * 0.5) % this.worldWidth + this.worldWidth) % this.worldWidth - this.worldWidth * 0.5;
+        return delta;
+    }
+
+    shortestDeltaY(fromY, toY) {
+        let delta = (toY - fromY);
+        if (!this.wrapY || !Number.isFinite(delta) || this.worldHeight <= 0) return delta;
+        delta = ((delta + this.worldHeight * 0.5) % this.worldHeight + this.worldHeight) % this.worldHeight - this.worldHeight * 0.5;
+        return delta;
+    }
+
+    wrapWorldPoint(point) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return point;
+        return {
+            x: this.wrapWorldX(point.x),
+            y: this.wrapWorldY(point.y)
+        };
     }
 }

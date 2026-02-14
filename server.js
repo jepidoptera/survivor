@@ -1,5 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 
 // require ('firebase/database')
@@ -12,8 +14,8 @@ const players = [];
 
 // Serve static files
 app.use(express.static(__dirname + '/public'));
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false, limit: '25mb' }));
+app.use(bodyParser.json({ limit: '25mb' }));
 app.set('view engine', 'ejs');
 
 // Serve app
@@ -22,6 +24,81 @@ console.log('Listening on: http://localhost:' + port);
 app.get('/', (req, res) => {
     res.render('hunt')
 })
+
+const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile.json');
+const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backups');
+
+function formatTimestampToSecond(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    const ss = String(date.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${d}_${hh}-${mm}-${ss}`;
+}
+
+app.post('/api/savefile', (req, res) => {
+    try {
+        const payload = req.body;
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            return res.status(400).json({ ok: false, reason: 'invalid-payload' });
+        }
+
+        fs.mkdirSync(path.dirname(saveFilePath), { recursive: true });
+        if (fs.existsSync(saveFilePath)) {
+            fs.mkdirSync(saveBackupsDir, { recursive: true });
+            const timestamp = formatTimestampToSecond(new Date());
+            let backupName = `savefile_${timestamp}.json`;
+            let backupPath = path.join(saveBackupsDir, backupName);
+            let suffix = 1;
+            while (fs.existsSync(backupPath)) {
+                backupName = `savefile_${timestamp}_${suffix}.json`;
+                backupPath = path.join(saveBackupsDir, backupName);
+                suffix++;
+            }
+            fs.copyFileSync(saveFilePath, backupPath);
+        }
+        fs.writeFileSync(saveFilePath, JSON.stringify(payload, null, 2), 'utf8');
+        return res.json({ ok: true, path: '/assets/saves/savefile.json' });
+    } catch (e) {
+        console.error('Failed to write save file:', e);
+        return res.status(500).json({ ok: false, reason: 'write-failed' });
+    }
+});
+
+app.get('/api/savefile', (req, res) => {
+    try {
+        if (!fs.existsSync(saveFilePath)) {
+            return res.status(404).json({ ok: false, reason: 'missing' });
+        }
+        const raw = fs.readFileSync(saveFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return res.json({ ok: true, data: parsed });
+    } catch (e) {
+        console.error('Failed to read save file:', e);
+        return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
+app.get('/api/flooring', (req, res) => {
+    try {
+        const flooringDir = path.join(__dirname, 'public', 'assets', 'images', 'flooring');
+        if (!fs.existsSync(flooringDir)) {
+            return res.json({ ok: true, files: [] });
+        }
+        const files = fs.readdirSync(flooringDir, { withFileTypes: true })
+            .filter(entry => entry.isFile())
+            .map(entry => entry.name)
+            .filter(name => /\.(png|jpg|jpeg|webp|gif)$/i.test(name))
+            .sort((a, b) => a.localeCompare(b))
+            .map(name => `/assets/images/flooring/${name}`);
+        return res.json({ ok: true, files });
+    } catch (e) {
+        console.error('Failed to read flooring directory:', e);
+        return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
 
 app.listen(port);
 

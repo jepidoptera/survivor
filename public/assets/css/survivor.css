@@ -47,17 +47,27 @@ body {
     gap: 8px;
 }
 
-#spellSelector {
+#auraSelector {
     position: absolute;
     left: 10px;
-    top: 120px;
+    top: 74px;
     z-index: 2;
+    cursor: default !important;
 }
 
+#spellSelector {
+    position: absolute;
+    left: 248px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
+#selectedAura,
 #selectedSpell {
     width: 60px;
     height: 60px;
-    cursor: pointer;
+    cursor: pointer !important;
     border: 3px solid #FFD700;
     border-radius: 8px;
     background-size: cover;
@@ -66,21 +76,67 @@ body {
     transition: transform 0.1s;
 }
 
+#selectedAura {
+    background-image: url("/assets/images/thumbnails/aura.png");
+}
+
+#activeAuraIcons {
+    position: absolute;
+    left: 68px;
+    top: 16px;
+    display: flex;
+    gap: 4px;
+    align-items: flex-start;
+}
+
+.activeAuraIconBadge {
+    width: 30px;
+    height: 30px;
+    border: 2px solid #FFD700;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+}
+
+#selectedAura:hover,
 #selectedSpell:hover {
     transform: scale(1.05);
 }
 
+#auraMenu,
 #spellMenu {
     position: absolute;
     left: 0;
     top: 70px;
+    z-index: 10000;
     background: rgba(0, 0, 0, 0.85);
     border: 2px solid #FFD700;
     border-radius: 8px;
     padding: 10px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+    cursor: default !important;
 }
 
+#auraMenu,
+#auraMenu *,
+#spellMenu,
+#spellMenu * {
+    color: #ffffff;
+    cursor: auto !important;
+}
+
+#auraMenu button,
+#auraMenu .auraIcon,
+#auraMenu input[type="range"],
+#spellMenu button,
+#spellMenu .spellIcon,
+#spellMenu input[type="range"] {
+    cursor: pointer !important;
+}
+
+#auraMenu.hidden,
 #spellMenu.hidden {
     display: none;
 }
@@ -91,10 +147,17 @@ body {
     gap: 10px;
 }
 
+#auraGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 60px);
+    gap: 10px;
+}
+
+.auraIcon,
 .spellIcon {
     width: 60px;
     height: 60px;
-    cursor: pointer;
+    cursor: pointer !important;
     border: 2px solid #888;
     border-radius: 6px;
     background-size: cover;
@@ -102,14 +165,26 @@ body {
     transition: border-color 0.2s, transform 0.1s;
 }
 
+.auraIcon:hover,
 .spellIcon:hover {
     border-color: #FFD700;
     transform: scale(1.1);
 }
 
+.auraIcon.selected,
 .spellIcon.selected {
     border-color: #FFD700;
     box-shadow: 0 0 10px #FFD700;
+}
+
+.spellIcon.keyboard-nav-focus {
+    border-color: #66c2ff;
+    box-shadow: 0 0 10px rgba(102, 194, 255, 0.9);
+}
+
+#spellGrid button.keyboard-nav-focus {
+    border-color: #66c2ff !important;
+    box-shadow: 0 0 10px rgba(102, 194, 255, 0.9);
 }
 
 .statusBar {

@@ -1,0 +1,7 @@
+/ inside furniture
+  checkpoints
+  dangerous monsters
+  3d / textured walls
+  animal spells
+  mind control spells
+  animals have magic points that protect them from spells

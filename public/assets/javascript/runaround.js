@@ -2,31 +2,106 @@ const mapWidth = 400;
 const mapHeight = 400;
 let frameRate = 60;
 let frameCount = 0;
-const animationSpeedMultiplier = 0.75; // Adjustable: lower = faster, higher = slower
+let renderNowMs = 0;
+const renderMaxFps = 0; // 0 = uncapped (vsync-limited)
+const debugRenderMaxFps = 0; // keep debug uncapped to avoid hidden global frame caps
 const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align sprite sheet rows.
 let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal markers)
 let showHexGrid = false; // Toggle hex grid only (g key)
 let showBlockedNeighbors = false; // Toggle display of blocked neighbor connections
 
 let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494}
+let previousViewport = {x: viewport.x, y: viewport.y};
+let interpolatedViewport = {x: viewport.x, y: viewport.y};
+let renderAlpha = 1;
 let viewScale = 1;
 let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
 let projectiles = [];
 let animals = [];
-let mousePos = {x: 0, y: 0};
+let mousePos = {x: 0, y: 0, clientX: NaN, clientY: NaN};
+let pointerLockActive = false;
+let pointerLockAimWorld = {x: NaN, y: NaN};
+let pointerLockSensitivity = 1.0;
+let pendingPointerLockEntry = null;
 var messages = [];
 let keysPressed = {}; // Track which keys are currently pressed
 let spacebarDownAt = null;
-let spellKeyBindings = {
-    "F": "fireball",
-    "B": "wall",
-    "V": "vanish",
-    "T": "treegrow",
-    "R": "buildroad"
-}
+let spellMenuKeyboardIndex = -1;
+let suppressNextCanvasMenuClose = false;
 
 let textures = {};
 let fireFrames = null;
+let perfPanel = null;
+let showPerfReadout = false;
+let perfStats = {
+    lastLoopAt: 0,
+    fps: 0,
+    loopMs: 0,
+    drawMs: 0,
+    simMs: 0,
+    idleMs: 0,
+    simSteps: 0,
+    lastUiUpdateAt: 0
+};
+const runaroundViewportNodeSampleEpsilon = 1e-4;
+
+function applyViewportWrapShift(deltaX, deltaY) {
+    if (!map) return;
+    const eps = 1e-6;
+    const mapWorldWidth = Number.isFinite(map.worldWidth) ? map.worldWidth : mapWidth;
+    const mapWorldHeight = Number.isFinite(map.worldHeight) ? map.worldHeight : mapHeight;
+    const maxViewportX = Math.max(0, mapWorldWidth - viewport.width);
+    const maxViewportY = Math.max(0, mapWorldHeight - viewport.height);
+
+    if (Math.abs(deltaX) > eps) {
+        viewport.x += deltaX;
+        previousViewport.x += deltaX;
+        interpolatedViewport.x += deltaX;
+        if (Number.isFinite(mousePos.worldX)) mousePos.worldX += deltaX;
+        if (Number.isFinite(pointerLockAimWorld.x)) pointerLockAimWorld.x += deltaX;
+    }
+    if (Math.abs(deltaY) > eps) {
+        viewport.y += deltaY;
+        previousViewport.y += deltaY;
+        interpolatedViewport.y += deltaY;
+        if (Number.isFinite(mousePos.worldY)) mousePos.worldY += deltaY;
+        if (Number.isFinite(pointerLockAimWorld.y)) pointerLockAimWorld.y += deltaY;
+    }
+
+    viewport.x = Math.max(0, Math.min(viewport.x, maxViewportX));
+    viewport.y = Math.max(0, Math.min(viewport.y, maxViewportY));
+    previousViewport.x = Math.max(0, Math.min(previousViewport.x, maxViewportX));
+    previousViewport.y = Math.max(0, Math.min(previousViewport.y, maxViewportY));
+    interpolatedViewport.x = Math.max(0, Math.min(interpolatedViewport.x, maxViewportX));
+    interpolatedViewport.y = Math.max(0, Math.min(interpolatedViewport.y, maxViewportY));
+
+    if (Number.isFinite(mousePos.worldX) && typeof map.wrapWorldX === "function") mousePos.worldX = map.wrapWorldX(mousePos.worldX);
+    if (Number.isFinite(mousePos.worldY) && typeof map.wrapWorldY === "function") mousePos.worldY = map.wrapWorldY(mousePos.worldY);
+    if (Number.isFinite(pointerLockAimWorld.x) && typeof map.wrapWorldX === "function") pointerLockAimWorld.x = map.wrapWorldX(pointerLockAimWorld.x);
+    if (Number.isFinite(pointerLockAimWorld.y) && typeof map.wrapWorldY === "function") pointerLockAimWorld.y = map.wrapWorldY(pointerLockAimWorld.y);
+}
+
+function worldToNodeCanonical(worldX, worldY) {
+    if (!map || !map.nodes) return null;
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+    const approxX = Math.round(worldX / 0.866);
+    const clampedX = Math.max(0, Math.min(map.width - 1, approxX));
+    const approxY = Math.round(worldY - (clampedX % 2 === 0 ? 0.5 : 0));
+    const clampedY = Math.max(0, Math.min(map.height - 1, approxY));
+    return (map.nodes[clampedX] && map.nodes[clampedX][clampedY]) ? map.nodes[clampedX][clampedY] : null;
+}
+
+function getViewportCornerNodes() {
+    if (!map) {
+        return { startNode: null, endNode: null };
+    }
+    const sampleMaxX = viewport.x + Math.max(0, viewport.width - runaroundViewportNodeSampleEpsilon);
+    const sampleMaxY = viewport.y + Math.max(0, viewport.height - runaroundViewportNodeSampleEpsilon);
+    return {
+        startNode: worldToNodeCanonical(viewport.x, viewport.y),
+        endNode: worldToNodeCanonical(sampleMaxX, sampleMaxY)
+    };
+}
 
 // Pixi.js setup
 const app = new PIXI.Application({
@@ -60,7 +135,8 @@ gameContainer.addChild(roofLayer);
 gameContainer.addChild(characterLayer);
 gameContainer.addChild(projectileLayer);
 gameContainer.addChild(hitboxLayer);
-gameContainer.addChild(cursorLayer);
+// Keep cursor unmasked so it remains visible outside indoor visibility masks.
+app.stage.addChild(cursorLayer);
 
 let landTileSprite = null;
 let gridGraphics = null;
@@ -73,12 +149,7 @@ let roof = null; // Roof preview mesh
 let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
 let onscreenObjects = new Set(); // Track visible staticObjects each frame
-let roadTileSprite = null;
-let roadMaskGraphics = null;
-const roadRepeatWorldUnits = 1;
-const roadTextureRotation = 10 * Math.PI / 180;
-const roadLayerOversize = 1.5;
-const roadWidth = 1.5;
+const roadWidth = 3;
 
 // Load sprite sheets before starting game
 PIXI.Loader.shared
@@ -86,6 +157,7 @@ PIXI.Loader.shared
     .add('/assets/spritesheet/deer.json')
     .add('/assets/spritesheet/squirrel.json')
     .add('/assets/images/runningman.png')
+    .add('/assets/images/fireball.png')
     .add('/assets/images/arrow.png')
     .load(onAssetsLoaded);
 
@@ -153,734 +225,32 @@ function onAssetsLoaded() {
         spellCursor.lineTo(fivepoints[i].x, fivepoints[i].y);
         spellCursor.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
     }
+
+    if (typeof SpellSystem !== "undefined" && typeof SpellSystem.primeSpellAssets === "function") {
+        SpellSystem.primeSpellAssets();
+    }
     
     console.log("Pixi assets loaded successfully");
 }
 
 function initRoadLayer() {
-    const texture = PIXI.Texture.from('/assets/images/dirt.jpg');
-    if (texture && texture.baseTexture) {
-        texture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
-        texture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
-    }
-
-    if (!roadTileSprite) {
-        roadTileSprite = new PIXI.TilingSprite(
-            texture,
-            app.screen.width * roadLayerOversize,
-            app.screen.height * roadLayerOversize
-        );
-        const oversizeOffsetX = (roadTileSprite.width - app.screen.width) / 2;
-        const oversizeOffsetY = (roadTileSprite.height - app.screen.height) / 2;
-        roadTileSprite.x = -oversizeOffsetX;
-        roadTileSprite.y = -oversizeOffsetY;
-        roadTileSprite.tileTransform.rotation = roadTextureRotation;
-        roadLayer.addChild(roadTileSprite);
-    }
-
-    if (!roadMaskGraphics) {
-        roadMaskGraphics = new PIXI.Graphics();
-        roadLayer.addChild(roadMaskGraphics);
-        roadTileSprite.mask = roadMaskGraphics;
-    }
-
-    if (texture && texture.baseTexture && !texture.baseTexture.valid) {
-        texture.baseTexture.once('loaded', () => {
-            initRoadLayer();
-        });
-    }
-}
-
-class Spell {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/mokeball.png";
-        this.size = 6;
-        this.apparentSize = 16;
-        this.speed = 7;
-        this.range = 8;
-        this.bounced = 0;
-        this.bounces = 2;
-        this.gravity = .5;
-        this.bounceFactor = 1/3;
-        this.landed = false;
-        this.landedWorldX = 0;
-        this.landedWorldY = 0;
-        this.delayTime = 0;
-        this.radius = 0.25; // Default hitbox radius in hex units
-    }
-    cast(targetX, targetY) {
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        
-        let xdist = (targetX - this.x);
-        let ydist = targetY - this.y;
-        let dist = Math.sqrt(xdist ** 2 + ydist ** 2);
-        
-        // Prevent division by zero
-        if (dist < 0.1) {
-            dist = 0.1;
-            xdist = 0.1;
-            ydist = 0;
-        }
-        
-        if (dist > this.range) {
-            let fraction = this.range / dist;
-            ydist *= fraction;
-            xdist *= fraction;
-            dist = this.range;
-        }
-        this.movement = {
-            x: xdist / dist * this.speed / frameRate,
-            y: ydist / dist * this.speed / frameRate,
-            z: (dist - 0.5) / this.speed / 2 * this.gravity,
-        }
-
-
-        this.castInterval = setInterval(() => {
-            if (paused) return;
-            this.x += this.movement.x;
-            this.y += this.movement.y;
-            this.z += this.movement.z;
-            this.movement.z -= this.gravity / frameRate;
-
-            // this.z = Math.sqrt((this.movement.max / 2  - Math.abs(this.movement.max / 2 - this.movement.total)) / 2) || 0 ;
-            this.apparentSize = (this.size * (this.z + 1) / 2 + 10) * Math.max($(document).width(), $(document).height()) / 1280;
-
-            // Call land for continuous effects (like fireball damage)
-            if (this.z === 0 && this.bounces === 0) {
-                this.land();
-            }
-
-            if (this.z <= 0) {
-                this.z = 0;
-                this.land();
-                this.bounce();
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-    bounce() {
-        if (this.bounced < this.bounces) {
-            this.movement = {
-                x: this.movement.x * this.bounceFactor,
-                y: this.movement.y * this.bounceFactor,
-                z: -this.movement.z * this.bounceFactor,
-            }
-            this.bounced += 1;
-        }
-        else {
-            this.landed = true;
-            this.landedWorldX = this.x;
-            this.landedWorldY = this.y;
-            this.vanishTimeout = setTimeout(() => {
-                this.visible = false;
-                if (this.pixiSprite) {
-                    projectileLayer.removeChild(this.pixiSprite);
-                    this.pixiSprite = null;
-                }
-            }, 3000);
-            clearInterval(this.castInterval);
-        }
-    }
-    land() {
-    }
-}
-
-class Grenade extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/grenade.png";
-        this.altimage = document.createElement('img');
-        this.altimage.src = "./assets/images/explosion.png";
-        this.explosionFrame = 0;
-        this.explosionFrames = null;
-        this.isExploding = false;
-        this.delayTime = 2;
-    }
-    land() {
-        if (this.bounced === this.bounces) setTimeout(() => {
-            this.isExploding = true;
-            this.explosionFrame = 0;
-            
-            // Load explosion spritesheet frames (5x2)
-            if (!this.explosionFrames) {
-                const baseTexture = PIXI.Texture.from(this.altimage.src).baseTexture;
-                this.explosionFrames = [];
-                const frameWidth = baseTexture.width / 5;
-                const frameHeight = baseTexture.height / 2;
-                
-                // Row 1 (frames 0-4)
-                for (let col = 0; col < 5; col++) {
-                    this.explosionFrames.push(
-                        new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, 0, frameWidth, frameHeight))
-                    );
-                }
-                // Row 2 (frames 5-9)
-                for (let col = 0; col < 5; col++) {
-                    this.explosionFrames.push(
-                        new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, frameHeight, frameWidth, frameHeight))
-                    );
-                }
-            }
-            
-            this.explodeInterval = setInterval(() => {
-                if (paused) return;
-                this.explosionFrame++;
-                if (this.explosionFrame >= this.explosionFrames.length) {
-                    clearInterval(this.explodeInterval);
-                    this.visible = false;
-                    if (this.pixiSprite) {
-                        projectileLayer.removeChild(this.pixiSprite);
-                        this.pixiSprite = null;
-                    }
-                }
-            }, 50);
-            this.apparentSize = 80;
-            animals.forEach((animal, n) => {
-                let margin = 4;
-                if (animal._onScreen && !animal.dead) {
-                    const targetCoors = worldToScreen(animal);
-                    targetCoors.y += animal.height / 2;
-                    targetCoors.x += animal.width / 2;
-                    const dist = distance(this.x, this.y, targetCoors.x, targetCoors.y);
-                    if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
-                        console.log('blast radius: ', dist);
-                        let damage = Math.min(40 / dist / Math.max(dist - 1, 1), 40);
-                        console.log('damage: ', damage);
-                        animal.hp -= damage;
-                        if (animal.hp <= 0) {
-                            let messageText = `You killed: ${animal.type}!` 
-                            if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;
-                            message(messageText);
-                            wizard.food += animal.foodValue;
-                            animal.explode(this.x, this.y - this.z);
-                            saveGame();
-                        }
-                        else if (animal.chaseRadius > 0) animal.attack(wizard);
-                    }
-                    // all visible animals flee
-                    if (animal.fleeRadius != 0 && !animal.attacking) animal.flee();
-                }
-            })
-        }, 500);
-    }
-}
-
-class Rock extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = `./assets/images/rock${Math.floor(Math.random() * 5)}.png`;
-        this.range = 10;
-        this.delayTime = 0.5;
-    }
-    land() {
-        if (this.bounced === 0) {
-            animals.forEach((animal, n) => {
-                let margin = animal.size + .15;
-                if (animal._onScreen && !animal.dead) {
-                    const targetCoors = worldToScreen(animal);
-                    targetCoors.y += animal.height / 2;
-                    targetCoors.x += animal.width / 2;
-                    if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
-                        animal.hp -= 1;
-                        if (animal.hp <= 0) {
-                            let messageText = `You killed: ${animal.type}!` 
-                            if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;
-                            wizard.food += animal.foodValue;
-                            message(messageText);
-                            animal.die();
-                            saveGame();
-                        }
-                        else {
-                            // didn't die
-                            let xmove = this.movement.x;
-                            let ymove = this.movement.y;
-                            // bounce off at 90 degrees
-                            if (Math.random() > .5) {
-                                xmove = -this.movement.y;
-                                ymove = this.movement.x;
-                            }
-                            else {
-                                xmove = this.movement.y;
-                                ymove = -this.movement.x;
-                            }
-                            this.movement.x = xmove * 2;
-                            this.movement.y = ymove * 2;
-                            if (animal.fleeRadius > 0) {
-                                animal.flee();
-                            }
-                            else if (animal.chaseRadius > 0) {
-                                animal.attack(wizard);
-                            }
-                        }
-                    }
-                }
-            })
-        }
-    }
-}
-
-class Fireball extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/fireball.png";
-        this.gravity = 0; // No arc - straight line
-        this.speed = 5;
-        this.range = 10;
-        this.bounces = 0;
-        this.apparentSize = 60;
-        this.explosionFrame = 0;
-        this.explosionFrames = null;
-        this.isAnimating = true;
-        this.damageRadius = 0.75;
-        this.delayTime = 0.5;
-        this.radius = this.damageRadius;
-    }
-    cast(targetX, targetY) {
-        // check magic
-        if (wizard.magic < 10) {
-            message("Not enough magic to cast Fireball!");
-            return this;
-        }
-        wizard.magic -= 10;
-        // Load explosion spritesheet frames (5x2)
-        const baseTexture = PIXI.Texture.from(this.image.src).baseTexture;
-        if (!baseTexture.valid) {
-            this.visible = false;
-            if (!this._pendingCast) {
-                this._pendingCast = {targetX, targetY};
-                baseTexture.once('loaded', () => {
-                    if (this._pendingCast) {
-                        const {targetX: pendingX, targetY: pendingY} = this._pendingCast;
-                        this._pendingCast = null;
-                        this.visible = true;
-                        this.cast(pendingX, pendingY);
-                    }
-                });
-            }
-            return this;
-        }
-        this.explosionFrames = [];
-        const frameWidth = baseTexture.width / 5;
-        const frameHeight = baseTexture.height / 2;
-        
-        // Row 1 (frames 0-4)
-        for (let col = 0; col < 5; col++) {
-            this.explosionFrames.push(
-                new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, 0, frameWidth, frameHeight))
-            );
-        }
-        // Row 2 (frames 5-9)
-        for (let col = 0; col < 5; col++) {
-            this.explosionFrames.push(
-                new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, frameHeight, frameWidth, frameHeight))
-            );
-        }
-        
-        // For fireball, calculate distance to target and track progress
-        this.targetX = targetX;
-        this.targetY = targetY;
-        this.traveledDist = 0;
-        
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        
-        let xdist = targetX - this.x;
-        let ydist = targetY - this.y;
-        this.totalDist = distance(0, 0, xdist, ydist);
-
-        this.x += (xdist / this.totalDist) * 0.5; // Start slightly away from wizard to avoid self-collision
-        this.y += (ydist / this.totalDist) * 0.5;
-        this.totalDist -= 0.5; // Adjust total distance accordingly
-
-        this.movement = {
-            x: xdist / this.totalDist * this.speed / frameRate,
-            y: ydist / this.totalDist * this.speed / frameRate,
-            z: 0,
-        }
-        
-        // Prevent division by zero
-        if (this.totalDist < 0.1) {
-            this.totalDist = 0.1;
-            xdist = 0.1;
-            ydist = 0;
-        }
-        
-        if (this.totalDist > this.range) {
-            let fraction = this.range / this.totalDist;
-            ydist *= fraction;
-            xdist *= fraction;
-            this.totalDist = this.range;
-        }
-                
-        // Both animation and travel controlled by the same time basis
-        const cycleDurationMs = 2000;
-        const startX = this.x;
-        const startY = this.y;
-        this.travelStartTime = performance.now();
-        this.travelPausedTime = 0;
-        this._pausedAt = null;
-        
-        // Single interval: update both movement and animation based on elapsed time
-        this.castInterval = setInterval(() => {
-            if (paused) {
-                if (!this._pausedAt) {
-                    this._pausedAt = performance.now();
-                }
-                return;
-            }
-            if (this._pausedAt) {
-                this.travelPausedTime += performance.now() - this._pausedAt;
-                this._pausedAt = null;
-            }
-            
-            const now = performance.now();
-            const elapsedMs = now - this.travelStartTime - this.travelPausedTime;
-            const progress = Math.min(elapsedMs / cycleDurationMs, 1);
-            
-            // Update animation frame based on same progress
-            if (this.explosionFrames && this.explosionFrames.length > 0) {
-                this.explosionFrame = Math.floor(progress * this.explosionFrames.length) % this.explosionFrames.length;
-            }
-            
-            // Update position
-            this.x+= this.movement.x;
-            this.y += this.movement.y;
-            this.traveledDist = this.totalDist * progress;
-            
-            // Check for continuous damage while moving
-            this.land();
-            
-            // Check if reached target
-            if (progress >= 1) {
-                // Snap to exact target position before finishing
-                this.visible = false;
-                if (this.pixiSprite) {
-                    projectileLayer.removeChild(this.pixiSprite);
-                    this.pixiSprite = null;
-                }
-                clearInterval(this.castInterval);
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-    land() {
-
-        for (let obj of onscreenObjects) {
-            if (!obj || obj.gone || obj.vanishing) continue;
-            const visualHitbox = obj.visualHitbox || obj.hitbox;
-            if (!visualHitbox) continue;
-            if (obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius})) {
-                // Don't re-ignite objects that are already dead
-                if (obj.burned || obj.hp <= 0) {
-                    continue;
-                }
-                if (!obj.hp) {
-                    obj.hp = obj.maxHP || 100;
-                    obj.maxHP = obj.hp;
-                }
-                obj.hp -= 0.1 * (obj.flamability || 1); // Damage per frame
-                if (obj.hp < obj.maxHP) obj.isOnFire = true;
-                const fireDuration = 5 * (obj.flamability || 1)
-                obj.fireDuration = fireDuration * frameRate;
-                obj.ignite(fireDuration);
-            }
-        }
-    }
-}
-
-
-class Vanish extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/vanish.png";
-        this.gravity = 0; // No arc - straight line
-        this.speed = 10;
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 40;
-        this.delayTime = 0;
-        this.effectRadius = 0.5;
-        this.magicCost = 5;
-        this.radius = this.effectRadius;
-    }
-    
-    cast(targetX, targetY) {
-        // Check magic
-        if (wizard.magic < 15) {
-            message("Not enough magic to cast Vanish!");
-            return this;
-        }
-        wizard.magic -= this.magicCost;
-        
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        
-        let xdist = (targetX - this.x);
-        let ydist = targetY - this.y;
-        this.totalDist = distance(0, 0, xdist, ydist);
-        
-        // Prevent division by zero
-        if (this.totalDist < 0.1) {
-            this.totalDist = 0.1;
-            xdist = 0.1;
-            ydist = 0;
-        }
-        
-        if (this.totalDist > this.range) {
-            let fraction = this.range / this.totalDist;
-            ydist *= fraction;
-            xdist *= fraction;
-            this.totalDist = this.range;
-        }
-
-        this.movement = {
-            x: xdist / this.totalDist * this.speed / frameRate,
-            y: ydist / this.totalDist * this.speed / frameRate,
-            z: 0,
-        }
-        this.x += this.movement.x;
-        this.y += this.movement.y;
-        this.traveledDist = 0;
-        
-        this.castInterval = setInterval(() => {
-            if (paused) return;
-            this.x += this.movement.x;
-            this.y += this.movement.y;
-            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
-            
-            if (!this.forcedTarget) {
-                // they didn't pinpoint a target, so this is a loose spell
-                this.land();
-            }
-
-            // Check if reached target
-            if (this.traveledDist >= this.totalDist) {
-                // If cursor was over a staticObject, only hit that object
-                if (this.forcedTarget) {
-                    const obj = this.forcedTarget;
-                    if (!obj.vanishing) {
-                        this.vanishTarget(obj);
-                    }
-                    this.deactivate();
-                    return;
-                }
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-
-    deactivate() {
-        this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
-        clearInterval(this.castInterval);
-    }
-    
-    land() {
-        // Check all onscreen objects
-        for(let obj of onscreenObjects) {
-            if (!obj || obj.gone || obj.vanishing) continue;
-            if (obj.type === "road") continue;
-            if (!obj.visualHitbox) continue;
-            let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
-            if (hit && !obj.vanishing) {
-                this.vanishTarget(obj);
-                this.deactivate();
-            }
-        }
-    }
-    
-    vanishTarget(target) {
-        // Mark as vanishing to avoid hitting multiple times
-        target.vanishing = true;
-        target.vanishStartTime = frameCount;
-        target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
-        target.percentVanished = 0;
-    }
-}
-
-
-class Arrow extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = `./assets/images/pointy arrow.png`;
-        this.range = 12
-        this.speed = 15
-        this.bounces = 0
-        this.gravity = .5
-        this.type = "arrow"
-        this.size = 50
-    }
-    bounce () {}
-    land() {
-        super.land()
-        clearInterval(this.castInterval)
-        animals.forEach((animal, n) => {
-            let margin = animal.size
-            if (animal._onScreen && !animal.dead) {
-                const dist = distance(this.x, this.y, animal.center_x, animal.center_y);
-                if (withinRadius(this.x, this.y, animal.center_x, animal.center_y, margin)) {
-                    this.hurt(animal, 25 * (margin - dist) / margin)
-                    this.x = animal.center_x
-                    this.y = animal.center_y
-                    if (animal.hp > 0) {
-                        this.visible = false
-                    }
-                }
-            }
-        })
-    }
-}
-
-class TreeGrow extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/tree.png";
-        this.gravity = 0;
-        this.speed = 0; // Instant placement, no travel
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 20;
-        this.growthDuration = 2; // 2 seconds to grow
-        this.radius = 0;
-    }
-    
-    cast(targetX, targetY) {
-        // Check magic
-        if (wizard.magic < this.magicCost) {
-            message("Not enough magic to cast Tree Grow!");
-            return this;
-        }
-        wizard.magic -= this.magicCost;
-        
-        // Snap to nearest hex tile
-        const targetNode = wizard.map.worldToNode(targetX, targetY);
-        if (!targetNode) {
-            message("Cannot grow tree there!");
-            return this;
-        }
-        
-        // Check if there's already an object at this location
-        if (targetNode.objects && targetNode.objects.length > 0) {
-            message("Something is already growing there!");
-            return this;
-        }
-        
-        // Load tree textures (5 variants like trees normally loaded)
-        const treeTextures = [];
-        for (let n = 0; n < 5; n++) {
-            const texture = PIXI.Texture.from(`/assets/images/tree${n}.png`);
-            treeTextures.push(texture);
-        }
-        
-        // Create tree
-        const newTree = new Tree({x: targetNode.x, y: targetNode.y}, treeTextures, wizard.map);
-        
-        // Store full dimensions for growth animation
-        newTree.growthFullWidth = newTree.width;
-        newTree.growthFullHeight = newTree.height;
-        
-        // Start at size 0
-        newTree.width = 0;
-        newTree.height = 0;
-        
-        // Mark tree as growing with animation properties
-        newTree.isGrowing = true;
-        newTree.growthStartFrame = frameCount;
-        newTree.growthFrames = this.growthDuration * frameRate; // 2 seconds * 30fps = 60 frames
-        
-        // Deactivate this spell projectile immediately (tree is now placed)
-        this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
-        
-        return this;
-    }
-}
-
-class BuildRoad extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.gravity = 0;
-        this.speed = 0; // Instant placement
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 5;
-        this.radius = 0;
-    }
-    
-    cast(targetX, targetY) {
-        // Check magic
-        if (wizard.magic < this.magicCost) {
-            message("Not enough magic to cast Build Road!");
-            return this;
-        }
-        wizard.magic -= this.magicCost;
-        
-        // Snap to nearest hex tile
-        const targetNode = wizard.map.worldToNode(targetX, targetY);
-        if (!targetNode) {
-            message("Cannot place road there!");
-            return this;
-        }
-        
-        // Check if there's already road at this location
-        if (targetNode.objects && targetNode.objects.some(obj => obj.type === 'road')) {
-            message("Road already there!");
-            return this;
-        }
-        
-        // Create road (textures are generated dynamically in the constructor)
-        const newRoad = new Road({x: targetNode.x, y: targetNode.y}, [], wizard.map);
-        
-        // Deactivate this spell projectile immediately
-        this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
-        
-        return this;
-    }
+    // Legacy road layer disabled: roads render as regular sprites.
 }
 
 class Character {
-    constructor(type, location, map) {
+    constructor(type, location, size, map) {
         this.type = type;
         this.map = map;
+        this.size = Number.isFinite(size) ? size : 1;
         this.z = 0;
         this.travelFrames = 0;
         this.moving = false;
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
-        this.groundRadius = 0.35; // Default hitbox radius in hex units
-        this.visualRadius = 0.5; // Default visual hitbox radius in hex units
+        this.fireDamageScale = 1;
+        this.groundRadius = this.size / 3; // Default hitbox radius in hex units
+        this.visualRadius = this.size / 2; // Default visual hitbox radius in hex units
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
@@ -912,10 +282,16 @@ class Character {
         if (this.visualHitbox) {
             this.visualHitbox.x = this.x;
             this.visualHitbox.y = this.y;
+            if (Number.isFinite(this.visualRadius)) {
+                this.visualHitbox.radius = this.visualRadius;
+            }
         }
         if (this.groundPlaneHitbox) {
             this.groundPlaneHitbox.x = this.x;
             this.groundPlaneHitbox.y = this.y;
+            if (Number.isFinite(this.groundRadius)) {
+                this.groundPlaneHitbox.radius = this.groundRadius;
+            }
         }
     }
     
@@ -925,6 +301,36 @@ class Character {
     freeze() {
         clearTimeout(this.moveTimeout);
         this.moveTimeout = null;
+    }
+    delete() {
+        this.gone = true;
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.freeze();
+
+        if (this.attackTimeout) {
+            clearTimeout(this.attackTimeout);
+            this.attackTimeout = null;
+        }
+        if (this.dieAnimation) {
+            clearInterval(this.dieAnimation);
+            this.dieAnimation = null;
+        }
+        if (this.fireAnimationInterval) {
+            clearInterval(this.fireAnimationInterval);
+            this.fireAnimationInterval = null;
+        }
+
+        if (this.pixiSprite && this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        if (this.fireSprite && this.fireSprite.parent) {
+            this.fireSprite.parent.removeChild(this.fireSprite);
+        }
+        if (this.hatGraphics && this.hatGraphics.parent) {
+            this.hatGraphics.parent.removeChild(this.hatGraphics);
+        }
     }
     getDirectionRow() {
         if (!this.direction) return 0;
@@ -983,8 +389,12 @@ class Character {
             }
             
             // Calculate travel parameters using world coordinates
-            let xdist = this.nextNode.x - this.x;
-            let ydist = this.nextNode.y - this.y;
+            let xdist = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, this.nextNode.x)
+                : (this.nextNode.x - this.x);
+            let ydist = (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, this.nextNode.y)
+                : (this.nextNode.y - this.y);
             let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
             this.travelFrames = Math.ceil(direction_distance / this.speed * this.frameRate);
             this.travelX = xdist / this.travelFrames;
@@ -994,13 +404,24 @@ class Character {
         this.travelFrames--;
         this.x += this.travelX;
         this.y += this.travelY;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            this.x = this.map.wrapWorldX(this.x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            this.y = this.map.wrapWorldY(this.y);
+        }
         
         // Update hitboxes after movement
         this.updateHitboxes();
     }
-    ignite(duration) {
+    ignite(duration, damageScale = null) {
         this.isOnFire = true;
         this.fireDuration = duration * frameRate; 
+        if (Number.isFinite(damageScale)) {
+            this.fireDamageScale = Math.max(0, damageScale);
+        } else {
+            this.fireDamageScale = 1;
+        }
         if (!this.fireAnimationInterval) {
             this.fireAnimationInterval = setInterval(() => {
                 if (paused) return;
@@ -1012,15 +433,22 @@ class Character {
         this.fireDuration--;
         if (this.fireDuration <= 0) {
             this.isOnFire = false;
+            this.fireDamageScale = 1;
             if (this.fireSprite) {
                 characterLayer.removeChild(this.fireSprite);
                 this.fireSprite = null;
             }
+            if (this.fireAnimationInterval) {
+                clearInterval(this.fireAnimationInterval);
+                this.fireAnimationInterval = null;
+            }
+            return;
         }
         if (this.hp <= 0 && !this.dead) {
             this.die();
         } else {
-            this.hp -= 0.05; // Fire damage over time
+            const damageScale = Number.isFinite(this.fireDamageScale) ? this.fireDamageScale : 1;
+            this.hp -= 0.05 * Math.max(0, damageScale); // Fire damage over time
         }
     }
     die() {
@@ -1031,9 +459,10 @@ class Character {
 
 class Wizard extends Character {
     constructor(location, map) {
-        super('human', location, map);
+        super('human', location, 1, map);
         this.speed = 5;
-        this.roadSpeedMultiplier = 1.5;
+        this.roadSpeedMultiplier = 1.3;
+        this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
         this.frameRate = 60;
         this.cooldownTime = 0; // configurable delay in seconds before casting
         this.food = 0;
@@ -1041,10 +470,13 @@ class Wizard extends Character {
         this.maxHp = 100;
         this.magic = 100;
         this.maxMagic = 100;
+        this.activeAura = null;
+        this.activeAuras = [];
         this.name = 'you';
         this.groundRadius = 0.3;
         this.visualRadius = 0.5; // Hitbox radius in hex units
         this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
+        this.animationSpeedMultiplier = 0.95; // Multiplier for animation speed (lower is faster)
         
         // Movement acceleration via vector interpolation
         this.acceleration = 50; // Rate of acceleration in units/second²
@@ -1059,21 +491,134 @@ class Wizard extends Character {
         this.roadLayoutMode = false;
         this.roadStartPoint = null;
         this.phantomRoad = null;
+        
+        // Firewall placement state
+        this.firewallLayoutMode = false;
+        this.firewallStartPoint = null;
+        this.phantomFirewall = null;
 
         // Create wizard hat graphics
         this.hatGraphics = new PIXI.Graphics();
         characterLayer.addChild(this.hatGraphics);
+        this.shadowGraphics = new PIXI.Graphics();
+        characterLayer.addChild(this.shadowGraphics);
         this.hatColor = 0x000099; // Royal Blue
         this.hatBandColor = 0xFFD700; // Gold
+        this.treeGrowthChannel = null;
+        this.isJumping = false;
+        this.jumpCount = 0;
+        this.maxJumpCount = 2;
+        this.jumpElapsedSec = 0;
+        this.baseJumpDurationSec = 0.55;
+        this.baseJumpMaxHeight = 0.5; // world units
+        this.doubleJumpDurationSec = 1.2;
+        this.jumpDurationSec = this.baseJumpDurationSec;
+        this.jumpMaxHeight = this.baseJumpMaxHeight;
+        this.jumpMode = "single";
+        this.jumpPolyA = 0;
+        this.jumpPolyB = 0;
+        this.jumpPolyC = 0;
+        this.jumpHeight = 0;
+        this.jumpLockedMovingBackward = false;
+        this.isMovingBackward = false;
+        this.updateHitboxes();
         this.move();
         clearTimeout(this.moveTimeout);
     }
+    startJump() {
+        if (this.jumpCount >= this.maxJumpCount) return;
+        if (this.jumpCount === 0) {
+            this.isJumping = true;
+            this.jumpMode = "single";
+            this.jumpCount = 1;
+            this.jumpElapsedSec = 0;
+            this.jumpDurationSec = this.baseJumpDurationSec;
+            this.jumpMaxHeight = this.baseJumpMaxHeight;
+            this.jumpHeight = 0;
+            this.jumpLockedMovingBackward = !!this.isMovingBackward;
+            return;
+        }
+
+        if (this.jumpCount === 1 && this.isJumping) {
+            // Start a boosted second jump from the CURRENT height so there is
+            // no instant dip between first and second jump.
+            const h0 = Math.max(0, Number(this.jumpHeight) || 0);
+            const T = this.doubleJumpDurationSec;
+            const peakTime = T * 0.35;
+            const targetPeak = Math.max(this.baseJumpMaxHeight * 2, h0 + 0.1);
+            const denom = (peakTime * peakTime - peakTime * T);
+            let a = 0;
+            let b = 0;
+            if (Math.abs(denom) > 1e-6) {
+                a = (targetPeak - h0 + (peakTime * h0) / T) / denom;
+                b = (-h0 - a * T * T) / T;
+            } else {
+                // Fallback if timing parameters are degenerate.
+                a = -h0 / Math.max(1e-6, T * T);
+                b = 0;
+            }
+
+            this.isJumping = true;
+            this.jumpMode = "double";
+            this.jumpCount = 2;
+            this.jumpElapsedSec = 0;
+            this.jumpDurationSec = T;
+            this.jumpPolyA = a;
+            this.jumpPolyB = b;
+            this.jumpPolyC = h0;
+        }
+    }
+    updateJump(dtSec) {
+        if (!this.isJumping) {
+            this.z = 0;
+            return;
+        }
+        const dt = Math.max(0, Number(dtSec) || 0);
+        this.jumpElapsedSec += dt;
+
+        if (this.jumpMode === "double") {
+            const t = Math.max(0, this.jumpElapsedSec);
+            this.jumpHeight = Math.max(0, this.jumpPolyA * t * t + this.jumpPolyB * t + this.jumpPolyC);
+        } else {
+            const t = Math.max(0, Math.min(1, this.jumpElapsedSec / this.jumpDurationSec));
+            // Symmetric arc: 0 at ends, max at midpoint.
+            this.jumpHeight = 4 * this.jumpMaxHeight * t * (1 - t);
+        }
+        this.z = this.jumpHeight;
+
+        if (this.jumpElapsedSec >= this.jumpDurationSec || this.jumpHeight <= 0.0001) {
+            this.isJumping = false;
+            this.jumpElapsedSec = 0;
+            this.jumpHeight = 0;
+            this.jumpCount = 0;
+            this.jumpMode = "single";
+            this.jumpLockedMovingBackward = false;
+            this.z = 0;
+        }
+    }
     turnToward(targetX, targetY) {
         // Calculate vector from wizard to target (in world coordinates)
-        
-        // Calculate angle in radians, then convert to degrees
+        const normalizeDeg = (deg) => {
+            let out = deg;
+            while (out <= -180) out += 360;
+            while (out > 180) out -= 360;
+            return out;
+        };
+
+        // Calculate angle in radians, then convert to degrees.
         const angle = Math.atan2(targetY, targetX);
-        const angleInDegrees = angle * 180 / Math.PI;
+        const angleInDegrees = normalizeDeg(angle * 180 / Math.PI);
+
+        // Smooth facing angle before quantizing to 12 sprite directions.
+        // This prevents tiny aim oscillations from causing visible pose jitter.
+        if (!Number.isFinite(this.smoothedFacingAngleDeg)) {
+            this.smoothedFacingAngleDeg = angleInDegrees;
+        } else {
+            const delta = normalizeDeg(angleInDegrees - this.smoothedFacingAngleDeg);
+            const smoothing = this.moving ? 0.38 : 0.28;
+            this.smoothedFacingAngleDeg = normalizeDeg(this.smoothedFacingAngleDeg + delta * smoothing);
+        }
+        const facingDeg = this.smoothedFacingAngleDeg;
         
         // 12 sprite directions with their center angles
         // East = 0°, going counterclockwise
@@ -1094,11 +639,11 @@ class Wizard extends Character {
         
         // Find closest direction
         let closestDir = directions[0];
-        let minDiff = Math.abs(angleInDegrees - directions[0].angle);
+        let minDiff = Math.abs(facingDeg - directions[0].angle);
         
         for (const dir of directions) {
             // Handle angle wrapping (e.g., -170° is close to 170°)
-            let diff = Math.abs(angleInDegrees - dir.angle);
+            let diff = Math.abs(facingDeg - dir.angle);
             if (diff > 180) diff = 360 - diff;
             
             if (diff < minDiff) {
@@ -1111,169 +656,7 @@ class Wizard extends Character {
     }
     move() {
         super.move();
-        centerViewport(this, 2);
-    }
-    cast(worldX, worldY) {
-        if (this.castDelay) return;
-
-                
-        if (wizard.currentSpell === "wall") {
-            // Resolve world coordinates to the nearest map node
-            const wallNode = this.map.worldToNode(worldX, worldY);
-            if (!wallNode) return;
-            
-            // First click: enter layout mode
-            if (!this.wallLayoutMode) {
-                this.wallLayoutMode = true;
-                this.wallStartPoint = wallNode;
-                // Create phantom wall graphics
-                this.phantomWall = new PIXI.Graphics();
-                this.phantomWall.skipTransform = true;
-                objectLayer.addChild(this.phantomWall);
-                return;
-            }
-            
-            // Second click: place the wall
-            if (this.wallLayoutMode && this.wallStartPoint) {
-                const nodeA = this.wallStartPoint;
-                const nodeB = wallNode;
-                
-                if (nodeA === nodeB) {
-                    // Can't place a wall from a node to itself
-                    this.wallLayoutMode = false;
-                    this.wallStartPoint = null;
-                    if (this.phantomWall) {
-                        objectLayer.removeChild(this.phantomWall);
-                        this.phantomWall = null;
-                    }
-                    return;
-                }
-                
-                // Create a chain of walls along the straightest path
-                const wallPath = this.map.getHexLine(nodeA, nodeB);
-                Wall.createWallLine(wallPath, 2.0, 0.2, this.map);
-                
-                // Clean up layout mode
-                this.wallLayoutMode = false;
-                this.wallStartPoint = null;
-                if (this.phantomWall) {
-                    objectLayer.removeChild(this.phantomWall);
-                    this.phantomWall = null;
-                }
-                
-                const delayTime = this.cooldownTime;
-                this.castDelay = true;
-                this.casting = true;
-                setTimeout(() => {
-                    this.castDelay = false;
-                    this.casting = false;
-                }, 1000 * delayTime);
-            }
-            return;
-        }
-        
-        if (wizard.currentSpell === "buildroad") {
-            // Resolve world coordinates to the nearest map node
-            const roadNode = this.map.worldToNode(worldX, worldY);
-            if (!roadNode) return;
-            
-            // Place the road (this is called from mouseup when in layout mode)
-            if (this.roadLayoutMode && this.roadStartPoint) {
-                const nodeA = this.roadStartPoint;
-                const nodeB = roadNode;
-                
-                // Determine width based on whether it's a single tile or a line
-                const width = (nodeA === nodeB) ? 1 : roadWidth; // 1 tile wide for single click, wider for drag
-                
-                // Get line of hexes (1 tile wide for single click, 3 tiles wide for drag)
-                const roadNodes = this.map.getHexLine(nodeA, nodeB, width);
-                
-                // Place road on each node
-                roadNodes.forEach(node => {
-                    // Check if there's already road at this location
-                    const hasRoad = node.objects && node.objects.some(obj => obj.type === 'road');
-                    if (!hasRoad) {
-                        new Road({x: node.x, y: node.y}, [], this.map);
-                    }
-                });
-                
-                // Deduct magic cost once for the whole line
-                wizard.magic -= 5;
-                
-                // Clean up layout mode
-                this.roadLayoutMode = false;
-                this.roadStartPoint = null;
-                if (this.phantomRoad) {
-                    objectLayer.removeChild(this.phantomRoad);
-                    this.phantomRoad = null;
-                }
-                
-                const delayTime = this.cooldownTime;
-                this.castDelay = true;
-                this.casting = true;
-                setTimeout(() => {
-                    this.castDelay = false;
-                    this.casting = false;
-                }, 1000 * delayTime);
-            }
-            return;
-        }
-        
-        // Check if cursor is inside any visible staticObject hitbox
-        // Check if cursor is inside any visible staticObject sprite (topmost by y first)
-        let clickTarget = null;
- 
-        const clickScreen = worldToScreen({x: worldX, y: worldY});
-        const targetCandidates = Array.from(onscreenObjects)
-            .filter(obj => obj && !obj.gone && !obj.vanishing)
-            .sort((a, b) => worldToScreen(b).y - worldToScreen(a).y);
-
-        for (let obj of targetCandidates) {
-            if (obj.pixiSprite.containsPoint(clickScreen)) {
-                clickTarget = obj;
-                console.log("target acquired: ", obj);
-                break;
-            }
-        }
-        
-        let projectile;
-        let delayTime;
-
-        if (wizard.currentSpell === "grenades") {
-            if (!wizard.inventory.includes("grenades") || wizard.inventory.grenades <= 0) return;
-            wizard.inventory.grenades--;
-            projectile = new Grenade();
-        }
-        else if (wizard.currentSpell === "rocks") {
-            projectile = new Rock();
-        }
-        else if (wizard.currentSpell === "fireball") {
-            projectile = new Fireball();
-        }
-        else if (wizard.currentSpell === "vanish") {
-            projectile = new Vanish();
-        }
-        else if (wizard.currentSpell === "treegrow") {
-            projectile = new TreeGrow();
-        }
-        else if (wizard.currentSpell === "buildroad") {
-            projectile = new BuildRoad();
-        }
-        
-        // Pass forced target to projectile if cursor was over an object
-        if (clickTarget) {
-            projectile.forcedTarget = clickTarget;
-        }
-        
-        delayTime = projectile.delayTime || this.cooldownTime;
-
-        this.castDelay = true;
-        projectiles.push(projectile.cast(worldX, worldY))
-        wizard.casting = true;
-        setTimeout(() => {
-            this.castDelay = false;
-            this.casting = false;
-        }, 1000 * delayTime);
+        centerViewport(this, 0);
     }
     
     getTouchingTiles() {
@@ -1317,19 +700,28 @@ class Wizard extends Character {
         return false;
     }
     
-    moveDirection(vector) {
+    moveDirection(vector, options = {}) {
         // Apply physics and collision resolution to the wizard's movement vector
         // Called every frame to process movement, regardless of input
 
-        const maxSpeed = this.speed * (this.isOnRoad() ? this.roadSpeedMultiplier : 1);
+        const lockMovementVector = !!options.lockMovementVector;
+        const inputSpeedMultiplier = Number.isFinite(options.speedMultiplier) ? Math.max(0, options.speedMultiplier) : 1;
+        const activeAuras = Array.isArray(this.activeAuras)
+            ? this.activeAuras
+            : (typeof this.activeAura === "string" ? [this.activeAura] : []);
+        const auraSpeedMultiplier = activeAuras.includes("speed") ? 2 : 1;
+        const maxSpeed = this.speed * inputSpeedMultiplier * auraSpeedMultiplier * (this.isOnRoad() ? this.roadSpeedMultiplier : 1);
         this.currentMaxSpeed = maxSpeed;
+        this.isMovingBackward = !!options.animateBackward;
         
-        if (vector && vector.x !== 0 && vector.y !== 0) {
+        const inputLen = vector ? Math.hypot(vector.x || 0, vector.y || 0) : 0;
+        if (lockMovementVector) {
+            // Airborne lock: preserve momentum and ignore steering/braking input.
+        } else if (vector && inputLen > 1e-6) {
             // Input provided: add acceleration toward desired direction
-            const len = Math.hypot(vector.x, vector.y);
-            if (len > 0) {
-                const nx = vector.x / len;
-                const ny = vector.y / len;
+            if (inputLen > 0) {
+                const nx = vector.x / inputLen;
+                const ny = vector.y / inputLen;
                 
                 // If current momentum is opposite of desired direction, remove that component
                 const desiredDot = this.movementVector.x * nx + this.movementVector.y * ny;
@@ -1346,11 +738,22 @@ class Wizard extends Character {
                 const accelerationFactor = this.acceleration / this.frameRate;
                 this.movementVector.x += nx * accelerationFactor;
                 this.movementVector.y += ny * accelerationFactor;
-                
-                this.turnToward(nx, ny);
+
+                const facingVector = options.facingVector;
+                if (
+                    facingVector &&
+                    Number.isFinite(facingVector.x) &&
+                    Number.isFinite(facingVector.y) &&
+                    Math.hypot(facingVector.x, facingVector.y) > 1e-6
+                ) {
+                    this.turnToward(facingVector.x, facingVector.y);
+                } else {
+                    this.turnToward(nx, ny);
+                }
             }
         } else {
             // No input: decelerate quickly using same acceleration rate
+            this.isMovingBackward = false;
             const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
             if (currentMag > 0) {
                 const decelerationFactor = this.acceleration / this.frameRate;
@@ -1375,7 +778,7 @@ class Wizard extends Character {
         }
         
         // If no movement, skip physics
-        if (currentMag < 0.01) {
+        if (currentMag < 0.001) {
             this.moving = false;
             return false;
         }
@@ -1441,10 +844,15 @@ class Wizard extends Character {
             
             // If no collisions, we're done
             if (!hasCollision) {
-                this.x = testX;
-                this.y = testY;
+                const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(testX) : testX;
+                const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(testY) : testY;
+                if (this === wizard) {
+                    applyViewportWrapShift(wrappedX - testX, wrappedY - testY);
+                }
+                this.x = wrappedX;
+                this.y = wrappedY;
                 this.updateHitboxes();
-                centerViewport(this, 2);
+                centerViewport(this, 0);
                 return true;
             }
             
@@ -1526,22 +934,34 @@ class Wizard extends Character {
             const normalY = totalPushY / Math.hypot(totalPushX, totalPushY);
             const pushOutDistance = maxPushLen + 0.01;
             
-            this.x = this.x + normalX * pushOutDistance;
-            this.y = this.y + normalY * pushOutDistance;
+            const resolvedX = this.x + normalX * pushOutDistance;
+            const resolvedY = this.y + normalY * pushOutDistance;
+            const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(resolvedX) : resolvedX;
+            const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(resolvedY) : resolvedY;
+            if (this === wizard) {
+                applyViewportWrapShift(wrappedX - resolvedX, wrappedY - resolvedY);
+            }
+            this.x = wrappedX;
+            this.y = wrappedY;
             this.updateHitboxes();
-            centerViewport(this, 2);
+            centerViewport(this, 0);
             return true;
         }
         
         // No collision - apply the movement
-        this.x = newX;
-        this.y = newY;
+        const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(newX) : newX;
+        const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(newY) : newY;
+        if (this === wizard) {
+            applyViewportWrapShift(wrappedX - newX, wrappedY - newY);
+        }
+        this.x = wrappedX;
+        this.y = wrappedY;
         this.updateHitboxes();
-        centerViewport(this, 2);
+        centerViewport(this, 0);
         return true;
     }
     
-    drawHat() {
+    drawHat(interpolatedJumpHeight = null) {
         // Wizard hat positioning constants
         const hatBrimOffsetX = 0;
         const hatBrimOffsetY = -0.625;
@@ -1554,7 +974,11 @@ class Wizard extends Character {
         // Recalculate screen position from world coordinates
         const screenCoors = worldToScreen(this);
         let wizardScreenX = screenCoors.x;
-        let wizardScreenY = screenCoors.y;
+        const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
+            ? interpolatedJumpHeight
+            : (Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0);
+        const jumpOffsetPx = jumpHeightForRender * viewscale * xyratio;
+        let wizardScreenY = screenCoors.y - jumpOffsetPx;
         
         this.hatGraphics.clear();
         
@@ -1620,23 +1044,56 @@ class Wizard extends Character {
             this.pixiSprite = new PIXI.Sprite(wizardFrames[0] || PIXI.Texture.WHITE);
             characterLayer.addChild(this.pixiSprite);
         }
+
+        const alpha = (typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1;
+        const previousJumpHeight = Number.isFinite(this.prevJumpHeight) ? this.prevJumpHeight : (Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0);
+        const currentJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
+        const interpolatedJumpHeight = previousJumpHeight + (currentJumpHeight - previousJumpHeight) * alpha;
+
+        // Draw a ground shadow from the same interpolated world position as the sprite.
+        const screenCoors = worldToScreen(this);
+        const shadowCoors = {
+            x: screenCoors.x,
+            y: screenCoors.y + 0.2 * viewscale * xyratio
+        };
+        const shadowRadiusX = 0.2 * viewscale; // 0.3 map units wide (diameter)
+        const shadowRadiusY = shadowRadiusX * xyratio;
+        this.shadowGraphics.clear();
+        this.shadowGraphics.beginFill(0x000000, 0.3);
+        this.shadowGraphics.drawEllipse(shadowCoors.x, shadowCoors.y, shadowRadiusX, shadowRadiusY);
+        this.shadowGraphics.endFill();
+        if (this.pixiSprite && this.shadowGraphics.parent) {
+            const spriteIndex = characterLayer.children.indexOf(this.pixiSprite);
+            const shadowIndex = characterLayer.children.indexOf(this.shadowGraphics);
+            if (spriteIndex > 0 && shadowIndex >= spriteIndex) {
+                characterLayer.setChildIndex(this.shadowGraphics, spriteIndex - 1);
+            }
+        }
         
         // Determine which row (direction) to use
+        const visualSpeed = Math.hypot(this.movementVector?.x || 0, this.movementVector?.y || 0);
+        const isVisuallyMoving = this.moving || visualSpeed > 0.02;
         if (this.lastDirectionRow === undefined) this.lastDirectionRow = 0;
         let rowIndex = this.lastDirectionRow;
-        if (this.moving && Number.isInteger(this.direction) && this.direction >= 0) {
+        if (isVisuallyMoving && Number.isInteger(this.direction) && this.direction >= 0) {
             rowIndex = (this.direction + wizardDirectionRowOffset + 12) % 12;
             this.lastDirectionRow = rowIndex;
         }
         
         // Determine which frame (column) to show for animation
         let frameIndex = rowIndex * 9; // Start of this row
-        if (this.moving) {
+        if (this.isJumping) {
+            // Keep a fixed airborne pose while jumping.
+            const airborneFrameCol = 2;
+            frameIndex = rowIndex * 9 + airborneFrameCol;
+        } else if (isVisuallyMoving) {
             // Columns 1-8 = running animation (8 frames)
             // Column 0 = standing still
             const speedRatio = (this.currentMaxSpeed && this.speed) ? (this.currentMaxSpeed / this.speed) : 1;
-            const animFrame = Math.floor(frameCount * animationSpeedMultiplier * speedRatio / 2) % 8;
-            frameIndex = rowIndex * 9 + 1 + animFrame;
+            const simTicks = (renderNowMs / 1000) * frameRate;
+            const animFrame = Math.floor(simTicks * this.animationSpeedMultiplier * speedRatio / 2) % 8;
+            const effectiveAnimFrame = this.isMovingBackward ? (7 - animFrame) : animFrame;
+            frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
         }
         
         // Set the texture to the appropriate frame
@@ -1645,22 +1102,102 @@ class Wizard extends Character {
         }
         
         // Update wizard sprite position
-        const screenCoors = worldToScreen(this);
+        const jumpOffsetPx = interpolatedJumpHeight * viewscale * xyratio;
         
         this.pixiSprite.x = screenCoors.x;
-        this.pixiSprite.y = screenCoors.y;
+        this.pixiSprite.y = screenCoors.y - jumpOffsetPx;
         this.pixiSprite.anchor.set(0.5, 0.75);
         this.pixiSprite.width = viewscale;
         this.pixiSprite.height = viewscale;
 
-        this.drawHat();
+        this.drawHat(interpolatedJumpHeight);
+    }
+
+    saveJson() {
+        return {
+            type: 'wizard',
+            x: this.x,
+            y: this.y,
+            hp: this.hp,
+            maxHp: this.maxHp,
+            magic: this.magic,
+            maxMagic: this.maxMagic,
+            food: this.food,
+            currentSpell: this.currentSpell,
+            activeAura: this.activeAura || null,
+            activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
+            selectedFlooringTexture: this.selectedFlooringTexture,
+            selectedTreeTextureVariant: this.selectedTreeTextureVariant,
+            selectedWallHeight: this.selectedWallHeight,
+            selectedWallThickness: this.selectedWallThickness,
+            showPerfReadout: !!showPerfReadout,
+            spells: this.spells,
+            inventory: this.inventory,
+            viewport: {
+                x: viewport.x,
+                y: viewport.y
+            }
+        };
+    }
+
+    loadJson(data) {
+        if (data.x !== undefined) this.x = data.x;
+        if (data.y !== undefined) this.y = data.y;
+        if (data.hp !== undefined) this.hp = data.hp;
+        if (data.maxHp !== undefined) this.maxHp = data.maxHp;
+        if (data.magic !== undefined) this.magic = data.magic;
+        if (data.maxMagic !== undefined) this.maxMagic = data.maxMagic;
+        if (data.food !== undefined) this.food = data.food;
+        if (data.currentSpell !== undefined) this.currentSpell = data.currentSpell;
+        if (Array.isArray(data.activeAuras)) {
+            this.activeAuras = data.activeAuras.slice();
+            this.activeAura = this.activeAuras.length > 0 ? this.activeAuras[0] : null;
+        } else if (data.activeAura !== undefined) {
+            this.activeAura = data.activeAura;
+            this.activeAuras = (typeof data.activeAura === "string" && data.activeAura.length > 0) ? [data.activeAura] : [];
+        }
+        if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
+        if (data.selectedTreeTextureVariant !== undefined) this.selectedTreeTextureVariant = data.selectedTreeTextureVariant;
+        if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
+        if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
+        if (typeof data.showPerfReadout === "boolean") {
+            showPerfReadout = data.showPerfReadout;
+            if (perfPanel) {
+                perfPanel.css("display", showPerfReadout ? "block" : "none");
+            }
+        }
+        if (data.spells !== undefined) this.spells = data.spells;
+        if (data.inventory !== undefined) this.inventory = data.inventory;
+
+        this.node = this.map.worldToNode(this.x, this.y) || this.node;
+        this.updateHitboxes();
+
+        if (data.viewport && Number.isFinite(data.viewport.x) && Number.isFinite(data.viewport.y)) {
+            viewport.x = data.viewport.x;
+            viewport.y = data.viewport.y;
+        } else {
+            centerViewport(this, 0, 0);
+        }
+
+        // Keep loaded viewport valid for current map/screen bounds
+        const mapWorldWidth = (this.map && Number.isFinite(this.map.worldWidth)) ? this.map.worldWidth : mapWidth;
+        const mapWorldHeight = (this.map && Number.isFinite(this.map.worldHeight)) ? this.map.worldHeight : mapHeight;
+        viewport.x = Math.max(0, Math.min(viewport.x, mapWorldWidth - viewport.width));
+        viewport.y = Math.max(0, Math.min(viewport.y, mapWorldHeight - viewport.height));
+
+        if (typeof this.refreshSpellSelector === 'function') {
+            this.refreshSpellSelector();
+        }
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
+            SpellSystem.refreshAuraSelector(this);
+        }
     }
 }
 
 class Animal extends Character {
-    constructor(type, location, map) {
-        super(type, location, map);
-        this.radius = 0.45; // Animal hitbox radius in hex units
+    constructor(type, location, size, map) {
+        super(type, location, size, map);
+        this.radius = this.size / 2; // Animal hitbox radius in hex units
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 0;
@@ -1712,9 +1249,10 @@ class Animal extends Character {
         } 
         super.move();
         // wander around
-        if (!this.moving || Math.random() * this.randomMotion * this.frameRate < 1 && this.speed == this.walkSpeed) {
-            const direction = Math.floor(Math.random() * 12);
-            const wanderNode = this.node.neighbors[direction];
+        if (this.x && this.y && !this.moving) {
+            const wanderX = this.x + (Math.random() - 0.5) * 10;
+            const wanderY = this.y + (Math.random() - 0.5) * 10;
+            const wanderNode = this.map.worldToNode(wanderX, wanderY);
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
         }
@@ -1831,11 +1369,75 @@ class Animal extends Character {
             }
         }, 1000 / this.frameRate);
     }
+
+    saveJson() {
+        return {
+            type: this.type,
+            x: this.x,
+            y: this.y,
+            hp: this.hp
+        };
+    }
+
+    static loadJson(data, map) {
+        if (!data || !data.type || !map) return null;
+
+        let animalInstance;
+        const node = map.worldToNode(data.x, data.y);
+
+        if (!node) return null;
+
+        try {
+            switch (data.type) {
+                case 'squirrel':
+                    animalInstance = new Squirrel(node, map);
+                    break;
+                case 'deer':
+                    animalInstance = new Deer(node, map);
+                    break;
+                case 'bear':
+                    animalInstance = new Bear(node, map);
+                    break;
+                case 'scorpion':
+                    animalInstance = new Scorpion(node, map);
+                    break;
+                case 'armadillo':
+                    animalInstance = new Armadillo(node, map);
+                    break;
+                case 'coyote':
+                    animalInstance = new Coyote(node, map);
+                    break;
+                case 'goat':
+                    animalInstance = new Goat(node, map);
+                    break;
+                case 'porcupine':
+                    animalInstance = new Porcupine(node, map);
+                    break;
+                case 'yeti':
+                    animalInstance = new Yeti(node, map);
+                    break;
+                default:
+                    animalInstance = new Animal(data.type, node, map);
+            }
+
+            if (animalInstance) {
+                animalInstance.x = data.x;
+                animalInstance.y = data.y;
+                if (data.hp !== undefined) animalInstance.hp = data.hp;
+            }
+
+            return animalInstance;
+        } catch (e) {
+            console.error("Error loading animal:", e);
+            return null;
+        }
+    }
 }
 
 class Squirrel extends Animal {
     constructor(location, map) {
-        super('squirrel', location, map);
+        const size = Math.random() * .2 + .4;
+        super('squirrel', location, size, map);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -1846,9 +1448,8 @@ class Squirrel extends Animal {
         };
         this.radius = 0.25; 
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .2 + .4;
-        this.width = this.size;
-        this.height = this.size;
+        this.width = size;
+        this.height = size;
         this.walkSpeed = 2;
         this.runSpeed = 2.5;
         this.fleeRadius = 5;
@@ -1862,7 +1463,8 @@ class Squirrel extends Animal {
 
 class Deer extends Animal {
     constructor(location, map) {
-        super('deer', location, map);
+        const size = Math.random() * .5 + .75;
+        super('deer', location, size, map);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -1873,14 +1475,13 @@ class Deer extends Animal {
         };
         this.radius = 0.55; // Animal hitbox radius in hex units
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .5 + .75;
-        this.width = this.size;
-        this.height = this.size;
+        this.width = size;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.fleeRadius = 9;
-        this.foodValue = Math.floor(90 * this.size);
-        this.hp = 10 * this.size;
+        this.foodValue = Math.floor(90 * size);
+        this.hp = 10 * size;
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
     }
@@ -1888,7 +1489,8 @@ class Deer extends Animal {
 
 class Bear extends Animal {
     constructor(location, map) {
-        super('bear', location, map);
+        const size = Math.random() * .5 + 1.2;
+        super('bear', location, size, map);
         this.spriteSheet = {
             rows: 2,
             cols: 2,
@@ -1901,7 +1503,6 @@ class Bear extends Animal {
         };
         this.radius = 1.0; // Animal hitbox radius in hex units
         this.frameCount = {x: 2, y: 2};
-        this.size = Math.random() * .3 + 1.2;
         this.width = this.size * 1.4;
         this.height = this.size;
         this.walkSpeed = 1;
@@ -2021,14 +1622,204 @@ class Yeti extends Animal {
 }
 
 jQuery(() => {
+    if (typeof sanitizeSavedGameState === 'function') {
+        sanitizeSavedGameState();
+    }
+
     // Append Pixi canvas to display
     $("#display").append(app.view);
+    perfPanel = $("<div id='perfReadout'></div>").css({
+        position: "fixed",
+        top: "8px",
+        right: "8px",
+        "z-index": 99999,
+        padding: "6px 8px",
+        "font-family": "monospace",
+        "font-size": "11px",
+        color: "#d8f6ff",
+        background: "rgba(0,0,0,0.55)",
+        border: "1px solid rgba(180,220,235,0.45)",
+        "border-radius": "4px",
+        "pointer-events": "none",
+        "white-space": "pre"
+    });
+    perfPanel.css("display", showPerfReadout ? "block" : "none");
+    $("body").append(perfPanel);
 
-    app.ticker.add(() => {
-        // Force the cursor style directly on the canvas 60 times a second
-        if (app.view && app.view.style) {
-            app.view.style.cursor = "url('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), default";
+    if (app.view && app.view.style) {
+        app.view.style.cursor = "url('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), default";
+    }
+
+    document.addEventListener("mousemove", event => {
+        mousePos.clientX = event.clientX;
+        mousePos.clientY = event.clientY;
+    });
+
+    function isPointerLockedOnCanvas() {
+        return document.pointerLockElement === app.view;
+    }
+
+    function syncMouseWorldFromScreenWithViewport() {
+        if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY)) return;
+        mousePos.worldX = mousePos.screenX / viewscale + viewport.x;
+        mousePos.worldY = mousePos.screenY / (viewscale * xyratio) + viewport.y;
+        if (map && typeof map.wrapWorldX === "function" && Number.isFinite(mousePos.worldX)) {
+            mousePos.worldX = map.wrapWorldX(mousePos.worldX);
         }
+        if (map && typeof map.wrapWorldY === "function" && Number.isFinite(mousePos.worldY)) {
+            mousePos.worldY = map.wrapWorldY(mousePos.worldY);
+        }
+    }
+
+    function syncMouseScreenFromWorldWithViewport(useInterpolatedCamera = false) {
+        if (!Number.isFinite(pointerLockAimWorld.x) || !Number.isFinite(pointerLockAimWorld.y)) return;
+        const camera = (
+            useInterpolatedCamera &&
+            interpolatedViewport &&
+            Number.isFinite(interpolatedViewport.x) &&
+            Number.isFinite(interpolatedViewport.y)
+        )
+            ? interpolatedViewport
+            : viewport;
+        mousePos.screenX = (pointerLockAimWorld.x - camera.x) * viewscale;
+        mousePos.screenY = (pointerLockAimWorld.y - camera.y) * viewscale * xyratio;
+    }
+
+    function clampVirtualCursorToCanvas(paddingPx = 1) {
+        if (!app || !app.screen) return false;
+        const width = Number.isFinite(app.screen.width) ? app.screen.width : 0;
+        const height = Number.isFinite(app.screen.height) ? app.screen.height : 0;
+        if (width <= 0 || height <= 0) return false;
+        const pad = Math.max(0, Number.isFinite(paddingPx) ? paddingPx : 0);
+        const minX = pad;
+        const minY = pad;
+        const maxX = Math.max(minX, width - pad);
+        const maxY = Math.max(minY, height - pad);
+        if (!Number.isFinite(mousePos.screenX)) mousePos.screenX = width * 0.5;
+        if (!Number.isFinite(mousePos.screenY)) mousePos.screenY = height * 0.5;
+        const clampedX = Math.max(minX, Math.min(maxX, mousePos.screenX));
+        const clampedY = Math.max(minY, Math.min(maxY, mousePos.screenY));
+        const changed = (clampedX !== mousePos.screenX) || (clampedY !== mousePos.screenY);
+        mousePos.screenX = clampedX;
+        mousePos.screenY = clampedY;
+        return changed;
+    }
+
+    function ensurePointerLockAimInitialized() {
+        if (Number.isFinite(pointerLockAimWorld.x) && Number.isFinite(pointerLockAimWorld.y)) return;
+        if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
+            pointerLockAimWorld.x = mousePos.worldX;
+            pointerLockAimWorld.y = mousePos.worldY;
+            return;
+        }
+        if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
+            pointerLockAimWorld.x = mousePos.screenX / viewscale + viewport.x;
+            pointerLockAimWorld.y = mousePos.screenY / (viewscale * xyratio) + viewport.y;
+            return;
+        }
+        if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
+            pointerLockAimWorld.x = wizard.x;
+            pointerLockAimWorld.y = wizard.y;
+            syncMouseScreenFromWorldWithViewport();
+        }
+    }
+
+    function requestGameplayPointerLock(event = null) {
+        if (!app.view || typeof app.view.requestPointerLock !== "function") return;
+        const rect = app.view.getBoundingClientRect();
+        const fallbackX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : app.screen.width * 0.5;
+        const fallbackY = Number.isFinite(mousePos.screenY) ? mousePos.screenY : app.screen.height * 0.5;
+        const screenX = (
+            event &&
+            Number.isFinite(event.clientX) &&
+            Number.isFinite(rect.left)
+        ) ? (event.clientX - rect.left) : fallbackX;
+        const screenY = (
+            event &&
+            Number.isFinite(event.clientY) &&
+            Number.isFinite(rect.top)
+        ) ? (event.clientY - rect.top) : fallbackY;
+        mousePos.screenX = screenX;
+        mousePos.screenY = screenY;
+        clampVirtualCursorToCanvas(1);
+        syncMouseWorldFromScreenWithViewport();
+        pendingPointerLockEntry = {
+            screenX: mousePos.screenX,
+            screenY: mousePos.screenY,
+            worldX: mousePos.worldX,
+            worldY: mousePos.worldY
+        };
+        app.view.requestPointerLock();
+    }
+
+    function exitGameplayPointerLock() {
+        if (document.pointerLockElement !== app.view) return;
+        if (typeof document.exitPointerLock === "function") {
+            document.exitPointerLock();
+        }
+    }
+
+    if (typeof globalThis !== "undefined" && typeof globalThis.setPointerLockSensitivity !== "function") {
+        globalThis.setPointerLockSensitivity = function setPointerLockSensitivity(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return;
+            pointerLockSensitivity = Math.max(0.05, Math.min(3, n));
+        };
+    }
+
+    function getVirtualCursorClientPoint() {
+        if (!app || !app.view) return { x: NaN, y: NaN };
+        if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY)) return { x: NaN, y: NaN };
+        const rect = app.view.getBoundingClientRect();
+        return {
+            x: rect.left + mousePos.screenX,
+            y: rect.top + mousePos.screenY
+        };
+    }
+
+    function getVirtualCursorHoveredElement() {
+        const pt = getVirtualCursorClientPoint();
+        if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y) || typeof document === "undefined") return null;
+        return document.elementFromPoint(pt.x, pt.y);
+    }
+
+    function isVirtualCursorOverMenuArea() {
+        const hovered = getVirtualCursorHoveredElement();
+        if (!hovered || typeof hovered.closest !== "function") return false;
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons");
+    }
+
+    document.addEventListener("pointerlockchange", () => {
+        pointerLockActive = isPointerLockedOnCanvas();
+        if (pointerLockActive) {
+            if (
+                pendingPointerLockEntry &&
+                Number.isFinite(pendingPointerLockEntry.screenX) &&
+                Number.isFinite(pendingPointerLockEntry.screenY)
+            ) {
+                mousePos.screenX = pendingPointerLockEntry.screenX;
+                mousePos.screenY = pendingPointerLockEntry.screenY;
+                if (Number.isFinite(pendingPointerLockEntry.worldX) && Number.isFinite(pendingPointerLockEntry.worldY)) {
+                    pointerLockAimWorld.x = pendingPointerLockEntry.worldX;
+                    pointerLockAimWorld.y = pendingPointerLockEntry.worldY;
+                } else {
+                    syncMouseWorldFromScreenWithViewport();
+                    pointerLockAimWorld.x = mousePos.worldX;
+                    pointerLockAimWorld.y = mousePos.worldY;
+                }
+            } else {
+                ensurePointerLockAimInitialized();
+                mousePos.worldX = pointerLockAimWorld.x;
+                mousePos.worldY = pointerLockAimWorld.y;
+                syncMouseScreenFromWorldWithViewport();
+            }
+            clampVirtualCursorToCanvas(1);
+            syncMouseWorldFromScreenWithViewport();
+            pointerLockAimWorld.x = mousePos.worldX;
+            pointerLockAimWorld.y = mousePos.worldY;
+            updateCursor();
+        }
+        pendingPointerLockEntry = null;
     });
     
     // Handle window resize
@@ -2036,14 +1827,6 @@ jQuery(() => {
 
     function sizeView() {
         app.renderer.resize(window.innerWidth, window.innerHeight);
-
-        // Resize background tiles to match new screen size
-        if (Array.isArray(landTileSprite)) {
-            for (let i = 0; i < landTileSprite.length; i++) {
-                landTileSprite[i].width = app.screen.width;
-                landTileSprite[i].height = app.screen.height;
-            }
-        }
         
         if (window.innerWidth > window.innerHeight) {
             viewport.width = 31;
@@ -2061,262 +1844,789 @@ jQuery(() => {
         // Reposition background tiles after resize
         updateLandLayer();
 
-        if (roadTileSprite) {
-            roadTileSprite.width = app.screen.width * roadLayerOversize;
-            roadTileSprite.height = app.screen.height * roadLayerOversize;
-            const oversizeOffsetX = (roadTileSprite.width - app.screen.width) / 2;
-            const oversizeOffsetY = (roadTileSprite.height - app.screen.height) / 2;
-            roadTileSprite.x = -oversizeOffsetX;
-            roadTileSprite.y = -oversizeOffsetY;
-            roadTileSprite.tileTransform.rotation = roadTextureRotation;
+    }
+
+    function clearOnScreenObjects() {
+        if (!map || !wizard) return;
+
+        const { startNode, endNode } = getViewportCornerNodes();
+        if (!startNode || !endNode) return;
+
+        const xStart = Math.max(0, Math.min(startNode.xindex, endNode.xindex));
+        const xEnd = Math.min(mapWidth - 1, Math.max(startNode.xindex, endNode.xindex));
+        const yStart = Math.max(0, Math.min(startNode.yindex, endNode.yindex));
+        const yEnd = Math.min(mapHeight - 1, Math.max(startNode.yindex, endNode.yindex));
+
+        for (let y = yStart; y <= yEnd; y++) {
+            for (let x = xStart; x <= xEnd; x++) {
+                const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
+                if (!node || !node.objects || node.objects.length === 0) continue;
+
+                const objectsToRemove = node.objects.filter(obj => obj && obj.type === "tree");
+                objectsToRemove.forEach(obj => {
+                    obj.gone = true;
+                    obj.removeFromNodes();
+                    if (obj.pixiSprite && obj.pixiSprite.parent) {
+                        obj.pixiSprite.parent.removeChild(obj.pixiSprite);
+                    }
+                });
+            }
         }
+
+        animals = animals.filter(animal => {
+            if (!animal || animal.gone) return false;
+            if (animal.onScreen) {
+                if (typeof animal.delete === "function") animal.delete();
+                else animal.gone = true;
+                return false;
+            }
+            return true;
+        });
+    }
+
+    function getSpellMenuIconElements() {
+        const grid = document.getElementById("spellGrid");
+        if (!grid) return [];
+        return Array.from(grid.querySelectorAll(".spellIcon, button"));
+    }
+
+    function clearSpellMenuKeyboardFocus() {
+        getSpellMenuIconElements().forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        spellMenuKeyboardIndex = -1;
+    }
+
+    function setSpellMenuKeyboardFocus(index) {
+        const icons = getSpellMenuIconElements();
+        if (!icons.length) {
+            spellMenuKeyboardIndex = -1;
+            return false;
+        }
+        const clamped = Math.max(0, Math.min(icons.length - 1, index));
+        icons.forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        icons[clamped].classList.add("keyboard-nav-focus");
+        spellMenuKeyboardIndex = clamped;
+        return true;
+    }
+
+    function initSpellMenuKeyboardFocus() {
+        const icons = getSpellMenuIconElements();
+        if (!icons.length) {
+            spellMenuKeyboardIndex = -1;
+            return false;
+        }
+        const selectedIndex = icons.findIndex(icon => icon.classList.contains("selected"));
+        return setSpellMenuKeyboardFocus(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+
+    function moveSpellMenuKeyboardFocus(dx, dy) {
+        const icons = getSpellMenuIconElements();
+        if (!icons.length) return false;
+        if (!Number.isInteger(spellMenuKeyboardIndex) || spellMenuKeyboardIndex < 0 || spellMenuKeyboardIndex >= icons.length) {
+            initSpellMenuKeyboardFocus();
+        }
+        const grid = document.getElementById("spellGrid");
+        const computed = grid ? window.getComputedStyle(grid) : null;
+        const cols = (() => {
+            if (!computed) return 4;
+            const template = computed.gridTemplateColumns || "";
+            if (!template || template === "none") return 4;
+            const count = template.split(" ").filter(token => token && token !== "/").length;
+            return Math.max(1, count);
+        })();
+        const current = Math.max(0, spellMenuKeyboardIndex);
+        const row = Math.floor(current / cols);
+        const col = current % cols;
+        const nextRow = Math.max(0, row + dy);
+        const nextCol = Math.max(0, Math.min(cols - 1, col + dx));
+        let next = nextRow * cols + nextCol;
+        if (next >= icons.length) next = icons.length - 1;
+        return setSpellMenuKeyboardFocus(next);
+    }
+
+    function activateSelectedSpellFromMenu() {
+        const icons = getSpellMenuIconElements();
+        if (!icons.length) return { activated: false, shouldCloseMenu: false };
+        let target = icons.find(icon => icon.classList.contains("keyboard-nav-focus"));
+        if (!target) {
+            target = icons.find(icon => icon.classList.contains("selected"));
+        }
+        if (!target) {
+            target = icons[0];
+        }
+        if (!target) return { activated: false, shouldCloseMenu: false };
+        const targetLabel = (target.textContent || "").trim().toLowerCase();
+        const isBackAction = targetLabel === "back";
+        target.click();
+        return { activated: true, shouldCloseMenu: !isBackAction };
+    }
+
+    function getFocusedSpellNameFromMenu() {
+        const icons = getSpellMenuIconElements();
+        if (!icons.length) return null;
+        let target = icons.find(icon => icon.classList.contains("keyboard-nav-focus"));
+        if (!target) {
+            target = icons.find(icon => icon.classList.contains("selected"));
+        }
+        if (!target) {
+            target = icons[0];
+        }
+        if (!target || !target.dataset) return null;
+        return target.dataset.spell || null;
+    }
+
+    function openFocusedSpellSubmenu() {
+        if (!wizard || typeof SpellSystem === "undefined") return false;
+        const spellName = getFocusedSpellNameFromMenu();
+        if (!spellName) return false;
+        if (spellName === "buildroad" && typeof SpellSystem.showFlooringMenu === "function") {
+            SpellSystem.showFlooringMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        if (spellName === "wall" && typeof SpellSystem.showWallMenu === "function") {
+            SpellSystem.showWallMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        if (spellName === "treegrow" && typeof SpellSystem.showTreeMenu === "function") {
+            SpellSystem.showTreeMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        return false;
     }
 
     console.log("Generating map...");
     initRoadLayer();
     map = new GameMap(mapHeight, mapWidth, {}, () => {
         frameRate = 30;
+        const simStepMs = 1000 / frameRate;
+        let simAccumulatorMs = 0;
+        let lastFrameMs = performance.now();
+        let lastPresentedMs = 0;
+        let nextPresentAtMs = 0;
+        const maxSimStepsPerFrame = 5;
         
         // Draw immediately on first frame
         drawCanvas();
         
-        // Set up rendering loop
-        setInterval(() => {
-            if (paused) return;
+        function runSimulationStep() {
+            if (!wizard) return;
+            // Keep aim stable through camera drift:
+            // pointer lock stores world aim directly, unlocked mode maps screen->world.
+            if (pointerLockActive) {
+                ensurePointerLockAimInitialized();
+                const cursorOverMenu = isVirtualCursorOverMenuArea();
+                if (cursorOverMenu) {
+                    // Over menu UI, keep screen-space cursor pinned and derive world aim from it.
+                    syncMouseWorldFromScreenWithViewport();
+                    pointerLockAimWorld.x = mousePos.worldX;
+                    pointerLockAimWorld.y = mousePos.worldY;
+                } else {
+                    mousePos.worldX = pointerLockAimWorld.x;
+                    mousePos.worldY = pointerLockAimWorld.y;
+                    syncMouseScreenFromWorldWithViewport();
+                    if (clampVirtualCursorToCanvas(1)) {
+                        syncMouseWorldFromScreenWithViewport();
+                        pointerLockAimWorld.x = mousePos.worldX;
+                        pointerLockAimWorld.y = mousePos.worldY;
+                    }
+                }
+            } else if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
+                syncMouseWorldFromScreenWithViewport();
+            }
+
+            // Always face the mouse when a valid aim vector exists,
+            // even when the wizard is not moving.
+            if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
+                const faceX = mousePos.worldX - wizard.x;
+                const faceY = mousePos.worldY - wizard.y;
+                if (Math.hypot(faceX, faceY) > 1e-6) {
+                    wizard.turnToward(faceX, faceY);
+                }
+            }
             
             // Calculate desired movement direction from input
             let moveVector = null;
-            if (keysPressed['w']) {
+            let moveOptions = {};
+            const forwardVector = {
+                x: mousePos.worldX - wizard.x,
+                y: mousePos.worldY - wizard.y
+            };
+            const movingForward = !!keysPressed['w'];
+            const movingBackward = !!keysPressed['s'];
+            if (wizard.isJumping) {
+                moveVector = wizard.movementVector;
+                moveOptions = {
+                    speedMultiplier: wizard.jumpLockedMovingBackward ? wizard.backwardSpeedMultiplier : 1,
+                    animateBackward: wizard.jumpLockedMovingBackward,
+                    lockMovementVector: true
+                };
+            } else if (movingForward && !movingBackward) {
+                moveVector = forwardVector;
+                moveOptions = {
+                    speedMultiplier: 1,
+                    animateBackward: false,
+                    facingVector: forwardVector
+                };
+                wizard.path = [];
+                wizard.nextNode = null;
+            } else if (movingBackward && !movingForward) {
                 moveVector = {
-                    x: mousePos.worldX - wizard.x,
-                    y: mousePos.worldY - wizard.y
+                    x: -forwardVector.x,
+                    y: -forwardVector.y
+                };
+                moveOptions = {
+                    speedMultiplier: wizard.backwardSpeedMultiplier,
+                    animateBackward: true,
+                    facingVector: forwardVector
                 };
                 wizard.path = [];
                 wizard.nextNode = null;
             }
             
             // Process movement every frame (with or without input)
-            wizard.moveDirection(moveVector);
-            
-            drawCanvas();
+            const wizardStartX = wizard.x;
+            const wizardStartY = wizard.y;
+            wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
+            wizard.moveDirection(moveVector, moveOptions);
+            wizard.updateJump(1 / frameRate);
+            if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
+                SpellSystem.updateCharacterObjectCollisions(wizard);
+            }
+            if (
+                pointerLockActive &&
+                Number.isFinite(pointerLockAimWorld.x) &&
+                Number.isFinite(pointerLockAimWorld.y) &&
+                !isVirtualCursorOverMenuArea()
+            ) {
+                // Keep lock-mode aim anchored relative to the wizard's movement.
+                const wizardDeltaX = wizard.x - wizardStartX;
+                const wizardDeltaY = wizard.y - wizardStartY;
+                pointerLockAimWorld.x += wizardDeltaX;
+                pointerLockAimWorld.y += wizardDeltaY;
+                mousePos.worldX = pointerLockAimWorld.x;
+                mousePos.worldY = pointerLockAimWorld.y;
+            }
+            if (pointerLockActive) {
+                if (isVirtualCursorOverMenuArea()) {
+                    syncMouseWorldFromScreenWithViewport();
+                    pointerLockAimWorld.x = mousePos.worldX;
+                    pointerLockAimWorld.y = mousePos.worldY;
+                } else {
+                    syncMouseScreenFromWorldWithViewport();
+                    if (clampVirtualCursorToCanvas(1)) {
+                        syncMouseWorldFromScreenWithViewport();
+                        pointerLockAimWorld.x = mousePos.worldX;
+                        pointerLockAimWorld.y = mousePos.worldY;
+                    }
+                }
+            }
             frameCount ++;
-        }, 1000 / frameRate);
+        }
+
+        function renderFrame(nowMs) {
+            const frameDeltaMs = Math.min(250, Math.max(0, nowMs - lastFrameMs));
+            lastFrameMs = nowMs;
+            const simStartMs = performance.now();
+
+            if (paused) {
+                perfStats.simSteps = 0;
+                perfStats.simMs = 0;
+                renderAlpha = 1;
+                interpolatedViewport.x = viewport.x;
+                interpolatedViewport.y = viewport.y;
+            } else {
+                simAccumulatorMs += frameDeltaMs;
+                let simSteps = 0;
+
+                while (simAccumulatorMs >= simStepMs && simSteps < maxSimStepsPerFrame) {
+                    previousViewport.x = viewport.x;
+                    previousViewport.y = viewport.y;
+                    if (wizard) {
+                        wizard.prevX = wizard.x;
+                        wizard.prevY = wizard.y;
+                    }
+                    runSimulationStep();
+                    simAccumulatorMs -= simStepMs;
+                    simSteps++;
+                }
+
+                if (simSteps === maxSimStepsPerFrame && simAccumulatorMs >= simStepMs) {
+                    simAccumulatorMs = simStepMs; // prevent runaway catch-up stutter
+                }
+
+                perfStats.simSteps = simSteps;
+                renderAlpha = Math.max(0, Math.min(1, simAccumulatorMs / simStepMs));
+                interpolatedViewport.x = previousViewport.x + (viewport.x - previousViewport.x) * renderAlpha;
+                interpolatedViewport.y = previousViewport.y + (viewport.y - previousViewport.y) * renderAlpha;
+                perfStats.simMs = performance.now() - simStartMs;
+            }
+            if (paused) {
+                perfStats.simMs = 0;
+            }
+
+            // Use a scheduled present clock so frame pacing does not alias between 60/120.
+            const debugRenderCapActive = !!debugMode;
+            const effectiveRenderMaxFps = debugRenderCapActive ? debugRenderMaxFps : renderMaxFps;
+            const renderIntervalMs = effectiveRenderMaxFps > 0 ? (1000 / effectiveRenderMaxFps) : 0;
+
+            if (renderIntervalMs > 0) {
+                if (nextPresentAtMs === 0) {
+                    nextPresentAtMs = nowMs;
+                }
+
+                if ((nowMs + 0.25) < nextPresentAtMs) {
+                    requestAnimationFrame(renderFrame);
+                    return;
+                }
+
+                const latenessMs = nowMs - nextPresentAtMs;
+                if (latenessMs > renderIntervalMs * 4) {
+                    nextPresentAtMs = nowMs;
+                } else {
+                    nextPresentAtMs += renderIntervalMs;
+                }
+            } else {
+                nextPresentAtMs = nowMs;
+            }
+
+            const presentedDeltaMs = lastPresentedMs > 0
+                ? (nowMs - lastPresentedMs)
+                : (renderIntervalMs > 0 ? renderIntervalMs : 0);
+            lastPresentedMs = nowMs;
+            perfStats.loopMs = presentedDeltaMs;
+            perfStats.fps = presentedDeltaMs > 0 ? 1000 / presentedDeltaMs : 0;
+            const drawStart = performance.now();
+            renderNowMs = nowMs;
+            if (pointerLockActive) {
+                if (!isVirtualCursorOverMenuArea()) {
+                    // Reproject lock-mode aim every render frame using the interpolated camera
+                    // to keep cursor motion smooth while the viewport drifts.
+                    syncMouseScreenFromWorldWithViewport(true);
+                    clampVirtualCursorToCanvas(1);
+                }
+            }
+            drawCanvas();
+            perfStats.drawMs = performance.now() - drawStart;
+            perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
+            const panelNow = performance.now();
+            if (showPerfReadout && perfPanel && panelNow - perfStats.lastUiUpdateAt > 200) {
+                const losVisibleObjects = (typeof globalThis !== "undefined" && Array.isArray(globalThis.losDebugVisibleObjects))
+                    ? globalThis.losDebugVisibleObjects
+                    : [];
+                const losBreakdown = (typeof globalThis !== "undefined" && globalThis.losDebugBreakdown)
+                    ? globalThis.losDebugBreakdown
+                    : null;
+                const losBuildMs = (losBreakdown && Number.isFinite(losBreakdown.buildMs)) ? losBreakdown.buildMs : 0;
+                const losTraceMs = (losBreakdown && Number.isFinite(losBreakdown.traceMs)) ? losBreakdown.traceMs : 0;
+                const losTotalMs = (losBreakdown && Number.isFinite(losBreakdown.totalMs))
+                    ? losBreakdown.totalMs
+                    : ((typeof globalThis !== "undefined" && Number.isFinite(globalThis.losDebugLastMs)) ? globalThis.losDebugLastMs : 0);
+                const losRecomputed = !!(losBreakdown && losBreakdown.recomputed);
+                const losSummary = debugMode
+                    ? `\nlos ${losVisibleObjects.length} / ${losTotalMs.toFixed(2)} ms` +
+                      `\n  b ${losBuildMs.toFixed(2)} t ${losTraceMs.toFixed(2)}${losRecomputed ? "" : " (cached)"}`
+                    : "";
+                perfPanel.text(
+                    `FPS ${perfStats.fps.toFixed(1)}\n` +
+                    `loop ${perfStats.loopMs.toFixed(1)} ms\n` +
+                    `simms ${perfStats.simMs.toFixed(1)} ms\n` +
+                    `draw ${perfStats.drawMs.toFixed(1)} ms\n` +
+                    `idle ${perfStats.idleMs.toFixed(1)} ms\n` +
+                    `sim ${perfStats.simSteps}\n` +
+                    `target ${frameRate}` +
+                    (effectiveRenderMaxFps > 0 ? ` / render ${effectiveRenderMaxFps}` : "") +
+                    losSummary
+                );
+                perfStats.lastUiUpdateAt = panelNow;
+            }
+            requestAnimationFrame(renderFrame);
+        }
+
+        requestAnimationFrame(renderFrame);
     });
 
     wizard = new Wizard({x: mapWidth/2, y: mapHeight/2}, map);
-    viewport.x = Math.max(0, wizard.x - viewport.width / 2);
-    viewport.y = Math.max(0, wizard.y - viewport.height / 2);
-    centerViewport(wizard, 0);
     sizeView();
+    centerViewport(wizard, 0, 0);
+    clearOnScreenObjects();
     
     // Create roof preview
     roof = new Roof(0, 0, 0);
-    
-    // once-per-second time update
-    function timeDown() {
-        if (wizard.hp < wizard.maxHp) {
-            wizard.hp = Math.min(wizard.maxHp, wizard.hp + 0.0625);
-        }
-        if (wizard.magic < wizard.maxMagic) {
-            wizard.magic = Math.min(wizard.maxMagic, wizard.magic + 1);
-        }
-        setTimeout(timeDown, 250);
-    }    
-    timeDown();
+    if (typeof setVisibilityMaskSources === "function") {
+        setVisibilityMaskSources([() => {
+            if (!roof || !roof.placed || !roof.groundPlaneHitbox || !wizard) return null;
+            if (typeof roof.groundPlaneHitbox.containsPoint !== "function") return null;
+            const wizardUnderRoof = roof.groundPlaneHitbox.containsPoint(wizard.x, wizard.y);
+            return wizardUnderRoof ? roof.groundPlaneHitbox : null;
+        }]);
+    }
+    if (typeof setVisibilityMaskEnabled === "function") {
+        setVisibilityMaskEnabled(true);
+    }
+    SpellSystem.startMagicInterval(wizard);
     
     // Initialize status bar updates
     setInterval(() => {
         if (wizard) wizard.updateStatusBars();
     }, 100);
+    SpellSystem.initWizardSpells(wizard);
 
-    // Spell system
-    wizard.spells = [
-        { name: 'fireball', icon: '/assets/images/thumbnails/fireball.png'},
-        { name: 'wall', icon: '/assets/images/thumbnails/wall.png'},
-        { name: 'vanish', icon: '/assets/images/thumbnails/vanish.png'},
-        { name: 'treegrow', icon: '/assets/images/thumbnails/tree.png'},
-        { name: 'buildroad', icon: '/assets/images/thumbnails/road.png'}
-    ].map((spell) => {
-        spell.key = Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
-        return spell;
-    });
-    wizard.currentSpell = 'wall';
-    
-    // Initialize spell selector UI
-    function updateSpellSelector() {
-        const currentSpell = wizard.spells.find(s => s.name === wizard.currentSpell);
-        if (currentSpell) {
-            $("#selectedSpell").css('background-image', `url('${currentSpell.icon}')`);
-        }
-        
-        // Build spell grid
-        $("#spellGrid").empty();
-        wizard.spells.forEach(spell => {
-            const spellIcon = $("<div>")
-                .addClass("spellIcon")
-                .css({
-                    'background-image': `url('${spell.icon}')`,
-                    'position': 'relative'
-                })
-                .attr('data-spell', spell.name)
-                .click(() => {
-                    wizard.currentSpell = spell.name;
-                    updateSpellSelector();
-                    $("#spellMenu").addClass('hidden');
-                });
-            
-            // Add key binding label to upper left corner
-            if (spell.key) {
-                const keyLabel = $("<span>")
-                    .addClass("spellKeyBinding")
-                    .text(spell.key)
-                    .css({
-                        'position': 'absolute',
-                        'top': '4px',
-                        'left': '4px',
-                        'color': 'white',
-                        'font-size': '12px',
-                        'font-weight': 'bold',
-                        'pointer-events': 'none',
-                        'text-shadow': '1px 1px 2px rgba(0, 0, 0, 0.8)',
-                        'z-index': '10'
-                    });
-                spellIcon.append(keyLabel);
-            }
-            
-            if (spell.name === wizard.currentSpell) {
-                spellIcon.addClass('selected');
-            }
-            
-            $("#spellGrid").append(spellIcon);
-        });
-    }
-    
-    updateSpellSelector();
-    
-    // Toggle spell menu
     $("#selectedSpell").click(() => {
+        const wasHidden = $("#spellMenu").hasClass('hidden');
+        if ($("#spellMenu").hasClass('hidden') && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+            SpellSystem.showMainSpellMenu(wizard);
+        }
         $("#spellMenu").toggleClass('hidden');
+        const nowHidden = $("#spellMenu").hasClass('hidden');
+        if (nowHidden) {
+            clearSpellMenuKeyboardFocus();
+        } else if (wasHidden) {
+            initSpellMenuKeyboardFocus();
+        }
     });
-    
-    // Close spell menu when clicking on canvas
+
+    $("#selectedAura").click(() => {
+        $("#auraMenu").toggleClass("hidden");
+        if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
+            SpellSystem.refreshAuraSelector(wizard);
+        }
+    });
+
+    $("#selectedSpell").on("contextmenu", event => {
+        if (
+            wizard &&
+            wizard.currentSpell === "wall" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showWallMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showWallMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            wizard.currentSpell === "buildroad" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showFlooringMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showFlooringMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            wizard.currentSpell === "treegrow" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showTreeMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showTreeMenu(wizard);
+        }
+    });
+
     app.view.addEventListener("click", () => {
+        if (suppressNextCanvasMenuClose) {
+            suppressNextCanvasMenuClose = false;
+            return;
+        }
         $("#spellMenu").addClass('hidden');
-    })
+        $("#auraMenu").addClass('hidden');
+        clearSpellMenuKeyboardFocus();
+    });
 
     app.view.addEventListener("mousemove", event => {
-        let rect = app.view.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-        // Store screen coordinates for cursor
-        mousePos.screenX = screenX;
-        mousePos.screenY = screenY;
-        // Store exact world coordinates for pixel-accurate aiming
-        const worldCoors = screenToWorld(screenX, screenY);
-        mousePos.worldX = worldCoors.x;
-        mousePos.worldY = worldCoors.y;
-        // Also store hex tile for movement
-        const dest = screenToHex(screenX, screenY);
-        mousePos.x = dest.x;
-        mousePos.y = dest.y;
-        
-        // Update cursor immediately (don't wait for render loop)
-        updateCursor();
-        
-        // Update phantom wall preview if in layout mode
-        if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
-            updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
+        mousePos.clientX = event.clientX;
+        mousePos.clientY = event.clientY;
+        if (pointerLockActive) {
+            ensurePointerLockAimInitialized();
+            const dx = (Number(event.movementX) || 0) * pointerLockSensitivity;
+            const dy = (Number(event.movementY) || 0) * pointerLockSensitivity;
+            if (isVirtualCursorOverMenuArea()) {
+                // Keep menu interaction stable in screen space while locked.
+                if (!Number.isFinite(mousePos.screenX)) mousePos.screenX = app.screen.width * 0.5;
+                if (!Number.isFinite(mousePos.screenY)) mousePos.screenY = app.screen.height * 0.5;
+                mousePos.screenX += dx;
+                mousePos.screenY += dy;
+                clampVirtualCursorToCanvas(1);
+                syncMouseWorldFromScreenWithViewport();
+                pointerLockAimWorld.x = mousePos.worldX;
+                pointerLockAimWorld.y = mousePos.worldY;
+            } else {
+                pointerLockAimWorld.x += dx / viewscale;
+                pointerLockAimWorld.y += dy / (viewscale * xyratio);
+                mousePos.worldX = pointerLockAimWorld.x;
+                mousePos.worldY = pointerLockAimWorld.y;
+                syncMouseScreenFromWorldWithViewport();
+                if (clampVirtualCursorToCanvas(1)) {
+                    syncMouseWorldFromScreenWithViewport();
+                    pointerLockAimWorld.x = mousePos.worldX;
+                    pointerLockAimWorld.y = mousePos.worldY;
+                }
+            }
+        } else {
+            let rect = app.view.getBoundingClientRect();
+            const screenX = event.clientX - rect.left;
+            const screenY = event.clientY - rect.top;
+            // Store screen coordinates for cursor
+            mousePos.screenX = screenX;
+            mousePos.screenY = screenY;
+            // Store exact world coordinates for pixel-accurate aiming
+            const worldCoors = screenToWorld(screenX, screenY);
+            mousePos.worldX = worldCoors.x;
+            mousePos.worldY = worldCoors.y;
         }
 
-        // Update phantom road preview if in layout mode
-        if (wizard.roadLayoutMode && wizard.roadStartPoint && wizard.phantomRoad) {
-            updatePhantomRoad(wizard.roadStartPoint.x, wizard.roadStartPoint.y, mousePos.worldX, mousePos.worldY);
+        // Also store hex tile for movement
+        if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
+            const dest = screenToHex(mousePos.screenX, mousePos.screenY);
+            mousePos.x = dest.x;
+            mousePos.y = dest.y;
+        }
+
+        // Update cursor immediately (don't wait for render loop)
+        updateCursor();
+
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateDragPreview === "function"
+        ) {
+            SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
         }
     })
 
     app.view.addEventListener("mousedown", event => {
-        // For walls: requires spacebar
-        if (wizard.currentSpell === "wall") {
-            if (!keysPressed[' ']) return;
-            event.preventDefault();
-
-            const rect = app.view.getBoundingClientRect();
-            const screenX = event.clientX - rect.left;
-            const screenY = event.clientY - rect.top;
-            const worldCoors = screenToWorld(screenX, screenY);
-
-            wizard.cast(worldCoors.x, worldCoors.y);
-            return;
-        }
-        
-        // For roads: set the start point on mousedown
-        if (wizard.currentSpell === "buildroad" && !wizard.roadLayoutMode) {
-            const rect = app.view.getBoundingClientRect();
-            const screenX = event.clientX - rect.left;
-            const screenY = event.clientY - rect.top;
-            const worldCoors = screenToWorld(screenX, screenY);
-            const roadNode = wizard.map.worldToNode(worldCoors.x, worldCoors.y);
-            if (roadNode) {
-                wizard.roadLayoutMode = true;
-                wizard.roadStartPoint = roadNode;
-                if (!wizard.phantomRoad) {
-                    wizard.phantomRoad = new PIXI.Container();
-                    wizard.phantomRoad.skipTransform = true;
-                    objectLayer.addChild(wizard.phantomRoad);
+        if (pointerLockActive) {
+            const hovered = getVirtualCursorHoveredElement();
+            const selectedSpellEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedSpell")
+                : null;
+            const selectedAuraEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedAura, #activeAuraIcons")
+                : null;
+            const menuInteractiveEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label")
+                : null;
+            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedAuraEl;
+            const isRightClick = (event.button === 2);
+            if (forwardTarget) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isRightClick) {
+                    suppressNextCanvasMenuClose = true;
+                    forwardTarget.dispatchEvent(new MouseEvent("contextmenu", {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    }));
+                } else {
+                    suppressNextCanvasMenuClose = true;
+                    forwardTarget.dispatchEvent(new MouseEvent("click", {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    }));
                 }
+                return;
             }
+        }
+        if (!pointerLockActive) {
+            requestGameplayPointerLock(event);
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.beginDragSpell === "function" &&
+            (wizard.currentSpell === "wall" || wizard.currentSpell === "buildroad" || wizard.currentSpell === "firewall")
+        ) {
+            event.preventDefault();
+            const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+                ? {x: mousePos.worldX, y: mousePos.worldY}
+                : (() => {
+                    const rect = app.view.getBoundingClientRect();
+                    const screenX = event.clientX - rect.left;
+                    const screenY = event.clientY - rect.top;
+                    return screenToWorld(screenX, screenY);
+                })();
+            SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
             return;
         }
     });
 
     app.view.addEventListener("mouseup", event => {
-        if (wizard.currentSpell === "wall") {
-            if (!wizard.wallLayoutMode || !wizard.wallStartPoint) return;
-        } else if (wizard.currentSpell === "buildroad") {
-            if (!wizard.roadLayoutMode || !wizard.roadStartPoint) return;
-        } else {
-            return;
-        }
+        if (
+            !wizard ||
+            typeof SpellSystem === "undefined" ||
+            typeof SpellSystem.completeDragSpell !== "function" ||
+            typeof SpellSystem.isDragSpellActive !== "function" ||
+            !SpellSystem.isDragSpellActive(wizard, wizard.currentSpell)
+        ) return;
+
         event.preventDefault();
-
-        const rect = app.view.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-        const worldCoors = screenToWorld(screenX, screenY);
-
-        wizard.cast(worldCoors.x, worldCoors.y);
+        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+            ? {x: mousePos.worldX, y: mousePos.worldY}
+            : (() => {
+                const rect = app.view.getBoundingClientRect();
+                const screenX = event.clientX - rect.left;
+                const screenY = event.clientY - rect.top;
+                return screenToWorld(screenX, screenY);
+            })();
+        SpellSystem.completeDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
     });
 
     app.view.addEventListener("click", event => {
         if (keysPressed[' ']) {
+            if (wizard.currentSpell === "treegrow") {
+                event.preventDefault();
+                return;
+            }
             event.preventDefault();
+            const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+                ? {x: mousePos.worldX, y: mousePos.worldY}
+                : (() => {
+                    const rect = app.view.getBoundingClientRect();
+                    const screenX = event.clientX - rect.left;
+                    const screenY = event.clientY - rect.top;
+                    return screenToWorld(screenX, screenY);
+                })();
             // Stop wizard movement by setting destination to current node
             wizard.destination = null;
             wizard.path = [];
             wizard.travelFrames = 0;
-            // Turn toward mouse position using world coordinates
-            wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
+            // Turn and cast at exact click coordinates.
+            wizard.turnToward(worldCoors.x - wizard.x, worldCoors.y - wizard.y);
             if (wizard.currentSpell === "wall") return;
-            // Cast after delay
-            setTimeout(() => {
-                wizard.cast(mousePos.worldX, mousePos.worldY);
-            }, wizard.cooldownTime * 1000);
+            SpellSystem.castWizardSpell(wizard, worldCoors.x, worldCoors.y);
+            // Prevent keyup quick-cast from firing a duplicate cast.
+            spacebarDownAt = null;
         }
     })
      
     $("#msg").contextmenu(event => event.preventDefault())
     $(document).keydown(event => {
+        const keyLower = event.key.toLowerCase();
+        const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
+
+        if (event.ctrlKey && keyLower === "f") {
+            event.preventDefault();
+            showPerfReadout = !showPerfReadout;
+            if (perfPanel) {
+                perfPanel.css("display", showPerfReadout ? "block" : "none");
+            }
+            return;
+        }
+
+        if (event.key === "Tab") {
+            event.preventDefault();
+            if (spellMenuVisible) {
+                $("#spellMenu").addClass("hidden");
+                $("#auraMenu").addClass("hidden");
+                clearSpellMenuKeyboardFocus();
+            } else if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+                SpellSystem.showMainSpellMenu(wizard);
+                $("#spellMenu").removeClass("hidden");
+                initSpellMenuKeyboardFocus();
+            }
+            return;
+        }
+
+        if (event.key === "Escape" && spellMenuVisible) {
+            event.preventDefault();
+            $("#spellMenu").addClass("hidden");
+            $("#auraMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+            return;
+        }
+
+        if (spellMenuVisible && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            if (event.key === "ArrowLeft") moveSpellMenuKeyboardFocus(-1, 0);
+            if (event.key === "ArrowRight") moveSpellMenuKeyboardFocus(1, 0);
+            if (event.key === "ArrowUp") moveSpellMenuKeyboardFocus(0, -1);
+            if (event.key === "ArrowDown") moveSpellMenuKeyboardFocus(0, 1);
+            return;
+        }
+
+        if (spellMenuVisible && (
+            event.key === "Shift" ||
+            event.key === "Control" ||
+            event.key === "Alt" ||
+            event.key === "Meta" ||
+            event.key === "ContextMenu"
+        )) {
+            event.preventDefault();
+            openFocusedSpellSubmenu();
+            return;
+        }
+
+        if (spellMenuVisible && (event.key === "Enter" || event.key === " " || event.code === "Space")) {
+            event.preventDefault();
+            spacebarDownAt = null;
+            const activation = activateSelectedSpellFromMenu();
+            if (activation.activated && activation.shouldCloseMenu) {
+                $("#spellMenu").addClass("hidden");
+                clearSpellMenuKeyboardFocus();
+            } else if (activation.activated) {
+                initSpellMenuKeyboardFocus();
+            }
+            return;
+        }
+
         // Track key state
-        keysPressed[event.key.toLowerCase()] = true;
-        
+        keysPressed[keyLower] = true;
+
+        // Combo binding: F+W selects Firewall spell.
+        if (
+            wizard &&
+            keysPressed['f'] &&
+            keysPressed['w'] &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.setCurrentSpell === "function"
+        ) {
+            SpellSystem.setCurrentSpell(wizard, "firewall");
+            return;
+        }
+
         if (event.key === " " || event.code === "Space") {
             event.preventDefault();
             if (!event.repeat) {
                 spacebarDownAt = Date.now();
+                if (
+                    wizard &&
+                    wizard.currentSpell === "treegrow" &&
+                    mousePos.worldX !== undefined &&
+                    mousePos.worldY !== undefined
+                ) {
+                    wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
+                    SpellSystem.castWizardSpell(wizard, mousePos.worldX, mousePos.worldY);
+                }
             }
+        } else if ((event.key === "a" || event.key === "A") && !event.repeat) {
+            if (wizard && typeof wizard.startJump === "function") {
+                wizard.startJump();
+            }
+        } else if ((event.key === "o" || event.key === "O") && !event.repeat) {
+            event.preventDefault();
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                SpellSystem.toggleAura(wizard, "omnivision");
+            }
+            return;
+        } else if ((event.key === "p" || event.key === "P") && !event.repeat) {
+            event.preventDefault();
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                SpellSystem.toggleAura(wizard, "speed");
+            }
+            return;
+        } else if ((event.key === "h" || event.key === "H") && !event.repeat) {
+            event.preventDefault();
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                SpellSystem.toggleAura(wizard, "healing");
+            }
+            return;
         } else if (Object.keys(spellKeyBindings).includes(event.key.toUpperCase())) {
-            wizard.currentSpell = spellKeyBindings[event.key.toUpperCase()];
-            updateSpellSelector();
+            SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
         }
         
         // Toggle debug graphics with ctrl+d
@@ -2332,13 +2642,96 @@ jQuery(() => {
             showHexGrid = !showHexGrid;
             console.log('Hex grid:', showHexGrid ? 'ON' : 'OFF');
         }
+
+        // Save game to fixed server path with Ctrl+Shift+S
+        if ((event.key === 's' || event.key === 'S') && event.ctrlKey && event.shiftKey) {
+            event.preventDefault();
+            if (typeof saveGameStateToServerFile === 'function') {
+                saveGameStateToServerFile().then(result => {
+                    if (result && result.ok) {
+                        message('Saved to /assets/saves/savefile.json');
+                    } else {
+                        message('Failed to save file');
+                        console.error('Failed to save file:', result);
+                    }
+                });
+            } else {
+                message('Server file save is unavailable');
+            }
+            return;
+        }
+
+        // Load game from fixed server path with Ctrl+Shift+L
+        if ((event.key === 'l' || event.key === 'L') && event.ctrlKey && event.shiftKey) {
+            event.preventDefault();
+            if (typeof loadGameStateFromServerFile === 'function') {
+                loadGameStateFromServerFile().then(result => {
+                    if (result && result.ok) {
+                        message('Loaded /assets/saves/savefile.json');
+                        console.log('Game loaded from fixed save file');
+                    } else {
+                        message('Failed to load fixed save file');
+                        console.error('Failed to load fixed save file:', result);
+                    }
+                });
+            } else {
+                message('Server file load is unavailable');
+            }
+            return;
+        }
+
+        // Save game with Ctrl+S
+        if ((event.key === 's' || event.key === 'S') && event.ctrlKey) {
+            event.preventDefault();
+            const saveData = saveGameState();
+            if (saveData) {
+                localStorage.setItem('survivor_save', JSON.stringify(saveData));
+                message('Game saved!');
+                console.log('Game saved to localStorage');
+            }
+        }
+
+        // Load game with Ctrl+L
+        if ((event.key === 'l' || event.key === 'L') && event.ctrlKey) {
+            event.preventDefault();
+            const parsedSave = (typeof getSavedGameState === 'function')
+                ? getSavedGameState()
+                : { ok: false, reason: 'unavailable' };
+
+            if (parsedSave.ok) {
+                if (loadGameState(parsedSave.data)) {
+                    message('Game loaded!');
+                    console.log('Game loaded from localStorage');
+                } else {
+                    message('Failed to load game');
+                }
+            } else {
+                if (parsedSave.reason === 'missing') {
+                    message('No saved game found');
+                } else {
+                    localStorage.removeItem('survivor_save');
+                    message('Save was invalid and has been reset');
+                    console.error('Invalid save data:', parsedSave.reason, parsedSave.error || '');
+                }
+            }
+        }
     })
     
     $(document).keyup(event => {
         // Track key state
         keysPressed[event.key.toLowerCase()] = false;
-
         if (event.key === " " || event.code === "Space") {
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
+                SpellSystem.cancelDragSpell(wizard, "wall");
+                SpellSystem.cancelDragSpell(wizard, "buildroad");
+                SpellSystem.cancelDragSpell(wizard, "firewall");
+            }
+            SpellSystem.stopTreeGrowthChannel(wizard);
+            if (wizard.currentSpell === "treegrow") {
+                spacebarDownAt = null;
+                event.preventDefault();
+                return;
+            }
             if (wizard.currentSpell === "wall") return;
             event.preventDefault();
             const now = Date.now();
@@ -2349,7 +2742,7 @@ jQuery(() => {
                 // Quick tap: cast immediately
                 if (wizard && mousePos.worldX !== undefined && mousePos.worldY !== undefined) {
                     wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
-                    wizard.cast(mousePos.worldX, mousePos.worldY);
+                    SpellSystem.castWizardSpell(wizard, mousePos.worldX, mousePos.worldY);
                 }
             }
         }

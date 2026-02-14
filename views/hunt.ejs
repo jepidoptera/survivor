@@ -9,9 +9,13 @@
     <script src="assets/javascript/hitbox.js"></script>
     <script src="assets/javascript/Map.js"></script>
     <script src="assets/javascript/staticObjects.js"></script>
+    <script src="assets/javascript/los.js"></script>
     <script src="assets/javascript/roof.js"></script>
+    <script src="assets/javascript/filesystem.js"></script>
+    <script src="assets/javascript/spells.js"></script>
     <script src="assets/javascript/runaround.js"></script>
     <script src="assets/javascript/rendering.js"></script>
+    <link rel="icon" type="image/png" href="assets/images/wizard-hat-favicon.png">
     <link rel="stylesheet" href="assets/css/survivor.css">
     <link rel="stylesheet" href="assets/css/dialogBoxes.css">
 </head>
@@ -30,6 +34,13 @@
             <div class="statusBar-background">
                 <div id="magicBar" class="statusBar-fill"></div>
             </div>
+        </div>
+    </div>
+    <div id="auraSelector">
+        <div id="selectedAura"></div>
+        <div id="activeAuraIcons" class="hidden"></div>
+        <div id="auraMenu" class="hidden">
+            <div id="auraGrid"></div>
         </div>
     </div>
     <div id="spellSelector">
