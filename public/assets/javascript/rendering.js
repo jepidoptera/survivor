@@ -15,6 +15,7 @@ const groundChunkTileSize = 24;
 const groundChunkRenderPaddingTiles = 4;
 const groundTileOverlapScale = 1.5;
 const groundTileFeatherRatio = 0.25;
+const groundChunkCacheMaxEntries = 96;
 let groundChunkCache = new Map();
 let groundChunkLastViewscale = 0;
 let spellHoverHighlightSprite = null;
@@ -44,8 +45,10 @@ let currentLosVisibleWallGroups = null;
 let wallLosGroupState = new Map();
 let lastLosWizardX = null;
 let lastLosWizardY = null;
+let lastLosFacingAngle = null;
 let lastLosCandidateCount = -1;
 let lastLosCandidateHash = 0;
+let lastLosComputeAtMs = 0;
 let nextLosObjectId = 1;
 let lastRenderFrameMs = 0;
 
@@ -357,6 +360,11 @@ function applyLosShadow() {
     const twoPi = Math.PI * 2;
     const farDist = Math.max(viewport.width, viewport.height) * 1.5;
     const angleForBin = idx => minAngle + ((idx + 0.5) / bins) * twoPi;
+    const wizardScreen = worldToScreen(wizard);
+    const losPointToScreen = (theta, distance) => ({
+        x: wizardScreen.x + Math.cos(theta) * distance * viewscale,
+        y: wizardScreen.y + Math.sin(theta) * distance * viewscale * xyratio
+    });
     graphics.visible = true;
     graphics.lineStyle(0);
     graphics.beginFill(0x000000, losShadowOpacity);
@@ -368,22 +376,10 @@ function applyLosShadow() {
 
         const t0 = angleForBin(i);
         const t1 = angleForBin(j);
-        const near0 = worldToScreen({
-            x: wizard.x + Math.cos(t0) * d0,
-            y: wizard.y + Math.sin(t0) * d0
-        });
-        const near1 = worldToScreen({
-            x: wizard.x + Math.cos(t1) * d1,
-            y: wizard.y + Math.sin(t1) * d1
-        });
-        const far1 = worldToScreen({
-            x: wizard.x + Math.cos(t1) * farDist,
-            y: wizard.y + Math.sin(t1) * farDist
-        });
-        const far0 = worldToScreen({
-            x: wizard.x + Math.cos(t0) * farDist,
-            y: wizard.y + Math.sin(t0) * farDist
-        });
+        const near0 = losPointToScreen(t0, d0);
+        const near1 = losPointToScreen(t1, d1);
+        const far1 = losPointToScreen(t1, farDist);
+        const far0 = losPointToScreen(t0, farDist);
         graphics.moveTo(near0.x, near0.y);
         graphics.lineTo(near1.x, near1.y);
         graphics.lineTo(far1.x, far1.y);
@@ -428,9 +424,31 @@ function getRoofInteriorHitbox() {
     return null;
 }
 
+function projectPolygonPointsToScreen(points) {
+    if (!Array.isArray(points) || points.length < 3) return [];
+    const anchor = points[0];
+    if (!anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) return [];
+    const anchorScreen = worldToScreen({ x: anchor.x, y: anchor.y });
+    return points.map(pt => {
+        if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) {
+            return { x: anchorScreen.x, y: anchorScreen.y };
+        }
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(anchor.x, pt.x)
+            : (pt.x - anchor.x);
+        const dy = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(anchor.y, pt.y)
+            : (pt.y - anchor.y);
+        return {
+            x: anchorScreen.x + dx * viewscale,
+            y: anchorScreen.y + dy * viewscale * xyratio
+        };
+    });
+}
+
 function buildRoofInteriorScreenPolygon(hitbox, inflatePx = 2) {
     if (!hitbox || !Array.isArray(hitbox.points) || hitbox.points.length < 3) return null;
-    const screenPoints = hitbox.points.map(pt => worldToScreen({ x: pt.x, y: pt.y }));
+    const screenPoints = projectPolygonPointsToScreen(hitbox.points);
     if (!screenPoints || screenPoints.length < 3) return null;
     return inflateScreenPolygon(screenPoints, inflatePx);
 }
@@ -680,7 +698,7 @@ function drawVisibilityMask() {
         }
         const points = Array.isArray(hitbox.points) ? hitbox.points : null;
         if (!points || points.length < 3) return;
-        const screenPoints = points.map(pt => worldToScreen({ x: pt.x, y: pt.y }));
+        const screenPoints = projectPolygonPointsToScreen(points);
         const flatPoints = [];
         screenPoints.forEach(pt => {
             flatPoints.push(pt.x, pt.y);
@@ -1042,6 +1060,15 @@ function getDebugRedrawPlan() {
 
 function drawCanvas() {
     if (!wizard) return;
+    const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    if (typeof hydrateVisibleLazyRoads === "function") {
+        hydrateVisibleLazyRoads({ maxPerFrame: 48, paddingWorld: 12 });
+    }
+    if (typeof hydrateVisibleLazyTrees === "function") {
+        hydrateVisibleLazyTrees({ maxPerFrame: 48, paddingWorld: 12 });
+    }
     const frameNowMs = (typeof renderNowMs === "number" && Number.isFinite(renderNowMs) && renderNowMs > 0)
         ? renderNowMs
         : performance.now();
@@ -1097,9 +1124,7 @@ function drawCanvas() {
     const seenRoadItems = new Set();
     onscreenObjects.clear();
 
-    const { topLeftNode, bottomRightNode } = getViewportNodeCorners();
-
-    if (topLeftNode && bottomRightNode) {
+    if (map && map.nodes) {
         // Keep large trees in the object set before their base tile reaches the viewport.
         // This prevents tall trees from "popping in" at the top/bottom edges.
         const maxExpectedTreeSize = 10;
@@ -1108,62 +1133,28 @@ function drawCanvas() {
         const xPadding = Math.ceil(maxTreeWidth / 2) + 2;
         const yPadding = Math.ceil(maxTreeHeight) + 2;
 
-        const xStart = Math.max(-1, topLeftNode.xindex - xPadding);
-        const xEnd = Math.min(mapWidth - 1, bottomRightNode.xindex + xPadding);
-        const yStart = Math.max(-1, topLeftNode.yindex - yPadding);
-        const yEnd = Math.min(mapHeight - 1, bottomRightNode.yindex + yPadding);
-
-        const startColA = Math.floor(xStart / 2) * 2 - 1;
-        const startColB = startColA - 1;
-
-        for (let y = yStart; y <= yEnd; y++) {
-            for (let x = startColA; x <= xEnd + 2; x += 2) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
-                    map.nodes[x][y].objects.forEach(obj => {
-                        if (!obj || seenMapItems.has(obj)) return;
-                        seenMapItems.add(obj);
-                        if (obj && obj.type === "road") {
-                            if (!seenRoadItems.has(obj)) {
-                                seenRoadItems.add(obj);
-                                roadItems.push(obj);
-                            }
-                            mapItems.push(obj);
-                            if (obj && obj.visualHitbox && !obj.gone && !obj.vanishing) {
-                                onscreenObjects.add(obj);
-                            }
-                        } else {
-                            mapItems.push(obj);
-                            if (obj && (obj.visualHitbox || obj.hitbox) && !obj.gone && !obj.vanishing) {
-                                onscreenObjects.add(obj);
-                            }
-                        }
-                    });
+        forEachWrappedNodeInViewport(xPadding, yPadding, (node) => {
+            if (!node.objects || node.objects.length === 0) return;
+            node.objects.forEach(obj => {
+                if (!obj || seenMapItems.has(obj)) return;
+                seenMapItems.add(obj);
+                if (obj && obj.type === "road") {
+                    if (!seenRoadItems.has(obj)) {
+                        seenRoadItems.add(obj);
+                        roadItems.push(obj);
+                    }
+                    mapItems.push(obj);
+                    if (obj && obj.visualHitbox && !obj.gone && !obj.vanishing) {
+                        onscreenObjects.add(obj);
+                    }
+                } else {
+                    mapItems.push(obj);
+                    if (obj && (obj.visualHitbox || obj.hitbox) && !obj.gone && !obj.vanishing) {
+                        onscreenObjects.add(obj);
+                    }
                 }
-            }
-            for (let x = startColB; x <= xEnd + 2; x += 2) {
-                if (map.nodes[x] && map.nodes[x][y] && map.nodes[x][y].objects && map.nodes[x][y].objects.length > 0) {
-                    map.nodes[x][y].objects.forEach(obj => {
-                        if (!obj || seenMapItems.has(obj)) return;
-                        seenMapItems.add(obj);
-                        if (obj && obj.type === "road") {
-                            if (!seenRoadItems.has(obj)) {
-                                seenRoadItems.add(obj);
-                                roadItems.push(obj);
-                            }
-                            mapItems.push(obj);
-                            if (obj && obj.visualHitbox && !obj.gone && !obj.vanishing) {
-                                onscreenObjects.add(obj);
-                            }
-                        } else {
-                            mapItems.push(obj);
-                            if (obj && (obj.visualHitbox || obj.hitbox) && !obj.gone && !obj.vanishing) {
-                                onscreenObjects.add(obj);
-                            }
-                        }
-                    });
-                }
-            }
-        }
+            });
+        }, renderCamera);
     }
     animals.forEach(animal => {
         if (animal.onScreen) {
@@ -1189,13 +1180,36 @@ function drawCanvas() {
         const losBuildMs = performance.now() - losBuildStartMs;
         const candidateCount = losCandidates.length;
         const candidateHash = computeLosCandidateHash(losCandidates);
-        const shouldRecomputeLos = true;
+        const facingAngle = getWizardFacingAngleRad();
+        const movedDx = (map && typeof map.shortestDeltaX === "function" && Number.isFinite(lastLosWizardX))
+            ? map.shortestDeltaX(lastLosWizardX, wizard.x)
+            : (Number.isFinite(lastLosWizardX) ? (wizard.x - lastLosWizardX) : Infinity);
+        const movedDy = (map && typeof map.shortestDeltaY === "function" && Number.isFinite(lastLosWizardY))
+            ? map.shortestDeltaY(lastLosWizardY, wizard.y)
+            : (Number.isFinite(lastLosWizardY) ? (wizard.y - lastLosWizardY) : Infinity);
+        const movedDist = Math.hypot(movedDx, movedDy);
+        const facingDelta = Number.isFinite(lastLosFacingAngle)
+            ? Math.abs(Math.atan2(Math.sin(facingAngle - lastLosFacingAngle), Math.cos(facingAngle - lastLosFacingAngle)))
+            : Infinity;
+        const structuralChange = (
+            !currentLosState ||
+            candidateCount !== lastLosCandidateCount ||
+            candidateHash !== lastLosCandidateHash
+        );
+        const losThrottleMs = 33; // ~30 Hz LOS updates are usually sufficient.
+        const timeSinceLastLosMs = Number.isFinite(lastLosComputeAtMs) ? (frameNowMs - lastLosComputeAtMs) : Infinity;
+        const shouldRecomputeLos = (
+            structuralChange ||
+            movedDist > 0.03 ||
+            facingDelta > 0.05 ||
+            timeSinceLastLosMs >= losThrottleMs
+        );
         let losTraceMs = 0;
 
         if (shouldRecomputeLos) {
             currentLosState = LOSSystem.computeState(wizard, losCandidates, {
                 bins: 2500,
-                facingAngle: getWizardFacingAngleRad(),
+                facingAngle,
                 fovDegrees: losForwardFovDegrees
             });
             currentLosVisibleSet = new Set(currentLosState.visibleObjects || []);
@@ -1203,8 +1217,10 @@ function drawCanvas() {
             losTraceMs = Number.isFinite(currentLosState.elapsedMs) ? currentLosState.elapsedMs : 0;
             lastLosWizardX = wizard.x;
             lastLosWizardY = wizard.y;
+            lastLosFacingAngle = facingAngle;
             lastLosCandidateCount = candidateCount;
             lastLosCandidateHash = candidateHash;
+            lastLosComputeAtMs = frameNowMs;
         }
         if (typeof globalThis !== "undefined") {
             globalThis.losDebugVisibleObjects = currentLosState.visibleObjects || [];
@@ -1223,8 +1239,10 @@ function drawCanvas() {
         currentLosVisibleWallGroups = null;
         lastLosWizardX = null;
         lastLosWizardY = null;
+        lastLosFacingAngle = null;
         lastLosCandidateCount = -1;
         lastLosCandidateHash = 0;
+        lastLosComputeAtMs = 0;
         if (typeof globalThis !== "undefined") {
             globalThis.losDebugVisibleObjects = [];
             globalThis.losDebugLastMs = 0;
@@ -1626,23 +1644,39 @@ function worldToScreen(item) {
         : viewport;
     const alpha = (typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1;
     const worldX = (item && Number.isFinite(item.prevX) && Number.isFinite(item.x))
-        ? item.prevX + (item.x - item.prevX) * alpha
+        ? (
+            Number.isFinite(alpha) && map && typeof map.shortestDeltaX === "function"
+                ? (item.prevX + map.shortestDeltaX(item.prevX, item.x) * alpha)
+                : (item.prevX + (item.x - item.prevX) * alpha)
+        )
         : item.x;
     const worldY = (item && Number.isFinite(item.prevY) && Number.isFinite(item.y))
-        ? item.prevY + (item.y - item.prevY) * alpha
+        ? (
+            Number.isFinite(alpha) && map && typeof map.shortestDeltaY === "function"
+                ? (item.prevY + map.shortestDeltaY(item.prevY, item.y) * alpha)
+                : (item.prevY + (item.y - item.prevY) * alpha)
+        )
         : item.y;
+    const dx = (map && typeof map.shortestDeltaX === "function")
+        ? map.shortestDeltaX(camera.x, worldX)
+        : (worldX - camera.x);
+    const dy = (map && typeof map.shortestDeltaY === "function")
+        ? map.shortestDeltaY(camera.y, worldY)
+        : (worldY - camera.y);
     return {
-        x: (worldX - camera.x) * viewscale,
-        y: (worldY - camera.y) * viewscale * xyratio
+        x: dx * viewscale,
+        y: dy * viewscale * xyratio
     };
 }
 
 function worldToNodeCanonical(worldX, worldY) {
     if (!map || !map.nodes) return null;
     if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
-    const approxX = Math.round(worldX / 0.866);
+    const wrappedX = (map && typeof map.wrapWorldX === "function") ? map.wrapWorldX(worldX) : worldX;
+    const wrappedY = (map && typeof map.wrapWorldY === "function") ? map.wrapWorldY(worldY) : worldY;
+    const approxX = Math.round(wrappedX / 0.866);
     const clampedX = Math.max(0, Math.min(map.width - 1, approxX));
-    const approxY = Math.round(worldY - (clampedX % 2 === 0 ? 0.5 : 0));
+    const approxY = Math.round(wrappedY - (clampedX % 2 === 0 ? 0.5 : 0));
     const clampedY = Math.max(0, Math.min(map.height - 1, approxY));
     return (map.nodes[clampedX] && map.nodes[clampedX][clampedY]) ? map.nodes[clampedX][clampedY] : null;
 }
@@ -1659,14 +1693,55 @@ function getViewportNodeCorners() {
     };
 }
 
+function getWrappedIndexRanges(start, end, size, wrapEnabled) {
+    if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(start) || !Number.isFinite(end)) return [];
+    const rawStart = Math.floor(Math.min(start, end));
+    const rawEnd = Math.floor(Math.max(start, end));
+    if (!wrapEnabled) {
+        const clampedStart = Math.max(0, Math.min(size - 1, rawStart));
+        const clampedEnd = Math.max(0, Math.min(size - 1, rawEnd));
+        if (clampedEnd < clampedStart) return [];
+        return [{ start: clampedStart, end: clampedEnd }];
+    }
+    if ((rawEnd - rawStart + 1) >= size) {
+        return [{ start: 0, end: size - 1 }];
+    }
+    const wrap = (n) => ((n % size) + size) % size;
+    const s = wrap(rawStart);
+    const e = wrap(rawEnd);
+    if (s <= e) return [{ start: s, end: e }];
+    return [
+        { start: 0, end: e },
+        { start: s, end: size - 1 }
+    ];
+}
+
 function screenToWorld(screenX, screenY) {
     const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
         ? interpolatedViewport
         : viewport;
-    return {
-        x: screenX / viewscale + camera.x,
-        y: screenY / (viewscale * xyratio) + camera.y
-    };
+    let worldX = screenX / viewscale + camera.x;
+    let worldY = screenY / (viewscale * xyratio) + camera.y;
+    if (map && typeof map.wrapWorldX === "function" && Number.isFinite(worldX)) {
+        worldX = map.wrapWorldX(worldX);
+    }
+    if (map && typeof map.wrapWorldY === "function" && Number.isFinite(worldY)) {
+        worldY = map.wrapWorldY(worldY);
+    }
+    if (
+        wizard &&
+        map &&
+        typeof map.shortestDeltaX === "function" &&
+        typeof map.shortestDeltaY === "function" &&
+        Number.isFinite(wizard.x) &&
+        Number.isFinite(wizard.y) &&
+        Number.isFinite(worldX) &&
+        Number.isFinite(worldY)
+    ) {
+        worldX = wizard.x + map.shortestDeltaX(wizard.x, worldX);
+        worldY = wizard.y + map.shortestDeltaY(wizard.y, worldY);
+    }
+    return { x: worldX, y: worldY };
 }
 
 function centerViewport(obj, margin, smoothing = null) {
@@ -1721,11 +1796,39 @@ function centerViewport(obj, margin, smoothing = null) {
     viewport.x = nextX;
     viewport.y = nextY;
 
-    // Keep viewport bounded to a single canonical map copy.
-    const mapWorldWidth = (map && Number.isFinite(map.worldWidth)) ? map.worldWidth : mapWidth;
-    const mapWorldHeight = (map && Number.isFinite(map.worldHeight)) ? map.worldHeight : mapHeight;
-    viewport.x = Math.max(0, Math.min(viewport.x, mapWorldWidth - viewport.width));
-    viewport.y = Math.max(0, Math.min(viewport.y, mapWorldHeight - viewport.height));
+    // Keep camera center on the same torus copy as the followed object to avoid
+    // accumulating huge viewport coordinates across seam crossings.
+    let seamShiftX = 0;
+    let seamShiftY = 0;
+    if (map && obj && Number.isFinite(obj.x) && Number.isFinite(obj.y)) {
+        const currentCenterX = viewport.x + viewport.width * 0.5;
+        const currentCenterY = viewport.y + viewport.height * 0.5;
+        if (typeof map.shortestDeltaX === "function" && Number.isFinite(currentCenterX)) {
+            const nearestCenterX = obj.x + map.shortestDeltaX(obj.x, currentCenterX);
+            seamShiftX = (nearestCenterX - viewport.width * 0.5) - viewport.x;
+        }
+        if (typeof map.shortestDeltaY === "function" && Number.isFinite(currentCenterY)) {
+            const nearestCenterY = obj.y + map.shortestDeltaY(obj.y, currentCenterY);
+            seamShiftY = (nearestCenterY - viewport.height * 0.5) - viewport.y;
+        }
+    }
+    const seamEps = 1e-6;
+    if ((Math.abs(seamShiftX) > seamEps || Math.abs(seamShiftY) > seamEps)) {
+        if (typeof applyViewportWrapShift === "function") {
+            applyViewportWrapShift(seamShiftX, seamShiftY);
+        } else {
+            viewport.x += seamShiftX;
+            viewport.y += seamShiftY;
+            if (typeof previousViewport !== "undefined") {
+                previousViewport.x += seamShiftX;
+                previousViewport.y += seamShiftY;
+            }
+            if (typeof interpolatedViewport !== "undefined") {
+                interpolatedViewport.x += seamShiftX;
+                interpolatedViewport.y += seamShiftY;
+            }
+        }
+    }
 
     // Keep precision stable to avoid float-noise shaking over time.
     viewport.x = Math.round(viewport.x * 1000) / 1000;
@@ -2008,38 +2111,110 @@ function applySpriteTransform(item) {
 
 function updateLandLayer() {
     if (!map || !landLayer) return;
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
     if (!Number.isFinite(groundChunkLastViewscale) || Math.abs(groundChunkLastViewscale - viewscale) > 0.001) {
         clearGroundChunkCache();
         groundChunkLastViewscale = viewscale;
     }
-
-    const { topLeftNode, bottomRightNode } = getViewportNodeCorners();
-    if (!topLeftNode || !bottomRightNode) return;
-
-    const xStart = Math.max(0, Math.min(topLeftNode.xindex, bottomRightNode.xindex) - groundChunkRenderPaddingTiles);
-    const xEnd = Math.min(map.width - 1, Math.max(topLeftNode.xindex, bottomRightNode.xindex) + groundChunkRenderPaddingTiles);
-    const yStart = Math.max(0, Math.min(topLeftNode.yindex, bottomRightNode.yindex) - groundChunkRenderPaddingTiles);
-    const yEnd = Math.min(map.height - 1, Math.max(topLeftNode.yindex, bottomRightNode.yindex) + groundChunkRenderPaddingTiles);
-
-    const chunkXStart = Math.floor(xStart / groundChunkTileSize);
-    const chunkXEnd = Math.floor(xEnd / groundChunkTileSize);
-    const chunkYStart = Math.floor(yStart / groundChunkTileSize);
-    const chunkYEnd = Math.floor(yEnd / groundChunkTileSize);
+    const xScale = 0.866;
+    const rawXStart = Math.floor(camera.x / xScale) - groundChunkRenderPaddingTiles;
+    const rawXEnd = Math.ceil((camera.x + viewport.width) / xScale) + groundChunkRenderPaddingTiles;
+    const rawYStart = Math.floor(camera.y) - groundChunkRenderPaddingTiles;
+    const rawYEnd = Math.ceil(camera.y + viewport.height) + groundChunkRenderPaddingTiles;
+    const xRanges = getWrappedIndexRanges(rawXStart, rawXEnd, map.width, map.wrapX);
+    const yRanges = getWrappedIndexRanges(rawYStart, rawYEnd, map.height, map.wrapY);
+    if (xRanges.length === 0 || yRanges.length === 0) return;
+    const chunkCountX = Math.ceil(map.width / groundChunkTileSize);
+    const chunkCountY = Math.ceil(map.height / groundChunkTileSize);
 
     groundChunkCache.forEach(chunk => {
         if (chunk && chunk.sprite) chunk.sprite.visible = false;
     });
 
-    for (let chunkY = chunkYStart; chunkY <= chunkYEnd; chunkY++) {
-        for (let chunkX = chunkXStart; chunkX <= chunkXEnd; chunkX++) {
-            const chunk = ensureGroundChunk(chunkX, chunkY);
-            if (!chunk || !chunk.sprite) continue;
+    const visibleChunkKeys = new Set();
+    yRanges.forEach(yRange => {
+        for (let y = yRange.start; y <= yRange.end; y++) {
+            const chunkY = Math.floor(y / groundChunkTileSize);
+            if (!Number.isFinite(chunkY) || chunkY < 0 || chunkY >= chunkCountY) continue;
+            xRanges.forEach(xRange => {
+                for (let x = xRange.start; x <= xRange.end; x++) {
+                    const chunkX = Math.floor(x / groundChunkTileSize);
+                    if (!Number.isFinite(chunkX) || chunkX < 0 || chunkX >= chunkCountX) continue;
+                    visibleChunkKeys.add(getGroundChunkKey(chunkX, chunkY));
+                }
+            });
+        }
+    });
 
-            chunk.sprite.visible = true;
-            chunk.sprite.x = (chunk.minWorldX - viewport.x) * viewscale;
-            chunk.sprite.y = (chunk.minWorldY - viewport.y) * viewscale * xyratio;
+    visibleChunkKeys.forEach(chunkKey => {
+        const parts = chunkKey.split(",");
+        if (parts.length !== 2) return;
+        const chunkX = Number(parts[0]);
+        const chunkY = Number(parts[1]);
+        if (!Number.isFinite(chunkX) || !Number.isFinite(chunkY)) return;
+        const chunk = ensureGroundChunk(chunkX, chunkY);
+        if (!chunk || !chunk.sprite) return;
+        chunk.lastUsedFrame = frameCount;
+
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(camera.x, chunk.minWorldX)
+            : (chunk.minWorldX - camera.x);
+        const dy = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(camera.y, chunk.minWorldY)
+            : (chunk.minWorldY - camera.y);
+        chunk.sprite.visible = true;
+        chunk.sprite.x = dx * viewscale;
+        chunk.sprite.y = dy * viewscale * xyratio;
+    });
+
+    if (groundChunkCache.size > groundChunkCacheMaxEntries) {
+        const evictable = [];
+        groundChunkCache.forEach((chunk, key) => {
+            if (!visibleChunkKeys.has(key)) {
+                evictable.push({
+                    key,
+                    chunk,
+                    lastUsedFrame: Number.isFinite(chunk.lastUsedFrame) ? chunk.lastUsedFrame : -Infinity
+                });
+            }
+        });
+        evictable.sort((a, b) => a.lastUsedFrame - b.lastUsedFrame);
+        for (let i = 0; i < evictable.length && groundChunkCache.size > groundChunkCacheMaxEntries; i++) {
+            const entry = evictable[i];
+            destroyGroundChunk(entry.chunk);
+            groundChunkCache.delete(entry.key);
         }
     }
+}
+
+function forEachWrappedNodeInViewport(xPadding, yPadding, callback, cameraOverride = null) {
+    if (!map || typeof callback !== "function") return;
+    const camera = cameraOverride || (
+        (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+            ? interpolatedViewport
+            : viewport
+    );
+    const xScale = 0.866;
+    const xStart = Math.floor(camera.x / xScale) - xPadding;
+    const xEnd = Math.ceil((camera.x + viewport.width) / xScale) + xPadding;
+    const yStart = Math.floor(camera.y) - yPadding;
+    const yEnd = Math.ceil(camera.y + viewport.height) + yPadding;
+    const xRanges = getWrappedIndexRanges(xStart, xEnd, map.width, map.wrapX);
+    const yRanges = getWrappedIndexRanges(yStart, yEnd, map.height, map.wrapY);
+    if (xRanges.length === 0 || yRanges.length === 0) return;
+
+    yRanges.forEach(yRange => {
+        for (let y = yRange.start; y <= yRange.end; y++) {
+            xRanges.forEach(xRange => {
+                for (let x = xRange.start; x <= xRange.end; x++) {
+                    const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
+                    if (node) callback(node);
+                }
+            });
+        }
+    });
 }
 
 function drawProjectiles() {
@@ -2290,79 +2465,89 @@ function drawHexGrid(redraw = true) {
     const quarterW = hexWidth / 4;
     const halfH = hexHeight / 2;
 
-    const corners = getViewportNodeCorners();
-    startNode = corners.topLeftNode;
-    endNode = corners.bottomRightNode;
-
-    const yStart = Math.max(Math.floor(startNode.yindex) - 2, 0);
-    const yEnd = Math.min(Math.ceil(endNode.yindex) + 2, mapHeight - 1);
-    const xStart = Math.max(Math.floor(startNode.xindex) - 2, 0);
-    const xEnd = Math.min(Math.ceil(endNode.xindex) + 2, mapWidth - 1);
+    const xPadding = 2;
+    const yPadding = 2;
+    const xScale = 0.866;
+    const rawXStart = Math.floor(viewport.x / xScale) - xPadding;
+    const rawXEnd = Math.ceil((viewport.x + viewport.width) / xScale) + xPadding;
+    const rawYStart = Math.floor(viewport.y) - yPadding;
+    const rawYEnd = Math.ceil(viewport.y + viewport.height) + yPadding;
+    const xRanges = getWrappedIndexRanges(rawXStart, rawXEnd, map.width, map.wrapX);
+    const yRanges = getWrappedIndexRanges(rawYStart, rawYEnd, map.height, map.wrapY);
+    if (xRanges.length === 0 || yRanges.length === 0) return;
 
     const animalTiles = new Set();
     animals.forEach(animal => {
         if (!animal || animal.gone || animal.dead) return;
-        animalTiles.add(`${animal.x},${animal.y}`);
+        const node = map.worldToNode(animal.x, animal.y);
+        if (!node) return;
+        animalTiles.add(`${node.xindex},${node.yindex}`);
     });
 
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const node = map.nodes[x][y];
-            const screenCoors = worldToScreen(node);
-            const centerX = screenCoors.x;
-            const centerY = screenCoors.y;
+    yRanges.forEach(yRange => {
+        for (let y = yRange.start; y <= yRange.end; y++) {
+            xRanges.forEach(xRange => {
+                for (let x = xRange.start; x <= xRange.end; x++) {
+                    if (!map.nodes[x] || !map.nodes[x][y]) continue;
+                    const node = map.nodes[x][y];
+                    const screenCoors = worldToScreen(node);
+                    const centerX = screenCoors.x;
+                    const centerY = screenCoors.y;
 
-            const isBlocked = node.hasBlockingObject() || !!node.blocked;
-            const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
-            const color = isBlocked ? 0xff0000 : 0xffffff;
-            const alpha = isBlocked ? 0.5 : 0.35;
-            if (hasAnimal) {
-                gridGraphics.beginFill(0x3399ff, 0.25);
-                gridGraphics.moveTo(centerX - halfW, centerY);
-                gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-                gridGraphics.lineTo(centerX + halfW, centerY);
-                gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-                gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-                gridGraphics.closePath();
-                gridGraphics.endFill();
-            }
+                    const isBlocked = node.hasBlockingObject() || !!node.blocked;
+                    const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
+                    const color = isBlocked ? 0xff0000 : 0xffffff;
+                    const alpha = isBlocked ? 0.5 : 0.35;
+                    if (hasAnimal) {
+                        gridGraphics.beginFill(0x3399ff, 0.25);
+                        gridGraphics.moveTo(centerX - halfW, centerY);
+                        gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
+                        gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
+                        gridGraphics.lineTo(centerX + halfW, centerY);
+                        gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
+                        gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
+                        gridGraphics.closePath();
+                        gridGraphics.endFill();
+                    }
 
-            gridGraphics.lineStyle(1, color, alpha);
-            gridGraphics.moveTo(centerX - halfW, centerY);
-            gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-            gridGraphics.lineTo(centerX + halfW, centerY);
-            gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-            gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-            gridGraphics.closePath();
+                    gridGraphics.lineStyle(1, color, alpha);
+                    gridGraphics.moveTo(centerX - halfW, centerY);
+                    gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
+                    gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
+                    gridGraphics.lineTo(centerX + halfW, centerY);
+                    gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
+                    gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
+                    gridGraphics.closePath();
+                }
+            });
         }
-    }
+    });
 
     // Draw blocked neighbor connections with red perpendicular lines
     if (showBlockedNeighbors) {
         gridGraphics.lineStyle(4, 0xff0000, 0.4);
         const drawnEdges = new Set();
-        for (let y = yStart; y <= yEnd; y++) {
-            for (let x = xStart; x <= xEnd; x++) {
-                if (!map.nodes[x] || !map.nodes[x][y]) continue;
-                const node = map.nodes[x][y];
+        yRanges.forEach(yRange => {
+            for (let y = yRange.start; y <= yRange.end; y++) {
+                xRanges.forEach(xRange => {
+                    for (let x = xRange.start; x <= xRange.end; x++) {
+                        if (!map.nodes[x] || !map.nodes[x][y]) continue;
+                        const node = map.nodes[x][y];
 
-                if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
+                        if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
 
-                // For each blocked neighbor direction
-                node.blockedNeighbors.forEach((blockingSet, direction) => {
-                    if (blockingSet.size === 0) return;
+                        // For each blocked neighbor direction
+                        node.blockedNeighbors.forEach((blockingSet, direction) => {
+                            if (blockingSet.size === 0) return;
 
-                    const neighbor = node.neighbors[direction];
-                    if (!neighbor) return;
-                    const edgeKey = [
-                        `${node.xindex},${node.yindex}`,
-                        `${neighbor.xindex},${neighbor.yindex}`
-                    ].sort().join("|");
-                    if (drawnEdges.has(edgeKey)) return;
-                    drawnEdges.add(edgeKey);
+                            const neighbor = node.neighbors[direction];
+                            if (!neighbor) return;
+                            const edgeKey = [
+                                `${node.xindex},${node.yindex}`,
+                                `${neighbor.xindex},${neighbor.yindex}`
+                            ].sort().join("|");
+                            if (drawnEdges.has(edgeKey)) return;
+                            drawnEdges.add(edgeKey);
 
                     // Calculate midpoint between the two hexes in world space
                     const midX = (node.x + neighbor.x) / 2;
@@ -2398,12 +2583,14 @@ function drawHexGrid(redraw = true) {
                     const screen1 = worldToScreen({x: x1, y: y1});
                     const screen2 = worldToScreen({x: x2, y: y2});
 
-                    // Draw the line
-                    gridGraphics.moveTo(screen1.x, screen1.y);
-                    gridGraphics.lineTo(screen2.x, screen2.y);
+                            // Draw the line
+                            gridGraphics.moveTo(screen1.x, screen1.y);
+                            gridGraphics.lineTo(screen2.x, screen2.y);
+                        });
+                    }
                 });
             }
-        }
+        });
     }
 }
 

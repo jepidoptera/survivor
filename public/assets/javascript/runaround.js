@@ -48,10 +48,6 @@ const runaroundViewportNodeSampleEpsilon = 1e-4;
 function applyViewportWrapShift(deltaX, deltaY) {
     if (!map) return;
     const eps = 1e-6;
-    const mapWorldWidth = Number.isFinite(map.worldWidth) ? map.worldWidth : mapWidth;
-    const mapWorldHeight = Number.isFinite(map.worldHeight) ? map.worldHeight : mapHeight;
-    const maxViewportX = Math.max(0, mapWorldWidth - viewport.width);
-    const maxViewportY = Math.max(0, mapWorldHeight - viewport.height);
 
     if (Math.abs(deltaX) > eps) {
         viewport.x += deltaX;
@@ -68,13 +64,6 @@ function applyViewportWrapShift(deltaX, deltaY) {
         if (Number.isFinite(pointerLockAimWorld.y)) pointerLockAimWorld.y += deltaY;
     }
 
-    viewport.x = Math.max(0, Math.min(viewport.x, maxViewportX));
-    viewport.y = Math.max(0, Math.min(viewport.y, maxViewportY));
-    previousViewport.x = Math.max(0, Math.min(previousViewport.x, maxViewportX));
-    previousViewport.y = Math.max(0, Math.min(previousViewport.y, maxViewportY));
-    interpolatedViewport.x = Math.max(0, Math.min(interpolatedViewport.x, maxViewportX));
-    interpolatedViewport.y = Math.max(0, Math.min(interpolatedViewport.y, maxViewportY));
-
     if (Number.isFinite(mousePos.worldX) && typeof map.wrapWorldX === "function") mousePos.worldX = map.wrapWorldX(mousePos.worldX);
     if (Number.isFinite(mousePos.worldY) && typeof map.wrapWorldY === "function") mousePos.worldY = map.wrapWorldY(mousePos.worldY);
     if (Number.isFinite(pointerLockAimWorld.x) && typeof map.wrapWorldX === "function") pointerLockAimWorld.x = map.wrapWorldX(pointerLockAimWorld.x);
@@ -84,9 +73,11 @@ function applyViewportWrapShift(deltaX, deltaY) {
 function worldToNodeCanonical(worldX, worldY) {
     if (!map || !map.nodes) return null;
     if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
-    const approxX = Math.round(worldX / 0.866);
+    const wrappedX = (map && typeof map.wrapWorldX === "function") ? map.wrapWorldX(worldX) : worldX;
+    const wrappedY = (map && typeof map.wrapWorldY === "function") ? map.wrapWorldY(worldY) : worldY;
+    const approxX = Math.round(wrappedX / 0.866);
     const clampedX = Math.max(0, Math.min(map.width - 1, approxX));
-    const approxY = Math.round(worldY - (clampedX % 2 === 0 ? 0.5 : 0));
+    const approxY = Math.round(wrappedY - (clampedX % 2 === 0 ? 0.5 : 0));
     const clampedY = Math.max(0, Math.min(map.height - 1, approxY));
     return (map.nodes[clampedX] && map.nodes[clampedX][clampedY]) ? map.nodes[clampedX][clampedY] : null;
 }
@@ -325,12 +316,31 @@ class Character {
         if (this.pixiSprite && this.pixiSprite.parent) {
             this.pixiSprite.parent.removeChild(this.pixiSprite);
         }
+        if (this.pixiSprite && typeof this.pixiSprite.destroy === "function") {
+            this.pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.pixiSprite = null;
         if (this.fireSprite && this.fireSprite.parent) {
             this.fireSprite.parent.removeChild(this.fireSprite);
         }
+        if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
+            this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.fireSprite = null;
         if (this.hatGraphics && this.hatGraphics.parent) {
             this.hatGraphics.parent.removeChild(this.hatGraphics);
         }
+        if (this.hatGraphics && typeof this.hatGraphics.destroy === "function") {
+            this.hatGraphics.destroy();
+        }
+        this.hatGraphics = null;
+        if (this.shadowGraphics && this.shadowGraphics.parent) {
+            this.shadowGraphics.parent.removeChild(this.shadowGraphics);
+        }
+        if (this.shadowGraphics && typeof this.shadowGraphics.destroy === "function") {
+            this.shadowGraphics.destroy();
+        }
+        this.shadowGraphics = null;
     }
     getDirectionRow() {
         if (!this.direction) return 0;
@@ -1114,10 +1124,16 @@ class Wizard extends Character {
     }
 
     saveJson() {
+        const viewportX = (this.map && typeof this.map.wrapWorldX === "function")
+            ? this.map.wrapWorldX(viewport.x)
+            : viewport.x;
+        const viewportY = (this.map && typeof this.map.wrapWorldY === "function")
+            ? this.map.wrapWorldY(viewport.y)
+            : viewport.y;
         return {
             type: 'wizard',
-            x: this.x,
-            y: this.y,
+            x: (this.map && typeof this.map.wrapWorldX === "function") ? this.map.wrapWorldX(this.x) : this.x,
+            y: (this.map && typeof this.map.wrapWorldY === "function") ? this.map.wrapWorldY(this.y) : this.y,
             hp: this.hp,
             maxHp: this.maxHp,
             magic: this.magic,
@@ -1134,8 +1150,8 @@ class Wizard extends Character {
             spells: this.spells,
             inventory: this.inventory,
             viewport: {
-                x: viewport.x,
-                y: viewport.y
+                x: viewportX,
+                y: viewportY
             }
         };
     }
@@ -1168,6 +1184,12 @@ class Wizard extends Character {
         }
         if (data.spells !== undefined) this.spells = data.spells;
         if (data.inventory !== undefined) this.inventory = data.inventory;
+        if (this.map && typeof this.map.wrapWorldX === "function" && Number.isFinite(this.x)) {
+            this.x = this.map.wrapWorldX(this.x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function" && Number.isFinite(this.y)) {
+            this.y = this.map.wrapWorldY(this.y);
+        }
 
         this.node = this.map.worldToNode(this.x, this.y) || this.node;
         this.updateHitboxes();
@@ -1179,11 +1201,55 @@ class Wizard extends Character {
             centerViewport(this, 0, 0);
         }
 
-        // Keep loaded viewport valid for current map/screen bounds
-        const mapWorldWidth = (this.map && Number.isFinite(this.map.worldWidth)) ? this.map.worldWidth : mapWidth;
-        const mapWorldHeight = (this.map && Number.isFinite(this.map.worldHeight)) ? this.map.worldHeight : mapHeight;
-        viewport.x = Math.max(0, Math.min(viewport.x, mapWorldWidth - viewport.width));
-        viewport.y = Math.max(0, Math.min(viewport.y, mapWorldHeight - viewport.height));
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            viewport.x = this.map.wrapWorldX(viewport.x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            viewport.y = this.map.wrapWorldY(viewport.y);
+        }
+        // Keep loaded camera on the wizard's nearest torus copy.
+        if (
+            this.map &&
+            typeof this.map.shortestDeltaX === "function" &&
+            typeof this.map.shortestDeltaY === "function" &&
+            Number.isFinite(this.x) &&
+            Number.isFinite(this.y)
+        ) {
+            const centerX = viewport.x + viewport.width * 0.5;
+            const centerY = viewport.y + viewport.height * 0.5;
+            const nearestCenterX = this.x + this.map.shortestDeltaX(this.x, centerX);
+            const nearestCenterY = this.y + this.map.shortestDeltaY(this.y, centerY);
+            viewport.x += (nearestCenterX - centerX);
+            viewport.y += (nearestCenterY - centerY);
+        }
+        // Prevent stale interpolation from drawing wizard at pre-load coordinates.
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
+        if (typeof previousViewport !== "undefined") {
+            previousViewport.x = viewport.x;
+            previousViewport.y = viewport.y;
+        }
+        if (typeof interpolatedViewport !== "undefined") {
+            interpolatedViewport.x = viewport.x;
+            interpolatedViewport.y = viewport.y;
+        }
+        if (typeof mousePos !== "undefined") {
+            if (
+                typeof syncMouseWorldFromScreenWithViewport === "function" &&
+                Number.isFinite(mousePos.screenX) &&
+                Number.isFinite(mousePos.screenY)
+            ) {
+                syncMouseWorldFromScreenWithViewport();
+            } else {
+                mousePos.worldX = this.x;
+                mousePos.worldY = this.y;
+            }
+        }
+        if (typeof pointerLockAimWorld !== "undefined") {
+            pointerLockAimWorld.x = this.x;
+            pointerLockAimWorld.y = this.y;
+        }
 
         if (typeof this.refreshSpellSelector === 'function') {
             this.refreshSpellSelector();
@@ -1280,13 +1346,19 @@ class Animal extends Character {
     }
     get onScreen() {
         const safetyMargin = 5; // world units
-        this._onScreen = false;
         if (this.gone) return false;
-        if (this.x + this.width + safetyMargin > viewport.x && this.y + safetyMargin / xyratio > viewport.y) {
-            if (this.x - this.width - safetyMargin < viewport.x + viewport.width && this.y - this.height - safetyMargin / xyratio < viewport.y + viewport.height) {
-                this._onScreen = true;
-            }
-        }
+        const camera = viewport;
+        const centerX = camera.x + camera.width * 0.5;
+        const centerY = camera.y + camera.height * 0.5;
+        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(centerX, this.x)
+            : (this.x - centerX);
+        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(centerY, this.y)
+            : (this.y - centerY);
+        const maxX = camera.width * 0.5 + this.width + safetyMargin;
+        const maxY = camera.height * 0.5 + this.height + safetyMargin / xyratio;
+        this._onScreen = Math.abs(dx) <= maxX && Math.abs(dy) <= maxY;
         return this._onScreen;
     }
     flee() {
@@ -1661,14 +1733,45 @@ jQuery(() => {
 
     function syncMouseWorldFromScreenWithViewport() {
         if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY)) return;
-        mousePos.worldX = mousePos.screenX / viewscale + viewport.x;
-        mousePos.worldY = mousePos.screenY / (viewscale * xyratio) + viewport.y;
-        if (map && typeof map.wrapWorldX === "function" && Number.isFinite(mousePos.worldX)) {
-            mousePos.worldX = map.wrapWorldX(mousePos.worldX);
+        const world = screenToWorld(mousePos.screenX, mousePos.screenY);
+        const normalized = normalizeAimWorldPointForWizard(world.x, world.y);
+        mousePos.worldX = normalized.x;
+        mousePos.worldY = normalized.y;
+    }
+
+    function normalizeAimWorldPointForWizard(worldX, worldY) {
+        let outX = worldX;
+        let outY = worldY;
+        if (map && typeof map.wrapWorldX === "function" && Number.isFinite(outX)) {
+            outX = map.wrapWorldX(outX);
         }
-        if (map && typeof map.wrapWorldY === "function" && Number.isFinite(mousePos.worldY)) {
-            mousePos.worldY = map.wrapWorldY(mousePos.worldY);
+        if (map && typeof map.wrapWorldY === "function" && Number.isFinite(outY)) {
+            outY = map.wrapWorldY(outY);
         }
+        if (
+            wizard &&
+            map &&
+            typeof map.shortestDeltaX === "function" &&
+            typeof map.shortestDeltaY === "function" &&
+            Number.isFinite(wizard.x) &&
+            Number.isFinite(wizard.y) &&
+            Number.isFinite(outX) &&
+            Number.isFinite(outY)
+        ) {
+            outX = wizard.x + map.shortestDeltaX(wizard.x, outX);
+            outY = wizard.y + map.shortestDeltaY(wizard.y, outY);
+        }
+        return { x: outX, y: outY };
+    }
+
+    function getWizardAimVectorTo(worldX, worldY) {
+        const normalized = normalizeAimWorldPointForWizard(worldX, worldY);
+        return {
+            x: normalized.x - wizard.x,
+            y: normalized.y - wizard.y,
+            worldX: normalized.x,
+            worldY: normalized.y
+        };
     }
 
     function syncMouseScreenFromWorldWithViewport(useInterpolatedCamera = false) {
@@ -1681,8 +1784,14 @@ jQuery(() => {
         )
             ? interpolatedViewport
             : viewport;
-        mousePos.screenX = (pointerLockAimWorld.x - camera.x) * viewscale;
-        mousePos.screenY = (pointerLockAimWorld.y - camera.y) * viewscale * xyratio;
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(camera.x, pointerLockAimWorld.x)
+            : (pointerLockAimWorld.x - camera.x);
+        const dy = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(camera.y, pointerLockAimWorld.y)
+            : (pointerLockAimWorld.y - camera.y);
+        mousePos.screenX = dx * viewscale;
+        mousePos.screenY = dy * viewscale * xyratio;
     }
 
     function clampVirtualCursorToCanvas(paddingPx = 1) {
@@ -1708,13 +1817,16 @@ jQuery(() => {
     function ensurePointerLockAimInitialized() {
         if (Number.isFinite(pointerLockAimWorld.x) && Number.isFinite(pointerLockAimWorld.y)) return;
         if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
-            pointerLockAimWorld.x = mousePos.worldX;
-            pointerLockAimWorld.y = mousePos.worldY;
+            const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+            pointerLockAimWorld.x = normalized.x;
+            pointerLockAimWorld.y = normalized.y;
             return;
         }
         if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
-            pointerLockAimWorld.x = mousePos.screenX / viewscale + viewport.x;
-            pointerLockAimWorld.y = mousePos.screenY / (viewscale * xyratio) + viewport.y;
+            const world = screenToWorld(mousePos.screenX, mousePos.screenY);
+            const normalized = normalizeAimWorldPointForWizard(world.x, world.y);
+            pointerLockAimWorld.x = normalized.x;
+            pointerLockAimWorld.y = normalized.y;
             return;
         }
         if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
@@ -1800,12 +1912,14 @@ jQuery(() => {
                 mousePos.screenX = pendingPointerLockEntry.screenX;
                 mousePos.screenY = pendingPointerLockEntry.screenY;
                 if (Number.isFinite(pendingPointerLockEntry.worldX) && Number.isFinite(pendingPointerLockEntry.worldY)) {
-                    pointerLockAimWorld.x = pendingPointerLockEntry.worldX;
-                    pointerLockAimWorld.y = pendingPointerLockEntry.worldY;
+                    const normalized = normalizeAimWorldPointForWizard(pendingPointerLockEntry.worldX, pendingPointerLockEntry.worldY);
+                    pointerLockAimWorld.x = normalized.x;
+                    pointerLockAimWorld.y = normalized.y;
                 } else {
                     syncMouseWorldFromScreenWithViewport();
-                    pointerLockAimWorld.x = mousePos.worldX;
-                    pointerLockAimWorld.y = mousePos.worldY;
+                    const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                    pointerLockAimWorld.x = normalized.x;
+                    pointerLockAimWorld.y = normalized.y;
                 }
             } else {
                 ensurePointerLockAimInitialized();
@@ -1815,8 +1929,9 @@ jQuery(() => {
             }
             clampVirtualCursorToCanvas(1);
             syncMouseWorldFromScreenWithViewport();
-            pointerLockAimWorld.x = mousePos.worldX;
-            pointerLockAimWorld.y = mousePos.worldY;
+            const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+            pointerLockAimWorld.x = normalized.x;
+            pointerLockAimWorld.y = normalized.y;
             updateCursor();
         }
         pendingPointerLockEntry = null;
@@ -2020,16 +2135,18 @@ jQuery(() => {
                 if (cursorOverMenu) {
                     // Over menu UI, keep screen-space cursor pinned and derive world aim from it.
                     syncMouseWorldFromScreenWithViewport();
-                    pointerLockAimWorld.x = mousePos.worldX;
-                    pointerLockAimWorld.y = mousePos.worldY;
+                    const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                    pointerLockAimWorld.x = normalized.x;
+                    pointerLockAimWorld.y = normalized.y;
                 } else {
                     mousePos.worldX = pointerLockAimWorld.x;
                     mousePos.worldY = pointerLockAimWorld.y;
                     syncMouseScreenFromWorldWithViewport();
                     if (clampVirtualCursorToCanvas(1)) {
                         syncMouseWorldFromScreenWithViewport();
-                        pointerLockAimWorld.x = mousePos.worldX;
-                        pointerLockAimWorld.y = mousePos.worldY;
+                        const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                        pointerLockAimWorld.x = normalized.x;
+                        pointerLockAimWorld.y = normalized.y;
                     }
                 }
             } else if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
@@ -2039,8 +2156,9 @@ jQuery(() => {
             // Always face the mouse when a valid aim vector exists,
             // even when the wizard is not moving.
             if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
-                const faceX = mousePos.worldX - wizard.x;
-                const faceY = mousePos.worldY - wizard.y;
+                const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
+                const faceX = aim.x;
+                const faceY = aim.y;
                 if (Math.hypot(faceX, faceY) > 1e-6) {
                     wizard.turnToward(faceX, faceY);
                 }
@@ -2049,9 +2167,10 @@ jQuery(() => {
             // Calculate desired movement direction from input
             let moveVector = null;
             let moveOptions = {};
+            const forwardAim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
             const forwardVector = {
-                x: mousePos.worldX - wizard.x,
-                y: mousePos.worldY - wizard.y
+                x: forwardAim.x,
+                y: forwardAim.y
             };
             const movingForward = !!keysPressed['w'];
             const movingBackward = !!keysPressed['s'];
@@ -2105,20 +2224,25 @@ jQuery(() => {
                 const wizardDeltaY = wizard.y - wizardStartY;
                 pointerLockAimWorld.x += wizardDeltaX;
                 pointerLockAimWorld.y += wizardDeltaY;
-                mousePos.worldX = pointerLockAimWorld.x;
-                mousePos.worldY = pointerLockAimWorld.y;
+                const normalized = normalizeAimWorldPointForWizard(pointerLockAimWorld.x, pointerLockAimWorld.y);
+                pointerLockAimWorld.x = normalized.x;
+                pointerLockAimWorld.y = normalized.y;
+                mousePos.worldX = normalized.x;
+                mousePos.worldY = normalized.y;
             }
             if (pointerLockActive) {
                 if (isVirtualCursorOverMenuArea()) {
                     syncMouseWorldFromScreenWithViewport();
-                    pointerLockAimWorld.x = mousePos.worldX;
-                    pointerLockAimWorld.y = mousePos.worldY;
+                    const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                    pointerLockAimWorld.x = normalized.x;
+                    pointerLockAimWorld.y = normalized.y;
                 } else {
                     syncMouseScreenFromWorldWithViewport();
                     if (clampVirtualCursorToCanvas(1)) {
                         syncMouseWorldFromScreenWithViewport();
-                        pointerLockAimWorld.x = mousePos.worldX;
-                        pointerLockAimWorld.y = mousePos.worldY;
+                        const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                        pointerLockAimWorld.x = normalized.x;
+                        pointerLockAimWorld.y = normalized.y;
                     }
                 }
             }
@@ -2351,18 +2475,23 @@ jQuery(() => {
                 mousePos.screenY += dy;
                 clampVirtualCursorToCanvas(1);
                 syncMouseWorldFromScreenWithViewport();
-                pointerLockAimWorld.x = mousePos.worldX;
-                pointerLockAimWorld.y = mousePos.worldY;
+                const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                pointerLockAimWorld.x = normalized.x;
+                pointerLockAimWorld.y = normalized.y;
             } else {
                 pointerLockAimWorld.x += dx / viewscale;
                 pointerLockAimWorld.y += dy / (viewscale * xyratio);
-                mousePos.worldX = pointerLockAimWorld.x;
-                mousePos.worldY = pointerLockAimWorld.y;
+                const normalized = normalizeAimWorldPointForWizard(pointerLockAimWorld.x, pointerLockAimWorld.y);
+                pointerLockAimWorld.x = normalized.x;
+                pointerLockAimWorld.y = normalized.y;
+                mousePos.worldX = normalized.x;
+                mousePos.worldY = normalized.y;
                 syncMouseScreenFromWorldWithViewport();
                 if (clampVirtualCursorToCanvas(1)) {
                     syncMouseWorldFromScreenWithViewport();
-                    pointerLockAimWorld.x = mousePos.worldX;
-                    pointerLockAimWorld.y = mousePos.worldY;
+                    const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
+                    pointerLockAimWorld.x = normalized.x;
+                    pointerLockAimWorld.y = normalized.y;
                 }
             }
         } else {
@@ -2374,8 +2503,9 @@ jQuery(() => {
             mousePos.screenY = screenY;
             // Store exact world coordinates for pixel-accurate aiming
             const worldCoors = screenToWorld(screenX, screenY);
-            mousePos.worldX = worldCoors.x;
-            mousePos.worldY = worldCoors.y;
+            const normalized = normalizeAimWorldPointForWizard(worldCoors.x, worldCoors.y);
+            mousePos.worldX = normalized.x;
+            mousePos.worldY = normalized.y;
         }
 
         // Also store hex tile for movement
@@ -2491,14 +2621,15 @@ jQuery(() => {
                     const screenY = event.clientY - rect.top;
                     return screenToWorld(screenX, screenY);
                 })();
+            const aim = getWizardAimVectorTo(worldCoors.x, worldCoors.y);
             // Stop wizard movement by setting destination to current node
             wizard.destination = null;
             wizard.path = [];
             wizard.travelFrames = 0;
             // Turn and cast at exact click coordinates.
-            wizard.turnToward(worldCoors.x - wizard.x, worldCoors.y - wizard.y);
+            wizard.turnToward(aim.x, aim.y);
             if (wizard.currentSpell === "wall") return;
-            SpellSystem.castWizardSpell(wizard, worldCoors.x, worldCoors.y);
+            SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
             // Prevent keyup quick-cast from firing a duplicate cast.
             spacebarDownAt = null;
         }
@@ -2599,8 +2730,9 @@ jQuery(() => {
                     mousePos.worldX !== undefined &&
                     mousePos.worldY !== undefined
                 ) {
-                    wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
-                    SpellSystem.castWizardSpell(wizard, mousePos.worldX, mousePos.worldY);
+                    const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
+                    wizard.turnToward(aim.x, aim.y);
+                    SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
                 }
             }
         } else if ((event.key === "a" || event.key === "A") && !event.repeat) {
@@ -2670,8 +2802,12 @@ jQuery(() => {
                         message('Loaded /assets/saves/savefile.json');
                         console.log('Game loaded from fixed save file');
                     } else {
-                        message('Failed to load fixed save file');
+                        const reason = (result && result.reason) ? String(result.reason) : 'unknown';
+                        message(`Failed to load fixed save file (${reason})`);
                         console.error('Failed to load fixed save file:', result);
+                        if (result && result.error) {
+                            console.error('Fixed save load error detail:', result.error);
+                        }
                     }
                 });
             } else {
@@ -2741,8 +2877,9 @@ jQuery(() => {
             if (downAt && (now - downAt) <= 250) {
                 // Quick tap: cast immediately
                 if (wizard && mousePos.worldX !== undefined && mousePos.worldY !== undefined) {
-                    wizard.turnToward(mousePos.worldX - wizard.x, mousePos.worldY - wizard.y);
-                    SpellSystem.castWizardSpell(wizard, mousePos.worldX, mousePos.worldY);
+                    const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
+                    wizard.turnToward(aim.x, aim.y);
+                    SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
                 }
             }
         }
