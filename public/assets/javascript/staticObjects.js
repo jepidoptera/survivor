@@ -1400,6 +1400,7 @@ class Road extends StaticObject {
     static _pixelsPerWorldUnit = (128 * 2) / 1.1547;
     static _edgeFadePx = 64;
     static _phaseQuantPx = 8;
+    static _maxTextureCacheEntries = 384;
     static _textureScaleByName = {
         "cobblestones.png": { x: 0.5, y: 0.5, squashByXyRatio: true }
     };
@@ -1718,10 +1719,31 @@ class Road extends StaticObject {
             ? fillTexturePath
             : Road._defaultFillTexturePath;
         const key = `${Road._textureCacheVersion}:${Road._edgeFadePx}:${q}:${textureKey}:${mask}:${qx}:${qy}`;
+        if (!Road._textureCache.has(key) && Road._textureCache.size >= Road._maxTextureCacheEntries) {
+            const firstKey = Road._textureCache.keys().next().value;
+            if (firstKey !== undefined) {
+                Road._textureCache.delete(firstKey);
+            }
+        }
         if (!Road._textureCache.has(key)) {
             Road._textureCache.set(key, Road._buildTextureForMask(mask, qx, qy, textureKey));
         }
         return Road._textureCache.get(key);
+    }
+
+    static clearRuntimeCaches(options = {}) {
+        const destroyTextures = !!(options && options.destroyTextures);
+        if (Road._textureCache && typeof Road._textureCache.forEach === 'function') {
+            if (destroyTextures) {
+                Road._textureCache.forEach(tex => {
+                    if (tex && typeof tex.destroy === 'function') tex.destroy(true);
+                });
+            }
+            Road._textureCache.clear();
+        }
+        if (Road._geometryCache && typeof Road._geometryCache.clear === 'function') {
+            Road._geometryCache.clear();
+        }
     }
     constructor(location, textures, map, options = {}) {
         // Create initial textures array (will be populated by updateTexture)
@@ -1818,7 +1840,7 @@ class Road extends StaticObject {
         const fillTexture = Road._getFillTexture(this.fillTexturePath);
         if (fillTexture && fillTexture.baseTexture && !fillTexture.baseTexture.valid) {
             fillTexture.baseTexture.once('loaded', () => {
-                Road._textureCache.clear();
+                Road.clearRuntimeCaches();
                 this.updateTexture(neighborDirectionsOverride);
             });
         }
