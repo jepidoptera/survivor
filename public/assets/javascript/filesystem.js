@@ -1,5 +1,196 @@
 // filesystem.js - Handles saving and loading game state
 
+const lazyRoadStore = {
+    recordsByKey: new Map(),
+    loadedKeys: new Set()
+};
+const lazyTreeStore = {
+    recordsByKey: new Map(),
+    loadedKeys: new Set()
+};
+
+function roadRecordKey(x, y) {
+    const qx = Math.round((Number(x) || 0) * 1000) / 1000;
+    const qy = Math.round((Number(y) || 0) * 1000) / 1000;
+    return `${qx},${qy}`;
+}
+
+function toRoadSaveRecord(data) {
+    if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return null;
+    const record = {
+        type: 'road',
+        x: Number(data.x),
+        y: Number(data.y)
+    };
+    if (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0) {
+        record.fillTexturePath = data.fillTexturePath;
+    }
+    return record;
+}
+
+function toTreeSaveRecord(data) {
+    if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return null;
+    const record = {
+        type: 'tree',
+        x: Number(data.x),
+        y: Number(data.y)
+    };
+    if (Number.isFinite(data.hp)) record.hp = Number(data.hp);
+    if (typeof data.isOnFire === 'boolean') record.isOnFire = data.isOnFire;
+    if (Number.isInteger(data.textureIndex)) record.textureIndex = data.textureIndex;
+    if (Number.isFinite(data.size)) record.size = Number(data.size);
+    return record;
+}
+
+function resetLazyRoadStore() {
+    lazyRoadStore.recordsByKey.clear();
+    lazyRoadStore.loadedKeys.clear();
+}
+function resetLazyTreeStore() {
+    lazyTreeStore.recordsByKey.clear();
+    lazyTreeStore.loadedKeys.clear();
+}
+
+function registerLazyRoadRecord(data, loaded = false) {
+    const record = toRoadSaveRecord(data);
+    if (!record) return false;
+    const key = roadRecordKey(record.x, record.y);
+    if (!lazyRoadStore.recordsByKey.has(key)) {
+        lazyRoadStore.recordsByKey.set(key, record);
+    }
+    if (loaded) {
+        lazyRoadStore.loadedKeys.add(key);
+    }
+    return true;
+}
+function registerLazyTreeRecord(data, loaded = false) {
+    const record = toTreeSaveRecord(data);
+    if (!record) return false;
+    const key = roadRecordKey(record.x, record.y);
+    if (!lazyTreeStore.recordsByKey.has(key)) {
+        lazyTreeStore.recordsByKey.set(key, record);
+    }
+    if (loaded) {
+        lazyTreeStore.loadedKeys.add(key);
+    }
+    return true;
+}
+
+function getAllRoadSaveRecords(loadedRoadRecords = []) {
+    const out = [];
+    const seen = new Set();
+
+    if (Array.isArray(loadedRoadRecords)) {
+        loadedRoadRecords.forEach(record => {
+            const normalized = toRoadSaveRecord(record);
+            if (!normalized) return;
+            const key = roadRecordKey(normalized.x, normalized.y);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(normalized);
+        });
+    }
+
+    lazyRoadStore.recordsByKey.forEach((record, key) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(record);
+    });
+
+    return out;
+}
+function getAllTreeSaveRecords(loadedTreeRecords = []) {
+    const out = [];
+    const seen = new Set();
+
+    if (Array.isArray(loadedTreeRecords)) {
+        loadedTreeRecords.forEach(record => {
+            const normalized = toTreeSaveRecord(record);
+            if (!normalized) return;
+            const key = roadRecordKey(normalized.x, normalized.y);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(normalized);
+        });
+    }
+
+    lazyTreeStore.recordsByKey.forEach((record, key) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(record);
+    });
+
+    return out;
+}
+
+function hydrateVisibleLazyRoads(options = {}) {
+    if (!map || !viewport || lazyRoadStore.recordsByKey.size === 0) return 0;
+    const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
+    const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    const centerX = camera.x + viewport.width * 0.5;
+    const centerY = camera.y + viewport.height * 0.5;
+    const maxX = viewport.width * 0.5 + paddingWorld;
+    const maxY = viewport.height * 0.5 + paddingWorld;
+
+    let hydrated = 0;
+    for (const [key, record] of lazyRoadStore.recordsByKey) {
+        if (lazyRoadStore.loadedKeys.has(key)) continue;
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(centerX, record.x)
+            : (record.x - centerX);
+        const dy = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(centerY, record.y)
+            : (record.y - centerY);
+        if (Math.abs(dx) > maxX || Math.abs(dy) > maxY) continue;
+        const created = StaticObject.loadJson(record, map);
+        if (created) {
+            lazyRoadStore.loadedKeys.add(key);
+            hydrated += 1;
+            if (hydrated >= maxPerFrame) break;
+        }
+    }
+    return hydrated;
+}
+function hydrateVisibleLazyTrees(options = {}) {
+    if (!map || !viewport || lazyTreeStore.recordsByKey.size === 0) return 0;
+    const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
+    const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    const centerX = camera.x + viewport.width * 0.5;
+    const centerY = camera.y + viewport.height * 0.5;
+    const maxX = viewport.width * 0.5 + paddingWorld;
+    const maxY = viewport.height * 0.5 + paddingWorld;
+
+    let hydrated = 0;
+    for (const [key, record] of lazyTreeStore.recordsByKey) {
+        if (lazyTreeStore.loadedKeys.has(key)) continue;
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(centerX, record.x)
+            : (record.x - centerX);
+        const dy = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(centerY, record.y)
+            : (record.y - centerY);
+        if (Math.abs(dx) > maxX || Math.abs(dy) > maxY) continue;
+        const created = StaticObject.loadJson(record, map);
+        if (created) {
+            lazyTreeStore.loadedKeys.add(key);
+            hydrated += 1;
+            if (hydrated >= maxPerFrame) break;
+        }
+    }
+    return hydrated;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.hydrateVisibleLazyRoads = hydrateVisibleLazyRoads;
+    globalThis.hydrateVisibleLazyTrees = hydrateVisibleLazyTrees;
+}
+
 function encodeGroundTiles(mapRef) {
     if (!mapRef || !mapRef.nodes) return null;
     let out = "";
@@ -63,6 +254,8 @@ function saveGameState() {
         roof: (roof && typeof roof.saveJson === 'function') ? roof.saveJson() : null
     };
 
+    const loadedRoadRecords = [];
+    const loadedTreeRecords = [];
     // Collect all static objects from the map (dedupe by object identity)
     const seenStaticObjects = new Set();
     for (let x = 0; x < map.width; x++) {
@@ -73,11 +266,23 @@ function saveGameState() {
             node.objects.forEach(obj => {
                 if (obj && !obj.gone && !seenStaticObjects.has(obj)) {
                     seenStaticObjects.add(obj);
+                    if (obj.type === 'road') {
+                        const roadRecord = toRoadSaveRecord(obj);
+                        if (roadRecord) loadedRoadRecords.push(roadRecord);
+                        return;
+                    }
+                    if (obj.type === 'tree') {
+                        const treeRecord = toTreeSaveRecord(obj);
+                        if (treeRecord) loadedTreeRecords.push(treeRecord);
+                        return;
+                    }
                     saveData.staticObjects.push(obj.saveJson());
                 }
             });
         }
     }
+    saveData.staticObjects.push(...getAllRoadSaveRecords(loadedRoadRecords));
+    saveData.staticObjects.push(...getAllTreeSaveRecords(loadedTreeRecords));
 
     return saveData;
 }
@@ -124,6 +329,31 @@ function loadGameState(saveData) {
     }
 
     try {
+        if (typeof globalThis !== "undefined") {
+            globalThis.lastLoadGameStateError = null;
+        }
+        const destroyDisplayObject = (displayObj) => {
+            if (!displayObj) return;
+            if (displayObj.parent && typeof displayObj.parent.removeChild === "function") {
+                displayObj.parent.removeChild(displayObj);
+            }
+            if (typeof displayObj.destroy === "function") {
+                try {
+                    const isSprite = (typeof PIXI !== "undefined") && (displayObj instanceof PIXI.Sprite);
+                    if (isSprite) {
+                        displayObj.destroy({ children: true, texture: false, baseTexture: false });
+                    } else {
+                        displayObj.destroy({ children: true });
+                    }
+                } catch (e) {
+                    try {
+                        displayObj.destroy();
+                    } catch (_ignored) {}
+                }
+            }
+        };
+        resetLazyRoadStore();
+        resetLazyTreeStore();
         // Clear active projectiles and timers from previous runtime state
         if (Array.isArray(projectiles)) {
             projectiles.forEach(projectile => {
@@ -134,6 +364,7 @@ function loadGameState(saveData) {
                 if (projectile.pixiSprite && projectile.pixiSprite.parent) {
                     projectile.pixiSprite.parent.removeChild(projectile.pixiSprite);
                 }
+                destroyDisplayObject(projectile.pixiSprite);
             });
             projectiles.length = 0;
         }
@@ -150,9 +381,8 @@ function loadGameState(saveData) {
                 animal.delete();
             } else {
                 animal.gone = true;
-                if (animal.pixiSprite && animal.pixiSprite.parent) {
-                    animal.pixiSprite.parent.removeChild(animal.pixiSprite);
-                }
+                destroyDisplayObject(animal.pixiSprite);
+                destroyDisplayObject(animal.fireSprite);
             }
         });
         animals.length = 0;
@@ -184,10 +414,23 @@ function loadGameState(saveData) {
             if (typeof obj.removeFromNodes === "function") {
                 obj.removeFromNodes();
             }
-            if (obj.pixiSprite && obj.pixiSprite.parent) {
-                obj.pixiSprite.parent.removeChild(obj.pixiSprite);
-            }
+            destroyDisplayObject(obj.pixiSprite);
+            destroyDisplayObject(obj.fireSprite);
         });
+
+        // Drop road-generated runtime caches now that old instances are gone.
+        if (typeof Road !== "undefined") {
+            if (typeof Road.clearRuntimeCaches === "function") {
+                Road.clearRuntimeCaches({ destroyTextures: true });
+            } else {
+                if (Road._textureCache && typeof Road._textureCache.clear === "function") {
+                    Road._textureCache.clear();
+                }
+                if (Road._geometryCache && typeof Road._geometryCache.clear === "function") {
+                    Road._geometryCache.clear();
+                }
+            }
+        }
 
         // Restore static objects (dedupe entries in save payload for backward compatibility)
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
@@ -196,6 +439,15 @@ function loadGameState(saveData) {
                 const key = JSON.stringify(objData);
                 if (restoredKeys.has(key)) return;
                 restoredKeys.add(key);
+
+                if (objData && objData.type === 'road') {
+                    registerLazyRoadRecord(objData, false);
+                    return;
+                }
+                if (objData && objData.type === 'tree') {
+                    registerLazyTreeRecord(objData, false);
+                    return;
+                }
 
                 let obj = null;
                 if (objData.type === 'wall') {
@@ -213,6 +465,9 @@ function loadGameState(saveData) {
             decodeGroundTiles(map, saveData.groundTiles);
         }
 
+        hydrateVisibleLazyRoads({ maxPerFrame: 192, paddingWorld: 12 });
+        hydrateVisibleLazyTrees({ maxPerFrame: 256, paddingWorld: 12 });
+
         // Repair any stale blocking counters from older runtime versions.
         for (let x = 0; x < map.width; x++) {
             for (let y = 0; y < map.height; y++) {
@@ -226,9 +481,7 @@ function loadGameState(saveData) {
 
         // Restore roof state from save (fallback to existing roof if missing).
         if (saveData.roof && typeof Roof !== 'undefined' && typeof Roof.loadJson === 'function') {
-            if (roof && roof.pixiMesh && roof.pixiMesh.parent) {
-                roof.pixiMesh.parent.removeChild(roof.pixiMesh);
-            }
+            destroyDisplayObject(roof && roof.pixiMesh ? roof.pixiMesh : null);
             const loadedRoof = Roof.loadJson(saveData.roof);
             if (loadedRoof) {
                 roof = loadedRoof;
@@ -236,11 +489,20 @@ function loadGameState(saveData) {
         }
 
         // Wizard.loadJson restores viewport (or centers when missing in old saves)
+        if (typeof clearGroundChunkCache === "function") {
+            clearGroundChunkCache();
+        }
+        if (typeof invalidateGroundChunks === "function") {
+            invalidateGroundChunks();
+        }
         drawCanvas();
 
         return true;
     } catch (e) {
         console.error("Error loading game state:", e);
+        if (typeof globalThis !== "undefined") {
+            globalThis.lastLoadGameStateError = e;
+        }
         return false;
     }
 }
@@ -346,7 +608,14 @@ async function loadGameStateFromServerFile() {
             return { ok: false, reason: payload && payload.reason ? payload.reason : 'request-failed' };
         }
         const loaded = loadGameState(payload.data);
-        return loaded ? { ok: true } : { ok: false, reason: "load-failed" };
+        if (loaded) return { ok: true };
+        return {
+            ok: false,
+            reason: "load-failed",
+            error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
+                ? globalThis.lastLoadGameStateError
+                : null
+        };
     } catch (e) {
         return { ok: false, reason: "network-failed", error: e };
     }
@@ -364,6 +633,8 @@ if (typeof module !== 'undefined' && module.exports) {
         importSaveFile,
         pickAndLoadSaveFile,
         saveGameStateToServerFile,
-        loadGameStateFromServerFile
+        loadGameStateFromServerFile,
+        hydrateVisibleLazyRoads,
+        hydrateVisibleLazyTrees
     };
 }
