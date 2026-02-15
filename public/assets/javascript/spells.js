@@ -529,6 +529,12 @@ class Vanish extends Spell {
             }
             this.x += this.movement.x;
             this.y += this.movement.y;
+            if (this.map && typeof this.map.wrapWorldX === "function") {
+                this.x = this.map.wrapWorldX(this.x);
+            }
+            if (this.map && typeof this.map.wrapWorldY === "function") {
+                this.y = this.map.wrapWorldY(this.y);
+            }
             this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
             
             if (!this.forcedTarget) {
@@ -538,15 +544,16 @@ class Vanish extends Spell {
 
             // Check if reached target
             if (this.traveledDist >= this.totalDist) {
-                // If cursor was over a staticObject, only hit that object
+                // If cursor was over a staticObject, only hit that object.
                 if (this.forcedTarget) {
                     const obj = this.forcedTarget;
-                    if (!obj.vanishing) {
+                    if (obj && !obj.gone && !obj.vanishing) {
                         this.vanishTarget(obj);
                     }
-                    this.deactivate();
-                    return;
                 }
+                // Always end projectile at max travel distance (including misses).
+                this.deactivate();
+                return;
             }
         }, 1000 / frameRate);
         return this;
