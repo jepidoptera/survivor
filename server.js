@@ -100,6 +100,32 @@ app.get('/api/flooring', (req, res) => {
     }
 });
 
+app.get('/api/placeables', (req, res) => {
+    try {
+        const imageRoot = path.join(__dirname, 'public', 'assets', 'images');
+        const categories = ['flowers', 'windows', 'doors', 'furniture'];
+        const out = {};
+        categories.forEach(category => {
+            const dir = path.join(imageRoot, category);
+            if (!fs.existsSync(dir)) {
+                out[category] = [];
+                return;
+            }
+            const files = fs.readdirSync(dir, { withFileTypes: true })
+                .filter(entry => entry.isFile())
+                .map(entry => entry.name)
+                .filter(name => /\.(png|jpg|jpeg|webp|gif)$/i.test(name))
+                .sort((a, b) => a.localeCompare(b))
+                .map(name => `/assets/images/${category}/${encodeURIComponent(name)}`);
+            out[category] = files;
+        });
+        return res.json({ ok: true, categories: out });
+    } catch (e) {
+        console.error('Failed to read placeables directories:', e);
+        return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
 app.listen(port);
 
 function generateToken() {
