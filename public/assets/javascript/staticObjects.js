@@ -38,9 +38,37 @@ function valueOr(value, fallback) {
     return Number.isFinite(value) ? Number(value) : fallback;
 }
 
-function resolveCircleRadius(spec, item, fallbackRadius) {
+function shouldScaleHitboxWithItem(spec) {
+    if (!spec || typeof spec !== "object") return true;
+    if (typeof spec.scaleWithItem === "boolean") return spec.scaleWithItem;
+    return true;
+}
+
+function resolveHitboxScaleContext(spec, item, fallbackBaseWidth = 1, fallbackBaseHeight = 1) {
+    const baseWidth = Math.max(
+        1e-6,
+        Number.isFinite(spec && spec.baseWidth) ? Number(spec.baseWidth) : fallbackBaseWidth
+    );
+    const baseHeight = Math.max(
+        1e-6,
+        Number.isFinite(spec && spec.baseHeight) ? Number(spec.baseHeight) : fallbackBaseHeight
+    );
+    const scaleX = Number.isFinite(item && item.width) ? (item.width / baseWidth) : 1;
+    const scaleY = Number.isFinite(item && item.height) ? (item.height / baseHeight) : 1;
+    const radiusScale = (Math.abs(scaleX) + Math.abs(scaleY)) * 0.5;
+    return {
+        scaleX: Number.isFinite(scaleX) ? scaleX : 1,
+        scaleY: Number.isFinite(scaleY) ? scaleY : 1,
+        radiusScale: Number.isFinite(radiusScale) ? radiusScale : 1
+    };
+}
+
+function resolveCircleRadius(spec, item, fallbackRadius, scaleContext) {
     if (!spec || typeof spec !== "object") return fallbackRadius;
-    if (Number.isFinite(spec.radius)) return Number(spec.radius);
+    const scaleRadius = shouldScaleHitboxWithItem(spec)
+        ? valueOr(scaleContext && scaleContext.radiusScale, 1)
+        : 1;
+    if (Number.isFinite(spec.radius)) return Number(spec.radius) * scaleRadius;
     if (Number.isFinite(spec.radiusFromWidthMultiplier)) return item.width * Number(spec.radiusFromWidthMultiplier);
     if (Number.isFinite(spec.radiusFromHeightMultiplier)) return item.height * Number(spec.radiusFromHeightMultiplier);
     if (Number.isFinite(spec.radiusFromMaxDimensionMultiplier)) return Math.max(item.width, item.height) * Number(spec.radiusFromMaxDimensionMultiplier);
@@ -51,68 +79,78 @@ function resolveCircleRadius(spec, item, fallbackRadius) {
     return fallbackRadius;
 }
 
-function resolveHitboxOffsetY(spec, item) {
+function resolveHitboxOffsetY(spec, item, scaleContext) {
     if (!spec || typeof spec !== "object") return 0;
-    let yOffset = valueOr(spec.yOffset, 0);
+    const scaleY = shouldScaleHitboxWithItem(spec)
+        ? valueOr(scaleContext && scaleContext.scaleY, 1)
+        : 1;
+    let yOffset = valueOr(spec.yOffset, 0) * scaleY;
     if (Number.isFinite(spec.yOffsetFromHeightMultiplier)) yOffset += item.height * Number(spec.yOffsetFromHeightMultiplier);
     if (Number.isFinite(spec.yOffsetFromWidthMultiplier)) yOffset += item.width * Number(spec.yOffsetFromWidthMultiplier);
     if (Number.isFinite(spec.yOffsetFromMaxDimensionMultiplier)) yOffset += Math.max(item.width, item.height) * Number(spec.yOffsetFromMaxDimensionMultiplier);
     return yOffset;
 }
 
-function resolveHitboxOffsetX(spec, item) {
+function resolveHitboxOffsetX(spec, item, scaleContext) {
     if (!spec || typeof spec !== "object") return 0;
-    let xOffset = valueOr(spec.xOffset, 0);
+    const scaleX = shouldScaleHitboxWithItem(spec)
+        ? valueOr(scaleContext && scaleContext.scaleX, 1)
+        : 1;
+    let xOffset = valueOr(spec.xOffset, 0) * scaleX;
     if (Number.isFinite(spec.xOffsetFromWidthMultiplier)) xOffset += item.width * Number(spec.xOffsetFromWidthMultiplier);
     if (Number.isFinite(spec.xOffsetFromHeightMultiplier)) xOffset += item.height * Number(spec.xOffsetFromHeightMultiplier);
     if (Number.isFinite(spec.xOffsetFromMaxDimensionMultiplier)) xOffset += Math.max(item.width, item.height) * Number(spec.xOffsetFromMaxDimensionMultiplier);
     return xOffset;
 }
 
-function buildCircleHitboxFromSpec(spec, item, fallbackRadius) {
-    const xOffset = resolveHitboxOffsetX(spec, item);
-    const yOffset = resolveHitboxOffsetY(spec, item);
-    const radius = Math.max(0.01, resolveCircleRadius(spec, item, fallbackRadius));
+function buildCircleHitboxFromSpec(spec, item, fallbackRadius, scaleContext) {
+    const xOffset = resolveHitboxOffsetX(spec, item, scaleContext);
+    const yOffset = resolveHitboxOffsetY(spec, item, scaleContext);
+    const radius = Math.max(0.01, resolveCircleRadius(spec, item, fallbackRadius, scaleContext));
     return new CircleHitbox(item.x + xOffset, item.y + yOffset, radius);
 }
 
-function resolvePolygonPointCoordinate(pointSpec, axis, item) {
+function resolvePolygonPointCoordinate(pointSpec, axis, item, scaleContext, scaleWithItem = true) {
     if (!pointSpec || typeof pointSpec !== "object") return 0;
     const keyBase = axis === "x" ? "x" : "y";
     const widthKey = `${keyBase}FromWidthMultiplier`;
     const heightKey = `${keyBase}FromHeightMultiplier`;
     const maxKey = `${keyBase}FromMaxDimensionMultiplier`;
     const offsetKey = `${keyBase}Offset`;
+    const axisScale = scaleWithItem
+        ? valueOr(scaleContext && (axis === "x" ? scaleContext.scaleX : scaleContext.scaleY), 1)
+        : 1;
     let out = 0;
-    if (Number.isFinite(pointSpec[keyBase])) out += Number(pointSpec[keyBase]);
-    if (Number.isFinite(pointSpec[offsetKey])) out += Number(pointSpec[offsetKey]);
+    if (Number.isFinite(pointSpec[keyBase])) out += Number(pointSpec[keyBase]) * axisScale;
+    if (Number.isFinite(pointSpec[offsetKey])) out += Number(pointSpec[offsetKey]) * axisScale;
     if (Number.isFinite(pointSpec[widthKey])) out += item.width * Number(pointSpec[widthKey]);
     if (Number.isFinite(pointSpec[heightKey])) out += item.height * Number(pointSpec[heightKey]);
     if (Number.isFinite(pointSpec[maxKey])) out += Math.max(item.width, item.height) * Number(pointSpec[maxKey]);
     return out;
 }
 
-function buildPolygonHitboxFromSpec(spec, item) {
+function buildPolygonHitboxFromSpec(spec, item, scaleContext) {
     if (!spec || typeof spec !== "object" || !Array.isArray(spec.points)) return null;
+    const scaleWithItem = shouldScaleHitboxWithItem(spec);
     const points = spec.points
         .map(point => ({
-            x: item.x + resolvePolygonPointCoordinate(point, "x", item),
-            y: item.y + resolvePolygonPointCoordinate(point, "y", item)
+            x: item.x + resolvePolygonPointCoordinate(point, "x", item, scaleContext, scaleWithItem),
+            y: item.y + resolvePolygonPointCoordinate(point, "y", item, scaleContext, scaleWithItem)
         }))
         .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
     if (points.length < 3) return null;
     return new PolygonHitbox(points);
 }
 
-function buildHitboxFromSpec(spec, item, fallbackRadius) {
+function buildHitboxFromSpec(spec, item, fallbackRadius, scaleContext) {
     if (!spec || typeof spec !== "object") {
-        return buildCircleHitboxFromSpec({}, item, fallbackRadius);
+        return buildCircleHitboxFromSpec({}, item, fallbackRadius, scaleContext);
     }
     if (spec.type === "polygon") {
-        const polygon = buildPolygonHitboxFromSpec(spec, item);
+        const polygon = buildPolygonHitboxFromSpec(spec, item, scaleContext);
         if (polygon) return polygon;
     }
-    return buildCircleHitboxFromSpec(spec, item, fallbackRadius);
+    return buildCircleHitboxFromSpec(spec, item, fallbackRadius, scaleContext);
 }
 
 function resolvePlaceableMetadataEntry(doc, texturePath) {
@@ -631,8 +669,16 @@ class PlacedObject extends StaticObject {
 
         const defaultGroundRadius = Math.max(0.12, this.width * 0.2);
         const defaultVisualRadius = Math.max(this.width, this.height) * 0.5;
-        this.groundPlaneHitbox = buildHitboxFromSpec(metaEntry.groundPlaneHitbox, this, defaultGroundRadius);
-        this.visualHitbox = buildHitboxFromSpec(metaEntry.visualHitbox, this, defaultVisualRadius);
+        const baseWidth = Number.isFinite(metaEntry.hitboxBaseWidth)
+            ? Number(metaEntry.hitboxBaseWidth)
+            : (Number.isFinite(metaEntry.width) ? Number(metaEntry.width) : 1);
+        const baseHeight = Number.isFinite(metaEntry.hitboxBaseHeight)
+            ? Number(metaEntry.hitboxBaseHeight)
+            : (Number.isFinite(metaEntry.height) ? Number(metaEntry.height) : 1);
+        const groundScaleContext = resolveHitboxScaleContext(metaEntry.groundPlaneHitbox, this, baseWidth, baseHeight);
+        const visualScaleContext = resolveHitboxScaleContext(metaEntry.visualHitbox, this, baseWidth, baseHeight);
+        this.groundPlaneHitbox = buildHitboxFromSpec(metaEntry.groundPlaneHitbox, this, defaultGroundRadius, groundScaleContext);
+        this.visualHitbox = buildHitboxFromSpec(metaEntry.visualHitbox, this, defaultVisualRadius, visualScaleContext);
     }
 
     async applyPlaceableMetadataFromServer() {
