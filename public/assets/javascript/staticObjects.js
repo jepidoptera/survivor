@@ -1,3 +1,133 @@
+const placeableMetadataByCategory = new Map();
+const placeableMetadataFetchPromises = new Map();
+
+function normalizeTextureBasename(texturePath) {
+    if (typeof texturePath !== "string" || texturePath.length === 0) return "";
+    const rawName = texturePath.split("/").pop() || "";
+    try {
+        return decodeURIComponent(rawName);
+    } catch (_) {
+        return rawName;
+    }
+}
+
+async function fetchPlaceableMetadataForCategory(category) {
+    const safeCategory = (typeof category === "string" && category.length > 0) ? category : "doors";
+    if (placeableMetadataByCategory.has(safeCategory)) {
+        return placeableMetadataByCategory.get(safeCategory);
+    }
+    if (placeableMetadataFetchPromises.has(safeCategory)) {
+        return placeableMetadataFetchPromises.get(safeCategory);
+    }
+    const request = fetch(`/assets/images/${encodeURIComponent(safeCategory)}/items.json`, { cache: "no-cache" })
+        .then(async response => {
+            if (!response.ok) return null;
+            const parsed = await response.json();
+            placeableMetadataByCategory.set(safeCategory, parsed);
+            return parsed;
+        })
+        .catch(() => null)
+        .finally(() => {
+            placeableMetadataFetchPromises.delete(safeCategory);
+        });
+    placeableMetadataFetchPromises.set(safeCategory, request);
+    return request;
+}
+
+function valueOr(value, fallback) {
+    return Number.isFinite(value) ? Number(value) : fallback;
+}
+
+function resolveCircleRadius(spec, item, fallbackRadius) {
+    if (!spec || typeof spec !== "object") return fallbackRadius;
+    if (Number.isFinite(spec.radius)) return Number(spec.radius);
+    if (Number.isFinite(spec.radiusFromWidthMultiplier)) return item.width * Number(spec.radiusFromWidthMultiplier);
+    if (Number.isFinite(spec.radiusFromHeightMultiplier)) return item.height * Number(spec.radiusFromHeightMultiplier);
+    if (Number.isFinite(spec.radiusFromMaxDimensionMultiplier)) return Math.max(item.width, item.height) * Number(spec.radiusFromMaxDimensionMultiplier);
+    if (Number.isFinite(spec.radiusFromSizeMultiplier)) {
+        const sizeBase = Number.isFinite(item.size) ? item.size : Math.max(item.width, item.height);
+        return sizeBase * Number(spec.radiusFromSizeMultiplier);
+    }
+    return fallbackRadius;
+}
+
+function resolveHitboxOffsetY(spec, item) {
+    if (!spec || typeof spec !== "object") return 0;
+    let yOffset = valueOr(spec.yOffset, 0);
+    if (Number.isFinite(spec.yOffsetFromHeightMultiplier)) yOffset += item.height * Number(spec.yOffsetFromHeightMultiplier);
+    if (Number.isFinite(spec.yOffsetFromWidthMultiplier)) yOffset += item.width * Number(spec.yOffsetFromWidthMultiplier);
+    if (Number.isFinite(spec.yOffsetFromMaxDimensionMultiplier)) yOffset += Math.max(item.width, item.height) * Number(spec.yOffsetFromMaxDimensionMultiplier);
+    return yOffset;
+}
+
+function resolveHitboxOffsetX(spec, item) {
+    if (!spec || typeof spec !== "object") return 0;
+    let xOffset = valueOr(spec.xOffset, 0);
+    if (Number.isFinite(spec.xOffsetFromWidthMultiplier)) xOffset += item.width * Number(spec.xOffsetFromWidthMultiplier);
+    if (Number.isFinite(spec.xOffsetFromHeightMultiplier)) xOffset += item.height * Number(spec.xOffsetFromHeightMultiplier);
+    if (Number.isFinite(spec.xOffsetFromMaxDimensionMultiplier)) xOffset += Math.max(item.width, item.height) * Number(spec.xOffsetFromMaxDimensionMultiplier);
+    return xOffset;
+}
+
+function buildCircleHitboxFromSpec(spec, item, fallbackRadius) {
+    const xOffset = resolveHitboxOffsetX(spec, item);
+    const yOffset = resolveHitboxOffsetY(spec, item);
+    const radius = Math.max(0.01, resolveCircleRadius(spec, item, fallbackRadius));
+    return new CircleHitbox(item.x + xOffset, item.y + yOffset, radius);
+}
+
+function resolvePolygonPointCoordinate(pointSpec, axis, item) {
+    if (!pointSpec || typeof pointSpec !== "object") return 0;
+    const keyBase = axis === "x" ? "x" : "y";
+    const widthKey = `${keyBase}FromWidthMultiplier`;
+    const heightKey = `${keyBase}FromHeightMultiplier`;
+    const maxKey = `${keyBase}FromMaxDimensionMultiplier`;
+    const offsetKey = `${keyBase}Offset`;
+    let out = 0;
+    if (Number.isFinite(pointSpec[keyBase])) out += Number(pointSpec[keyBase]);
+    if (Number.isFinite(pointSpec[offsetKey])) out += Number(pointSpec[offsetKey]);
+    if (Number.isFinite(pointSpec[widthKey])) out += item.width * Number(pointSpec[widthKey]);
+    if (Number.isFinite(pointSpec[heightKey])) out += item.height * Number(pointSpec[heightKey]);
+    if (Number.isFinite(pointSpec[maxKey])) out += Math.max(item.width, item.height) * Number(pointSpec[maxKey]);
+    return out;
+}
+
+function buildPolygonHitboxFromSpec(spec, item) {
+    if (!spec || typeof spec !== "object" || !Array.isArray(spec.points)) return null;
+    const points = spec.points
+        .map(point => ({
+            x: item.x + resolvePolygonPointCoordinate(point, "x", item),
+            y: item.y + resolvePolygonPointCoordinate(point, "y", item)
+        }))
+        .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (points.length < 3) return null;
+    return new PolygonHitbox(points);
+}
+
+function buildHitboxFromSpec(spec, item, fallbackRadius) {
+    if (!spec || typeof spec !== "object") {
+        return buildCircleHitboxFromSpec({}, item, fallbackRadius);
+    }
+    if (spec.type === "polygon") {
+        const polygon = buildPolygonHitboxFromSpec(spec, item);
+        if (polygon) return polygon;
+    }
+    return buildCircleHitboxFromSpec(spec, item, fallbackRadius);
+}
+
+function resolvePlaceableMetadataEntry(doc, texturePath) {
+    if (!doc || !Array.isArray(doc.items)) return null;
+    const normalizedPath = (typeof texturePath === "string") ? texturePath : "";
+    const normalizedBasename = normalizeTextureBasename(normalizedPath);
+    for (const item of doc.items) {
+        if (!item || typeof item !== "object") continue;
+        if (typeof item.texturePath === "string" && item.texturePath === normalizedPath) return item;
+        if (typeof item.file === "string" && item.file === normalizedBasename) return item;
+        if (typeof item.texturePath === "string" && normalizeTextureBasename(item.texturePath) === normalizedBasename) return item;
+    }
+    return null;
+}
+
 class StaticObject {
     constructor(type, location, width, height, textures, map) {
         this.type = type;
@@ -143,6 +273,26 @@ class StaticObject {
                         fillTexturePath: (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0)
                             ? data.fillTexturePath
                             : undefined
+                    });
+                    break;
+                case 'firewall':
+                    if (typeof FirewallEmitter === 'function') {
+                        obj = new FirewallEmitter({ x: data.x, y: data.y }, map);
+                    } else {
+                        obj = new StaticObject(data.type, node, 0.5, 1.0, textures, map);
+                    }
+                    break;
+                case 'placedObject':
+                    obj = new PlacedObject(node, map, {
+                        texturePath: (typeof data.texturePath === 'string' && data.texturePath.length > 0)
+                            ? data.texturePath
+                            : null,
+                        category: (typeof data.category === 'string' && data.category.length > 0)
+                            ? data.category
+                            : null,
+                        width: Number.isFinite(data.width) ? Number(data.width) : undefined,
+                        height: Number.isFinite(data.height) ? Number(data.height) : undefined,
+                        renderDepthOffset: Number.isFinite(data.renderDepthOffset) ? Number(data.renderDepthOffset) : 0
                     });
                     break;
                 case 'wall':
@@ -414,6 +564,85 @@ class Playground extends StaticObject {
                 this.fireFadeStart = frameCount;
             }
         }
+    }
+}
+
+class PlacedObject extends StaticObject {
+    constructor(location, map, options = {}) {
+        const texturePath = (typeof options.texturePath === 'string' && options.texturePath.length > 0)
+            ? options.texturePath
+            : '/assets/images/doors/door5.png';
+        const hasExplicitWidth = Number.isFinite(options.width);
+        const hasExplicitHeight = Number.isFinite(options.height);
+        const hasExplicitRenderDepthOffset = Number.isFinite(options.renderDepthOffset);
+        const width = hasExplicitWidth ? Math.max(0.25, Number(options.width)) : 1.0;
+        const height = hasExplicitHeight ? Math.max(0.25, Number(options.height)) : 1.0;
+        super('placedObject', location, width, height, [PIXI.Texture.from(texturePath)], map);
+        this.texturePath = texturePath;
+        this.category = (typeof options.category === 'string' && options.category.length > 0) ? options.category : 'doors';
+        this.renderDepthOffset = Number.isFinite(options.renderDepthOffset) ? Number(options.renderDepthOffset) : 0;
+        this.blocksTile = false;
+        this.isPassable = true;
+        this.groundRadius = Math.max(0.12, width * 0.2);
+        this.visualRadius = Math.max(width, height) * 0.5;
+        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.visualHitbox = new CircleHitbox(this.x, this.y - this.height * 0.25, this.visualRadius);
+        if (this.pixiSprite) {
+            this.pixiSprite.texture = PIXI.Texture.from(this.texturePath);
+            this.pixiSprite.anchor.set(0.5, 1);
+        }
+        this._placedObjectExplicit = {
+            width: hasExplicitWidth,
+            height: hasExplicitHeight,
+            renderDepthOffset: hasExplicitRenderDepthOffset
+        };
+        this.applyPlaceableMetadataFromServer();
+    }
+
+    saveJson() {
+        const data = super.saveJson();
+        data.texturePath = this.texturePath;
+        data.category = this.category;
+        data.width = this.width;
+        data.height = this.height;
+        data.renderDepthOffset = Number.isFinite(this.renderDepthOffset) ? this.renderDepthOffset : 0;
+        return data;
+    }
+
+    applyPlaceableMetadata(metaEntry) {
+        if (!metaEntry || typeof metaEntry !== 'object') return;
+        const explicit = this._placedObjectExplicit || {};
+        if (!explicit.width && Number.isFinite(metaEntry.width)) {
+            this.width = Math.max(0.25, Number(metaEntry.width));
+        }
+        if (!explicit.height && Number.isFinite(metaEntry.height)) {
+            this.height = Math.max(0.25, Number(metaEntry.height));
+        }
+        if (!explicit.renderDepthOffset && Number.isFinite(metaEntry.renderDepthOffset)) {
+            this.renderDepthOffset = Number(metaEntry.renderDepthOffset);
+        }
+        if (typeof metaEntry.blocksTile === 'boolean') this.blocksTile = metaEntry.blocksTile;
+        if (typeof metaEntry.isPassable === 'boolean') this.isPassable = metaEntry.isPassable;
+        if (metaEntry.anchor && typeof metaEntry.anchor === 'object' && this.pixiSprite && this.pixiSprite.anchor) {
+            const ax = Number.isFinite(metaEntry.anchor.x) ? Number(metaEntry.anchor.x) : this.pixiSprite.anchor.x;
+            const ay = Number.isFinite(metaEntry.anchor.y) ? Number(metaEntry.anchor.y) : this.pixiSprite.anchor.y;
+            this.pixiSprite.anchor.set(ax, ay);
+        }
+
+        const defaultGroundRadius = Math.max(0.12, this.width * 0.2);
+        const defaultVisualRadius = Math.max(this.width, this.height) * 0.5;
+        this.groundPlaneHitbox = buildHitboxFromSpec(metaEntry.groundPlaneHitbox, this, defaultGroundRadius);
+        this.visualHitbox = buildHitboxFromSpec(metaEntry.visualHitbox, this, defaultVisualRadius);
+    }
+
+    async applyPlaceableMetadataFromServer() {
+        const category = (typeof this.category === 'string' && this.category.length > 0) ? this.category : 'doors';
+        const doc = await fetchPlaceableMetadataForCategory(category);
+        if (!doc) return;
+        const defaults = (doc.defaults && typeof doc.defaults === 'object') ? doc.defaults : {};
+        const item = resolvePlaceableMetadataEntry(doc, this.texturePath) || {};
+        const merged = { ...defaults, ...item };
+        this.applyPlaceableMetadata(merged);
     }
 }
 

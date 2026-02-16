@@ -1,0 +1,240 @@
+{
+  "category": "doors",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "blocksTile": false,
+    "isPassable": true,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "groundPlaneHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radiusFromWidthMultiplier": 0.2,
+      "minRadius": 0.12
+    },
+    "visualHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.25,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    }
+  },
+  "items": [
+    {
+      "file": "door1.jpg",
+      "texturePath": "/assets/images/doors/door1.jpg",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "door2.jpg",
+      "texturePath": "/assets/images/doors/door2.jpg",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "door3.png",
+      "texturePath": "/assets/images/doors/door3.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "door4.png",
+      "texturePath": "/assets/images/doors/door4.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "door5.png",
+      "texturePath": "/assets/images/doors/door5.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "polygon",
+        "points": [
+          { "x": -0.4, "y": 0 },
+          { "x": 0.4, "y": 0 },
+          { "x": 0.4, "y": -0.5 },
+          { "x": -0.4, "y": -0.5 }
+        ]
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "door6.png",
+      "texturePath": "/assets/images/doors/door6.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "tree door 2.jpg",
+      "texturePath": "/assets/images/doors/tree%20door%202.jpg",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "tree door.png",
+      "texturePath": "/assets/images/doors/tree%20door.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    }
+  ]
+}

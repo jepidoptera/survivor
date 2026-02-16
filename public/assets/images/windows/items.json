@@ -1,0 +1,56 @@
+{
+  "category": "windows",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "blocksTile": false,
+    "isPassable": true,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "groundPlaneHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radiusFromWidthMultiplier": 0.2,
+      "minRadius": 0.12
+    },
+    "visualHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.25,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    }
+  },
+  "items": [
+    {
+      "file": "window.jpg",
+      "texturePath": "/assets/images/windows/window.jpg",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    }
+  ]
+}

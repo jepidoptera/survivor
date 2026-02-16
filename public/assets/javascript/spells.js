@@ -638,7 +638,7 @@ class TreeGrow extends Spell {
         this.delayTime = 0;
         this.magicCost = 0;
         this.initialSize = 1;
-        this.maxSize = 10;
+        this.maxSize = 20;
         this.growthPerSecond = 2.5;
         this.magicPerSecond = 10;
         this.radius = 0;
@@ -757,6 +757,91 @@ class BuildRoad extends Spell {
     }
 }
 
+class PlaceObject extends Spell {
+    constructor(x, y) {
+        super(x, y);
+        this.image = document.createElement('img');
+        this.gravity = 0;
+        this.speed = 0;
+        this.range = 20;
+        this.bounces = 0;
+        this.apparentSize = 0;
+        this.delayTime = 0;
+        this.magicCost = 0;
+        this.radius = 0;
+    }
+
+    cast(targetX, targetY) {
+        const wrappedX = (wizard.map && typeof wizard.map.wrapWorldX === "function")
+            ? wizard.map.wrapWorldX(targetX)
+            : targetX;
+        const wrappedY = (wizard.map && typeof wizard.map.wrapWorldY === "function")
+            ? wizard.map.wrapWorldY(targetY)
+            : targetY;
+        if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) {
+            message("Cannot place object there!");
+            return this;
+        }
+        if (typeof PlacedObject !== "function") {
+            message("Object placement is unavailable.");
+            return this;
+        }
+
+        const selectedTexturePath = (
+            wizard &&
+            typeof wizard.selectedPlaceableTexturePath === "string" &&
+            wizard.selectedPlaceableTexturePath.length > 0
+        ) ? wizard.selectedPlaceableTexturePath : "/assets/images/doors/door5.png";
+        const selectedCategory = (
+            wizard &&
+            typeof wizard.selectedPlaceableCategory === "string" &&
+            wizard.selectedPlaceableCategory.length > 0
+        ) ? wizard.selectedPlaceableCategory : "doors";
+        const renderDepthOffset = (wizard && Number.isFinite(wizard.selectedPlaceableRenderOffset))
+            ? Number(wizard.selectedPlaceableRenderOffset)
+            : 0;
+        const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
+            ? Number(wizard.selectedPlaceableScale)
+            : 1;
+        const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+        const rawYScale = Number(
+            (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
+                ? globalThis.xyratio
+                : 0.66
+        );
+        const yScale = Math.max(0.1, Math.abs(rawYScale));
+        const placementYOffset = (clampedScale * 0.5) / yScale;
+        let placedY = wrappedY + placementYOffset;
+        if (wizard.map && typeof wizard.map.wrapWorldY === "function") {
+            placedY = wizard.map.wrapWorldY(placedY);
+        }
+        if (
+            wizard.map &&
+            typeof wizard.map.worldToNode === "function" &&
+            !wizard.map.worldToNode(wrappedX, placedY) &&
+            wizard.map.worldToNode(wrappedX, wrappedY)
+        ) {
+            placedY = wrappedY;
+        }
+
+        new PlacedObject({ x: wrappedX, y: placedY }, wizard.map, {
+            texturePath: selectedTexturePath,
+            category: selectedCategory,
+            renderDepthOffset,
+            width: clampedScale,
+            height: clampedScale
+        });
+
+        this.visible = false;
+        if (this.pixiSprite) {
+            projectileLayer.removeChild(this.pixiSprite);
+            this.pixiSprite = null;
+        }
+
+        return this;
+    }
+}
+
 function hitboxesIntersect(hitboxA, hitboxB) {
     if (!hitboxA || !hitboxB) return false;
     if (typeof hitboxA.intersects === "function" && hitboxA.intersects(hitboxB)) return true;
@@ -810,6 +895,14 @@ class FirewallEmitter {
         }
     }
 
+    saveJson() {
+        return {
+            type: "firewall",
+            x: this.x,
+            y: this.y
+        };
+    }
+
     handleCharacterCollision(character) {
         if (!character || character.gone || character.dead) return;
         const characterHitbox = character.visualHitbox || character.groundPlaneHitbox || character.hitbox;
@@ -836,6 +929,14 @@ class FirewallEmitter {
 const SpellSystem = (() => {
     const DEFAULT_FLOORING_TEXTURE = "/assets/images/flooring/dirt.jpg";
     const RANDOM_TREE_VARIANT = "random";
+    const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture"];
+    const DEFAULT_PLACEABLE_CATEGORY = "doors";
+    const DEFAULT_PLACEABLE_BY_CATEGORY = {
+        doors: "/assets/images/doors/door5.png",
+        flowers: "/assets/images/flowers/red%20flower.jpg",
+        windows: "/assets/images/windows/window.jpg",
+        furniture: "/assets/images/furniture/chair.png"
+    };
     const AURA_MENU_ICON = "/assets/images/thumbnails/aura.png";
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
@@ -843,6 +944,7 @@ const SpellSystem = (() => {
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+        { name: "placeobject", icon: "/assets/images/doors/door5.png" },
         { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" }
     ];
     const AURA_DEFS = [
@@ -867,6 +969,9 @@ const SpellSystem = (() => {
     let spellMenuMode = "main";
     let flooringTexturePaths = [];
     let flooringTextureFetchPromise = null;
+    let placeableImagePathsByCategory = null;
+    let placeableImageFetchPromise = null;
+    let placeableMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
 
     function getSelectedFlooringTexture(wizardRef) {
         if (!wizardRef) return DEFAULT_FLOORING_TEXTURE;
@@ -1006,6 +1111,176 @@ const SpellSystem = (() => {
         return "/assets/images/thumbnails/tree.png";
     }
 
+    function getPlaceableCategories() {
+        return PLACEABLE_CATEGORIES.slice();
+    }
+
+    function normalizePlaceableSelections(wizardRef) {
+        if (!wizardRef) return;
+        if (!wizardRef.selectedPlaceableByCategory || typeof wizardRef.selectedPlaceableByCategory !== "object") {
+            wizardRef.selectedPlaceableByCategory = {};
+        }
+        if (!wizardRef.selectedPlaceableRenderOffsetByTexture || typeof wizardRef.selectedPlaceableRenderOffsetByTexture !== "object") {
+            wizardRef.selectedPlaceableRenderOffsetByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableScaleByTexture || typeof wizardRef.selectedPlaceableScaleByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleByTexture = {};
+        }
+        PLACEABLE_CATEGORIES.forEach(category => {
+            const existing = wizardRef.selectedPlaceableByCategory[category];
+            if (typeof existing !== "string" || existing.length === 0) {
+                wizardRef.selectedPlaceableByCategory[category] = DEFAULT_PLACEABLE_BY_CATEGORY[category];
+            }
+        });
+        const selectedCategory = (typeof wizardRef.selectedPlaceableCategory === "string")
+            ? wizardRef.selectedPlaceableCategory
+            : DEFAULT_PLACEABLE_CATEGORY;
+        wizardRef.selectedPlaceableCategory = PLACEABLE_CATEGORIES.includes(selectedCategory)
+            ? selectedCategory
+            : DEFAULT_PLACEABLE_CATEGORY;
+        const selectedPath = wizardRef.selectedPlaceableByCategory[wizardRef.selectedPlaceableCategory];
+        wizardRef.selectedPlaceableTexturePath = (typeof selectedPath === "string" && selectedPath.length > 0)
+            ? selectedPath
+            : DEFAULT_PLACEABLE_BY_CATEGORY[wizardRef.selectedPlaceableCategory];
+        const activeTexturePath = wizardRef.selectedPlaceableTexturePath;
+        if (typeof activeTexturePath === "string" && activeTexturePath.length > 0) {
+            const oldGlobalOffset = Number.isFinite(wizardRef.selectedPlaceableRenderOffset)
+                ? Number(wizardRef.selectedPlaceableRenderOffset)
+                : 0;
+            const oldGlobalScale = Number.isFinite(wizardRef.selectedPlaceableScale)
+                ? Number(wizardRef.selectedPlaceableScale)
+                : 1;
+
+            if (!Number.isFinite(wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath])) {
+                wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath] = oldGlobalOffset;
+            }
+            if (!Number.isFinite(wizardRef.selectedPlaceableScaleByTexture[activeTexturePath])) {
+                wizardRef.selectedPlaceableScaleByTexture[activeTexturePath] = oldGlobalScale;
+            }
+
+            const nextOffset = Number(wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath]);
+            const nextScale = Number(wizardRef.selectedPlaceableScaleByTexture[activeTexturePath]);
+            wizardRef.selectedPlaceableRenderOffset = Number.isFinite(nextOffset) ? nextOffset : 0;
+            wizardRef.selectedPlaceableScale = Number.isFinite(nextScale) ? Math.max(0.2, Math.min(5, nextScale)) : 1;
+        } else {
+            wizardRef.selectedPlaceableRenderOffset = 0;
+            wizardRef.selectedPlaceableScale = 1;
+        }
+    }
+
+    function adjustPlaceableRenderOffset(wizardRef, delta) {
+        if (!wizardRef || !Number.isFinite(delta) || delta === 0) return null;
+        normalizePlaceableSelections(wizardRef);
+        const texturePath = (typeof wizardRef.selectedPlaceableTexturePath === "string" && wizardRef.selectedPlaceableTexturePath.length > 0)
+            ? wizardRef.selectedPlaceableTexturePath
+            : DEFAULT_PLACEABLE_BY_CATEGORY[DEFAULT_PLACEABLE_CATEGORY];
+        const current = Number.isFinite(wizardRef.selectedPlaceableRenderOffset)
+            ? Number(wizardRef.selectedPlaceableRenderOffset)
+            : 0;
+        const unclamped = current + delta;
+        const next = Math.max(-10, Math.min(10, Math.round(unclamped * 10) / 10));
+        wizardRef.selectedPlaceableRenderOffset = next;
+        if (!wizardRef.selectedPlaceableRenderOffsetByTexture || typeof wizardRef.selectedPlaceableRenderOffsetByTexture !== "object") {
+            wizardRef.selectedPlaceableRenderOffsetByTexture = {};
+        }
+        wizardRef.selectedPlaceableRenderOffsetByTexture[texturePath] = next;
+        return next;
+    }
+
+    function adjustPlaceableScale(wizardRef, delta) {
+        if (!wizardRef || !Number.isFinite(delta) || delta === 0) return null;
+        normalizePlaceableSelections(wizardRef);
+        const texturePath = (typeof wizardRef.selectedPlaceableTexturePath === "string" && wizardRef.selectedPlaceableTexturePath.length > 0)
+            ? wizardRef.selectedPlaceableTexturePath
+            : DEFAULT_PLACEABLE_BY_CATEGORY[DEFAULT_PLACEABLE_CATEGORY];
+        const current = Number.isFinite(wizardRef.selectedPlaceableScale)
+            ? Number(wizardRef.selectedPlaceableScale)
+            : 1;
+        const rawNext = Math.max(0.2, Math.min(5, current + delta));
+        const next = Math.round(rawNext * 1000) / 1000;
+        wizardRef.selectedPlaceableScale = next;
+        if (!wizardRef.selectedPlaceableScaleByTexture || typeof wizardRef.selectedPlaceableScaleByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleByTexture = {};
+        }
+        wizardRef.selectedPlaceableScaleByTexture[texturePath] = next;
+        return next;
+    }
+
+    function getPlaceableImageList(category) {
+        if (!placeableImagePathsByCategory || !category) return [];
+        const list = placeableImagePathsByCategory[category];
+        return Array.isArray(list) ? list.slice() : [];
+    }
+
+    function getSelectedPlaceableCategory(wizardRef) {
+        normalizePlaceableSelections(wizardRef);
+        return wizardRef && typeof wizardRef.selectedPlaceableCategory === "string"
+            ? wizardRef.selectedPlaceableCategory
+            : DEFAULT_PLACEABLE_CATEGORY;
+    }
+
+    function setSelectedPlaceableCategory(wizardRef, category) {
+        if (!wizardRef || !PLACEABLE_CATEGORIES.includes(category)) return;
+        normalizePlaceableSelections(wizardRef);
+        wizardRef.selectedPlaceableCategory = category;
+        const selectedForCategory = wizardRef.selectedPlaceableByCategory[category];
+        wizardRef.selectedPlaceableTexturePath = (typeof selectedForCategory === "string" && selectedForCategory.length > 0)
+            ? selectedForCategory
+            : DEFAULT_PLACEABLE_BY_CATEGORY[category];
+        normalizePlaceableSelections(wizardRef);
+    }
+
+    function getSelectedPlaceableTextureForCategory(wizardRef, category) {
+        normalizePlaceableSelections(wizardRef);
+        if (!wizardRef || !PLACEABLE_CATEGORIES.includes(category)) return DEFAULT_PLACEABLE_BY_CATEGORY[DEFAULT_PLACEABLE_CATEGORY];
+        const selected = wizardRef.selectedPlaceableByCategory[category];
+        if (typeof selected === "string" && selected.length > 0) return selected;
+        return DEFAULT_PLACEABLE_BY_CATEGORY[category];
+    }
+
+    function getSelectedPlaceableTexture(wizardRef) {
+        const category = getSelectedPlaceableCategory(wizardRef);
+        return getSelectedPlaceableTextureForCategory(wizardRef, category);
+    }
+
+    function getPlaceObjectSpellIcon(wizardRef) {
+        return getSelectedPlaceableTexture(wizardRef);
+    }
+
+    function fetchPlaceableImages() {
+        if (placeableImagePathsByCategory && typeof placeableImagePathsByCategory === "object") {
+            return Promise.resolve(placeableImagePathsByCategory);
+        }
+        if (placeableImageFetchPromise) {
+            return placeableImageFetchPromise;
+        }
+        placeableImageFetchPromise = fetch("/api/placeables")
+            .then(response => response.json())
+            .then(payload => {
+                const next = {};
+                PLACEABLE_CATEGORIES.forEach(category => {
+                    const listed = payload && payload.ok && payload.categories && Array.isArray(payload.categories[category])
+                        ? payload.categories[category]
+                        : [];
+                    next[category] = listed.length > 0 ? listed : [DEFAULT_PLACEABLE_BY_CATEGORY[category]];
+                });
+                placeableImagePathsByCategory = next;
+                return placeableImagePathsByCategory;
+            })
+            .catch(() => {
+                const fallback = {};
+                PLACEABLE_CATEGORIES.forEach(category => {
+                    fallback[category] = [DEFAULT_PLACEABLE_BY_CATEGORY[category]];
+                });
+                placeableImagePathsByCategory = fallback;
+                return placeableImagePathsByCategory;
+            })
+            .finally(() => {
+                placeableImageFetchPromise = null;
+            });
+        return placeableImageFetchPromise;
+    }
+
     function quantizeToStep(value, min, max, step) {
         const v = Number(value);
         const clamped = Math.max(min, Math.min(max, Number.isFinite(v) ? v : min));
@@ -1081,7 +1356,7 @@ const SpellSystem = (() => {
         wizardRef.treeGrowHoldLocked = !!lockUntilRelease;
     }
 
-    function startTreeGrowthChannel(wizardRef, targetTree, growthPerSecond = 1, magicPerSecond = 15, maxSize = 10) {
+    function startTreeGrowthChannel(wizardRef, targetTree, growthPerSecond = 1, magicPerSecond = 15, maxSize = 20) {
         if (!wizardRef || !targetTree || typeof targetTree.applySize !== "function") return false;
         wizardRef.treeGrowHoldLocked = false;
         wizardRef.treeGrowthChannel = {
@@ -1498,22 +1773,50 @@ const SpellSystem = (() => {
         const maxNode = mapRef.worldToNode(bounds.x + bounds.width + margin, bounds.y + bounds.height + margin);
         if (!minNode || !maxNode) return [];
 
-        const xStart = Math.max(0, Math.min(minNode.xindex, maxNode.xindex));
-        const xEnd = Math.min(mapRef.width - 1, Math.max(minNode.xindex, maxNode.xindex));
-        const yStart = Math.max(0, Math.min(minNode.yindex, maxNode.yindex));
-        const yEnd = Math.min(mapRef.height - 1, Math.max(minNode.yindex, maxNode.yindex));
+        const toWrappedRanges = (startIdx, endIdx, size, wrapEnabled) => {
+            if (!Number.isFinite(startIdx) || !Number.isFinite(endIdx) || !Number.isFinite(size) || size <= 0) {
+                return [];
+            }
+            const sRaw = Math.floor(startIdx);
+            const eRaw = Math.floor(endIdx);
+            const lo = Math.min(sRaw, eRaw);
+            const hi = Math.max(sRaw, eRaw);
+            if (!wrapEnabled) {
+                const s = Math.max(0, Math.min(size - 1, lo));
+                const e = Math.max(0, Math.min(size - 1, hi));
+                if (e < s) return [];
+                return [{ start: s, end: e }];
+            }
+            if ((hi - lo + 1) >= size) return [{ start: 0, end: size - 1 }];
+            const wrap = (n) => ((n % size) + size) % size;
+            const s = wrap(lo);
+            const e = wrap(hi);
+            if (s <= e) return [{ start: s, end: e }];
+            return [
+                { start: 0, end: e },
+                { start: s, end: size - 1 }
+            ];
+        };
+
+        const xRanges = toWrappedRanges(minNode.xindex, maxNode.xindex, mapRef.width, !!mapRef.wrapX);
+        const yRanges = toWrappedRanges(minNode.yindex, maxNode.yindex, mapRef.height, !!mapRef.wrapY);
+        if (xRanges.length === 0 || yRanges.length === 0) return [];
         const nearbyObjects = [];
         const seen = new Set();
 
-        for (let x = xStart; x <= xEnd; x++) {
-            for (let y = yStart; y <= yEnd; y++) {
-                const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
-                if (!node || !Array.isArray(node.objects) || node.objects.length === 0) continue;
-                for (const obj of node.objects) {
-                    if (!obj || obj.gone) continue;
-                    if (seen.has(obj)) continue;
-                    seen.add(obj);
-                    nearbyObjects.push(obj);
+        for (const xRange of xRanges) {
+            for (let x = xRange.start; x <= xRange.end; x++) {
+                for (const yRange of yRanges) {
+                    for (let y = yRange.start; y <= yRange.end; y++) {
+                        const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
+                        if (!node || !Array.isArray(node.objects) || node.objects.length === 0) continue;
+                        for (const obj of node.objects) {
+                            if (!obj || obj.gone) continue;
+                            if (seen.has(obj)) continue;
+                            seen.add(obj);
+                            nearbyObjects.push(obj);
+                        }
+                    }
                 }
             }
         }
@@ -1644,6 +1947,8 @@ const SpellSystem = (() => {
             projectile = new TreeGrow();
         } else if (wizardRef.currentSpell === "buildroad") {
             projectile = new BuildRoad();
+        } else if (wizardRef.currentSpell === "placeobject") {
+            projectile = new PlaceObject();
         }
 
         if (!projectile) return;
@@ -1671,6 +1976,9 @@ const SpellSystem = (() => {
             }
             if (spell.name === "treegrow") {
                 return {...spell, key, icon: getTreeSpellIcon(wizardRef)};
+            }
+            if (spell.name === "placeobject") {
+                return {...spell, key, icon: getPlaceObjectSpellIcon(wizardRef)};
             }
             return {...spell, key};
         });
@@ -1885,6 +2193,128 @@ const SpellSystem = (() => {
         renderTreeSelector(wizardRef);
     }
 
+    function renderPlaceableCategorySelector(wizardRef) {
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "",
+            "flex-direction": "",
+            gap: ""
+        });
+        const backButton = $("<div>")
+            .addClass("spellIcon")
+            .css({
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                "font-size": "13px",
+                "font-weight": "bold",
+                "color": "#ffffff",
+                "background": "rgba(20,20,20,0.9)"
+            })
+            .text("Back")
+            .click(() => {
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
+            });
+        $grid.append(backButton);
+
+        getPlaceableCategories().forEach(category => {
+            const selectedTexture = getSelectedPlaceableTextureForCategory(wizardRef, category);
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${selectedTexture}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", category)
+                .click(() => {
+                    setSelectedPlaceableCategory(wizardRef, category);
+                    placeableMenuCategory = category;
+                    spellMenuMode = "placeable-items";
+                    renderPlaceableItemSelector(wizardRef, category);
+                    fetchPlaceableImages().then(() => {
+                        if (spellMenuMode === "placeable-items" && placeableMenuCategory === category) {
+                            renderPlaceableItemSelector(wizardRef, category);
+                        }
+                    });
+                });
+            $grid.append(icon);
+        });
+    }
+
+    function renderPlaceableItemSelector(wizardRef, category) {
+        const safeCategory = PLACEABLE_CATEGORIES.includes(category) ? category : DEFAULT_PLACEABLE_CATEGORY;
+        placeableMenuCategory = safeCategory;
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "",
+            "flex-direction": "",
+            gap: ""
+        });
+        const backButton = $("<div>")
+            .addClass("spellIcon")
+            .css({
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                "font-size": "13px",
+                "font-weight": "bold",
+                "color": "#ffffff",
+                "background": "rgba(20,20,20,0.9)"
+            })
+            .text("Back")
+            .click(() => {
+                spellMenuMode = "placeable-categories";
+                renderPlaceableCategorySelector(wizardRef);
+            });
+        $grid.append(backButton);
+
+        const selectedTexture = getSelectedPlaceableTextureForCategory(wizardRef, safeCategory);
+        const texturePaths = getPlaceableImageList(safeCategory);
+        texturePaths.forEach(texturePath => {
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${texturePath}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", decodeURIComponent((texturePath.split("/").pop() || texturePath)))
+                .click(() => {
+                    normalizePlaceableSelections(wizardRef);
+                    wizardRef.selectedPlaceableByCategory[safeCategory] = texturePath;
+                    wizardRef.selectedPlaceableCategory = safeCategory;
+                    wizardRef.selectedPlaceableTexturePath = texturePath;
+                    normalizePlaceableSelections(wizardRef);
+                    spellMenuMode = "main";
+                    setCurrentSpell(wizardRef, "placeobject");
+                    $("#spellMenu").addClass("hidden");
+                });
+            if (texturePath === selectedTexture) {
+                icon.addClass("selected");
+            }
+            $grid.append(icon);
+        });
+    }
+
+    function openPlaceableSelector(wizardRef) {
+        spellMenuMode = "placeable-items";
+        $("#spellMenu").removeClass("hidden");
+        const category = getSelectedPlaceableCategory(wizardRef);
+        placeableMenuCategory = category;
+        renderPlaceableItemSelector(wizardRef, category);
+        fetchPlaceableImages().then(() => {
+            if (spellMenuMode === "placeable-items") {
+                renderPlaceableItemSelector(wizardRef, placeableMenuCategory || getSelectedPlaceableCategory(wizardRef));
+            } else if (spellMenuMode === "placeable-categories") {
+                renderPlaceableCategorySelector(wizardRef);
+            }
+        });
+    }
+
     function renderWallSelector(wizardRef) {
         const $grid = $("#spellGrid");
         $grid.empty();
@@ -1985,6 +2415,14 @@ const SpellSystem = (() => {
             renderTreeSelector(wizardRef);
             return;
         }
+        if (spellMenuMode === "placeable-items") {
+            renderPlaceableItemSelector(wizardRef, placeableMenuCategory || getSelectedPlaceableCategory(wizardRef));
+            return;
+        }
+        if (spellMenuMode === "placeable-categories") {
+            renderPlaceableCategorySelector(wizardRef);
+            return;
+        }
         if (spellMenuMode === "wall") {
             renderWallSelector(wizardRef);
             return;
@@ -2031,6 +2469,12 @@ const SpellSystem = (() => {
                     event.preventDefault();
                     event.stopPropagation();
                     openTreeSelector(wizardRef);
+                });
+            } else if (spell.name === "placeobject") {
+                spellIcon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openPlaceableSelector(wizardRef);
                 });
             }
 
@@ -2084,6 +2528,7 @@ const SpellSystem = (() => {
         if (!wizardRef) return;
         getSelectedFlooringTexture(wizardRef);
         getSelectedTreeTextureVariant(wizardRef);
+        normalizePlaceableSelections(wizardRef);
         getSelectedWallHeight(wizardRef);
         getSelectedWallThickness(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
@@ -2095,6 +2540,11 @@ const SpellSystem = (() => {
         refreshSpellSelector(wizardRef);
         refreshAuraSelector(wizardRef);
         fetchFlooringTextures();
+        fetchPlaceableImages().then(() => {
+            normalizePlaceableSelections(wizardRef);
+            wizardRef.spells = buildSpellList(wizardRef);
+            refreshSpellSelector(wizardRef);
+        });
     }
 
     function showMainSpellMenu(wizardRef) {
@@ -2122,6 +2572,12 @@ const SpellSystem = (() => {
         openWallSelector(wizardRef);
     }
 
+    function showPlaceableMenu(wizardRef) {
+        if (!wizardRef) return;
+        setCurrentSpell(wizardRef, "placeobject");
+        openPlaceableSelector(wizardRef);
+    }
+
     function primeSpellAssets() {
         Fireball.getFrames();
     }
@@ -2138,6 +2594,9 @@ const SpellSystem = (() => {
         showFlooringMenu,
         showTreeMenu,
         showWallMenu,
+        showPlaceableMenu,
+        adjustPlaceableRenderOffset,
+        adjustPlaceableScale,
         beginDragSpell,
         updateDragPreview,
         completeDragSpell,

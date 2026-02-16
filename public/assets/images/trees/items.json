@@ -1,0 +1,565 @@
+{
+  "category": "trees",
+  "version": 1,
+  "sourceDirectory": "/assets/images",
+  "defaults": {
+    "width": 4,
+    "height": 4,
+    "size": 4,
+    "maxSize": 20,
+    "hp": 100,
+    "maxHP": 100,
+    "blocksTile": true,
+    "isPassable": false,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "groundPlaneHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radiusFromSizeMultiplier": 0.125
+    },
+    "visualHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -1,
+      "radiusFromSizeMultiplier": 0.4375
+    }
+  },
+  "items": [
+    {
+      "file": "palmtree0.png",
+      "texturePath": "/assets/images/palmtree0.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "palmtree1.png",
+      "texturePath": "/assets/images/palmtree1.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "palmtree2.png",
+      "texturePath": "/assets/images/palmtree2.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "palmtree3.png",
+      "texturePath": "/assets/images/palmtree3.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "palmtree4.png",
+      "texturePath": "/assets/images/palmtree4.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "pinetree0.png",
+      "texturePath": "/assets/images/pinetree0.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "pinetree1.png",
+      "texturePath": "/assets/images/pinetree1.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "pinetree2.png",
+      "texturePath": "/assets/images/pinetree2.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "pinetree3.png",
+      "texturePath": "/assets/images/pinetree3.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "pinetree4.png",
+      "texturePath": "/assets/images/pinetree4.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree0.png",
+      "texturePath": "/assets/images/tree0.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree1.png",
+      "texturePath": "/assets/images/tree1.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree11.png",
+      "texturePath": "/assets/images/tree11.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree12.png",
+      "texturePath": "/assets/images/tree12.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree14.png",
+      "texturePath": "/assets/images/tree14.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree2.png",
+      "texturePath": "/assets/images/tree2.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree3.png",
+      "texturePath": "/assets/images/tree3.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree4.png",
+      "texturePath": "/assets/images/tree4.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    },
+    {
+      "file": "tree5.png",
+      "texturePath": "/assets/images/tree5.png",
+      "width": 4,
+      "height": 4,
+      "size": 4,
+      "maxSize": 20,
+      "hp": 100,
+      "maxHP": 100,
+      "blocksTile": true,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromSizeMultiplier": 0.125
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -1,
+        "radiusFromSizeMultiplier": 0.4375
+      }
+    }
+  ]
+}

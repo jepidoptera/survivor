@@ -20,6 +20,8 @@ let groundChunkCache = new Map();
 let groundChunkLastViewscale = 0;
 let spellHoverHighlightSprite = null;
 let spellHoverHighlightWallGraphics = null;
+let placeObjectPreviewSprite = null;
+let placeObjectPreviewTexturePath = "";
 let uiArrowCursorElement = null;
 let mapBorderGraphics = null;
 let losDebugGraphics = null;
@@ -189,6 +191,118 @@ function isCurrentlyVisibleByLos(item) {
     const center = getGroundHitboxCenter(item.groundPlaneHitbox);
     if (!center) return true;
     return isLosPointVisible(center.x, center.y, 0.05);
+}
+
+function getLosCoverageRatio(item, slack = 0.05) {
+    if (!item || !wizard || !currentLosState) return 1;
+    if (!item.groundPlaneHitbox) return 1;
+
+    if (item._losCoverageCacheState === currentLosState && item._losCoverageCacheFrame === frameCount) {
+        const cached = Number(item._losCoverageCacheValue);
+        if (Number.isFinite(cached)) return Math.max(0, Math.min(1, cached));
+    }
+
+    const bins = Number.isFinite(currentLosState.bins) ? Math.max(1, Math.floor(currentLosState.bins)) : 0;
+    const depth = currentLosState.depth;
+    if (!bins || !depth || depth.length !== bins) return 1;
+
+    const wx = wizard.x;
+    const wy = wizard.y;
+    const minAngle = Number.isFinite(currentLosState.minAngle) ? currentLosState.minAngle : -Math.PI;
+    const twoPi = Math.PI * 2;
+    const angleForBin = idx => minAngle + ((idx + 0.5) / bins) * twoPi;
+
+    let possibleBins = 0;
+    let litBins = 0;
+    const countBin = (binIdx, t) => {
+        if (!Number.isFinite(t) || t < 0) return;
+        possibleBins += 1;
+        const nearestDepth = depth[binIdx];
+        if (Number.isFinite(nearestDepth) && t <= nearestDepth + slack) {
+            litBins += 1;
+        }
+    };
+
+    const hitbox = item.groundPlaneHitbox;
+    if (hitbox instanceof CircleHitbox) {
+        const cxRaw = hitbox.x;
+        const cyRaw = hitbox.y;
+        const r = hitbox.radius;
+        if (Number.isFinite(cxRaw) && Number.isFinite(cyRaw) && Number.isFinite(r) && r > 0) {
+            const dx = (map && typeof map.shortestDeltaX === "function")
+                ? map.shortestDeltaX(wx, cxRaw)
+                : (cxRaw - wx);
+            const dy = (map && typeof map.shortestDeltaY === "function")
+                ? map.shortestDeltaY(wy, cyRaw)
+                : (cyRaw - wy);
+            const cx = wx + dx;
+            const cy = wy + dy;
+            const centerDist = Math.hypot(dx, dy);
+            if (centerDist <= r + 1e-6) {
+                // Wizard inside object footprint: object can occupy any LOS bin.
+                possibleBins = bins;
+                litBins = bins;
+            } else {
+                const centerAngle = Math.atan2(dy, dx);
+                const halfSpan = Math.asin(Math.min(1, r / centerDist));
+                const a0 = centerAngle - halfSpan;
+                const a1 = centerAngle + halfSpan;
+                forEachBinInShortSpan(a0, a1, bins, b => {
+                    const theta = angleForBin(b);
+                    if (!angleInSpan(theta, a0, a1)) return;
+                    const dirX = Math.cos(theta);
+                    const dirY = Math.sin(theta);
+                    const t = rayCircleDistance(wx, wy, dirX, dirY, cx, cy, r);
+                    if (t !== null) countBin(b, t);
+                });
+            }
+        }
+    } else if (hitbox instanceof PolygonHitbox && Array.isArray(hitbox.points) && hitbox.points.length >= 2) {
+        const points = hitbox.points.map(p => ({
+            x: wx + ((map && typeof map.shortestDeltaX === "function") ? map.shortestDeltaX(wx, p.x) : (p.x - wx)),
+            y: wy + ((map && typeof map.shortestDeltaY === "function") ? map.shortestDeltaY(wy, p.y) : (p.y - wy))
+        }));
+        const minDistByBin = new Map();
+        for (let i = 0; i < points.length; i++) {
+            const p1 = points[i];
+            const p2 = points[(i + 1) % points.length];
+            if (!p1 || !p2) continue;
+            const a0 = Math.atan2(p1.y - wy, p1.x - wx);
+            const a1 = Math.atan2(p2.y - wy, p2.x - wx);
+            forEachBinInShortSpan(a0, a1, bins, b => {
+                const theta = angleForBin(b);
+                const dirX = Math.cos(theta);
+                const dirY = Math.sin(theta);
+                const t = raySegmentDistance(wx, wy, dirX, dirY, p1.x, p1.y, p2.x, p2.y);
+                if (t === null) return;
+                const prev = minDistByBin.get(b);
+                if (!Number.isFinite(prev) || t < prev) minDistByBin.set(b, t);
+            });
+        }
+        minDistByBin.forEach((t, b) => countBin(b, t));
+    } else {
+        const center = getGroundHitboxCenter(hitbox);
+        if (center) {
+            const dx = (map && typeof map.shortestDeltaX === "function")
+                ? map.shortestDeltaX(wx, center.x)
+                : (center.x - wx);
+            const dy = (map && typeof map.shortestDeltaY === "function")
+                ? map.shortestDeltaY(wy, center.y)
+                : (center.y - wy);
+            const t = Math.hypot(dx, dy);
+            const angle = Math.atan2(dy, dx);
+            const normalized = ((normalizeAngle(angle) - minAngle) / twoPi);
+            const bin = Math.max(0, Math.min(bins - 1, Math.floor((((normalized % 1) + 1) % 1) * bins)));
+            countBin(bin, t);
+        }
+    }
+
+    let ratio = possibleBins > 0 ? (litBins / possibleBins) : (isCurrentlyVisibleByLos(item) ? 1 : 0);
+    ratio = Math.max(0, Math.min(1, ratio));
+    item._losCoverageCacheState = currentLosState;
+    item._losCoverageCacheFrame = frameCount;
+    item._losCoverageCacheValue = ratio;
+    return ratio;
 }
 
 function getLosObjectId(item) {
@@ -902,6 +1016,103 @@ function drawSpellHoverTargetHighlight() {
     }
 }
 
+function buildPlaceObjectPreviewRenderItem() {
+    if (!objectLayer || !wizard || wizard.currentSpell !== "placeobject") {
+        if (placeObjectPreviewSprite) placeObjectPreviewSprite.visible = false;
+        return null;
+    }
+    if (!Number.isFinite(mousePos.worldX) || !Number.isFinite(mousePos.worldY)) {
+        if (placeObjectPreviewSprite) placeObjectPreviewSprite.visible = false;
+        return null;
+    }
+
+    const texturePath = (
+        typeof wizard.selectedPlaceableTexturePath === "string" &&
+        wizard.selectedPlaceableTexturePath.length > 0
+    ) ? wizard.selectedPlaceableTexturePath : "/assets/images/doors/door5.png";
+
+    if (!placeObjectPreviewSprite) {
+        placeObjectPreviewSprite = new PIXI.Sprite(PIXI.Texture.from(texturePath));
+        placeObjectPreviewSprite.anchor.set(0.5, 0.5);
+        placeObjectPreviewSprite.alpha = 0.5;
+        placeObjectPreviewSprite.interactive = false;
+        placeObjectPreviewSprite.visible = false;
+        placeObjectPreviewTexturePath = texturePath;
+    } else if (placeObjectPreviewTexturePath !== texturePath) {
+        placeObjectPreviewSprite.texture = PIXI.Texture.from(texturePath);
+        placeObjectPreviewTexturePath = texturePath;
+    }
+
+    const worldX = (map && typeof map.wrapWorldX === "function")
+        ? map.wrapWorldX(mousePos.worldX)
+        : mousePos.worldX;
+    const worldY = (map && typeof map.wrapWorldY === "function")
+        ? map.wrapWorldY(mousePos.worldY)
+        : mousePos.worldY;
+    const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
+        ? Number(wizard.selectedPlaceableScale)
+        : 1;
+    const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+    const yScale = Math.max(0.1, Math.abs(Number.isFinite(xyratio) ? xyratio : 0.66));
+    const placementYOffset = (clampedScale * 0.5) / yScale;
+    let placedY = worldY + placementYOffset;
+    if (map && typeof map.wrapWorldY === "function") {
+        placedY = map.wrapWorldY(placedY);
+    }
+    const renderDepthOffset = (wizard && Number.isFinite(wizard.selectedPlaceableRenderOffset))
+        ? Number(wizard.selectedPlaceableRenderOffset)
+        : 0;
+
+    placeObjectPreviewSprite.tint = 0xffffff;
+    placeObjectPreviewSprite.visible = true;
+    return {
+        type: "placedObjectPreview",
+        x: worldX,
+        y: worldY,
+        width: clampedScale,
+        height: clampedScale,
+        renderZ: placedY + renderDepthOffset,
+        previewAlpha: 0.5,
+        pixiSprite: placeObjectPreviewSprite
+    };
+}
+
+function ensureSpellCursorShape(mode) {
+    if (!spellCursor) return;
+    if (mode === "placeobject") {
+        const halfW = Math.max(1, viewscale * 0.5);
+        const halfH = Math.max(1, viewscale * xyratio * 0.5);
+        const shapeKey = `cross:${Math.round(halfW * 1000)}:${Math.round(halfH * 1000)}`;
+        if (spellCursor._shapeKey === shapeKey) return;
+        spellCursor.clear();
+        spellCursor.lineStyle(1, 0x000000, 1);
+        spellCursor.moveTo(-halfW, 0);
+        spellCursor.lineTo(halfW, 0);
+        spellCursor.moveTo(0, -halfH);
+        spellCursor.lineTo(0, halfH);
+        spellCursor._shapeKey = shapeKey;
+        return;
+    }
+
+    const shapeKey = "default";
+    if (spellCursor._shapeKey === shapeKey) return;
+    spellCursor.clear();
+    const cursorSize = 20;
+    const tenpoints = Array.from(
+        { length: 10 }, (_, i) => i * 36
+    ).map(angle => ({ x: Math.cos(angle * Math.PI / 180) * cursorSize, y: Math.sin(angle * Math.PI / 180) * cursorSize }));
+    const fivepoints = Array.from(
+        { length: 5 }, (_, i) => i * 72 + 18
+    ).map(angle => ({ x: Math.cos(angle * Math.PI / 180) * cursorSize * 0.5, y: Math.sin(angle * Math.PI / 180) * cursorSize * 0.5 }));
+    spellCursor.lineStyle(2, 0x44aaff, 1);
+    for (let i = 0; i < 5; i++) {
+        spellCursor.moveTo(tenpoints[i * 2].x, tenpoints[i * 2].y);
+        spellCursor.lineTo(fivepoints[i].x, fivepoints[i].y);
+        spellCursor.lineTo(tenpoints[i * 2 + 1].x, tenpoints[i * 2 + 1].y);
+    }
+    spellCursor._shapeKey = shapeKey;
+}
+
 function invalidateGroundChunks() {
     groundChunkCache.forEach(chunk => {
         chunk.dirty = true;
@@ -1060,15 +1271,30 @@ function getDebugRedrawPlan() {
 
 function drawCanvas() {
     if (!wizard) return;
+    const perfStartMs = performance.now();
+    const drawPerf = {
+        lazyMs: 0,
+        prepMs: 0,
+        collectMs: 0,
+        losMs: 0,
+        composeMs: 0,
+        totalMs: 0,
+        hydratedRoads: 0,
+        hydratedTrees: 0,
+        mapItems: 0,
+        onscreen: 0
+    };
     const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
         ? interpolatedViewport
         : viewport;
+    const lazyStartMs = performance.now();
     if (typeof hydrateVisibleLazyRoads === "function") {
-        hydrateVisibleLazyRoads({ maxPerFrame: 48, paddingWorld: 12 });
+        drawPerf.hydratedRoads = hydrateVisibleLazyRoads({ maxPerFrame: 48, paddingWorld: 12 }) || 0;
     }
     if (typeof hydrateVisibleLazyTrees === "function") {
-        hydrateVisibleLazyTrees({ maxPerFrame: 48, paddingWorld: 12 });
+        drawPerf.hydratedTrees = hydrateVisibleLazyTrees({ maxPerFrame: 48, paddingWorld: 12 }) || 0;
     }
+    drawPerf.lazyMs = performance.now() - lazyStartMs;
     const frameNowMs = (typeof renderNowMs === "number" && Number.isFinite(renderNowMs) && renderNowMs > 0)
         ? renderNowMs
         : performance.now();
@@ -1081,11 +1307,12 @@ function drawCanvas() {
     const occlusionLerpFactor = (occlusionFadeTimeSec <= 0)
         ? 1
         : (1 - Math.exp(-frameDtSec / occlusionFadeTimeSec));
-    const losFadeTimeSec = 0.1;
+    const losFadeTimeSec = 0.05;
     const losLerpFactor = (losFadeTimeSec <= 0)
         ? 1
         : (1 - Math.exp(-frameDtSec / losFadeTimeSec));
 
+    const prepStartMs = performance.now();
     const debugRedrawPlan = getDebugRedrawPlan();
     updateRoofPreview(roof);
     // Update land layer position (tiling background)
@@ -1117,7 +1344,9 @@ function drawCanvas() {
             objectLayer.addChild(wizard.phantomRoad);
         }
     }
+    drawPerf.prepMs = performance.now() - prepStartMs;
 
+    const collectStartMs = performance.now();
     let mapItems = [];
     let roadItems = [];
     const seenMapItems = new Set();
@@ -1127,7 +1356,7 @@ function drawCanvas() {
     if (map && map.nodes) {
         // Keep large trees in the object set before their base tile reaches the viewport.
         // This prevents tall trees from "popping in" at the top/bottom edges.
-        const maxExpectedTreeSize = 10;
+        const maxExpectedTreeSize = 20;
         const maxTreeWidth = maxExpectedTreeSize;
         const maxTreeHeight = maxExpectedTreeSize;
         const xPadding = Math.ceil(maxTreeWidth / 2) + 2;
@@ -1162,11 +1391,15 @@ function drawCanvas() {
             onscreenObjects.add(animal);
         }
     });
+    drawPerf.collectMs = performance.now() - collectStartMs;
+    drawPerf.mapItems = mapItems.length;
+    drawPerf.onscreen = onscreenObjects.size;
 
     const activeAuras = (wizard && Array.isArray(wizard.activeAuras))
         ? wizard.activeAuras
         : ((wizard && typeof wizard.activeAura === "string") ? [wizard.activeAura] : []);
     const omnivisionActive = activeAuras.includes("omnivision");
+    let losPerfMs = 0;
 
     if (!omnivisionActive && typeof LOSSystem !== "undefined" && LOSSystem && typeof LOSSystem.computeState === "function") {
         const losBuildStartMs = performance.now();
@@ -1233,6 +1466,7 @@ function drawCanvas() {
                 candidates: candidateCount
             };
         }
+        losPerfMs = losBuildMs + losTraceMs;
     } else {
         currentLosState = null;
         currentLosVisibleSet = null;
@@ -1254,7 +1488,10 @@ function drawCanvas() {
                 candidates: 0
             };
         }
+        losPerfMs = 0;
     }
+    drawPerf.losMs = losPerfMs;
+    const composeStartMs = performance.now();
     applyLosGroundMask();
     applyLosShadow();
 
@@ -1319,7 +1556,9 @@ function drawCanvas() {
         }
         if (Number.isFinite(item.renderZ)) return item.renderZ;
         if (item.type === "road") return 0;
-        return Number.isFinite(item.y) ? item.y : 0;
+        const baseDepth = Number.isFinite(item.y) ? item.y : 0;
+        const depthOffset = Number.isFinite(item.renderDepthOffset) ? item.renderDepthOffset : 0;
+        return baseDepth + depthOffset;
     }
 
     if (Number.isFinite(roofRenderDepth) && roof && roof.pixiMesh && roof.pixiMesh.visible) {
@@ -1357,6 +1596,11 @@ function drawCanvas() {
         }
     } else if (roofInteriorBlackoutGraphics) {
         roofInteriorBlackoutGraphics.clear();
+    }
+
+    const placePreviewItem = buildPlaceObjectPreviewRenderItem();
+    if (placePreviewItem) {
+        mapItems.push(placePreviewItem);
     }
 
     // Enforce explicit render ordering:
@@ -1479,21 +1723,24 @@ function drawCanvas() {
                         groupState = { everVisible: false, brightnessCurrent: 1.0 };
                         wallLosGroupState.set(groupId, groupState);
                     }
-                    const groupVisibleNow = !!(currentLosVisibleWallGroups && currentLosVisibleWallGroups.has(groupId));
+                    const groupCoverage = getLosCoverageRatio(item, 0.08);
+                    const groupVisibleNow = groupCoverage > 0.0001;
                     if (groupVisibleNow) {
                         groupState.everVisible = true;
                     }
-                    const groupTargetBrightness = groupVisibleNow
-                        ? 1
-                        : Math.max(losMinStaticBrightness, 1 - losMaxDarken);
+                    const groupTargetBrightness = Math.max(
+                        losMinStaticBrightness,
+                        (1 - losMaxDarken) + groupCoverage * losMaxDarken
+                    );
                     groupState.brightnessCurrent += (groupTargetBrightness - groupState.brightnessCurrent) * losLerpFactor;
                     groupState.brightnessCurrent = Math.max(0, Math.min(1, groupState.brightnessCurrent));
                     losBrightness = groupState.brightnessCurrent;
                 } else {
+                    const coverageRatio = getLosCoverageRatio(item, 0.05);
                     const currentlyVisible = isCurrentlyVisibleByLos(item);
                     const losTargetBrightness = isAnimal
                         ? (currentlyVisible ? 1 : 0)
-                        : (currentlyVisible ? 1 : Math.max(losMinStaticBrightness, 1 - losMaxDarken));
+                        : Math.max(losMinStaticBrightness, (1 - losMaxDarken) + coverageRatio * losMaxDarken);
                     if (!Number.isFinite(item._losBrightnessCurrent)) {
                         item._losBrightnessCurrent = 1.0;
                     }
@@ -1506,8 +1753,23 @@ function drawCanvas() {
                 }
             }
             const combinedBaseAlpha = interiorFadeAlpha * losAlpha;
+            const perItemAlpha = Number.isFinite(item.previewAlpha)
+                ? Math.max(0, Math.min(1, item.previewAlpha))
+                : 1;
             const losTintValue = Math.max(0, Math.min(255, Math.round(255 * losBrightness)));
             const losTint = (losTintValue << 16) | (losTintValue << 8) | losTintValue;
+            let burnTintValue = null;
+            if (Number.isFinite(item && item.maxHP) && Number.isFinite(item && item.hp) && item.maxHP > 0) {
+                const hpThreshold = item.maxHP * 0.5;
+                if (item.hp < hpThreshold) {
+                    const blackProgress = Math.max(0, (hpThreshold - item.hp) / hpThreshold);
+                    const burnBrightness = Math.max(0, Math.min(255, Math.floor(255 * (1 - blackProgress * 0.8))));
+                    burnTintValue = burnBrightness;
+                }
+            }
+            if ((item && item.burned) || (Number.isFinite(item && item.hp) && item.hp <= 0)) {
+                burnTintValue = 0x22;
+            }
 
             // Combine vanish alpha with occlusion alpha
             if (item.vanishing === true && item.vanishStartTime !== undefined && item.vanishDuration !== undefined) {
@@ -1516,7 +1778,7 @@ function drawCanvas() {
                 if (elapsedFrames < 1) {
                     // First frame: show blue tint
                     item.pixiSprite.tint = 0x0099FF;
-                    item.pixiSprite.alpha = combinedBaseAlpha;
+                    item.pixiSprite.alpha = combinedBaseAlpha * perItemAlpha;
                 } else {
                     // Fade phase: fade from blue to transparent over 1/4 second
                     const fadeElapsed = elapsedFrames - 1;
@@ -1524,11 +1786,16 @@ function drawCanvas() {
                     const percentVanished = Math.min(1, fadeElapsed / fadeDuration);
                     const vanishAlpha = Math.max(0, 1 - percentVanished);
                     item.pixiSprite.tint = 0x0099FF; // Keep blue tint while fading
-                    item.pixiSprite.alpha = combinedBaseAlpha * vanishAlpha;
+                    item.pixiSprite.alpha = combinedBaseAlpha * vanishAlpha * perItemAlpha;
                 }
             } else {
-                item.pixiSprite.tint = losTint;
-                item.pixiSprite.alpha = combinedBaseAlpha;
+                if (Number.isFinite(burnTintValue)) {
+                    const combinedTintValue = Math.min(losTintValue, Math.max(0, Math.min(255, Math.round(burnTintValue))));
+                    item.pixiSprite.tint = (combinedTintValue << 16) | (combinedTintValue << 8) | combinedTintValue;
+                } else {
+                    item.pixiSprite.tint = losTint;
+                }
+                item.pixiSprite.alpha = combinedBaseAlpha * perItemAlpha;
             }
             if (item.pixiSprite.mask === losGroundMaskGraphics) {
                 item.pixiSprite.mask = null;
@@ -1635,6 +1902,11 @@ function drawCanvas() {
     if (nextMessageHtml !== lastRenderedMessageHtml) {
         $('#msg').html(nextMessageHtml);
         lastRenderedMessageHtml = nextMessageHtml;
+    }
+    drawPerf.composeMs = performance.now() - composeStartMs;
+    drawPerf.totalMs = performance.now() - perfStartMs;
+    if (typeof globalThis !== "undefined") {
+        globalThis.drawPerfBreakdown = drawPerf;
     }
 }
 
@@ -2107,6 +2379,7 @@ function applySpriteTransform(item) {
     } else {
         item.pixiSprite.rotation = 0;
     }
+
 }
 
 function updateLandLayer() {
@@ -2281,6 +2554,32 @@ function angleInSpan(theta, a0, a1) {
     let rel = normalizeAngle(t - s0);
     if (rel < 0) rel += Math.PI * 2;
     return rel <= span;
+}
+
+function angleToBin(theta, bins) {
+    const twoPi = Math.PI * 2;
+    const norm = normalizeAngle(theta);
+    const unit = (norm + Math.PI) / twoPi;
+    const idx = Math.floor(unit * bins);
+    if (idx < 0) return 0;
+    if (idx >= bins) return bins - 1;
+    return idx;
+}
+
+function forEachBinInShortSpan(a0, a1, bins, callback) {
+    const twoPi = Math.PI * 2;
+    const start = normalizeAngle(a0);
+    const delta = normalizeAngle(a1 - a0); // shortest signed arc in [-pi, pi]
+    const direction = delta >= 0 ? 1 : -1;
+    const spanBins = Math.max(1, Math.ceil((Math.abs(delta) / twoPi) * bins));
+    const startIdx = angleToBin(start, bins);
+    let prevIdx = -1;
+    for (let i = 0; i <= spanBins; i++) {
+        const idx = (startIdx + (direction * i) + bins) % bins;
+        if (idx === prevIdx) continue;
+        prevIdx = idx;
+        callback(idx);
+    }
 }
 
 function cross2(ax, ay, bx, by) {
@@ -2945,6 +3244,8 @@ function updateCursor() {
     // Set cursor position to mouse position
     activeCursor.x = mousePos.screenX;
     activeCursor.y = mousePos.screenY;
+    const placingObject = wizard && wizard.currentSpell === "placeobject";
+    ensureSpellCursorShape(placingObject ? "placeobject" : "default");
 
     // Calculate wizard position in screen coordinates
     wizardScreenCoors = worldToScreen(wizard);
@@ -2957,8 +3258,12 @@ function updateCursor() {
 
     // Calculate rotation angle (atan2 returns angle from -PI to PI)
     // Add PI to point away from wizard, then add PI/2 for visual alignment
-    const angle = Math.atan2(dy, dx) + Math.PI * 1.5;
-    activeCursor.rotation = angle;
+    if (placingObject) {
+        activeCursor.rotation = 0;
+    } else {
+        const angle = Math.atan2(dy, dx) + Math.PI * 1.5;
+        activeCursor.rotation = angle;
+    }
 
     // Set size for sprite cursor
     if (!spacePressed && cursorSprite) {

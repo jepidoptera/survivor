@@ -27,6 +27,7 @@ var messages = [];
 let keysPressed = {}; // Track which keys are currently pressed
 let spacebarDownAt = null;
 let spellMenuKeyboardIndex = -1;
+let auraMenuKeyboardIndex = -1;
 let suppressNextCanvasMenuClose = false;
 
 let textures = {};
@@ -42,6 +43,21 @@ let perfStats = {
     idleMs: 0,
     simSteps: 0,
     lastUiUpdateAt: 0
+};
+let simPerfBreakdown = {
+    steps: 0,
+    totalMs: 0,
+    maxStepMs: 0,
+    aimSyncMs: 0,
+    facingMs: 0,
+    movementMs: 0,
+    collisionMs: 0,
+    pointerPostMs: 0,
+    maxAimSyncMs: 0,
+    maxFacingMs: 0,
+    maxMovementMs: 0,
+    maxCollisionMs: 0,
+    maxPointerPostMs: 0
 };
 const runaroundViewportNodeSampleEpsilon = 1e-4;
 
@@ -802,7 +818,9 @@ class Wizard extends Character {
         const wizardRadius = this.groundRadius;
         
         // Collect nearby objects once to avoid repeated grid traversal
-        const nearbyObjects = [];
+        const nearbyObjects = Array.isArray(this._movementNearbyObjects) ? this._movementNearbyObjects : [];
+        nearbyObjects.length = 0;
+        this._movementNearbyObjects = nearbyObjects;
         const minNode = this.map.worldToNode(newX - 2, newY - 2);
         const maxNode = this.map.worldToNode(newX + 2, newY + 2);
         
@@ -833,7 +851,11 @@ class Wizard extends Character {
         
         while (iteration < maxIterations) {
             iteration++;
-            const testHitbox = new CircleHitbox(testX, testY, wizardRadius);
+            const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: wizardRadius };
+            testHitbox.x = testX;
+            testHitbox.y = testY;
+            testHitbox.radius = wizardRadius;
+            this._movementTestHitbox = testHitbox;
             
             // Check all nearby objects for collisions at current test position
             let totalPushX = 0;
@@ -917,7 +939,11 @@ class Wizard extends Character {
         }
         
         // If we exhausted iterations, at least push out to clear the collision
-        const testHitbox = new CircleHitbox(testX, testY, wizardRadius);
+        const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: wizardRadius };
+        testHitbox.x = testX;
+        testHitbox.y = testY;
+        testHitbox.radius = wizardRadius;
+        this._movementTestHitbox = testHitbox;
         let totalPushX = 0;
         let totalPushY = 0;
         let maxPushLen = 0;
@@ -1144,6 +1170,13 @@ class Wizard extends Character {
             activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
             selectedFlooringTexture: this.selectedFlooringTexture,
             selectedTreeTextureVariant: this.selectedTreeTextureVariant,
+            selectedPlaceableCategory: this.selectedPlaceableCategory,
+            selectedPlaceableTexturePath: this.selectedPlaceableTexturePath,
+            selectedPlaceableByCategory: this.selectedPlaceableByCategory,
+            selectedPlaceableRenderOffset: this.selectedPlaceableRenderOffset,
+            selectedPlaceableRenderOffsetByTexture: this.selectedPlaceableRenderOffsetByTexture,
+            selectedPlaceableScale: this.selectedPlaceableScale,
+            selectedPlaceableScaleByTexture: this.selectedPlaceableScaleByTexture,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
             showPerfReadout: !!showPerfReadout,
@@ -1174,6 +1207,13 @@ class Wizard extends Character {
         }
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
         if (data.selectedTreeTextureVariant !== undefined) this.selectedTreeTextureVariant = data.selectedTreeTextureVariant;
+        if (data.selectedPlaceableCategory !== undefined) this.selectedPlaceableCategory = data.selectedPlaceableCategory;
+        if (data.selectedPlaceableTexturePath !== undefined) this.selectedPlaceableTexturePath = data.selectedPlaceableTexturePath;
+        if (data.selectedPlaceableByCategory !== undefined) this.selectedPlaceableByCategory = data.selectedPlaceableByCategory;
+        if (data.selectedPlaceableRenderOffset !== undefined) this.selectedPlaceableRenderOffset = data.selectedPlaceableRenderOffset;
+        if (data.selectedPlaceableRenderOffsetByTexture !== undefined) this.selectedPlaceableRenderOffsetByTexture = data.selectedPlaceableRenderOffsetByTexture;
+        if (data.selectedPlaceableScale !== undefined) this.selectedPlaceableScale = data.selectedPlaceableScale;
+        if (data.selectedPlaceableScaleByTexture !== undefined) this.selectedPlaceableScaleByTexture = data.selectedPlaceableScaleByTexture;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (typeof data.showPerfReadout === "boolean") {
@@ -2005,9 +2045,20 @@ jQuery(() => {
         return Array.from(grid.querySelectorAll(".spellIcon, button"));
     }
 
+    function getAuraMenuIconElements() {
+        const grid = document.getElementById("auraGrid");
+        if (!grid) return [];
+        return Array.from(grid.querySelectorAll(".auraIcon, button"));
+    }
+
     function clearSpellMenuKeyboardFocus() {
         getSpellMenuIconElements().forEach(icon => icon.classList.remove("keyboard-nav-focus"));
         spellMenuKeyboardIndex = -1;
+    }
+
+    function clearAuraMenuKeyboardFocus() {
+        getAuraMenuIconElements().forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        auraMenuKeyboardIndex = -1;
     }
 
     function setSpellMenuKeyboardFocus(index) {
@@ -2056,6 +2107,69 @@ jQuery(() => {
         let next = nextRow * cols + nextCol;
         if (next >= icons.length) next = icons.length - 1;
         return setSpellMenuKeyboardFocus(next);
+    }
+
+    function setAuraMenuKeyboardFocus(index) {
+        const icons = getAuraMenuIconElements();
+        if (!icons.length) {
+            auraMenuKeyboardIndex = -1;
+            return false;
+        }
+        const clamped = Math.max(0, Math.min(icons.length - 1, index));
+        icons.forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        icons[clamped].classList.add("keyboard-nav-focus");
+        auraMenuKeyboardIndex = clamped;
+        return true;
+    }
+
+    function initAuraMenuKeyboardFocus() {
+        const icons = getAuraMenuIconElements();
+        if (!icons.length) {
+            auraMenuKeyboardIndex = -1;
+            return false;
+        }
+        const selectedIndex = icons.findIndex(icon => icon.classList.contains("selected"));
+        return setAuraMenuKeyboardFocus(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+
+    function moveAuraMenuKeyboardFocus(dx, dy) {
+        const icons = getAuraMenuIconElements();
+        if (!icons.length) return false;
+        if (!Number.isInteger(auraMenuKeyboardIndex) || auraMenuKeyboardIndex < 0 || auraMenuKeyboardIndex >= icons.length) {
+            initAuraMenuKeyboardFocus();
+        }
+        const grid = document.getElementById("auraGrid");
+        const computed = grid ? window.getComputedStyle(grid) : null;
+        const cols = (() => {
+            if (!computed) return 3;
+            const template = computed.gridTemplateColumns || "";
+            if (!template || template === "none") return 3;
+            const count = template.split(" ").filter(token => token && token !== "/").length;
+            return Math.max(1, count);
+        })();
+        const current = Math.max(0, auraMenuKeyboardIndex);
+        const row = Math.floor(current / cols);
+        const col = current % cols;
+        const nextRow = Math.max(0, row + dy);
+        const nextCol = Math.max(0, Math.min(cols - 1, col + dx));
+        let next = nextRow * cols + nextCol;
+        if (next >= icons.length) next = icons.length - 1;
+        return setAuraMenuKeyboardFocus(next);
+    }
+
+    function activateSelectedAuraFromMenu() {
+        const icons = getAuraMenuIconElements();
+        if (!icons.length) return { activated: false, shouldCloseMenu: false };
+        let target = icons.find(icon => icon.classList.contains("keyboard-nav-focus"));
+        if (!target) {
+            target = icons.find(icon => icon.classList.contains("selected"));
+        }
+        if (!target) {
+            target = icons[0];
+        }
+        if (!target) return { activated: false, shouldCloseMenu: false };
+        target.click();
+        return { activated: true, shouldCloseMenu: false };
     }
 
     function activateSelectedSpellFromMenu() {
@@ -2108,6 +2222,11 @@ jQuery(() => {
             initSpellMenuKeyboardFocus();
             return true;
         }
+        if (spellName === "placeobject" && typeof SpellSystem.showPlaceableMenu === "function") {
+            SpellSystem.showPlaceableMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
         return false;
     }
 
@@ -2127,8 +2246,15 @@ jQuery(() => {
         
         function runSimulationStep() {
             if (!wizard) return;
+            const stepStartMs = performance.now();
+            let aimSyncMs = 0;
+            let facingMs = 0;
+            let movementMs = 0;
+            let collisionMs = 0;
+            let pointerPostMs = 0;
             // Keep aim stable through camera drift:
             // pointer lock stores world aim directly, unlocked mode maps screen->world.
+            const aimSyncStartMs = performance.now();
             if (pointerLockActive) {
                 ensurePointerLockAimInitialized();
                 const cursorOverMenu = isVirtualCursorOverMenuArea();
@@ -2152,9 +2278,11 @@ jQuery(() => {
             } else if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
                 syncMouseWorldFromScreenWithViewport();
             }
+            aimSyncMs = performance.now() - aimSyncStartMs;
 
             // Always face the mouse when a valid aim vector exists,
             // even when the wizard is not moving.
+            const facingStartMs = performance.now();
             if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
                 const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
                 const faceX = aim.x;
@@ -2163,6 +2291,7 @@ jQuery(() => {
                     wizard.turnToward(faceX, faceY);
                 }
             }
+            facingMs = performance.now() - facingStartMs;
             
             // Calculate desired movement direction from input
             let moveVector = null;
@@ -2205,14 +2334,19 @@ jQuery(() => {
             }
             
             // Process movement every frame (with or without input)
+            const movementStartMs = performance.now();
             const wizardStartX = wizard.x;
             const wizardStartY = wizard.y;
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             wizard.moveDirection(moveVector, moveOptions);
             wizard.updateJump(1 / frameRate);
+            movementMs = performance.now() - movementStartMs;
+            const collisionStartMs = performance.now();
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
             }
+            collisionMs = performance.now() - collisionStartMs;
+            const pointerPostStartMs = performance.now();
             if (
                 pointerLockActive &&
                 Number.isFinite(pointerLockAimWorld.x) &&
@@ -2246,6 +2380,21 @@ jQuery(() => {
                     }
                 }
             }
+            pointerPostMs = performance.now() - pointerPostStartMs;
+            const stepTotalMs = performance.now() - stepStartMs;
+            simPerfBreakdown.steps += 1;
+            simPerfBreakdown.totalMs += stepTotalMs;
+            simPerfBreakdown.maxStepMs = Math.max(simPerfBreakdown.maxStepMs, stepTotalMs);
+            simPerfBreakdown.aimSyncMs += aimSyncMs;
+            simPerfBreakdown.facingMs += facingMs;
+            simPerfBreakdown.movementMs += movementMs;
+            simPerfBreakdown.collisionMs += collisionMs;
+            simPerfBreakdown.pointerPostMs += pointerPostMs;
+            simPerfBreakdown.maxAimSyncMs = Math.max(simPerfBreakdown.maxAimSyncMs, aimSyncMs);
+            simPerfBreakdown.maxFacingMs = Math.max(simPerfBreakdown.maxFacingMs, facingMs);
+            simPerfBreakdown.maxMovementMs = Math.max(simPerfBreakdown.maxMovementMs, movementMs);
+            simPerfBreakdown.maxCollisionMs = Math.max(simPerfBreakdown.maxCollisionMs, collisionMs);
+            simPerfBreakdown.maxPointerPostMs = Math.max(simPerfBreakdown.maxPointerPostMs, pointerPostMs);
             frameCount ++;
         }
 
@@ -2281,6 +2430,37 @@ jQuery(() => {
                 }
 
                 perfStats.simSteps = simSteps;
+                if (typeof globalThis !== "undefined") {
+                    globalThis.simPerfBreakdown = {
+                        steps: simPerfBreakdown.steps,
+                        totalMs: simPerfBreakdown.totalMs,
+                        maxStepMs: simPerfBreakdown.maxStepMs,
+                        aimSyncMs: simPerfBreakdown.aimSyncMs,
+                        facingMs: simPerfBreakdown.facingMs,
+                        movementMs: simPerfBreakdown.movementMs,
+                        collisionMs: simPerfBreakdown.collisionMs,
+                        pointerPostMs: simPerfBreakdown.pointerPostMs,
+                        maxAimSyncMs: simPerfBreakdown.maxAimSyncMs,
+                        maxFacingMs: simPerfBreakdown.maxFacingMs,
+                        maxMovementMs: simPerfBreakdown.maxMovementMs,
+                        maxCollisionMs: simPerfBreakdown.maxCollisionMs,
+                        maxPointerPostMs: simPerfBreakdown.maxPointerPostMs,
+                        accumulatorMs: simAccumulatorMs
+                    };
+                }
+                simPerfBreakdown.steps = 0;
+                simPerfBreakdown.totalMs = 0;
+                simPerfBreakdown.maxStepMs = 0;
+                simPerfBreakdown.aimSyncMs = 0;
+                simPerfBreakdown.facingMs = 0;
+                simPerfBreakdown.movementMs = 0;
+                simPerfBreakdown.collisionMs = 0;
+                simPerfBreakdown.pointerPostMs = 0;
+                simPerfBreakdown.maxAimSyncMs = 0;
+                simPerfBreakdown.maxFacingMs = 0;
+                simPerfBreakdown.maxMovementMs = 0;
+                simPerfBreakdown.maxCollisionMs = 0;
+                simPerfBreakdown.maxPointerPostMs = 0;
                 renderAlpha = Math.max(0, Math.min(1, simAccumulatorMs / simStepMs));
                 interpolatedViewport.x = previousViewport.x + (viewport.x - previousViewport.x) * renderAlpha;
                 interpolatedViewport.y = previousViewport.y + (viewport.y - previousViewport.y) * renderAlpha;
@@ -2348,19 +2528,75 @@ jQuery(() => {
                     ? losBreakdown.totalMs
                     : ((typeof globalThis !== "undefined" && Number.isFinite(globalThis.losDebugLastMs)) ? globalThis.losDebugLastMs : 0);
                 const losRecomputed = !!(losBreakdown && losBreakdown.recomputed);
-                const losSummary = debugMode
-                    ? `\nlos ${losVisibleObjects.length} / ${losTotalMs.toFixed(2)} ms` +
-                      `\n  b ${losBuildMs.toFixed(2)} t ${losTraceMs.toFixed(2)}${losRecomputed ? "" : " (cached)"}`
+                const losCandidates = (losBreakdown && Number.isFinite(losBreakdown.candidates))
+                    ? losBreakdown.candidates
+                    : 0;
+                const losSummary =
+                    `\nlos ${losTotalMs.toFixed(2)} ms${losRecomputed ? "" : " (cached)"}` +
+                    `\n  b ${losBuildMs.toFixed(2)} t ${losTraceMs.toFixed(2)} vis ${losVisibleObjects.length} cand ${losCandidates}`;
+                const drawBreakdown = (typeof globalThis !== "undefined" && globalThis.drawPerfBreakdown)
+                    ? globalThis.drawPerfBreakdown
+                    : null;
+                const simBreakdown = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                    ? globalThis.simPerfBreakdown
+                    : null;
+                const cpuMs = perfStats.simMs + perfStats.drawMs;
+                const drawBuckets = drawBreakdown
+                    ? (
+                        `\ndrawb lz ${Number(drawBreakdown.lazyMs || 0).toFixed(2)}` +
+                        ` pr ${Number(drawBreakdown.prepMs || 0).toFixed(2)}` +
+                        ` co ${Number(drawBreakdown.collectMs || 0).toFixed(2)}` +
+                        ` lo ${Number(drawBreakdown.losMs || 0).toFixed(2)}` +
+                        ` cp ${Number(drawBreakdown.composeMs || 0).toFixed(2)}`
+                    )
+                    : "";
+                const drawCounts = drawBreakdown
+                    ? (
+                        `\nobjs ${Number(drawBreakdown.mapItems || 0)}` +
+                        ` on ${Number(drawBreakdown.onscreen || 0)}` +
+                        ` hyd r${Number(drawBreakdown.hydratedRoads || 0)}` +
+                        ` t${Number(drawBreakdown.hydratedTrees || 0)}`
+                    )
+                    : "";
+                const simBuckets = simBreakdown
+                    ? (
+                        `\nsimb a ${Number(simBreakdown.aimSyncMs || 0).toFixed(2)}` +
+                        ` f ${Number(simBreakdown.facingMs || 0).toFixed(2)}` +
+                        ` m ${Number(simBreakdown.movementMs || 0).toFixed(2)}` +
+                        ` c ${Number(simBreakdown.collisionMs || 0).toFixed(2)}` +
+                        ` p ${Number(simBreakdown.pointerPostMs || 0).toFixed(2)}`
+                    )
+                    : "";
+                const simMeta = simBreakdown
+                    ? (
+                        `\nstepmx ${Number(simBreakdown.maxStepMs || 0).toFixed(2)}` +
+                        ` acc ${Number(simBreakdown.accumulatorMs || 0).toFixed(1)}`
+                    )
+                    : "";
+                const simMaxBuckets = simBreakdown
+                    ? (
+                        `\nstepb a ${Number(simBreakdown.maxAimSyncMs || 0).toFixed(2)}` +
+                        ` f ${Number(simBreakdown.maxFacingMs || 0).toFixed(2)}` +
+                        ` m ${Number(simBreakdown.maxMovementMs || 0).toFixed(2)}` +
+                        ` c ${Number(simBreakdown.maxCollisionMs || 0).toFixed(2)}` +
+                        ` p ${Number(simBreakdown.maxPointerPostMs || 0).toFixed(2)}`
+                    )
                     : "";
                 perfPanel.text(
                     `FPS ${perfStats.fps.toFixed(1)}\n` +
                     `loop ${perfStats.loopMs.toFixed(1)} ms\n` +
+                    `cpu ${cpuMs.toFixed(1)} ms\n` +
                     `simms ${perfStats.simMs.toFixed(1)} ms\n` +
                     `draw ${perfStats.drawMs.toFixed(1)} ms\n` +
                     `idle ${perfStats.idleMs.toFixed(1)} ms\n` +
                     `sim ${perfStats.simSteps}\n` +
                     `target ${frameRate}` +
+                    simBuckets +
+                    simMeta +
+                    simMaxBuckets +
                     (effectiveRenderMaxFps > 0 ? ` / render ${effectiveRenderMaxFps}` : "") +
+                    drawBuckets +
+                    drawCounts +
                     losSummary
                 );
                 perfStats.lastUiUpdateAt = panelNow;
@@ -2412,9 +2648,16 @@ jQuery(() => {
     });
 
     $("#selectedAura").click(() => {
+        const wasHidden = $("#auraMenu").hasClass("hidden");
         $("#auraMenu").toggleClass("hidden");
         if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
             SpellSystem.refreshAuraSelector(wizard);
+        }
+        const nowHidden = $("#auraMenu").hasClass("hidden");
+        if (nowHidden) {
+            clearAuraMenuKeyboardFocus();
+        } else if (wasHidden) {
+            initAuraMenuKeyboardFocus();
         }
     });
 
@@ -2447,6 +2690,16 @@ jQuery(() => {
         ) {
             event.preventDefault();
             SpellSystem.showTreeMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            wizard.currentSpell === "placeobject" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showPlaceableMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showPlaceableMenu(wizard);
         }
     });
 
@@ -2458,6 +2711,7 @@ jQuery(() => {
         $("#spellMenu").addClass('hidden');
         $("#auraMenu").addClass('hidden');
         clearSpellMenuKeyboardFocus();
+        clearAuraMenuKeyboardFocus();
     });
 
     app.view.addEventListener("mousemove", event => {
@@ -2526,6 +2780,46 @@ jQuery(() => {
             SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
         }
     })
+
+    let lastPlaceScaleMessageMs = 0;
+    app.view.addEventListener("wheel", event => {
+        if (
+            !wizard ||
+            wizard.currentSpell !== "placeobject" ||
+            typeof SpellSystem === "undefined" ||
+            typeof SpellSystem.adjustPlaceableScale !== "function"
+        ) {
+            return;
+        }
+        const overMenu = pointerLockActive
+            ? isVirtualCursorOverMenuArea()
+            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars"));
+        if (overMenu) return;
+
+        event.preventDefault();
+        let deltaPixels = Number(event.deltaY) || 0;
+        if (!Number.isFinite(deltaPixels) || deltaPixels === 0) return;
+        if (event.deltaMode === 1) {
+            // Convert line-based wheel deltas to pixel-ish units.
+            deltaPixels *= 16;
+        } else if (event.deltaMode === 2) {
+            // Convert page-based deltas.
+            deltaPixels *= Math.max(200, window.innerHeight || 800);
+        }
+        // Continuous scaling from wheel input: negative scroll grows, positive shrinks.
+        const unclampedDelta = -deltaPixels * 0.0015;
+        const delta = Math.max(-0.05, Math.min(0.05, unclampedDelta));
+        if (Math.abs(delta) < 0.0005) return;
+
+        const next = SpellSystem.adjustPlaceableScale(wizard, delta);
+        if (Number.isFinite(next)) {
+            const now = performance.now();
+            if (now - lastPlaceScaleMessageMs >= 90) {
+                message(`Place scale: ${next.toFixed(2)}x`);
+                lastPlaceScaleMessageMs = now;
+            }
+        }
+    }, { passive: false });
 
     app.view.addEventListener("mousedown", event => {
         if (pointerLockActive) {
@@ -2639,6 +2933,7 @@ jQuery(() => {
     $(document).keydown(event => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
+        const auraMenuVisible = !$("#auraMenu").hasClass("hidden");
 
         if (event.ctrlKey && keyLower === "f") {
             event.preventDefault();
@@ -2651,10 +2946,38 @@ jQuery(() => {
 
         if (event.key === "Tab") {
             event.preventDefault();
-            if (spellMenuVisible) {
+            if (event.shiftKey) {
+                if (spellMenuVisible) {
+                    $("#spellMenu").addClass("hidden");
+                    clearSpellMenuKeyboardFocus();
+                    if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
+                        SpellSystem.refreshAuraSelector(wizard);
+                    }
+                    $("#auraMenu").removeClass("hidden");
+                    initAuraMenuKeyboardFocus();
+                } else if (auraMenuVisible) {
+                    $("#auraMenu").addClass("hidden");
+                    clearAuraMenuKeyboardFocus();
+                } else {
+                    if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
+                        SpellSystem.refreshAuraSelector(wizard);
+                    }
+                    $("#auraMenu").removeClass("hidden");
+                    initAuraMenuKeyboardFocus();
+                }
+            } else if (auraMenuVisible) {
+                $("#auraMenu").addClass("hidden");
+                clearAuraMenuKeyboardFocus();
+                if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+                    SpellSystem.showMainSpellMenu(wizard);
+                }
+                $("#spellMenu").removeClass("hidden");
+                initSpellMenuKeyboardFocus();
+            } else if (spellMenuVisible) {
                 $("#spellMenu").addClass("hidden");
                 $("#auraMenu").addClass("hidden");
                 clearSpellMenuKeyboardFocus();
+                clearAuraMenuKeyboardFocus();
             } else if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
                 SpellSystem.showMainSpellMenu(wizard);
                 $("#spellMenu").removeClass("hidden");
@@ -2663,11 +2986,12 @@ jQuery(() => {
             return;
         }
 
-        if (event.key === "Escape" && spellMenuVisible) {
+        if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
             $("#auraMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
+            clearAuraMenuKeyboardFocus();
             return;
         }
 
@@ -2677,6 +3001,15 @@ jQuery(() => {
             if (event.key === "ArrowRight") moveSpellMenuKeyboardFocus(1, 0);
             if (event.key === "ArrowUp") moveSpellMenuKeyboardFocus(0, -1);
             if (event.key === "ArrowDown") moveSpellMenuKeyboardFocus(0, 1);
+            return;
+        }
+
+        if (auraMenuVisible && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            if (event.key === "ArrowLeft") moveAuraMenuKeyboardFocus(-1, 0);
+            if (event.key === "ArrowRight") moveAuraMenuKeyboardFocus(1, 0);
+            if (event.key === "ArrowUp") moveAuraMenuKeyboardFocus(0, -1);
+            if (event.key === "ArrowDown") moveAuraMenuKeyboardFocus(0, 1);
             return;
         }
 
@@ -2705,6 +3038,16 @@ jQuery(() => {
             return;
         }
 
+        if (auraMenuVisible && (event.key === "Enter" || event.key === " " || event.code === "Space")) {
+            event.preventDefault();
+            spacebarDownAt = null;
+            const activation = activateSelectedAuraFromMenu();
+            if (activation.activated) {
+                initAuraMenuKeyboardFocus();
+            }
+            return;
+        }
+
         // Track key state
         keysPressed[keyLower] = true;
 
@@ -2717,6 +3060,27 @@ jQuery(() => {
             typeof SpellSystem.setCurrentSpell === "function"
         ) {
             SpellSystem.setCurrentSpell(wizard, "firewall");
+            return;
+        }
+
+        const isPlusKey = (event.key === "+") || (event.code === "NumpadAdd") || (event.code === "Equal" && event.shiftKey);
+        const isMinusKey = (event.key === "-") || (event.code === "NumpadSubtract");
+        if (
+            wizard &&
+            wizard.currentSpell === "placeobject" &&
+            (isPlusKey || isMinusKey) &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.adjustPlaceableRenderOffset === "function"
+        ) {
+            event.preventDefault();
+            if (!event.repeat) {
+                const delta = isPlusKey ? 0.1 : -0.1;
+                const next = SpellSystem.adjustPlaceableRenderOffset(wizard, delta);
+                if (Number.isFinite(next)) {
+                    const sign = next >= 0 ? "+" : "";
+                    message(`Place depth offset: ${sign}${next.toFixed(1)}`);
+                }
+            }
             return;
         }
 
