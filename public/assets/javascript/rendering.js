@@ -1,16 +1,8 @@
-let lastDebugOverlayUpdateMs = 0;
-let debugOverlayDirty = true;
-const debugOverlayMinIntervalMs = 1000 / 30;
-let debugOverlayPhase = 0;
 let lastRenderedMessageHtml = "";
 let visibilityMaskGraphics = null;
 let visibilityMaskEnabled = false;
 let visibilityMaskSources = [];
 let activeVisibilityMaskHitboxes = [];
-let roofInteriorBlackoutGraphics = null;
-let roofInteriorMaskBlend = 0;
-let roofInteriorMaskBlendLastMs = 0;
-const roofInteriorMaskFadeSeconds = 0.22;
 const groundChunkTileSize = 24;
 const groundChunkRenderPaddingTiles = 4;
 const groundTileOverlapScale = 1.5;
@@ -20,31 +12,39 @@ let groundChunkCache = new Map();
 let groundChunkLastViewscale = 0;
 let spellHoverHighlightSprite = null;
 let spellHoverHighlightWallGraphics = null;
+let spellHoverHighlightMesh = null;
 let placeObjectPreviewSprite = null;
+let placeObjectPreviewSpatialMesh = null;
 let placeObjectPreviewTexturePath = "";
+let placeObjectCenterSnapGuideGraphics = null;
 let uiArrowCursorElement = null;
-let mapBorderGraphics = null;
-let losDebugGraphics = null;
-let losDebugState = null;
 let losGroundMaskGraphics = null;
 let losShadowGraphics = null;
 let losShadowMaskGraphics = null;
-let losDebugFillEnabled = false;
-let losGroundMaskEnabled = false;
-let losShadowEnabled = true;
-let losShadowOpacity = 0.2;
-let losShadowBlurEnabled = true;
-let losShadowBlurStrength = 12;
-let losMaxDarken = 0.5;
+let losObjectTransparencyMaskGraphics = null;
+let losObjectTransparencyMaskTexture = null;
+let losObjectTransparencyFilter = null;
+let losObjectTransparencyMaskWidth = 0;
+let losObjectTransparencyMaskHeight = 0;
+let losObjectTransparencyMaskPreviewSprite = null;
+let losObjectTransparencyMaskPreviewPanel = null;
+let indoorGroundTexture = null;
+let indoorGroundTextureWidth = 0;
+let indoorGroundTextureHeight = 0;
+let indoorGroundTextureDirty = false;
+let indoorGroundSprite = null;
+let indoorMaskGraphics = null;
+let indoorObjectLayer = null;
+let indoorOverlayWasActive = false;
+let indoorCompositeLastRenderMs = 0;
+let indoorCompositeLastCameraX = NaN;
+let indoorCompositeLastCameraY = NaN;
+// Debug/LOS config/state lives in debug.js.
+const losNearRevealRadius = 1.0; // Keep a small omnivision pocket around the wizard.
 const losMinStaticBrightness = 0.2;
 const renderingViewportNodeSampleEpsilon = 1e-4;
-let losForwardFovDegrees = 200;
-let cameraForwardLeadRatio = 0.22;
-let cameraFollowSmoothing = 0.025;
 let currentLosState = null;
 let currentLosVisibleSet = null;
-let currentLosVisibleWallGroups = null;
-let wallLosGroupState = new Map();
 let lastLosWizardX = null;
 let lastLosWizardY = null;
 let lastLosFacingAngle = null;
@@ -53,68 +53,286 @@ let lastLosCandidateHash = 0;
 let lastLosComputeAtMs = 0;
 let nextLosObjectId = 1;
 let lastRenderFrameMs = 0;
+const wallSectionBatchingEnabled = true;
+const opaqueDepthMeshEnabled = true;
+const defaultWallTexturePath = "/assets/images/walls/stonewall.png";
+const defaultWallTextureRepeatsPerMapUnitX = 0.1; // 1 repetition per 2 map units.
+const defaultWallTextureRepeatsPerMapUnitY = 0.1; // 1 repetition per 2 map units.
+let wallTextureConfigCache = null;
+let wallTextureConfigPromise = null;
+let opaqueDepthMeshState = null;
+const OPAQUE_DEPTH_VS = `
+precision mediump float;
+attribute vec3 aWorldPosition;
+attribute vec2 aUvs;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+varying vec2 vUvs;
+void main(void) {
+    float camDx = aWorldPosition.x - uCameraWorld.x;
+    float camDy = aWorldPosition.y - uCameraWorld.y;
+    float camDz = aWorldPosition.z;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+}
+`;
+const OPAQUE_DEPTH_FS = `
+precision mediump float;
+varying vec2 vUvs;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+void main(void) {
+    vec4 tex = texture2D(uSampler, vUvs) * uTint;
+    if (tex.a < uAlphaCutoff) discard;
+    gl_FragColor = tex;
+}
+`;
 
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {
-    globalThis.setLosDebugFillEnabled = function setLosDebugFillEnabled(enabled) {
-        losDebugFillEnabled = !!enabled;
+function getWallSectionsRendererApi() {
+    return (typeof globalThis !== "undefined" && globalThis.WallSectionsRenderer)
+        ? globalThis.WallSectionsRenderer
+        : null;
+}
+
+function getLosVisualSetting(key, fallback) {
+    const settings = (typeof LOSVisualSettings !== "undefined") ? LOSVisualSettings : null;
+    if (!settings || typeof settings !== "object") return fallback;
+    return Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : fallback;
+}
+
+function normalizeWallTextureConfigPath(texturePath) {
+    if (typeof texturePath !== "string" || texturePath.length === 0) return "";
+    const raw = texturePath.split("?")[0].split("#")[0];
+    if (raw.startsWith("/")) return raw;
+    try {
+        if (typeof window !== "undefined" && window.location && window.location.origin) {
+            return new URL(raw, window.location.origin).pathname || raw;
+        }
+    } catch (_) {}
+    return raw;
+}
+
+function ensureWallTextureConfigLoaded() {
+    if (wallTextureConfigCache) return Promise.resolve(wallTextureConfigCache);
+    if (wallTextureConfigPromise) return wallTextureConfigPromise;
+    const invalidateWallDepthGeometryCaches = () => {
+        if (!(map && Array.isArray(map.objects))) return;
+        for (let i = 0; i < map.objects.length; i++) {
+            const obj = map.objects[i];
+            if (!obj) continue;
+            if (obj._wallDepthGeometryCache) obj._wallDepthGeometryCache = null;
+            if (obj._sectionDepthGeometryCache) obj._sectionDepthGeometryCache = null;
+        }
+    };
+    const rebuildSectionCompositesAfterTextureConfigLoad = () => {
+        const wallSections = getWallSectionsRendererApi();
+        if (wallSections && typeof wallSections.queueRebuildPass === "function") {
+            wallSections.queueRebuildPass(2);
+            return;
+        }
+        if (typeof globalThis !== "undefined" && typeof globalThis.queueWallSectionRebuildPass === "function") {
+            globalThis.queueWallSectionRebuildPass(2);
+        }
+    };
+    wallTextureConfigPromise = fetch("/assets/images/walls/items.json", { cache: "no-cache" })
+        .then(resp => (resp && resp.ok) ? resp.json() : null)
+        .then(doc => {
+            const cfg = { byPath: new Map(), byFile: new Map() };
+            const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i];
+                if (!entry || typeof entry !== "object") continue;
+                const texturePath = normalizeWallTextureConfigPath(entry.texturePath);
+                const fallbackRepeat = Number.isFinite(entry.repeatsPerMapUnit)
+                    ? Math.max(0.0001, Number(entry.repeatsPerMapUnit))
+                    : null;
+                const repeatsPerMapUnitX = Number.isFinite(entry.repeatsPerMapUnitX)
+                    ? Math.max(0.0001, Number(entry.repeatsPerMapUnitX))
+                    : (fallbackRepeat || defaultWallTextureRepeatsPerMapUnitX);
+                const repeatsPerMapUnitY = Number.isFinite(entry.repeatsPerMapUnitY)
+                    ? Math.max(0.0001, Number(entry.repeatsPerMapUnitY))
+                    : (fallbackRepeat || defaultWallTextureRepeatsPerMapUnitY);
+                const normalizedEntry = { texturePath, repeatsPerMapUnitX, repeatsPerMapUnitY };
+                if (texturePath) cfg.byPath.set(texturePath, normalizedEntry);
+                const file = (typeof entry.file === "string" && entry.file.length > 0) ? entry.file : null;
+                if (file) cfg.byFile.set(file, normalizedEntry);
+            }
+            wallTextureConfigCache = cfg;
+            invalidateWallDepthGeometryCaches();
+            rebuildSectionCompositesAfterTextureConfigLoad();
+            return wallTextureConfigCache;
+        })
+        .catch(() => {
+            wallTextureConfigCache = { byPath: new Map(), byFile: new Map() };
+            return wallTextureConfigCache;
+        })
+        .finally(() => {
+            wallTextureConfigPromise = null;
+        });
+    return wallTextureConfigPromise;
+}
+
+function getWallTextureConfig(texturePath) {
+    if (!wallTextureConfigCache) {
+        void ensureWallTextureConfigLoaded();
+    }
+    const normalized = normalizeWallTextureConfigPath(texturePath || defaultWallTexturePath);
+    const file = normalized.split("/").pop() || "";
+    const byPath = wallTextureConfigCache && wallTextureConfigCache.byPath ? wallTextureConfigCache.byPath : null;
+    const byFile = wallTextureConfigCache && wallTextureConfigCache.byFile ? wallTextureConfigCache.byFile : null;
+    const entry = (byPath && byPath.get(normalized))
+        || (byFile && byFile.get(file))
+        || null;
+    return {
+        texturePath: (entry && typeof entry.texturePath === "string" && entry.texturePath.length > 0)
+            ? entry.texturePath
+            : (normalized || defaultWallTexturePath),
+        repeatsPerMapUnitX: (entry && Number.isFinite(entry.repeatsPerMapUnitX))
+            ? Math.max(0.0001, Number(entry.repeatsPerMapUnitX))
+            : defaultWallTextureRepeatsPerMapUnitX,
+        repeatsPerMapUnitY: (entry && Number.isFinite(entry.repeatsPerMapUnitY))
+            ? Math.max(0.0001, Number(entry.repeatsPerMapUnitY))
+            : defaultWallTextureRepeatsPerMapUnitY
     };
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosGroundMaskEnabled !== "function") {
-    globalThis.setLosGroundMaskEnabled = function setLosGroundMaskEnabled(enabled) {
-        losGroundMaskEnabled = !!enabled;
-    };
+
+function ensureOpaqueDepthMeshState() {
+    if (!opaqueDepthMeshEnabled || typeof PIXI === "undefined") return null;
+    if (opaqueDepthMeshState) return opaqueDepthMeshState;
+    opaqueDepthMeshState = new PIXI.State();
+    opaqueDepthMeshState.depthTest = true;
+    opaqueDepthMeshState.depthMask = true;
+    opaqueDepthMeshState.blend = false;
+    opaqueDepthMeshState.culling = false;
+    return opaqueDepthMeshState;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosShadowEnabled !== "function") {
-    globalThis.setLosShadowEnabled = function setLosShadowEnabled(enabled) {
-        losShadowEnabled = !!enabled;
-    };
+
+function createOpaqueDepthMesh() {
+    if (typeof PIXI === "undefined") return null;
+    const state = ensureOpaqueDepthMeshState();
+    if (!state) return null;
+    const geometry = new PIXI.Geometry()
+        .addAttribute("aWorldPosition", new Float32Array(0), 3)
+        .addAttribute("aUvs", new Float32Array(0), 2)
+        .addIndex(new Uint16Array(0));
+    const shader = PIXI.Shader.from(OPAQUE_DEPTH_VS, OPAQUE_DEPTH_FS, {
+        uScreenSize: new Float32Array([1, 1]),
+        uCameraWorld: new Float32Array([0, 0]),
+        uViewScale: 1,
+        uXyRatio: 1,
+        uDepthRange: new Float32Array([0, 1]),
+        uTint: new Float32Array([1, 1, 1, 1]),
+        uAlphaCutoff: 0.1,
+        uSampler: PIXI.Texture.WHITE
+    });
+    const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
+    mesh.interactive = false;
+    mesh.roundPixels = true;
+    return mesh;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosShadowOpacity !== "function") {
-    globalThis.setLosShadowOpacity = function setLosShadowOpacity(alpha) {
-        const value = Number(alpha);
-        if (!Number.isFinite(value)) return;
-        losShadowOpacity = Math.max(0, Math.min(1, value));
-    };
+
+function setOpaqueDepthMeshGeometry(mesh, worldPositions, uvs, indices) {
+    if (!mesh || !mesh.geometry) return false;
+    const posBuffer = mesh.geometry.getBuffer("aWorldPosition");
+    const uvBuffer = mesh.geometry.getBuffer("aUvs");
+    const indexBuffer = mesh.geometry.getIndex();
+    if (!posBuffer || !uvBuffer || !indexBuffer) return false;
+    posBuffer.data = worldPositions;
+    uvBuffer.data = uvs;
+    indexBuffer.data = indices;
+    posBuffer.update();
+    uvBuffer.update();
+    indexBuffer.update();
+    return true;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosShadowBlurEnabled !== "function") {
-    globalThis.setLosShadowBlurEnabled = function setLosShadowBlurEnabled(enabled) {
-        losShadowBlurEnabled = !!enabled;
-    };
+
+function getDepthMetricRange() {
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    const viewportHeight = Number(camera.height) || 30;
+    const nearMetric = -Math.max(80, viewportHeight * 0.6);
+    const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+    const span = Math.max(1e-4, farMetric - nearMetric);
+    return { nearMetric, farMetric, span, invSpan: 1 / span, camera };
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosShadowBlurStrength !== "function") {
-    globalThis.setLosShadowBlurStrength = function setLosShadowBlurStrength(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return;
-        losShadowBlurStrength = Math.max(0, n);
-    };
+
+function appendDepthQuad(builder, p0, p1, p2, p3, uvRect = null) {
+    if (!builder || !p0 || !p1 || !p2 || !p3) return;
+    const u0 = uvRect && Number.isFinite(uvRect.u0) ? uvRect.u0 : 0;
+    const v0 = uvRect && Number.isFinite(uvRect.v0) ? uvRect.v0 : 0;
+    const u1 = uvRect && Number.isFinite(uvRect.u1) ? uvRect.u1 : 1;
+    const v1 = uvRect && Number.isFinite(uvRect.v1) ? uvRect.v1 : 1;
+    const base = builder.vertexCount;
+    builder.positions.push(
+        p0.x, p0.y, p0.z,
+        p1.x, p1.y, p1.z,
+        p2.x, p2.y, p2.z,
+        p3.x, p3.y, p3.z
+    );
+    builder.uvs.push(u0, v1, u1, v1, u1, v0, u0, v0);
+    builder.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    builder.vertexCount += 4;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosMaxDarken !== "function") {
-    globalThis.setLosMaxDarken = function setLosMaxDarken(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return;
-        losMaxDarken = Math.max(0, Math.min(1, n));
-    };
+
+function appendDepthTriangle(builder, p0, p1, p2, uv0 = null, uv1 = null, uv2 = null) {
+    if (!builder || !p0 || !p1 || !p2) return;
+    const base = builder.vertexCount;
+    builder.positions.push(
+        p0.x, p0.y, p0.z,
+        p1.x, p1.y, p1.z,
+        p2.x, p2.y, p2.z
+    );
+    builder.uvs.push(
+        uv0 && Number.isFinite(uv0.u) ? uv0.u : 0, uv0 && Number.isFinite(uv0.v) ? uv0.v : 1,
+        uv1 && Number.isFinite(uv1.u) ? uv1.u : 1, uv1 && Number.isFinite(uv1.v) ? uv1.v : 1,
+        uv2 && Number.isFinite(uv2.u) ? uv2.u : 0.5, uv2 && Number.isFinite(uv2.v) ? uv2.v : 0
+    );
+    builder.indices.push(base, base + 1, base + 2);
+    builder.vertexCount += 3;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setLosForwardFovDegrees !== "function") {
-    globalThis.setLosForwardFovDegrees = function setLosForwardFovDegrees(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return;
-        losForwardFovDegrees = Math.max(0, Math.min(360, n));
-    };
+
+function ensureItemOpaqueDepthMesh(item) {
+    if (!item) return null;
+    if (item._opaqueDepthMesh && !item._opaqueDepthMesh.destroyed) return item._opaqueDepthMesh;
+    const mesh = createOpaqueDepthMesh();
+    if (!mesh) return null;
+    item._opaqueDepthMesh = mesh;
+    return mesh;
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setCameraForwardLeadRatio !== "function") {
-    globalThis.setCameraForwardLeadRatio = function setCameraForwardLeadRatio(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return;
-        cameraForwardLeadRatio = Math.max(0, Math.min(0.8, n));
-    };
+
+function removeItemOpaqueDepthMeshFromParent(item) {
+    if (!item || !item._opaqueDepthMesh) return;
+    if (item._opaqueDepthMesh.parent) {
+        item._opaqueDepthMesh.parent.removeChild(item._opaqueDepthMesh);
+    }
 }
-if (typeof globalThis !== "undefined" && typeof globalThis.setCameraFollowSmoothing !== "function") {
-    globalThis.setCameraFollowSmoothing = function setCameraFollowSmoothing(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return;
-        cameraFollowSmoothing = Math.max(0, Math.min(1, n));
-    };
+
+function tintHexToUniform(tintHex, alpha = 1) {
+    const t = Number.isFinite(tintHex) ? (tintHex >>> 0) : 0xFFFFFF;
+    const a = Math.max(0, Math.min(1, Number.isFinite(alpha) ? alpha : 1));
+    return new Float32Array([
+        ((t >> 16) & 0xFF) / 255,
+        ((t >> 8) & 0xFF) / 255,
+        (t & 0xFF) / 255,
+        a
+    ]);
 }
 
 function isAnimalEntity(item) {
@@ -123,12 +341,38 @@ function isAnimalEntity(item) {
     return false;
 }
 
+function isPlacedObjectEntity(item) {
+    if (!item) return false;
+    return !!(item.isPlacedObject || item.objectType === "placedObject" || item.type === "placedObject");
+}
+
 function isLosOccluder(item) {
     if (!item || !item.groundPlaneHitbox) return false;
     if (isAnimalEntity(item)) return false;
     if (item.type === "road") return false;
     if (item.type === "firewall") return false;
+    if (item.type === "roof") return false;
+    if (
+        isPlacedObjectEntity(item) &&
+        typeof item.category === "string" &&
+        item.category.trim().toLowerCase() === "windows"
+    ) return false;
     return true;
+}
+
+function isWallMountedPlaceable(item) {
+    if (!item) return false;
+    const explicitType = (typeof item.type === "string") ? item.type.trim().toLowerCase() : "";
+    const isExplicitWindowDoorType = explicitType === "window" || explicitType === "door";
+    const isPlacedOrPreview = isPlacedObjectEntity(item) || item.type === "placedObjectPreview" || isExplicitWindowDoorType;
+    if (!isPlacedOrPreview) return false;
+    const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+    if (category === "windows" || category === "doors") return true;
+    return isExplicitWindowDoorType;
+}
+
+function getWallMountedDepthBias(item) {
+    return isWallMountedPlaceable(item) ? 0.00005 : 0;
 }
 
 function getGroundHitboxCenter(hitbox) {
@@ -144,6 +388,177 @@ function getGroundHitboxCenter(hitbox) {
     return null;
 }
 
+function hitboxContainsWorldPoint(hitbox, x, y) {
+    return !!(hitbox && typeof hitbox.containsPoint === "function" && hitbox.containsPoint(x, y));
+}
+
+function groundHitboxLikelyIntersectsHitbox(groundHitbox, maskHitbox) {
+    if (!groundHitbox || !maskHitbox) return false;
+    if (groundHitbox.type === "circle" && Number.isFinite(groundHitbox.x) && Number.isFinite(groundHitbox.y) && Number.isFinite(groundHitbox.radius)) {
+        const r = groundHitbox.radius;
+        const samples = [
+            { x: groundHitbox.x, y: groundHitbox.y },
+            { x: groundHitbox.x + r, y: groundHitbox.y },
+            { x: groundHitbox.x - r, y: groundHitbox.y },
+            { x: groundHitbox.x, y: groundHitbox.y + r },
+            { x: groundHitbox.x, y: groundHitbox.y - r }
+        ];
+        return samples.some(pt => hitboxContainsWorldPoint(maskHitbox, pt.x, pt.y));
+    }
+    if (Array.isArray(groundHitbox.points) && groundHitbox.points.length >= 3) {
+        const pts = groundHitbox.points;
+        if (pts.some(pt => hitboxContainsWorldPoint(maskHitbox, pt.x, pt.y))) return true;
+        const cx = pts.reduce((sum, pt) => sum + pt.x, 0) / pts.length;
+        const cy = pts.reduce((sum, pt) => sum + pt.y, 0) / pts.length;
+        return hitboxContainsWorldPoint(maskHitbox, cx, cy);
+    }
+    const center = getGroundHitboxCenter(groundHitbox);
+    return !!(center && hitboxContainsWorldPoint(maskHitbox, center.x, center.y));
+}
+
+function ensureIndoorOverlayResources() {
+    if (!app || !app.renderer || !gameContainer || typeof PIXI === "undefined") return false;
+
+    const targetWidth = Math.max(1, Math.ceil((app.screen && app.screen.width) ? app.screen.width : (app.renderer.width || 1)));
+    const targetHeight = Math.max(1, Math.ceil((app.screen && app.screen.height) ? app.screen.height : (app.renderer.height || 1)));
+    if (!indoorGroundTexture || indoorGroundTextureWidth !== targetWidth || indoorGroundTextureHeight !== targetHeight) {
+        if (indoorGroundTexture) indoorGroundTexture.destroy(true);
+        indoorGroundTexture = PIXI.RenderTexture.create({ width: targetWidth, height: targetHeight });
+        indoorGroundTextureWidth = targetWidth;
+        indoorGroundTextureHeight = targetHeight;
+        indoorGroundTextureDirty = true;
+        if (indoorGroundSprite) indoorGroundSprite.texture = indoorGroundTexture;
+    }
+
+    if (!indoorGroundSprite) {
+        indoorGroundSprite = new PIXI.Sprite(indoorGroundTexture);
+        indoorGroundSprite.anchor.set(0, 0);
+        indoorGroundSprite.x = 0;
+        indoorGroundSprite.y = 0;
+        indoorGroundSprite.visible = false;
+        gameContainer.addChild(indoorGroundSprite);
+    }
+    if (!indoorMaskGraphics) {
+        indoorMaskGraphics = new PIXI.Graphics();
+        indoorMaskGraphics.visible = false;
+        gameContainer.addChild(indoorMaskGraphics);
+    }
+    if (!indoorObjectLayer) {
+        indoorObjectLayer = new PIXI.Container();
+        indoorObjectLayer.visible = true;
+        gameContainer.addChild(indoorObjectLayer);
+    }
+    indoorGroundSprite.mask = indoorMaskGraphics;
+    return true;
+}
+
+function drawHitboxMaskToGraphics(hitbox, graphics) {
+    if (!hitbox || !graphics) return false;
+    let drew = false;
+    if (hitbox.type === "circle" && Number.isFinite(hitbox.x) && Number.isFinite(hitbox.y) && Number.isFinite(hitbox.radius)) {
+        const center = worldToScreen({ x: hitbox.x, y: hitbox.y });
+        graphics.drawEllipse(
+            center.x,
+            center.y,
+            hitbox.radius * viewscale,
+            hitbox.radius * viewscale * xyratio
+        );
+        drew = true;
+    } else if (Array.isArray(hitbox.points) && hitbox.points.length >= 3) {
+        const points = projectPolygonPointsToScreen(hitbox.points);
+        if (points.length >= 3) {
+            graphics.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                graphics.lineTo(points[i].x, points[i].y);
+            }
+            graphics.closePath();
+            drew = true;
+        }
+    }
+    return drew;
+}
+
+function updateIndoorOverlay(houseHitbox, wizardInsideHouse) {
+    if (!ensureIndoorOverlayResources()) return;
+    if (!wizardInsideHouse || !houseHitbox) {
+        if (indoorGroundSprite) indoorGroundSprite.visible = false;
+        if (indoorMaskGraphics) {
+            indoorMaskGraphics.clear();
+            indoorMaskGraphics.visible = false;
+        }
+        if (indoorObjectLayer) indoorObjectLayer.visible = false;
+        indoorOverlayWasActive = false;
+        indoorCompositeLastCameraX = NaN;
+        indoorCompositeLastCameraY = NaN;
+        return;
+    }
+
+    if (indoorMaskGraphics) {
+        indoorMaskGraphics.clear();
+        indoorMaskGraphics.beginFill(0xffffff, 1);
+        const drew = drawHitboxMaskToGraphics(houseHitbox, indoorMaskGraphics);
+        indoorMaskGraphics.endFill();
+        indoorMaskGraphics.visible = drew;
+    }
+
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    const cameraMoved = (
+        !Number.isFinite(indoorCompositeLastCameraX) ||
+        !Number.isFinite(indoorCompositeLastCameraY) ||
+        Math.abs(camera.x - indoorCompositeLastCameraX) > 1e-4 ||
+        Math.abs(camera.y - indoorCompositeLastCameraY) > 1e-4
+    );
+    const shouldRenderComposite = (
+        indoorGroundTextureDirty ||
+        !indoorOverlayWasActive ||
+        cameraMoved
+    );
+
+    if (shouldRenderComposite) {
+        try {
+            app.renderer.render({ container: landLayer, target: indoorGroundTexture, clear: true });
+            app.renderer.render({ container: roadLayer, target: indoorGroundTexture, clear: false });
+        } catch (e) {
+            app.renderer.render(landLayer, indoorGroundTexture, true);
+            app.renderer.render(roadLayer, indoorGroundTexture, false);
+        }
+        indoorCompositeLastRenderMs = (typeof renderNowMs === "number" && Number.isFinite(renderNowMs) && renderNowMs > 0)
+            ? renderNowMs
+            : performance.now();
+        indoorCompositeLastCameraX = camera.x;
+        indoorCompositeLastCameraY = camera.y;
+        indoorGroundTextureDirty = false;
+    }
+
+    indoorGroundSprite.visible = true;
+    indoorObjectLayer.visible = true;
+    indoorOverlayWasActive = true;
+
+    // Keep indoor composite on top of world layers.
+    if (gameContainer && indoorGroundSprite && indoorObjectLayer) {
+        gameContainer.setChildIndex(indoorGroundSprite, gameContainer.children.length - 1);
+        gameContainer.setChildIndex(indoorObjectLayer, gameContainer.children.length - 1);
+    }
+}
+
+function routeWizardToIndoorLayer(wizardInsideHouse) {
+    if (!wizard) return;
+    const targetLayer = (wizardInsideHouse && indoorObjectLayer) ? indoorObjectLayer : characterLayer;
+    if (!targetLayer) return;
+    const moveToLayer = (displayObj) => {
+        if (!displayObj) return;
+        if (displayObj.parent !== targetLayer) {
+            if (displayObj.parent) displayObj.parent.removeChild(displayObj);
+            targetLayer.addChild(displayObj);
+        }
+    };
+    moveToLayer(wizard.shadowGraphics);
+    moveToLayer(wizard.pixiSprite);
+    moveToLayer(wizard.hatGraphics);
+}
+
 function isLosPointVisible(worldX, worldY, slack = 0.05) {
     if (!wizard || !currentLosState) return true;
     if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return true;
@@ -155,6 +570,7 @@ function isLosPointVisible(worldX, worldY, slack = 0.05) {
         : (worldY - wizard.y);
     const distanceToPoint = Math.hypot(dx, dy);
     if (!Number.isFinite(distanceToPoint) || distanceToPoint <= 1e-6) return true;
+    if (distanceToPoint <= losNearRevealRadius) return true;
 
     const bins = Number.isFinite(currentLosState.bins) ? currentLosState.bins : 0;
     const depth = currentLosState.depth;
@@ -169,21 +585,64 @@ function isLosPointVisible(worldX, worldY, slack = 0.05) {
     return distanceToPoint <= nearestDepth + slack;
 }
 
+function getWallVisibleLongEdgeSegment(item) {
+    if (!item || item.type !== "wall" || !item.a || !item.b) return null;
+    const ax = Number(item.a.x);
+    const ay = Number(item.a.y);
+    const bx = Number(item.b.x);
+    const by = Number(item.b.y);
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return null;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 1e-6) return null;
+
+    const wallThickness = Math.max(0.001, Number(item.thickness) || 0.001);
+    const halfThickness = wallThickness * 0.5;
+    const nx = -dy / len;
+    const ny = dx / len;
+
+    const aLeft = { x: ax + nx * halfThickness, y: ay + ny * halfThickness };
+    const bLeft = { x: bx + nx * halfThickness, y: by + ny * halfThickness };
+    const aRight = { x: ax - nx * halfThickness, y: ay - ny * halfThickness };
+    const bRight = { x: bx - nx * halfThickness, y: by - ny * halfThickness };
+
+    // The "visible onscreen" long face is the one with larger world-y average
+    // (since screen y increases with world y in this projection).
+    let useLeft = ny >= 0;
+    if (Math.abs(ny) < 1e-6 && wizard) {
+        // Tie-break nearly vertical walls by wizard side-of-wall.
+        const midX = (ax + bx) * 0.5;
+        const midY = (ay + by) * 0.5;
+        const toWizardX = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(midX, wizard.x)
+            : (wizard.x - midX);
+        const toWizardY = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(midY, wizard.y)
+            : (wizard.y - midY);
+        const side = toWizardX * nx + toWizardY * ny;
+        useLeft = side >= 0;
+    }
+
+    return useLeft
+        ? { x0: aLeft.x, y0: aLeft.y, x1: bLeft.x, y1: bLeft.y }
+        : { x0: aRight.x, y0: aRight.y, x1: bRight.x, y1: bRight.y };
+}
+
 function isCurrentlyVisibleByLos(item) {
     if (!item || !item.groundPlaneHitbox || !wizard || !currentLosState) return true;
     if (currentLosVisibleSet && currentLosVisibleSet.has(item)) return true;
     if (item.type === "wall" && item.a && item.b) {
-        const ax = Number(item.a.x);
-        const ay = Number(item.a.y);
-        const bx = Number(item.b.x);
-        const by = Number(item.b.y);
-        if (Number.isFinite(ax) && Number.isFinite(ay) && Number.isFinite(bx) && Number.isFinite(by)) {
-            const sampleTs = [0, 0.25, 0.5, 0.75, 1];
+        const visibleEdge = getWallVisibleLongEdgeSegment(item);
+        if (visibleEdge) {
+            // Sample only along the wall's long span; ignore endpoint caps so
+            // touching an attached short end does not mark the whole wall lit.
+            const sampleTs = [0.2, 0.35, 0.5, 0.65, 0.8];
             for (let i = 0; i < sampleTs.length; i++) {
                 const t = sampleTs[i];
-                const sx = ax + (bx - ax) * t;
-                const sy = ay + (by - ay) * t;
-                if (isLosPointVisible(sx, sy, 0.08)) return true;
+                const sx = visibleEdge.x0 + (visibleEdge.x1 - visibleEdge.x0) * t;
+                const sy = visibleEdge.y0 + (visibleEdge.y1 - visibleEdge.y0) * t;
+                if (isLosPointVisible(sx, sy, 0.1)) return true;
             }
             return false;
         }
@@ -326,19 +785,11 @@ function computeLosCandidateHash(candidates) {
 
 function getWizardFacingAngleRad() {
     if (!wizard) return 0;
-    if (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
-        const dx = (map && typeof map.shortestDeltaX === "function")
-            ? map.shortestDeltaX(wizard.x, mousePos.worldX)
-            : (mousePos.worldX - wizard.x);
-        const dy = (map && typeof map.shortestDeltaY === "function")
-            ? map.shortestDeltaY(wizard.y, mousePos.worldY)
-            : (mousePos.worldY - wizard.y);
-        if (Math.hypot(dx, dy) > 1e-6) {
-            return Math.atan2(dy, dx);
-        }
+    if (Number.isFinite(wizard.smoothedFacingAngleDeg)) {
+        return Number(wizard.smoothedFacingAngleDeg) * (Math.PI / 180);
     }
 
-    // Fallback to sprite row facing when aim vector is unavailable.
+    // Fallback to sprite row facing when smoothed angle is unavailable.
     if (Number.isInteger(wizard.lastDirectionRow)) {
         const rowAngleDegByDirectionIndex = [180, -150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
         const directionIndex = ((wizard.lastDirectionRow - wizardDirectionRowOffset) % 12 + 12) % 12;
@@ -378,18 +829,20 @@ function ensureLosShadowGraphics() {
     if (losShadowGraphics.mask) {
         losShadowGraphics.mask = null;
     }
-    if (losShadowBlurEnabled && losShadowBlurStrength > 0 && typeof PIXI !== "undefined") {
+    const shadowBlurEnabled = !!getLosVisualSetting("shadowBlurEnabled", true);
+    const shadowBlurStrength = Number(getLosVisualSetting("shadowBlurStrength", 12));
+    if (shadowBlurEnabled && shadowBlurStrength > 0 && typeof PIXI !== "undefined") {
         if (typeof PIXI.BlurFilter === "function") {
             if (!losShadowGraphics._losBlurFilter || !(losShadowGraphics._losBlurFilter instanceof PIXI.BlurFilter)) {
                 losShadowGraphics._losBlurFilter = new PIXI.BlurFilter();
             }
-            losShadowGraphics._losBlurFilter.blur = losShadowBlurStrength;
+            losShadowGraphics._losBlurFilter.blur = shadowBlurStrength;
             losShadowGraphics.filters = [losShadowGraphics._losBlurFilter];
         } else if (PIXI.filters && typeof PIXI.filters.BlurFilter === "function") {
             if (!losShadowGraphics._losBlurFilter || !(losShadowGraphics._losBlurFilter instanceof PIXI.filters.BlurFilter)) {
                 losShadowGraphics._losBlurFilter = new PIXI.filters.BlurFilter();
             }
-            losShadowGraphics._losBlurFilter.blur = losShadowBlurStrength;
+            losShadowGraphics._losBlurFilter.blur = shadowBlurStrength;
             losShadowGraphics.filters = [losShadowGraphics._losBlurFilter];
         } else {
             losShadowGraphics.filters = null;
@@ -410,9 +863,230 @@ function ensureLosShadowGraphics() {
     return losShadowGraphics;
 }
 
+function ensureLosObjectTransparencyResources() {
+    if (!app || !app.renderer || typeof PIXI === "undefined") return false;
+    if (!losObjectTransparencyMaskGraphics) {
+        losObjectTransparencyMaskGraphics = new PIXI.Graphics();
+        losObjectTransparencyMaskGraphics.visible = false;
+        losObjectTransparencyMaskGraphics.interactive = false;
+    }
+
+    const targetWidth = Math.max(1, Math.ceil((app.screen && app.screen.width) ? app.screen.width : (app.renderer.width || 1)));
+    const targetHeight = Math.max(1, Math.ceil((app.screen && app.screen.height) ? app.screen.height : (app.renderer.height || 1)));
+    if (
+        !losObjectTransparencyMaskTexture ||
+        losObjectTransparencyMaskWidth !== targetWidth ||
+        losObjectTransparencyMaskHeight !== targetHeight
+    ) {
+        if (losObjectTransparencyMaskTexture) {
+            losObjectTransparencyMaskTexture.destroy(true);
+        }
+        losObjectTransparencyMaskTexture = PIXI.RenderTexture.create({
+            width: targetWidth,
+            height: targetHeight
+        });
+        losObjectTransparencyMaskWidth = targetWidth;
+        losObjectTransparencyMaskHeight = targetHeight;
+        if (losObjectTransparencyMaskPreviewSprite) {
+            losObjectTransparencyMaskPreviewSprite.texture = losObjectTransparencyMaskTexture;
+        }
+    }
+
+    if (!losObjectTransparencyMaskPreviewSprite) {
+        losObjectTransparencyMaskPreviewPanel = new PIXI.Graphics();
+        losObjectTransparencyMaskPreviewPanel.interactive = false;
+        losObjectTransparencyMaskPreviewPanel.zIndex = 999998;
+        losObjectTransparencyMaskPreviewPanel.visible = true;
+        losObjectTransparencyMaskPreviewPanel.x = 4;
+        losObjectTransparencyMaskPreviewPanel.y = 4;
+
+        losObjectTransparencyMaskPreviewSprite = new PIXI.Sprite(losObjectTransparencyMaskTexture);
+        losObjectTransparencyMaskPreviewSprite.anchor.set(0, 0);
+        losObjectTransparencyMaskPreviewSprite.x = 8;
+        losObjectTransparencyMaskPreviewSprite.y = 8;
+        losObjectTransparencyMaskPreviewSprite.alpha = 0.9;
+        losObjectTransparencyMaskPreviewSprite.zIndex = 999999;
+        if (app.stage && typeof app.stage.sortableChildren === "boolean") {
+            app.stage.sortableChildren = true;
+        }
+        if (app.stage) {
+            app.stage.addChild(losObjectTransparencyMaskPreviewPanel);
+            app.stage.addChild(losObjectTransparencyMaskPreviewSprite);
+        }
+    }
+    // Keep a readable preview size.
+    const previewW = Math.max(200, Math.floor(targetWidth * 0.28));
+    const previewH = Math.max(120, Math.floor(targetHeight * 0.28));
+    losObjectTransparencyMaskPreviewSprite.width = previewW;
+    losObjectTransparencyMaskPreviewSprite.height = previewH;
+    const showMaskPreview = !!getLosVisualSetting("objectLitMaskPreview", false);
+    losObjectTransparencyMaskPreviewSprite.visible = showMaskPreview;
+    if (losObjectTransparencyMaskPreviewPanel) {
+        losObjectTransparencyMaskPreviewPanel.clear();
+        losObjectTransparencyMaskPreviewPanel.lineStyle(2, 0xff00ff, 1);
+        losObjectTransparencyMaskPreviewPanel.beginFill(0x101010, 0.85);
+        losObjectTransparencyMaskPreviewPanel.drawRect(0, 0, previewW + 12, previewH + 12);
+        losObjectTransparencyMaskPreviewPanel.endFill();
+        losObjectTransparencyMaskPreviewPanel.visible = showMaskPreview;
+    }
+
+    if (!losObjectTransparencyFilter) {
+        const fragment = `
+            precision mediump float;
+            varying vec2 vTextureCoord;
+            uniform sampler2D uSampler;
+            uniform sampler2D losMask;
+            uniform float litAlpha;
+            uniform float shadowOpacity;
+            uniform float debugMaskOnly;
+            uniform vec2 screenSize;
+            void main(void) {
+                vec4 color = texture2D(uSampler, vTextureCoord);
+                vec2 maskUv = vTextureCoord;
+                vec4 maskSample = texture2D(losMask, maskUv);
+                float shadowAmountRaw = maskSample.a;
+                float shadowAmount = clamp(shadowAmountRaw / max(shadowOpacity, 0.0001), 0.0, 1.0);
+                if (debugMaskOnly > 0.5) {
+                    gl_FragColor = vec4(vec3(shadowAmount), color.a);
+                    return;
+                }
+                float alphaFactor = mix(litAlpha, 1.0, shadowAmount);
+                color.rgb *= alphaFactor;
+                color.a *= alphaFactor;
+                gl_FragColor = color;
+            }
+        `;
+        try {
+            losObjectTransparencyFilter = new PIXI.Filter(undefined, fragment, {
+                losMask: losObjectTransparencyMaskTexture,
+                litAlpha: 0.5,
+                shadowOpacity: 0.4,
+                debugMaskOnly: 0,
+                screenSize: new Float32Array([targetWidth, targetHeight])
+            });
+        } catch (err) {
+            losObjectTransparencyFilter = null;
+            return false;
+        }
+    } else {
+        losObjectTransparencyFilter.uniforms.losMask = losObjectTransparencyMaskTexture;
+        losObjectTransparencyFilter.uniforms.screenSize = new Float32Array([targetWidth, targetHeight]);
+    }
+    return true;
+}
+
+function setLosObjectTransparencyFilterEnabled(enabled) {
+    if (!objectLayer || !losObjectTransparencyFilter) return;
+    const filters = Array.isArray(objectLayer.filters)
+        ? objectLayer.filters.filter(Boolean)
+        : [];
+    const hasFilter = filters.includes(losObjectTransparencyFilter);
+    if (enabled) {
+        if (!hasFilter) filters.push(losObjectTransparencyFilter);
+        objectLayer.filters = filters;
+        if (app && app.screen) {
+            objectLayer.filterArea = app.screen;
+        }
+    } else if (hasFilter) {
+        const next = filters.filter(f => f !== losObjectTransparencyFilter);
+        objectLayer.filters = next.length ? next : null;
+    }
+}
+
+function updateLosObjectTransparencyMask() {
+    const enabled = !!getLosVisualSetting("objectLitTransparencyEnabled", false);
+    if (!enabled) {
+        setLosObjectTransparencyFilterEnabled(false);
+        if (losObjectTransparencyMaskPreviewSprite) {
+            losObjectTransparencyMaskPreviewSprite.visible = false;
+        }
+        if (losObjectTransparencyMaskPreviewPanel) {
+            losObjectTransparencyMaskPreviewPanel.visible = false;
+        }
+        return;
+    }
+    if (!wizard || !currentLosState || !LOSSystem || typeof LOSSystem.buildPolygonWorldPoints !== "function") {
+        setLosObjectTransparencyFilterEnabled(false);
+        if (losObjectTransparencyMaskPreviewSprite) {
+            losObjectTransparencyMaskPreviewSprite.visible = false;
+        }
+        if (losObjectTransparencyMaskPreviewPanel) {
+            losObjectTransparencyMaskPreviewPanel.visible = false;
+        }
+        return;
+    }
+    if (!ensureLosObjectTransparencyResources()) {
+        setLosObjectTransparencyFilterEnabled(false);
+        if (losObjectTransparencyMaskPreviewSprite) {
+            losObjectTransparencyMaskPreviewSprite.visible = false;
+        }
+        if (losObjectTransparencyMaskPreviewPanel) {
+            losObjectTransparencyMaskPreviewPanel.visible = false;
+        }
+        return;
+    }
+
+    const shadowEnabled = !!getLosVisualSetting("shadowEnabled", true);
+    if (!shadowEnabled) {
+        setLosObjectTransparencyFilterEnabled(false);
+        if (losObjectTransparencyMaskPreviewSprite) {
+            losObjectTransparencyMaskPreviewSprite.visible = false;
+        }
+        if (losObjectTransparencyMaskPreviewPanel) {
+            losObjectTransparencyMaskPreviewPanel.visible = false;
+        }
+        return;
+    }
+
+    const litAlphaRaw = Number(getLosVisualSetting("objectLitAlpha", 0.5));
+    const litAlpha = Number.isFinite(litAlphaRaw) ? Math.max(0, Math.min(1, litAlphaRaw)) : 0.5;
+    const shadowOpacityRaw = Number(getLosVisualSetting("shadowOpacity", 0.4));
+    const shadowOpacity = Number.isFinite(shadowOpacityRaw) ? Math.max(0.0001, Math.min(1, shadowOpacityRaw)) : 0.4;
+    const debugMaskOnly = !!getLosVisualSetting("objectLitMaskDebugOnly", false);
+    losObjectTransparencyFilter.uniforms.losMask = losObjectTransparencyMaskTexture;
+    losObjectTransparencyFilter.uniforms.litAlpha = litAlpha;
+    losObjectTransparencyFilter.uniforms.shadowOpacity = shadowOpacity;
+    losObjectTransparencyFilter.uniforms.debugMaskOnly = debugMaskOnly ? 1 : 0;
+    const existingScreenSize = losObjectTransparencyFilter.uniforms.screenSize;
+    if (existingScreenSize && existingScreenSize.length >= 2) {
+        existingScreenSize[0] = losObjectTransparencyMaskWidth;
+        existingScreenSize[1] = losObjectTransparencyMaskHeight;
+    } else {
+        losObjectTransparencyFilter.uniforms.screenSize = new Float32Array([
+            losObjectTransparencyMaskWidth,
+            losObjectTransparencyMaskHeight
+        ]);
+    }
+
+    const graphics = losObjectTransparencyMaskGraphics;
+    graphics.clear();
+    // Source the mask from the already-rendered LOS shadow graphics to ensure
+    // exact shape/placement parity with what appears on screen.
+    const sourceMask = (losShadowGraphics && losShadowGraphics.visible) ? losShadowGraphics : graphics;
+    try {
+        // Pixi v8 signature.
+        app.renderer.render({
+            container: sourceMask,
+            target: losObjectTransparencyMaskTexture,
+            clear: true
+        });
+    } catch (e) {
+        // Pixi v7 and older signature fallback.
+        app.renderer.render(sourceMask, losObjectTransparencyMaskTexture, true);
+    }
+    const showMaskPreview = !!getLosVisualSetting("objectLitMaskPreview", false);
+    if (losObjectTransparencyMaskPreviewSprite) {
+        losObjectTransparencyMaskPreviewSprite.visible = showMaskPreview;
+    }
+    if (losObjectTransparencyMaskPreviewPanel) {
+        losObjectTransparencyMaskPreviewPanel.visible = showMaskPreview;
+    }
+    setLosObjectTransparencyFilterEnabled(true);
+}
+
 function applyLosGroundMask() {
     if (!landLayer) return;
-    if (!losGroundMaskEnabled) {
+    if (!getLosVisualSetting("groundMaskEnabled", false)) {
         landLayer.mask = null;
         if (losGroundMaskGraphics) {
             losGroundMaskGraphics.clear();
@@ -431,19 +1105,20 @@ function applyLosGroundMask() {
     const graphics = ensureLosGroundMaskGraphics();
     graphics.clear();
     const farDist = Math.max(viewport.width, viewport.height) * 1.5;
-    const worldPoints = LOSSystem.buildPolygonWorldPoints(wizard, currentLosState, farDist);
-    if (!Array.isArray(worldPoints) || worldPoints.length < 3) {
-        landLayer.mask = null;
-        graphics.visible = false;
-        return;
-    }
-    const screenPoints = worldPoints.map(pt => worldToScreen(pt));
     graphics.beginFill(0xffffff, 1);
-    graphics.moveTo(screenPoints[0].x, screenPoints[0].y);
-    for (let i = 1; i < screenPoints.length; i++) {
-        graphics.lineTo(screenPoints[i].x, screenPoints[i].y);
+    const worldPoints = LOSSystem.buildPolygonWorldPoints(wizard, currentLosState, farDist);
+    if (Array.isArray(worldPoints) && worldPoints.length >= 3) {
+        const screenPoints = worldPoints.map(pt => worldToScreen(pt));
+        graphics.moveTo(screenPoints[0].x, screenPoints[0].y);
+        for (let i = 1; i < screenPoints.length; i++) {
+            graphics.lineTo(screenPoints[i].x, screenPoints[i].y);
+        }
+        graphics.closePath();
     }
-    graphics.closePath();
+    const wizardScreen = worldToScreen(wizard);
+    const radiusX = losNearRevealRadius * viewscale;
+    const radiusY = losNearRevealRadius * viewscale * xyratio;
+    graphics.drawEllipse(wizardScreen.x, wizardScreen.y, radiusX, radiusY);
     graphics.endFill();
     graphics.visible = true;
     landLayer.mask = graphics;
@@ -454,7 +1129,10 @@ function applyLosShadow() {
     if (!graphics) return;
     graphics.clear();
 
-    if (!losShadowEnabled || losShadowOpacity <= 0) {
+    const shadowEnabled = !!getLosVisualSetting("shadowEnabled", true);
+    const shadowOpacityRaw = Number(getLosVisualSetting("shadowOpacity", 0.4));
+    const shadowOpacity = Number.isFinite(shadowOpacityRaw) ? Math.max(0, Math.min(1, shadowOpacityRaw)) : 0.4;
+    if (!shadowEnabled || shadowOpacity <= 0) {
         graphics.visible = false;
         return;
     }
@@ -475,29 +1153,41 @@ function applyLosShadow() {
     const farDist = Math.max(viewport.width, viewport.height) * 1.5;
     const angleForBin = idx => minAngle + ((idx + 0.5) / bins) * twoPi;
     const wizardScreen = worldToScreen(wizard);
-    const losPointToScreen = (theta, distance) => ({
-        x: wizardScreen.x + Math.cos(theta) * distance * viewscale,
-        y: wizardScreen.y + Math.sin(theta) * distance * viewscale * xyratio
-    });
+    const scaleX = viewscale;
+    const scaleY = viewscale * xyratio;
+    const wizardScreenX = wizardScreen.x;
+    const wizardScreenY = wizardScreen.y;
     graphics.visible = true;
     graphics.lineStyle(0);
-    graphics.beginFill(0x000000, losShadowOpacity);
+    const shadowColorRaw = Number(getLosVisualSetting("shadowColor", 0x777777));
+    const shadowColor = Number.isFinite(shadowColorRaw)
+        ? Math.max(0, Math.min(0xffffff, Math.floor(shadowColorRaw)))
+        : 0x777777;
+    graphics.beginFill(shadowColor, shadowOpacity);
     for (let i = 0; i < bins; i++) {
         const j = (i + 1) % bins;
-        const d0 = Number.isFinite(depth[i]) ? Math.max(0, depth[i]) : farDist;
-        const d1 = Number.isFinite(depth[j]) ? Math.max(0, depth[j]) : farDist;
+        const d0 = Number.isFinite(depth[i]) ? Math.max(losNearRevealRadius, depth[i]) : farDist;
+        const d1 = Number.isFinite(depth[j]) ? Math.max(losNearRevealRadius, depth[j]) : farDist;
         if (d0 >= farDist && d1 >= farDist) continue;
 
         const t0 = angleForBin(i);
         const t1 = angleForBin(j);
-        const near0 = losPointToScreen(t0, d0);
-        const near1 = losPointToScreen(t1, d1);
-        const far1 = losPointToScreen(t1, farDist);
-        const far0 = losPointToScreen(t0, farDist);
-        graphics.moveTo(near0.x, near0.y);
-        graphics.lineTo(near1.x, near1.y);
-        graphics.lineTo(far1.x, far1.y);
-        graphics.lineTo(far0.x, far0.y);
+        const cos0 = Math.cos(t0);
+        const sin0 = Math.sin(t0);
+        const cos1 = Math.cos(t1);
+        const sin1 = Math.sin(t1);
+        const near0x = wizardScreenX + cos0 * d0 * scaleX;
+        const near0y = wizardScreenY + sin0 * d0 * scaleY;
+        const near1x = wizardScreenX + cos1 * d1 * scaleX;
+        const near1y = wizardScreenY + sin1 * d1 * scaleY;
+        const far1x = wizardScreenX + cos1 * farDist * scaleX;
+        const far1y = wizardScreenY + sin1 * farDist * scaleY;
+        const far0x = wizardScreenX + cos0 * farDist * scaleX;
+        const far0y = wizardScreenY + sin0 * farDist * scaleY;
+        graphics.moveTo(near0x, near0y);
+        graphics.lineTo(near1x, near1y);
+        graphics.lineTo(far1x, far1y);
+        graphics.lineTo(far0x, far0y);
         graphics.closePath();
     }
     graphics.endFill();
@@ -526,18 +1216,6 @@ function pointInsideVisibilityMask(x, y) {
     );
 }
 
-function getRoofInteriorHitbox() {
-    if (
-        roof &&
-        roof.placed &&
-        roof.groundPlaneHitbox &&
-        typeof roof.groundPlaneHitbox.containsPoint === "function"
-    ) {
-        return roof.groundPlaneHitbox;
-    }
-    return null;
-}
-
 function projectPolygonPointsToScreen(points) {
     if (!Array.isArray(points) || points.length < 3) return [];
     const anchor = points[0];
@@ -558,38 +1236,6 @@ function projectPolygonPointsToScreen(points) {
             y: anchorScreen.y + dy * viewscale * xyratio
         };
     });
-}
-
-function buildRoofInteriorScreenPolygon(hitbox, inflatePx = 2) {
-    if (!hitbox || !Array.isArray(hitbox.points) || hitbox.points.length < 3) return null;
-    const screenPoints = projectPolygonPointsToScreen(hitbox.points);
-    if (!screenPoints || screenPoints.length < 3) return null;
-    return inflateScreenPolygon(screenPoints, inflatePx);
-}
-
-function updateRoofInteriorMaskBlend(wizardInsideRoof) {
-    const nowMs = (typeof renderNowMs === "number" && renderNowMs > 0)
-        ? renderNowMs
-        : performance.now();
-    if (!Number.isFinite(roofInteriorMaskBlendLastMs) || roofInteriorMaskBlendLastMs <= 0) {
-        roofInteriorMaskBlendLastMs = nowMs;
-    }
-    const dtSec = Math.max(0, (nowMs - roofInteriorMaskBlendLastMs) / 1000);
-    roofInteriorMaskBlendLastMs = nowMs;
-
-    const target = wizardInsideRoof ? 1 : 0;
-    if (roofInteriorMaskFadeSeconds <= 0) {
-        roofInteriorMaskBlend = target;
-        return roofInteriorMaskBlend;
-    }
-
-    const maxStep = dtSec / roofInteriorMaskFadeSeconds;
-    if (target > roofInteriorMaskBlend) {
-        roofInteriorMaskBlend = Math.min(target, roofInteriorMaskBlend + maxStep);
-    } else if (target < roofInteriorMaskBlend) {
-        roofInteriorMaskBlend = Math.max(target, roofInteriorMaskBlend - maxStep);
-    }
-    return roofInteriorMaskBlend;
 }
 
 function pointInsideMaskHitboxes(x, y, maskHitboxes) {
@@ -780,15 +1426,7 @@ function drawVisibilityMask() {
     }
 
     const graphics = ensureVisibilityMaskGraphics();
-    let hitboxes = resolveVisibilityHitboxes();
-    const interiorRoofHitbox = getRoofInteriorHitbox();
-    if (
-        (!hitboxes || hitboxes.length === 0) &&
-        interiorRoofHitbox &&
-        roofInteriorMaskBlend > 0.001
-    ) {
-        hitboxes = [interiorRoofHitbox];
-    }
+    const hitboxes = resolveVisibilityHitboxes();
     activeVisibilityMaskHitboxes = hitboxes || [];
 
     if (!hitboxes.length) {
@@ -799,7 +1437,7 @@ function drawVisibilityMask() {
     }
 
     graphics.clear();
-    graphics.alpha = Math.max(0.001, Math.min(1, roofInteriorMaskBlend));
+    graphics.alpha = 1;
     graphics.beginFill(0xffffff, 1);
     let drewMaskShape = false;
     hitboxes.forEach(hitbox => {
@@ -883,6 +1521,23 @@ function drawSpellHoverTargetHighlight() {
         spellHoverHighlightWallGraphics.blendMode = PIXI.BLEND_MODES.ADD;
         spellHoverHighlightWallGraphics.interactive = false;
     }
+    if (!spellHoverHighlightMesh) {
+        spellHoverHighlightMesh = new PIXI.Mesh(
+            new PIXI.Geometry()
+                .addAttribute("aVertexPosition", new Float32Array(8), 2)
+                .addAttribute("aUvs", new Float32Array([
+                    0, 1,
+                    1, 1,
+                    1, 0,
+                    0, 0
+                ]), 2)
+                .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3])),
+            new PIXI.MeshMaterial(PIXI.Texture.WHITE)
+        );
+        spellHoverHighlightMesh.visible = false;
+        spellHoverHighlightMesh.interactive = false;
+        spellHoverHighlightMesh.blendMode = PIXI.BLEND_MODES.ADD;
+    }
 
     if (
         !wizard ||
@@ -896,67 +1551,46 @@ function drawSpellHoverTargetHighlight() {
             spellHoverHighlightWallGraphics.clear();
             spellHoverHighlightWallGraphics.visible = false;
         }
+        if (spellHoverHighlightMesh) {
+            spellHoverHighlightMesh.visible = false;
+        }
         return;
     }
+
+    const getHoverDisplayObject = obj => {
+        if (!obj) return null;
+        if (obj._wallSectionCompositeDisplayObject && obj._wallSectionCompositeDisplayObject.parent) return obj._wallSectionCompositeDisplayObject;
+        if (obj._opaqueDepthMesh && obj._opaqueDepthMesh.parent) return obj._opaqueDepthMesh;
+        if (obj.pixiSprite && obj.pixiSprite.parent) return obj.pixiSprite;
+        if (obj._wallSectionCompositeSprite && obj._wallSectionCompositeSprite.parent) return obj._wallSectionCompositeSprite;
+        return null;
+    };
 
     const target = SpellSystem.getHoverTargetForCurrentSpell(wizard, mousePos.worldX, mousePos.worldY);
-    if (!target || !target.pixiSprite || target.gone || target.vanishing) {
+    const targetSprite = getHoverDisplayObject(target);
+    if (!target || !targetSprite || target.gone || target.vanishing) {
         spellHoverHighlightSprite.visible = false;
         if (spellHoverHighlightWallGraphics) {
             spellHoverHighlightWallGraphics.clear();
             spellHoverHighlightWallGraphics.visible = false;
         }
+        if (spellHoverHighlightMesh) {
+            spellHoverHighlightMesh.visible = false;
+        }
         return;
     }
-    const targetSprite = target.pixiSprite;
-    if (!targetSprite.parent) {
+    if (wizard && wizard.currentSpell === "placeobject") {
         spellHoverHighlightSprite.visible = false;
         if (spellHoverHighlightWallGraphics) {
             spellHoverHighlightWallGraphics.clear();
             spellHoverHighlightWallGraphics.visible = false;
         }
+        if (spellHoverHighlightMesh) {
+            spellHoverHighlightMesh.visible = false;
+        }
         return;
     }
-
     const pulse = 0.55 + 0.45 * (Math.sin(frameCount * 0.12) * 0.5 + 0.5);
-
-    if (targetSprite instanceof PIXI.Sprite) {
-        if (spellHoverHighlightWallGraphics) {
-            spellHoverHighlightWallGraphics.clear();
-            spellHoverHighlightWallGraphics.visible = false;
-        }
-        spellHoverHighlightSprite.texture = targetSprite.texture || PIXI.Texture.WHITE;
-        if (targetSprite.anchor && spellHoverHighlightSprite.anchor) {
-            spellHoverHighlightSprite.anchor.set(targetSprite.anchor.x, targetSprite.anchor.y);
-        }
-        spellHoverHighlightSprite.position.set(targetSprite.position.x, targetSprite.position.y);
-        spellHoverHighlightSprite.scale.set(targetSprite.scale.x, targetSprite.scale.y);
-        spellHoverHighlightSprite.rotation = targetSprite.rotation;
-        spellHoverHighlightSprite.skew.set(targetSprite.skew.x, targetSprite.skew.y);
-        spellHoverHighlightSprite.pivot.set(targetSprite.pivot.x, targetSprite.pivot.y);
-        spellHoverHighlightSprite.tint = 0x66c2ff;
-        spellHoverHighlightSprite.alpha = 0.35 * pulse;
-        spellHoverHighlightSprite.visible = true;
-
-        const parent = targetSprite.parent;
-        if (spellHoverHighlightSprite.parent !== parent) {
-            if (spellHoverHighlightSprite.parent) {
-                spellHoverHighlightSprite.parent.removeChild(spellHoverHighlightSprite);
-            }
-            parent.addChild(spellHoverHighlightSprite);
-        } else {
-            // Keep the glow directly above the target sprite.
-            const targetIndex = parent.getChildIndex(targetSprite);
-            const glowIndex = parent.getChildIndex(spellHoverHighlightSprite);
-            const desiredIndex = Math.min(parent.children.length - 1, targetIndex + 1);
-            if (glowIndex !== desiredIndex) {
-                parent.setChildIndex(spellHoverHighlightSprite, desiredIndex);
-            }
-        }
-        return;
-    }
-
-    spellHoverHighlightSprite.visible = false;
 
     if (
         target.type === "wall" &&
@@ -964,6 +1598,10 @@ function drawSpellHoverTargetHighlight() {
         typeof Wall.drawWall === "function" &&
         spellHoverHighlightWallGraphics
     ) {
+        spellHoverHighlightSprite.visible = false;
+        if (spellHoverHighlightMesh) {
+            spellHoverHighlightMesh.visible = false;
+        }
         const parent = targetSprite.parent;
         spellHoverHighlightWallGraphics.clear();
         const profile = (typeof target.getWallProfile === "function")
@@ -975,7 +1613,6 @@ function drawSpellHoverTargetHighlight() {
         const renderCapB = (typeof target.hasConnectedWallAtEndpoint === "function")
             ? !target.hasConnectedWallAtEndpoint("b")
             : true;
-
         Wall.drawWall(
             spellHoverHighlightWallGraphics,
             target.a,
@@ -1010,6 +1647,209 @@ function drawSpellHoverTargetHighlight() {
         return;
     }
 
+    if (targetSprite instanceof PIXI.Sprite) {
+        if (spellHoverHighlightWallGraphics) {
+            spellHoverHighlightWallGraphics.clear();
+            spellHoverHighlightWallGraphics.visible = false;
+        }
+        if (spellHoverHighlightMesh) {
+            spellHoverHighlightMesh.visible = false;
+        }
+        spellHoverHighlightSprite.texture = targetSprite.texture || PIXI.Texture.WHITE;
+        if (targetSprite.anchor && spellHoverHighlightSprite.anchor) {
+            spellHoverHighlightSprite.anchor.set(targetSprite.anchor.x, targetSprite.anchor.y);
+        }
+        spellHoverHighlightSprite.position.set(targetSprite.position.x, targetSprite.position.y);
+        spellHoverHighlightSprite.scale.set(targetSprite.scale.x, targetSprite.scale.y);
+        spellHoverHighlightSprite.rotation = targetSprite.rotation;
+        spellHoverHighlightSprite.skew.set(targetSprite.skew.x, targetSprite.skew.y);
+        spellHoverHighlightSprite.pivot.set(targetSprite.pivot.x, targetSprite.pivot.y);
+        spellHoverHighlightSprite.tint = 0x66c2ff;
+        spellHoverHighlightSprite.alpha = 0.35 * pulse;
+        spellHoverHighlightSprite.visible = true;
+
+        const parent = targetSprite.parent;
+        if (spellHoverHighlightSprite.parent !== parent) {
+            if (spellHoverHighlightSprite.parent) {
+                spellHoverHighlightSprite.parent.removeChild(spellHoverHighlightSprite);
+            }
+            parent.addChild(spellHoverHighlightSprite);
+        } else {
+            // Keep the glow directly above the target sprite.
+            const targetIndex = parent.getChildIndex(targetSprite);
+            const glowIndex = parent.getChildIndex(spellHoverHighlightSprite);
+            const desiredIndex = Math.min(parent.children.length - 1, targetIndex + 1);
+            if (glowIndex !== desiredIndex) {
+                parent.setChildIndex(spellHoverHighlightSprite, desiredIndex);
+            }
+        }
+        return;
+    }
+
+    spellHoverHighlightSprite.visible = false;
+    if (spellHoverHighlightMesh) {
+        spellHoverHighlightMesh.visible = false;
+    }
+
+    if (targetSprite instanceof PIXI.Mesh && spellHoverHighlightMesh) {
+        const parent = targetSprite.parent;
+        const safeGetBuffer = (geometry, attrName) => {
+            if (!geometry || typeof geometry.getBuffer !== "function") return null;
+            try {
+                return geometry.getBuffer(attrName);
+            } catch (_err) {
+                return null;
+            }
+        };
+        const vertexBuffer = safeGetBuffer(targetSprite.geometry, "aVertexPosition");
+        const worldVertexBuffer = safeGetBuffer(targetSprite.geometry, "aWorldPosition");
+        const uvBuffer = safeGetBuffer(targetSprite.geometry, "aUvs");
+        const indexBuffer = targetSprite.geometry && targetSprite.geometry.getIndex
+            ? targetSprite.geometry.getIndex()
+            : null;
+        const verts = vertexBuffer && vertexBuffer.data ? vertexBuffer.data : null;
+        const worldVerts = worldVertexBuffer && worldVertexBuffer.data ? worldVertexBuffer.data : null;
+        const uvs = uvBuffer && uvBuffer.data ? uvBuffer.data : null;
+        const idx = indexBuffer && indexBuffer.data ? indexBuffer.data : null;
+        const has2DVerts = !!(verts && verts.length >= 8);
+        const hasWorldVerts = !!(worldVerts && worldVerts.length >= 12);
+        if ((has2DVerts || hasWorldVerts) && uvs && uvs.length >= 8 && idx && idx.length >= 3) {
+            const hlGeom = spellHoverHighlightMesh.geometry;
+            const hlVertsBuffer = hlGeom.getBuffer("aVertexPosition");
+            const hlUvsBuffer = hlGeom.getBuffer("aUvs");
+            const hlIndex = hlGeom.getIndex();
+            if (hlVertsBuffer && hlVertsBuffer.data) {
+                let projectedVerts = null;
+                if (has2DVerts) {
+                    projectedVerts = verts;
+                } else if (hasWorldVerts) {
+                    const projected = new Float32Array((worldVerts.length / 3) * 2);
+                    for (let i = 0, j = 0; i <= worldVerts.length - 3; i += 3, j += 2) {
+                        const screenPt = worldToScreen({ x: worldVerts[i], y: worldVerts[i + 1] });
+                        projected[j] = screenPt.x;
+                        projected[j + 1] = screenPt.y - (worldVerts[i + 2] * viewscale * xyratio);
+                    }
+                    projectedVerts = projected;
+                }
+                if (projectedVerts) {
+                    const nextVerts = (projectedVerts instanceof Float32Array)
+                        ? projectedVerts
+                        : Float32Array.from(projectedVerts);
+                    if (hlVertsBuffer.data.length !== nextVerts.length) {
+                        hlVertsBuffer.data = new Float32Array(nextVerts.length);
+                    }
+                    hlVertsBuffer.data.set(nextVerts);
+                    hlVertsBuffer.update();
+                }
+            }
+            if (hlUvsBuffer && hlUvsBuffer.data) {
+                const nextUvs = (uvs instanceof Float32Array) ? uvs : Float32Array.from(uvs);
+                if (hlUvsBuffer.data.length !== nextUvs.length) {
+                    hlUvsBuffer.data = new Float32Array(nextUvs.length);
+                }
+                hlUvsBuffer.data.set(nextUvs);
+                hlUvsBuffer.update();
+            }
+            if (hlIndex && hlIndex.data) {
+                const indexCtor = (idx && idx.constructor) ? idx.constructor : Uint16Array;
+                const nextIdx = (idx instanceof indexCtor) ? idx : new indexCtor(idx);
+                if (hlIndex.data.length !== nextIdx.length || hlIndex.data.constructor !== nextIdx.constructor) {
+                    hlIndex.data = new indexCtor(nextIdx.length);
+                }
+                hlIndex.data.set(nextIdx);
+                hlIndex.update();
+            }
+            if (spellHoverHighlightMesh.material) {
+                const tex = (targetSprite.material && targetSprite.material.texture)
+                    ? targetSprite.material.texture
+                    : ((targetSprite.shader && targetSprite.shader.uniforms && targetSprite.shader.uniforms.uSampler)
+                        ? targetSprite.shader.uniforms.uSampler
+                        : PIXI.Texture.WHITE);
+                spellHoverHighlightMesh.material.texture = tex;
+            }
+            spellHoverHighlightMesh.tint = 0x66c2ff;
+            spellHoverHighlightMesh.alpha = 0.35 * pulse;
+            spellHoverHighlightMesh.position.set(targetSprite.position.x, targetSprite.position.y);
+            spellHoverHighlightMesh.scale.set(targetSprite.scale.x, targetSprite.scale.y);
+            spellHoverHighlightMesh.rotation = targetSprite.rotation;
+            spellHoverHighlightMesh.skew.set(targetSprite.skew.x, targetSprite.skew.y);
+            spellHoverHighlightMesh.pivot.set(targetSprite.pivot.x, targetSprite.pivot.y);
+            spellHoverHighlightMesh.visible = true;
+
+            if (spellHoverHighlightMesh.parent !== parent) {
+                if (spellHoverHighlightMesh.parent) {
+                    spellHoverHighlightMesh.parent.removeChild(spellHoverHighlightMesh);
+                }
+                parent.addChild(spellHoverHighlightMesh);
+            } else {
+                const targetIndex = parent.getChildIndex(targetSprite);
+                const glowIndex = parent.getChildIndex(spellHoverHighlightMesh);
+                const desiredIndex = Math.min(parent.children.length - 1, targetIndex + 1);
+                if (glowIndex !== desiredIndex) {
+                    parent.setChildIndex(spellHoverHighlightMesh, desiredIndex);
+                }
+            }
+            return;
+        }
+    }
+
+    if (spellHoverHighlightWallGraphics) {
+        const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+        let drewGenericHighlight = false;
+        if (targetHitbox) {
+            const parent = targetSprite.parent;
+            const glowColor = 0x66c2ff;
+            spellHoverHighlightWallGraphics.clear();
+            spellHoverHighlightWallGraphics.lineStyle(2, glowColor, Math.max(0.2, 0.55 * pulse));
+            spellHoverHighlightWallGraphics.beginFill(glowColor, 0.12 * pulse);
+
+            if (
+                targetHitbox.type === "circle" &&
+                Number.isFinite(targetHitbox.x) &&
+                Number.isFinite(targetHitbox.y) &&
+                Number.isFinite(targetHitbox.radius)
+            ) {
+                const c = worldToScreen({ x: targetHitbox.x, y: targetHitbox.y });
+                spellHoverHighlightWallGraphics.drawEllipse(
+                    c.x,
+                    c.y,
+                    targetHitbox.radius * viewscale,
+                    targetHitbox.radius * viewscale * xyratio
+                );
+                drewGenericHighlight = true;
+            } else if (Array.isArray(targetHitbox.points) && targetHitbox.points.length >= 3) {
+                const screenPoints = targetHitbox.points.map(pt => worldToScreen({ x: pt.x, y: pt.y }));
+                if (screenPoints.length >= 3) {
+                    spellHoverHighlightWallGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
+                    for (let i = 1; i < screenPoints.length; i++) {
+                        spellHoverHighlightWallGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
+                    }
+                    spellHoverHighlightWallGraphics.closePath();
+                    drewGenericHighlight = true;
+                }
+            }
+
+            spellHoverHighlightWallGraphics.endFill();
+            spellHoverHighlightWallGraphics.visible = drewGenericHighlight;
+            if (drewGenericHighlight) {
+                if (spellHoverHighlightWallGraphics.parent !== parent) {
+                    if (spellHoverHighlightWallGraphics.parent) {
+                        spellHoverHighlightWallGraphics.parent.removeChild(spellHoverHighlightWallGraphics);
+                    }
+                    parent.addChild(spellHoverHighlightWallGraphics);
+                } else {
+                    const targetIndex = parent.getChildIndex(targetSprite);
+                    const glowIndex = parent.getChildIndex(spellHoverHighlightWallGraphics);
+                    const desiredIndex = Math.min(parent.children.length - 1, targetIndex + 1);
+                    if (glowIndex !== desiredIndex) {
+                        parent.setChildIndex(spellHoverHighlightWallGraphics, desiredIndex);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
     if (spellHoverHighlightWallGraphics) {
         spellHoverHighlightWallGraphics.clear();
         spellHoverHighlightWallGraphics.visible = false;
@@ -1030,6 +1870,21 @@ function buildPlaceObjectPreviewRenderItem() {
         typeof wizard.selectedPlaceableTexturePath === "string" &&
         wizard.selectedPlaceableTexturePath.length > 0
     ) ? wizard.selectedPlaceableTexturePath : "/assets/images/doors/door5.png";
+    const selectedCategory = (
+        wizard &&
+        typeof wizard.selectedPlaceableCategory === "string" &&
+        wizard.selectedPlaceableCategory.length > 0
+    ) ? wizard.selectedPlaceableCategory : "doors";
+    const rawAxis = (wizard && typeof wizard.selectedPlaceableRotationAxis === "string")
+        ? wizard.selectedPlaceableRotationAxis.trim().toLowerCase()
+        : "";
+    const rotationAxis = (rawAxis === "spatial" || rawAxis === "visual" || rawAxis === "none")
+        ? rawAxis
+        : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
+    const placementRotation = (wizard && Number.isFinite(wizard.selectedPlaceableRotation))
+        ? Number(wizard.selectedPlaceableRotation)
+        : 0;
+    const effectivePlacementRotation = (rotationAxis === "none") ? 0 : placementRotation;
 
     if (!placeObjectPreviewSprite) {
         placeObjectPreviewSprite = new PIXI.Sprite(PIXI.Texture.from(texturePath));
@@ -1049,32 +1904,246 @@ function buildPlaceObjectPreviewRenderItem() {
     const worldY = (map && typeof map.wrapWorldY === "function")
         ? map.wrapWorldY(mousePos.worldY)
         : mousePos.worldY;
+    const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
+    const snapPlacement = (
+        isWallMountedPlacement &&
+        typeof SpellSystem !== "undefined" &&
+        SpellSystem &&
+        typeof SpellSystem.getPlaceObjectPlacementCandidate === "function"
+    ) ? SpellSystem.getPlaceObjectPlacementCandidate(wizard, worldX, worldY) : null;
+    const hasWallSnapTarget = !!(
+        isWallMountedPlacement &&
+        snapPlacement &&
+        snapPlacement.targetWall
+    );
+    const useSnapPlacement = hasWallSnapTarget;
     const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
         ? Number(wizard.selectedPlaceableScale)
         : 1;
     const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+    const selectedAnchorY = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorY))
+        ? Number(wizard.selectedPlaceableAnchorY)
+        : 1;
     const yScale = Math.max(0.1, Math.abs(Number.isFinite(xyratio) ? xyratio : 0.66));
-    const placementYOffset = (clampedScale * 0.5) / yScale;
-    let placedY = worldY + placementYOffset;
+    const placementYOffset = (rotationAxis === "spatial")
+        ? 0
+        : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
+    const previewX = (useSnapPlacement && Number.isFinite(snapPlacement.snappedX)) ? snapPlacement.snappedX : worldX;
+    let placedY = (useSnapPlacement && Number.isFinite(snapPlacement.snappedY))
+        ? snapPlacement.snappedY
+        : (worldY + placementYOffset);
     if (map && typeof map.wrapWorldY === "function") {
         placedY = map.wrapWorldY(placedY);
     }
     const renderDepthOffset = (wizard && Number.isFinite(wizard.selectedPlaceableRenderOffset))
         ? Number(wizard.selectedPlaceableRenderOffset)
         : 0;
-
     placeObjectPreviewSprite.tint = 0xffffff;
     placeObjectPreviewSprite.visible = true;
     return {
         type: "placedObjectPreview",
-        x: worldX,
-        y: worldY,
+        x: previewX,
+        y: (useSnapPlacement && Number.isFinite(snapPlacement.snappedY)) ? snapPlacement.snappedY : worldY,
         width: clampedScale,
         height: clampedScale,
         renderZ: placedY + renderDepthOffset,
         previewAlpha: 0.5,
+        texturePath,
+        category: selectedCategory,
+        placeableAnchorX: (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
+            ? Number(wizard.selectedPlaceableAnchorX)
+            : 0.5,
+        placeableAnchorY: (wizard && Number.isFinite(wizard.selectedPlaceableAnchorY))
+            ? Number(wizard.selectedPlaceableAnchorY)
+            : 1,
+        rotationAxis: useSnapPlacement ? "spatial" : rotationAxis,
+        placementRotation: (useSnapPlacement && Number.isFinite(snapPlacement.snappedRotationDeg)) ? snapPlacement.snappedRotationDeg : effectivePlacementRotation,
+        mountedWallLineGroupId: (
+            useSnapPlacement &&
+            Number.isInteger(snapPlacement.mountedWallLineGroupId)
+        ) ? Number(snapPlacement.mountedWallLineGroupId) : (
+            useSnapPlacement &&
+            snapPlacement.targetWall &&
+            Number.isInteger(snapPlacement.targetWall.lineGroupId)
+        ) ? Number(snapPlacement.targetWall.lineGroupId) : null,
+        mountedSectionId: (
+            useSnapPlacement &&
+            Number.isInteger(snapPlacement.mountedSectionId)
+        ) ? Number(snapPlacement.mountedSectionId) : (
+            useSnapPlacement &&
+            Number.isInteger(snapPlacement.mountedWallLineGroupId)
+        ) ? Number(snapPlacement.mountedWallLineGroupId) : null,
+        mountedWallFacingSign: (
+            useSnapPlacement &&
+            Number.isFinite(snapPlacement.mountedWallFacingSign)
+        ) ? Number(snapPlacement.mountedWallFacingSign) : null,
+        previewDrawAfterWalls: !!(isWallMountedPlacement && useSnapPlacement),
+        centerSnapGuide: useSnapPlacement
+            ? {
+                centerSnapActive: !!snapPlacement.centerSnapActive,
+                placementCenterX: Number(snapPlacement.placementCenterX),
+                placementCenterY: Number(snapPlacement.placementCenterY),
+                sectionCenterX: Number(snapPlacement.sectionCenterX),
+                sectionCenterY: Number(snapPlacement.sectionCenterY),
+                sectionFacingSign: Number(snapPlacement.sectionFacingSign),
+                sectionNormalX: Number(snapPlacement.sectionNormalX),
+                sectionNormalY: Number(snapPlacement.sectionNormalY),
+                sectionDirX: Number(snapPlacement.sectionDirX),
+                sectionDirY: Number(snapPlacement.sectionDirY),
+                wallFaceCenterX: Number(snapPlacement.wallFaceCenterX),
+                wallFaceCenterY: Number(snapPlacement.wallFaceCenterY),
+                placementHalfWidth: Number(snapPlacement.placementHalfWidth),
+                wallHeight: Number(snapPlacement.wallHeight) || 0,
+                wallThickness: Number(snapPlacement.wallThickness) || 0,
+                sectionFaceQuadScreenPoints: Array.isArray(snapPlacement.sectionFaceQuadScreenPoints)
+                    ? snapPlacement.sectionFaceQuadScreenPoints
+                    : null,
+                sectionVisiblePolygonsScreen: Array.isArray(snapPlacement.sectionVisiblePolygonsScreen)
+                    ? snapPlacement.sectionVisiblePolygonsScreen
+                    : null
+            }
+            : null,
+        groundPlaneHitbox: (useSnapPlacement && Array.isArray(snapPlacement.wallGroundHitboxPoints))
+            ? new PolygonHitbox(snapPlacement.wallGroundHitboxPoints.map(p => ({ x: p.x, y: p.y })))
+            : undefined,
         pixiSprite: placeObjectPreviewSprite
     };
+}
+
+function drawPlaceObjectCenterSnapGuide(previewItem) {
+    if (typeof PIXI === "undefined") return;
+    const targetLayer = (
+        previewItem &&
+        previewItem.pixiSprite &&
+        previewItem.pixiSprite.parent
+    ) ? previewItem.pixiSprite.parent : objectLayer;
+    if (!targetLayer) return;
+    if (!placeObjectCenterSnapGuideGraphics) {
+        placeObjectCenterSnapGuideGraphics = new PIXI.Graphics();
+        placeObjectCenterSnapGuideGraphics.skipTransform = true;
+        placeObjectCenterSnapGuideGraphics.interactive = false;
+        placeObjectCenterSnapGuideGraphics.visible = false;
+    }
+    if (placeObjectCenterSnapGuideGraphics.parent !== targetLayer) {
+        if (placeObjectCenterSnapGuideGraphics.parent) {
+            placeObjectCenterSnapGuideGraphics.parent.removeChild(placeObjectCenterSnapGuideGraphics);
+        }
+        targetLayer.addChild(placeObjectCenterSnapGuideGraphics);
+    }
+
+    placeObjectCenterSnapGuideGraphics.clear();
+    const guide = previewItem && previewItem.centerSnapGuide ? previewItem.centerSnapGuide : null;
+    if (
+        !guide ||
+        !Number.isFinite(guide.placementCenterX) ||
+        !Number.isFinite(guide.placementCenterY) ||
+        !Number.isFinite(guide.sectionCenterX) ||
+        !Number.isFinite(guide.sectionCenterY)
+    ) {
+        placeObjectCenterSnapGuideGraphics.visible = false;
+        return;
+    }
+
+    const placementCenterScreen = worldToScreen({ x: guide.placementCenterX, y: guide.placementCenterY });
+    const sectionCenterScreen = worldToScreen({ x: guide.sectionCenterX, y: guide.sectionCenterY });
+    const topCenterScreen = {
+        x: sectionCenterScreen.x,
+        y: sectionCenterScreen.y - (Math.max(0, Number(guide.wallHeight) || 0) * viewscale * xyratio)
+    };
+
+    const visiblePolygons = Array.isArray(guide.sectionVisiblePolygonsScreen)
+        ? guide.sectionVisiblePolygonsScreen
+        : null;
+    if (Array.isArray(visiblePolygons) && visiblePolygons.length > 0) {
+        for (let i = 0; i < visiblePolygons.length; i++) {
+            const poly = Array.isArray(visiblePolygons[i])
+                ? visiblePolygons[i].map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+                : [];
+            if (poly.length < 3) continue;
+            if (!poly.every(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))) continue;
+            placeObjectCenterSnapGuideGraphics.lineStyle(2, 0x4fc3ff, 0.8);
+            placeObjectCenterSnapGuideGraphics.beginFill(0x4fc3ff, 0.12);
+            placeObjectCenterSnapGuideGraphics.moveTo(poly[0].x, poly[0].y);
+            for (let p = 1; p < poly.length; p++) {
+                placeObjectCenterSnapGuideGraphics.lineTo(poly[p].x, poly[p].y);
+            }
+            placeObjectCenterSnapGuideGraphics.closePath();
+            placeObjectCenterSnapGuideGraphics.endFill();
+        }
+    } else if (Array.isArray(guide.sectionFaceQuadScreenPoints) && guide.sectionFaceQuadScreenPoints.length >= 4) {
+        const quad = guide.sectionFaceQuadScreenPoints
+            .slice(0, 4)
+            .map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+            .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        if (quad.length === 4) {
+            placeObjectCenterSnapGuideGraphics.lineStyle(2, 0x4fc3ff, 0.8);
+            placeObjectCenterSnapGuideGraphics.beginFill(0x4fc3ff, 0.12);
+            placeObjectCenterSnapGuideGraphics.moveTo(quad[0].x, quad[0].y);
+            placeObjectCenterSnapGuideGraphics.lineTo(quad[1].x, quad[1].y);
+            placeObjectCenterSnapGuideGraphics.lineTo(quad[2].x, quad[2].y);
+            placeObjectCenterSnapGuideGraphics.lineTo(quad[3].x, quad[3].y);
+            placeObjectCenterSnapGuideGraphics.closePath();
+            placeObjectCenterSnapGuideGraphics.endFill();
+        }
+    }
+
+    const facingSign = Number.isFinite(guide.sectionFacingSign) ? Number(guide.sectionFacingSign) : 1;
+    const insideWorld = {
+        x: guide.sectionCenterX - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+        y: guide.sectionCenterY - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+    };
+    const insideScreen = worldToScreen(insideWorld);
+    const topInsideScreen = {
+        x: insideScreen.x,
+        y: insideScreen.y - (Math.max(0, Number(guide.wallHeight) || 0) * viewscale * xyratio)
+    };
+
+    if (guide.centerSnapActive) {
+        placeObjectCenterSnapGuideGraphics.lineStyle(2, 0xff0000, 0.5);
+        placeObjectCenterSnapGuideGraphics.moveTo(placementCenterScreen.x, placementCenterScreen.y);
+        placeObjectCenterSnapGuideGraphics.lineTo(topCenterScreen.x, topCenterScreen.y);
+        placeObjectCenterSnapGuideGraphics.moveTo(topCenterScreen.x, topCenterScreen.y);
+        placeObjectCenterSnapGuideGraphics.lineTo(topInsideScreen.x, topInsideScreen.y);
+    }
+
+    // Draw black top-edge markers at each end of the placed window/door span.
+    if (
+        Number.isFinite(guide.wallFaceCenterX) &&
+        Number.isFinite(guide.wallFaceCenterY) &&
+        Number.isFinite(guide.sectionDirX) &&
+        Number.isFinite(guide.sectionDirY) &&
+        Number.isFinite(guide.placementHalfWidth)
+    ) {
+        const hx = guide.sectionDirX * guide.placementHalfWidth;
+        const hy = guide.sectionDirY * guide.placementHalfWidth;
+        const facingEndA = { x: guide.wallFaceCenterX - hx, y: guide.wallFaceCenterY - hy };
+        const facingEndB = { x: guide.wallFaceCenterX + hx, y: guide.wallFaceCenterY + hy };
+        const insideEndA = {
+            x: facingEndA.x - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+            y: facingEndA.y - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+        };
+        const insideEndB = {
+            x: facingEndB.x - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+            y: facingEndB.y - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+        };
+        const toTop = (pt) => {
+            const s = worldToScreen(pt);
+            return {
+                x: s.x,
+                y: s.y - (Math.max(0, Number(guide.wallHeight) || 0) * viewscale * xyratio)
+            };
+        };
+        const topFacingA = toTop(facingEndA);
+        const topInsideA = toTop(insideEndA);
+        const topFacingB = toTop(facingEndB);
+        const topInsideB = toTop(insideEndB);
+        placeObjectCenterSnapGuideGraphics.lineStyle(2, 0x000000, 0.6);
+        placeObjectCenterSnapGuideGraphics.moveTo(topFacingA.x, topFacingA.y);
+        placeObjectCenterSnapGuideGraphics.lineTo(topInsideA.x, topInsideA.y);
+        placeObjectCenterSnapGuideGraphics.moveTo(topFacingB.x, topFacingB.y);
+        placeObjectCenterSnapGuideGraphics.lineTo(topInsideB.x, topInsideB.y);
+    }
+    placeObjectCenterSnapGuideGraphics.visible = true;
 }
 
 function ensureSpellCursorShape(mode) {
@@ -1234,7 +2303,7 @@ function buildGroundChunk(chunkX, chunkY) {
 
     const frameTexture = new PIXI.Texture(renderTexture, new PIXI.Rectangle(frameX, frameY, frameW, frameH));
     const sprite = new PIXI.Sprite(frameTexture);
-    sprite.roundPixels = false;
+    sprite.roundPixels = true;
     landLayer.addChild(sprite);
 
     return {
@@ -1265,8 +2334,486 @@ function ensureGroundChunk(chunkX, chunkY) {
     return rebuilt;
 }
 
-function getDebugRedrawPlan() {
-    return { hex: true, ground: true, hit: true, boundary: true };
+function resolveWallDepthUvAndTexture(wall, profile) {
+    if (!wall || !profile) return null;
+    const { aLeft, aRight, bLeft, bRight } = profile;
+    const centerA = { x: (aLeft.x + aRight.x) * 0.5, y: (aLeft.y + aRight.y) * 0.5 };
+    const centerB = { x: (bLeft.x + bRight.x) * 0.5, y: (bLeft.y + bRight.y) * 0.5 };
+    const dirX = centerB.x - centerA.x;
+    const dirY = centerB.y - centerA.y;
+    const dirLen = Math.hypot(dirX, dirY);
+    const ux = dirLen > 1e-6 ? (dirX / dirLen) : 1;
+    const uy = dirLen > 1e-6 ? (dirY / dirLen) : 0;
+    const wallTexturePath = (typeof wall.wallTexturePath === "string" && wall.wallTexturePath.length > 0)
+        ? wall.wallTexturePath
+        : defaultWallTexturePath;
+    const wallTextureCfg = getWallTextureConfig(wallTexturePath);
+    const repeatsPerMapUnitX = Math.max(0.0001, Number(wallTextureCfg.repeatsPerMapUnitX) || defaultWallTextureRepeatsPerMapUnitX);
+    const repeatsPerMapUnitY = Math.max(0.0001, Number(wallTextureCfg.repeatsPerMapUnitY) || defaultWallTextureRepeatsPerMapUnitY);
+    const alongAt = pt => (pt.x * ux + pt.y * uy);
+    const fallbackUStart = alongAt(centerA) * repeatsPerMapUnitX;
+    const fallbackUEnd = alongAt(centerB) * repeatsPerMapUnitX;
+    const uStart = Number.isFinite(wall && wall.texturePhaseA)
+        ? Number(wall.texturePhaseA) * (3 * repeatsPerMapUnitX)
+        : fallbackUStart;
+    const uEnd = Number.isFinite(wall && wall.texturePhaseB)
+        ? Number(wall.texturePhaseB) * (3 * repeatsPerMapUnitX)
+        : fallbackUEnd;
+    const texture = PIXI.Texture.from(wallTextureCfg.texturePath || defaultWallTexturePath);
+    if (texture && texture.baseTexture) {
+        texture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+        texture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    }
+    return {
+        wallTextureCfg,
+        repeatsPerMapUnitX,
+        repeatsPerMapUnitY,
+        uStart,
+        uEnd,
+        texture
+    };
+}
+
+function getWallCapBasesForDepth(wall, wallHeight) {
+    const adjacentHeightA = (wall && typeof wall.getAdjacentCollinearWallHeightAtEndpoint === "function")
+        ? wall.getAdjacentCollinearWallHeightAtEndpoint("a")
+        : null;
+    const adjacentHeightB = (wall && typeof wall.getAdjacentCollinearWallHeightAtEndpoint === "function")
+        ? wall.getAdjacentCollinearWallHeightAtEndpoint("b")
+        : null;
+    const capBaseA = Number.isFinite(adjacentHeightA)
+        ? Math.max(0, Math.min(wallHeight, Number(adjacentHeightA)))
+        : 0;
+    const capBaseB = Number.isFinite(adjacentHeightB)
+        ? Math.max(0, Math.min(wallHeight, Number(adjacentHeightB)))
+        : 0;
+    const capVisibleEps = 1e-5;
+    return {
+        capBaseA,
+        capBaseB,
+        renderCapA: capBaseA < (wallHeight - capVisibleEps),
+        renderCapB: capBaseB < (wallHeight - capVisibleEps)
+    };
+}
+
+function appendSingleWallDepthGeometry(builder, wall, profile, uvInfo, capInfo) {
+    if (!builder || !wall || !profile || !uvInfo) return false;
+    const wallHeight = Math.max(0.001, Number(wall.height) || 0.001);
+    const wallThickness = Math.max(0.001, Number(wall.thickness) || 0.001);
+    const { aLeft, aRight, bLeft, bRight } = profile;
+    const wallHeightV = wallHeight * uvInfo.repeatsPerMapUnitY;
+    const topThicknessV = Math.max(0.0001, wallThickness * uvInfo.repeatsPerMapUnitX);
+    const capWidthV = Math.max(0.0001, wallThickness * uvInfo.repeatsPerMapUnitX);
+    const capStartV0 = capInfo.capBaseA * uvInfo.repeatsPerMapUnitY;
+    const capStartV1 = wallHeight * uvInfo.repeatsPerMapUnitY;
+    const capEndV0 = capInfo.capBaseB * uvInfo.repeatsPerMapUnitY;
+    const capEndV1 = wallHeight * uvInfo.repeatsPerMapUnitY;
+    const gAL = { x: aLeft.x, y: aLeft.y, z: 0 };
+    const gAR = { x: aRight.x, y: aRight.y, z: 0 };
+    const gBL = { x: bLeft.x, y: bLeft.y, z: 0 };
+    const gBR = { x: bRight.x, y: bRight.y, z: 0 };
+    const tAL = { x: aLeft.x, y: aLeft.y, z: wallHeight };
+    const tAR = { x: aRight.x, y: aRight.y, z: wallHeight };
+    const tBL = { x: bLeft.x, y: bLeft.y, z: wallHeight };
+    const tBR = { x: bRight.x, y: bRight.y, z: wallHeight };
+    const mAL = { x: aLeft.x, y: aLeft.y, z: capInfo.capBaseA };
+    const mAR = { x: aRight.x, y: aRight.y, z: capInfo.capBaseA };
+    const mBL = { x: bLeft.x, y: bLeft.y, z: capInfo.capBaseB };
+    const mBR = { x: bRight.x, y: bRight.y, z: capInfo.capBaseB };
+
+    appendDepthQuad(builder, gAL, gBL, tBL, tAL, { u0: uvInfo.uStart, v0: 0, u1: uvInfo.uEnd, v1: wallHeightV });
+    appendDepthQuad(builder, gAR, gBR, tBR, tAR, { u0: uvInfo.uStart, v0: 0, u1: uvInfo.uEnd, v1: wallHeightV });
+    appendDepthQuad(builder, tAL, tBL, tBR, tAR, { u0: uvInfo.uStart, v0: 0, u1: uvInfo.uEnd, v1: topThicknessV });
+    if (capInfo.renderCapA) {
+        appendDepthQuad(builder, mAR, mAL, tAL, tAR, { u0: 0, v0: capStartV0, u1: capWidthV, v1: capStartV1 });
+    }
+    if (capInfo.renderCapB) {
+        appendDepthQuad(builder, mBL, mBR, tBR, tBL, { u0: 0, v0: capEndV0, u1: capWidthV, v1: capEndV1 });
+    }
+    return true;
+}
+
+function buildWallOpaqueDepthGeometry(item, range) {
+    if (!item || typeof item.getWallProfile !== "function") return null;
+    const profile = item.getWallProfile();
+    if (!profile) return null;
+    const uvInfo = resolveWallDepthUvAndTexture(item, profile);
+    if (!uvInfo) return null;
+    const wallHeight = Math.max(0.001, Number(item.height) || 0.001);
+    const capInfo = getWallCapBasesForDepth(item, wallHeight);
+    const cacheKey = [
+        Number(profile.aLeft.x).toFixed(4), Number(profile.aLeft.y).toFixed(4),
+        Number(profile.aRight.x).toFixed(4), Number(profile.aRight.y).toFixed(4),
+        Number(profile.bLeft.x).toFixed(4), Number(profile.bLeft.y).toFixed(4),
+        Number(profile.bRight.x).toFixed(4), Number(profile.bRight.y).toFixed(4),
+        wallHeight.toFixed(4),
+        Number(item.thickness || 0).toFixed(4),
+        uvInfo.uStart.toFixed(4),
+        uvInfo.uEnd.toFixed(4),
+        uvInfo.repeatsPerMapUnitX.toFixed(6),
+        uvInfo.repeatsPerMapUnitY.toFixed(6),
+        capInfo.capBaseA.toFixed(4),
+        capInfo.capBaseB.toFixed(4),
+        capInfo.renderCapA ? "1" : "0",
+        capInfo.renderCapB ? "1" : "0",
+        uvInfo.wallTextureCfg.texturePath || defaultWallTexturePath
+    ].join("|");
+    if (item._wallDepthGeometryCache && item._wallDepthGeometryCache.key === cacheKey) {
+        return item._wallDepthGeometryCache.geometry;
+    }
+
+    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
+    appendSingleWallDepthGeometry(builder, item, profile, uvInfo, capInfo);
+    if (builder.vertexCount === 0) return null;
+    const geometry = {
+        positions: new Float32Array(builder.positions),
+        uvs: new Float32Array(builder.uvs),
+        indices: new Uint16Array(builder.indices),
+        texture: uvInfo.texture || PIXI.Texture.WHITE,
+        alphaCutoff: 0.02
+    };
+    item._wallDepthGeometryCache = { key: cacheKey, geometry };
+    return geometry;
+}
+
+function buildWallSectionCompositeOpaqueDepthGeometry(item, range) {
+    if (!item || item.type !== "wallSectionComposite") return null;
+    const walls = Array.isArray(item._sectionMemberWalls) ? item._sectionMemberWalls : [];
+    if (walls.length === 0) return null;
+    const cacheKey = [
+        String(item._sectionCompositeMembershipSignature || ""),
+        String(Number.isInteger(item.lineGroupId) ? item.lineGroupId : "na"),
+        String(walls.length)
+    ].join("|");
+    if (item._sectionDepthGeometryCache && item._sectionDepthGeometryCache.key === cacheKey) {
+        return item._sectionDepthGeometryCache.geometry;
+    }
+
+    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
+    let sharedTexture = null;
+    for (let i = 0; i < walls.length; i++) {
+        const wall = walls[i];
+        if (!wall || typeof wall.getWallProfile !== "function") continue;
+        const profile = wall.getWallProfile();
+        if (!profile) continue;
+        const uvInfo = resolveWallDepthUvAndTexture(wall, profile);
+        if (!uvInfo) continue;
+        if (!sharedTexture) sharedTexture = uvInfo.texture;
+        const wallHeight = Math.max(0.001, Number(wall.height) || 0.001);
+        const capInfo = getWallCapBasesForDepth(wall, wallHeight);
+        appendSingleWallDepthGeometry(builder, wall, profile, uvInfo, capInfo);
+    }
+    if (builder.vertexCount === 0) return null;
+    const geometry = {
+        positions: new Float32Array(builder.positions),
+        uvs: new Float32Array(builder.uvs),
+        indices: new Uint16Array(builder.indices),
+        texture: sharedTexture || PIXI.Texture.from(defaultWallTexturePath),
+        alphaCutoff: 0.02
+    };
+    item._sectionDepthGeometryCache = { key: cacheKey, geometry };
+    return geometry;
+}
+
+function buildRoofOpaqueDepthGeometry(item, range) {
+    if (!item || item.type !== "roof" || !Array.isArray(item.vertices) || !Array.isArray(item.faces)) return null;
+    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
+    const scale = 0.05;
+    for (let i = 0; i < item.faces.length; i++) {
+        const face = item.faces[i];
+        if (!Array.isArray(face) || face.length < 3) continue;
+        const v0 = item.vertices[face[0]];
+        const v1 = item.vertices[face[1]];
+        const v2 = item.vertices[face[2]];
+        if (!v0 || !v1 || !v2) continue;
+        const p0 = { x: item.x + v0.x, y: item.y + v0.y, z: Number(v0.z) || 0 };
+        const p1 = { x: item.x + v1.x, y: item.y + v1.y, z: Number(v1.z) || 0 };
+        const p2 = { x: item.x + v2.x, y: item.y + v2.y, z: Number(v2.z) || 0 };
+        appendDepthTriangle(
+            builder,
+            p0,
+            p1,
+            p2,
+            { u: 0.5 + v0.x * scale, v: 0.5 + v0.y * scale },
+            { u: 0.5 + v1.x * scale, v: 0.5 + v1.y * scale },
+            { u: 0.5 + v2.x * scale, v: 0.5 + v2.y * scale }
+        );
+    }
+    if (builder.vertexCount === 0) return null;
+    const texturePath = (typeof item.textureName === "string" && item.textureName.length > 0)
+        ? item.textureName
+        : "assets/images/smallshingles.png";
+    return {
+        positions: new Float32Array(builder.positions),
+        uvs: new Float32Array(builder.uvs),
+        indices: new Uint16Array(builder.indices),
+        texture: PIXI.Texture.from(texturePath),
+        alphaCutoff: 0.02
+    };
+}
+
+function buildBillboardOpaqueDepthGeometry(item, range) {
+    if (!item || !item.pixiSprite || !item.pixiSprite.texture) return null;
+    const texture = item.pixiSprite.texture;
+    const width = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
+    const height = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
+    const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(xyratio) ? Number(xyratio) : 0.66));
+    // Match legacy sprite apparent height: non-road sprites were not Y-squashed.
+    const verticalWorldHeight = height / yIsoScale;
+    const anchorX = (item.pixiSprite.anchor && Number.isFinite(item.pixiSprite.anchor.x)) ? Number(item.pixiSprite.anchor.x) : 0.5;
+    const anchorY = (item.pixiSprite.anchor && Number.isFinite(item.pixiSprite.anchor.y)) ? Number(item.pixiSprite.anchor.y) : 1;
+    const rotationDeg = (isPlacedObjectEntity(item) && Number.isFinite(item.placementRotation))
+        ? Number(item.placementRotation)
+        : 0;
+    const theta = rotationDeg * (Math.PI / 180);
+    const axisX = Math.cos(theta);
+    const axisY = Math.sin(theta);
+    const halfWidth = width * 0.5;
+    const centerX = Number.isFinite(item.x) ? item.x : 0;
+    const centerY = Number.isFinite(item.y) ? item.y : 0;
+    const alongOffset = (anchorX - 0.5) * width;
+    const zBottom = -((1 - anchorY) * verticalWorldHeight);
+    const zTop = zBottom + verticalWorldHeight;
+    const baseX = centerX - axisX * alongOffset;
+    const baseY = centerY - axisY * alongOffset;
+    const blWorld = { x: baseX - axisX * halfWidth, y: baseY - axisY * halfWidth };
+    const brWorld = { x: baseX + axisX * halfWidth, y: baseY + axisY * halfWidth };
+
+    const pBL = { x: blWorld.x, y: blWorld.y, z: zBottom };
+    const pBR = { x: brWorld.x, y: brWorld.y, z: zBottom };
+    const pTR = { x: brWorld.x, y: brWorld.y, z: zTop };
+    const pTL = { x: blWorld.x, y: blWorld.y, z: zTop };
+
+    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
+    appendDepthQuad(builder, pBL, pBR, pTR, pTL);
+    return {
+        positions: new Float32Array(builder.positions),
+        uvs: new Float32Array(builder.uvs),
+        indices: new Uint16Array(builder.indices),
+        texture,
+        alphaCutoff: 0.25
+    };
+}
+
+function closestPointOnSegment2D(px, py, ax, ay, bx, by) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (!(len2 > 1e-8)) {
+        const ddx = px - ax;
+        const ddy = py - ay;
+        return { x: ax, y: ay, t: 0, dist2: ddx * ddx + ddy * ddy };
+    }
+    const rawT = ((px - ax) * dx + (py - ay) * dy) / len2;
+    const t = Math.max(0, Math.min(1, rawT));
+    const x = ax + dx * t;
+    const y = ay + dy * t;
+    const ddx = px - x;
+    const ddy = py - y;
+    return { x, y, t, dist2: ddx * ddx + ddy * ddy };
+}
+
+function getMountedWallFaceCenters(item) {
+    const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
+        ? Number(item.mountedWallLineGroupId)
+        : null;
+    if (!Number.isInteger(mountedId)) return null;
+    const worldX = Number(item && item.x);
+    const worldY = Number(item && item.y);
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+
+    let walls = null;
+    const wallClass = (typeof Wall !== "undefined") ? Wall : null;
+    const sectionRegistry = wallClass && wallClass._sectionsById instanceof Map
+        ? wallClass._sectionsById
+        : null;
+    const sectionEntry = sectionRegistry ? sectionRegistry.get(mountedId) : null;
+    if (sectionEntry && Array.isArray(sectionEntry.walls) && sectionEntry.walls.length > 0) {
+        walls = sectionEntry.walls;
+    } else if (map && Array.isArray(map.objects)) {
+        walls = map.objects.filter(obj =>
+            obj &&
+            obj.type === "wall" &&
+            Number.isInteger(obj.lineGroupId) &&
+            Number(obj.lineGroupId) === mountedId &&
+            typeof obj.getWallProfile === "function"
+        );
+    }
+    if (!Array.isArray(walls) || walls.length === 0) return null;
+
+    let best = null;
+    for (let i = 0; i < walls.length; i++) {
+        const wall = walls[i];
+        if (!wall || typeof wall.getWallProfile !== "function") continue;
+        const profile = wall.getWallProfile();
+        if (!profile || !profile.aLeft || !profile.bLeft || !profile.aRight || !profile.bRight) continue;
+        const left = closestPointOnSegment2D(
+            worldX, worldY,
+            Number(profile.aLeft.x), Number(profile.aLeft.y),
+            Number(profile.bLeft.x), Number(profile.bLeft.y)
+        );
+        const right = closestPointOnSegment2D(
+            worldX, worldY,
+            Number(profile.aRight.x), Number(profile.aRight.y),
+            Number(profile.bRight.x), Number(profile.bRight.y)
+        );
+        const score = Math.min(left.dist2, right.dist2);
+        if (!best || score < best.score) {
+            best = { left, right, score };
+        }
+    }
+    if (!best) return null;
+
+    const facingSign = Number.isFinite(item && item.mountedWallFacingSign)
+        ? Number(item.mountedWallFacingSign)
+        : 1;
+    const frontRaw = (facingSign >= 0) ? best.left : best.right;
+    const backRaw = (facingSign >= 0) ? best.right : best.left;
+    let nx = frontRaw.x - backRaw.x;
+    let ny = frontRaw.y - backRaw.y;
+    const nLen = Math.hypot(nx, ny);
+    if (!(nLen > 1e-6)) return null;
+    nx /= nLen;
+    ny /= nLen;
+    const eps = 0.01;
+    return {
+        front: { x: frontRaw.x + nx * eps, y: frontRaw.y + ny * eps },
+        back: { x: backRaw.x - nx * eps, y: backRaw.y - ny * eps }
+    };
+}
+
+function buildMountedWallOpaqueDepthGeometry(item, range) {
+    if (!item || !isWallMountedPlaceable(item) || item.rotationAxis !== "spatial") return null;
+    const texturePath = (typeof item.texturePath === "string" && item.texturePath.length > 0)
+        ? item.texturePath
+        : null;
+    const texture = texturePath ? PIXI.Texture.from(texturePath) : (item.pixiSprite && item.pixiSprite.texture);
+    if (!texture) return null;
+
+    const width = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
+    const height = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
+    const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(xyratio) ? Number(xyratio) : 0.66));
+    const verticalWorldHeight = height / yIsoScale;
+    const anchorX = Number.isFinite(item.placeableAnchorX) ? Number(item.placeableAnchorX) : 0.5;
+    const anchorY = Number.isFinite(item.placeableAnchorY) ? Number(item.placeableAnchorY) : 1;
+    const angleDeg = Number.isFinite(item.placementRotation) ? Number(item.placementRotation) : 0;
+    const theta = angleDeg * (Math.PI / 180);
+    const axisX = Math.cos(theta);
+    const axisY = Math.sin(theta);
+    const faceSignRaw = Number.isFinite(item.mountedWallFacingSign) ? Number(item.mountedWallFacingSign) : 1;
+    const faceSign = faceSignRaw >= 0 ? 1 : -1;
+    let normalX = (-axisY) * faceSign;
+    let normalY = axisX * faceSign;
+    const normalLen = Math.hypot(normalX, normalY);
+    if (!(normalLen > 1e-6)) return null;
+    normalX /= normalLen;
+    normalY /= normalLen;
+    const faceCenters = getMountedWallFaceCenters(item);
+    if (!faceCenters) return null;
+
+    const cacheKey = [
+        Number(item.x || 0).toFixed(4),
+        Number(item.y || 0).toFixed(4),
+        width.toFixed(4),
+        verticalWorldHeight.toFixed(4),
+        anchorX.toFixed(4),
+        anchorY.toFixed(4),
+        angleDeg.toFixed(4),
+        faceSign,
+        Number(yIsoScale).toFixed(4),
+        faceCenters && Number.isFinite(faceCenters.front && faceCenters.front.x) ? Number(faceCenters.front.x).toFixed(4) : "na",
+        faceCenters && Number.isFinite(faceCenters.front && faceCenters.front.y) ? Number(faceCenters.front.y).toFixed(4) : "na",
+        faceCenters && Number.isFinite(faceCenters.back && faceCenters.back.x) ? Number(faceCenters.back.x).toFixed(4) : "na",
+        faceCenters && Number.isFinite(faceCenters.back && faceCenters.back.y) ? Number(faceCenters.back.y).toFixed(4) : "na",
+        texturePath || "__sprite_tex__"
+    ].join("|");
+    if (item._mountedDepthGeometryCache && item._mountedDepthGeometryCache.key === cacheKey) {
+        return item._mountedDepthGeometryCache.geometry;
+    }
+
+    const halfWidth = width * 0.5;
+    const alongOffset = (anchorX - 0.5) * width;
+    const zBottom = -((1 - anchorY) * verticalWorldHeight);
+    const zTop = zBottom + verticalWorldHeight;
+
+    const frontCenterX = Number(faceCenters.front.x);
+    const frontCenterY = Number(faceCenters.front.y);
+    const backCenterX = Number(faceCenters.back.x);
+    const backCenterY = Number(faceCenters.back.y);
+
+    const centerWithAnchor = (cx, cy) => ({
+        x: cx - axisX * alongOffset,
+        y: cy - axisY * alongOffset
+    });
+    const frontBase = centerWithAnchor(frontCenterX, frontCenterY);
+    const backBase = centerWithAnchor(backCenterX, backCenterY);
+
+    const frontBL = { x: frontBase.x - axisX * halfWidth, y: frontBase.y - axisY * halfWidth, z: zBottom };
+    const frontBR = { x: frontBase.x + axisX * halfWidth, y: frontBase.y + axisY * halfWidth, z: zBottom };
+    const frontTR = { x: frontBR.x, y: frontBR.y, z: zTop };
+    const frontTL = { x: frontBL.x, y: frontBL.y, z: zTop };
+
+    const backBL = { x: backBase.x - axisX * halfWidth, y: backBase.y - axisY * halfWidth, z: zBottom };
+    const backBR = { x: backBase.x + axisX * halfWidth, y: backBase.y + axisY * halfWidth, z: zBottom };
+    const backTR = { x: backBR.x, y: backBR.y, z: zTop };
+    const backTL = { x: backBL.x, y: backBL.y, z: zTop };
+
+    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
+    appendDepthQuad(builder, frontBL, frontBR, frontTR, frontTL);
+    // Mirror the back face texture.
+    appendDepthQuad(builder, backBL, backBR, backTR, backTL, { u0: 1, v0: 0, u1: 0, v1: 1 });
+
+    const geometry = {
+        positions: new Float32Array(builder.positions),
+        uvs: new Float32Array(builder.uvs),
+        indices: new Uint16Array(builder.indices),
+        texture,
+        alphaCutoff: 0.25
+    };
+    item._mountedDepthGeometryCache = { key: cacheKey, geometry };
+    return geometry;
+}
+
+function buildOpaqueDepthGeometryForItem(item, range) {
+    if (!item) return null;
+    if (item.type === "wall") return buildWallOpaqueDepthGeometry(item, range);
+    if (item.type === "wallSectionComposite") return buildWallSectionCompositeOpaqueDepthGeometry(item, range);
+    if (item.type === "roof") return buildRoofOpaqueDepthGeometry(item, range);
+    if (isWallMountedPlaceable(item) && item.rotationAxis === "spatial") {
+        const mounted = buildMountedWallOpaqueDepthGeometry(item, range);
+        if (mounted) return mounted;
+    }
+    return buildBillboardOpaqueDepthGeometry(item, range);
+}
+
+function getOpaqueDepthDisplayObject(item, options = {}) {
+    if (!opaqueDepthMeshEnabled || !item || typeof PIXI === "undefined") return null;
+    const mesh = ensureItemOpaqueDepthMesh(item);
+    if (!mesh || !mesh.shader || !mesh.shader.uniforms) return null;
+    const range = getDepthMetricRange();
+    const geometry = buildOpaqueDepthGeometryForItem(item, range);
+    if (!geometry) return null;
+    if (item._opaqueDepthLastGeometry !== geometry) {
+        if (!setOpaqueDepthMeshGeometry(mesh, geometry.positions, geometry.uvs, geometry.indices)) return null;
+        item._opaqueDepthLastGeometry = geometry;
+    }
+    const uniforms = mesh.shader.uniforms;
+    const screenW = (app && app.screen && Number.isFinite(app.screen.width)) ? app.screen.width : 1;
+    const screenH = (app && app.screen && Number.isFinite(app.screen.height)) ? app.screen.height : 1;
+    uniforms.uScreenSize[0] = screenW;
+    uniforms.uScreenSize[1] = screenH;
+    const camera = range && range.camera ? range.camera : viewport;
+    uniforms.uCameraWorld[0] = Number(camera.x) || 0;
+    uniforms.uCameraWorld[1] = Number(camera.y) || 0;
+    uniforms.uViewScale = Number(viewscale) || 1;
+    uniforms.uXyRatio = Number(xyratio) || 1;
+    uniforms.uDepthRange[0] = Number(range.farMetric) || 180;
+    uniforms.uDepthRange[1] = Number(range.invSpan) || (1 / 256);
+    uniforms.uSampler = geometry.texture || PIXI.Texture.WHITE;
+    uniforms.uTint = tintHexToUniform(options.tint, options.alpha);
+    uniforms.uAlphaCutoff = Number.isFinite(geometry.alphaCutoff) ? Number(geometry.alphaCutoff) : 0.1;
+    mesh.visible = true;
+    return mesh;
 }
 
 function drawCanvas() {
@@ -1277,7 +2824,20 @@ function drawCanvas() {
         prepMs: 0,
         collectMs: 0,
         losMs: 0,
+        passWorldMs: 0,
+        passLosMs: 0,
+        passObjectsMs: 0,
+        passPostMs: 0,
         composeMs: 0,
+        composeMaskMs: 0,
+        composeSortMs: 0,
+        composePopulateMs: 0,
+        composeInvariantMs: 0,
+        composeWallSectionsMs: 0,
+        composeWallSectionsGroups: 0,
+        composeWallSectionsRebuilt: 0,
+        composeUnaccountedMs: 0,
+        composeInvariantSkipped: 0,
         totalMs: 0,
         hydratedRoads: 0,
         hydratedTrees: 0,
@@ -1303,15 +2863,47 @@ function drawCanvas() {
     }
     const frameDtSec = Math.max(0, (frameNowMs - lastRenderFrameMs) / 1000);
     lastRenderFrameMs = frameNowMs;
-    const occlusionFadeTimeSec = 0.3;
-    const occlusionLerpFactor = (occlusionFadeTimeSec <= 0)
-        ? 1
-        : (1 - Math.exp(-frameDtSec / occlusionFadeTimeSec));
     const losFadeTimeSec = 0.05;
     const losLerpFactor = (losFadeTimeSec <= 0)
         ? 1
         : (1 - Math.exp(-frameDtSec / losFadeTimeSec));
+    const overlapCache = new WeakMap();
+    function groundHitboxLikelyIntersectsCached(aHitbox, bHitbox) {
+        if (!aHitbox || !bHitbox) return false;
+        if (aHitbox === bHitbox) return true;
+        if (typeof aHitbox !== "object" || typeof bHitbox !== "object") {
+            return groundHitboxLikelyIntersectsHitbox(aHitbox, bHitbox);
+        }
+        let mapForA = overlapCache.get(aHitbox);
+        if (mapForA && mapForA.has(bHitbox)) return mapForA.get(bHitbox);
+        let mapForB = overlapCache.get(bHitbox);
+        if (mapForB && mapForB.has(aHitbox)) return mapForB.get(aHitbox);
+        const result = groundHitboxLikelyIntersectsHitbox(aHitbox, bHitbox);
+        if (!mapForA) {
+            mapForA = new WeakMap();
+            overlapCache.set(aHitbox, mapForA);
+        }
+        mapForA.set(bHitbox, result);
+        if (!mapForB) {
+            mapForB = new WeakMap();
+            overlapCache.set(bHitbox, mapForB);
+        }
+        mapForB.set(aHitbox, result);
+        return result;
+    }
 
+    let mapItems = [];
+    let roadItems = [];
+    let omnivisionActive = false;
+    let losForwardFovDegrees = 200;
+    let losMaxDarken = 0.5;
+    let objectLitTransparencyEnabled = false;
+    let houseHitbox = null;
+    let wizardInsideHouse = false;
+    let composeStartMs = 0;
+
+    function renderWorldPass() {
+    const passWorldStartMs = performance.now();
     const prepStartMs = performance.now();
     const debugRedrawPlan = getDebugRedrawPlan();
     updateRoofPreview(roof);
@@ -1327,11 +2919,28 @@ function drawCanvas() {
     if (roadLayer) {
         roadLayer.removeChildren();
     }
+    if (opaqueMeshLayer) {
+        opaqueMeshLayer.removeChildren();
+    }
     objectLayer.removeChildren();
+    if (indoorObjectLayer) {
+        indoorObjectLayer.removeChildren();
+    }
 
     // Keep phantom wall visible during layout mode
     if (wizard.wallLayoutMode && wizard.wallStartPoint && wizard.phantomWall) {
-        updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, mousePos.worldX, mousePos.worldY);
+        const adjustedWallDragPoint = (
+            typeof SpellSystem !== "undefined" &&
+            SpellSystem &&
+            typeof SpellSystem.getAdjustedWallDragWorldPoint === "function"
+        ) ? SpellSystem.getAdjustedWallDragWorldPoint(wizard, mousePos.worldX, mousePos.worldY) : null;
+        const dragWorldX = adjustedWallDragPoint && Number.isFinite(adjustedWallDragPoint.x)
+            ? adjustedWallDragPoint.x
+            : mousePos.worldX;
+        const dragWorldY = adjustedWallDragPoint && Number.isFinite(adjustedWallDragPoint.y)
+            ? adjustedWallDragPoint.y
+            : mousePos.worldY;
+        updatePhantomWall(wizard.wallStartPoint.x, wizard.wallStartPoint.y, dragWorldX, dragWorldY);
         objectLayer.addChild(wizard.phantomWall);
     }
 
@@ -1347,8 +2956,8 @@ function drawCanvas() {
     drawPerf.prepMs = performance.now() - prepStartMs;
 
     const collectStartMs = performance.now();
-    let mapItems = [];
-    let roadItems = [];
+    mapItems = [];
+    roadItems = [];
     const seenMapItems = new Set();
     const seenRoadItems = new Set();
     onscreenObjects.clear();
@@ -1391,22 +3000,51 @@ function drawCanvas() {
             onscreenObjects.add(animal);
         }
     });
+    // Roof is rendered through a separate path, so include it explicitly
+    // in onscreenObjects for debugging/console inspection.
+    if (roof && roof.placed && roof.pixiMesh && roof.pixiMesh.visible) {
+        onscreenObjects.add(roof);
+    }
     drawPerf.collectMs = performance.now() - collectStartMs;
     drawPerf.mapItems = mapItems.length;
     drawPerf.onscreen = onscreenObjects.size;
+    drawPerf.passWorldMs = performance.now() - passWorldStartMs;
+    }
 
+    function renderLosPass() {
+    const passLosStartMs = performance.now();
     const activeAuras = (wizard && Array.isArray(wizard.activeAuras))
         ? wizard.activeAuras
         : ((wizard && typeof wizard.activeAura === "string") ? [wizard.activeAura] : []);
-    const omnivisionActive = activeAuras.includes("omnivision");
+    omnivisionActive = activeAuras.includes("omnivision");
+    const losForwardFovDegreesRaw = Number(getLosVisualSetting("forwardFovDegrees", 200));
+    losForwardFovDegrees = Number.isFinite(losForwardFovDegreesRaw)
+        ? Math.max(0, Math.min(360, losForwardFovDegreesRaw))
+        : 200;
+    const losMaxDarkenRaw = Number(getLosVisualSetting("maxDarken", 0.5));
+    losMaxDarken = Number.isFinite(losMaxDarkenRaw)
+        ? Math.max(0, Math.min(1, losMaxDarkenRaw))
+        : 0.5;
+    objectLitTransparencyEnabled = !!getLosVisualSetting("objectLitTransparencyEnabled", false);
+    houseHitbox = (roof && roof.placed && roof.groundPlaneHitbox) ? roof.groundPlaneHitbox : null;
+    wizardInsideHouse = !!(wizard && houseHitbox && hitboxContainsWorldPoint(houseHitbox, wizard.x, wizard.y));
     let losPerfMs = 0;
 
     if (!omnivisionActive && typeof LOSSystem !== "undefined" && LOSSystem && typeof LOSSystem.computeState === "function") {
         const losBuildStartMs = performance.now();
         const losCandidates = [];
+        const losWindowOpenings = [];
         if (onscreenObjects && onscreenObjects.size > 0) {
             onscreenObjects.forEach(obj => {
                 if (!obj || obj === wizard || obj.gone || obj.vanishing) return;
+                if (
+                    isPlacedObjectEntity(obj) &&
+                    typeof obj.category === "string" &&
+                    obj.category.trim().toLowerCase() === "windows" &&
+                    obj.groundPlaneHitbox
+                ) {
+                    losWindowOpenings.push(obj);
+                }
                 if (isLosOccluder(obj)) losCandidates.push(obj);
             });
         }
@@ -1441,12 +3079,12 @@ function drawCanvas() {
 
         if (shouldRecomputeLos) {
             currentLosState = LOSSystem.computeState(wizard, losCandidates, {
-                bins: 2500,
+                bins: 3600, // 0.1 degree bins for occluder edge sorting; more bins increases accuracy but also increases compute time.
                 facingAngle,
-                fovDegrees: losForwardFovDegrees
+                fovDegrees: losForwardFovDegrees,
+                windowOpenings: losWindowOpenings
             });
             currentLosVisibleSet = new Set(currentLosState.visibleObjects || []);
-            currentLosVisibleWallGroups = null;
             losTraceMs = Number.isFinite(currentLosState.elapsedMs) ? currentLosState.elapsedMs : 0;
             lastLosWizardX = wizard.x;
             lastLosWizardY = wizard.y;
@@ -1470,7 +3108,6 @@ function drawCanvas() {
     } else {
         currentLosState = null;
         currentLosVisibleSet = null;
-        currentLosVisibleWallGroups = null;
         lastLosWizardX = null;
         lastLosWizardY = null;
         lastLosFacingAngle = null;
@@ -1491,9 +3128,17 @@ function drawCanvas() {
         losPerfMs = 0;
     }
     drawPerf.losMs = losPerfMs;
-    const composeStartMs = performance.now();
+    composeStartMs = performance.now();
+    const composeMaskStartMs = performance.now();
     applyLosGroundMask();
     applyLosShadow();
+    updateLosObjectTransparencyMask();
+    drawPerf.composeMaskMs = performance.now() - composeMaskStartMs;
+    drawPerf.passLosMs = performance.now() - passLosStartMs;
+    }
+
+    function renderObjectsPass() {
+    const passObjectsStartMs = performance.now();
 
     // Process vanishing roads and update the list before rendering
     roadItems = roadItems.filter(road => {
@@ -1514,169 +3159,188 @@ function drawCanvas() {
 
     wizardCoors = worldToScreen(wizard);
 
-    const interiorRoofHitbox = getRoofInteriorHitbox();
-    const wizardInsideInteriorRoof = !!(
-        interiorRoofHitbox &&
-        wizard &&
-        interiorRoofHitbox.containsPoint(wizard.x, wizard.y)
-    );
-    updateRoofInteriorMaskBlend(wizardInsideInteriorRoof);
-
-    const roofRenderDepth = (
-        roof &&
-        roof.placed &&
-        roof.pixiMesh &&
-        roof.pixiMesh.visible &&
-        Number.isFinite(roof.y)
-    )
-        ? (roof.y - (Number.isFinite(roof.peakHeight) ? roof.peakHeight : 0))
-        : null;
-    const roofWallDepthHitbox = (
-        roof &&
-        roof.placed &&
-        (roof.wallDepthHitbox || roof.groundPlaneHitbox)
-    ) ? (roof.wallDepthHitbox || roof.groundPlaneHitbox) : null;
-    const outsideRoofInteriorHitbox = (
-        interiorRoofHitbox &&
-        wizard &&
-        !interiorRoofHitbox.containsPoint(wizard.x, wizard.y)
-    ) ? interiorRoofHitbox : null;
-
-    function getRenderDepth(item) {
+    function getRenderBottomZ(item) {
         if (!item) return 0;
-        if (item.isRoofInteriorBlackout) return 0.0001;
-        if (
-            item.type === "wall" &&
-            Number.isFinite(roofRenderDepth) &&
-            roofWallDepthHitbox &&
-            wallIntersectsMaskHitboxes(item, [roofWallDepthHitbox])
-        ) {
-            // Structural walls within the roof footprint should render beneath the roof.
-            return roofRenderDepth - 0.0001;
-        }
-        if (Number.isFinite(item.renderZ)) return item.renderZ;
-        if (item.type === "road") return 0;
-        const baseDepth = Number.isFinite(item.y) ? item.y : 0;
-        const depthOffset = Number.isFinite(item.renderDepthOffset) ? item.renderDepthOffset : 0;
-        return baseDepth + depthOffset;
+        const baseZ = Number.isFinite(item.bottomZ)
+            ? Number(item.bottomZ)
+            : (Number.isFinite(item.z) ? Number(item.z) : 0);
+        return baseZ + getWallMountedDepthBias(item);
     }
 
-    if (Number.isFinite(roofRenderDepth) && roof && roof.pixiMesh && roof.pixiMesh.visible) {
+    function getRenderTopZ(item) {
+        const bottomZ = getRenderBottomZ(item);
+        const height = Number.isFinite(item && item.height) ? Math.max(0, Number(item.height)) : 0;
+        return bottomZ + height;
+    }
+
+    function getRenderAnchorY(item) {
+        if (!item) return 0;
+        if (Number.isFinite(item.anchorYSort)) return Number(item.anchorYSort);
+        if (Number.isFinite(item.y)) return Number(item.y);
+        return 0;
+    }
+
+    if (roof && roof.placed && roof.pixiMesh && roof.pixiMesh.visible) {
+        const roofBottomZ = Number.isFinite(roof.z)
+            ? Number(roof.z)
+            : (Number.isFinite(roof.heightFromGround) ? Number(roof.heightFromGround) : 0);
+        const roofHeight = (
+            Number.isFinite(roof.peakHeight) && Number.isFinite(roof.heightFromGround)
+        ) ? Math.max(0, Number(roof.peakHeight) - Number(roof.heightFromGround))
+            : (Number.isFinite(roof.peakHeight) ? Math.max(0, Number(roof.peakHeight)) : 0);
         mapItems.push({
             type: "roof",
-            isRoofRenderItem: true,
             x: roof.x,
             y: roof.y,
-            // Order by roof peak so tall objects can render above lower roof slopes.
-            renderZ: roofRenderDepth,
-            pixiSprite: roof.pixiMesh
+            z: roofBottomZ,
+            height: roofHeight,
+            pixiSprite: roof.pixiMesh,
+            vertices: Array.isArray(roof.vertices) ? roof.vertices : [],
+            faces: Array.isArray(roof.faces) ? roof.faces : [],
+            textureName: roof.textureName
         });
     }
-    if (outsideRoofInteriorHitbox) {
-        if (!roofInteriorBlackoutGraphics) {
-            roofInteriorBlackoutGraphics = new PIXI.Graphics();
-            roofInteriorBlackoutGraphics.skipTransform = true;
-        }
-        roofInteriorBlackoutGraphics.clear();
-        const screenPoints = buildRoofInteriorScreenPolygon(outsideRoofInteriorHitbox, 2);
-        if (screenPoints && screenPoints.length >= 3) {
-            roofInteriorBlackoutGraphics.beginFill(0x000000, 1);
-            roofInteriorBlackoutGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
-            for (let i = 1; i < screenPoints.length; i++) {
-                roofInteriorBlackoutGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
-            }
-            roofInteriorBlackoutGraphics.closePath();
-            roofInteriorBlackoutGraphics.endFill();
-            mapItems.push({
-                type: "roofInteriorBlackout",
-                isRoofInteriorBlackout: true,
-                renderZ: 0.0001,
-                pixiSprite: roofInteriorBlackoutGraphics
-            });
-        }
-    } else if (roofInteriorBlackoutGraphics) {
-        roofInteriorBlackoutGraphics.clear();
-    }
-
     const placePreviewItem = buildPlaceObjectPreviewRenderItem();
     if (placePreviewItem) {
         mapItems.push(placePreviewItem);
     }
-
-    // Enforce explicit render ordering:
-    // roads at fixed base depth, most objects by world y.
-    function getRenderBand(item) {
-        if (!item) return 2;
-        if (item.type === "road") return 0;
-        if (item.isRoofInteriorBlackout) return 1;
-        return 2;
-    }
-
-    mapItems.sort((a, b) => {
-        const aBand = getRenderBand(a);
-        const bBand = getRenderBand(b);
-        if (aBand !== bBand) return aBand - bBand;
-
-        const az = getRenderDepth(a);
-        const bz = getRenderDepth(b);
-        if (az !== bz) return az - bz;
-        const ay = Number.isFinite(a && a.y) ? a.y : 0;
-        const by = Number.isFinite(b && b.y) ? b.y : 0;
-        if (ay !== by) return ay - by;
-        const ax = Number.isFinite(a && a.x) ? a.x : 0;
-        const bx = Number.isFinite(b && b.x) ? b.x : 0;
-        return ax - bx;
-    });
-
-    const interiorMaskHitboxes = interiorRoofHitbox ? [interiorRoofHitbox] : null;
-    const insideBlend = Math.max(0, Math.min(1, roofInteriorMaskBlend));
-    const blendTransitioning = insideBlend > 0.001 && insideBlend < 0.999;
-    const fullyInsideView = insideBlend >= 0.999;
-    const fullyOutsideView = insideBlend <= 0.001;
-    const visibleWallGroupsByGeometry = new Set();
-    if (Array.isArray(mapItems) && mapItems.length > 0) {
-        mapItems.forEach(item => {
-            if (!item || item.gone || item.vanishing) return;
-            if (item.type !== "wall" || !Number.isInteger(item.lineGroupId)) return;
-            if (!item.groundPlaneHitbox) return;
-            if (isCurrentlyVisibleByLos(item)) {
-                visibleWallGroupsByGeometry.add(item.lineGroupId);
+    let wallSectionHiddenItems = new Set();
+    const composeWallSectionsStartMs = performance.now();
+    if (wallSectionBatchingEnabled) {
+        const wallSections = getWallSectionsRendererApi();
+        const sectionCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+            ? interpolatedViewport
+            : viewport;
+        if (wallSections && typeof wallSections.buildCompositeRenderItems === "function") {
+            wallSections.prepareFrame(viewscale, xyratio);
+            const sectionResult = wallSections.buildCompositeRenderItems({
+                enabled: wallSectionBatchingEnabled,
+                items: mapItems,
+                cachePrefix: "world",
+                camera: sectionCamera,
+                map,
+                app,
+                PIXI,
+                viewscale,
+                xyratio,
+                isWallMountedPlaceable
+            });
+            const compositeItems = (sectionResult && Array.isArray(sectionResult.renderItems))
+                ? sectionResult.renderItems
+                : [];
+            const sectionStats = (sectionResult && sectionResult.stats && typeof sectionResult.stats === "object")
+                ? sectionResult.stats
+                : null;
+            wallSectionHiddenItems = (sectionResult && sectionResult.hiddenItems instanceof Set)
+                ? sectionResult.hiddenItems
+                : new Set();
+            drawPerf.composeWallSectionsGroups = sectionStats && Number.isFinite(sectionStats.groups)
+                ? Number(sectionStats.groups)
+                : 0;
+            drawPerf.composeWallSectionsRebuilt = sectionStats && Number.isFinite(sectionStats.rebuilt)
+                ? Number(sectionStats.rebuilt)
+                : 0;
+            if (compositeItems.length > 0) {
+                mapItems.push(...compositeItems);
             }
-        });
-    }
-    currentLosVisibleWallGroups = visibleWallGroupsByGeometry;
-
-    // Add sorted items to object layer in explicit passes:
-    // roads -> interior blackout -> everything else.
-    const renderPasses = [0, 1, 2];
-    renderPasses.forEach(passBand => {
-        mapItems.forEach(item => {
-            if (getRenderBand(item) !== passBand) return;
-        if (item && item.isRoofInteriorBlackout && item.pixiSprite) {
-            objectLayer.addChild(item.pixiSprite);
-            return;
+            wallSections.endFrame();
         }
-        if (item && item.isRoofRenderItem && item.pixiSprite) {
-            objectLayer.addChild(item.pixiSprite);
-            return;
+    } else {
+        const wallSections = getWallSectionsRendererApi();
+        if (wallSections) {
+            wallSections.restoreRenderable(mapItems, isWallMountedPlaceable);
+            wallSections.clearCache();
+        }
+    }
+    if (wallSectionHiddenItems.size > 0) {
+        mapItems = mapItems.filter(item => !wallSectionHiddenItems.has(item));
+    }
+    drawPerf.composeWallSectionsMs = performance.now() - composeWallSectionsStartMs;
+    drawPerf.composeSortMs = 0;
+
+    if (typeof globalThis !== "undefined" && globalThis.windowWallDebugDumpRequested) {
+        const roofs = mapItems.filter(obj => obj && obj.type === "roof");
+        const trees = mapItems.filter(obj => obj && obj.type === "tree");
+        const walls = mapItems.filter(obj => obj && obj.type === "wall");
+        const sortedIndex = new Map();
+        mapItems.forEach((obj, idx) => sortedIndex.set(obj, idx));
+        const roofRows = roofs.map((roofItem, idx) => ({
+            idx,
+            sortedIdx: sortedIndex.get(roofItem),
+            x: Number(roofItem.x || 0).toFixed(3),
+            y: Number(roofItem.y || 0).toFixed(3),
+            z: Number((Number.isFinite(roofItem.z) ? roofItem.z : 0)).toFixed(3),
+            h: Number((Number.isFinite(roofItem.height) ? roofItem.height : 0)).toFixed(3),
+            bottom: Number(getRenderBottomZ(roofItem)).toFixed(3),
+            top: Number(getRenderTopZ(roofItem)).toFixed(3),
+            aY: Number(getRenderAnchorY(roofItem)).toFixed(3)
+        }));
+        const treeRows = trees.map((treeItem, idx) => ({
+            idx,
+            sortedIdx: sortedIndex.get(treeItem),
+            x: Number(treeItem.x || 0).toFixed(3),
+            y: Number(treeItem.y || 0).toFixed(3),
+            z: Number((Number.isFinite(treeItem.z) ? treeItem.z : 0)).toFixed(3),
+            h: Number((Number.isFinite(treeItem.height) ? treeItem.height : 0)).toFixed(3),
+            bottom: Number(getRenderBottomZ(treeItem)).toFixed(3),
+            top: Number(getRenderTopZ(treeItem)).toFixed(3),
+            aY: Number(getRenderAnchorY(treeItem)).toFixed(3)
+        }));
+        const wallRows = walls.map((wallItem, idx) => ({
+            idx,
+            lineGroupId: Number.isInteger(wallItem.lineGroupId) ? wallItem.lineGroupId : null,
+            sortedIdx: sortedIndex.get(wallItem),
+            x: Number(wallItem.x || 0).toFixed(3),
+            y: Number(wallItem.y || 0).toFixed(3),
+            z: Number((Number.isFinite(wallItem.z) ? wallItem.z : 0)).toFixed(3),
+            h: Number((Number.isFinite(wallItem.height) ? wallItem.height : 0)).toFixed(3),
+            bottom: Number(getRenderBottomZ(wallItem)).toFixed(3),
+            top: Number(getRenderTopZ(wallItem)).toFixed(3),
+            aY: Number(getRenderAnchorY(wallItem)).toFixed(3)
+        }));
+
+        console.groupCollapsed(`[RWT-DUMP] frame ${frameCount} roofs=${roofs.length} trees=${trees.length} walls=${walls.length}`);
+        console.table(roofRows);
+        console.table(treeRows);
+        console.table(wallRows);
+        console.groupEnd();
+        globalThis.windowWallDebugDumpRequested = false;
+    }
+
+    const composePopulateStartMs = performance.now();
+    const objectLayerInvariantItems = [];
+    const indoorLayerInvariantItems = [];
+    let invariantRelevantPresent = false;
+    const indoorWallLineGroupIds = new Set();
+    if (wizardInsideHouse && indoorObjectLayer && houseHitbox) {
+        for (let i = 0; i < mapItems.length; i++) {
+            const candidate = mapItems[i];
+            if (
+                !candidate ||
+                (candidate.type !== "wall" && candidate.type !== "wallSectionComposite") ||
+                !Number.isInteger(candidate.lineGroupId) ||
+                !candidate.groundPlaneHitbox
+            ) {
+                continue;
+            }
+            if (groundHitboxLikelyIntersectsCached(candidate.groundPlaneHitbox, houseHitbox)) {
+                indoorWallLineGroupIds.add(Number(candidate.lineGroupId));
+            }
+        }
+    }
+
+    // Add items to render layers. Opaque visuals route to the depth/mesh path.
+    mapItems.forEach(item => {
+        if (
+            !invariantRelevantPresent &&
+            item &&
+            (item.type === "wall" || item.type === "wallSectionComposite" || item.type === "roof" || item.type === "tree")
+        ) {
+            invariantRelevantPresent = true;
         }
         // Skip items that have been fully vanished
         if (item.gone) return;
         let interiorFadeAlpha = 1;
-        if (interiorMaskHitboxes && item.groundPlaneHitbox) {
-            const itemCountsAsInside = (item.type === "wall")
-                ? isGroundHitboxFullyInsideMaskHitboxes(item.groundPlaneHitbox, interiorMaskHitboxes)
-                : !isGroundHitboxFullyOutsideMaskHitboxes(item.groundPlaneHitbox, interiorMaskHitboxes);
-
-            if (blendTransitioning) {
-                interiorFadeAlpha = itemCountsAsInside ? insideBlend : (1 - insideBlend);
-                if (interiorFadeAlpha <= 0.001) return;
-            } else if (fullyInsideView && !itemCountsAsInside) {
-                return;
-            } else if (fullyOutsideView && itemCountsAsInside) {
-                return;
-            }
-        }
         
         // Run object simulation updates at most once per simulation frame.
         if (typeof item.update === "function" && item._lastUpdateFrame !== frameCount) {
@@ -1690,75 +3354,82 @@ function drawCanvas() {
                 if (item.pixiSprite && item.pixiSprite.parent) {
                     item.pixiSprite.parent.removeChild(item.pixiSprite);
                 }
+                removeItemOpaqueDepthMeshFromParent(item);
+                if (item._vanishFinalizeTimeout) {
+                    clearTimeout(item._vanishFinalizeTimeout);
+                    item._vanishFinalizeTimeout = null;
+                }
                 if (typeof item.removeFromNodes === "function") {
                     item.removeFromNodes();
                 } else {
                     const itemNode = map.worldToNode(item.x, item.y);
                     if (itemNode) itemNode.removeObject(item);
                 }
+                if (typeof globalThis !== "undefined") {
+                    if (item.type === "tree" && typeof globalThis.unregisterLazyTreeRecordAt === "function") {
+                        globalThis.unregisterLazyTreeRecordAt(item.x, item.y);
+                    } else if (item.type === "road" && typeof globalThis.unregisterLazyRoadRecordAt === "function") {
+                        globalThis.unregisterLazyRoadRecordAt(item.x, item.y);
+                    }
+                }
                 item.gone = true;
+                item.vanishing = false;
                 return;
             }
         }
 
             if (item.pixiSprite) {
-                if (item.skipTransform && typeof item.draw === "function") {
+                const skipLegacyWallGraphicsDraw = !!(opaqueDepthMeshEnabled && item && item.type === "wall");
+                const skipLegacyRoofTransform = !!(opaqueDepthMeshEnabled && item && item.type === "roof");
+                if (item.skipTransform && typeof item.draw === "function" && !skipLegacyWallGraphicsDraw) {
                     item.draw();
-                } else {
+                } else if (!skipLegacyRoofTransform) {
                     applySpriteTransform(item);
                 }
+            const isAnimal = isAnimalEntity(item);
             let losBrightness = 1;
             let losAlpha = 1;
+            const useLegacyLosTinting = !objectLitTransparencyEnabled;
             if (!omnivisionActive && item.groundPlaneHitbox) {
-                const isAnimal = isAnimalEntity(item);
-                const isRoad = item.type === "road";
-                const isGroupedWall = item.type === "wall" && Number.isInteger(item.lineGroupId);
-                if (isRoad) {
-                    // Roads behave like ground: never partially fade by LOS visibility rules.
-                    losBrightness = 1;
-                } else if (isGroupedWall) {
-                    const groupId = item.lineGroupId;
-                    let groupState = wallLosGroupState.get(groupId);
-                    if (!groupState) {
-                        groupState = { everVisible: false, brightnessCurrent: 1.0 };
-                        wallLosGroupState.set(groupId, groupState);
-                    }
-                    const groupCoverage = getLosCoverageRatio(item, 0.08);
-                    const groupVisibleNow = groupCoverage > 0.0001;
-                    if (groupVisibleNow) {
-                        groupState.everVisible = true;
-                    }
-                    const groupTargetBrightness = Math.max(
-                        losMinStaticBrightness,
-                        (1 - losMaxDarken) + groupCoverage * losMaxDarken
-                    );
-                    groupState.brightnessCurrent += (groupTargetBrightness - groupState.brightnessCurrent) * losLerpFactor;
-                    groupState.brightnessCurrent = Math.max(0, Math.min(1, groupState.brightnessCurrent));
-                    losBrightness = groupState.brightnessCurrent;
-                } else {
-                    const coverageRatio = getLosCoverageRatio(item, 0.05);
+                if (isAnimal) {
+                    // Animals should remain strictly LOS-gated even when
+                    // object transparency masking is enabled.
                     const currentlyVisible = isCurrentlyVisibleByLos(item);
-                    const losTargetBrightness = isAnimal
-                        ? (currentlyVisible ? 1 : 0)
-                        : Math.max(losMinStaticBrightness, (1 - losMaxDarken) + coverageRatio * losMaxDarken);
+                    const losTargetAlpha = currentlyVisible ? 1 : 0;
                     if (!Number.isFinite(item._losBrightnessCurrent)) {
                         item._losBrightnessCurrent = 1.0;
                     }
-                    const itemLosLerpFactor = isAnimal ? Math.min(1, losLerpFactor * 3) : losLerpFactor;
-                    item._losBrightnessCurrent += (losTargetBrightness - item._losBrightnessCurrent) * itemLosLerpFactor;
-                    losBrightness = Math.max(0, Math.min(1, item._losBrightnessCurrent));
-                }
-                if (isAnimal) {
-                    losAlpha = losBrightness;
+                    const animalLosLerpFactor = Math.min(1, losLerpFactor * 3);
+                    item._losBrightnessCurrent += (losTargetAlpha - item._losBrightnessCurrent) * animalLosLerpFactor;
+                    losAlpha = Math.max(0, Math.min(1, item._losBrightnessCurrent));
+                } else if (useLegacyLosTinting) {
+                    const isRoad = item.type === "road";
+                    if (isRoad) {
+                        // Roads behave like ground: never partially fade by LOS visibility rules.
+                        losBrightness = 1;
+                    } else {
+                        const coverageRatio = getLosCoverageRatio(item, 0.05);
+                        const losTargetBrightness = Math.max(
+                            losMinStaticBrightness,
+                            (1 - losMaxDarken) + coverageRatio * losMaxDarken
+                        );
+                        if (!Number.isFinite(item._losBrightnessCurrent)) {
+                            item._losBrightnessCurrent = 1.0;
+                        }
+                        item._losBrightnessCurrent += (losTargetBrightness - item._losBrightnessCurrent) * losLerpFactor;
+                        losBrightness = Math.max(0, Math.min(1, item._losBrightnessCurrent));
+                    }
                 }
             }
             const combinedBaseAlpha = interiorFadeAlpha * losAlpha;
             const perItemAlpha = Number.isFinite(item.previewAlpha)
                 ? Math.max(0, Math.min(1, item.previewAlpha))
                 : 1;
+            const opaqueAlphaEps = 0.999;
             const losTintValue = Math.max(0, Math.min(255, Math.round(255 * losBrightness)));
             const losTint = (losTintValue << 16) | (losTintValue << 8) | losTintValue;
             let burnTintValue = null;
+            let finalSpriteAlpha = combinedBaseAlpha * perItemAlpha;
             if (Number.isFinite(item && item.maxHP) && Number.isFinite(item && item.hp) && item.maxHP > 0) {
                 const hpThreshold = item.maxHP * 0.5;
                 if (item.hp < hpThreshold) {
@@ -1786,7 +3457,8 @@ function drawCanvas() {
                     const percentVanished = Math.min(1, fadeElapsed / fadeDuration);
                     const vanishAlpha = Math.max(0, 1 - percentVanished);
                     item.pixiSprite.tint = 0x0099FF; // Keep blue tint while fading
-                    item.pixiSprite.alpha = combinedBaseAlpha * vanishAlpha * perItemAlpha;
+                    finalSpriteAlpha = combinedBaseAlpha * vanishAlpha * perItemAlpha;
+                    item.pixiSprite.alpha = finalSpriteAlpha;
                 }
             } else {
                 if (Number.isFinite(burnTintValue)) {
@@ -1795,14 +3467,67 @@ function drawCanvas() {
                 } else {
                     item.pixiSprite.tint = losTint;
                 }
-                item.pixiSprite.alpha = combinedBaseAlpha * perItemAlpha;
+                finalSpriteAlpha = combinedBaseAlpha * perItemAlpha;
+                item.pixiSprite.alpha = finalSpriteAlpha;
             }
             if (item.pixiSprite.mask === losGroundMaskGraphics) {
                 item.pixiSprite.mask = null;
             }
             // item.pixiSprite.anchor.set(0.1, 0.1);
-            const targetLayer = (item.type === "road" && roadLayer) ? roadLayer : objectLayer;
-            targetLayer.addChild(item.pixiSprite);
+            const isPlacementPreview = item.type === "placedObjectPreview";
+            const canRouteToIndoorLayer = !!(wizardInsideHouse && indoorObjectLayer && item.type !== "road");
+            const itemInsideHouse = canRouteToIndoorLayer
+                ? !!(houseHitbox && item.groundPlaneHitbox && groundHitboxLikelyIntersectsCached(item.groundPlaneHitbox, houseHitbox))
+                : false;
+            const mountedGroupId = Number.isInteger(item && item.mountedWallLineGroupId)
+                ? Number(item.mountedWallLineGroupId)
+                : (Number.isInteger(item && item.lineGroupId) ? Number(item.lineGroupId) : null);
+            const followsIndoorWallGroup = Number.isInteger(mountedGroupId) && indoorWallLineGroupIds.has(mountedGroupId);
+            const useIndoorObjectLayer = !!(
+                canRouteToIndoorLayer &&
+                (itemInsideHouse || isPlacementPreview || followsIndoorWallGroup)
+            );
+            const isOpaqueVisual = finalSpriteAlpha >= opaqueAlphaEps && !item.vanishing;
+            const useOpaqueMeshLayer = !!(
+                !useIndoorObjectLayer &&
+                opaqueMeshLayer &&
+                item &&
+                item.type !== "road" &&
+                isOpaqueVisual
+            );
+            const targetLayer = (item.type === "road" && roadLayer)
+                ? roadLayer
+                : (useIndoorObjectLayer
+                    ? indoorObjectLayer
+                    : (useOpaqueMeshLayer ? opaqueMeshLayer : (isAnimal && characterLayer ? characterLayer : objectLayer)));
+            let displayObject = item.pixiSprite;
+            if (useOpaqueMeshLayer) {
+                const depthDisplay = getOpaqueDepthDisplayObject(item, {
+                    tint: item.pixiSprite && Number.isFinite(item.pixiSprite.tint) ? item.pixiSprite.tint : 0xFFFFFF,
+                    alpha: finalSpriteAlpha
+                });
+                if (depthDisplay) {
+                    displayObject = depthDisplay;
+                }
+            } else {
+                removeItemOpaqueDepthMeshFromParent(item);
+            }
+            if (item && item.type === "wallSectionComposite" && Array.isArray(item._sectionMemberWalls)) {
+                for (let i = 0; i < item._sectionMemberWalls.length; i++) {
+                    const memberWall = item._sectionMemberWalls[i];
+                    if (!memberWall) continue;
+                    memberWall._wallSectionCompositeDisplayObject = displayObject;
+                    if (item.pixiSprite && item.pixiSprite.parent) {
+                        memberWall._wallSectionCompositeSprite = item.pixiSprite;
+                    }
+                }
+            }
+            targetLayer.addChild(displayObject);
+            if (targetLayer === objectLayer) {
+                objectLayerInvariantItems.push(item);
+            } else if (targetLayer === indoorObjectLayer) {
+                indoorLayerInvariantItems.push(item);
+            }
 
             // Render fire if burning or fading out
             if (item.isOnFire || item.fireFadeStart !== undefined) {
@@ -1871,11 +3596,153 @@ function drawCanvas() {
                 const alphaMult = item.fireAlphaMult !== undefined ? item.fireAlphaMult : 1;
                 item.fireSprite.alpha = item.pixiSprite.alpha * alphaMult;
                 item.fireSprite.rotation = 0; // Fire stays upright
-                objectLayer.addChild(item.fireSprite);
+                const fireLayer = useIndoorObjectLayer ? indoorObjectLayer : objectLayer;
+                fireLayer.addChild(item.fireSprite);
             }
         }
-        });
     });
+    drawPerf.composePopulateMs = performance.now() - composePopulateStartMs;
+
+    // Deterministic invariant pass:
+    // Preserve roof/tree relationships over base sorted order.
+    const runInvariantPass = !!(
+        invariantRelevantPresent ||
+        (typeof globalThis !== "undefined" && globalThis.windowWallDebugDumpRequested)
+    );
+    const composeInvariantStartMs = performance.now();
+    if (runInvariantPass) {
+        [
+            { layer: objectLayer, layerItems: objectLayerInvariantItems },
+            { layer: indoorObjectLayer, layerItems: indoorLayerInvariantItems }
+        ].forEach(layerState => {
+        const layer = layerState.layer;
+        if (!layer) return;
+        const layerItems = Array.isArray(layerState.layerItems) ? layerState.layerItems : [];
+        if (layerItems.length === 0) return;
+
+        const wallItems = [];
+
+        layerItems.forEach(item => {
+            if (
+                (item.type === "wall" || item.type === "wallSectionComposite") &&
+                Number.isInteger(item.lineGroupId)
+            ) {
+                wallItems.push(item);
+            }
+        });
+
+        // Roof ordering invariants:
+        // 1) roof above supporting walls
+        // 2) trees in front of roof (below front eave in world y) above roof
+        const roofItems = [];
+        const treeItems = [];
+        layerItems.forEach(item => {
+            if (!item || !item.pixiSprite || item.pixiSprite.parent !== layer) return;
+            if (item.type === "roof") {
+                roofItems.push(item);
+            } else if (item.type === "tree") {
+                treeItems.push(item);
+            }
+        });
+        roofItems.forEach(roofItem => {
+            const roofSprite = roofItem.pixiSprite;
+            if (!roofSprite || roofSprite.parent !== layer) return;
+
+            if (roofItem.groundPlaneHitbox) {
+                const supportIndices = [];
+                for (let i = 0; i < wallItems.length; i++) {
+                    const wall = wallItems[i];
+                    if (!wall || !wall.pixiSprite || wall.pixiSprite.parent !== layer || !wall.groundPlaneHitbox) continue;
+                    if (!groundHitboxLikelyIntersectsCached(wall.groundPlaneHitbox, roofItem.groundPlaneHitbox)) continue;
+                    const idx = layer.getChildIndex(wall.pixiSprite);
+                    if (idx >= 0) supportIndices.push(idx);
+                }
+                if (supportIndices.length > 0) {
+                    const minRoofIdx = Math.max(...supportIndices) + 1;
+                    const roofIdx = layer.getChildIndex(roofSprite);
+                    if (roofIdx >= 0 && roofIdx < minRoofIdx) {
+                        layer.removeChild(roofSprite);
+                        const clamped = Math.max(0, Math.min(minRoofIdx, layer.children.length));
+                        layer.addChildAt(roofSprite, clamped);
+                    }
+                }
+            }
+
+            const roofFrontY = (() => {
+                const hb = roofItem.groundPlaneHitbox;
+                if (!hb) return Number.isFinite(roofItem.y) ? roofItem.y : 0;
+                if (hb.type === "circle" && Number.isFinite(hb.y) && Number.isFinite(hb.radius)) {
+                    return hb.y + hb.radius;
+                }
+                if (Array.isArray(hb.points) && hb.points.length >= 3) {
+                    return hb.points.reduce((m, p) => Math.max(m, Number.isFinite(p && p.y) ? p.y : -Infinity), -Infinity);
+                }
+                return Number.isFinite(roofItem.y) ? roofItem.y : 0;
+            })();
+
+            const roofHitbox = roofItem.groundPlaneHitbox || null;
+            const roofIdx = layer.getChildIndex(roofSprite);
+            if (roofIdx >= 0) {
+                const treesToMove = [];
+                for (let i = 0; i < treeItems.length; i++) {
+                    const treeItem = treeItems[i];
+                    if (
+                        !treeItem ||
+                        !treeItem.pixiSprite ||
+                        treeItem.pixiSprite.parent !== layer ||
+                        !Number.isFinite(treeItem.y) ||
+                        treeItem.y <= roofFrontY
+                    ) {
+                        continue;
+                    }
+                    if (
+                        roofHitbox &&
+                        treeItem.groundPlaneHitbox &&
+                        !groundHitboxLikelyIntersectsCached(treeItem.groundPlaneHitbox, roofHitbox)
+                    ) {
+                        continue;
+                    }
+                    const treeIdx = layer.getChildIndex(treeItem.pixiSprite);
+                    if (treeIdx < 0 || treeIdx > roofIdx) continue;
+                    treesToMove.push({ sprite: treeItem.pixiSprite, idx: treeIdx });
+                }
+
+                if (treesToMove.length > 0) {
+                    treesToMove.sort((a, b) => a.idx - b.idx);
+                    treesToMove.forEach(entry => layer.removeChild(entry.sprite));
+
+                    const nextRoofIdx = layer.getChildIndex(roofSprite);
+                    let insertAt = Math.max(0, Math.min(nextRoofIdx + 1, layer.children.length));
+                    treesToMove.forEach(entry => {
+                        layer.addChildAt(entry.sprite, insertAt);
+                        insertAt += 1;
+                    });
+                }
+            }
+        });
+        });
+        drawPerf.composeInvariantMs = performance.now() - composeInvariantStartMs;
+        drawPerf.composeInvariantSkipped = 0;
+    } else {
+        drawPerf.composeInvariantMs = 0;
+        drawPerf.composeInvariantSkipped = 1;
+    }
+
+    if (
+        placePreviewItem &&
+        placePreviewItem.previewDrawAfterWalls &&
+        placePreviewItem.pixiSprite &&
+        placePreviewItem.pixiSprite.parent
+    ) {
+        const previewParent = placePreviewItem.pixiSprite.parent;
+        const topIndex = previewParent.children.length - 1;
+        if (topIndex >= 0) {
+            const currentIndex = previewParent.getChildIndex(placePreviewItem.pixiSprite);
+            if (currentIndex !== topIndex) {
+                previewParent.setChildIndex(placePreviewItem.pixiSprite, topIndex);
+            }
+        }
+    }
 
     // Keep firewall preview visible above rendered map objects (including roads).
     if (wizard.firewallLayoutMode && wizard.firewallStartPoint && wizard.phantomFirewall) {
@@ -1888,10 +3755,19 @@ function drawCanvas() {
         objectLayer.addChild(wizard.phantomFirewall);
     }
 
+    updateIndoorOverlay(houseHitbox, wizardInsideHouse);
+    drawPlaceObjectCenterSnapGuide(placePreviewItem);
+
     drawSpellHoverTargetHighlight();
 
     wizard.draw();
-    drawProjectiles();
+    routeWizardToIndoorLayer(wizardInsideHouse);
+    drawProjectiles(houseHitbox, wizardInsideHouse);
+    drawPerf.passObjectsMs = performance.now() - passObjectsStartMs;
+    }
+
+    function renderPostPass() {
+    const passPostStartMs = performance.now();
     drawHitboxes(true);
     drawWizardBoundaries(true);
     drawLosDebug(true);
@@ -1903,11 +3779,27 @@ function drawCanvas() {
         $('#msg').html(nextMessageHtml);
         lastRenderedMessageHtml = nextMessageHtml;
     }
+    drawPerf.passPostMs = performance.now() - passPostStartMs;
     drawPerf.composeMs = performance.now() - composeStartMs;
+    drawPerf.composeUnaccountedMs = Math.max(
+        0,
+        drawPerf.composeMs -
+            drawPerf.composeMaskMs -
+            drawPerf.composeSortMs -
+            drawPerf.composePopulateMs -
+            drawPerf.composeInvariantMs -
+            drawPerf.composeWallSectionsMs
+    );
     drawPerf.totalMs = performance.now() - perfStartMs;
     if (typeof globalThis !== "undefined") {
         globalThis.drawPerfBreakdown = drawPerf;
     }
+    }
+
+    renderWorldPass();
+    renderLosPass();
+    renderObjectsPass();
+    renderPostPass();
 }
 
 function worldToScreen(item) {
@@ -2107,72 +3999,66 @@ function centerViewport(obj, margin, smoothing = null) {
     viewport.y = Math.round(viewport.y * 1000) / 1000;
 }
 
-function drawMapBorder() {
-    if (!gameContainer || !map) return;
-    if (!mapBorderGraphics) {
-        mapBorderGraphics = new PIXI.Graphics();
-        mapBorderGraphics.interactive = false;
-        gameContainer.addChild(mapBorderGraphics);
-    }
-    mapBorderGraphics.clear();
-
-    const worldWidth = Number.isFinite(map.worldWidth) ? map.worldWidth : map.width;
-    const worldHeight = Number.isFinite(map.worldHeight) ? map.worldHeight : map.height;
-    if (!(worldWidth > 0) || !(worldHeight > 0)) return;
-
-    const worldToScreenRaw = (x, y) => ({
-        x: (x - viewport.x) * viewscale,
-        y: (y - viewport.y) * viewscale * xyratio
-    });
-    const topLeft = worldToScreenRaw(0, 0);
-    const topRight = worldToScreenRaw(worldWidth, 0);
-    const bottomRight = worldToScreenRaw(worldWidth, worldHeight);
-    const bottomLeft = worldToScreenRaw(0, worldHeight);
-
-    const dash = 8;
-    const gap = 6;
-    const drawDashed = (a, b) => {
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const len = Math.hypot(dx, dy);
-        if (len <= 1e-6) return;
-        const ux = dx / len;
-        const uy = dy / len;
-        let t = 0;
-        while (t < len) {
-            const start = t;
-            const end = Math.min(len, t + dash);
-            mapBorderGraphics.moveTo(a.x + ux * start, a.y + uy * start);
-            mapBorderGraphics.lineTo(a.x + ux * end, a.y + uy * end);
-            t += dash + gap;
-        }
-    };
-
-    mapBorderGraphics.lineStyle(2, 0xffffff, 0.85);
-    drawDashed(topLeft, topRight);
-    drawDashed(topRight, bottomRight);
-    drawDashed(bottomRight, bottomLeft);
-    drawDashed(bottomLeft, topLeft);
-}
-
 function updatePhantomWall(ax, ay, bx, by) {
     if (!wizard.phantomWall) return;
 
     wizard.phantomWall.clear();
 
-    const nodeA = map.worldToNode(ax, ay);
-    const nodeB = map.worldToNode(bx, by);
-    if (!nodeA || !nodeB) return;
-
-    const wallPath = map.getHexLine(nodeA, nodeB);
+    const startPoint = { x: Number(ax), y: Number(ay) };
+    const endPoint = { x: Number(bx), y: Number(by) };
+    if (
+        !Number.isFinite(startPoint.x) ||
+        !Number.isFinite(startPoint.y) ||
+        !Number.isFinite(endPoint.x) ||
+        !Number.isFinite(endPoint.y)
+    ) {
+        return;
+    }
+    const wallPath = (
+        typeof Wall !== "undefined" &&
+        Wall &&
+        typeof Wall.buildPlacementPath === "function"
+    ) ? Wall.buildPlacementPath(map, startPoint, endPoint, { maxAnchorDistance: 1.0001 }) : [];
+    if (!Array.isArray(wallPath) || wallPath.length === 0) return;
+    const planned = (
+        typeof Wall !== "undefined" &&
+        Wall &&
+        typeof Wall.planWallLineSegments === "function"
+    ) ? Wall.planWallLineSegments(wallPath, map, {
+        skipExisting: true,
+        startReferenceWall: (wizard && wizard.wallStartReferenceWall && wizard.wallStartReferenceWall.type === "wall")
+            ? wizard.wallStartReferenceWall
+            : null
+    }) : null;
+    const previewSegments = planned && Array.isArray(planned.segments) ? planned.segments : null;
     const wallHeight = Number.isFinite(wizard.selectedWallHeight) ? wizard.selectedWallHeight : 3.0;
     const wallThickness = Number.isFinite(wizard.selectedWallThickness) ? wizard.selectedWallThickness : 0.2;
+    const drawSegment = (from, to) => {
+        if (!from || !to || (typeof Wall !== "undefined" && Wall && Wall.pointsMatch(from, to))) return;
+        Wall.drawWall(wizard.phantomWall, from, to, wallHeight, wallThickness, 0x888888, 0.5);
+    };
+
+    if (previewSegments) {
+        for (let i = 0; i < previewSegments.length; i++) {
+            const seg = previewSegments[i];
+            if (!seg) continue;
+            drawSegment(seg.from, seg.to);
+        }
+        return;
+    }
+
+    if (!(typeof Wall !== "undefined" && Wall && Wall.pointsMatch(startPoint, wallPath[0]))) {
+        drawSegment(startPoint, wallPath[0]);
+    }
     for (let i = 0; i < wallPath.length - 1; i++) {
-        const nodeA = wallPath[i];
-        const nodeB = wallPath[i + 1];
+        const pathNodeA = wallPath[i];
+        const pathNodeB = wallPath[i + 1];
 
         // Use the static NewWall.drawWall method with phantom styling
-        Wall.drawWall(wizard.phantomWall, nodeA, nodeB, wallHeight, wallThickness, 0x888888, 0.5);
+        drawSegment(pathNodeA, pathNodeB);
+    }
+    if (!(typeof Wall !== "undefined" && Wall && Wall.pointsMatch(wallPath[wallPath.length - 1], endPoint))) {
+        drawSegment(wallPath[wallPath.length - 1], endPoint);
     }
 }
 
@@ -2344,7 +4230,238 @@ function ensureFireFrames() {
     }
 }
 
+function resolvePlacedObjectLodTexturePath(item) {
+    if (!item || !isPlacedObjectEntity(item)) return null;
+    const basePath = (typeof item.texturePath === "string" && item.texturePath.length > 0)
+        ? item.texturePath
+        : null;
+    const lodList = Array.isArray(item.lodTextures) ? item.lodTextures : null;
+    if (!lodList || lodList.length === 0) return basePath;
+    const itemWidthWorld = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
+    const itemHeightWorld = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
+    const rotationAxis = (typeof item.rotationAxis === "string") ? item.rotationAxis : "visual";
+    const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(xyratio) ? xyratio : 0.66));
+    const screenWidthPx = itemWidthWorld * viewscale;
+    const screenHeightPx = (rotationAxis === "spatial")
+        ? (itemHeightWorld * viewscale)
+        : (itemHeightWorld * viewscale * yIsoScale);
+    // Size metric used for LOD thresholds: larger on-screen objects use higher-detail textures.
+    const sizeMetric = Math.max(screenWidthPx, screenHeightPx);
+
+    for (let i = 0; i < lodList.length; i++) {
+        const entry = lodList[i];
+        if (!entry || typeof entry.texturePath !== "string" || entry.texturePath.length === 0) continue;
+        // Backward-compatible field name: "maxDistance" now interpreted as max on-screen size in px.
+        const maxSize = Number.isFinite(entry.maxDistance) ? Number(entry.maxDistance) : Infinity;
+        if (sizeMetric <= maxSize) return entry.texturePath;
+    }
+    return basePath || (lodList[lodList.length - 1] && lodList[lodList.length - 1].texturePath) || null;
+}
+
 function applySpriteTransform(item) {
+    if (item && item.type === "roof" && item.pixiSprite) {
+        const coors = worldToScreen(item);
+        item.pixiSprite.x = coors.x;
+        item.pixiSprite.y = coors.y;
+        if (item.pixiSprite.scale && typeof item.pixiSprite.scale.set === "function") {
+            item.pixiSprite.scale.set(viewscale, viewscale);
+        }
+        item.pixiSprite.rotation = 0;
+        return;
+    }
+
+    if (
+        item &&
+        (isPlacedObjectEntity(item) || item.type === "placedObjectPreview") &&
+        item.rotationAxis === "spatial"
+    ) {
+        const useDualWallPlanes = !!(
+            item &&
+            item.type !== "placedObjectPreview" &&
+            isPlacedObjectEntity(item) &&
+            isWallMountedPlaceable(item)
+        );
+        const texturePath = (
+            useDualWallPlanes &&
+            typeof item.texturePath === "string" &&
+            item.texturePath.length > 0
+        ) ? item.texturePath : (
+            resolvePlacedObjectLodTexturePath(item) || (
+                (typeof item.texturePath === "string" && item.texturePath.length > 0)
+                    ? item.texturePath
+                    : null
+            )
+        );
+        const makeSpatialGeometry = (dualPlanes = false) => {
+            if (!dualPlanes) {
+                return new PIXI.Geometry()
+                    .addAttribute('aVertexPosition', new Float32Array(8), 2)
+                    .addAttribute('aUvs', new Float32Array([
+                        0, 1,
+                        1, 1,
+                        1, 0,
+                        0, 0
+                    ]), 2)
+                    .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
+            }
+            return new PIXI.Geometry()
+                .addAttribute('aVertexPosition', new Float32Array(16), 2)
+                .addAttribute('aUvs', new Float32Array([
+                    0, 1,
+                    1, 1,
+                    1, 0,
+                    0, 0,
+                    1, 1,
+                    0, 1,
+                    0, 0,
+                    1, 0
+                ]), 2)
+                .addIndex(new Uint16Array([
+                    0, 1, 2, 0, 2, 3,
+                    4, 5, 6, 4, 6, 7
+                ]));
+        };
+        const meshNeedsGeometryShape = (meshRef, dualPlanes = false) => {
+            if (!meshRef || !meshRef.geometry) return true;
+            const vb = meshRef.geometry.getBuffer('aVertexPosition');
+            const ub = meshRef.geometry.getBuffer('aUvs');
+            const ib = meshRef.geometry.getIndex();
+            const expectedVerts = dualPlanes ? 16 : 8;
+            const expectedUvs = dualPlanes ? 16 : 8;
+            const expectedIdx = dualPlanes ? 12 : 6;
+            return !(
+                vb && vb.data && vb.data.length === expectedVerts &&
+                ub && ub.data && ub.data.length === expectedUvs &&
+                ib && ib.data && ib.data.length === expectedIdx
+            );
+        };
+        const mesh = (() => {
+            if (item.type === "placedObjectPreview") {
+                if (!placeObjectPreviewSpatialMesh) {
+                    const geometry = makeSpatialGeometry(false);
+                    const material = new PIXI.MeshMaterial(texturePath ? PIXI.Texture.from(texturePath) : PIXI.Texture.WHITE);
+                    placeObjectPreviewSpatialMesh = new PIXI.Mesh(geometry, material);
+                    placeObjectPreviewSpatialMesh.skipTransform = true;
+                    placeObjectPreviewSpatialMesh.interactive = false;
+                }
+                if (placeObjectPreviewSpatialMesh.material) {
+                    placeObjectPreviewSpatialMesh.material.texture = texturePath ? PIXI.Texture.from(texturePath) : PIXI.Texture.WHITE;
+                }
+                return placeObjectPreviewSpatialMesh;
+            }
+            if (item._spatialPlaneMesh) {
+                if (meshNeedsGeometryShape(item._spatialPlaneMesh, useDualWallPlanes)) {
+                    if (typeof item._spatialPlaneMesh.destroy === "function") {
+                        item._spatialPlaneMesh.destroy({ children: false, texture: false, baseTexture: false });
+                    }
+                    item._spatialPlaneMesh = null;
+                }
+            }
+            if (item._spatialPlaneMesh) {
+                if (item._spatialPlaneMesh.material) {
+                    item._spatialPlaneMesh.material.texture = texturePath ? PIXI.Texture.from(texturePath) : PIXI.Texture.WHITE;
+                }
+                return item._spatialPlaneMesh;
+            }
+            const geometry = makeSpatialGeometry(useDualWallPlanes);
+            const material = new PIXI.MeshMaterial(texturePath ? PIXI.Texture.from(texturePath) : PIXI.Texture.WHITE);
+            const m = new PIXI.Mesh(geometry, material);
+            m.skipTransform = true;
+            m.interactive = false;
+            item._spatialPlaneMesh = m;
+            if (!item._placedObjectBaseSprite && item.pixiSprite && item.pixiSprite instanceof PIXI.Sprite) {
+                item._placedObjectBaseSprite = item.pixiSprite;
+            }
+            return m;
+        })();
+
+        item.pixiSprite = mesh;
+        const worldX = Number.isFinite(item.x) ? item.x : 0;
+        const worldY = Number.isFinite(item.y) ? item.y : 0;
+        const activeTexture = (mesh.material && mesh.material.texture) ? mesh.material.texture : null;
+        const nativeTexW = activeTexture && Number.isFinite(activeTexture.width) ? Number(activeTexture.width) : null;
+        const nativeTexH = activeTexture && Number.isFinite(activeTexture.height) ? Number(activeTexture.height) : null;
+        const width = (debugUseLodNativePixelSize && isPlacedObjectEntity(item) && Number.isFinite(nativeTexW) && viewscale > 0)
+            ? Math.max(0.01, nativeTexW / viewscale)
+            : Math.max(0.01, Number.isFinite(item.width) ? item.width : 1);
+        const baseHeight = (debugUseLodNativePixelSize && isPlacedObjectEntity(item) && Number.isFinite(nativeTexH) && viewscale > 0)
+            ? Math.max(0.01, nativeTexH / viewscale)
+            : Math.max(0.01, Number.isFinite(item.height) ? item.height : 1);
+        const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(xyratio) ? xyratio : 0.66));
+        // Compensate for worldToScreen Y squash so spatial quads keep source aspect.
+        const height = baseHeight / yIsoScale;
+        const angleDeg = Number.isFinite(item.placementRotation) ? item.placementRotation : 0;
+        const theta = angleDeg * (Math.PI / 180);
+        const halfWidth = width * 0.5;
+        const axisX = Math.cos(theta);
+        const axisY = Math.sin(theta);
+        const anchorX = Number.isFinite(item.placeableAnchorX) ? Number(item.placeableAnchorX) : 0.5;
+        const anchorY = Number.isFinite(item.placeableAnchorY) ? Number(item.placeableAnchorY) : 1;
+        // Spatial planes should treat item.x/item.y as the anchor world point, same as sprite mode.
+        const alongOffset = (anchorX - 0.5) * width;
+        const verticalOffset = (1 - anchorY) * height;
+        const baseX = worldX - axisX * alongOffset;
+        const baseY = worldY - axisY * alongOffset + verticalOffset;
+
+        const planePointsToScreen = (centerX, centerY) => {
+            const lb = { x: centerX - axisX * halfWidth, y: centerY - axisY * halfWidth };
+            const rb = { x: centerX + axisX * halfWidth, y: centerY + axisY * halfWidth };
+            const lt = { x: lb.x, y: lb.y - height };
+            const rt = { x: rb.x, y: rb.y - height };
+            return {
+                sBL: worldToScreen(lb),
+                sBR: worldToScreen(rb),
+                sTR: worldToScreen(rt),
+                sTL: worldToScreen(lt)
+            };
+        };
+
+        let planeA = planePointsToScreen(baseX, baseY);
+        let planeB = null;
+        if (useDualWallPlanes) {
+            const faceCenters = getMountedWallFaceCenters(item);
+            if (faceCenters) {
+                planeA = planePointsToScreen(Number(faceCenters.front.x), Number(faceCenters.front.y));
+                planeB = planePointsToScreen(Number(faceCenters.back.x), Number(faceCenters.back.y));
+            }
+        }
+
+        const vertexBuffer = mesh.geometry.getBuffer('aVertexPosition');
+        const vertices = vertexBuffer && vertexBuffer.data ? vertexBuffer.data : null;
+        if (vertices && vertices.length >= 8) {
+            vertices[0] = planeA.sBL.x; vertices[1] = planeA.sBL.y;
+            vertices[2] = planeA.sBR.x; vertices[3] = planeA.sBR.y;
+            vertices[4] = planeA.sTR.x; vertices[5] = planeA.sTR.y;
+            vertices[6] = planeA.sTL.x; vertices[7] = planeA.sTL.y;
+            if (planeB && vertices.length >= 16) {
+                vertices[8] = planeB.sBL.x; vertices[9] = planeB.sBL.y;
+                vertices[10] = planeB.sBR.x; vertices[11] = planeB.sBR.y;
+                vertices[12] = planeB.sTR.x; vertices[13] = planeB.sTR.y;
+                vertices[14] = planeB.sTL.x; vertices[15] = planeB.sTL.y;
+            }
+            vertexBuffer.update();
+        }
+        mesh.rotation = 0;
+        return;
+    }
+
+    if (
+        item &&
+        isPlacedObjectEntity(item) &&
+        item._spatialPlaneMesh &&
+        item.pixiSprite === item._spatialPlaneMesh
+    ) {
+        if (item._placedObjectBaseSprite) {
+            item.pixiSprite = item._placedObjectBaseSprite;
+        } else {
+            const fallbackTexture = (typeof item.texturePath === "string" && item.texturePath.length > 0)
+                ? PIXI.Texture.from(item.texturePath)
+                : PIXI.Texture.WHITE;
+            item.pixiSprite = new PIXI.Sprite(fallbackTexture);
+            item.pixiSprite.anchor.set(0.5, 1);
+        }
+    }
+
     const coors = worldToScreen(item);
     ensureSpriteFrames(item);
     if (item.spriteFrames && item.pixiSprite) {
@@ -2357,15 +4474,38 @@ function applySpriteTransform(item) {
     }
     item.pixiSprite.x = coors.x;
     item.pixiSprite.y = coors.y;
+    if (item && isPlacedObjectEntity(item) && item.rotationAxis !== "spatial" && item.pixiSprite instanceof PIXI.Sprite) {
+        const lodTexturePath = resolvePlacedObjectLodTexturePath(item);
+        if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== item._activeLodTexturePath) {
+            item.pixiSprite.texture = PIXI.Texture.from(lodTexturePath);
+            item._activeLodTexturePath = lodTexturePath;
+        }
+    }
+    const spriteTexture = item.pixiSprite && item.pixiSprite.texture ? item.pixiSprite.texture : null;
+    const nativeTexW = spriteTexture && Number.isFinite(spriteTexture.width) ? Number(spriteTexture.width) : null;
+    const nativeTexH = spriteTexture && Number.isFinite(spriteTexture.height) ? Number(spriteTexture.height) : null;
+    const useNativeLodSize = (
+        debugUseLodNativePixelSize &&
+        item &&
+        isPlacedObjectEntity(item) &&
+        item.rotationAxis !== "spatial" &&
+        Number.isFinite(nativeTexW) &&
+        Number.isFinite(nativeTexH)
+    );
     // item.pixiSprite.anchor.set(0, 1);
-    item.pixiSprite.width = (item.width || 1) * viewscale;
+    item.pixiSprite.width = useNativeLodSize ? nativeTexW : ((item.width || 1) * viewscale);
     // Pavement gets squashed by xyratio for isometric effect, but trees/animals/walls display at full height
     if (item.type === "road") {
         item.pixiSprite.width = (item.width || 1) * viewscale * 1.1547;
         item.pixiSprite.height = (item.height || 1) * viewscale * xyratio;
     } else {
-        item.pixiSprite.height = (item.height || 1) * viewscale;
-        item.pixiSprite.width = (item.width || 1) * viewscale;
+        if (useNativeLodSize) {
+            item.pixiSprite.height = nativeTexH;
+            item.pixiSprite.width = nativeTexW;
+        } else {
+            item.pixiSprite.height = (item.height || 1) * viewscale;
+            item.pixiSprite.width = (item.width || 1) * viewscale;
+        }
     }
     item.pixiSprite.skew.x = 0;
 
@@ -2374,8 +4514,13 @@ function applySpriteTransform(item) {
         applyTreeTaperMesh(item, coors);
     }
 
-    if (item.rotation) {
-        item.pixiSprite.rotation = item.rotation * (Math.PI / 180);
+    const visualRotation = (item && item.rotationAxis === "none")
+        ? 0
+        : Number.isFinite(item.placementRotation)
+        ? item.placementRotation
+        : item.rotation;
+    if (visualRotation) {
+        item.pixiSprite.rotation = visualRotation * (Math.PI / 180);
     } else {
         item.pixiSprite.rotation = 0;
     }
@@ -2387,15 +4532,17 @@ function updateLandLayer() {
     const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
         ? interpolatedViewport
         : viewport;
+    const cameraWidth = Number.isFinite(camera.width) ? camera.width : viewport.width;
+    const cameraHeight = Number.isFinite(camera.height) ? camera.height : viewport.height;
     if (!Number.isFinite(groundChunkLastViewscale) || Math.abs(groundChunkLastViewscale - viewscale) > 0.001) {
         clearGroundChunkCache();
         groundChunkLastViewscale = viewscale;
     }
     const xScale = 0.866;
     const rawXStart = Math.floor(camera.x / xScale) - groundChunkRenderPaddingTiles;
-    const rawXEnd = Math.ceil((camera.x + viewport.width) / xScale) + groundChunkRenderPaddingTiles;
+    const rawXEnd = Math.ceil((camera.x + cameraWidth) / xScale) + groundChunkRenderPaddingTiles;
     const rawYStart = Math.floor(camera.y) - groundChunkRenderPaddingTiles;
-    const rawYEnd = Math.ceil(camera.y + viewport.height) + groundChunkRenderPaddingTiles;
+    const rawYEnd = Math.ceil(camera.y + cameraHeight) + groundChunkRenderPaddingTiles;
     const xRanges = getWrappedIndexRanges(rawXStart, rawXEnd, map.width, map.wrapX);
     const yRanges = getWrappedIndexRanges(rawYStart, rawYEnd, map.height, map.wrapY);
     if (xRanges.length === 0 || yRanges.length === 0) return;
@@ -2438,8 +4585,8 @@ function updateLandLayer() {
             ? map.shortestDeltaY(camera.y, chunk.minWorldY)
             : (chunk.minWorldY - camera.y);
         chunk.sprite.visible = true;
-        chunk.sprite.x = dx * viewscale;
-        chunk.sprite.y = dy * viewscale * xyratio;
+        chunk.sprite.x = Math.round(dx * viewscale);
+        chunk.sprite.y = Math.round(dy * viewscale * xyratio);
     });
 
     if (groundChunkCache.size > groundChunkCacheMaxEntries) {
@@ -2469,11 +4616,13 @@ function forEachWrappedNodeInViewport(xPadding, yPadding, callback, cameraOverri
             ? interpolatedViewport
             : viewport
     );
+    const cameraWidth = Number.isFinite(camera.width) ? camera.width : viewport.width;
+    const cameraHeight = Number.isFinite(camera.height) ? camera.height : viewport.height;
     const xScale = 0.866;
     const xStart = Math.floor(camera.x / xScale) - xPadding;
-    const xEnd = Math.ceil((camera.x + viewport.width) / xScale) + xPadding;
+    const xEnd = Math.ceil((camera.x + cameraWidth) / xScale) + xPadding;
     const yStart = Math.floor(camera.y) - yPadding;
-    const yEnd = Math.ceil(camera.y + viewport.height) + yPadding;
+    const yEnd = Math.ceil(camera.y + cameraHeight) + yPadding;
     const xRanges = getWrappedIndexRanges(xStart, xEnd, map.width, map.wrapX);
     const yRanges = getWrappedIndexRanges(yStart, yEnd, map.height, map.wrapY);
     if (xRanges.length === 0 || yRanges.length === 0) return;
@@ -2490,10 +4639,21 @@ function forEachWrappedNodeInViewport(xPadding, yPadding, callback, cameraOverri
     });
 }
 
-function drawProjectiles() {
+function drawProjectiles(houseHitbox = null, wizardInsideHouse = false) {
     remainingBalls = [];
     projectiles.forEach(ball => {
         if (!ball.visible) return;
+        const projectileWorldX = ball.landed ? ball.landedWorldX : ball.x;
+        const projectileWorldY = ball.landed ? ball.landedWorldY : ball.y;
+        const projectileInsideHouse = !!(
+            wizardInsideHouse &&
+            indoorObjectLayer &&
+            houseHitbox &&
+            Number.isFinite(projectileWorldX) &&
+            Number.isFinite(projectileWorldY) &&
+            hitboxContainsWorldPoint(houseHitbox, projectileWorldX, projectileWorldY)
+        );
+        const targetLayer = projectileInsideHouse && indoorObjectLayer ? indoorObjectLayer : projectileLayer;
 
         if (!ball.pixiSprite) {
             // Create sprite from actual texture
@@ -2501,7 +4661,9 @@ function drawProjectiles() {
             ball.pixiSprite = new PIXI.Sprite(texture);
             ball.pixiSprite.anchor.set(0.5, 0.5);
             ball.pixiSprite._lastImageSrc = ball.image.src;
-            projectileLayer.addChild(ball.pixiSprite);
+            targetLayer.addChild(ball.pixiSprite);
+        } else if (ball.pixiSprite.parent !== targetLayer) {
+            targetLayer.addChild(ball.pixiSprite);
         }
 
         // Handle fireball animation (animates while moving)
@@ -2709,443 +4871,6 @@ function computeLosDebugState(candidates) {
     };
 }
 
-function drawLosDebug(redraw = true) {
-    if (!debugMode || !wizard) {
-        if (losDebugGraphics) losDebugGraphics.visible = false;
-        losDebugState = null;
-        return;
-    }
-    if (!redraw) return;
-    if (!losDebugGraphics) {
-        losDebugGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(losDebugGraphics);
-    }
-    losDebugGraphics.visible = true;
-    losDebugGraphics.clear();
-    losDebugState = currentLosState;
-    if (!losDebugState || !losDebugState.depth || !losDebugState.owner || losDebugState.owner.length < 3) return;
-    if (!LOSSystem || typeof LOSSystem.buildPolygonWorldPoints !== "function") return;
-    const farDist = Math.max(viewport.width, viewport.height) * 1.5;
-    const worldPoints = LOSSystem.buildPolygonWorldPoints(wizard, losDebugState, farDist);
-    const screenPoints = worldPoints.map(pt => worldToScreen(pt));
-    if (screenPoints.length < 3) return;
-
-    losDebugGraphics.lineStyle(2, 0x000000, 0.9);
-    if (losDebugFillEnabled) {
-        losDebugGraphics.beginFill(0x000000, 0.12);
-    }
-    losDebugGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
-    for (let i = 1; i < screenPoints.length; i++) {
-        losDebugGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
-    }
-    losDebugGraphics.closePath();
-    if (losDebugFillEnabled) {
-        losDebugGraphics.endFill();
-    }
-}
-
-function drawHexGrid(redraw = true) {
-    if (!showHexGrid && !debugMode) {
-        if (gridGraphics) gridGraphics.visible = false;
-        return;
-    }
-    if (!redraw) return;
-
-    if (!gridGraphics) {
-        gridGraphics = new PIXI.Graphics();
-        gridLayer.addChild(gridGraphics);
-    }
-    gridGraphics.visible = true;
-    gridGraphics.clear();
-
-    const hexWidth = map.hexWidth * viewscale;
-    const hexHeight = map.hexHeight * viewscale * xyratio;
-    const halfW = hexWidth / 2;
-    const quarterW = hexWidth / 4;
-    const halfH = hexHeight / 2;
-
-    const xPadding = 2;
-    const yPadding = 2;
-    const xScale = 0.866;
-    const rawXStart = Math.floor(viewport.x / xScale) - xPadding;
-    const rawXEnd = Math.ceil((viewport.x + viewport.width) / xScale) + xPadding;
-    const rawYStart = Math.floor(viewport.y) - yPadding;
-    const rawYEnd = Math.ceil(viewport.y + viewport.height) + yPadding;
-    const xRanges = getWrappedIndexRanges(rawXStart, rawXEnd, map.width, map.wrapX);
-    const yRanges = getWrappedIndexRanges(rawYStart, rawYEnd, map.height, map.wrapY);
-    if (xRanges.length === 0 || yRanges.length === 0) return;
-
-    const animalTiles = new Set();
-    animals.forEach(animal => {
-        if (!animal || animal.gone || animal.dead) return;
-        const node = map.worldToNode(animal.x, animal.y);
-        if (!node) return;
-        animalTiles.add(`${node.xindex},${node.yindex}`);
-    });
-
-    yRanges.forEach(yRange => {
-        for (let y = yRange.start; y <= yRange.end; y++) {
-            xRanges.forEach(xRange => {
-                for (let x = xRange.start; x <= xRange.end; x++) {
-                    if (!map.nodes[x] || !map.nodes[x][y]) continue;
-                    const node = map.nodes[x][y];
-                    const screenCoors = worldToScreen(node);
-                    const centerX = screenCoors.x;
-                    const centerY = screenCoors.y;
-
-                    const isBlocked = node.hasBlockingObject() || !!node.blocked;
-                    const hasAnimal = debugMode && animalTiles.has(`${x},${y}`);
-                    const color = isBlocked ? 0xff0000 : 0xffffff;
-                    const alpha = isBlocked ? 0.5 : 0.35;
-                    if (hasAnimal) {
-                        gridGraphics.beginFill(0x3399ff, 0.25);
-                        gridGraphics.moveTo(centerX - halfW, centerY);
-                        gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-                        gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-                        gridGraphics.lineTo(centerX + halfW, centerY);
-                        gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-                        gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-                        gridGraphics.closePath();
-                        gridGraphics.endFill();
-                    }
-
-                    gridGraphics.lineStyle(1, color, alpha);
-                    gridGraphics.moveTo(centerX - halfW, centerY);
-                    gridGraphics.lineTo(centerX - quarterW, centerY - halfH);
-                    gridGraphics.lineTo(centerX + quarterW, centerY - halfH);
-                    gridGraphics.lineTo(centerX + halfW, centerY);
-                    gridGraphics.lineTo(centerX + quarterW, centerY + halfH);
-                    gridGraphics.lineTo(centerX - quarterW, centerY + halfH);
-                    gridGraphics.closePath();
-                }
-            });
-        }
-    });
-
-    // Draw blocked neighbor connections with red perpendicular lines
-    if (showBlockedNeighbors) {
-        gridGraphics.lineStyle(4, 0xff0000, 0.4);
-        const drawnEdges = new Set();
-        yRanges.forEach(yRange => {
-            for (let y = yRange.start; y <= yRange.end; y++) {
-                xRanges.forEach(xRange => {
-                    for (let x = xRange.start; x <= xRange.end; x++) {
-                        if (!map.nodes[x] || !map.nodes[x][y]) continue;
-                        const node = map.nodes[x][y];
-
-                        if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
-
-                        // For each blocked neighbor direction
-                        node.blockedNeighbors.forEach((blockingSet, direction) => {
-                            if (blockingSet.size === 0) return;
-
-                            const neighbor = node.neighbors[direction];
-                            if (!neighbor) return;
-                            const edgeKey = [
-                                `${node.xindex},${node.yindex}`,
-                                `${neighbor.xindex},${neighbor.yindex}`
-                            ].sort().join("|");
-                            if (drawnEdges.has(edgeKey)) return;
-                            drawnEdges.add(edgeKey);
-
-                    // Calculate midpoint between the two hexes in world space
-                    const midX = (node.x + neighbor.x) / 2;
-                    const midY = (node.y + neighbor.y) / 2;
-
-                    // Calculate vector from node to neighbor
-                    const dx = neighbor.x - node.x;
-                    const dy = neighbor.y - node.y;
-                    const len = Math.sqrt(dx * dx + dy * dy);
-
-                    if (len === 0) return;
-
-                    const tangentX = dx / len;
-                    const tangentY = dy / len;
-
-                    // Perpendicular vector (rotate 90 degrees)
-                    const perpX = -dy / len;
-                    const perpY = dx / len;
-
-                    // Line length (in world units)
-                    const lineLength = 0.4;
-                    const offset = 0.05;
-                    const ox = tangentX * offset;
-                    const oy = tangentY * offset;
-
-                    // Calculate endpoints of perpendicular line
-                    const x1 = midX + ox + perpX * lineLength;
-                    const y1 = midY + oy + perpY * lineLength;
-                    const x2 = midX + ox - perpX * lineLength;
-                    const y2 = midY + oy - perpY * lineLength;
-
-                    // Convert to screen coordinates
-                    const screen1 = worldToScreen({x: x1, y: y1});
-                    const screen2 = worldToScreen({x: x2, y: y2});
-
-                            // Draw the line
-                            gridGraphics.moveTo(screen1.x, screen1.y);
-                            gridGraphics.lineTo(screen2.x, screen2.y);
-                        });
-                    }
-                });
-            }
-        });
-    }
-}
-
-function drawGroundPlaneHitboxes(redraw = true) {
-    if (!debugMode) {
-        if (groundPlaneHitboxGraphics) groundPlaneHitboxGraphics.visible = false;
-        return;
-    }
-    if (!redraw) return;
-
-    if (!groundPlaneHitboxGraphics) {
-        groundPlaneHitboxGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(groundPlaneHitboxGraphics);
-    }
-    groundPlaneHitboxGraphics.visible = true;
-    groundPlaneHitboxGraphics.clear();
-
-    // Collect all objects with ground plane hitboxes
-    const { topLeftNode, bottomRightNode } = getViewportNodeCorners();
-
-    if (!topLeftNode || !bottomRightNode) return;
-
-    const yStart = Math.max(topLeftNode.yindex - 2, 0);
-    const yEnd = Math.min(bottomRightNode.yindex + 3, mapHeight - 1);
-    const xStart = Math.max(topLeftNode.xindex - 2, 0);
-    const xEnd = Math.min(bottomRightNode.xindex + 2, mapWidth - 1);
-
-    const objectsWithGroundHitboxes = new Set();
-
-    // Collect static objects
-    for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-            if (!map.nodes[x] || !map.nodes[x][y]) continue;
-            const node = map.nodes[x][y];
-            if (node.objects && node.objects.length > 0) {
-                node.objects.forEach(obj => {
-                    if (obj.groundPlaneHitbox) {
-                        objectsWithGroundHitboxes.add(obj);
-                    }
-                });
-            }
-        }
-    }
-
-    // Add wizard
-    if (wizard && wizard.groundPlaneHitbox) {
-        objectsWithGroundHitboxes.add(wizard);
-    }
-
-    // Add animals
-    animals.forEach(animal => {
-        if (animal && !animal.dead && animal._onScreen && animal.groundPlaneHitbox) {
-            objectsWithGroundHitboxes.add(animal);
-        }
-    });
-
-    // Draw ground plane hitboxes in black
-    groundPlaneHitboxGraphics.lineStyle(2, 0x000000, 0.7);
-
-    objectsWithGroundHitboxes.forEach(obj => {
-        const hitbox = obj.groundPlaneHitbox;
-
-        if (hitbox instanceof CircleHitbox) {
-            // Draw as ellipse for ground plane circles (accounting for xyratio)
-            const center = worldToScreen({x: hitbox.x, y: hitbox.y});
-            const radiusX = hitbox.radius * viewscale;
-            const radiusY = hitbox.radius * viewscale * xyratio;
-            groundPlaneHitboxGraphics.drawEllipse(center.x, center.y, radiusX, radiusY);
-        } else if (hitbox instanceof PolygonHitbox) {
-            // Draw polygon using worldToScreen for vertices
-            const screenPoints = hitbox.points.map(v => worldToScreen(v));
-            if (screenPoints.length > 0) {
-                groundPlaneHitboxGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
-                for (let i = 1; i < screenPoints.length; i++) {
-                    groundPlaneHitboxGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
-                }
-                groundPlaneHitboxGraphics.closePath();
-            }
-        }
-    });
-}
-
-function drawHitboxes(redraw = true) {
-    if (!debugMode) {
-        if (hitboxGraphics) hitboxGraphics.visible = false;
-        return;
-    }
-    if (!redraw) return;
-
-    if (!hitboxGraphics) {
-        hitboxGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(hitboxGraphics);
-    }
-    hitboxGraphics.visible = true;
-    hitboxGraphics.clear();
-
-    // Projectile hitboxes
-    projectiles.forEach(ball => {
-        if (!ball.visible || !ball.radius) return;
-        const ballCoors = worldToScreen(ball);
-        const radiusPx = ball.radius * viewscale;
-        hitboxGraphics.lineStyle(2, 0xffaa00, 0.9);
-        hitboxGraphics.drawCircle(ballCoors.x, ballCoors.y, radiusPx);
-    });
-
-    // Animal hitboxes
-    animals.forEach(animal => {
-        if (!animal || animal.dead || !animal._onScreen) return;
-        const animalCoors = worldToScreen(animal);
-        const radiusPx = (animal.radius || 0.35) * viewscale;
-        hitboxGraphics.lineStyle(2, 0x00ff66, 0.9);
-        hitboxGraphics.drawCircle(animalCoors.x, animalCoors.y, radiusPx);
-    });
-
-    // Tree hitboxes (match occlusion/catching fire bounds)
-    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-    const { topLeftNode, bottomRightNode } = getViewportNodeCorners();
-
-    if (topLeftNode && bottomRightNode) {
-        const yStart = Math.max(topLeftNode.yindex - 2, 0);
-        const yEnd = Math.min(bottomRightNode.yindex + 3, mapHeight - 1);
-        const xStart = Math.max(topLeftNode.xindex - 2, 0);
-        const xEnd = Math.min(bottomRightNode.xindex + 2, mapWidth - 1);
-
-        // Draw polygon hitboxes for all onscreen objects that have them
-        if (onscreenObjects.size > 0) {
-            onscreenObjects.forEach((obj) => {
-                if (!obj) return;
-                const hitbox = obj.visualHitbox || obj.hitbox;
-                if (!hitbox) return;
-
-                if (hitbox instanceof PolygonHitbox) {
-                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-                    const points = hitbox.points;
-                    if (!points || points.length === 0) return;
-
-                    // Convert world coordinates to screen coordinates
-                    const screenPoints = points.map(p => (worldToScreen({x: p.x, y: p.y})));
-
-                    // Draw polygon
-                    const flatPoints = screenPoints.flatMap(p => [p.x, p.y]);
-                    hitboxGraphics.drawPolygon(flatPoints);
-                } else if (hitbox instanceof CircleHitbox) {
-                    const center = worldToScreen({x: hitbox.x, y: hitbox.y});
-                    const radiusPx = hitbox.radius * viewscale;
-                    hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
-                    hitboxGraphics.drawCircle(center.x, center.y, radiusPx);
-                }
-            });
-        }
-    }
-
-    const drawDebugHitboxShape = (hitbox, color = 0xffffff, alpha = 0.95) => {
-        if (!hitbox) return false;
-        const isCircle = (
-            hitbox.type === "circle" &&
-            Number.isFinite(hitbox.x) &&
-            Number.isFinite(hitbox.y) &&
-            Number.isFinite(hitbox.radius)
-        );
-        if (isCircle) {
-            const center = worldToScreen({x: hitbox.x, y: hitbox.y});
-            hitboxGraphics.lineStyle(2, color, alpha);
-            hitboxGraphics.drawCircle(center.x, center.y, hitbox.radius * viewscale);
-            return true;
-        }
-
-        const points = Array.isArray(hitbox.points) ? hitbox.points : null;
-        if (points && points.length > 1) {
-            const flatPoints = points
-                .map(p => worldToScreen({x: p.x, y: p.y}))
-                .flatMap(p => [p.x, p.y]);
-            hitboxGraphics.lineStyle(2, color, alpha);
-            hitboxGraphics.drawPolygon(flatPoints);
-            return true;
-        }
-        return false;
-    };
-
-    // Wizard hitboxes: draw explicitly in high-contrast colors so collisions
-    // can be debugged even when ground-plane outlines are hard to see.
-    if (wizard) {
-        drawDebugHitboxShape(wizard.visualHitbox, 0x00ffff, 0.95);
-        drawDebugHitboxShape(wizard.groundPlaneHitbox, 0xffffff, 0.95);
-
-        // Always draw a center marker to verify debug layer visibility.
-        if (Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
-            const center = worldToScreen({x: wizard.x, y: wizard.y});
-            hitboxGraphics.lineStyle(2, 0xff00ff, 0.95);
-            hitboxGraphics.moveTo(center.x - 8, center.y);
-            hitboxGraphics.lineTo(center.x + 8, center.y);
-            hitboxGraphics.moveTo(center.x, center.y - 8);
-            hitboxGraphics.lineTo(center.x, center.y + 8);
-        }
-    }
-
-    // Firewall emitter hitboxes: useful to diagnose contact/damage behavior.
-    if (onscreenObjects && onscreenObjects.size > 0) {
-        onscreenObjects.forEach(obj => {
-            if (!obj || obj.type !== "firewall") return;
-            const fireHitbox = obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox;
-            drawDebugHitboxShape(fireHitbox, 0xff3300, 0.95);
-        });
-    }
-}
-
-function drawWizardBoundaries(redraw = true) {
-    if (!debugMode || !wizard) {
-        if (wizardBoundaryGraphics) wizardBoundaryGraphics.visible = false;
-        return;
-    }
-    if (!redraw) return;
-
-    if (!wizardBoundaryGraphics) {
-        wizardBoundaryGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(wizardBoundaryGraphics);
-    }
-
-    wizardBoundaryGraphics.visible = true;
-    wizardBoundaryGraphics.clear();
-
-    // Shade tiles the wizard is touching
-    const touchingTiles = wizard.getTouchingTiles();
-    if (touchingTiles && touchingTiles.size > 0) {
-        const hexWidth = map.hexWidth * viewscale;
-        const hexHeight = map.hexHeight * viewscale * xyratio;
-        const halfW = hexWidth / 2;
-        const quarterW = hexWidth / 4;
-        const halfH = hexHeight / 2;
-
-        wizardBoundaryGraphics.beginFill(0x000000, 0.25);
-        touchingTiles.forEach(tileKey => {
-            const [xindex, yindex] = tileKey.split(',').map(Number);
-            const node = map.nodes[xindex] && map.nodes[xindex][yindex];
-            if (!node) return;
-            const screenCoors = worldToScreen(node);
-            const centerX = screenCoors.x;
-            const centerY = screenCoors.y;
-            wizardBoundaryGraphics.moveTo(centerX - halfW, centerY);
-            wizardBoundaryGraphics.lineTo(centerX - quarterW, centerY - halfH);
-            wizardBoundaryGraphics.lineTo(centerX + quarterW, centerY - halfH);
-            wizardBoundaryGraphics.lineTo(centerX + halfW, centerY);
-            wizardBoundaryGraphics.lineTo(centerX + quarterW, centerY + halfH);
-            wizardBoundaryGraphics.lineTo(centerX - quarterW, centerY + halfH);
-            wizardBoundaryGraphics.closePath();
-        });
-        wizardBoundaryGraphics.endFill();
-    }
-
-    // Draw wizard hitbox circle
-    // const wizardCoors = worldToScreen(wizard);
-    // const wizardRadius = 0.45 * viewscale;
-    // wizardBoundaryGraphics.lineStyle(2, 0xffffff, 0.9);
-    // wizardBoundaryGraphics.drawCircle(wizardCoors.x, wizardCoors.y, wizardRadius);
-}
-
 function ensureUiArrowCursorElement() {
     if (uiArrowCursorElement || typeof document === "undefined" || !document.body) return uiArrowCursorElement;
     const el = document.createElement("img");
@@ -3331,7 +5056,7 @@ function updateRoofPreview(roof) {
         typeof roof.groundPlaneHitbox.containsPoint === 'function' &&
         roof.groundPlaneHitbox.containsPoint(wizard.x, wizard.y)
     );
-    roof.pixiMesh.visible = !!roof.placed;
+    roof.pixiMesh.visible = !!roof.placed && !wizardInsideRoof;
 
     const targetRoofAlpha = wizardInsideRoof ? 0.0 : 1.0;
     if (!Number.isFinite(roof.currentAlpha)) {

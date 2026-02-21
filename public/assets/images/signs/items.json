@@ -1,0 +1,32 @@
+{
+  "category": "signs",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "blocksTile": false,
+    "isPassable": true,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "groundPlaneHitbox": "none",
+    "visualHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.2,
+      "radiusFromMaxDimensionMultiplier": 0.45
+    }
+  },
+  "items": [
+    {
+      "file": "princess.png",
+      "texturePath": "/assets/images/signs/princess.png"
+    },
+    {
+      "file": "signpost0.png",
+      "texturePath": "/assets/images/signs/signpost0.png"
+    }
+  ]
+}

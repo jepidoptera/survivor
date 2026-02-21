@@ -69,12 +69,37 @@ app.post('/api/savefile', (req, res) => {
 
 app.get('/api/savefile', (req, res) => {
     try {
-        if (!fs.existsSync(saveFilePath)) {
+        const requestedFile = (typeof req.query.file === 'string') ? req.query.file.trim() : '';
+        let resolvedPath = saveFilePath;
+        let responsePath = '/assets/saves/savefile.json';
+
+        if (requestedFile) {
+            if (requestedFile === 'savefile.json') {
+                resolvedPath = saveFilePath;
+                responsePath = '/assets/saves/savefile.json';
+            } else {
+                const safeName = path.basename(requestedFile);
+                const isValidName = (
+                    safeName === requestedFile &&
+                    safeName.length > 0 &&
+                    safeName.endsWith('.json') &&
+                    !safeName.includes('/') &&
+                    !safeName.includes('\\')
+                );
+                if (!isValidName) {
+                    return res.status(400).json({ ok: false, reason: 'invalid-file' });
+                }
+                resolvedPath = path.join(saveBackupsDir, safeName);
+                responsePath = `/assets/saves/backups/${encodeURIComponent(safeName)}`;
+            }
+        }
+
+        if (!fs.existsSync(resolvedPath)) {
             return res.status(404).json({ ok: false, reason: 'missing' });
         }
-        const raw = fs.readFileSync(saveFilePath, 'utf8');
+        const raw = fs.readFileSync(resolvedPath, 'utf8');
         const parsed = JSON.parse(raw);
-        return res.json({ ok: true, data: parsed });
+        return res.json({ ok: true, data: parsed, path: responsePath });
     } catch (e) {
         console.error('Failed to read save file:', e);
         return res.status(500).json({ ok: false, reason: 'read-failed' });
@@ -103,7 +128,7 @@ app.get('/api/flooring', (req, res) => {
 app.get('/api/placeables', (req, res) => {
     try {
         const imageRoot = path.join(__dirname, 'public', 'assets', 'images');
-        const categories = ['flowers', 'windows', 'doors', 'furniture'];
+        const categories = ['flowers', 'windows', 'doors', 'furniture', 'signs'];
         const out = {};
         categories.forEach(category => {
             const dir = path.join(imageRoot, category);

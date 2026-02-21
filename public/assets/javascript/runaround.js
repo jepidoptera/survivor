@@ -4,11 +4,9 @@ let frameRate = 60;
 let frameCount = 0;
 let renderNowMs = 0;
 const renderMaxFps = 0; // 0 = uncapped (vsync-limited)
-const debugRenderMaxFps = 0; // keep debug uncapped to avoid hidden global frame caps
 const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align sprite sheet rows.
-let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal markers)
-let showHexGrid = false; // Toggle hex grid only (g key)
-let showBlockedNeighbors = false; // Toggle display of blocked neighbor connections
+const wizardMouseTurnZeroDistanceUnits = 1;
+const wizardMouseTurnFullDistanceUnits = 3;
 
 let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494}
 let previousViewport = {x: viewport.x, y: viewport.y};
@@ -23,6 +21,7 @@ let pointerLockActive = false;
 let pointerLockAimWorld = {x: NaN, y: NaN};
 let pointerLockSensitivity = 1.0;
 let pendingPointerLockEntry = null;
+let pointerLockRangeDragInput = null;
 var messages = [];
 let keysPressed = {}; // Track which keys are currently pressed
 let spacebarDownAt = null;
@@ -32,33 +31,6 @@ let suppressNextCanvasMenuClose = false;
 
 let textures = {};
 let fireFrames = null;
-let perfPanel = null;
-let showPerfReadout = false;
-let perfStats = {
-    lastLoopAt: 0,
-    fps: 0,
-    loopMs: 0,
-    drawMs: 0,
-    simMs: 0,
-    idleMs: 0,
-    simSteps: 0,
-    lastUiUpdateAt: 0
-};
-let simPerfBreakdown = {
-    steps: 0,
-    totalMs: 0,
-    maxStepMs: 0,
-    aimSyncMs: 0,
-    facingMs: 0,
-    movementMs: 0,
-    collisionMs: 0,
-    pointerPostMs: 0,
-    maxAimSyncMs: 0,
-    maxFacingMs: 0,
-    maxMovementMs: 0,
-    maxCollisionMs: 0,
-    maxPointerPostMs: 0
-};
 const runaroundViewportNodeSampleEpsilon = 1e-4;
 
 function applyViewportWrapShift(deltaX, deltaY) {
@@ -124,7 +96,7 @@ let landLayer = new PIXI.Container();
 let roadLayer = new PIXI.Container();
 let gridLayer = new PIXI.Container();
 let neighborDebugLayer = new PIXI.Container();
-let lastDebugWizardPos = {x: -1, y: -1}; // Track wizard position to cache debug labels
+let opaqueMeshLayer = new PIXI.Container();
 let objectLayer = new PIXI.Container();
 let roofLayer = new PIXI.Container();
 let characterLayer = new PIXI.Container();
@@ -137,6 +109,8 @@ gameContainer.addChild(landLayer);
 gameContainer.addChild(roadLayer);
 gameContainer.addChild(gridLayer);
 gameContainer.addChild(neighborDebugLayer);
+gameContainer.addChild(opaqueMeshLayer);
+opaqueMeshLayer.sortableChildren = false;
 gameContainer.addChild(objectLayer);
 gameContainer.addChild(roofLayer);
 gameContainer.addChild(characterLayer);
@@ -157,6 +131,95 @@ let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
 let onscreenObjects = new Set(); // Track visible staticObjects each frame
 const roadWidth = 3;
+
+function isWindowLikeObject(obj) {
+    if (!obj) return false;
+    if (obj.type === "window") return true;
+    if (obj.type === "placedObject" && typeof obj.category === "string") {
+        return obj.category.trim().toLowerCase() === "windows";
+    }
+    return false;
+}
+
+function formatWindowWallLinkDebugSummary() {
+    const objects = Array.from(onscreenObjects || []);
+    const walls = objects.filter(obj => obj && obj.type === "wall");
+    const windows = objects.filter(isWindowLikeObject);
+    const onscreenWallGroups = new Set(
+        walls
+            .map(w => (Number.isInteger(w && w.lineGroupId) ? w.lineGroupId : null))
+            .filter(v => v !== null)
+    );
+    const worldWallGroups = new Set();
+    if (map && map.nodes && Number.isFinite(map.width) && Number.isFinite(map.height)) {
+        const seenWalls = new Set();
+        for (let x = 0; x < map.width; x++) {
+            const col = map.nodes[x];
+            if (!Array.isArray(col)) continue;
+            for (let y = 0; y < map.height; y++) {
+                const node = col[y];
+                if (!node || !Array.isArray(node.objects)) continue;
+                node.objects.forEach(obj => {
+                    if (!obj || obj.type !== "wall") return;
+                    if (seenWalls.has(obj)) return;
+                    seenWalls.add(obj);
+                    if (Number.isInteger(obj.lineGroupId)) {
+                        worldWallGroups.add(obj.lineGroupId);
+                    }
+                });
+            }
+        }
+    }
+
+    let linked = 0;
+    let missingLinkId = 0;
+    let linkMissingOnscreen = 0;
+    let linkMissingWorld = 0;
+    const sampleProblems = [];
+
+    windows.forEach((w, idx) => {
+        const linkId = Number.isInteger(w && w.mountedWallLineGroupId) ? w.mountedWallLineGroupId : null;
+        if (linkId === null) {
+            missingLinkId += 1;
+            if (sampleProblems.length < 3) {
+                sampleProblems.push(`#${idx} noLink @(${Number(w.x || 0).toFixed(2)},${Number(w.y || 0).toFixed(2)})`);
+            }
+            return;
+        }
+        linked += 1;
+        const inOnscreen = onscreenWallGroups.has(linkId);
+        const inWorld = worldWallGroups.has(linkId);
+        if (!inOnscreen) {
+            linkMissingOnscreen += 1;
+        }
+        if (!inWorld) {
+            linkMissingWorld += 1;
+        }
+        if ((!inOnscreen || !inWorld) && sampleProblems.length < 3) {
+            sampleProblems.push(
+                `#${idx} link ${linkId} on=${inOnscreen ? "Y" : "N"} world=${inWorld ? "Y" : "N"}`
+            );
+        }
+    });
+
+    const sampleText = sampleProblems.length > 0 ? `\n  ${sampleProblems.join(" | ")}` : "";
+    return (
+        `\nww windows ${windows.length} walls ${walls.length}` +
+        `\n  linked ${linked} noLink ${missingLinkId}` +
+        `\n  missOn ${linkMissingOnscreen} missWorld ${linkMissingWorld}` +
+        sampleText
+    );
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.onscreenObjects = onscreenObjects;
+    globalThis.getOnscreenObjects = () => Array.from(onscreenObjects || []);
+    globalThis.getOnscreenByType = (type) =>
+        Array.from(onscreenObjects || []).filter(obj => obj && obj.type === type);
+    globalThis.logWindowWallLinkDebug = () => {
+        console.log(formatWindowWallLinkDebugSummary());
+    };
+}
 
 // Load sprite sheets before starting game
 PIXI.Loader.shared
@@ -309,7 +372,7 @@ class Character {
         clearTimeout(this.moveTimeout);
         this.moveTimeout = null;
     }
-    delete() {
+    removeFromGame() {
         this.gone = true;
         this.destination = null;
         this.path = [];
@@ -357,6 +420,17 @@ class Character {
             this.shadowGraphics.destroy();
         }
         this.shadowGraphics = null;
+        if (Array.isArray(animals)) {
+            const idx = animals.indexOf(this);
+            if (idx >= 0) animals.splice(idx, 1);
+        }
+    }
+    remove() {
+        this.removeFromGame();
+    }
+    delete() {
+        // Backward compatibility: use unified removal API.
+        this.removeFromGame();
     }
     getDirectionRow() {
         if (!this.direction) return 0;
@@ -496,6 +570,7 @@ class Wizard extends Character {
         this.maxHp = 100;
         this.magic = 100;
         this.maxMagic = 100;
+        this.magicRegenPerSecond = 8;
         this.activeAura = null;
         this.activeAuras = [];
         this.name = 'you';
@@ -503,6 +578,9 @@ class Wizard extends Character {
         this.visualRadius = 0.5; // Hitbox radius in hex units
         this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
         this.animationSpeedMultiplier = 0.95; // Multiplier for animation speed (lower is faster)
+        this.maxTurnSpeedDegPerSec = 180;
+        this.zeroTurnDistanceUnits = wizardMouseTurnZeroDistanceUnits;
+        this.fullTurnSpeedDistanceUnits = wizardMouseTurnFullDistanceUnits;
         
         // Movement acceleration via vector interpolation
         this.acceleration = 50; // Rate of acceleration in units/second²
@@ -622,7 +700,18 @@ class Wizard extends Character {
             this.z = 0;
         }
     }
-    turnToward(targetX, targetY) {
+    getTurnStrengthFromAimVector(targetX, targetY) {
+        const zeroDistance = Number.isFinite(this.zeroTurnDistanceUnits)
+            ? Math.max(0, this.zeroTurnDistanceUnits)
+            : 1;
+        const fullDistance = Number.isFinite(this.fullTurnSpeedDistanceUnits)
+            ? Math.max(zeroDistance + 1e-6, this.fullTurnSpeedDistanceUnits)
+            : 5;
+        const distance = Math.hypot(Number(targetX) || 0, Number(targetY) || 0);
+        if (distance <= zeroDistance) return 0;
+        return Math.max(0, Math.min(1, (distance - zeroDistance) / (fullDistance - zeroDistance)));
+    }
+    turnToward(targetX, targetY, turnStrength = 1) {
         // Calculate vector from wizard to target (in world coordinates)
         const normalizeDeg = (deg) => {
             let out = deg;
@@ -630,19 +719,44 @@ class Wizard extends Character {
             while (out > 180) out -= 360;
             return out;
         };
+        const facingAngleDegByDirectionIndex = [180, -150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
 
         // Calculate angle in radians, then convert to degrees.
         const angle = Math.atan2(targetY, targetX);
         const angleInDegrees = normalizeDeg(angle * 180 / Math.PI);
+        const nowMs = (Number.isFinite(renderNowMs) && renderNowMs > 0)
+            ? renderNowMs
+            : performance.now();
 
         // Smooth facing angle before quantizing to 12 sprite directions.
         // This prevents tiny aim oscillations from causing visible pose jitter.
         if (!Number.isFinite(this.smoothedFacingAngleDeg)) {
-            this.smoothedFacingAngleDeg = angleInDegrees;
+            const currentRow = Number.isInteger(this.lastDirectionRow)
+                ? this.lastDirectionRow
+                : ((Number.isInteger(this.direction) && this.direction >= 0)
+                    ? ((this.direction + wizardDirectionRowOffset + 12) % 12)
+                    : 0);
+            const directionIndex = ((currentRow - wizardDirectionRowOffset) % 12 + 12) % 12;
+            const currentFacing = facingAngleDegByDirectionIndex[directionIndex];
+            this.smoothedFacingAngleDeg = Number.isFinite(currentFacing)
+                ? normalizeDeg(currentFacing)
+                : angleInDegrees;
+            this._lastTurnTowardMs = nowMs;
+        } else if (!Number.isFinite(this._lastTurnTowardMs)) {
+            this._lastTurnTowardMs = nowMs;
         } else {
+            const dtSecRaw = (nowMs - this._lastTurnTowardMs) / 1000;
+            const dtSec = Math.max(1 / 240, Math.min(0.25, Number.isFinite(dtSecRaw) ? dtSecRaw : 0));
+            this._lastTurnTowardMs = nowMs;
             const delta = normalizeDeg(angleInDegrees - this.smoothedFacingAngleDeg);
             const smoothing = this.moving ? 0.38 : 0.28;
-            this.smoothedFacingAngleDeg = normalizeDeg(this.smoothedFacingAngleDeg + delta * smoothing);
+            const desiredStep = delta * smoothing;
+            const clampedStrength = Number.isFinite(turnStrength)
+                ? Math.max(0, Math.min(1, turnStrength))
+                : 1;
+            const maxStep = Math.max(0, Number(this.maxTurnSpeedDegPerSec) || 0) * clampedStrength * dtSec;
+            const clampedStep = Math.max(-maxStep, Math.min(maxStep, desiredStep));
+            this.smoothedFacingAngleDeg = normalizeDeg(this.smoothedFacingAngleDeg + clampedStep);
         }
         const facingDeg = this.smoothedFacingAngleDeg;
         
@@ -772,7 +886,10 @@ class Wizard extends Character {
                     Number.isFinite(facingVector.y) &&
                     Math.hypot(facingVector.x, facingVector.y) > 1e-6
                 ) {
-                    this.turnToward(facingVector.x, facingVector.y);
+                    const facingTurnStrength = Number.isFinite(options.facingTurnStrength)
+                        ? Math.max(0, Math.min(1, options.facingTurnStrength))
+                        : 1;
+                    this.turnToward(facingVector.x, facingVector.y, facingTurnStrength);
                 } else {
                     this.turnToward(nx, ny);
                 }
@@ -821,6 +938,9 @@ class Wizard extends Character {
         const nearbyObjects = Array.isArray(this._movementNearbyObjects) ? this._movementNearbyObjects : [];
         nearbyObjects.length = 0;
         this._movementNearbyObjects = nearbyObjects;
+        const nearbyDoorHitboxes = Array.isArray(this._movementNearbyDoorHitboxes) ? this._movementNearbyDoorHitboxes : [];
+        nearbyDoorHitboxes.length = 0;
+        this._movementNearbyDoorHitboxes = nearbyDoorHitboxes;
         const minNode = this.map.worldToNode(newX - 2, newY - 2);
         const maxNode = this.map.worldToNode(newX + 2, newY + 2);
         
@@ -835,12 +955,58 @@ class Wizard extends Character {
                     if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
                     const nodeObjects = this.map.nodes[x][y].objects;
                     for (const obj of nodeObjects) {
-                        if (obj && obj.groundPlaneHitbox && !obj.isPassable) {
+                        if (!obj || obj.gone) continue;
+                        const doorCandidate = (
+                            (obj.isPlacedObject || obj.objectType === "placedObject" || obj.type === "placedObject") &&
+                            (
+                                obj.category === "doors" ||
+                                (typeof obj.texturePath === "string" && obj.texturePath.includes("/doors/"))
+                            )
+                        );
+                        if (doorCandidate) {
+                            const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
+                            if (doorHitbox && typeof doorHitbox.containsPoint === "function") {
+                                nearbyDoorHitboxes.push(doorHitbox);
+                            }
+                        }
+                        if (obj.groundPlaneHitbox && !obj.isPassable) {
                             nearbyObjects.push(obj);
                         }
                     }
                 }
             }
+        }
+
+        const isInOrTouchingNearbyDoor = (px, py, radius = 0) => {
+            const probe = { type: "circle", x: px, y: py, radius: Math.max(0, Number(radius) || 0) };
+            for (let i = 0; i < nearbyDoorHitboxes.length; i++) {
+                const hb = nearbyDoorHitboxes[i];
+                if (!hb) continue;
+                if (typeof hb.intersects === "function") {
+                    const hit = hb.intersects(probe);
+                    if (hit) return true;
+                } else if (typeof hb.containsPoint === "function" && hb.containsPoint(px, py)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // While inside a door hitbox, bypass all blocking object collisions.
+        if (
+            isInOrTouchingNearbyDoor(this.x, this.y, wizardRadius) ||
+            isInOrTouchingNearbyDoor(newX, newY, wizardRadius)
+        ) {
+            const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(newX) : newX;
+            const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(newY) : newY;
+            if (this === wizard) {
+                applyViewportWrapShift(wrappedX - newX, wrappedY - newY);
+            }
+            this.x = wrappedX;
+            this.y = wrappedY;
+            this.updateHitboxes();
+            centerViewport(this, 0);
+            return true;
         }
         
         // Iteratively resolve collisions until we find a clear position
@@ -1110,11 +1276,7 @@ class Wizard extends Character {
         const visualSpeed = Math.hypot(this.movementVector?.x || 0, this.movementVector?.y || 0);
         const isVisuallyMoving = this.moving || visualSpeed > 0.02;
         if (this.lastDirectionRow === undefined) this.lastDirectionRow = 0;
-        let rowIndex = this.lastDirectionRow;
-        if (isVisuallyMoving && Number.isInteger(this.direction) && this.direction >= 0) {
-            rowIndex = (this.direction + wizardDirectionRowOffset + 12) % 12;
-            this.lastDirectionRow = rowIndex;
-        }
+        const rowIndex = this.lastDirectionRow;
         
         // Determine which frame (column) to show for animation
         let frameIndex = rowIndex * 9; // Start of this row
@@ -1164,6 +1326,7 @@ class Wizard extends Character {
             maxHp: this.maxHp,
             magic: this.magic,
             maxMagic: this.maxMagic,
+            magicRegenPerSecond: this.magicRegenPerSecond,
             food: this.food,
             currentSpell: this.currentSpell,
             activeAura: this.activeAura || null,
@@ -1177,6 +1340,10 @@ class Wizard extends Character {
             selectedPlaceableRenderOffsetByTexture: this.selectedPlaceableRenderOffsetByTexture,
             selectedPlaceableScale: this.selectedPlaceableScale,
             selectedPlaceableScaleByTexture: this.selectedPlaceableScaleByTexture,
+            selectedPlaceableRotation: this.selectedPlaceableRotation,
+            selectedPlaceableRotationByTexture: this.selectedPlaceableRotationByTexture,
+            selectedPlaceableRotationAxis: this.selectedPlaceableRotationAxis,
+            selectedPlaceableRotationAxisByTexture: this.selectedPlaceableRotationAxisByTexture,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
             showPerfReadout: !!showPerfReadout,
@@ -1196,6 +1363,7 @@ class Wizard extends Character {
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
         if (data.magic !== undefined) this.magic = data.magic;
         if (data.maxMagic !== undefined) this.maxMagic = data.maxMagic;
+        if (Number.isFinite(data.magicRegenPerSecond)) this.magicRegenPerSecond = Math.max(0, data.magicRegenPerSecond);
         if (data.food !== undefined) this.food = data.food;
         if (data.currentSpell !== undefined) this.currentSpell = data.currentSpell;
         if (Array.isArray(data.activeAuras)) {
@@ -1214,12 +1382,20 @@ class Wizard extends Character {
         if (data.selectedPlaceableRenderOffsetByTexture !== undefined) this.selectedPlaceableRenderOffsetByTexture = data.selectedPlaceableRenderOffsetByTexture;
         if (data.selectedPlaceableScale !== undefined) this.selectedPlaceableScale = data.selectedPlaceableScale;
         if (data.selectedPlaceableScaleByTexture !== undefined) this.selectedPlaceableScaleByTexture = data.selectedPlaceableScaleByTexture;
+        if (data.selectedPlaceableRotation !== undefined) this.selectedPlaceableRotation = data.selectedPlaceableRotation;
+        if (data.selectedPlaceableRotationByTexture !== undefined) this.selectedPlaceableRotationByTexture = data.selectedPlaceableRotationByTexture;
+        if (data.selectedPlaceableRotationAxis !== undefined) this.selectedPlaceableRotationAxis = data.selectedPlaceableRotationAxis;
+        if (data.selectedPlaceableRotationAxisByTexture !== undefined) this.selectedPlaceableRotationAxisByTexture = data.selectedPlaceableRotationAxisByTexture;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (typeof data.showPerfReadout === "boolean") {
-            showPerfReadout = data.showPerfReadout;
-            if (perfPanel) {
-                perfPanel.css("display", showPerfReadout ? "block" : "none");
+            if (typeof setShowPerfReadout === "function") {
+                setShowPerfReadout(data.showPerfReadout);
+            } else {
+                showPerfReadout = data.showPerfReadout;
+                if (perfPanel) {
+                    perfPanel.css("display", showPerfReadout ? "block" : "none");
+                }
             }
         }
         if (data.spells !== undefined) this.spells = data.spells;
@@ -1738,6 +1914,58 @@ jQuery(() => {
         sanitizeSavedGameState();
     }
 
+    const startupLoadDirectiveStorageKey = "survivor_startup_load_directive_v1";
+
+    function queueStartupLoadDirective(directive) {
+        if (typeof sessionStorage === "undefined") return false;
+        if (!directive || typeof directive !== "object") return false;
+        try {
+            sessionStorage.setItem(startupLoadDirectiveStorageKey, JSON.stringify(directive));
+            return true;
+        } catch (e) {
+            console.warn("Failed to queue startup load directive:", e);
+            return false;
+        }
+    }
+
+    function consumeStartupLoadDirective() {
+        if (typeof sessionStorage === "undefined") return null;
+        let raw = null;
+        try {
+            raw = sessionStorage.getItem(startupLoadDirectiveStorageKey);
+            sessionStorage.removeItem(startupLoadDirectiveStorageKey);
+        } catch (e) {
+            console.warn("Failed to read startup load directive:", e);
+            return null;
+        }
+        if (!raw) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === "object") ? parsed : null;
+        } catch (_ignored) {
+            return null;
+        }
+    }
+
+    function reloadWithStartupLoadDirective(directive) {
+        const queued = queueStartupLoadDirective(directive);
+        if (!queued) return false;
+        if (typeof window !== "undefined" && window.location && typeof window.location.reload === "function") {
+            window.location.reload();
+            return true;
+        }
+        return false;
+    }
+
+    if (typeof globalThis !== "undefined") {
+        globalThis.reloadAndLoadSaveFromServerFile = (fileName = "") => {
+            const trimmed = (typeof fileName === "string") ? fileName.trim() : "";
+            const directive = { source: "server" };
+            if (trimmed.length > 0) directive.fileName = trimmed;
+            return reloadWithStartupLoadDirective(directive);
+        };
+    }
+
     // Append Pixi canvas to display
     $("#display").append(app.view);
     perfPanel = $("<div id='perfReadout'></div>").css({
@@ -1755,7 +1983,11 @@ jQuery(() => {
         "pointer-events": "none",
         "white-space": "pre"
     });
-    perfPanel.css("display", showPerfReadout ? "block" : "none");
+    if (typeof updatePerfPanelVisibility === "function") {
+        updatePerfPanelVisibility();
+    } else {
+        perfPanel.css("display", showPerfReadout ? "block" : "none");
+    }
     $("body").append(perfPanel);
 
     if (app.view && app.view.style) {
@@ -1939,6 +2171,29 @@ jQuery(() => {
         const hovered = getVirtualCursorHoveredElement();
         if (!hovered || typeof hovered.closest !== "function") return false;
         return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons");
+    }
+
+    function updateRangeInputFromClientX(rangeInput, clientX, emitChange = false) {
+        if (!(rangeInput instanceof HTMLInputElement) || rangeInput.type !== "range") return false;
+        if (!Number.isFinite(clientX)) return false;
+        const rect = rangeInput.getBoundingClientRect();
+        if (!rect || rect.width <= 0) return false;
+        const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const min = Number(rangeInput.min);
+        const max = Number(rangeInput.max);
+        const step = Number(rangeInput.step);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return false;
+        let next = min + frac * (max - min);
+        if (Number.isFinite(step) && step > 0) {
+            next = Math.round((next - min) / step) * step + min;
+        }
+        next = Math.max(min, Math.min(max, next));
+        rangeInput.value = String(next);
+        rangeInput.dispatchEvent(new Event("input", { bubbles: true }));
+        if (emitChange) {
+            rangeInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return true;
     }
 
     document.addEventListener("pointerlockchange", () => {
@@ -2288,7 +2543,8 @@ jQuery(() => {
                 const faceX = aim.x;
                 const faceY = aim.y;
                 if (Math.hypot(faceX, faceY) > 1e-6) {
-                    wizard.turnToward(faceX, faceY);
+                    const turnStrength = wizard.getTurnStrengthFromAimVector(faceX, faceY);
+                    wizard.turnToward(faceX, faceY, turnStrength);
                 }
             }
             facingMs = performance.now() - facingStartMs;
@@ -2301,6 +2557,7 @@ jQuery(() => {
                 x: forwardAim.x,
                 y: forwardAim.y
             };
+            const forwardTurnStrength = wizard.getTurnStrengthFromAimVector(forwardVector.x, forwardVector.y);
             const movingForward = !!keysPressed['w'];
             const movingBackward = !!keysPressed['s'];
             if (wizard.isJumping) {
@@ -2315,7 +2572,8 @@ jQuery(() => {
                 moveOptions = {
                     speedMultiplier: 1,
                     animateBackward: false,
-                    facingVector: forwardVector
+                    facingVector: forwardVector,
+                    facingTurnStrength: forwardTurnStrength
                 };
                 wizard.path = [];
                 wizard.nextNode = null;
@@ -2327,7 +2585,8 @@ jQuery(() => {
                 moveOptions = {
                     speedMultiplier: wizard.backwardSpeedMultiplier,
                     animateBackward: true,
-                    facingVector: forwardVector
+                    facingVector: forwardVector,
+                    facingTurnStrength: forwardTurnStrength
                 };
                 wizard.path = [];
                 wizard.nextNode = null;
@@ -2514,6 +2773,38 @@ jQuery(() => {
             drawCanvas();
             perfStats.drawMs = performance.now() - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
+            if (typeof recordPerfAccumulatorSample === "function") {
+                const drawBreakdownForAccum = (typeof globalThis !== "undefined" && globalThis.drawPerfBreakdown)
+                    ? globalThis.drawPerfBreakdown
+                    : null;
+                const simBreakdownForAccum = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                    ? globalThis.simPerfBreakdown
+                    : null;
+                recordPerfAccumulatorSample({
+                    fps: perfStats.fps,
+                    loopMs: perfStats.loopMs,
+                    cpuMs: perfStats.simMs + perfStats.drawMs,
+                    simMs: perfStats.simMs,
+                    drawMs: perfStats.drawMs,
+                    idleMs: perfStats.idleMs,
+                    simSteps: perfStats.simSteps,
+                    accMs: simBreakdownForAccum ? Number(simBreakdownForAccum.accumulatorMs || 0) : 0,
+                    stepMaxMs: simBreakdownForAccum ? Number(simBreakdownForAccum.maxStepMs || 0) : 0,
+                    drawComposeMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeMs || 0) : 0,
+                    drawCollectMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.collectMs || 0) : 0,
+                    drawLosMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.losMs || 0) : 0,
+                    drawPassWorldMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.passWorldMs || 0) : 0,
+                    drawPassLosMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.passLosMs || 0) : 0,
+                    drawPassObjectsMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.passObjectsMs || 0) : 0,
+                    drawPassPostMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.passPostMs || 0) : 0,
+                    drawComposeMaskMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeMaskMs || 0) : 0,
+                    drawComposeSortMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeSortMs || 0) : 0,
+                    drawComposePopulateMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composePopulateMs || 0) : 0,
+                    drawComposeInvariantMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeInvariantMs || 0) : 0,
+                    drawComposeWallSectionsMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeWallSectionsMs || 0) : 0,
+                    drawComposeUnaccountedMs: drawBreakdownForAccum ? Number(drawBreakdownForAccum.composeUnaccountedMs || 0) : 0
+                });
+            }
             const panelNow = performance.now();
             if (showPerfReadout && perfPanel && panelNow - perfStats.lastUiUpdateAt > 200) {
                 const losVisibleObjects = (typeof globalThis !== "undefined" && Array.isArray(globalThis.losDebugVisibleObjects))
@@ -2550,12 +2841,33 @@ jQuery(() => {
                         ` cp ${Number(drawBreakdown.composeMs || 0).toFixed(2)}`
                     )
                     : "";
+                const drawPasses = drawBreakdown
+                    ? (
+                        `\ndrawp w ${Number(drawBreakdown.passWorldMs || 0).toFixed(2)}` +
+                        ` l ${Number(drawBreakdown.passLosMs || 0).toFixed(2)}` +
+                        ` o ${Number(drawBreakdown.passObjectsMs || 0).toFixed(2)}` +
+                        ` p ${Number(drawBreakdown.passPostMs || 0).toFixed(2)}`
+                    )
+                    : "";
                 const drawCounts = drawBreakdown
                     ? (
                         `\nobjs ${Number(drawBreakdown.mapItems || 0)}` +
                         ` on ${Number(drawBreakdown.onscreen || 0)}` +
                         ` hyd r${Number(drawBreakdown.hydratedRoads || 0)}` +
                         ` t${Number(drawBreakdown.hydratedTrees || 0)}`
+                    )
+                    : "";
+                const drawComposeBuckets = drawBreakdown
+                    ? (
+                        `\ndrawc mk ${Number(drawBreakdown.composeMaskMs || 0).toFixed(2)}` +
+                        ` so ${Number(drawBreakdown.composeSortMs || 0).toFixed(2)}` +
+                        ` po ${Number(drawBreakdown.composePopulateMs || 0).toFixed(2)}` +
+                        ` iv ${Number(drawBreakdown.composeInvariantMs || 0).toFixed(2)}` +
+                        ` ws ${Number(drawBreakdown.composeWallSectionsMs || 0).toFixed(2)}` +
+                        ` g ${Number(drawBreakdown.composeWallSectionsGroups || 0)}` +
+                        ` r ${Number(drawBreakdown.composeWallSectionsRebuilt || 0)}` +
+                        ` un ${Number(drawBreakdown.composeUnaccountedMs || 0).toFixed(2)}` +
+                        `${Number(drawBreakdown.composeInvariantSkipped || 0) > 0 ? " (skip)" : ""}`
                     )
                     : "";
                 const simBuckets = simBreakdown
@@ -2582,6 +2894,7 @@ jQuery(() => {
                         ` p ${Number(simBreakdown.maxPointerPostMs || 0).toFixed(2)}`
                     )
                     : "";
+                const wwDebug = debugMode ? formatWindowWallLinkDebugSummary() : "";
                 perfPanel.text(
                     `FPS ${perfStats.fps.toFixed(1)}\n` +
                     `loop ${perfStats.loopMs.toFixed(1)} ms\n` +
@@ -2596,8 +2909,11 @@ jQuery(() => {
                     simMaxBuckets +
                     (effectiveRenderMaxFps > 0 ? ` / render ${effectiveRenderMaxFps}` : "") +
                     drawBuckets +
+                    drawPasses +
+                    drawComposeBuckets +
                     drawCounts +
-                    losSummary
+                    losSummary +
+                    wwDebug
                 );
                 perfStats.lastUiUpdateAt = panelNow;
             }
@@ -2615,15 +2931,10 @@ jQuery(() => {
     // Create roof preview
     roof = new Roof(0, 0, 0);
     if (typeof setVisibilityMaskSources === "function") {
-        setVisibilityMaskSources([() => {
-            if (!roof || !roof.placed || !roof.groundPlaneHitbox || !wizard) return null;
-            if (typeof roof.groundPlaneHitbox.containsPoint !== "function") return null;
-            const wizardUnderRoof = roof.groundPlaneHitbox.containsPoint(wizard.x, wizard.y);
-            return wizardUnderRoof ? roof.groundPlaneHitbox : null;
-        }]);
+        setVisibilityMaskSources([]);
     }
     if (typeof setVisibilityMaskEnabled === "function") {
-        setVisibilityMaskEnabled(true);
+        setVisibilityMaskEnabled(false);
     }
     SpellSystem.startMagicInterval(wizard);
     
@@ -2632,6 +2943,70 @@ jQuery(() => {
         if (wizard) wizard.updateStatusBars();
     }, 100);
     SpellSystem.initWizardSpells(wizard);
+
+    function tryAutoLoadLocalSaveOnStartup() {
+        if (typeof getSavedGameState !== "function" || typeof loadGameState !== "function") {
+            return false;
+        }
+        const parsedSave = getSavedGameState();
+        if (!parsedSave.ok) {
+            if (parsedSave.reason && parsedSave.reason !== "missing") {
+                console.warn("Skipping startup auto-load due to invalid local save:", parsedSave.reason, parsedSave.error || "");
+            }
+            return false;
+        }
+        const loaded = loadGameState(parsedSave.data);
+        if (loaded) {
+            message("Loaded local save");
+            console.log("Auto-loaded game from localStorage at startup");
+            return true;
+        }
+        console.warn("Startup auto-load found local save but load failed");
+        return false;
+    }
+
+    async function tryLoadFromStartupDirective() {
+        const directive = consumeStartupLoadDirective();
+        if (!directive || typeof directive.source !== "string") return false;
+
+        const source = directive.source.trim().toLowerCase();
+        if (source === "local") {
+            tryAutoLoadLocalSaveOnStartup();
+            return true;
+        }
+
+        if (source === "server") {
+            if (typeof loadGameStateFromServerFile !== "function") {
+                message("Server file load is unavailable");
+                return true;
+            }
+            const fileName = (typeof directive.fileName === "string") ? directive.fileName.trim() : "";
+            const result = await loadGameStateFromServerFile(fileName ? { fileName } : {});
+            const loadedPath = fileName.length > 0
+                ? `/assets/saves/backups/${fileName}`
+                : "/assets/saves/savefile.json";
+            if (result && result.ok) {
+                message(`Loaded ${loadedPath}`);
+                console.log(`Startup loaded game from ${loadedPath}`);
+            } else {
+                const reason = (result && result.reason) ? String(result.reason) : "unknown";
+                message(`Failed to load ${loadedPath} (${reason})`);
+                console.error(`Startup load failed for ${loadedPath}:`, result);
+                if (result && result.error) {
+                    console.error("Startup load error detail:", result.error);
+                }
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    void tryLoadFromStartupDirective().then(handled => {
+        if (!handled) {
+            tryAutoLoadLocalSaveOnStartup();
+        }
+    });
 
     $("#selectedSpell").click(() => {
         const wasHidden = $("#spellMenu").hasClass('hidden');
@@ -2721,13 +3096,18 @@ jQuery(() => {
             ensurePointerLockAimInitialized();
             const dx = (Number(event.movementX) || 0) * pointerLockSensitivity;
             const dy = (Number(event.movementY) || 0) * pointerLockSensitivity;
-            if (isVirtualCursorOverMenuArea()) {
+            const draggingRangeSlider = !!(pointerLockRangeDragInput && ((event.buttons & 1) === 1));
+            if (draggingRangeSlider || isVirtualCursorOverMenuArea()) {
                 // Keep menu interaction stable in screen space while locked.
                 if (!Number.isFinite(mousePos.screenX)) mousePos.screenX = app.screen.width * 0.5;
                 if (!Number.isFinite(mousePos.screenY)) mousePos.screenY = app.screen.height * 0.5;
                 mousePos.screenX += dx;
                 mousePos.screenY += dy;
                 clampVirtualCursorToCanvas(1);
+                if (draggingRangeSlider) {
+                    const virtualPt = getVirtualCursorClientPoint();
+                    updateRangeInputFromClientX(pointerLockRangeDragInput, virtualPt.x, false);
+                }
                 syncMouseWorldFromScreenWithViewport();
                 const normalized = normalizeAimWorldPointForWizard(mousePos.worldX, mousePos.worldY);
                 pointerLockAimWorld.x = normalized.x;
@@ -2781,7 +3161,6 @@ jQuery(() => {
         }
     })
 
-    let lastPlaceScaleMessageMs = 0;
     app.view.addEventListener("wheel", event => {
         if (
             !wizard ||
@@ -2811,19 +3190,13 @@ jQuery(() => {
         const delta = Math.max(-0.05, Math.min(0.05, unclampedDelta));
         if (Math.abs(delta) < 0.0005) return;
 
-        const next = SpellSystem.adjustPlaceableScale(wizard, delta);
-        if (Number.isFinite(next)) {
-            const now = performance.now();
-            if (now - lastPlaceScaleMessageMs >= 90) {
-                message(`Place scale: ${next.toFixed(2)}x`);
-                lastPlaceScaleMessageMs = now;
-            }
-        }
+        SpellSystem.adjustPlaceableScale(wizard, delta);
     }, { passive: false });
 
     app.view.addEventListener("mousedown", event => {
         if (pointerLockActive) {
             const hovered = getVirtualCursorHoveredElement();
+            const virtualPt = getVirtualCursorClientPoint();
             const selectedSpellEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedSpell")
                 : null;
@@ -2838,20 +3211,35 @@ jQuery(() => {
             if (forwardTarget) {
                 event.preventDefault();
                 event.stopPropagation();
+                const syntheticMouseInit = {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    button: event.button,
+                    buttons: event.buttons,
+                    clientX: Number.isFinite(virtualPt.x) ? virtualPt.x : 0,
+                    clientY: Number.isFinite(virtualPt.y) ? virtualPt.y : 0,
+                    screenX: Number.isFinite(virtualPt.x) ? virtualPt.x : 0,
+                    screenY: Number.isFinite(virtualPt.y) ? virtualPt.y : 0
+                };
                 if (isRightClick) {
                     suppressNextCanvasMenuClose = true;
                     forwardTarget.dispatchEvent(new MouseEvent("contextmenu", {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window
+                        ...syntheticMouseInit,
+                        button: 2
                     }));
                 } else {
                     suppressNextCanvasMenuClose = true;
-                    forwardTarget.dispatchEvent(new MouseEvent("click", {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window
-                    }));
+                    const isRangeInput = forwardTarget instanceof HTMLInputElement && forwardTarget.type === "range";
+                    if (isRangeInput) {
+                        updateRangeInputFromClientX(forwardTarget, virtualPt.x, false);
+                        pointerLockRangeDragInput = forwardTarget;
+                        forwardTarget.dispatchEvent(new MouseEvent("mousedown", syntheticMouseInit));
+                        return;
+                    }
+                    forwardTarget.dispatchEvent(new MouseEvent("mousedown", syntheticMouseInit));
+                    forwardTarget.dispatchEvent(new MouseEvent("mouseup", syntheticMouseInit));
+                    forwardTarget.dispatchEvent(new MouseEvent("click", syntheticMouseInit));
                 }
                 return;
             }
@@ -2866,7 +3254,7 @@ jQuery(() => {
             (wizard.currentSpell === "wall" || wizard.currentSpell === "buildroad" || wizard.currentSpell === "firewall")
         ) {
             event.preventDefault();
-            const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
                 ? {x: mousePos.worldX, y: mousePos.worldY}
                 : (() => {
                     const rect = app.view.getBoundingClientRect();
@@ -2880,6 +3268,20 @@ jQuery(() => {
     });
 
     app.view.addEventListener("mouseup", event => {
+        if (pointerLockActive && pointerLockRangeDragInput) {
+            event.preventDefault();
+            event.stopPropagation();
+            const virtualPt = getVirtualCursorClientPoint();
+            updateRangeInputFromClientX(pointerLockRangeDragInput, virtualPt.x, true);
+            pointerLockRangeDragInput.dispatchEvent(new MouseEvent("mouseup", {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+                button: event.button
+            }));
+            pointerLockRangeDragInput = null;
+            return;
+        }
         if (
             !wizard ||
             typeof SpellSystem === "undefined" ||
@@ -2889,7 +3291,7 @@ jQuery(() => {
         ) return;
 
         event.preventDefault();
-        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+        const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
             ? {x: mousePos.worldX, y: mousePos.worldY}
             : (() => {
                 const rect = app.view.getBoundingClientRect();
@@ -2937,9 +3339,13 @@ jQuery(() => {
 
         if (event.ctrlKey && keyLower === "f") {
             event.preventDefault();
-            showPerfReadout = !showPerfReadout;
-            if (perfPanel) {
-                perfPanel.css("display", showPerfReadout ? "block" : "none");
+            if (typeof toggleShowPerfReadout === "function") {
+                toggleShowPerfReadout();
+            } else {
+                showPerfReadout = !showPerfReadout;
+                if (perfPanel) {
+                    perfPanel.css("display", showPerfReadout ? "block" : "none");
+                }
             }
             return;
         }
@@ -3065,6 +3471,25 @@ jQuery(() => {
 
         const isPlusKey = (event.key === "+") || (event.code === "NumpadAdd") || (event.code === "Equal" && event.shiftKey);
         const isMinusKey = (event.key === "-") || (event.code === "NumpadSubtract");
+        const isPlaceRotateLeft = event.key === "ArrowLeft";
+        const isPlaceRotateRight = event.key === "ArrowRight";
+        if (
+            wizard &&
+            wizard.currentSpell === "placeobject" &&
+            (isPlaceRotateLeft || isPlaceRotateRight) &&
+            !spellMenuVisible &&
+            !auraMenuVisible &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.adjustPlaceableRotation === "function"
+        ) {
+            event.preventDefault();
+            if (!event.repeat) {
+                const delta = isPlaceRotateRight ? 5 : -5;
+                SpellSystem.adjustPlaceableRotation(wizard, delta);
+            }
+            return;
+        }
+
         if (
             wizard &&
             wizard.currentSpell === "placeobject" &&
@@ -3075,11 +3500,7 @@ jQuery(() => {
             event.preventDefault();
             if (!event.repeat) {
                 const delta = isPlusKey ? 0.1 : -0.1;
-                const next = SpellSystem.adjustPlaceableRenderOffset(wizard, delta);
-                if (Number.isFinite(next)) {
-                    const sign = next >= 0 ? "+" : "";
-                    message(`Place depth offset: ${sign}${next.toFixed(1)}`);
-                }
+                SpellSystem.adjustPlaceableRenderOffset(wizard, delta);
             }
             return;
         }
@@ -3128,14 +3549,32 @@ jQuery(() => {
         // Toggle debug graphics with ctrl+d
         if ((event.key === 'd' || event.key === 'D') && event.ctrlKey) {
             event.preventDefault();
-            debugMode = !debugMode;
+            if (typeof toggleDebugMode === "function") {
+                toggleDebugMode();
+            } else {
+                debugMode = !debugMode;
+            }
             console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
+            if (debugMode) {
+                console.log(formatWindowWallLinkDebugSummary());
+            }
+        }
+        // One-shot wall/window render-order dump with plain D key.
+        if (!event.ctrlKey && (event.key === 'd' || event.key === 'D') && !event.repeat) {
+            if (typeof globalThis !== "undefined") {
+                globalThis.windowWallDebugDumpRequested = true;
+            }
+            console.log("Requested one-shot wall/window render debug dump on next frame.");
         }
 
         // Toggle hex grid only with 'g' key
         if (event.key === 'g' || event.key === 'G') {
             event.preventDefault();
-            showHexGrid = !showHexGrid;
+            if (typeof toggleHexGrid === "function") {
+                toggleHexGrid();
+            } else {
+                showHexGrid = !showHexGrid;
+            }
             console.log('Hex grid:', showHexGrid ? 'ON' : 'OFF');
         }
 
@@ -3160,22 +3599,10 @@ jQuery(() => {
         // Load game from fixed server path with Ctrl+Shift+L
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
-            if (typeof loadGameStateFromServerFile === 'function') {
-                loadGameStateFromServerFile().then(result => {
-                    if (result && result.ok) {
-                        message('Loaded /assets/saves/savefile.json');
-                        console.log('Game loaded from fixed save file');
-                    } else {
-                        const reason = (result && result.reason) ? String(result.reason) : 'unknown';
-                        message(`Failed to load fixed save file (${reason})`);
-                        console.error('Failed to load fixed save file:', result);
-                        if (result && result.error) {
-                            console.error('Fixed save load error detail:', result.error);
-                        }
-                    }
-                });
+            if (reloadWithStartupLoadDirective({ source: "server" })) {
+                message('Reloading and loading /assets/saves/savefile.json...');
             } else {
-                message('Server file load is unavailable');
+                message('Failed to queue reload for server save load');
             }
             return;
         }
@@ -3194,26 +3621,12 @@ jQuery(() => {
         // Load game with Ctrl+L
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey) {
             event.preventDefault();
-            const parsedSave = (typeof getSavedGameState === 'function')
-                ? getSavedGameState()
-                : { ok: false, reason: 'unavailable' };
-
-            if (parsedSave.ok) {
-                if (loadGameState(parsedSave.data)) {
-                    message('Game loaded!');
-                    console.log('Game loaded from localStorage');
-                } else {
-                    message('Failed to load game');
-                }
+            if (reloadWithStartupLoadDirective({ source: "local" })) {
+                message('Reloading and loading local save...');
             } else {
-                if (parsedSave.reason === 'missing') {
-                    message('No saved game found');
-                } else {
-                    localStorage.removeItem('survivor_save');
-                    message('Save was invalid and has been reset');
-                    console.error('Invalid save data:', parsedSave.reason, parsedSave.error || '');
-                }
+                message('Failed to queue reload for local save load');
             }
+            return;
         }
     })
     

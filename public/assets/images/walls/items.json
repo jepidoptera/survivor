@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "file": "stonewall.png",
+      "texturePath": "/assets/images/walls/stonewall.png",
+      "repeatsPerMapUnitX": 0.4,
+      "repeatsPerMapUnitY": 0.4
+    }
+  ]
+}

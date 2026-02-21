@@ -31,7 +31,7 @@
   "items": [
     {
       "file": "palmtree0.png",
-      "texturePath": "/assets/images/palmtree0.png",
+      "texturePath": "/assets/images/trees/trees/palmtree0.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -59,7 +59,7 @@
     },
     {
       "file": "palmtree1.png",
-      "texturePath": "/assets/images/palmtree1.png",
+      "texturePath": "/assets/images/trees/trees/palmtree1.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -87,7 +87,7 @@
     },
     {
       "file": "palmtree2.png",
-      "texturePath": "/assets/images/palmtree2.png",
+      "texturePath": "/assets/images/trees/trees/palmtree2.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -115,7 +115,7 @@
     },
     {
       "file": "palmtree3.png",
-      "texturePath": "/assets/images/palmtree3.png",
+      "texturePath": "/assets/images/trees/trees/palmtree3.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -143,7 +143,7 @@
     },
     {
       "file": "palmtree4.png",
-      "texturePath": "/assets/images/palmtree4.png",
+      "texturePath": "/assets/images/trees/trees/palmtree4.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -171,7 +171,7 @@
     },
     {
       "file": "pinetree0.png",
-      "texturePath": "/assets/images/pinetree0.png",
+      "texturePath": "/assets/images/trees/trees/pinetree0.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -199,7 +199,7 @@
     },
     {
       "file": "pinetree1.png",
-      "texturePath": "/assets/images/pinetree1.png",
+      "texturePath": "/assets/images/trees/trees/pinetree1.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -227,7 +227,7 @@
     },
     {
       "file": "pinetree2.png",
-      "texturePath": "/assets/images/pinetree2.png",
+      "texturePath": "/assets/images/trees/trees/pinetree2.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -255,7 +255,7 @@
     },
     {
       "file": "pinetree3.png",
-      "texturePath": "/assets/images/pinetree3.png",
+      "texturePath": "/assets/images/trees/trees/pinetree3.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -283,7 +283,7 @@
     },
     {
       "file": "pinetree4.png",
-      "texturePath": "/assets/images/pinetree4.png",
+      "texturePath": "/assets/images/trees/trees/pinetree4.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -311,7 +311,7 @@
     },
     {
       "file": "tree0.png",
-      "texturePath": "/assets/images/tree0.png",
+      "texturePath": "/assets/images/trees/tree0.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -325,10 +325,14 @@
         "y": 1
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "type": "polygon",
+        "points": [
+          { "x": -0.5, "y": -0.2 },
+          { "x": 0.4, "y": -0.2 },
+          { "x": 0.6, "y": -0.35 },
+          { "x": 0.2, "y": -0.7 },
+          { "x": -0.2, "y": -0.7 }
+        ]
       },
       "visualHitbox": {
         "type": "circle",
@@ -339,7 +343,7 @@
     },
     {
       "file": "tree1.png",
-      "texturePath": "/assets/images/tree1.png",
+      "texturePath": "/assets/images/trees/tree1.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -349,14 +353,14 @@
       "blocksTile": true,
       "isPassable": false,
       "anchor": {
-        "x": 0.5,
-        "y": 1
+        "x": 0.475,
+        "y": 0.95
       },
       "groundPlaneHitbox": {
         "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "xOffset": 0.0,
+        "yOffset": 0.0,
+        "radiusFromSizeMultiplier": 0.05
       },
       "visualHitbox": {
         "type": "circle",
@@ -367,7 +371,7 @@
     },
     {
       "file": "tree11.png",
-      "texturePath": "/assets/images/tree11.png",
+      "texturePath": "/assets/images/trees/tree11.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -378,24 +382,24 @@
       "isPassable": false,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.975
       },
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "radiusFromSizeMultiplier": 0.05
       },
       "visualHitbox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -1,
+        "yOffsetFromHeightMultiplier": -0.975,
         "radiusFromSizeMultiplier": 0.4375
       }
     },
     {
       "file": "tree12.png",
-      "texturePath": "/assets/images/tree12.png",
+      "texturePath": "/assets/images/trees/tree12.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -423,7 +427,7 @@
     },
     {
       "file": "tree14.png",
-      "texturePath": "/assets/images/tree14.png",
+      "texturePath": "/assets/images/trees/tree14.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -451,7 +455,7 @@
     },
     {
       "file": "tree2.png",
-      "texturePath": "/assets/images/tree2.png",
+      "texturePath": "/assets/images/trees/tree2.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -461,14 +465,18 @@
       "blocksTile": true,
       "isPassable": false,
       "anchor": {
-        "x": 0.5,
-        "y": 1
+        "x": 0.53,
+        "y": 0.95
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "type": "polygon",
+        "points": [
+          { "x": -0.35, "y": 0.1 },
+          { "x": 0.3, "y": 0.1 },
+          { "x": 0.3, "y": -0.05 },
+          { "x": 0.1, "y": -0.3 },
+          { "x": -0.2, "y": -0.3 }
+        ]
       },
       "visualHitbox": {
         "type": "circle",
@@ -479,7 +487,7 @@
     },
     {
       "file": "tree3.png",
-      "texturePath": "/assets/images/tree3.png",
+      "texturePath": "/assets/images/trees/tree3.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -490,13 +498,13 @@
       "isPassable": false,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.95
       },
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "radiusFromSizeMultiplier": 0.04
       },
       "visualHitbox": {
         "type": "circle",
@@ -507,7 +515,7 @@
     },
     {
       "file": "tree4.png",
-      "texturePath": "/assets/images/tree4.png",
+      "texturePath": "/assets/images/trees/tree4.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -517,14 +525,14 @@
       "blocksTile": true,
       "isPassable": false,
       "anchor": {
-        "x": 0.5,
-        "y": 1
+        "x": 0.485,
+        "y": 0.985
       },
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "radiusFromSizeMultiplier": 0.035
       },
       "visualHitbox": {
         "type": "circle",
@@ -535,7 +543,7 @@
     },
     {
       "file": "tree5.png",
-      "texturePath": "/assets/images/tree5.png",
+      "texturePath": "/assets/images/trees/tree5.png",
       "width": 4,
       "height": 4,
       "size": 4,
@@ -545,14 +553,14 @@
       "blocksTile": true,
       "isPassable": false,
       "anchor": {
-        "x": 0.5,
-        "y": 1
+        "x": 0.475,
+        "y": 0.975
       },
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
-        "radiusFromSizeMultiplier": 0.125
+        "radiusFromSizeMultiplier": 0.04
       },
       "visualHitbox": {
         "type": "circle",

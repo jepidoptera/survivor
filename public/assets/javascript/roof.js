@@ -33,9 +33,11 @@ class Roof {
     }
 
     constructor(x, y, heightFromGround) {
+        this.type = "roof";
         this.x = x;
         this.y = y;
         this.heightFromGround = heightFromGround;
+        this.z = heightFromGround;
         this.peakHeight = heightFromGround + 7; // Peak is 3 units above base
         this.midHeight = heightFromGround + 4; // Midpoint for hex ring
         this.pixiMesh = null;
@@ -320,6 +322,7 @@ class Roof {
             type: 'roof',
             x: this.x,
             y: this.y,
+            z: Number.isFinite(this.z) ? this.z : this.heightFromGround,
             heightFromGround: this.heightFromGround,
             peakHeight: this.peakHeight,
             midHeight: this.midHeight,
@@ -345,7 +348,10 @@ class Roof {
         const x = Number.isFinite(data.x) ? data.x : 0;
         const y = Number.isFinite(data.y) ? data.y : 0;
         const heightFromGround = Number.isFinite(data.heightFromGround) ? data.heightFromGround : 0;
+        const z = Number.isFinite(data.z) ? Number(data.z) : heightFromGround;
         const roof = new Roof(x, y, heightFromGround);
+        roof.z = z;
+        roof.heightFromGround = z;
 
         if (Number.isFinite(data.peakHeight)) roof.peakHeight = data.peakHeight;
         if (Number.isFinite(data.midHeight)) roof.midHeight = data.midHeight;

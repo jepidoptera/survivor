@@ -7,16 +7,13 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
+    "rotationAxis": "none",
     "anchor": {
-      "x": 0.5,
-      "y": 1
-    },
+        "x": 0.5,
+        "y": 0.5
+      },
     "groundPlaneHitbox": {
-      "type": "circle",
-      "xOffset": 0,
-      "yOffset": 0,
-      "radiusFromWidthMultiplier": 0.2,
-      "minRadius": 0.12
+      "type": "none"
     },
     "visualHitbox": {
       "type": "circle",
@@ -36,14 +33,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -53,8 +46,8 @@
       }
     },
     {
-      "file": "fairytale flowers.jpg",
-      "texturePath": "/assets/images/flowers/fairytale%20flowers.jpg",
+      "file": "fairytale flowers.png",
+      "texturePath": "/assets/images/flowers/fairytale%20flowers.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -62,14 +55,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -79,8 +68,8 @@
       }
     },
     {
-      "file": "lily plant.jpg",
-      "texturePath": "/assets/images/flowers/lily%20plant.jpg",
+      "file": "lily plant.png",
+      "texturePath": "/assets/images/flowers/lily%20plant.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -88,14 +77,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -105,8 +90,8 @@
       }
     },
     {
-      "file": "orange flower bush.jpg",
-      "texturePath": "/assets/images/flowers/orange%20flower%20bush.jpg",
+      "file": "fireflower.png",
+      "texturePath": "/assets/images/flowers/fireflower.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -114,14 +99,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -140,14 +121,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -166,14 +143,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -183,8 +156,8 @@
       }
     },
     {
-      "file": "thornflowers.jpg",
-      "texturePath": "/assets/images/flowers/thornflowers.jpg",
+      "file": "thornflowers.png",
+      "texturePath": "/assets/images/flowers/thornflowers.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -192,14 +165,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -209,8 +178,8 @@
       }
     },
     {
-      "file": "white flower bush.jpg",
-      "texturePath": "/assets/images/flowers/white%20flower%20bush.jpg",
+      "file": "white flower bush.png",
+      "texturePath": "/assets/images/flowers/white%20flower%20bush.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -218,14 +187,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -235,8 +200,8 @@
       }
     },
     {
-      "file": "white rosebush.jpg",
-      "texturePath": "/assets/images/flowers/white%20rosebush.jpg",
+      "file": "white rosebush.png",
+      "texturePath": "/assets/images/flowers/white%20rosebush.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -244,14 +209,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -270,14 +231,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",
@@ -296,14 +253,10 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0,
-        "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "none"
       },
       "visualHitbox": {
         "type": "circle",

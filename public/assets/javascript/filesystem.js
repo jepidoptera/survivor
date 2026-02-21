@@ -76,6 +76,18 @@ function registerLazyTreeRecord(data, loaded = false) {
     return true;
 }
 
+function unregisterLazyRoadRecordAt(x, y) {
+    const key = roadRecordKey(x, y);
+    lazyRoadStore.recordsByKey.delete(key);
+    lazyRoadStore.loadedKeys.delete(key);
+}
+
+function unregisterLazyTreeRecordAt(x, y) {
+    const key = roadRecordKey(x, y);
+    lazyTreeStore.recordsByKey.delete(key);
+    lazyTreeStore.loadedKeys.delete(key);
+}
+
 function getAllRoadSaveRecords(loadedRoadRecords = []) {
     const out = [];
     const seen = new Set();
@@ -189,6 +201,8 @@ function hydrateVisibleLazyTrees(options = {}) {
 if (typeof globalThis !== "undefined") {
     globalThis.hydrateVisibleLazyRoads = hydrateVisibleLazyRoads;
     globalThis.hydrateVisibleLazyTrees = hydrateVisibleLazyTrees;
+    globalThis.unregisterLazyRoadRecordAt = unregisterLazyRoadRecordAt;
+    globalThis.unregisterLazyTreeRecordAt = unregisterLazyTreeRecordAt;
 }
 
 function encodeGroundTiles(mapRef) {
@@ -248,7 +262,9 @@ function saveGameState() {
         version: 1,
         timestamp: new Date().toISOString(),
         wizard: wizard.saveJson(),
-        animals: animals.map(animal => animal.saveJson()),
+        animals: animals
+            .filter(animal => animal && !animal.gone && !animal.vanishing)
+            .map(animal => animal.saveJson()),
         staticObjects: [],
         groundTiles: encodeGroundTiles(map),
         roof: (roof && typeof roof.saveJson === 'function') ? roof.saveJson() : null
@@ -264,7 +280,7 @@ function saveGameState() {
             if (!node || !node.objects || node.objects.length === 0) continue;
 
             node.objects.forEach(obj => {
-                if (obj && !obj.gone && !seenStaticObjects.has(obj)) {
+                if (obj && !obj.gone && !obj.vanishing && !seenStaticObjects.has(obj)) {
                     seenStaticObjects.add(obj);
                     if (obj.type === 'road') {
                         const roadRecord = toRoadSaveRecord(obj);
@@ -306,6 +322,44 @@ function parseSavedGameState(rawSaveData) {
     } catch (e) {
         return { ok: false, reason: "invalid-json", error: e };
     }
+}
+
+function buildRestoreStaticObjectKey(objData, index = -1) {
+    if (!objData || typeof objData !== "object") return `__invalid__|${index}`;
+    const type = (typeof objData.type === "string" && objData.type.length > 0)
+        ? objData.type
+        : "unknown";
+    const x = Number.isFinite(objData.x) ? Number(objData.x).toFixed(3) : "";
+    const y = Number.isFinite(objData.y) ? Number(objData.y).toFixed(3) : "";
+
+    if (type === "road") {
+        const fill = (typeof objData.fillTexturePath === "string") ? objData.fillTexturePath : "";
+        return `road|${x}|${y}|${fill}`;
+    }
+
+    if (type === "tree") {
+        const size = Number.isFinite(objData.size) ? Number(objData.size).toFixed(3) : "";
+        const tex = Number.isInteger(objData.textureIndex) ? String(objData.textureIndex) : "";
+        const hp = Number.isFinite(objData.hp) ? Number(objData.hp).toFixed(2) : "";
+        const fire = (typeof objData.isOnFire === "boolean") ? String(objData.isOnFire) : "";
+        return `tree|${x}|${y}|${size}|${tex}|${hp}|${fire}`;
+    }
+
+    if (type === "wall") {
+        const ax = Number.isFinite(objData.aX) ? Number(objData.aX).toFixed(3) : "";
+        const ay = Number.isFinite(objData.aY) ? Number(objData.aY).toFixed(3) : "";
+        const bx = Number.isFinite(objData.bX) ? Number(objData.bX).toFixed(3) : "";
+        const by = Number.isFinite(objData.bY) ? Number(objData.bY).toFixed(3) : "";
+        const h = Number.isFinite(objData.height) ? Number(objData.height).toFixed(3) : "";
+        const t = Number.isFinite(objData.thickness) ? Number(objData.thickness).toFixed(3) : "";
+        const pa = Number.isFinite(objData.texturePhaseA) ? Number(objData.texturePhaseA).toFixed(4) : "";
+        const pb = Number.isFinite(objData.texturePhaseB) ? Number(objData.texturePhaseB).toFixed(4) : "";
+        const sid = Number.isInteger(objData.sectionId) ? String(objData.sectionId) : "";
+        return `wall|${ax}|${ay}|${bx}|${by}|${h}|${t}|${pa}|${pb}|${sid}`;
+    }
+
+    // Safety fallback for less common object shapes.
+    return `${type}|${x}|${y}|${index}`;
 }
 
 function getSavedGameState() {
@@ -390,6 +444,7 @@ function loadGameState(saveData) {
         // Restore animals
         if (saveData.animals && Array.isArray(saveData.animals)) {
             saveData.animals.forEach(animalData => {
+                if (!animalData || animalData.gone || animalData.vanishing) return;
                 const animal = Animal.loadJson(animalData, map);
                 if (animal) {
                     animals.push(animal);
@@ -435,30 +490,62 @@ function loadGameState(saveData) {
         // Restore static objects (dedupe entries in save payload for backward compatibility)
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
             const restoredKeys = new Set();
-            saveData.staticObjects.forEach(objData => {
-                const key = JSON.stringify(objData);
-                if (restoredKeys.has(key)) return;
-                restoredKeys.add(key);
+            const canSuspendWallRebuild = (
+                typeof Wall !== "undefined" &&
+                Wall &&
+                typeof Wall.setBulkRebuildSuspended === "function"
+            );
+            if (canSuspendWallRebuild) {
+                Wall.setBulkRebuildSuspended(true);
+            }
+            try {
+                saveData.staticObjects.forEach((objData, index) => {
+                    const key = buildRestoreStaticObjectKey(objData, index);
+                    if (restoredKeys.has(key)) return;
+                    restoredKeys.add(key);
 
-                if (objData && objData.type === 'road') {
-                    registerLazyRoadRecord(objData, false);
-                    return;
-                }
-                if (objData && objData.type === 'tree') {
-                    registerLazyTreeRecord(objData, false);
-                    return;
-                }
+                    if (objData && objData.type === 'road') {
+                        registerLazyRoadRecord(objData, false);
+                        return;
+                    }
+                    if (objData && objData.type === 'tree') {
+                        registerLazyTreeRecord(objData, false);
+                        return;
+                    }
 
-                let obj = null;
-                if (objData.type === 'wall') {
-                    obj = Wall.loadJson(objData, map);
-                } else {
-                    obj = StaticObject.loadJson(objData, map);
+                    let obj = null;
+                    if (objData.type === 'wall') {
+                        obj = Wall.loadJson(objData, map);
+                    } else {
+                        obj = StaticObject.loadJson(objData, map);
+                    }
+                    if (obj) {
+                        // Objects handle their own node registration
+                    }
+                });
+            } finally {
+                if (canSuspendWallRebuild) {
+                    Wall.setBulkRebuildSuspended(false);
                 }
-                if (obj) {
-                    // Objects handle their own node registration
-                }
-            });
+            }
+        }
+
+        if (typeof Wall !== "undefined" && Wall) {
+            if (typeof Wall.recomputeLineGroups === "function") {
+                Wall.recomputeLineGroups(map);
+            }
+            if (typeof Wall.reconcilePersistedSectionIds === "function") {
+                Wall.reconcilePersistedSectionIds(map);
+            }
+            if (typeof Wall.repairMountedSectionLinks === "function") {
+                Wall.repairMountedSectionLinks(map);
+            }
+            if (typeof globalThis !== "undefined" && typeof globalThis.markAllWallSectionsDirty === "function") {
+                globalThis.markAllWallSectionsDirty();
+            }
+            if (typeof globalThis !== "undefined" && typeof globalThis.queueWallSectionRebuildPass === "function") {
+                globalThis.queueWallSectionRebuildPass(12);
+            }
         }
 
         if (saveData.groundTiles) {
@@ -600,9 +687,14 @@ async function saveGameStateToServerFile() {
     }
 }
 
-async function loadGameStateFromServerFile() {
+async function loadGameStateFromServerFile(options = {}) {
     try {
-        const response = await fetch('/api/savefile', { method: 'GET' });
+        const qs = new URLSearchParams();
+        if (options && typeof options.fileName === "string" && options.fileName.trim().length > 0) {
+            qs.set("file", options.fileName.trim());
+        }
+        const url = qs.toString().length > 0 ? `/api/savefile?${qs.toString()}` : '/api/savefile';
+        const response = await fetch(url, { method: 'GET' });
         const payload = await response.json();
         if (!response.ok || !payload || !payload.ok || !payload.data) {
             return { ok: false, reason: payload && payload.reason ? payload.reason : 'request-failed' };

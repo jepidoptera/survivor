@@ -251,6 +251,55 @@ class MapNode {
     }
 }
 
+class NodeMidpoint {
+    constructor(nodeA, nodeB, mapRef) {
+        this.nodeA = nodeA;
+        this.nodeB = nodeB;
+        this.map = mapRef || null;
+        this.x = (Number(nodeA && nodeA.x) + Number(nodeB && nodeB.x)) * 0.5;
+        this.y = (Number(nodeA && nodeA.y) + Number(nodeB && nodeB.y)) * 0.5;
+        this.neighbors = [];
+
+        const pushUnique = (node) => {
+            if (!node || typeof node.xindex !== "number" || typeof node.yindex !== "number") return;
+            if (this.neighbors.some(existing => existing === node)) return;
+            this.neighbors.push(node);
+        };
+
+        pushUnique(nodeA);
+        pushUnique(nodeB);
+
+        const common = [];
+        const neighborsA = (nodeA && Array.isArray(nodeA.neighbors)) ? nodeA.neighbors : [];
+        const neighborsB = (nodeB && Array.isArray(nodeB.neighbors)) ? nodeB.neighbors : [];
+        for (let i = 0; i < neighborsA.length; i++) {
+            const candidate = neighborsA[i];
+            if (!candidate || candidate === nodeA || candidate === nodeB) continue;
+            if (!neighborsB.includes(candidate)) continue;
+            if (common.includes(candidate)) continue;
+            common.push(candidate);
+        }
+        common.sort((left, right) => {
+            const ldx = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, left.x)
+                : (left.x - this.x);
+            const ldy = (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, left.y)
+                : (left.y - this.y);
+            const rdx = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, right.x)
+                : (right.x - this.x);
+            const rdy = (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, right.y)
+                : (right.y - this.y);
+            return (ldx * ldx + ldy * ldy) - (rdx * rdx + rdy * rdy);
+        });
+        for (let i = 0; i < common.length && i < 2; i++) {
+            pushUnique(common[i]);
+        }
+    }
+}
+
 class GameMap {
     constructor(width, height, options, callback) {
         const opts = options || {};
@@ -307,7 +356,11 @@ class GameMap {
                 } else {
                     // For trees, rocks, etc., load 5 variants
                     for (let n = 0; n < 5; n++) {
-                        this.scenery[item.type].textures[n] = PIXI.Texture.from(`/assets/images/${item.type.replace(' ', '')}${n}.png`);
+                        if (item.type === "tree") {
+                            this.scenery[item.type].textures[n] = PIXI.Texture.from(`/assets/images/trees/tree${n}.png`);
+                        } else {
+                            this.scenery[item.type].textures[n] = PIXI.Texture.from(`/assets/images/${item.type.replace(' ', '')}${n}.png`);
+                        }
                     }
                 }
             }
@@ -577,6 +630,93 @@ class GameMap {
         return best;
     }
 
+    worldToNodeOrMidpoint(worldX, worldY) {
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const wrappedWorldX = this.wrapWorldX(worldX);
+        const wrappedWorldY = this.wrapWorldY(worldY);
+        const node = this.worldToNode(wrappedWorldX, wrappedWorldY);
+        if (!node) return null;
+
+        const nodeDist = Math.hypot(
+            this.shortestDeltaX(node.x, wrappedWorldX),
+            this.shortestDeltaY(node.y, wrappedWorldY)
+        );
+
+        const midpointDirections = [1, 3, 5, 7, 9, 11];
+        let bestMidpoint = null;
+        let bestMidpointDist = Infinity;
+        const seenPairs = new Set();
+        for (let i = 0; i < midpointDirections.length; i++) {
+            const dir = midpointDirections[i];
+            const neighbor = node.neighbors[dir];
+            if (!neighbor || typeof neighbor.xindex !== "number" || typeof neighbor.yindex !== "number") continue;
+            const ax = Math.min(node.xindex, neighbor.xindex);
+            const ay = Math.min(node.yindex, neighbor.yindex);
+            const bx = Math.max(node.xindex, neighbor.xindex);
+            const by = Math.max(node.yindex, neighbor.yindex);
+            const pairKey = `${ax},${ay}|${bx},${by}`;
+            if (seenPairs.has(pairKey)) continue;
+            seenPairs.add(pairKey);
+
+            const midpoint = new NodeMidpoint(node, neighbor, this);
+            const midDist = Math.hypot(
+                this.shortestDeltaX(midpoint.x, wrappedWorldX),
+                this.shortestDeltaY(midpoint.y, wrappedWorldY)
+            );
+            if (midDist < bestMidpointDist) {
+                bestMidpointDist = midDist;
+                bestMidpoint = midpoint;
+            }
+        }
+
+        if (bestMidpoint && bestMidpointDist < nodeDist) {
+            return bestMidpoint;
+        }
+        return node;
+    }
+
+    _isNodeMidpoint(entity) {
+        return entity instanceof NodeMidpoint;
+    }
+
+    _resolveHexLineEndpoint(entity) {
+        if (!entity) return null;
+        if (entity instanceof MapNode) return entity;
+        if (this._isNodeMidpoint(entity)) return entity;
+        if (Number.isFinite(entity.x) && Number.isFinite(entity.y)) {
+            return this.worldToNodeOrMidpoint(entity.x, entity.y);
+        }
+        return null;
+    }
+
+    _hexEntitiesMatch(a, b, eps = 1e-6) {
+        if (!a || !b) return false;
+        return (
+            Math.abs(this.shortestDeltaX(a.x, b.x)) <= eps &&
+            Math.abs(this.shortestDeltaY(a.y, b.y)) <= eps
+        );
+    }
+
+    _chooseMidpointBridgeNode(midpoint, towardEntity) {
+        if (!this._isNodeMidpoint(midpoint) || !Array.isArray(midpoint.neighbors) || midpoint.neighbors.length === 0) return null;
+        const tx = Number(towardEntity && towardEntity.x);
+        const ty = Number(towardEntity && towardEntity.y);
+        let bestNode = null;
+        let bestDist = Infinity;
+        for (let i = 0; i < midpoint.neighbors.length; i++) {
+            const node = midpoint.neighbors[i];
+            if (!node || typeof node.xindex !== "number" || typeof node.yindex !== "number") continue;
+            const dist = Number.isFinite(tx) && Number.isFinite(ty)
+                ? Math.hypot(this.shortestDeltaX(node.x, tx), this.shortestDeltaY(node.y, ty))
+                : 0;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestNode = node;
+            }
+        }
+        return bestNode;
+    }
+
     getHexDirection(x, y) {
         if (x === 0 && y === 0) return 0;
         const angle = Math.atan2(-y, x) * (180 / Math.PI);
@@ -586,16 +726,23 @@ class GameMap {
     }
 
     getHexLine(nodeA, nodeB, width = 0) {
-        
-        if (nodeA == nodeB) return [nodeA];
+        const start = this._resolveHexLineEndpoint(nodeA);
+        const end = this._resolveHexLineEndpoint(nodeB);
+        if (!start || !end) return [];
+        if (this._hexEntitiesMatch(start, end)) return [start];
 
         // Get the center line first
-        if (width == 0) return this._getSingleHexLine(nodeA, nodeB);
+        if (width == 0 || this._isNodeMidpoint(start) || this._isNodeMidpoint(end)) {
+            return this._getSingleHexLine(start, end);
+        }
+
+        const nodeStart = start;
+        const nodeEnd = end;
 
         // get direction (0-11) corresponding to the travel vector from A to B
         const firstNeighborDirection = -1
-        const dx = this.shortestDeltaX(nodeA.x, nodeB.x);
-        const dy = this.shortestDeltaY(nodeA.y, nodeB.y);
+        const dx = this.shortestDeltaX(nodeStart.x, nodeEnd.x);
+        const dy = this.shortestDeltaY(nodeStart.y, nodeEnd.y);
         let direction = this.getHexDirection(dx, dy);
         let sideLineStarts = [];
         if (width == 2) {
@@ -615,12 +762,13 @@ class GameMap {
             sideLineStarts.push(11);
         }        
         
-        const startNodes = new Set(this._getSingleHexLine(nodeA, nodeB));
+        const startNodes = new Set(this._getSingleHexLine(nodeStart, nodeEnd));
         let allNodes = new Set(startNodes);
         for (let node of startNodes) {
+            if (!node || !Array.isArray(node.neighbors)) continue;
             for (let sideStart of sideLineStarts) {
                 const sideNode = node.neighbors[sideStart];
-                allNodes.add(sideNode);
+                if (sideNode) allNodes.add(sideNode);
             }
         }
         // sideLineStarts.forEach(sideStart => {
@@ -640,16 +788,51 @@ class GameMap {
     
     _getSingleHexLine(nodeA, nodeB) {
         if (!nodeA || !nodeB) return [];
-        
-        // Convert world coordinates to map nodes if needed
+        const start = this._resolveHexLineEndpoint(nodeA);
+        const end = this._resolveHexLineEndpoint(nodeB);
+        if (!start || !end) return [];
+        if (this._hexEntitiesMatch(start, end)) return [start];
+
+        const path = [];
+        let startNode = start;
+        let endNode = end;
+
+        if (this._isNodeMidpoint(start)) {
+            path.push(start);
+            startNode = this._chooseMidpointBridgeNode(start, end);
+        }
+        if (this._isNodeMidpoint(end)) {
+            endNode = this._chooseMidpointBridgeNode(end, start);
+        }
+        if (!startNode || !endNode) return path;
+
+        const corePath = this._getSingleHexLineNodes(startNode, endNode);
+        for (let i = 0; i < corePath.length; i++) {
+            if (!path.length || !this._hexEntitiesMatch(path[path.length - 1], corePath[i])) {
+                path.push(corePath[i]);
+            }
+        }
+
+        if (this._isNodeMidpoint(end)) {
+            if (!path.length || !this._hexEntitiesMatch(path[path.length - 1], end)) {
+                path.push(end);
+            }
+        }
+
+        return path;
+    }
+
+    _getSingleHexLineNodes(nodeA, nodeB) {
+        if (!nodeA || !nodeB) return [];
         let current = this.worldToNode(nodeA.x, nodeA.y);
         const target = this.worldToNode(nodeB.x, nodeB.y);
-        
         if (!current || !target) return [];
+        if (current === target) return [current];
         const path = [current];
         const maxSteps = (mapWidth + mapHeight) * 2;
 
         for (let step = 0; step < maxSteps; step++) {
+            if (current === target) break;
             let nextDirection = this.getHexDirection(
                 this.shortestDeltaX(current.x, target.x),
                 this.shortestDeltaY(current.y, target.y)

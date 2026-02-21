@@ -5,6 +5,7 @@
     "width": 1,
     "height": 1,
     "renderDepthOffset": 0,
+    "rotationAxis": "spatial",
     "blocksTile": false,
     "isPassable": true,
     "anchor": {
@@ -50,7 +51,20 @@
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
         "radiusFromMaxDimensionMultiplier": 0.5
-      }
+      },
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/windows/lod/window_lod096.jpg",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/windows/lod/window_lod192.jpg",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/windows/window.jpg"
+        }
+      ]
     }
   ]
 }

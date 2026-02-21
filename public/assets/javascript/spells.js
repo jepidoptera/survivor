@@ -3,6 +3,7 @@ let spellKeyBindings = {
     "B": "wall",
     "V": "vanish",
     "T": "treegrow",
+    "J": "teleport",
     "R": "buildroad",
     "FW": "firewall"
 };
@@ -588,6 +589,81 @@ class Vanish extends Spell {
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
         target.percentVanished = 0;
+        if (target._vanishFinalizeTimeout) {
+            clearTimeout(target._vanishFinalizeTimeout);
+        }
+        const finalizeAfterMs = Math.max(0, (target.vanishDuration / Math.max(1, frameRate)) * 1000);
+        target._vanishFinalizeTimeout = setTimeout(() => {
+            if (!target || target.gone) return;
+            if (typeof target.remove === "function") {
+                target.remove();
+            } else if (typeof target.removeFromGame === "function") {
+                target.removeFromGame();
+            } else if (typeof target.delete === "function") {
+                // Backward compatibility for entities not yet migrated.
+                target.delete();
+            } else {
+                target.gone = true;
+            }
+            target.vanishing = false;
+            target._vanishFinalizeTimeout = null;
+        }, finalizeAfterMs);
+    }
+}
+
+class Teleport extends Spell {
+    constructor(x, y) {
+        super(x, y);
+        this.image = document.createElement('img');
+        this.image.src = "./assets/images/thumbnails/vanish.png";
+        this.gravity = 0;
+        this.speed = 0;
+        this.range = Infinity;
+        this.bounces = 0;
+        this.apparentSize = 0;
+        this.delayTime = 0;
+        this.magicCost = 5;
+        this.radius = 0;
+    }
+
+    cast(targetX, targetY) {
+        if (!wizard || !wizard.map) return this;
+        if (wizard.magic < this.magicCost) {
+            message("Not enough magic to cast Teleport!");
+            return this;
+        }
+
+        let destinationX = targetX;
+        let destinationY = targetY;
+        if (typeof wizard.map.wrapWorldX === "function") destinationX = wizard.map.wrapWorldX(destinationX);
+        if (typeof wizard.map.wrapWorldY === "function") destinationY = wizard.map.wrapWorldY(destinationY);
+        if (!Number.isFinite(destinationX) || !Number.isFinite(destinationY)) {
+            message("Cannot teleport there!");
+            return this;
+        }
+
+        wizard.magic -= this.magicCost;
+        wizard.x = destinationX;
+        wizard.y = destinationY;
+        wizard.node = wizard.map.worldToNode(destinationX, destinationY) || wizard.node;
+        wizard.path = [];
+        wizard.nextNode = null;
+        wizard.destination = null;
+        wizard.moving = false;
+        wizard.movementVector = { x: 0, y: 0 };
+        wizard.prevX = destinationX;
+        wizard.prevY = destinationY;
+        wizard.updateHitboxes();
+        if (typeof centerViewport === "function") {
+            centerViewport(wizard, 0);
+        }
+
+        this.visible = false;
+        if (this.pixiSprite) {
+            projectileLayer.removeChild(this.pixiSprite);
+            this.pixiSprite = null;
+        }
+        return this;
     }
 }
 
@@ -661,7 +737,7 @@ class TreeGrow extends Spell {
         // Reuse map-managed tree textures when available to preserve variants.
         const treeTextures = (wizard.map.scenery && wizard.map.scenery.tree && wizard.map.scenery.tree.textures)
             ? wizard.map.scenery.tree.textures
-            : Array.from({length: 5}, (_, n) => PIXI.Texture.from(`/assets/images/tree${n}.png`));
+            : Array.from({length: 5}, (_, n) => PIXI.Texture.from(`/assets/images/trees/tree${n}.png`));
         
         const newTree = new Tree({x: targetNode.x, y: targetNode.y}, treeTextures, wizard.map);
         const selectedTreeVariant = (
@@ -675,8 +751,12 @@ class TreeGrow extends Spell {
         if (selectedTreeVariant !== null && newTree.pixiSprite) {
             const selectedTexture = treeTextures[selectedTreeVariant];
             if (selectedTexture) {
-                newTree.pixiSprite.texture = selectedTexture;
-                newTree.textureIndex = selectedTreeVariant;
+                if (typeof newTree.setTreeTextureIndex === "function") {
+                    newTree.setTreeTextureIndex(selectedTreeVariant, treeTextures);
+                } else {
+                    newTree.pixiSprite.texture = selectedTexture;
+                    newTree.textureIndex = selectedTreeVariant;
+                }
             }
         }
         newTree.applySize(this.initialSize);
@@ -804,14 +884,49 @@ class PlaceObject extends Spell {
             ? Number(wizard.selectedPlaceableScale)
             : 1;
         const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+        const selectedAnchorX = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
+            ? Number(wizard.selectedPlaceableAnchorX)
+            : 0.5;
+        const selectedAnchorY = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorY))
+            ? Number(wizard.selectedPlaceableAnchorY)
+            : 1;
+        const placementRotation = (wizard && Number.isFinite(wizard.selectedPlaceableRotation))
+            ? Number(wizard.selectedPlaceableRotation)
+            : 0;
+        const rotationAxisRaw = wizard ? wizard.selectedPlaceableRotationAxis : null;
+        const rotationAxisNormalized = (typeof rotationAxisRaw === "string")
+            ? rotationAxisRaw.trim().toLowerCase()
+            : "";
+        const rotationAxis = (rotationAxisNormalized === "spatial" || rotationAxisNormalized === "visual" || rotationAxisNormalized === "none")
+            ? rotationAxisNormalized
+            : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
+        const effectivePlacementRotation = (rotationAxis === "none") ? 0 : placementRotation;
+        const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
+        const wallSnapPlacement = isWallMountedPlacement
+            ? (
+                (typeof SpellSystem !== "undefined" &&
+                    SpellSystem &&
+                    typeof SpellSystem.getPlaceObjectPlacementCandidate === "function")
+                    ? SpellSystem.getPlaceObjectPlacementCandidate(wizard, wrappedX, wrappedY)
+                    : null
+            )
+            : null;
+        const useWallSnapPlacement = !!(
+            isWallMountedPlacement &&
+            wallSnapPlacement &&
+            wallSnapPlacement.targetWall
+        );
         const rawYScale = Number(
             (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
                 ? globalThis.xyratio
                 : 0.66
         );
         const yScale = Math.max(0.1, Math.abs(rawYScale));
-        const placementYOffset = (clampedScale * 0.5) / yScale;
-        let placedY = wrappedY + placementYOffset;
+        const placementYOffset = (rotationAxis === "spatial")
+            ? 0
+            : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
+        const placedX = wrappedX;
+        let placedY = useWallSnapPlacement ? wrappedY : (wrappedY + placementYOffset);
         if (wizard.map && typeof wizard.map.wrapWorldY === "function") {
             placedY = wizard.map.wrapWorldY(placedY);
         }
@@ -824,12 +939,36 @@ class PlaceObject extends Spell {
             placedY = wrappedY;
         }
 
-        new PlacedObject({ x: wrappedX, y: placedY }, wizard.map, {
+        new PlacedObject({ x: placedX, y: placedY }, wizard.map, {
             texturePath: selectedTexturePath,
             category: selectedCategory,
             renderDepthOffset,
             width: clampedScale,
-            height: clampedScale
+            height: clampedScale,
+            placeableAnchorX: selectedAnchorX,
+            placeableAnchorY: selectedAnchorY,
+            rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
+            placementRotation: effectivePlacementRotation,
+            mountedWallLineGroupId: (
+                useWallSnapPlacement &&
+                Number.isInteger(wallSnapPlacement.mountedWallLineGroupId)
+            ) ? Number(wallSnapPlacement.mountedWallLineGroupId) : (
+                useWallSnapPlacement &&
+                wallSnapPlacement.targetWall &&
+                Number.isInteger(wallSnapPlacement.targetWall.lineGroupId)
+            ) ? Number(wallSnapPlacement.targetWall.lineGroupId) : null,
+            mountedSectionId: (
+                useWallSnapPlacement &&
+                Number.isInteger(wallSnapPlacement.mountedSectionId)
+            ) ? Number(wallSnapPlacement.mountedSectionId) : (
+                useWallSnapPlacement &&
+                Number.isInteger(wallSnapPlacement.mountedWallLineGroupId)
+            ) ? Number(wallSnapPlacement.mountedWallLineGroupId) : null,
+            mountedWallFacingSign: (
+                useWallSnapPlacement &&
+                Number.isFinite(wallSnapPlacement.mountedWallFacingSign)
+            ) ? Number(wallSnapPlacement.mountedWallFacingSign) : null,
+            groundPlaneHitboxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallGroundHitboxPoints : undefined
         });
 
         this.visible = false;
@@ -887,12 +1026,55 @@ class FirewallEmitter {
         } else {
             this.node = null;
         }
+        this._removedFromNodes = false;
+        if (typeof globalThis !== "undefined") {
+            const current = Number(globalThis.activeFirewallEmitterCount || 0);
+            globalThis.activeFirewallEmitterCount = current + 1;
+        }
     }
 
     removeFromNodes() {
+        if (this._removedFromNodes) return;
+        this._removedFromNodes = true;
         if (this.node && typeof this.node.removeObject === "function") {
             this.node.removeObject(this);
         }
+        if (typeof globalThis !== "undefined") {
+            const current = Number(globalThis.activeFirewallEmitterCount || 0);
+            globalThis.activeFirewallEmitterCount = Math.max(0, current - 1);
+        }
+    }
+
+    removeFromGame() {
+        if (this.gone) return;
+        this.gone = true;
+        this.vanishing = false;
+        if (this._vanishFinalizeTimeout) {
+            clearTimeout(this._vanishFinalizeTimeout);
+            this._vanishFinalizeTimeout = null;
+        }
+        this.removeFromNodes();
+        if (Array.isArray(this.map && this.map.objects)) {
+            const idx = this.map.objects.indexOf(this);
+            if (idx >= 0) this.map.objects.splice(idx, 1);
+        }
+        if (this.pixiSprite && this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        if (this.pixiSprite && typeof this.pixiSprite.destroy === "function") {
+            this.pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.pixiSprite = null;
+        if (this.fireSprite && this.fireSprite.parent) {
+            this.fireSprite.parent.removeChild(this.fireSprite);
+        }
+        if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
+            this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.fireSprite = null;
+    }
+    remove() {
+        this.removeFromGame();
     }
 
     saveJson() {
@@ -929,19 +1111,21 @@ class FirewallEmitter {
 const SpellSystem = (() => {
     const DEFAULT_FLOORING_TEXTURE = "/assets/images/flooring/dirt.jpg";
     const RANDOM_TREE_VARIANT = "random";
-    const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture"];
+    const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "signs"];
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
         doors: "/assets/images/doors/door5.png",
-        flowers: "/assets/images/flowers/red%20flower.jpg",
+        flowers: "/assets/images/flowers/red%20flower.png",
         windows: "/assets/images/windows/window.jpg",
-        furniture: "/assets/images/furniture/chair.png"
+        furniture: "/assets/images/furniture/chair.png",
+        signs: "/assets/images/signs/princess.png"
     };
     const AURA_MENU_ICON = "/assets/images/thumbnails/aura.png";
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
+        { name: "teleport", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
         { name: "placeobject", icon: "/assets/images/doors/door5.png" },
@@ -955,7 +1139,6 @@ const SpellSystem = (() => {
 
     const MAGIC_TICK_MS = 50;
     const HP_REGEN_PER_SECOND = 0.25;
-    const MAGIC_REGEN_PER_SECOND = 4;
     let healingAuraHpMultiplier = 5;
     const WALL_HEIGHT_MIN = 0.5;
     const WALL_HEIGHT_MAX = 7.0;
@@ -963,6 +1146,7 @@ const SpellSystem = (() => {
     const WALL_THICKNESS_MIN = 0.125;
     const WALL_THICKNESS_MAX = 1.0;
     const WALL_THICKNESS_STEP = 0.125;
+    const PLACEABLE_ROTATION_STEP_DEGREES = 5;
 
     let magicIntervalId = null;
     let lastMagicTickMs = 0;
@@ -972,6 +1156,253 @@ const SpellSystem = (() => {
     let placeableImagePathsByCategory = null;
     let placeableImageFetchPromise = null;
     let placeableMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
+    const textureAlphaMaskCache = new Map();
+
+    function getTextureAlphaMask(texture) {
+        if (!texture || !texture.baseTexture || !texture.frame) return null;
+        const baseTexture = texture.baseTexture;
+        const frame = texture.frame;
+        const key = [
+            baseTexture.uid,
+            Math.floor(frame.x),
+            Math.floor(frame.y),
+            Math.floor(frame.width),
+            Math.floor(frame.height)
+        ].join(":");
+        if (textureAlphaMaskCache.has(key)) {
+            return textureAlphaMaskCache.get(key);
+        }
+        try {
+            const source = baseTexture.resource && baseTexture.resource.source;
+            if (!source) {
+                textureAlphaMaskCache.set(key, null);
+                return null;
+            }
+            const w = Math.max(1, Math.floor(frame.width));
+            const h = Math.max(1, Math.floor(frame.height));
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            if (!ctx) {
+                textureAlphaMaskCache.set(key, null);
+                return null;
+            }
+            ctx.clearRect(0, 0, w, h);
+            ctx.drawImage(
+                source,
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height,
+                0,
+                0,
+                w,
+                h
+            );
+            const rgba = ctx.getImageData(0, 0, w, h).data;
+            const alpha = new Uint8Array(w * h);
+            for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
+                alpha[j] = rgba[i + 3];
+            }
+            const mask = { width: w, height: h, alpha };
+            textureAlphaMaskCache.set(key, mask);
+            return mask;
+        } catch (_err) {
+            textureAlphaMaskCache.set(key, null);
+            return null;
+        }
+    }
+
+    function isOpaqueSpritePixelAtScreenPoint(sprite, screenPoint, alphaThreshold = 10) {
+        if (!sprite || !sprite.texture || !screenPoint) return true;
+        if (!(sprite instanceof PIXI.Sprite)) return true;
+        try {
+            if (!sprite.worldTransform || typeof sprite.worldTransform.applyInverse !== "function") return true;
+            const local = new PIXI.Point();
+            sprite.worldTransform.applyInverse(new PIXI.Point(screenPoint.x, screenPoint.y), local);
+
+            const bounds = (typeof sprite.getLocalBounds === "function") ? sprite.getLocalBounds() : null;
+            if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 0 || bounds.height <= 0) {
+                return true;
+            }
+
+            const u = (local.x - bounds.x) / bounds.width;
+            const v = (local.y - bounds.y) / bounds.height;
+            if (!Number.isFinite(u) || !Number.isFinite(v)) return true;
+            if (u < 0 || u > 1 || v < 0 || v > 1) return false;
+
+            const mask = getTextureAlphaMask(sprite.texture);
+            if (!mask) return true;
+            const px = Math.max(0, Math.min(mask.width - 1, Math.floor(u * (mask.width - 1))));
+            const py = Math.max(0, Math.min(mask.height - 1, Math.floor(v * (mask.height - 1))));
+            const a = mask.alpha[py * mask.width + px];
+            return a >= alphaThreshold;
+        } catch (_err) {
+            // Never break targeting because alpha sampling failed.
+            return true;
+        }
+    }
+
+    function barycentricAtPoint(px, py, ax, ay, bx, by, cx, cy) {
+        const v0x = bx - ax;
+        const v0y = by - ay;
+        const v1x = cx - ax;
+        const v1y = cy - ay;
+        const v2x = px - ax;
+        const v2y = py - ay;
+        const denom = (v0x * v1y - v1x * v0y);
+        if (Math.abs(denom) < 1e-8) return null;
+        const invDenom = 1 / denom;
+        const v = (v2x * v1y - v1x * v2y) * invDenom;
+        const w = (v0x * v2y - v2x * v0y) * invDenom;
+        const u = 1 - v - w;
+        return { u, v, w };
+    }
+
+    function isOpaqueMeshPixelAtScreenPoint(mesh, screenPoint, alphaThreshold = 10) {
+        if (!mesh || !mesh.geometry || !screenPoint) return true;
+        try {
+            const safeGetBuffer = (geometry, attrName) => {
+                if (!geometry || typeof geometry.getBuffer !== "function") return null;
+                try {
+                    return geometry.getBuffer(attrName);
+                } catch (_err) {
+                    return null;
+                }
+            };
+            const texture = (mesh.material && mesh.material.texture)
+                ? mesh.material.texture
+                : ((mesh.shader && mesh.shader.uniforms && mesh.shader.uniforms.uSampler) ? mesh.shader.uniforms.uSampler : null);
+            if (!texture) return true;
+            const mask = getTextureAlphaMask(texture);
+            if (!mask) return true;
+
+            const vb = safeGetBuffer(mesh.geometry, "aVertexPosition");
+            const wb = safeGetBuffer(mesh.geometry, "aWorldPosition");
+            const ub = safeGetBuffer(mesh.geometry, "aUvs");
+            const ib = mesh.geometry.getIndex && mesh.geometry.getIndex();
+            const vertices = vb && vb.data ? vb.data : null;
+            const worldVertices = wb && wb.data ? wb.data : null;
+            const uvs = ub && ub.data ? ub.data : null;
+            const indices = ib && ib.data ? ib.data : null;
+            if ((!vertices && !worldVertices) || !uvs || !indices || indices.length < 3) return true;
+
+            const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+                ? interpolatedViewport
+                : viewport;
+            const projectWorldToScreen = (wx, wy, wz) => {
+                const dx = (map && typeof map.shortestDeltaX === "function")
+                    ? map.shortestDeltaX(camera.x, wx)
+                    : (wx - camera.x);
+                const dy = (map && typeof map.shortestDeltaY === "function")
+                    ? map.shortestDeltaY(camera.y, wy)
+                    : (wy - camera.y);
+                return {
+                    x: dx * viewscale,
+                    y: (dy - wz) * viewscale * xyratio
+                };
+            };
+
+            let uv = null;
+            for (let i = 0; i <= indices.length - 3; i += 3) {
+                const ia = indices[i];
+                const ibx = indices[i + 1];
+                const ic = indices[i + 2];
+
+                let ax, ay, bx, by, cx, cy;
+                if (worldVertices) {
+                    const a = projectWorldToScreen(
+                        worldVertices[ia * 3],
+                        worldVertices[ia * 3 + 1],
+                        worldVertices[ia * 3 + 2]
+                    );
+                    const b = projectWorldToScreen(
+                        worldVertices[ibx * 3],
+                        worldVertices[ibx * 3 + 1],
+                        worldVertices[ibx * 3 + 2]
+                    );
+                    const c = projectWorldToScreen(
+                        worldVertices[ic * 3],
+                        worldVertices[ic * 3 + 1],
+                        worldVertices[ic * 3 + 2]
+                    );
+                    ax = a.x; ay = a.y;
+                    bx = b.x; by = b.y;
+                    cx = c.x; cy = c.y;
+                } else {
+                    if (!mesh.worldTransform || typeof mesh.worldTransform.apply !== "function") return true;
+                    const a = mesh.worldTransform.apply(new PIXI.Point(vertices[ia * 2], vertices[ia * 2 + 1]));
+                    const b = mesh.worldTransform.apply(new PIXI.Point(vertices[ibx * 2], vertices[ibx * 2 + 1]));
+                    const c = mesh.worldTransform.apply(new PIXI.Point(vertices[ic * 2], vertices[ic * 2 + 1]));
+                    ax = a.x; ay = a.y;
+                    bx = b.x; by = b.y;
+                    cx = c.x; cy = c.y;
+                }
+                const bc = barycentricAtPoint(screenPoint.x, screenPoint.y, ax, ay, bx, by, cx, cy);
+                if (!bc) continue;
+                const epsilon = 1e-4;
+                if (bc.u < -epsilon || bc.v < -epsilon || bc.w < -epsilon) continue;
+
+                const au = uvs[ia * 2];
+                const av = uvs[ia * 2 + 1];
+                const bu = uvs[ibx * 2];
+                const bv = uvs[ibx * 2 + 1];
+                const cu = uvs[ic * 2];
+                const cv = uvs[ic * 2 + 1];
+                uv = {
+                    u: (au * bc.u) + (bu * bc.v) + (cu * bc.w),
+                    v: (av * bc.u) + (bv * bc.v) + (cv * bc.w)
+                };
+                break;
+            }
+
+            if (!uv) return false;
+            if (!Number.isFinite(uv.u) || !Number.isFinite(uv.v)) return true;
+
+            const baseTexture = texture.baseTexture || null;
+            const wrapMode = baseTexture ? baseTexture.wrapMode : null;
+            const repeatWrap = (
+                wrapMode === PIXI.WRAP_MODES.REPEAT ||
+                wrapMode === PIXI.WRAP_MODES.MIRRORED_REPEAT
+            );
+            let sampleU = uv.u;
+            let sampleV = uv.v;
+            if (repeatWrap) {
+                sampleU = sampleU - Math.floor(sampleU);
+                sampleV = sampleV - Math.floor(sampleV);
+            } else if (sampleU < 0 || sampleU > 1 || sampleV < 0 || sampleV > 1) {
+                return false;
+            }
+
+            const px = Math.max(0, Math.min(mask.width - 1, Math.floor(sampleU * (mask.width - 1))));
+            const py = Math.max(0, Math.min(mask.height - 1, Math.floor(sampleV * (mask.height - 1))));
+            const a = mask.alpha[py * mask.width + px];
+            return a >= alphaThreshold;
+        } catch (_err) {
+            return true;
+        }
+    }
+
+    function isOpaqueRenderablePixelAtScreenPoint(displayObj, screenPoint, alphaThreshold = 10) {
+        if (!displayObj) return true;
+        if (typeof PIXI !== "undefined" && displayObj instanceof PIXI.Sprite) {
+            return isOpaqueSpritePixelAtScreenPoint(displayObj, screenPoint, alphaThreshold);
+        }
+        if (typeof PIXI !== "undefined" && displayObj instanceof PIXI.Mesh) {
+            return isOpaqueMeshPixelAtScreenPoint(displayObj, screenPoint, alphaThreshold);
+        }
+        return true;
+    }
+
+    function getSpellTargetDisplayObject(item) {
+        if (!item) return null;
+        if (item._wallSectionCompositeDisplayObject && item._wallSectionCompositeDisplayObject.parent) return item._wallSectionCompositeDisplayObject;
+        if (item._opaqueDepthMesh && item._opaqueDepthMesh.parent) return item._opaqueDepthMesh;
+        if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
+        if (item._wallSectionCompositeSprite && item._wallSectionCompositeSprite.parent) return item._wallSectionCompositeSprite;
+        return null;
+    }
 
     function getSelectedFlooringTexture(wizardRef) {
         if (!wizardRef) return DEFAULT_FLOORING_TEXTURE;
@@ -1106,7 +1537,7 @@ const SpellSystem = (() => {
     function getTreeSpellIcon(wizardRef) {
         const selected = getSelectedTreeTextureVariant(wizardRef);
         if (Number.isInteger(selected)) {
-            return `/assets/images/tree${selected}.png`;
+            return `/assets/images/trees/tree${selected}.png`;
         }
         return "/assets/images/thumbnails/tree.png";
     }
@@ -1126,6 +1557,18 @@ const SpellSystem = (() => {
         if (!wizardRef.selectedPlaceableScaleByTexture || typeof wizardRef.selectedPlaceableScaleByTexture !== "object") {
             wizardRef.selectedPlaceableScaleByTexture = {};
         }
+        if (!wizardRef.selectedPlaceableRotationByTexture || typeof wizardRef.selectedPlaceableRotationByTexture !== "object") {
+            wizardRef.selectedPlaceableRotationByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableRotationAxisByTexture || typeof wizardRef.selectedPlaceableRotationAxisByTexture !== "object") {
+            wizardRef.selectedPlaceableRotationAxisByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableAnchorXByTexture || typeof wizardRef.selectedPlaceableAnchorXByTexture !== "object") {
+            wizardRef.selectedPlaceableAnchorXByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableAnchorYByTexture || typeof wizardRef.selectedPlaceableAnchorYByTexture !== "object") {
+            wizardRef.selectedPlaceableAnchorYByTexture = {};
+        }
         PLACEABLE_CATEGORIES.forEach(category => {
             const existing = wizardRef.selectedPlaceableByCategory[category];
             if (typeof existing !== "string" || existing.length === 0) {
@@ -1143,6 +1586,11 @@ const SpellSystem = (() => {
             ? selectedPath
             : DEFAULT_PLACEABLE_BY_CATEGORY[wizardRef.selectedPlaceableCategory];
         const activeTexturePath = wizardRef.selectedPlaceableTexturePath;
+        const selectedCategoryForActive = wizardRef.selectedPlaceableCategory;
+        const defaultAxis = (selectedCategoryForActive === "doors" || selectedCategoryForActive === "windows")
+            ? "spatial"
+            : "visual";
+        const defaultAnchorYForCategory = (selectedCategoryForActive === "windows") ? 0.5 : 1;
         if (typeof activeTexturePath === "string" && activeTexturePath.length > 0) {
             const oldGlobalOffset = Number.isFinite(wizardRef.selectedPlaceableRenderOffset)
                 ? Number(wizardRef.selectedPlaceableRenderOffset)
@@ -1150,6 +1598,18 @@ const SpellSystem = (() => {
             const oldGlobalScale = Number.isFinite(wizardRef.selectedPlaceableScale)
                 ? Number(wizardRef.selectedPlaceableScale)
                 : 1;
+            const oldGlobalRotation = Number.isFinite(wizardRef.selectedPlaceableRotation)
+                ? Number(wizardRef.selectedPlaceableRotation)
+                : 0;
+            const oldGlobalAxis = (typeof wizardRef.selectedPlaceableRotationAxis === "string")
+                ? wizardRef.selectedPlaceableRotationAxis
+                : defaultAxis;
+            const oldGlobalAnchorX = Number.isFinite(wizardRef.selectedPlaceableAnchorX)
+                ? Number(wizardRef.selectedPlaceableAnchorX)
+                : 0.5;
+            const oldGlobalAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
+                ? Number(wizardRef.selectedPlaceableAnchorY)
+                : defaultAnchorYForCategory;
 
             if (!Number.isFinite(wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath])) {
                 wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath] = oldGlobalOffset;
@@ -1157,15 +1617,84 @@ const SpellSystem = (() => {
             if (!Number.isFinite(wizardRef.selectedPlaceableScaleByTexture[activeTexturePath])) {
                 wizardRef.selectedPlaceableScaleByTexture[activeTexturePath] = oldGlobalScale;
             }
+            if (!Number.isFinite(wizardRef.selectedPlaceableRotationByTexture[activeTexturePath])) {
+                wizardRef.selectedPlaceableRotationByTexture[activeTexturePath] = oldGlobalRotation;
+            }
+            if (
+                typeof wizardRef.selectedPlaceableRotationAxisByTexture[activeTexturePath] !== "string" ||
+                wizardRef.selectedPlaceableRotationAxisByTexture[activeTexturePath].length === 0
+            ) {
+                wizardRef.selectedPlaceableRotationAxisByTexture[activeTexturePath] = oldGlobalAxis;
+            }
+            if (!Number.isFinite(wizardRef.selectedPlaceableAnchorXByTexture[activeTexturePath])) {
+                wizardRef.selectedPlaceableAnchorXByTexture[activeTexturePath] = oldGlobalAnchorX;
+            }
+            if (!Number.isFinite(wizardRef.selectedPlaceableAnchorYByTexture[activeTexturePath])) {
+                wizardRef.selectedPlaceableAnchorYByTexture[activeTexturePath] = oldGlobalAnchorY;
+            }
 
             const nextOffset = Number(wizardRef.selectedPlaceableRenderOffsetByTexture[activeTexturePath]);
             const nextScale = Number(wizardRef.selectedPlaceableScaleByTexture[activeTexturePath]);
+            const nextRotation = Number(wizardRef.selectedPlaceableRotationByTexture[activeTexturePath]);
+            const nextAxisRaw = wizardRef.selectedPlaceableRotationAxisByTexture[activeTexturePath];
+            const nextAnchorX = Number(wizardRef.selectedPlaceableAnchorXByTexture[activeTexturePath]);
+            const nextAnchorY = Number(wizardRef.selectedPlaceableAnchorYByTexture[activeTexturePath]);
             wizardRef.selectedPlaceableRenderOffset = Number.isFinite(nextOffset) ? nextOffset : 0;
             wizardRef.selectedPlaceableScale = Number.isFinite(nextScale) ? Math.max(0.2, Math.min(5, nextScale)) : 1;
+            wizardRef.selectedPlaceableRotation = Number.isFinite(nextRotation) ? nextRotation : 0;
+            wizardRef.selectedPlaceableRotationAxis = (nextAxisRaw === "spatial" || nextAxisRaw === "visual" || nextAxisRaw === "none")
+                ? nextAxisRaw
+                : defaultAxis;
+            wizardRef.selectedPlaceableAnchorX = Number.isFinite(nextAnchorX) ? nextAnchorX : 0.5;
+            wizardRef.selectedPlaceableAnchorY = Number.isFinite(nextAnchorY) ? nextAnchorY : defaultAnchorYForCategory;
         } else {
             wizardRef.selectedPlaceableRenderOffset = 0;
             wizardRef.selectedPlaceableScale = 1;
+            wizardRef.selectedPlaceableRotation = 0;
+            wizardRef.selectedPlaceableRotationAxis = defaultAxis;
+            wizardRef.selectedPlaceableAnchorX = 0.5;
+            wizardRef.selectedPlaceableAnchorY = defaultAnchorYForCategory;
         }
+    }
+
+    function normalizePlaceableRotationAxisForWizard(wizardRef, axis, category = null) {
+        const normalized = (typeof axis === "string") ? axis.trim().toLowerCase() : "";
+        if (normalized === "spatial" || normalized === "visual" || normalized === "none") return normalized;
+        const fallbackCategory = (typeof category === "string" && category.length > 0)
+            ? category
+            : (wizardRef && typeof wizardRef.selectedPlaceableCategory === "string" ? wizardRef.selectedPlaceableCategory : DEFAULT_PLACEABLE_CATEGORY);
+        return (fallbackCategory === "doors" || fallbackCategory === "windows") ? "spatial" : "visual";
+    }
+
+    async function refreshSelectedPlaceableMetadata(wizardRef) {
+        if (!wizardRef) return null;
+        normalizePlaceableSelections(wizardRef);
+        const category = getSelectedPlaceableCategory(wizardRef);
+        const texturePath = getSelectedPlaceableTexture(wizardRef);
+        if (!(typeof globalThis !== "undefined" && typeof globalThis.getResolvedPlaceableMetadata === "function")) {
+            const fallbackAxis = normalizePlaceableRotationAxisForWizard(wizardRef, null, category);
+            const fallbackAnchorY = category === "windows" ? 0.5 : 1;
+            wizardRef.selectedPlaceableRotationAxisByTexture[texturePath] = fallbackAxis;
+            wizardRef.selectedPlaceableRotationAxis = fallbackAxis;
+            wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = 0.5;
+            wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = fallbackAnchorY;
+            wizardRef.selectedPlaceableAnchorX = 0.5;
+            wizardRef.selectedPlaceableAnchorY = fallbackAnchorY;
+            return null;
+        }
+        const meta = await globalThis.getResolvedPlaceableMetadata(category, texturePath);
+        const axis = normalizePlaceableRotationAxisForWizard(wizardRef, meta && meta.rotationAxis, category);
+        const anchorX = Number.isFinite(meta && meta.anchor && meta.anchor.x) ? Number(meta.anchor.x) : 0.5;
+        const anchorY = Number.isFinite(meta && meta.anchor && meta.anchor.y) ? Number(meta.anchor.y) : (category === "windows" ? 0.5 : 1);
+        wizardRef.selectedPlaceableRotationAxisByTexture[texturePath] = axis;
+        wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = anchorX;
+        wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = anchorY;
+        if (wizardRef.selectedPlaceableTexturePath === texturePath) {
+            wizardRef.selectedPlaceableRotationAxis = axis;
+            wizardRef.selectedPlaceableAnchorX = anchorX;
+            wizardRef.selectedPlaceableAnchorY = anchorY;
+        }
+        return meta;
     }
 
     function adjustPlaceableRenderOffset(wizardRef, delta) {
@@ -1204,6 +1733,38 @@ const SpellSystem = (() => {
         }
         wizardRef.selectedPlaceableScaleByTexture[texturePath] = next;
         return next;
+    }
+
+    function adjustPlaceableRotation(wizardRef, deltaDegrees) {
+        if (!wizardRef || !Number.isFinite(deltaDegrees) || deltaDegrees === 0) return null;
+        normalizePlaceableSelections(wizardRef);
+        const axisRaw = (typeof wizardRef.selectedPlaceableRotationAxis === "string")
+            ? wizardRef.selectedPlaceableRotationAxis.trim().toLowerCase()
+            : "";
+        const texturePath = (typeof wizardRef.selectedPlaceableTexturePath === "string" && wizardRef.selectedPlaceableTexturePath.length > 0)
+            ? wizardRef.selectedPlaceableTexturePath
+            : DEFAULT_PLACEABLE_BY_CATEGORY[DEFAULT_PLACEABLE_CATEGORY];
+        if (axisRaw === "none") {
+            wizardRef.selectedPlaceableRotation = 0;
+            if (!wizardRef.selectedPlaceableRotationByTexture || typeof wizardRef.selectedPlaceableRotationByTexture !== "object") {
+                wizardRef.selectedPlaceableRotationByTexture = {};
+            }
+            wizardRef.selectedPlaceableRotationByTexture[texturePath] = 0;
+            return 0;
+        }
+        const current = Number.isFinite(wizardRef.selectedPlaceableRotation)
+            ? Number(wizardRef.selectedPlaceableRotation)
+            : 0;
+        let next = current + Number(deltaDegrees);
+        next = ((next % 360) + 360) % 360;
+        if (next > 180) next -= 360;
+        const snapped = Math.round(next / PLACEABLE_ROTATION_STEP_DEGREES) * PLACEABLE_ROTATION_STEP_DEGREES;
+        wizardRef.selectedPlaceableRotation = snapped;
+        if (!wizardRef.selectedPlaceableRotationByTexture || typeof wizardRef.selectedPlaceableRotationByTexture !== "object") {
+            wizardRef.selectedPlaceableRotationByTexture = {};
+        }
+        wizardRef.selectedPlaceableRotationByTexture[texturePath] = snapped;
+        return snapped;
     }
 
     function getPlaceableImageList(category) {
@@ -1385,8 +1946,11 @@ const SpellSystem = (() => {
         }
         const auraDrainPerSecond = getActiveAuraMagicDrainPerSecond(wizardRef);
         const auraActive = auraDrainPerSecond > 0;
+        const magicRegenPerSecond = Number.isFinite(wizardRef.magicRegenPerSecond)
+            ? Math.max(0, wizardRef.magicRegenPerSecond)
+            : 0;
         if (wizardRef.magic < wizardRef.maxMagic) {
-            wizardRef.magic = Math.min(wizardRef.maxMagic, wizardRef.magic + MAGIC_REGEN_PER_SECOND * dtSec);
+            wizardRef.magic = Math.min(wizardRef.maxMagic, wizardRef.magic + magicRegenPerSecond * dtSec);
         }
         if (auraActive) {
             const auraCost = auraDrainPerSecond * dtSec;
@@ -1505,6 +2069,8 @@ const SpellSystem = (() => {
         if (spellName === "wall") {
             wizardRef.wallLayoutMode = false;
             wizardRef.wallStartPoint = null;
+            wizardRef.wallStartReferenceWall = null;
+            wizardRef.wallDragMouseStartWorld = null;
             clearDragPreview(wizardRef, "wall");
             return;
         }
@@ -1526,6 +2092,93 @@ const SpellSystem = (() => {
         if (spellName === "buildroad") return "road";
         if (spellName === "firewall") return "firewall";
         return null;
+    }
+
+    function wrapWorldPointForMap(mapRef, x, y) {
+        let outX = Number(x);
+        let outY = Number(y);
+        if (mapRef && typeof mapRef.wrapWorldX === "function") outX = mapRef.wrapWorldX(outX);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") outY = mapRef.wrapWorldY(outY);
+        return { x: outX, y: outY };
+    }
+
+    function projectWallDragPointFromMouseDelta(wizardRef, wrappedCurrentPoint) {
+        if (!wizardRef || !wrappedCurrentPoint) return null;
+        const mapRef = wizardRef.map || null;
+        const startAnchor = wizardRef.wallStartPoint;
+        const dragMouseStart = wizardRef.wallDragMouseStartWorld;
+        if (
+            !startAnchor ||
+            !dragMouseStart ||
+            !Number.isFinite(dragMouseStart.x) ||
+            !Number.isFinite(dragMouseStart.y)
+        ) {
+            return wrappedCurrentPoint;
+        }
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(dragMouseStart.x, wrappedCurrentPoint.x)
+            : (wrappedCurrentPoint.x - dragMouseStart.x);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(dragMouseStart.y, wrappedCurrentPoint.y)
+            : (wrappedCurrentPoint.y - dragMouseStart.y);
+        return wrapWorldPointForMap(
+            mapRef,
+            Number(startAnchor.x) + dx,
+            Number(startAnchor.y) + dy
+        );
+    }
+
+    function snapProjectedWallDragPoint(wizardRef, projectedPoint) {
+        if (!wizardRef || !projectedPoint) return null;
+        const mapRef = wizardRef.map || null;
+        const snapTarget = getDragStartSnapTargetAt(wizardRef, "wall", projectedPoint.x, projectedPoint.y);
+        if (snapTarget && snapTarget.point) {
+            return { x: Number(snapTarget.point.x), y: Number(snapTarget.point.y) };
+        }
+        if (!mapRef) return projectedPoint;
+        const fallbackAnchor = (typeof mapRef.worldToNodeOrMidpoint === "function")
+            ? mapRef.worldToNodeOrMidpoint(projectedPoint.x, projectedPoint.y)
+            : (typeof mapRef.worldToNode === "function" ? mapRef.worldToNode(projectedPoint.x, projectedPoint.y) : null);
+        if (fallbackAnchor && Number.isFinite(fallbackAnchor.x) && Number.isFinite(fallbackAnchor.y)) {
+            return { x: Number(fallbackAnchor.x), y: Number(fallbackAnchor.y) };
+        }
+        return projectedPoint;
+    }
+
+    function getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const mapRef = wizardRef.map || null;
+        const wrappedCurrentPoint = wrapWorldPointForMap(mapRef, worldX, worldY);
+        if (
+            wizardRef.wallLayoutMode &&
+            wizardRef.currentSpell === "wall"
+        ) {
+            const projectedPoint = projectWallDragPointFromMouseDelta(wizardRef, wrappedCurrentPoint);
+            return snapProjectedWallDragPoint(wizardRef, projectedPoint);
+        }
+        return wrappedCurrentPoint;
+    }
+
+    function pointsMatchWorld(mapRef, a, b, epsilon = 1e-6) {
+        if (!a || !b) return false;
+        const ax = Number(a.x);
+        const ay = Number(a.y);
+        const bx = Number(b.x);
+        const by = Number(b.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(ax, bx)
+            : (bx - ax);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(ay, by)
+            : (by - ay);
+        return Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon;
+    }
+
+    function buildWallPathFromEndpoints(wizardRef, startPoint, endPoint) {
+        if (!wizardRef || !wizardRef.map || !startPoint || !endPoint) return [];
+        if (!(typeof Wall !== "undefined") || !Wall || typeof Wall.buildPlacementPath !== "function") return [];
+        return Wall.buildPlacementPath(wizardRef.map, startPoint, endPoint, { maxAnchorDistance: 1.0001 });
     }
 
     function getSpellTargetHistorySet(wizardRef, spellName) {
@@ -1555,6 +2208,53 @@ const SpellSystem = (() => {
         }
     }
 
+    function getRenderPriority(item) {
+        if (!item) {
+            return { band: 1, depth: 0, y: 0, x: 0 };
+        }
+        const band = (item.type === "road") ? 0 : 1;
+        let depth = 0;
+        if (Number.isFinite(item.renderZ)) {
+            depth = Number(item.renderZ);
+        } else if (item.type === "road") {
+            depth = 0;
+        } else {
+            const baseDepth = Number.isFinite(item.y) ? item.y : 0;
+            const depthOffset = Number.isFinite(item.renderDepthOffset) ? item.renderDepthOffset : 0;
+            depth = baseDepth + depthOffset;
+        }
+        const y = Number.isFinite(item.y) ? item.y : 0;
+        const x = Number.isFinite(item.x) ? item.x : 0;
+        return { band, depth, y, x };
+    }
+
+    function getDisplayPriority(item) {
+        const displayObj = getSpellTargetDisplayObject(item);
+        if (!displayObj || !displayObj.parent) return null;
+        try {
+            const parent = displayObj.parent;
+            const index = parent.getChildIndex(displayObj);
+            if (!Number.isFinite(index)) return null;
+            return { parent, index };
+        } catch (_err) {
+            return null;
+        }
+    }
+
+    function compareTargetPriorityTopFirst(a, b) {
+        const da = getDisplayPriority(a);
+        const db = getDisplayPriority(b);
+        if (da && db && da.parent === db.parent && da.index !== db.index) {
+            return db.index - da.index;
+        }
+        const pa = getRenderPriority(a);
+        const pb = getRenderPriority(b);
+        if (pa.band !== pb.band) return pb.band - pa.band;
+        if (pa.depth !== pb.depth) return pb.depth - pa.depth;
+        if (pa.y !== pb.y) return pb.y - pa.y;
+        return pb.x - pa.x;
+    }
+
     function getSameTypeObjectTargetAt(wizardRef, spellName, worldX, worldY) {
         const objectType = getDragSpellObjectType(spellName);
         if (!wizardRef || !objectType || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
@@ -1564,12 +2264,19 @@ const SpellSystem = (() => {
                 obj &&
                 !obj.gone &&
                 obj.type === objectType &&
-                obj.pixiSprite &&
                 !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
             )
-            .sort((a, b) => worldToScreen(b).y - worldToScreen(a).y);
+            .sort(compareTargetPriorityTopFirst);
         for (const obj of targetCandidates) {
-            if (obj.pixiSprite.containsPoint(clickScreen)) return obj;
+            const displayObj = getSpellTargetDisplayObject(obj);
+            const isMeshTarget = (typeof PIXI !== "undefined") && (displayObj instanceof PIXI.Mesh);
+            if (!displayObj || !displayObj.parent) continue;
+            if (!isMeshTarget) {
+                if (typeof displayObj.containsPoint !== "function") continue;
+                if (!displayObj.containsPoint(clickScreen)) continue;
+            }
+            if (!isOpaqueRenderablePixelAtScreenPoint(displayObj, clickScreen)) continue;
+            return obj;
         }
         return null;
     }
@@ -1583,8 +2290,67 @@ const SpellSystem = (() => {
             Number.isFinite(obj.b.x) && Number.isFinite(obj.b.y) &&
             Number.isFinite(worldX) && Number.isFinite(worldY)
         ) {
-            const da = Math.hypot(worldX - obj.a.x, worldY - obj.a.y);
-            const db = Math.hypot(worldX - obj.b.x, worldY - obj.b.y);
+            const endpointConnected = endpointKey => {
+                if (typeof obj.hasConnectedWallAtEndpoint === "function") {
+                    try {
+                        return !!obj.hasConnectedWallAtEndpoint(endpointKey);
+                    } catch (_) {
+                        // Fall through to proximity fallback.
+                    }
+                }
+                return false;
+            };
+            const aConnected = endpointConnected("a");
+            const bConnected = endpointConnected("b");
+            // Prefer extending from the free end when only one side is connected.
+            if (aConnected !== bConnected) {
+                return aConnected
+                    ? { x: obj.b.x, y: obj.b.y }
+                    : { x: obj.a.x, y: obj.a.y };
+            }
+
+            const clickScreen = (typeof worldToScreen === "function")
+                ? worldToScreen({ x: worldX, y: worldY })
+                : null;
+            const endpointAScreen = (typeof worldToScreen === "function")
+                ? worldToScreen({ x: obj.a.x, y: obj.a.y })
+                : null;
+            const endpointBScreen = (typeof worldToScreen === "function")
+                ? worldToScreen({ x: obj.b.x, y: obj.b.y })
+                : null;
+            const hasScreenDistances = !!(
+                clickScreen &&
+                endpointAScreen &&
+                endpointBScreen &&
+                Number.isFinite(clickScreen.x) &&
+                Number.isFinite(clickScreen.y) &&
+                Number.isFinite(endpointAScreen.x) &&
+                Number.isFinite(endpointAScreen.y) &&
+                Number.isFinite(endpointBScreen.x) &&
+                Number.isFinite(endpointBScreen.y)
+            );
+
+            let da = Infinity;
+            let db = Infinity;
+            if (hasScreenDistances) {
+                da = Math.hypot(clickScreen.x - endpointAScreen.x, clickScreen.y - endpointAScreen.y);
+                db = Math.hypot(clickScreen.x - endpointBScreen.x, clickScreen.y - endpointBScreen.y);
+            } else {
+                const dxA = (map && typeof map.shortestDeltaX === "function")
+                    ? map.shortestDeltaX(worldX, obj.a.x)
+                    : (obj.a.x - worldX);
+                const dyA = (map && typeof map.shortestDeltaY === "function")
+                    ? map.shortestDeltaY(worldY, obj.a.y)
+                    : (obj.a.y - worldY);
+                const dxB = (map && typeof map.shortestDeltaX === "function")
+                    ? map.shortestDeltaX(worldX, obj.b.x)
+                    : (obj.b.x - worldX);
+                const dyB = (map && typeof map.shortestDeltaY === "function")
+                    ? map.shortestDeltaY(worldY, obj.b.y)
+                    : (obj.b.y - worldY);
+                da = Math.hypot(dxA, dyA);
+                db = Math.hypot(dxB, dyB);
+            }
             return da <= db
                 ? { x: obj.a.x, y: obj.a.y }
                 : { x: obj.b.x, y: obj.b.y };
@@ -1600,7 +2366,15 @@ const SpellSystem = (() => {
         if (!obj) return null;
         const anchor = getGroundAnchorPointForObject(obj, worldX, worldY);
         if (!anchor) return null;
-        if (spellName === "wall" || spellName === "buildroad") {
+        if (spellName === "wall") {
+            const node = wizardRef.map.worldToNode(anchor.x, anchor.y);
+            return {
+                obj,
+                node,
+                point: { x: anchor.x, y: anchor.y }
+            };
+        }
+        if (spellName === "buildroad") {
             const node = wizardRef.map.worldToNode(anchor.x, anchor.y);
             if (node) return { obj, node, point: { x: node.x, y: node.y } };
         } else {
@@ -1615,10 +2389,136 @@ const SpellSystem = (() => {
         if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
             return getSameTypeObjectTargetAt(wizardRef, spell, worldX, worldY);
         }
+        if (spell === "placeobject") {
+            const category = (typeof wizardRef.selectedPlaceableCategory === "string")
+                ? wizardRef.selectedPlaceableCategory.trim().toLowerCase()
+                : "";
+            if (category === "windows" || category === "doors") {
+                const placement = getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY);
+                return placement && placement.targetWall ? placement.targetWall : null;
+            }
+        }
         if (spell === "vanish") {
             return getObjectTargetAt(wizardRef, worldX, worldY);
         }
         return null;
+    }
+
+    function isPointInsideProjectedWallVolume(wall, screenPoint) {
+        if (!wall || wall.type !== "wall" || !wall.a || !wall.b || !screenPoint) return false;
+        const ax = Number(wall.a.x);
+        const ay = Number(wall.a.y);
+        const bx = Number(wall.b.x);
+        const by = Number(wall.b.y);
+        const wallHeight = Math.max(0.001, Number(wall.height) || 0.001);
+        const wallThickness = Math.max(0.001, Number(wall.thickness) || 0.001);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-6) return false;
+
+        const halfT = wallThickness * 0.5;
+        const nx = -dy / len;
+        const ny = dx / len;
+
+        let aLeft = { x: ax + nx * halfT, y: ay + ny * halfT };
+        let aRight = { x: ax - nx * halfT, y: ay - ny * halfT };
+        let bLeft = { x: bx + nx * halfT, y: by + ny * halfT };
+        let bRight = { x: bx - nx * halfT, y: by - ny * halfT };
+        if (typeof wall.getWallProfile === "function") {
+            const profile = wall.getWallProfile();
+            if (profile) {
+                if (profile.aLeft) aLeft = profile.aLeft;
+                if (profile.aRight) aRight = profile.aRight;
+                if (profile.bLeft) bLeft = profile.bLeft;
+                if (profile.bRight) bRight = profile.bRight;
+            }
+        }
+
+        const toScreen = (pt, z = 0) => {
+            const s = worldToScreen(pt);
+            return { x: s.x, y: s.y - z * viewscale * xyratio };
+        };
+
+        const gAL = toScreen(aLeft, 0);
+        const gAR = toScreen(aRight, 0);
+        const gBL = toScreen(bLeft, 0);
+        const gBR = toScreen(bRight, 0);
+        const tAL = toScreen(aLeft, wallHeight);
+        const tAR = toScreen(aRight, wallHeight);
+        const tBL = toScreen(bLeft, wallHeight);
+        const tBR = toScreen(bRight, wallHeight);
+
+        const pointInTri = (p, a, b, c) => {
+            const bc = barycentricAtPoint(p.x, p.y, a.x, a.y, b.x, b.y, c.x, c.y);
+            if (!bc) return false;
+            const eps = 1e-4;
+            return bc.u >= -eps && bc.v >= -eps && bc.w >= -eps;
+        };
+        const pointInQuad = (p, q0, q1, q2, q3) =>
+            pointInTri(p, q0, q1, q2) || pointInTri(p, q0, q2, q3);
+
+        return (
+            pointInQuad(screenPoint, gAL, gBL, tBL, tAL) ||
+            pointInQuad(screenPoint, gAR, gBR, tBR, tAR) ||
+            pointInQuad(screenPoint, gAR, gAL, tAL, tAR) ||
+            pointInQuad(screenPoint, gBL, gBR, tBR, tBL) ||
+            pointInQuad(screenPoint, tAL, tBL, tBR, tAR)
+        );
+    }
+
+    function getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY) {
+        if (!wizardRef || !wizardRef.map || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const category = (typeof wizardRef.selectedPlaceableCategory === "string")
+            ? wizardRef.selectedPlaceableCategory.trim().toLowerCase()
+            : "";
+        if (category !== "windows" && category !== "doors") return null;
+
+        const placeableScale = Number.isFinite(wizardRef.selectedPlaceableScale)
+            ? Number(wizardRef.selectedPlaceableScale)
+            : 1;
+        const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+        const selectedAnchorX = Number.isFinite(wizardRef.selectedPlaceableAnchorX)
+            ? Number(wizardRef.selectedPlaceableAnchorX)
+            : 0.5;
+        const selectedAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
+            ? Number(wizardRef.selectedPlaceableAnchorY)
+            : 1;
+        const rawYScale = Number(
+            (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
+                ? globalThis.xyratio
+                : 0.66
+        );
+        const yScale = Math.max(0.1, Math.abs(rawYScale));
+        const windowWorldWidth = clampedScale;
+        // Height fit is in world units; object height is clampedScale (not screen-scaled).
+        const windowWorldHeight = clampedScale;
+        const mouseScreen = (
+            typeof mousePos !== "undefined" &&
+            mousePos &&
+            Number.isFinite(mousePos.screenX) &&
+            Number.isFinite(mousePos.screenY)
+        ) ? { x: mousePos.screenX, y: mousePos.screenY } : worldToScreen({ x: worldX, y: worldY });
+        const wallSectionsApi = (typeof globalThis !== "undefined" && globalThis.WallSectionsRenderer)
+            ? globalThis.WallSectionsRenderer
+            : null;
+        if (!wallSectionsApi || typeof wallSectionsApi.getWallMountedPlacementCandidate !== "function") return null;
+        return wallSectionsApi.getWallMountedPlacementCandidate({
+            map: wizardRef.map,
+            category,
+            worldX,
+            worldY,
+            worldToScreen,
+            mouseScreen,
+            objectWorldWidth: windowWorldWidth,
+            objectWorldHeight: windowWorldHeight,
+            anchorX: selectedAnchorX,
+            anchorY: selectedAnchorY,
+            viewscale,
+            xyratio,
+            maxSnapDistPx: 40
+        });
     }
 
     function beginDragSpell(wizardRef, spellName, worldX, worldY) {
@@ -1628,12 +2528,22 @@ const SpellSystem = (() => {
 
         if (spellName === "wall") {
             if (!keysPressed[" "]) return false;
-            const wallNode = (snapTarget && snapTarget.node)
-                ? snapTarget.node
-                : wizardRef.map.worldToNode(worldX, worldY);
-            if (!wallNode) return false;
+            const startPoint = (snapTarget && snapTarget.point)
+                ? { x: snapTarget.point.x, y: snapTarget.point.y }
+                : (() => {
+                    const fallbackNode = wizardRef.map.worldToNode(worldX, worldY);
+                    return fallbackNode ? { x: fallbackNode.x, y: fallbackNode.y } : null;
+                })();
+            if (!startPoint) return false;
             wizardRef.wallLayoutMode = true;
-            wizardRef.wallStartPoint = wallNode;
+            wizardRef.wallStartPoint = startPoint;
+            wizardRef.wallStartReferenceWall = (snapTarget && snapTarget.obj && snapTarget.obj.type === "wall")
+                ? snapTarget.obj
+                : null;
+            wizardRef.wallDragMouseStartWorld = {
+                x: (wizardRef.map && typeof wizardRef.map.wrapWorldX === "function") ? wizardRef.map.wrapWorldX(worldX) : worldX,
+                y: (wizardRef.map && typeof wizardRef.map.wrapWorldY === "function") ? wizardRef.map.wrapWorldY(worldY) : worldY
+            };
             ensureDragPreview(wizardRef, "wall");
             return true;
         }
@@ -1670,7 +2580,9 @@ const SpellSystem = (() => {
             return false;
         }
         if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint && wizardRef.phantomWall) {
-            updatePhantomWall(wizardRef.wallStartPoint.x, wizardRef.wallStartPoint.y, worldX, worldY);
+            const adjustedPoint = getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY);
+            if (!adjustedPoint) return false;
+            updatePhantomWall(wizardRef.wallStartPoint.x, wizardRef.wallStartPoint.y, adjustedPoint.x, adjustedPoint.y);
             return true;
         }
         if (wizardRef.currentSpell === "buildroad" && wizardRef.roadLayoutMode && wizardRef.roadStartPoint && wizardRef.phantomRoad) {
@@ -1689,23 +2601,31 @@ const SpellSystem = (() => {
 
         if (spellName === "wall") {
             if (!isDragSpellActive(wizardRef, "wall")) return false;
-            const wallNode = wizardRef.map.worldToNode(worldX, worldY);
-            if (!wallNode) {
+            const adjustedPoint = getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY);
+            if (!adjustedPoint) {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
-            const nodeA = wizardRef.wallStartPoint;
-            const nodeB = wallNode;
-            if (nodeA === nodeB) {
+            const endSnapTarget = getDragStartSnapTargetAt(wizardRef, "wall", adjustedPoint.x, adjustedPoint.y);
+            const endPoint = (endSnapTarget && endSnapTarget.point)
+                ? { x: endSnapTarget.point.x, y: endSnapTarget.point.y }
+                : adjustedPoint;
+            const startPoint = wizardRef.wallStartPoint;
+            if (pointsMatchWorld(wizardRef.map, startPoint, endPoint)) {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
-            const wallPath = wizardRef.map.getHexLine(nodeA, nodeB);
+            const wallPath = buildWallPathFromEndpoints(wizardRef, startPoint, endPoint);
+            if (!Array.isArray(wallPath) || wallPath.length < 2) {
+                cancelDragSpell(wizardRef, "wall");
+                return true;
+            }
             Wall.createWallLine(
                 wallPath,
                 getSelectedWallHeight(wizardRef),
                 getSelectedWallThickness(wizardRef),
-                wizardRef.map
+                wizardRef.map,
+                { startReferenceWall: wizardRef.wallStartReferenceWall || null }
             );
             cancelDragSpell(wizardRef, "wall");
             cooldown(wizardRef, wizardRef.cooldownTime);
@@ -1761,14 +2681,20 @@ const SpellSystem = (() => {
         return false;
     }
 
-    function getNearbyObjects(mapRef, hitbox) {
+    const CHARACTER_COLLISION_ANIMAL_STEP_INTERVAL = 2;
+    let collisionQueryStamp = 1;
+    const collisionNearbyObjectsScratch = [];
+    const collisionTargetsScratch = [];
+
+    function getNearbyObjects(mapRef, hitbox, outArray = null, options = {}) {
         if (!mapRef || !hitbox || typeof hitbox.getBounds !== "function") return [];
         const bounds = hitbox.getBounds();
         if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
             return [];
         }
 
-        const margin = 1.0;
+        const margin = Number.isFinite(options.margin) ? Number(options.margin) : 1.0;
+        const requireCollisionHandler = !!options.requireCollisionHandler;
         const minNode = mapRef.worldToNode(bounds.x - margin, bounds.y - margin);
         const maxNode = mapRef.worldToNode(bounds.x + bounds.width + margin, bounds.y + bounds.height + margin);
         if (!minNode || !maxNode) return [];
@@ -1801,8 +2727,14 @@ const SpellSystem = (() => {
         const xRanges = toWrappedRanges(minNode.xindex, maxNode.xindex, mapRef.width, !!mapRef.wrapX);
         const yRanges = toWrappedRanges(minNode.yindex, maxNode.yindex, mapRef.height, !!mapRef.wrapY);
         if (xRanges.length === 0 || yRanges.length === 0) return [];
-        const nearbyObjects = [];
-        const seen = new Set();
+        const nearbyObjects = Array.isArray(outArray) ? outArray : [];
+        nearbyObjects.length = 0;
+
+        collisionQueryStamp += 1;
+        if (!Number.isFinite(collisionQueryStamp) || collisionQueryStamp > 2147483000) {
+            collisionQueryStamp = 1;
+        }
+        const queryStamp = collisionQueryStamp;
 
         for (const xRange of xRanges) {
             for (let x = xRange.start; x <= xRange.end; x++) {
@@ -1812,8 +2744,9 @@ const SpellSystem = (() => {
                         if (!node || !Array.isArray(node.objects) || node.objects.length === 0) continue;
                         for (const obj of node.objects) {
                             if (!obj || obj.gone) continue;
-                            if (seen.has(obj)) continue;
-                            seen.add(obj);
+                            if (requireCollisionHandler && typeof obj.handleCharacterCollision !== "function") continue;
+                            if (obj._collisionQueryStamp === queryStamp) continue;
+                            obj._collisionQueryStamp = queryStamp;
                             nearbyObjects.push(obj);
                         }
                     }
@@ -1826,11 +2759,26 @@ const SpellSystem = (() => {
 
     function updateCharacterObjectCollisions(wizardRef) {
         if (!wizardRef || !wizardRef.map) return;
-        const targets = [];
+        const activeFirewalls = Number(
+            (typeof globalThis !== "undefined" && globalThis.activeFirewallEmitterCount)
+                ? globalThis.activeFirewallEmitterCount
+                : 0
+        );
+        if (activeFirewalls <= 0) return;
+        const targets = collisionTargetsScratch;
+        targets.length = 0;
         if (!wizardRef.gone && !wizardRef.dead) targets.push(wizardRef);
         if (Array.isArray(animals)) {
-            for (const animal of animals) {
+            for (let animalIdx = 0; animalIdx < animals.length; animalIdx++) {
+                const animal = animals[animalIdx];
                 if (!animal || animal.gone || animal.dead) continue;
+                if (
+                    Number.isFinite(frameCount) &&
+                    CHARACTER_COLLISION_ANIMAL_STEP_INTERVAL > 1 &&
+                    ((frameCount + animalIdx) % CHARACTER_COLLISION_ANIMAL_STEP_INTERVAL) !== 0
+                ) {
+                    continue;
+                }
                 targets.push(animal);
             }
         }
@@ -1838,9 +2786,14 @@ const SpellSystem = (() => {
         for (const target of targets) {
             const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
             if (!targetHitbox) continue;
-            const nearbyObjects = getNearbyObjects(wizardRef.map, targetHitbox);
+            const nearbyObjects = getNearbyObjects(
+                wizardRef.map,
+                targetHitbox,
+                collisionNearbyObjectsScratch,
+                { margin: 0.35, requireCollisionHandler: true }
+            );
             for (const obj of nearbyObjects) {
-                if (!obj || typeof obj.handleCharacterCollision !== "function") continue;
+                if (!obj) continue;
                 obj.handleCharacterCollision(target);
             }
         }
@@ -1857,13 +2810,31 @@ const SpellSystem = (() => {
                 !obj.vanishing &&
                 !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
             )
-            .sort((a, b) => worldToScreen(b).y - worldToScreen(a).y);
+            .sort(compareTargetPriorityTopFirst);
 
         for (const obj of targetCandidates) {
-            if (obj.pixiSprite && obj.pixiSprite.containsPoint(clickScreen)) {
-                clickTarget = obj;
-                break;
+            const displayObj = getSpellTargetDisplayObject(obj);
+            const isMeshTarget = (typeof PIXI !== "undefined") && (displayObj instanceof PIXI.Mesh);
+            if (!displayObj || !displayObj.parent) continue;
+            if (!isMeshTarget) {
+                if (typeof displayObj.containsPoint !== "function") continue;
+                if (!displayObj.containsPoint(clickScreen)) continue;
             }
+            if (!isOpaqueRenderablePixelAtScreenPoint(displayObj, clickScreen)) {
+                // Fallback for tree depth meshes: accept world-hitbox match when
+                // per-pixel mesh alpha sampling fails due dynamic mesh path.
+                const treeHitbox = obj && obj.type === "tree"
+                    ? (obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox)
+                    : null;
+                const treeHit = !!(
+                    treeHitbox &&
+                    typeof treeHitbox.containsPoint === "function" &&
+                    treeHitbox.containsPoint(worldX, worldY)
+                );
+                if (!treeHit) continue;
+            }
+            clickTarget = obj;
+            break;
         }
 
         if (wizardRef.currentSpell === "vanish") {
@@ -1877,7 +2848,9 @@ const SpellSystem = (() => {
                     !hasSpellAlreadyTargetedObject(wizardRef, wizardRef.currentSpell, obj)
                 );
                 if (roadTarget) {
-                    clickTarget = roadTarget;
+                    if (!clickTarget || compareTargetPriorityTopFirst(roadTarget, clickTarget) < 0) {
+                        clickTarget = roadTarget;
+                    }
                 }
             }
         }
@@ -1912,6 +2885,19 @@ const SpellSystem = (() => {
             } else {
                 beginDragSpell(wizardRef, "firewall", worldX, worldY);
             }
+            return;
+        }
+
+        if (wizardRef.currentSpell === "teleport") {
+            const projectile = new Teleport();
+            const delayTime = projectile.delayTime || wizardRef.cooldownTime;
+            wizardRef.castDelay = true;
+            projectiles.push(projectile.cast(worldX, worldY));
+            wizardRef.casting = true;
+            setTimeout(() => {
+                wizardRef.castDelay = false;
+                wizardRef.casting = false;
+            }, 1000 * delayTime);
             return;
         }
 
@@ -2165,7 +3151,7 @@ const SpellSystem = (() => {
 
         const variantCount = getTreeVariantCount(wizardRef);
         for (let textureIndex = 0; textureIndex < variantCount; textureIndex++) {
-            const texturePath = `/assets/images/tree${textureIndex}.png`;
+            const texturePath = `/assets/images/trees/tree${textureIndex}.png`;
             const icon = $("<div>")
                 .addClass("spellIcon")
                 .css({
@@ -2289,6 +3275,7 @@ const SpellSystem = (() => {
                     wizardRef.selectedPlaceableCategory = safeCategory;
                     wizardRef.selectedPlaceableTexturePath = texturePath;
                     normalizePlaceableSelections(wizardRef);
+                    refreshSelectedPlaceableMetadata(wizardRef);
                     spellMenuMode = "main";
                     setCurrentSpell(wizardRef, "placeobject");
                     $("#spellMenu").addClass("hidden");
@@ -2301,11 +3288,10 @@ const SpellSystem = (() => {
     }
 
     function openPlaceableSelector(wizardRef) {
-        spellMenuMode = "placeable-items";
+        spellMenuMode = "placeable-categories";
         $("#spellMenu").removeClass("hidden");
-        const category = getSelectedPlaceableCategory(wizardRef);
-        placeableMenuCategory = category;
-        renderPlaceableItemSelector(wizardRef, category);
+        placeableMenuCategory = getSelectedPlaceableCategory(wizardRef);
+        renderPlaceableCategorySelector(wizardRef);
         fetchPlaceableImages().then(() => {
             if (spellMenuMode === "placeable-items") {
                 renderPlaceableItemSelector(wizardRef, placeableMenuCategory || getSelectedPlaceableCategory(wizardRef));
@@ -2542,6 +3528,7 @@ const SpellSystem = (() => {
         fetchFlooringTextures();
         fetchPlaceableImages().then(() => {
             normalizePlaceableSelections(wizardRef);
+            refreshSelectedPlaceableMetadata(wizardRef);
             wizardRef.spells = buildSpellList(wizardRef);
             refreshSpellSelector(wizardRef);
         });
@@ -2597,6 +3584,7 @@ const SpellSystem = (() => {
         showPlaceableMenu,
         adjustPlaceableRenderOffset,
         adjustPlaceableScale,
+        adjustPlaceableRotation,
         beginDragSpell,
         updateDragPreview,
         completeDragSpell,
@@ -2610,6 +3598,8 @@ const SpellSystem = (() => {
         stopTreeGrowthChannel,
         updateCharacterObjectCollisions
         ,
-        getHoverTargetForCurrentSpell
+        getHoverTargetForCurrentSpell,
+        getPlaceObjectPlacementCandidate,
+        getAdjustedWallDragWorldPoint
     };
 })();

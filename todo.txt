@@ -1,7 +1,24 @@
 / inside furniture
   checkpoints
   dangerous monsters
-  3d / textured walls
+X 3d / textured walls
   animal spells
   mind control spells
   animals have magic points that protect them from spells
+X render depth determines spell targeting priority
+X refactor: debug functions
+  refactor: character class
+X windows and doors snap to walls
+  rugs rotate on ground plane
+X see-through windows
+  buildable roofs
+
+
+problems:
+  animals running through walls
+X windows visible through roof
+  rugs don't place correctly
+  walls don't always connect
+X animals don't correctly vanish
+X animals and spells are invisible inside house.
+  wizard's min-radius sight circle should only go behind him

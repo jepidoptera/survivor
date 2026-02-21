@@ -1,3 +1,23 @@
+const LOSVisualSettings = (typeof globalThis !== "undefined" && globalThis.LOSVisualSettings)
+    ? globalThis.LOSVisualSettings
+    : {
+        groundMaskEnabled: false,
+        shadowEnabled: true,
+        shadowOpacity: 0.6,
+        shadowColor: 0x222222,
+        shadowBlurEnabled: true,
+        shadowBlurStrength: 12,
+        objectLitTransparencyEnabled: false,
+        objectLitAlpha: 0.5,
+        objectLitMaskDebugOnly: false,
+        objectLitMaskPreview: false,
+        maxDarken: 0.5,
+        forwardFovDegrees: 200
+    };
+if (typeof globalThis !== "undefined") {
+    globalThis.LOSVisualSettings = LOSVisualSettings;
+}
+
 const LOSSystem = (() => {
     function shortestDeltaX(mapRef, fromX, toX) {
         if (mapRef && typeof mapRef.shortestDeltaX === "function") {
@@ -132,6 +152,28 @@ const LOSSystem = (() => {
             const hitbox = obj.groundPlaneHitbox;
             if (!hitbox) continue;
 
+            if (typeof obj.generateLosOcclusionSpan === "function") {
+                const hits = obj.generateLosOcclusionSpan(wizardRef, {
+                    bins,
+                    angleForBin,
+                    forEachBinInShortSpan,
+                    raySegmentDistance,
+                    shortestDeltaX: (fromX, toX) => shortestDeltaX(mapRef, fromX, toX),
+                    shortestDeltaY: (fromY, toY) => shortestDeltaY(mapRef, fromY, toY)
+                });
+                if (Array.isArray(hits)) {
+                    for (let i = 0; i < hits.length; i++) {
+                        const hit = hits[i];
+                        if (!hit) continue;
+                        const binIdx = Number(hit.binIdx);
+                        const hitDist = Number(hit.hitDist);
+                        if (!Number.isInteger(binIdx) || binIdx < 0 || binIdx >= bins) continue;
+                        processHit(obj, binIdx, hitDist);
+                    }
+                }
+                continue;
+            }
+
             if (hitbox instanceof CircleHitbox) {
                 const cxRaw = hitbox.x;
                 const cyRaw = hitbox.y;
@@ -236,3 +278,7 @@ const LOSSystem = (() => {
         buildPolygonWorldPoints
     };
 })();
+
+if (typeof globalThis !== "undefined") {
+    globalThis.LOSSystem = LOSSystem;
+}
