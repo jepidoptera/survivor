@@ -59,6 +59,9 @@ void main(void) {
             this.depthObjectsState = null;
             this.treeDepthMeshByObject = new Map();
             this.activeTreeDepthMeshes = new Set();
+            this.scenePicker = (global.Renderer2ScenePicker && typeof global.Renderer2ScenePicker === "function")
+                ? new global.Renderer2ScenePicker()
+                : null;
         }
 
         init(ctx) {
@@ -293,6 +296,7 @@ void main(void) {
 
                 const record = this.ensureTreeDepthMeshRecord(item);
                 const mesh = record.mesh;
+                item._renderer2DepthMesh = mesh;
                 this.updateTreeDepthWorldQuad(item, record);
 
                 const uniforms = mesh.shader && mesh.shader.uniforms ? mesh.shader.uniforms : null;
@@ -352,6 +356,9 @@ void main(void) {
                     if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
                         item.pixiSprite.renderable = true;
                     }
+                }
+                if (item && item._renderer2DepthMesh) {
+                    item._renderer2DepthMesh = null;
                 }
                 if (!item || item.gone) {
                     if (record && record.mesh && typeof record.mesh.destroy === "function") {
@@ -720,6 +727,22 @@ void main(void) {
             this.renderObjects3D(ctx, visibleNodes);
             this.renderRoofs3D(ctx);
             this.renderWizard(ctx);
+            if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
+                this.scenePicker.renderHoverHighlight({
+                    wizard: ctx.wizard || global.wizard || null,
+                    spellSystem: global.SpellSystem || null,
+                    mousePos: global.mousePos || null,
+                    frameCount: global.frameCount || 0,
+                    camera: this.camera,
+                    uiLayer: this.layers.ui,
+                    getDisplayObjectForItem: (item) => {
+                        if (!item) return null;
+                        if (item._renderer2DepthMesh && item._renderer2DepthMesh.visible) return item._renderer2DepthMesh;
+                        if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
+                        return null;
+                    }
+                });
+            }
             return true;
         }
     }
@@ -754,6 +777,12 @@ void main(void) {
                 if (record && record.mesh) {
                     record.mesh.visible = false;
                 }
+                if (item && item._renderer2DepthMesh) {
+                    item._renderer2DepthMesh = null;
+                }
+            }
+            if (singleton.scenePicker && typeof singleton.scenePicker.hideAll === "function") {
+                singleton.scenePicker.hideAll();
             }
             singleton.layers.root.visible = false;
             singleton.setLegacyLayersVisible(true);
