@@ -273,6 +273,7 @@ function onAssetsLoaded() {
     cursorTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR; // Enable antialiasing
     cursorSprite = new PIXI.Sprite(cursorTexture);
     cursorSprite.anchor.set(0.5, 0);
+    cursorSprite.visible = false; // Hidden until first cursor update
     cursorLayer.addChild(cursorSprite);
     
     // Initialize spacebar cursor (line art)
@@ -608,6 +609,7 @@ class Wizard extends Character {
         characterLayer.addChild(this.shadowGraphics);
         this.hatColor = 0x000099; // Royal Blue
         this.hatBandColor = 0xFFD700; // Gold
+        this.redrawHatGeometry();
         this.treeGrowthChannel = null;
         this.isJumping = false;
         this.jumpCount = 0;
@@ -1164,15 +1166,6 @@ class Wizard extends Character {
     }
     
     drawHat(interpolatedJumpHeight = null) {
-        // Wizard hat positioning constants
-        const hatBrimOffsetX = 0;
-        const hatBrimOffsetY = -0.625;
-        const hatBrimWidth = 0.5;
-        const hatBrimHeight = 0.15;
-        const hatPointOffsetX = 0;
-        const hatPointOffsetY = -0.65;
-        const hatPointHeight = 0.35;
-
         // Recalculate screen position from world coordinates
         const screenCoors = worldToScreen(this);
         let wizardScreenX = screenCoors.x;
@@ -1181,20 +1174,38 @@ class Wizard extends Character {
             : (Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0);
         const jumpOffsetPx = jumpHeightForRender * viewscale * xyratio;
         let wizardScreenY = screenCoors.y - jumpOffsetPx;
-        
-        this.hatGraphics.clear();
-        
-        // Calculate hat brim position (blue oval)
-        const brimX = wizardScreenX + hatBrimOffsetX * viewscale;
-        const brimY = wizardScreenY + hatBrimOffsetY * viewscale;
-        const brimWidth = hatBrimWidth * viewscale;
-        const brimHeight = hatBrimHeight * viewscale;
-        const pointWidth = hatBrimWidth * viewscale * 0.6;
+
+        if (!this.hatGraphics) return;
+        if (this.hatGraphics.parent !== characterLayer) {
+            characterLayer.addChild(this.hatGraphics);
+        }
+        this.hatGraphics.x = wizardScreenX;
+        this.hatGraphics.y = wizardScreenY;
+        this.hatGraphics.scale.set(viewscale, viewscale);
+        this.hatGraphics.visible = true;
+
+        // Ensure hat graphics are rendered on top by moving to end of container
+        if (characterLayer.children.indexOf(this.hatGraphics) !== characterLayer.children.length - 1) {
+            characterLayer.setChildIndex(this.hatGraphics, characterLayer.children.length - 1);
+        }
+    }
+
+    redrawHatGeometry() {
+        // Wizard hat positioning constants
+        const brimX = 0;
+        const brimY = -0.625;
+        const brimWidth = 0.5;
+        const brimHeight = 0.15;
+        const pointX = 0;
+        const pointY = -0.65;
+        const pointHeight = 0.35;        
+        const pointWidth = brimWidth * 0.6;
         const bandInnerHeight = brimHeight * 0.4;
         const bandInnerWidth = pointWidth * 0.8;
         const bandOuterWidth = pointWidth;
         const bandOuterHeight = brimHeight / brimWidth * bandOuterWidth;
 
+        this.hatGraphics.clear();
         // Draw hat brim (oval/ellipse)
         this.hatGraphics.beginFill(this.hatColor, 1);
         this.hatGraphics.drawEllipse(brimX, brimY, brimWidth / 2, brimHeight / 2);
@@ -1211,11 +1222,6 @@ class Wizard extends Character {
         this.hatGraphics.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
         this.hatGraphics.endFill();
         
-        // Calculate hat point position (blue triangle)
-        const pointX = wizardScreenX + hatPointOffsetX * viewscale;
-        const pointY = wizardScreenY + hatPointOffsetY * viewscale;
-        const pointHeight = hatPointHeight * viewscale;
-        
         // Draw hat point (triangle)
         this.hatGraphics.beginFill(this.hatColor, 1);
         this.hatGraphics.moveTo(pointX, pointY - pointHeight); // Top point
@@ -1223,12 +1229,6 @@ class Wizard extends Character {
         this.hatGraphics.lineTo(pointX + pointWidth / 2, pointY); // Bottom right
         this.hatGraphics.closePath();
         this.hatGraphics.endFill();
-        
-        // Ensure hat graphics are rendered on top by moving to end of container
-        if (this.hatGraphics.parent && characterLayer.children.indexOf(this.hatGraphics) !== characterLayer.children.length - 1) {
-            characterLayer.removeChild(this.hatGraphics);
-            characterLayer.addChild(this.hatGraphics);
-        }
     }
     
     updateStatusBars() {
