@@ -53,6 +53,7 @@ let lastLosCandidateHash = 0;
 let lastLosComputeAtMs = 0;
 let nextLosObjectId = 1;
 let lastRenderFrameMs = 0;
+let renderer2QueryFlagCache = null;
 const wallSectionBatchingEnabled = true;
 const opaqueDepthMeshEnabled = true;
 const defaultWallTexturePath = "/assets/images/walls/stonewall.png";
@@ -2816,11 +2817,83 @@ function getOpaqueDepthDisplayObject(item, options = {}) {
     return mesh;
 }
 
+function isRenderer2Enabled() {
+    if (typeof globalThis !== "undefined" && typeof globalThis.useRenderer2 === "boolean") {
+        return !!globalThis.useRenderer2;
+    }
+    if (renderer2QueryFlagCache === null) {
+        renderer2QueryFlagCache = false;
+        try {
+            if (typeof window !== "undefined" && window.location && typeof window.location.search === "string") {
+                const params = new URLSearchParams(window.location.search);
+                const raw = (params.get("renderer2") || "").trim().toLowerCase();
+                renderer2QueryFlagCache = raw === "1" || raw === "true" || raw === "on";
+            }
+        } catch (_) {}
+    }
+    if (renderer2QueryFlagCache) return true;
+    try {
+        if (typeof localStorage !== "undefined") {
+            const raw = (localStorage.getItem("survivor.renderer2") || "").trim().toLowerCase();
+            return raw === "1" || raw === "true" || raw === "on";
+        }
+    } catch (_) {}
+    return false;
+}
+
 function drawCanvas() {
     if (!wizard) return;
+    const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+    const lazyStartMs = performance.now();
+    const preHydratedRoads = (typeof hydrateVisibleLazyRoads === "function")
+        ? (hydrateVisibleLazyRoads({ maxPerFrame: 48, paddingWorld: 12 }) || 0)
+        : 0;
+    const preHydratedTrees = (typeof hydrateVisibleLazyTrees === "function")
+        ? (hydrateVisibleLazyTrees({ maxPerFrame: 48, paddingWorld: 12 }) || 0)
+        : 0;
+    const preLazyMs = performance.now() - lazyStartMs;
+    const renderer2Enabled = isRenderer2Enabled();
+    if (
+        renderer2Enabled &&
+        typeof globalThis !== "undefined" &&
+        globalThis.Renderer2 &&
+        typeof globalThis.Renderer2.renderFrame === "function"
+    ) {
+        const renderedByRenderer2 = globalThis.Renderer2.renderFrame({
+            app,
+            gameContainer,
+            map,
+            animals,
+            wizard,
+            roof,
+            camera: renderCamera,
+            viewport,
+            viewscale,
+            xyratio,
+            wizardFrames,
+            renderNowMs,
+            frameRate,
+            renderAlpha
+        });
+        if (renderedByRenderer2) {
+            if (typeof updateCursor === "function") {
+                updateCursor();
+            }
+            return;
+        }
+    } else if (
+        typeof globalThis !== "undefined" &&
+        globalThis.Renderer2 &&
+        typeof globalThis.Renderer2.disable === "function"
+    ) {
+        globalThis.Renderer2.disable();
+    }
+
     const perfStartMs = performance.now();
     const drawPerf = {
-        lazyMs: 0,
+        lazyMs: preLazyMs,
         prepMs: 0,
         collectMs: 0,
         losMs: 0,
@@ -2839,22 +2912,11 @@ function drawCanvas() {
         composeUnaccountedMs: 0,
         composeInvariantSkipped: 0,
         totalMs: 0,
-        hydratedRoads: 0,
-        hydratedTrees: 0,
+        hydratedRoads: preHydratedRoads,
+        hydratedTrees: preHydratedTrees,
         mapItems: 0,
         onscreen: 0
     };
-    const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-        ? interpolatedViewport
-        : viewport;
-    const lazyStartMs = performance.now();
-    if (typeof hydrateVisibleLazyRoads === "function") {
-        drawPerf.hydratedRoads = hydrateVisibleLazyRoads({ maxPerFrame: 48, paddingWorld: 12 }) || 0;
-    }
-    if (typeof hydrateVisibleLazyTrees === "function") {
-        drawPerf.hydratedTrees = hydrateVisibleLazyTrees({ maxPerFrame: 48, paddingWorld: 12 }) || 0;
-    }
-    drawPerf.lazyMs = performance.now() - lazyStartMs;
     const frameNowMs = (typeof renderNowMs === "number" && Number.isFinite(renderNowMs) && renderNowMs > 0)
         ? renderNowMs
         : performance.now();
