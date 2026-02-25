@@ -441,6 +441,76 @@ function resolveMountedWallThickness(item) {
     return Number.isFinite(bestThickness) ? bestThickness : null;
 }
 
+function getMountedWallFaceCentersForObject(item) {
+    const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
+        ? Number(item.mountedWallLineGroupId)
+        : null;
+    if (!Number.isInteger(mountedId)) return null;
+    const worldX = Number(item && item.x);
+    const worldY = Number(item && item.y);
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+
+    const mapRef = item && item.map ? item.map : null;
+    let walls = null;
+    const wallClass = (typeof Wall !== "undefined") ? Wall : null;
+    const sectionRegistry = wallClass && wallClass._sectionsById instanceof Map
+        ? wallClass._sectionsById
+        : null;
+    const sectionEntry = sectionRegistry ? sectionRegistry.get(mountedId) : null;
+    if (sectionEntry && Array.isArray(sectionEntry.walls) && sectionEntry.walls.length > 0) {
+        walls = sectionEntry.walls;
+    } else if (mapRef && Array.isArray(mapRef.objects)) {
+        walls = mapRef.objects.filter(obj =>
+            obj &&
+            obj.type === "wall" &&
+            Number.isInteger(obj.lineGroupId) &&
+            Number(obj.lineGroupId) === mountedId &&
+            typeof obj.getWallProfile === "function"
+        );
+    }
+    if (!Array.isArray(walls) || walls.length === 0) return null;
+
+    let best = null;
+    for (let i = 0; i < walls.length; i++) {
+        const wall = walls[i];
+        if (!wall || typeof wall.getWallProfile !== "function") continue;
+        const profile = wall.getWallProfile();
+        if (!profile || !profile.aLeft || !profile.bLeft || !profile.aRight || !profile.bRight) continue;
+        const left = closestPointOnSegment2D(
+            worldX, worldY,
+            Number(profile.aLeft.x), Number(profile.aLeft.y),
+            Number(profile.bLeft.x), Number(profile.bLeft.y)
+        );
+        const right = closestPointOnSegment2D(
+            worldX, worldY,
+            Number(profile.aRight.x), Number(profile.aRight.y),
+            Number(profile.bRight.x), Number(profile.bRight.y)
+        );
+        const score = Math.min(left.dist2, right.dist2);
+        if (!best || score < best.score) {
+            best = { left, right, score };
+        }
+    }
+    if (!best) return null;
+
+    const facingSign = Number.isFinite(item && item.mountedWallFacingSign)
+        ? Number(item.mountedWallFacingSign)
+        : 1;
+    const frontRaw = (facingSign >= 0) ? best.left : best.right;
+    const backRaw = (facingSign >= 0) ? best.right : best.left;
+    let nx = frontRaw.x - backRaw.x;
+    let ny = frontRaw.y - backRaw.y;
+    const nLen = Math.hypot(nx, ny);
+    if (!(nLen > 1e-6)) return null;
+    nx /= nLen;
+    ny /= nLen;
+    const eps = 0.01;
+    return {
+        front: { x: frontRaw.x + nx * eps, y: frontRaw.y + ny * eps },
+        back: { x: backRaw.x - nx * eps, y: backRaw.y - ny * eps }
+    };
+}
+
 function resolvePlaceableMetadataEntry(doc, texturePath) {
     if (!doc || !Array.isArray(doc.items)) return null;
     const normalizedPath = (typeof texturePath === "string") ? texturePath : "";
@@ -466,6 +536,62 @@ async function getResolvedPlaceableMetadata(category, texturePath) {
 }
 
 class StaticObject {
+    static _depthBillboardState = null;
+    static _depthBillboardVs = `
+precision mediump float;
+attribute vec3 aWorldPosition;
+attribute vec2 aUvs;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+varying vec2 vUvs;
+void main(void) {
+    float camDx = aWorldPosition.x - uCameraWorld.x;
+    float camDy = aWorldPosition.y - uCameraWorld.y;
+    float camDz = aWorldPosition.z;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+}
+`;
+    static _depthBillboardFs = `
+precision mediump float;
+varying vec2 vUvs;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+void main(void) {
+    vec4 tex = texture2D(uSampler, vUvs) * uTint;
+    if (tex.a < uAlphaCutoff) discard;
+    gl_FragColor = tex;
+}
+`;
+
+    static ensureDepthBillboardState(pixiRef) {
+        if (!pixiRef) return null;
+        if (StaticObject._depthBillboardState) return StaticObject._depthBillboardState;
+        const state = new pixiRef.State();
+        state.depthTest = true;
+        state.depthMask = true;
+        state.blend = false;
+        state.culling = false;
+        StaticObject._depthBillboardState = state;
+        return state;
+    }
+
     constructor(type, location, width, height, textures, map) {
         this.type = type;
         this.map = map;
@@ -501,6 +627,194 @@ class StaticObject {
         this.hp = 100;
         this.isOnFire = false;
         this.burned = false;
+    }
+
+    ensureDepthBillboardMesh(pixiRef = null, alphaCutoff = 0.08) {
+        const pixi = pixiRef || ((typeof PIXI !== "undefined") ? PIXI : null);
+        if (!pixi) return null;
+        const category = (typeof this.category === "string") ? this.category.trim().toLowerCase() : "";
+        const useDualWallPlanes = !!(
+            this &&
+            this.rotationAxis === "spatial" &&
+            (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
+        );
+        const desiredMode = useDualWallPlanes ? "dual" : "single";
+        if (this._depthBillboardMesh && !this._depthBillboardMesh.destroyed && this._depthBillboardMeshMode === desiredMode) {
+            return this._depthBillboardMesh;
+        }
+        if (this._depthBillboardMesh && typeof this._depthBillboardMesh.destroy === "function") {
+            if (this._depthBillboardMesh.parent) this._depthBillboardMesh.parent.removeChild(this._depthBillboardMesh);
+            this._depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
+            this._depthBillboardMesh = null;
+            this._depthBillboardWorldPositions = null;
+            this._depthBillboardLastSignature = "";
+        }
+        const state = StaticObject.ensureDepthBillboardState(pixi);
+        if (!state) return null;
+        const positionsVertexCount = useDualWallPlanes ? 24 : 12;
+        const uvs = useDualWallPlanes
+            ? new Float32Array([
+                0, 1, 1, 1, 1, 0, 0, 0,
+                1, 1, 0, 1, 0, 0, 1, 0
+            ])
+            : new Float32Array([
+                0, 1,
+                1, 1,
+                1, 0,
+                0, 0
+            ]);
+        const indices = useDualWallPlanes
+            ? new Uint16Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7])
+            : new Uint16Array([0, 1, 2, 0, 2, 3]);
+        const geometry = new pixi.Geometry()
+            .addAttribute("aWorldPosition", new Float32Array(positionsVertexCount), 3)
+            .addAttribute("aUvs", uvs, 2)
+            .addIndex(indices);
+        const shader = pixi.Shader.from(StaticObject._depthBillboardVs, StaticObject._depthBillboardFs, {
+            uScreenSize: new Float32Array([1, 1]),
+            uCameraWorld: new Float32Array([0, 0]),
+            uViewScale: 1,
+            uXyRatio: 1,
+            uDepthRange: new Float32Array([0, 1]),
+            uTint: new Float32Array([1, 1, 1, 1]),
+            uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
+            uSampler: pixi.Texture.WHITE
+        });
+        const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
+        mesh.name = `${String(this.type || "staticObject")}DepthBillboard`;
+        mesh.interactive = false;
+        mesh.roundPixels = true;
+        mesh.visible = false;
+        this._depthBillboardWorldPositions = geometry.getBuffer("aWorldPosition").data;
+        this._depthBillboardLastSignature = "";
+        this._depthBillboardMeshMode = desiredMode;
+        this._depthBillboardMesh = mesh;
+        return mesh;
+    }
+
+    updateDepthBillboardMesh(ctx = null, camera = null, options = {}) {
+        const sprite = this.pixiSprite;
+        const category = (typeof this.category === "string") ? this.category.trim().toLowerCase() : "";
+        const useDualWallPlanes = !!(
+            this &&
+            this.rotationAxis === "spatial" &&
+            (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
+        );
+        const fallbackTexture = (typeof this.texturePath === "string" && this.texturePath.length > 0)
+            ? PIXI.Texture.from(this.texturePath)
+            : null;
+        if (!sprite && !fallbackTexture) return null;
+        if (!useDualWallPlanes && (!sprite || !sprite.texture)) return null;
+        const cam = camera || null;
+        if (!cam) return null;
+        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff);
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms) return null;
+        const viewScale = Math.max(1e-6, Math.abs(Number(cam.viewscale) || 1));
+        const xyRatio = Math.max(1e-6, Math.abs(Number(cam.xyratio) || 1));
+        const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
+        const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const worldZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+
+        let signature = "";
+        if (useDualWallPlanes) {
+            const faceCenters = getMountedWallFaceCentersForObject(this);
+            if (!faceCenters) return null;
+            const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
+            const height = Math.max(0.01, Number.isFinite(this.height) ? Number(this.height) : 1);
+            const verticalWorldHeight = height / Math.max(0.0001, xyRatio);
+            const anchorX = Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5;
+            const anchorY = Number.isFinite(this.placeableAnchorY) ? Number(this.placeableAnchorY) : 1;
+            const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.placementRotation) : 0;
+            const theta = angleDeg * (Math.PI / 180);
+            const axisX = Math.cos(theta);
+            const axisY = Math.sin(theta);
+            const halfWidth = width * 0.5;
+            const alongOffset = (anchorX - 0.5) * width;
+            const zBottom = worldZ - ((1 - anchorY) * verticalWorldHeight);
+            const zTop = zBottom + verticalWorldHeight;
+            const centerWithAnchor = (cx, cy) => ({
+                x: cx - axisX * alongOffset,
+                y: cy - axisY * alongOffset
+            });
+            const frontBase = centerWithAnchor(Number(faceCenters.front.x), Number(faceCenters.front.y));
+            const backBase = centerWithAnchor(Number(faceCenters.back.x), Number(faceCenters.back.y));
+            const frontBL = { x: frontBase.x - axisX * halfWidth, y: frontBase.y - axisY * halfWidth, z: zBottom };
+            const frontBR = { x: frontBase.x + axisX * halfWidth, y: frontBase.y + axisY * halfWidth, z: zBottom };
+            const frontTR = { x: frontBR.x, y: frontBR.y, z: zTop };
+            const frontTL = { x: frontBL.x, y: frontBL.y, z: zTop };
+            const backBL = { x: backBase.x - axisX * halfWidth, y: backBase.y - axisY * halfWidth, z: zBottom };
+            const backBR = { x: backBase.x + axisX * halfWidth, y: backBase.y + axisY * halfWidth, z: zBottom };
+            const backTR = { x: backBR.x, y: backBR.y, z: zTop };
+            const backTL = { x: backBL.x, y: backBL.y, z: zTop };
+            signature = [
+                frontBL.x, frontBL.y, frontBR.x, frontBR.y,
+                backBL.x, backBL.y, backBR.x, backBR.y,
+                zBottom, zTop, width, verticalWorldHeight, angleDeg
+            ].map(v => Number(v).toFixed(4)).join("|");
+            if (signature !== this._depthBillboardLastSignature && this._depthBillboardWorldPositions) {
+                const positions = this._depthBillboardWorldPositions;
+                positions[0] = frontBL.x; positions[1] = frontBL.y; positions[2] = frontBL.z;
+                positions[3] = frontBR.x; positions[4] = frontBR.y; positions[5] = frontBR.z;
+                positions[6] = frontTR.x; positions[7] = frontTR.y; positions[8] = frontTR.z;
+                positions[9] = frontTL.x; positions[10] = frontTL.y; positions[11] = frontTL.z;
+                positions[12] = backBL.x; positions[13] = backBL.y; positions[14] = backBL.z;
+                positions[15] = backBR.x; positions[16] = backBR.y; positions[17] = backBR.z;
+                positions[18] = backTR.x; positions[19] = backTR.y; positions[20] = backTR.z;
+                positions[21] = backTL.x; positions[22] = backTL.y; positions[23] = backTL.z;
+                mesh.geometry.getBuffer("aWorldPosition").update();
+                this._depthBillboardLastSignature = signature;
+            }
+        } else {
+            const anchorX = (sprite.anchor && Number.isFinite(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0.5;
+            const anchorY = (sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
+            const worldWidth = Math.max(0.01, Math.abs(Number(sprite.width) || 0) / viewScale);
+            const worldHeightZ = Math.max(0.01, Math.abs(Number(sprite.height) || 0) / (viewScale * xyRatio));
+            const leftX = worldX - anchorX * worldWidth;
+            const rightX = worldX + (1 - anchorX) * worldWidth;
+            const bottomZ = worldZ - (1 - anchorY) * worldHeightZ;
+            const topZ = worldZ + anchorY * worldHeightZ;
+            signature = [
+                leftX, rightX, worldY, bottomZ, topZ, worldWidth, worldHeightZ
+            ].map(v => v.toFixed(4)).join("|");
+            if (signature !== this._depthBillboardLastSignature && this._depthBillboardWorldPositions) {
+                const positions = this._depthBillboardWorldPositions;
+                positions[0] = leftX;  positions[1] = worldY; positions[2] = bottomZ;
+                positions[3] = rightX; positions[4] = worldY; positions[5] = bottomZ;
+                positions[6] = rightX; positions[7] = worldY; positions[8] = topZ;
+                positions[9] = leftX;  positions[10] = worldY; positions[11] = topZ;
+                mesh.geometry.getBuffer("aWorldPosition").update();
+                this._depthBillboardLastSignature = signature;
+            }
+        }
+
+        const uniforms = mesh.shader.uniforms;
+        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
+        const nearMetric = -Math.max(80, viewportHeight * 0.6);
+        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
+        const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
+            ? Number(ctx.app.screen.width)
+            : 1;
+        const screenH = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.height))
+            ? Number(ctx.app.screen.height)
+            : 1;
+        const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
+        uniforms.uScreenSize[0] = Math.max(1, screenW);
+        uniforms.uScreenSize[1] = Math.max(1, screenH);
+        uniforms.uCameraWorld[0] = Number(cam.x) || 0;
+        uniforms.uCameraWorld[1] = Number(cam.y) || 0;
+        uniforms.uViewScale = Number(cam.viewscale) || 1;
+        uniforms.uXyRatio = Number(cam.xyratio) || 1;
+        uniforms.uDepthRange[0] = farMetric;
+        uniforms.uDepthRange[1] = depthSpanInv;
+        uniforms.uTint[0] = ((tint >> 16) & 255) / 255;
+        uniforms.uTint[1] = ((tint >> 8) & 255) / 255;
+        uniforms.uTint[2] = (tint & 255) / 255;
+        uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
+        uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
+        uniforms.uSampler = (sprite && sprite.texture) ? sprite.texture : (fallbackTexture || PIXI.Texture.WHITE);
+        mesh.visible = true;
+        return mesh;
     }
 
 
@@ -558,6 +872,16 @@ class StaticObject {
             this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
         }
         this.fireSprite = null;
+        if (this._depthBillboardMesh && this._depthBillboardMesh.parent) {
+            this._depthBillboardMesh.parent.removeChild(this._depthBillboardMesh);
+        }
+        if (this._depthBillboardMesh && typeof this._depthBillboardMesh.destroy === "function") {
+            this._depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
+        }
+        this._depthBillboardMesh = null;
+        this._depthBillboardWorldPositions = null;
+        this._depthBillboardLastSignature = "";
+        this._depthBillboardMeshMode = "";
         if (typeof globalThis !== "undefined") {
             if (this.type === "tree" && typeof globalThis.unregisterLazyTreeRecordAt === "function") {
                 globalThis.unregisterLazyTreeRecordAt(this.x, this.y);
@@ -1258,6 +1582,54 @@ class PlacedObject extends StaticObject {
         const anchorY = Number.isFinite(this.placeableAnchorY) ? Number(this.placeableAnchorY) : 1;
         const alongOffset = (anchorX - 0.5) * width;
         const wallHeight = Math.max(0, Number(wall && wall.height) || 0);
+        if (category === "windows") {
+            const wallThickness = Math.max(0.001, Number(wall && wall.thickness) || 0.001);
+            const wallHalfT = wallThickness * 0.5;
+            const nx = -ty;
+            const ny = tx;
+            const faceSign = Number.isFinite(this.mountedWallFacingSign)
+                ? (Number(this.mountedWallFacingSign) >= 0 ? 1 : -1)
+                : 1;
+            let faceStartX = ax + nx * wallHalfT * faceSign;
+            let faceStartY = ay + ny * wallHalfT * faceSign;
+            let faceEndX = bx + nx * wallHalfT * faceSign;
+            let faceEndY = by + ny * wallHalfT * faceSign;
+            if (typeof wall.getWallProfile === "function") {
+                const profile = wall.getWallProfile();
+                if (profile) {
+                    const faceA = faceSign >= 0 ? profile.aLeft : profile.aRight;
+                    const faceB = faceSign >= 0 ? profile.bLeft : profile.bRight;
+                    if (faceA && faceB && Number.isFinite(faceA.x) && Number.isFinite(faceA.y) && Number.isFinite(faceB.x) && Number.isFinite(faceB.y)) {
+                        faceStartX = seedX + shortestDX(seedX, Number(faceA.x));
+                        faceStartY = seedY + shortestDY(seedY, Number(faceA.y));
+                        faceEndX = seedX + shortestDX(seedX, Number(faceB.x));
+                        faceEndY = seedY + shortestDY(seedY, Number(faceB.y));
+                    }
+                }
+            }
+            const faceDx = faceEndX - faceStartX;
+            const faceDy = faceEndY - faceStartY;
+            let faceT = null;
+            if (Math.abs(faceDx) > 1e-6) {
+                const rawT = (seedX - faceStartX) / faceDx;
+                if (rawT >= -1e-6 && rawT <= 1 + 1e-6) {
+                    faceT = Math.max(0, Math.min(1, rawT));
+                }
+            } else if (Math.abs(seedX - faceStartX) <= 1e-4) {
+                faceT = Math.max(0, Math.min(1, closestOnCenter.t));
+            }
+            if (Number.isFinite(faceT)) {
+                let snappedX = seedX + nx * 0.001 * faceSign;
+                let snappedY = (faceStartY + faceDy * faceT) + ny * 0.001 * faceSign;
+                if (this.map && typeof this.map.wrapWorldX === "function") snappedX = this.map.wrapWorldX(snappedX);
+                if (this.map && typeof this.map.wrapWorldY === "function") snappedY = this.map.wrapWorldY(snappedY);
+                this.x = snappedX;
+                this.y = snappedY;
+                this.z = wallHeight * 0.5;
+                this.mountedWallFacingSign = faceSign;
+                return true;
+            }
+        }
         const desiredBaseX = closestOnCenter.x;
         const desiredBaseY = (category === "doors")
             ? closestOnCenter.y

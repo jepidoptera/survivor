@@ -1,48 +1,9 @@
 (function attachRenderer2(global) {
     const GROUND_TILE_OVERLAP_SCALE = 1.5;
     const TREE_ALPHA_CUTOFF = 0.08;
-    const DEPTH_BILLBOARD_VS = `
-precision mediump float;
-attribute vec3 aWorldPosition;
-attribute vec2 aUvs;
-uniform vec2 uScreenSize;
-uniform vec2 uCameraWorld;
-uniform float uViewScale;
-uniform float uXyRatio;
-uniform vec2 uDepthRange;
-varying vec2 vUvs;
-void main(void) {
-    float camDx = aWorldPosition.x - uCameraWorld.x;
-    float camDy = aWorldPosition.y - uCameraWorld.y;
-    float camDz = aWorldPosition.z;
-    float sx = max(1.0, uScreenSize.x);
-    float sy = max(1.0, uScreenSize.y);
-    float screenX = camDx * uViewScale;
-    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
-    float depthMetric = camDy + camDz;
-    float farMetric = uDepthRange.x;
-    float invSpan = max(1e-6, uDepthRange.y);
-    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
-    vec2 clip = vec2(
-        (screenX / sx) * 2.0 - 1.0,
-        1.0 - (screenY / sy) * 2.0
-    );
-    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
-    vUvs = aUvs;
-}
-`;
-    const DEPTH_BILLBOARD_FS = `
-precision mediump float;
-varying vec2 vUvs;
-uniform sampler2D uSampler;
-uniform vec4 uTint;
-uniform float uAlphaCutoff;
-void main(void) {
-    vec4 tex = texture2D(uSampler, vUvs) * uTint;
-    if (tex.a < uAlphaCutoff) discard;
-    gl_FragColor = tex;
-}
-`;
+    if (typeof global.renderer2ShowPickerScreen !== "boolean") {
+        global.renderer2ShowPickerScreen = false;
+    }
 
     class Renderer2Impl {
         constructor() {
@@ -51,17 +12,36 @@ void main(void) {
             this.initialized = false;
             this.wizardSprite = null;
             this.wizardShadowGraphics = null;
+            this.placeObjectPreviewSprite = null;
+            this.placeObjectPreviewTexturePath = "";
+            this.placeObjectPreviewDisplayObject = null;
+            this.placeObjectPreviewItem = null;
+            this.placeObjectCenterSnapGuideGraphics = null;
             this.groundSpriteByNodeKey = new Map();
             this.roadSpriteByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
             this.activeRoofMeshes = new Set();
-            this.depthObjectsState = null;
-            this.treeDepthMeshByObject = new Map();
-            this.activeTreeDepthMeshes = new Set();
+            this.activeDepthBillboardMeshes = new Set();
+            this.activeDepthBillboardItems = new Set();
+            this.pickRenderItems = [];
             this.scenePicker = (global.Renderer2ScenePicker && typeof global.Renderer2ScenePicker === "function")
                 ? new global.Renderer2ScenePicker()
                 : null;
+        }
+
+        resetPickRenderItems() {
+            this.pickRenderItems.length = 0;
+        }
+
+        addPickRenderItem(item, displayObj, options = null) {
+            if (!item || !displayObj) return;
+            if (item.gone || item.vanishing) return;
+            const opts = options && typeof options === "object" ? options : {};
+            const forceInclude = !!opts.forceInclude;
+            if (!forceInclude && !displayObj.visible) return;
+            if (!displayObj.parent) return;
+            this.pickRenderItems.push({ item, displayObj, forceInclude });
         }
 
         init(ctx) {
@@ -83,7 +63,6 @@ void main(void) {
                 "objectLayer",
                 "roofLayer",
                 "characterLayer",
-                "projectileLayer",
                 "hitboxLayer"
             ];
             for (let i = 0; i < names.length; i++) {
@@ -192,137 +171,38 @@ void main(void) {
             }
         }
 
-        ensureDepthObjectsState() {
-            if (this.depthObjectsState) return this.depthObjectsState;
-            const state = new PIXI.State();
-            state.depthTest = true;
-            state.depthMask = true;
-            state.blend = false;
-            state.culling = false;
-            this.depthObjectsState = state;
-            return state;
-        }
-
-        createTreeDepthMesh(item) {
-            const state = this.ensureDepthObjectsState();
-            const geometry = new PIXI.Geometry()
-                .addAttribute("aWorldPosition", new Float32Array(12), 3)
-                .addAttribute("aUvs", new Float32Array([
-                    0, 1,
-                    1, 1,
-                    1, 0,
-                    0, 0
-                ]), 2)
-                .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
-            const shader = PIXI.Shader.from(DEPTH_BILLBOARD_VS, DEPTH_BILLBOARD_FS, {
-                uScreenSize: new Float32Array([1, 1]),
-                uCameraWorld: new Float32Array([0, 0]),
-                uViewScale: 1,
-                uXyRatio: 1,
-                uDepthRange: new Float32Array([0, 1]),
-                uTint: new Float32Array([1, 1, 1, 1]),
-                uAlphaCutoff: TREE_ALPHA_CUTOFF,
-                uSampler: PIXI.Texture.WHITE
-            });
-            const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
-            mesh.name = "renderer2TreeDepth";
-            mesh.interactive = false;
-            mesh.roundPixels = true;
-            mesh.visible = false;
-            return {
-                item,
-                mesh,
-                worldPositions: geometry.getBuffer("aWorldPosition").data,
-                lastSignature: ""
-            };
-        }
-
-        ensureTreeDepthMeshRecord(item) {
-            let record = this.treeDepthMeshByObject.get(item);
-            if (record) return record;
-            record = this.createTreeDepthMesh(item);
-            this.treeDepthMeshByObject.set(item, record);
-            return record;
-        }
-
-        updateTreeDepthWorldQuad(item, record) {
-            if (!item || !record || !record.mesh) return;
+        shouldUseDepthBillboard(item) {
+            if (!item || item.gone || item.vanishing) return false;
+            if (item.type === "road" || item.type === "roof" || item.type === "wall" || item.type === "wallSectionComposite") {
+                return false;
+            }
+            const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+            const isWallMountedSpatial = !!(
+                item.rotationAxis === "spatial" &&
+                (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
+            );
+            if (item.rotationAxis === "spatial" && !isWallMountedSpatial) return false;
+            if (typeof item.updateDepthBillboardMesh !== "function") return false;
             const sprite = item.pixiSprite;
-            if (!sprite) return;
-            const viewScale = Math.max(1e-6, Math.abs(this.camera.viewscale) || 1);
-            const xyRatio = Math.max(1e-6, Math.abs(this.camera.xyratio) || 1);
-            const anchorX = (sprite.anchor && Number.isFinite(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0.5;
-            const anchorY = (sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
-            const worldWidth = Math.max(0.01, Math.abs(Number(sprite.width) || 0) / viewScale);
-            const worldHeightZ = Math.max(0.01, Math.abs(Number(sprite.height) || 0) / (viewScale * xyRatio));
-            const worldX = Number.isFinite(item.x) ? Number(item.x) : 0;
-            const worldY = Number.isFinite(item.y) ? Number(item.y) : 0;
-            const worldZ = Number.isFinite(item.z) ? Number(item.z) : 0;
-            const leftX = worldX - anchorX * worldWidth;
-            const rightX = worldX + (1 - anchorX) * worldWidth;
-            const bottomZ = worldZ - (1 - anchorY) * worldHeightZ;
-            const topZ = worldZ + anchorY * worldHeightZ;
-            const signature = [
-                leftX, rightX, worldY, bottomZ, topZ, worldWidth, worldHeightZ
-            ].map(v => v.toFixed(4)).join("|");
-            if (signature === record.lastSignature) return;
-
-            const positions = record.worldPositions;
-            // BL, BR, TR, TL in world coordinates.
-            positions[0] = leftX;  positions[1] = worldY; positions[2] = bottomZ;
-            positions[3] = rightX; positions[4] = worldY; positions[5] = bottomZ;
-            positions[6] = rightX; positions[7] = worldY; positions[8] = topZ;
-            positions[9] = leftX;  positions[10] = worldY; positions[11] = topZ;
-            record.mesh.geometry.getBuffer("aWorldPosition").update();
-            record.lastSignature = signature;
+            if (!isWallMountedSpatial && (!sprite || !sprite.texture)) return false;
+            if (isWallMountedSpatial && !sprite && !(typeof item.texturePath === "string" && item.texturePath.length > 0)) return false;
+            return true;
         }
 
-        renderTreeDepthObjects(ctx, renderItems) {
+        renderDepthBillboardObjects(ctx, renderItems) {
             const container = this.layers.depthObjects;
             if (!container) return new Set();
             const depthRenderedItems = new Set();
-            const activeItems = new Set();
             const currentMeshes = new Set();
-            const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
-            const nearMetric = -Math.max(80, viewportHeight * 0.6);
-            const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
-            const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
+            const currentItems = new Set();
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
-                if (!item || item.type !== "tree" || item.gone || item.vanishing) continue;
+                if (!this.shouldUseDepthBillboard(item)) continue;
                 const sprite = item.pixiSprite;
-                if (!sprite || !sprite.texture) continue;
-
-                const record = this.ensureTreeDepthMeshRecord(item);
-                const mesh = record.mesh;
+                const mesh = item.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
+                if (!mesh) continue;
                 item._renderer2DepthMesh = mesh;
-                this.updateTreeDepthWorldQuad(item, record);
-
-                const uniforms = mesh.shader && mesh.shader.uniforms ? mesh.shader.uniforms : null;
-                if (uniforms) {
-                    const tint = Number.isFinite(sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
-                    const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
-                        ? Number(ctx.app.screen.width)
-                        : 1;
-                    const screenH = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.height))
-                        ? Number(ctx.app.screen.height)
-                        : 1;
-                    uniforms.uScreenSize[0] = Math.max(1, screenW);
-                    uniforms.uScreenSize[1] = Math.max(1, screenH);
-                    uniforms.uCameraWorld[0] = Number(this.camera.x) || 0;
-                    uniforms.uCameraWorld[1] = Number(this.camera.y) || 0;
-                    uniforms.uViewScale = Number(this.camera.viewscale) || 1;
-                    uniforms.uXyRatio = Number(this.camera.xyratio) || 1;
-                    uniforms.uDepthRange[0] = farMetric;
-                    uniforms.uDepthRange[1] = depthSpanInv;
-                    uniforms.uTint[0] = ((tint >> 16) & 255) / 255;
-                    uniforms.uTint[1] = ((tint >> 8) & 255) / 255;
-                    uniforms.uTint[2] = (tint & 255) / 255;
-                    uniforms.uTint[3] = Number.isFinite(sprite.alpha) ? Number(sprite.alpha) : 1;
-                    uniforms.uAlphaCutoff = TREE_ALPHA_CUTOFF;
-                    uniforms.uSampler = sprite.texture;
-                }
 
                 if (mesh.parent !== container) {
                     container.addChild(mesh);
@@ -332,8 +212,14 @@ void main(void) {
                     mesh.renderable = true;
                 }
                 currentMeshes.add(mesh);
-                activeItems.add(item);
+                currentItems.add(item);
                 depthRenderedItems.add(item);
+                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+                const useMeshForPicking = !!(
+                    item.rotationAxis === "spatial" &&
+                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
+                );
+                this.addPickRenderItem(item, useMeshForPicking ? mesh : sprite, { forceInclude: true });
 
                 // Hide legacy sprite when depth mesh is active.
                 sprite.visible = false;
@@ -342,15 +228,13 @@ void main(void) {
                 }
             }
 
-            for (const mesh of this.activeTreeDepthMeshes) {
+            for (const mesh of this.activeDepthBillboardMeshes) {
                 if (!currentMeshes.has(mesh) && mesh) {
                     mesh.visible = false;
                 }
             }
-            this.activeTreeDepthMeshes = currentMeshes;
-
-            for (const [item, record] of this.treeDepthMeshByObject.entries()) {
-                if (activeItems.has(item)) continue;
+            for (const item of this.activeDepthBillboardItems) {
+                if (currentItems.has(item)) continue;
                 if (item && item.pixiSprite) {
                     item.pixiSprite.visible = true;
                     if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
@@ -360,13 +244,9 @@ void main(void) {
                 if (item && item._renderer2DepthMesh) {
                     item._renderer2DepthMesh = null;
                 }
-                if (!item || item.gone) {
-                    if (record && record.mesh && typeof record.mesh.destroy === "function") {
-                        record.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                    }
-                    this.treeDepthMeshByObject.delete(item);
-                }
             }
+            this.activeDepthBillboardMeshes = currentMeshes;
+            this.activeDepthBillboardItems = currentItems;
 
             return depthRenderedItems;
         }
@@ -485,6 +365,8 @@ void main(void) {
                 sprite.height = (Number(road.height) || 1) * cam.viewscale * cam.xyratio;
                 sprite.alpha = Number.isFinite(road.alpha) ? road.alpha : 1;
                 sprite.visible = true;
+                road._renderer2DisplayObject = sprite;
+                this.addPickRenderItem(road, sprite);
             }
 
             for (const [road, sprite] of this.roadSpriteByObject.entries()) {
@@ -517,11 +399,19 @@ void main(void) {
             let hiddenItems = new Set();
             let compositeItems = [];
             if (wallSections && typeof wallSections.buildCompositeRenderItems === "function") {
-                wallSections.prepareFrame(this.camera.viewscale, this.camera.xyratio);
+                const sectionItems = mapItems.filter(item => {
+                    if (!item) return false;
+                    const type = (typeof item.type === "string") ? item.type.trim().toLowerCase() : "";
+                    if (type === "window" || type === "door") return false;
+                    const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+                    return !(category === "windows" || category === "doors");
+                });
+                wallSections.prepareFrame(this.camera.viewscale, this.camera.xyratio, { outputMode: "mesh3d" });
                 const sectionResult = wallSections.buildCompositeRenderItems({
                     enabled: true,
-                    items: mapItems,
+                    items: sectionItems,
                     cachePrefix: "renderer2",
+                    outputMode: "mesh3d",
                     camera: ctx.camera || this.camera,
                     map: ctx.map,
                     app: ctx.app,
@@ -548,27 +438,57 @@ void main(void) {
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item) continue;
-                if (item.type !== "wallSectionComposite" && typeof global.applySpriteTransform === "function") {
+                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+                const isWallMountedSpatial = !!(
+                    item.rotationAxis === "spatial" &&
+                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
+                );
+                if (!isWallMountedSpatial && item.type !== "wallSectionComposite" && typeof global.applySpriteTransform === "function") {
                     global.applySpriteTransform(item);
                 }
             }
-            const depthRenderedItems = this.renderTreeDepthObjects(ctx, renderItems);
+            const depthBillboardRenderedItems = this.renderDepthBillboardObjects(ctx, renderItems);
             const currentDisplayObjects = new Set();
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item) continue;
-                if (depthRenderedItems.has(item)) continue;
+                if (depthBillboardRenderedItems.has(item)) continue;
                 const displayObj = item.pixiSprite || null;
                 if (!displayObj) continue;
                 if (displayObj.parent !== container) {
                     container.addChild(displayObj);
                 }
                 displayObj.visible = true;
+                item._renderer2DisplayObject = displayObj;
+                if (item.type === "wallSectionComposite" && Array.isArray(item._sectionMemberWalls)) {
+                    for (let w = 0; w < item._sectionMemberWalls.length; w++) {
+                        const memberWall = item._sectionMemberWalls[w];
+                        if (!memberWall) continue;
+                        memberWall._wallSectionCompositeDisplayObject = displayObj;
+                    }
+                }
                 if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
                     displayObj.renderable = true;
                 }
                 currentDisplayObjects.add(displayObj);
+                this.addPickRenderItem(item, displayObj);
+            }
+
+            // Ensure wall-mounted depth billboards (windows/doors) win picker hits over wall sections.
+            // Their visible pixels should be targetable even when coplanar with section meshes.
+            for (let i = 0; i < renderItems.length; i++) {
+                const item = renderItems[i];
+                if (!item || !depthBillboardRenderedItems.has(item)) continue;
+                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+                const isWallMountedSpatial = !!(
+                    item.rotationAxis === "spatial" &&
+                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
+                );
+                if (!isWallMountedSpatial) continue;
+                const mesh = item._renderer2DepthMesh;
+                if (!mesh || !mesh.parent || !mesh.visible) continue;
+                this.addPickRenderItem(item, mesh, { forceInclude: true });
             }
 
             for (const obj of this.activeObjectDisplayObjects) {
@@ -645,9 +565,9 @@ void main(void) {
             if (wizard.isJumping) {
                 frameIndex = rowIndex * 9 + 2;
             } else if (isVisuallyMoving) {
-                const speedRatio = (wizard.currentMaxSpeed && wizard.speed)
-                    ? (wizard.currentMaxSpeed / wizard.speed)
-                    : 1;
+                const speedRatio = (wizard.speed > 0)
+                    ? (visualSpeed / wizard.speed)
+                    : 0;
                 const nowMs = Number.isFinite(ctx.renderNowMs) ? ctx.renderNowMs : performance.now();
                 const simFrameRate = Number.isFinite(ctx.frameRate) ? ctx.frameRate : 60;
                 const animSpeed = Number.isFinite(wizard.animationSpeedMultiplier)
@@ -680,6 +600,7 @@ void main(void) {
             this.wizardSprite.width = this.camera.viewscale;
             this.wizardSprite.height = this.camera.viewscale;
             this.wizardSprite.visible = true;
+            this.addPickRenderItem(wizard, this.wizardSprite, { forceInclude: true });
 
             const shadow = this.wizardShadowGraphics;
             const shadowCenterY = p.y + 0.2 * this.camera.viewscale * this.camera.xyratio;
@@ -708,6 +629,421 @@ void main(void) {
             }
         }
 
+        getMousePosRef(ctx) {
+            if (ctx && ctx.mousePos) return ctx.mousePos;
+            if (typeof mousePos !== "undefined") return mousePos;
+            return global.mousePos || null;
+        }
+
+        clearPlaceObjectPreview() {
+            if (this.placeObjectPreviewItem && this.placeObjectPreviewItem._depthBillboardMesh) {
+                const mesh = this.placeObjectPreviewItem._depthBillboardMesh;
+                mesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                    mesh.renderable = false;
+                }
+            }
+            if (this.placeObjectPreviewDisplayObject) {
+                this.placeObjectPreviewDisplayObject.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewDisplayObject, "renderable")) {
+                    this.placeObjectPreviewDisplayObject.renderable = false;
+                }
+                this.placeObjectPreviewDisplayObject = null;
+            }
+            if (this.placeObjectPreviewSprite) {
+                this.placeObjectPreviewSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewSprite, "renderable")) {
+                    this.placeObjectPreviewSprite.renderable = false;
+                }
+            }
+            if (this.placeObjectCenterSnapGuideGraphics) {
+                this.placeObjectCenterSnapGuideGraphics.clear();
+                this.placeObjectCenterSnapGuideGraphics.visible = false;
+            }
+        }
+
+        buildPlaceObjectPreviewRenderItem(ctx) {
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            if (!wizard || wizard.currentSpell !== "placeobject") {
+                return null;
+            }
+            const mousePosRef = this.getMousePosRef(ctx);
+            if (!mousePosRef || !Number.isFinite(mousePosRef.worldX) || !Number.isFinite(mousePosRef.worldY)) {
+                return null;
+            }
+
+            const texturePath = (
+                typeof wizard.selectedPlaceableTexturePath === "string" &&
+                wizard.selectedPlaceableTexturePath.length > 0
+            ) ? wizard.selectedPlaceableTexturePath : "/assets/images/doors/door5.png";
+            const selectedCategory = (
+                typeof wizard.selectedPlaceableCategory === "string" &&
+                wizard.selectedPlaceableCategory.length > 0
+            ) ? wizard.selectedPlaceableCategory : "doors";
+            const rawAxis = (typeof wizard.selectedPlaceableRotationAxis === "string")
+                ? wizard.selectedPlaceableRotationAxis.trim().toLowerCase()
+                : "";
+            const rotationAxis = (rawAxis === "spatial" || rawAxis === "visual" || rawAxis === "none")
+                ? rawAxis
+                : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
+            const placementRotation = Number.isFinite(wizard.selectedPlaceableRotation)
+                ? Number(wizard.selectedPlaceableRotation)
+                : 0;
+            const effectivePlacementRotation = (rotationAxis === "none") ? 0 : placementRotation;
+
+            if (!this.placeObjectPreviewSprite) {
+                this.placeObjectPreviewSprite = new PIXI.Sprite(PIXI.Texture.from(texturePath));
+                this.placeObjectPreviewSprite.anchor.set(0.5, 0.5);
+                this.placeObjectPreviewSprite.alpha = 0.5;
+                this.placeObjectPreviewSprite.interactive = false;
+                this.placeObjectPreviewSprite.visible = false;
+                this.placeObjectPreviewTexturePath = texturePath;
+            } else if (this.placeObjectPreviewTexturePath !== texturePath) {
+                this.placeObjectPreviewSprite.texture = PIXI.Texture.from(texturePath);
+                this.placeObjectPreviewTexturePath = texturePath;
+            }
+
+            const mapRef = (ctx && ctx.map) || wizard.map || global.map || null;
+            const worldX = (mapRef && typeof mapRef.wrapWorldX === "function")
+                ? mapRef.wrapWorldX(mousePosRef.worldX)
+                : mousePosRef.worldX;
+            const worldY = (mapRef && typeof mapRef.wrapWorldY === "function")
+                ? mapRef.wrapWorldY(mousePosRef.worldY)
+                : mousePosRef.worldY;
+            const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
+            const spellSystemRef = (typeof SpellSystem !== "undefined")
+                ? SpellSystem
+                : (global.SpellSystem || null);
+            const snapPlacement = (
+                isWallMountedPlacement &&
+                spellSystemRef &&
+                typeof spellSystemRef.getPlaceObjectPlacementCandidate === "function"
+            ) ? spellSystemRef.getPlaceObjectPlacementCandidate(wizard, worldX, worldY) : null;
+            const useSnapPlacement = !!(snapPlacement && snapPlacement.targetWall);
+            if (isWallMountedPlacement) {
+                if (
+                    !useSnapPlacement ||
+                    !Number.isFinite(snapPlacement.snappedX) ||
+                    !Number.isFinite(snapPlacement.snappedY) ||
+                    !Number.isFinite(snapPlacement.snappedRotationDeg) ||
+                    !Number.isFinite(snapPlacement.snappedZ)
+                ) {
+                    return null;
+                }
+            }
+            const placeableScale = Number.isFinite(wizard.selectedPlaceableScale)
+                ? Number(wizard.selectedPlaceableScale)
+                : 1;
+            const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+            const selectedAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
+                ? Number(wizard.selectedPlaceableAnchorY)
+                : 1;
+            const yScale = Math.max(0.1, Math.abs(Number.isFinite(this.camera.xyratio) ? this.camera.xyratio : 0.66));
+            const placementYOffset = (rotationAxis === "spatial")
+                ? 0
+                : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
+            const previewX = useSnapPlacement ? snapPlacement.snappedX : worldX;
+            let placedY = useSnapPlacement ? snapPlacement.snappedY : (worldY + placementYOffset);
+            if (mapRef && typeof mapRef.wrapWorldY === "function") {
+                placedY = mapRef.wrapWorldY(placedY);
+            }
+            const renderDepthOffset = Number.isFinite(wizard.selectedPlaceableRenderOffset)
+                ? Number(wizard.selectedPlaceableRenderOffset)
+                : 0;
+            this.placeObjectPreviewSprite.tint = 0xFFFFFF;
+            this.placeObjectPreviewSprite.visible = true;
+            if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewSprite, "renderable")) {
+                this.placeObjectPreviewSprite.renderable = true;
+            }
+            if (!this.placeObjectPreviewItem) {
+                this.placeObjectPreviewItem = {
+                    type: "placedObjectPreview",
+                    map: mapRef || global.map || null,
+                    gone: false,
+                    vanishing: false,
+                    isPlacedObject: true,
+                    objectType: "placedObject",
+                    pixiSprite: this.placeObjectPreviewSprite
+                };
+                const staticProto = global.StaticObject && global.StaticObject.prototype
+                    ? global.StaticObject.prototype
+                    : null;
+                if (staticProto && typeof staticProto.ensureDepthBillboardMesh === "function") {
+                    this.placeObjectPreviewItem.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
+                }
+                if (staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
+                    this.placeObjectPreviewItem.updateDepthBillboardMesh = staticProto.updateDepthBillboardMesh;
+                }
+            }
+            const previewItem = this.placeObjectPreviewItem;
+            previewItem.map = mapRef || previewItem.map || null;
+            previewItem.pixiSprite = this.placeObjectPreviewSprite;
+            previewItem.x = previewX;
+            previewItem.y = useSnapPlacement ? snapPlacement.snappedY : worldY;
+            previewItem.z = useSnapPlacement ? Number(snapPlacement.snappedZ) : 0;
+            previewItem.width = clampedScale;
+            previewItem.height = clampedScale;
+            previewItem.renderZ = placedY + renderDepthOffset;
+            previewItem.previewAlpha = 0.5;
+            previewItem.texturePath = texturePath;
+            previewItem.category = selectedCategory;
+            previewItem.placeableAnchorX = Number.isFinite(wizard.selectedPlaceableAnchorX)
+                ? (useSnapPlacement ? 0.5 : Number(wizard.selectedPlaceableAnchorX))
+                : 0.5;
+            previewItem.placeableAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
+                ? Number(wizard.selectedPlaceableAnchorY)
+                : 1;
+            previewItem.rotationAxis = useSnapPlacement ? "spatial" : rotationAxis;
+            previewItem.placementRotation = useSnapPlacement ? snapPlacement.snappedRotationDeg : effectivePlacementRotation;
+            previewItem.mountedWallLineGroupId = (
+                useSnapPlacement &&
+                Number.isInteger(snapPlacement.mountedWallLineGroupId)
+            ) ? Number(snapPlacement.mountedWallLineGroupId) : (
+                useSnapPlacement &&
+                snapPlacement.targetWall &&
+                Number.isInteger(snapPlacement.targetWall.lineGroupId)
+            ) ? Number(snapPlacement.targetWall.lineGroupId) : null;
+            previewItem.mountedSectionId = (
+                useSnapPlacement &&
+                Number.isInteger(snapPlacement.mountedSectionId)
+            ) ? Number(snapPlacement.mountedSectionId) : (
+                useSnapPlacement &&
+                Number.isInteger(snapPlacement.mountedWallLineGroupId)
+            ) ? Number(snapPlacement.mountedWallLineGroupId) : null;
+            previewItem.mountedWallFacingSign = (
+                useSnapPlacement &&
+                Number.isFinite(snapPlacement.mountedWallFacingSign)
+            ) ? Number(snapPlacement.mountedWallFacingSign) : null;
+            previewItem.centerSnapGuide = useSnapPlacement
+                ? {
+                    centerSnapActive: !!snapPlacement.centerSnapActive,
+                    placementCenterX: Number(snapPlacement.placementCenterX),
+                    placementCenterY: Number(snapPlacement.placementCenterY),
+                    sectionCenterX: Number(snapPlacement.sectionCenterX),
+                    sectionCenterY: Number(snapPlacement.sectionCenterY),
+                    sectionFacingSign: Number(snapPlacement.sectionFacingSign),
+                    sectionNormalX: Number(snapPlacement.sectionNormalX),
+                    sectionNormalY: Number(snapPlacement.sectionNormalY),
+                    sectionDirX: Number(snapPlacement.sectionDirX),
+                    sectionDirY: Number(snapPlacement.sectionDirY),
+                    wallFaceCenterX: Number(snapPlacement.wallFaceCenterX),
+                    wallFaceCenterY: Number(snapPlacement.wallFaceCenterY),
+                    placementHalfWidth: Number(snapPlacement.placementHalfWidth),
+                    wallHeight: Number(snapPlacement.wallHeight) || 0,
+                    wallThickness: Number(snapPlacement.wallThickness) || 0,
+                    sectionFaceQuadScreenPoints: Array.isArray(snapPlacement.sectionFaceQuadScreenPoints)
+                        ? snapPlacement.sectionFaceQuadScreenPoints
+                        : null,
+                    sectionVisiblePolygonsScreen: Array.isArray(snapPlacement.sectionVisiblePolygonsScreen)
+                        ? snapPlacement.sectionVisiblePolygonsScreen
+                        : null
+                }
+                : null;
+            return previewItem;
+        }
+
+        renderPlaceObjectCenterSnapGuide(previewItem) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.placeObjectCenterSnapGuideGraphics) {
+                this.placeObjectCenterSnapGuideGraphics = new PIXI.Graphics();
+                this.placeObjectCenterSnapGuideGraphics.name = "renderer2PlaceObjectSnapGuide";
+                this.placeObjectCenterSnapGuideGraphics.skipTransform = true;
+                this.placeObjectCenterSnapGuideGraphics.interactive = false;
+                this.placeObjectCenterSnapGuideGraphics.visible = false;
+                layer.addChild(this.placeObjectCenterSnapGuideGraphics);
+            } else if (this.placeObjectCenterSnapGuideGraphics.parent !== layer) {
+                layer.addChild(this.placeObjectCenterSnapGuideGraphics);
+            }
+            const g = this.placeObjectCenterSnapGuideGraphics;
+            g.clear();
+            const guide = previewItem && previewItem.centerSnapGuide ? previewItem.centerSnapGuide : null;
+            if (
+                !guide ||
+                !Number.isFinite(guide.placementCenterX) ||
+                !Number.isFinite(guide.placementCenterY) ||
+                !Number.isFinite(guide.sectionCenterX) ||
+                !Number.isFinite(guide.sectionCenterY)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            const placementCenterScreen = this.camera.worldToScreen(guide.placementCenterX, guide.placementCenterY, 0);
+            const sectionCenterScreen = this.camera.worldToScreen(guide.sectionCenterX, guide.sectionCenterY, 0);
+            const topCenterScreen = {
+                x: sectionCenterScreen.x,
+                y: sectionCenterScreen.y - (Math.max(0, Number(guide.wallHeight) || 0) * this.camera.viewscale * this.camera.xyratio)
+            };
+            const visiblePolygons = Array.isArray(guide.sectionVisiblePolygonsScreen)
+                ? guide.sectionVisiblePolygonsScreen
+                : null;
+            if (Array.isArray(visiblePolygons) && visiblePolygons.length > 0) {
+                for (let i = 0; i < visiblePolygons.length; i++) {
+                    const poly = Array.isArray(visiblePolygons[i])
+                        ? visiblePolygons[i].map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+                        : [];
+                    if (poly.length < 3) continue;
+                    if (!poly.every(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))) continue;
+                    g.lineStyle(2, 0x4FC3FF, 0.8);
+                    g.beginFill(0x4FC3FF, 0.12);
+                    g.moveTo(poly[0].x, poly[0].y);
+                    for (let p = 1; p < poly.length; p++) {
+                        g.lineTo(poly[p].x, poly[p].y);
+                    }
+                    g.closePath();
+                    g.endFill();
+                }
+            } else if (Array.isArray(guide.sectionFaceQuadScreenPoints) && guide.sectionFaceQuadScreenPoints.length >= 4) {
+                const quad = guide.sectionFaceQuadScreenPoints
+                    .slice(0, 4)
+                    .map(pt => ({ x: Number(pt.x), y: Number(pt.y) }))
+                    .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+                if (quad.length === 4) {
+                    g.lineStyle(2, 0x4FC3FF, 0.8);
+                    g.beginFill(0x4FC3FF, 0.12);
+                    g.moveTo(quad[0].x, quad[0].y);
+                    g.lineTo(quad[1].x, quad[1].y);
+                    g.lineTo(quad[2].x, quad[2].y);
+                    g.lineTo(quad[3].x, quad[3].y);
+                    g.closePath();
+                    g.endFill();
+                }
+            }
+
+            const facingSign = Number.isFinite(guide.sectionFacingSign) ? Number(guide.sectionFacingSign) : 1;
+            const insideWorld = {
+                x: guide.sectionCenterX - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+                y: guide.sectionCenterY - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+            };
+            const insideScreen = this.camera.worldToScreen(insideWorld.x, insideWorld.y, 0);
+            const topInsideScreen = {
+                x: insideScreen.x,
+                y: insideScreen.y - (Math.max(0, Number(guide.wallHeight) || 0) * this.camera.viewscale * this.camera.xyratio)
+            };
+            if (guide.centerSnapActive) {
+                g.lineStyle(2, 0xFF0000, 0.5);
+                g.moveTo(placementCenterScreen.x, placementCenterScreen.y);
+                g.lineTo(topCenterScreen.x, topCenterScreen.y);
+                g.moveTo(topCenterScreen.x, topCenterScreen.y);
+                g.lineTo(topInsideScreen.x, topInsideScreen.y);
+            }
+
+            if (
+                Number.isFinite(guide.wallFaceCenterX) &&
+                Number.isFinite(guide.wallFaceCenterY) &&
+                Number.isFinite(guide.sectionDirX) &&
+                Number.isFinite(guide.sectionDirY) &&
+                Number.isFinite(guide.placementHalfWidth)
+            ) {
+                const hx = guide.sectionDirX * guide.placementHalfWidth;
+                const hy = guide.sectionDirY * guide.placementHalfWidth;
+                const facingEndA = { x: guide.wallFaceCenterX - hx, y: guide.wallFaceCenterY - hy };
+                const facingEndB = { x: guide.wallFaceCenterX + hx, y: guide.wallFaceCenterY + hy };
+                const insideEndA = {
+                    x: facingEndA.x - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+                    y: facingEndA.y - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+                };
+                const insideEndB = {
+                    x: facingEndB.x - (Number.isFinite(guide.sectionNormalX) ? guide.sectionNormalX : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign,
+                    y: facingEndB.y - (Number.isFinite(guide.sectionNormalY) ? guide.sectionNormalY : 0) * Math.max(0, Number(guide.wallThickness) || 0) * facingSign
+                };
+                const toTop = (pt) => {
+                    const s = this.camera.worldToScreen(pt.x, pt.y, 0);
+                    return {
+                        x: s.x,
+                        y: s.y - (Math.max(0, Number(guide.wallHeight) || 0) * this.camera.viewscale * this.camera.xyratio)
+                    };
+                };
+                const topFacingA = toTop(facingEndA);
+                const topInsideA = toTop(insideEndA);
+                const topFacingB = toTop(facingEndB);
+                const topInsideB = toTop(insideEndB);
+                g.lineStyle(2, 0x000000, 0.6);
+                g.moveTo(topFacingA.x, topFacingA.y);
+                g.lineTo(topInsideA.x, topInsideA.y);
+                g.moveTo(topFacingB.x, topFacingB.y);
+                g.lineTo(topInsideB.x, topInsideB.y);
+            }
+            g.visible = true;
+        }
+
+        renderPlaceObjectPreview(ctx) {
+            const previewItem = this.buildPlaceObjectPreviewRenderItem(ctx);
+            if (!previewItem) {
+                this.clearPlaceObjectPreview();
+                return;
+            }
+            let displayObj = null;
+            if (
+                typeof previewItem.updateDepthBillboardMesh === "function" &&
+                previewItem.rotationAxis === "spatial"
+            ) {
+                const mesh = previewItem.updateDepthBillboardMesh(
+                    ctx,
+                    this.camera,
+                    { alphaCutoff: TREE_ALPHA_CUTOFF }
+                );
+                if (mesh) {
+                    const depthContainer = this.layers.depthObjects;
+                    if (depthContainer && mesh.parent !== depthContainer) {
+                        depthContainer.addChild(mesh);
+                    }
+                    mesh.visible = true;
+                    if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                        mesh.renderable = true;
+                    }
+                    if (Number.isFinite(previewItem.previewAlpha)) {
+                        mesh.alpha = previewItem.previewAlpha;
+                    }
+                    displayObj = mesh;
+                }
+            }
+            if (!displayObj && typeof global.applySpriteTransform === "function") {
+                global.applySpriteTransform(previewItem);
+                displayObj = previewItem.pixiSprite || this.placeObjectPreviewSprite;
+            }
+            if (!displayObj) {
+                this.clearPlaceObjectPreview();
+                return;
+            }
+            const container = (displayObj instanceof PIXI.Mesh)
+                ? this.layers.depthObjects
+                : this.layers.objects3d;
+            if (!container) {
+                this.clearPlaceObjectPreview();
+                return;
+            }
+            if (displayObj.parent !== container) {
+                container.addChild(displayObj);
+            }
+            displayObj.visible = true;
+            if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
+                displayObj.renderable = true;
+            }
+            if (Number.isFinite(previewItem.previewAlpha)) {
+                displayObj.alpha = previewItem.previewAlpha;
+            }
+            if (Number.isFinite(displayObj.tint)) {
+                displayObj.tint = 0xFFFFFF;
+            }
+            const topIndex = container.children.length - 1;
+            if (topIndex >= 0) {
+                const currentIndex = container.getChildIndex(displayObj);
+                if (currentIndex !== topIndex) {
+                    container.setChildIndex(displayObj, topIndex);
+                }
+            }
+            if (this.placeObjectPreviewDisplayObject && this.placeObjectPreviewDisplayObject !== displayObj) {
+                this.placeObjectPreviewDisplayObject.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewDisplayObject, "renderable")) {
+                    this.placeObjectPreviewDisplayObject.renderable = false;
+                }
+            }
+            this.placeObjectPreviewDisplayObject = displayObj;
+            this.renderPlaceObjectCenterSnapGuide(previewItem);
+        }
+
         renderFrame(ctx) {
             this.init(ctx);
             if (!this.initialized) return false;
@@ -720,29 +1056,63 @@ void main(void) {
                 viewscale: ctx.viewscale,
                 xyratio: ctx.xyratio
             });
+            this.resetPickRenderItems();
+            if (this.scenePicker && this.scenePicker.publicApi) {
+                global.renderer2ScenePicker = this.scenePicker.publicApi;
+            }
             const visibleNodes = this.collectVisibleNodes(ctx, 4, 4);
             this.syncOnscreenObjectsCache(ctx, visibleNodes);
             this.renderGroundTiles(ctx, visibleNodes);
             this.renderRoadsAndFloors(ctx, visibleNodes);
             this.renderObjects3D(ctx, visibleNodes);
+            this.renderPlaceObjectPreview(ctx);
             this.renderRoofs3D(ctx);
             this.renderWizard(ctx);
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
+                const spellSystemRef = (typeof SpellSystem !== "undefined")
+                    ? SpellSystem
+                    : (global.SpellSystem || null);
+                const mousePosRef = (typeof mousePos !== "undefined")
+                    ? mousePos
+                    : (global.mousePos || null);
+                const frameCountRef = (typeof frameCount !== "undefined")
+                    ? frameCount
+                    : (global.frameCount || 0);
                 this.scenePicker.renderHoverHighlight({
+                    app: ctx.app || global.app || null,
                     wizard: ctx.wizard || global.wizard || null,
-                    spellSystem: global.SpellSystem || null,
-                    mousePos: global.mousePos || null,
-                    frameCount: global.frameCount || 0,
+                    spellSystem: spellSystemRef,
+                    mousePos: mousePosRef,
+                    frameCount: frameCountRef,
+                    viewport: ctx.viewport || null,
+                    pickRenderItems: this.pickRenderItems,
                     camera: this.camera,
                     uiLayer: this.layers.ui,
                     getDisplayObjectForItem: (item) => {
                         if (!item) return null;
                         if (item._renderer2DepthMesh && item._renderer2DepthMesh.visible) return item._renderer2DepthMesh;
+                        if (item._wallSectionCompositeDisplayObject && item._wallSectionCompositeDisplayObject.parent) {
+                            return item._wallSectionCompositeDisplayObject;
+                        }
+                        if (item.type === "road") {
+                            const roadSprite = this.roadSpriteByObject.get(item);
+                            if (roadSprite && roadSprite.parent) return roadSprite;
+                        }
+                        if (item._renderer2DisplayObject && item._renderer2DisplayObject.parent) {
+                            return item._renderer2DisplayObject;
+                        }
                         if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
                         return null;
                     }
                 });
             }
+            const showPickerScreen = !!global.renderer2ShowPickerScreen;
+            this.layers.ground.visible = !showPickerScreen;
+            this.layers.roadsFloor.visible = !showPickerScreen;
+            this.layers.depthObjects.visible = !showPickerScreen;
+            this.layers.objects3d.visible = !showPickerScreen;
+            this.layers.entities.visible = !showPickerScreen;
+            this.layers.ui.visible = true;
             return true;
         }
     }
@@ -767,22 +1137,29 @@ void main(void) {
                         : (() => false)
                 );
             }
-            for (const [item, record] of singleton.treeDepthMeshByObject.entries()) {
+            for (const item of singleton.activeDepthBillboardItems) {
                 if (item && item.pixiSprite) {
                     item.pixiSprite.visible = true;
                     if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
                         item.pixiSprite.renderable = true;
                     }
                 }
-                if (record && record.mesh) {
-                    record.mesh.visible = false;
-                }
                 if (item && item._renderer2DepthMesh) {
+                    if (item._renderer2DepthMesh.parent) {
+                        item._renderer2DepthMesh.parent.removeChild(item._renderer2DepthMesh);
+                    }
+                    item._renderer2DepthMesh.visible = false;
                     item._renderer2DepthMesh = null;
                 }
             }
+            singleton.activeDepthBillboardItems.clear();
+            singleton.activeDepthBillboardMeshes.clear();
+            singleton.clearPlaceObjectPreview();
             if (singleton.scenePicker && typeof singleton.scenePicker.hideAll === "function") {
                 singleton.scenePicker.hideAll();
+            }
+            if (singleton.scenePicker && singleton.scenePicker.publicApi && global.renderer2ScenePicker === singleton.scenePicker.publicApi) {
+                global.renderer2ScenePicker = null;
             }
             singleton.layers.root.visible = false;
             singleton.setLegacyLayersVisible(true);

@@ -584,6 +584,20 @@ class Vanish extends Spell {
     }
     
     vanishTarget(target) {
+        if (
+            target &&
+            target.type === "wallSectionComposite" &&
+            Array.isArray(target._sectionMemberWalls) &&
+            target._sectionMemberWalls.length > 0
+        ) {
+            const members = Array.from(new Set(target._sectionMemberWalls));
+            for (let i = 0; i < members.length; i++) {
+                const member = members[i];
+                if (!member || member.gone || member.vanishing) continue;
+                this.vanishTarget(member);
+            }
+            return;
+        }
         // Mark as vanishing to avoid hitting multiple times
         target.vanishing = true;
         target.vanishStartTime = frameCount;
@@ -916,6 +930,7 @@ class PlaceObject extends Spell {
             wallSnapPlacement &&
             wallSnapPlacement.targetWall
         );
+        const effectiveAnchorX = useWallSnapPlacement ? 0.5 : selectedAnchorX;
         const rawYScale = Number(
             (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
                 ? globalThis.xyratio
@@ -925,8 +940,14 @@ class PlaceObject extends Spell {
         const placementYOffset = (rotationAxis === "spatial")
             ? 0
             : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
-        const placedX = wrappedX;
-        let placedY = useWallSnapPlacement ? wrappedY : (wrappedY + placementYOffset);
+        const placedX = (
+            useWallSnapPlacement &&
+            Number.isFinite(wallSnapPlacement.snappedX)
+        ) ? Number(wallSnapPlacement.snappedX) : wrappedX;
+        let placedY = (
+            useWallSnapPlacement &&
+            Number.isFinite(wallSnapPlacement.snappedY)
+        ) ? Number(wallSnapPlacement.snappedY) : (wrappedY + placementYOffset);
         if (wizard.map && typeof wizard.map.wrapWorldY === "function") {
             placedY = wizard.map.wrapWorldY(placedY);
         }
@@ -939,16 +960,21 @@ class PlaceObject extends Spell {
             placedY = wrappedY;
         }
 
-        new PlacedObject({ x: placedX, y: placedY }, wizard.map, {
+        const resolvedPlacementRotation = (
+            useWallSnapPlacement &&
+            Number.isFinite(wallSnapPlacement.snappedRotationDeg)
+        ) ? Number(wallSnapPlacement.snappedRotationDeg) : effectivePlacementRotation;
+
+        const placedObject = new PlacedObject({ x: placedX, y: placedY }, wizard.map, {
             texturePath: selectedTexturePath,
             category: selectedCategory,
             renderDepthOffset,
             width: clampedScale,
             height: clampedScale,
-            placeableAnchorX: selectedAnchorX,
+            placeableAnchorX: effectiveAnchorX,
             placeableAnchorY: selectedAnchorY,
             rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
-            placementRotation: effectivePlacementRotation,
+            placementRotation: resolvedPlacementRotation,
             mountedWallLineGroupId: (
                 useWallSnapPlacement &&
                 Number.isInteger(wallSnapPlacement.mountedWallLineGroupId)
@@ -970,6 +996,13 @@ class PlaceObject extends Spell {
             ) ? Number(wallSnapPlacement.mountedWallFacingSign) : null,
             groundPlaneHitboxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallGroundHitboxPoints : undefined
         });
+        if (
+            useWallSnapPlacement &&
+            Number.isFinite(wallSnapPlacement.snappedZ) &&
+            placedObject
+        ) {
+            placedObject.z = Number(wallSnapPlacement.snappedZ);
+        }
 
         this.visible = false;
         if (this.pixiSprite) {
@@ -1398,6 +1431,7 @@ const SpellSystem = (() => {
     function getSpellTargetDisplayObject(item) {
         if (!item) return null;
         if (item._wallSectionCompositeDisplayObject && item._wallSectionCompositeDisplayObject.parent) return item._wallSectionCompositeDisplayObject;
+        if (item._renderer2DepthMesh && item._renderer2DepthMesh.parent) return item._renderer2DepthMesh;
         if (item._opaqueDepthMesh && item._opaqueDepthMesh.parent) return item._opaqueDepthMesh;
         if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
         if (item._wallSectionCompositeSprite && item._wallSectionCompositeSprite.parent) return item._wallSectionCompositeSprite;
@@ -2255,28 +2289,67 @@ const SpellSystem = (() => {
         return pb.x - pa.x;
     }
 
+    function pickObjectViaRenderer2ColorId(worldX, worldY, filterFn = null) {
+        const pickerApi = (typeof globalThis !== "undefined") ? globalThis.renderer2ScenePicker : null;
+        if (!pickerApi) {
+            return { picked: null, attempted: false };
+        }
+        if (typeof pickerApi.pickObjectAtScreenPoint !== "function") {
+            return { picked: null, attempted: false };
+        }
+        const mouseScreen = (
+            typeof mousePos !== "undefined" &&
+            mousePos &&
+            Number.isFinite(mousePos.screenX) &&
+            Number.isFinite(mousePos.screenY)
+        ) ? { x: mousePos.screenX, y: mousePos.screenY } : null;
+        const clickScreen = mouseScreen || (
+            (typeof worldToScreen === "function")
+                ? worldToScreen({ x: worldX, y: worldY })
+                : null
+        );
+        if (!clickScreen || !Number.isFinite(clickScreen.x) || !Number.isFinite(clickScreen.y)) {
+            return { picked: null, attempted: false };
+        }
+        let picked = null;
+        try {
+            picked = pickerApi.pickObjectAtScreenPoint(clickScreen.x, clickScreen.y, {
+                filter: filterFn
+            });
+        } catch (_err) {
+            picked = null;
+        }
+        return { picked: picked || null, attempted: true };
+    }
+
     function getSameTypeObjectTargetAt(wizardRef, spellName, worldX, worldY) {
         const objectType = getDragSpellObjectType(spellName);
         if (!wizardRef || !objectType || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
-        const clickScreen = worldToScreen({ x: worldX, y: worldY });
-        const targetCandidates = Array.from(onscreenObjects)
-            .filter(obj =>
-                obj &&
-                !obj.gone &&
-                obj.type === objectType &&
-                !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
-            )
-            .sort(compareTargetPriorityTopFirst);
-        for (const obj of targetCandidates) {
-            const displayObj = getSpellTargetDisplayObject(obj);
-            const isMeshTarget = (typeof PIXI !== "undefined") && (displayObj instanceof PIXI.Mesh);
-            if (!displayObj || !displayObj.parent) continue;
-            if (!isMeshTarget) {
-                if (typeof displayObj.containsPoint !== "function") continue;
-                if (!displayObj.containsPoint(clickScreen)) continue;
+        const canTargetObject = (obj) => !!(
+            obj &&
+            !obj.gone &&
+            obj.type === objectType &&
+            !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
+        );
+
+        const pickResult = pickObjectViaRenderer2ColorId(worldX, worldY, (obj) =>
+            canTargetObject(obj)
+        );
+        if (pickResult && pickResult.attempted) {
+            const picked = pickResult.picked;
+            if (picked && canTargetObject(picked)) return picked;
+            if (
+                objectType === "wall" &&
+                picked &&
+                picked.type === "wallSectionComposite" &&
+                Array.isArray(picked._sectionMemberWalls)
+            ) {
+                for (let i = 0; i < picked._sectionMemberWalls.length; i++) {
+                    const member = picked._sectionMemberWalls[i];
+                    if (canTargetObject(member)) return member;
+                }
             }
-            if (!isOpaqueRenderablePixelAtScreenPoint(displayObj, clickScreen)) continue;
-            return obj;
+            return null;
         }
         return null;
     }
@@ -2404,6 +2477,32 @@ const SpellSystem = (() => {
         return null;
     }
 
+    function isValidHoverTargetForCurrentSpell(wizardRef, candidate, worldX, worldY) {
+        if (!wizardRef || !candidate || candidate.gone || candidate.vanishing) return false;
+        const spell = wizardRef.currentSpell;
+        if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
+            const objectType = getDragSpellObjectType(spell);
+            if (!objectType) return false;
+            if (candidate.type !== objectType) return false;
+            return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
+        }
+        if (spell === "placeobject") {
+            const category = (typeof wizardRef.selectedPlaceableCategory === "string")
+                ? wizardRef.selectedPlaceableCategory.trim().toLowerCase()
+                : "";
+            if (category === "windows" || category === "doors") {
+                if (candidate.type !== "wall") return false;
+                const placement = getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY);
+                return !!(placement && placement.targetWall === candidate);
+            }
+            return false;
+        }
+        if (spell === "vanish") {
+            return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
+        }
+        return false;
+    }
+
     function isPointInsideProjectedWallVolume(wall, screenPoint) {
         if (!wall || wall.type !== "wall" || !wall.a || !wall.b || !screenPoint) return false;
         const ax = Number(wall.a.x);
@@ -2479,18 +2578,9 @@ const SpellSystem = (() => {
             ? Number(wizardRef.selectedPlaceableScale)
             : 1;
         const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
-        const selectedAnchorX = Number.isFinite(wizardRef.selectedPlaceableAnchorX)
-            ? Number(wizardRef.selectedPlaceableAnchorX)
-            : 0.5;
         const selectedAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
             ? Number(wizardRef.selectedPlaceableAnchorY)
             : 1;
-        const rawYScale = Number(
-            (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
-                ? globalThis.xyratio
-                : 0.66
-        );
-        const yScale = Math.max(0.1, Math.abs(rawYScale));
         const windowWorldWidth = clampedScale;
         // Height fit is in world units; object height is clampedScale (not screen-scaled).
         const windowWorldHeight = clampedScale;
@@ -2513,11 +2603,11 @@ const SpellSystem = (() => {
             mouseScreen,
             objectWorldWidth: windowWorldWidth,
             objectWorldHeight: windowWorldHeight,
-            anchorX: selectedAnchorX,
             anchorY: selectedAnchorY,
             viewscale,
             xyratio,
-            maxSnapDistPx: 40
+            // Placement candidate handles hit-testing against visible section faces.
+            // No extra distance threshold is needed here.
         });
     }
 
@@ -2800,62 +2890,21 @@ const SpellSystem = (() => {
     }
 
     function getObjectTargetAt(wizardRef, worldX, worldY) {
-        let clickTarget = null;
-        const clickScreen = worldToScreen({x: worldX, y: worldY});
         const activeSpell = wizardRef ? wizardRef.currentSpell : null;
-        const targetCandidates = Array.from(onscreenObjects)
-            .filter(obj =>
-                obj &&
-                !obj.gone &&
-                !obj.vanishing &&
-                !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
-            )
-            .sort(compareTargetPriorityTopFirst);
+        const canTargetObject = (obj) => !!(
+            obj &&
+            !obj.gone &&
+            !obj.vanishing &&
+            !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
+        );
 
-        for (const obj of targetCandidates) {
-            const displayObj = getSpellTargetDisplayObject(obj);
-            const isMeshTarget = (typeof PIXI !== "undefined") && (displayObj instanceof PIXI.Mesh);
-            if (!displayObj || !displayObj.parent) continue;
-            if (!isMeshTarget) {
-                if (typeof displayObj.containsPoint !== "function") continue;
-                if (!displayObj.containsPoint(clickScreen)) continue;
-            }
-            if (!isOpaqueRenderablePixelAtScreenPoint(displayObj, clickScreen)) {
-                // Fallback for tree depth meshes: accept world-hitbox match when
-                // per-pixel mesh alpha sampling fails due dynamic mesh path.
-                const treeHitbox = obj && obj.type === "tree"
-                    ? (obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox)
-                    : null;
-                const treeHit = !!(
-                    treeHitbox &&
-                    typeof treeHitbox.containsPoint === "function" &&
-                    treeHitbox.containsPoint(worldX, worldY)
-                );
-                if (!treeHit) continue;
-            }
-            clickTarget = obj;
-            break;
-        }
-
-        if (wizardRef.currentSpell === "vanish") {
-            const clickedNode = wizardRef.map.worldToNode(worldX, worldY);
-            if (clickedNode && clickedNode.objects && clickedNode.objects.length > 0) {
-                const roadTarget = clickedNode.objects.find(obj =>
-                    obj &&
-                    obj.type === "road" &&
-                    !obj.gone &&
-                    !obj.vanishing &&
-                    !hasSpellAlreadyTargetedObject(wizardRef, wizardRef.currentSpell, obj)
-                );
-                if (roadTarget) {
-                    if (!clickTarget || compareTargetPriorityTopFirst(roadTarget, clickTarget) < 0) {
-                        clickTarget = roadTarget;
-                    }
-                }
-            }
-        }
-
-        return clickTarget;
+        const pickResult = pickObjectViaRenderer2ColorId(worldX, worldY, (obj) =>
+            canTargetObject(obj)
+        );
+        if (!pickResult || !pickResult.attempted) return null;
+        const picked = pickResult.picked;
+        if (picked && canTargetObject(picked)) return picked;
+        return null;
     }
 
     function castWizardSpell(wizardRef, worldX, worldY) {
@@ -3599,6 +3648,7 @@ const SpellSystem = (() => {
         updateCharacterObjectCollisions
         ,
         getHoverTargetForCurrentSpell,
+        isValidHoverTargetForCurrentSpell,
         getPlaceObjectPlacementCandidate,
         getAdjustedWallDragWorldPoint
     };
