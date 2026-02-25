@@ -10,7 +10,7 @@
     "isPassable": true,
     "anchor": {
       "x": 0.5,
-      "y": 1
+      "y": 0.5
     },
     "groundPlaneHitbox": {
       "type": "circle",
@@ -37,7 +37,7 @@
       "isPassable": true,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
         "type": "circle",
