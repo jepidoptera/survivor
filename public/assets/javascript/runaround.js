@@ -1195,7 +1195,7 @@ class Wizard extends Character {
         const brimX = 0;
         const brimY = -0.625;
         const brimWidth = 0.5;
-        const brimHeight = 0.15;
+        const brimHeight = 0.25;
         const pointX = 0;
         const pointY = -0.65;
         const pointHeight = 0.35;        
@@ -1287,7 +1287,7 @@ class Wizard extends Character {
         } else if (isVisuallyMoving) {
             // Columns 1-8 = running animation (8 frames)
             // Column 0 = standing still
-            const speedRatio = (this.currentMaxSpeed && this.speed) ? (this.currentMaxSpeed / this.speed) : 1;
+            const speedRatio = (this.speed > 0) ? (visualSpeed / this.speed) : 0;
             const simTicks = (renderNowMs / 1000) * frameRate;
             const animFrame = Math.floor(simTicks * this.animationSpeedMultiplier * speedRatio / 2) % 8;
             const effectiveAnimFrame = this.isMovingBackward ? (7 - animFrame) : animFrame;
@@ -3663,5 +3663,3 @@ jQuery(() => {
     })
 
 })
-
-// Rendering and utility helpers moved to rendering.js

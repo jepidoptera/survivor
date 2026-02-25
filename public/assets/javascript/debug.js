@@ -405,7 +405,7 @@ const losSettings = (typeof LOSVisualSettings !== "undefined" && LOSVisualSettin
         });
 
 let cameraForwardLeadRatio = 0.0;
-let cameraFollowSmoothing = 0.025;
+let cameraFollowSmoothing = 0.0; // 0.025;
 
 const debugUseLodNativePixelSize = false;
 const debugViewSettings = {
