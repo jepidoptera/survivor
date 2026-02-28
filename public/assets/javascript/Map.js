@@ -408,11 +408,6 @@ class GameMap {
                         if (item.type === "tree") {
                             staticObject = new Tree(node, item.textures, this);
                         }
-                        else if (item.type === "wall") {
-                            width = 1;
-                            height = 2;
-                            staticObject = new Wall(node, item.textures, this);
-                        }
                         else if (item.type === "rock") {
                             width = .25 + Math.random() * .5;
                             height = .25 + Math.random() * .5;
@@ -591,6 +586,157 @@ class GameMap {
         }
 
         return path.length ? path : null;
+    }
+
+    findPathAStar(startingNode, destinationNode, options = {}) {
+        if (!startingNode || !destinationNode) return null;
+        if (startingNode === destinationNode) return [];
+
+        // Keep traversal rules aligned with legacy findPath().
+        // Even indices are far moves, odd indices are adjacent moves.
+        const blockerPairs = [
+            [11, 1], // 0: far left (between down-left and up-left)
+            null,    // 1: up-left (adjacent)
+            [1, 3],  // 2: far up-left (between up-left and up)
+            null,    // 3: up (adjacent)
+            [3, 5],  // 4: far up-right (between up and up-right)
+            null,    // 5: up-right (adjacent)
+            [5, 7],  // 6: far right (between up-right and down-right)
+            null,    // 7: down-right (adjacent)
+            [7, 9],  // 8: far down-right (between down-right and down)
+            null,    // 9: down (adjacent)
+            [9, 11], // 10: far down-left (between down and down-left)
+            null     // 11: down-left (adjacent)
+        ];
+
+        const allowBlockedDestination = options.allowBlockedDestination === true;
+        if (!allowBlockedDestination && (destinationNode.blocked || destinationNode.hasBlockingObject())) {
+            return null;
+        }
+
+        const keyFor = (node) => `${node.xindex},${node.yindex}`;
+        const movementCost = (fromNode, toNode) => {
+            const dx = this.shortestDeltaX(fromNode.x, toNode.x);
+            const dy = this.shortestDeltaY(fromNode.y, toNode.y);
+            return Math.hypot(dx, dy);
+        };
+        const heuristic = (node) => {
+            const dx = this.shortestDeltaX(node.x, destinationNode.x);
+            const dy = this.shortestDeltaY(node.y, destinationNode.y);
+            return Math.hypot(dx, dy);
+        };
+        const canTraverseDirection = (currentNode, directionIndex) => {
+            const neighborNode = currentNode.neighbors[directionIndex];
+            if (!neighborNode) return false;
+
+            // Directional wall blocking from current -> neighbor.
+            const blockingWalls = currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null;
+            if (blockingWalls && blockingWalls.size > 0) return false;
+
+            // Destination occupancy blocking.
+            if (
+                neighborNode !== destinationNode &&
+                (neighborNode.blocked || neighborNode.hasBlockingObject())
+            ) {
+                return false;
+            }
+
+            // Preserve legacy anti-corner-cut for far moves.
+            const blockers = blockerPairs[directionIndex];
+            if (blockers) {
+                const [blocker1, blocker2] = blockers;
+                const blockerNode1 = currentNode.neighbors[blocker1];
+                const blockerNode2 = currentNode.neighbors[blocker2];
+                if (
+                    (blockerNode1 && blockerNode1.hasBlockingObject()) ||
+                    (blockerNode2 && blockerNode2.hasBlockingObject())
+                ) {
+                    return false;
+                }
+            }
+
+            return true;
+        };
+
+        const reconstructPath = (cameFrom, currentKey) => {
+            const result = [];
+            let walkKey = currentKey;
+            while (cameFrom.has(walkKey)) {
+                const node = openOrClosedNodes.get(walkKey);
+                if (node) result.unshift(node);
+                walkKey = cameFrom.get(walkKey);
+            }
+            return result;
+        };
+
+        const openSet = new Set();
+        const cameFrom = new Map();
+        const gScore = new Map();
+        const fScore = new Map();
+        const openOrClosedNodes = new Map();
+
+        const startKey = keyFor(startingNode);
+        const goalKey = keyFor(destinationNode);
+        openSet.add(startKey);
+        gScore.set(startKey, 0);
+        fScore.set(startKey, heuristic(startingNode));
+        openOrClosedNodes.set(startKey, startingNode);
+        openOrClosedNodes.set(goalKey, destinationNode);
+
+        const maxIterations = Number.isFinite(options.maxIterations)
+            ? Math.max(1, Math.floor(options.maxIterations))
+            : Math.max(1000, this.width * this.height * 2);
+
+        let iterations = 0;
+        while (openSet.size > 0 && iterations < maxIterations) {
+            iterations += 1;
+
+            // Pick node in open set with smallest f-score.
+            let currentKey = null;
+            let currentBestF = Infinity;
+            for (const key of openSet) {
+                const score = fScore.has(key) ? fScore.get(key) : Infinity;
+                if (score < currentBestF) {
+                    currentBestF = score;
+                    currentKey = key;
+                }
+            }
+            if (!currentKey) break;
+
+            const currentNode = openOrClosedNodes.get(currentKey);
+            if (!currentNode) {
+                openSet.delete(currentKey);
+                continue;
+            }
+
+            if (currentKey === goalKey) {
+                return reconstructPath(cameFrom, currentKey);
+            }
+
+            openSet.delete(currentKey);
+
+            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
+                if (!canTraverseDirection(currentNode, directionIndex)) continue;
+
+                const neighborNode = currentNode.neighbors[directionIndex];
+                if (!neighborNode) continue;
+
+                const neighborKey = keyFor(neighborNode);
+                openOrClosedNodes.set(neighborKey, neighborNode);
+
+                const currentG = gScore.has(currentKey) ? gScore.get(currentKey) : Infinity;
+                const tentativeG = currentG + movementCost(currentNode, neighborNode);
+                const existingG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
+                if (tentativeG >= existingG) continue;
+
+                cameFrom.set(neighborKey, currentKey);
+                gScore.set(neighborKey, tentativeG);
+                fScore.set(neighborKey, tentativeG + heuristic(neighborNode));
+                openSet.add(neighborKey);
+            }
+        }
+
+        return null;
     }
     
     // Convert world coordinates to the nearest MapNode

@@ -31,13 +31,24 @@ function normalizeTextureBasename(texturePath) {
 function normalizeTexturePathForMetadata(texturePath) {
     if (typeof texturePath !== "string" || texturePath.length === 0) return "";
     const raw = texturePath.split("?")[0].split("#")[0];
-    if (raw.startsWith("/")) return raw;
+    const remapLegacyPath = (value) => {
+        if (typeof value !== "string" || value.length === 0) return value;
+        if (/^\/assets\/images\/flowers\/.*\.jpg$/i.test(value)) {
+            return value.replace(/\.jpg$/i, ".png");
+        }
+        if (/^\/assets\/images\/windows\/.*\.jpg$/i.test(value)) {
+            return value.replace(/\.jpg$/i, ".png");
+        }
+        return value;
+    };
+    if (raw.startsWith("/")) return remapLegacyPath(raw);
     try {
         if (typeof window !== "undefined" && window.location && window.location.origin) {
-            return new URL(raw, window.location.origin).pathname || raw;
+            const resolved = new URL(raw, window.location.origin).pathname || raw;
+            return remapLegacyPath(resolved);
         }
     } catch (_) {}
-    return raw;
+    return remapLegacyPath(raw);
 }
 
 function normalizeLodTextures(spec, fallbackTexturePath = null) {
@@ -45,12 +56,12 @@ function normalizeLodTextures(spec, fallbackTexturePath = null) {
     const out = [];
     spec.forEach(entry => {
         if (typeof entry === "string" && entry.length > 0) {
-            out.push({ texturePath: entry, maxDistance: Infinity });
+            out.push({ texturePath: normalizeTexturePathForMetadata(entry), maxDistance: Infinity });
             return;
         }
         if (!entry || typeof entry !== "object") return;
         const texturePath = (typeof entry.texturePath === "string" && entry.texturePath.length > 0)
-            ? entry.texturePath
+            ? normalizeTexturePathForMetadata(entry.texturePath)
             : null;
         if (!texturePath) return;
         const maxDistance = Number.isFinite(entry.maxDistance)
@@ -324,32 +335,204 @@ function closestPointOnSegment2D(px, py, ax, ay, bx, by) {
     return { x, y, t, dist2: ddx * ddx + ddy * ddy };
 }
 
+function collectWallSectionUnitsFromMap(mapRef) {
+    if (!mapRef) return [];
+    const out = [];
+    const seen = new Set();
+    const pushIfValid = (section) => {
+        if (!section || section.gone || section.type !== "wallSection") return;
+        if (seen.has(section)) return;
+        const a = section.startPoint;
+        const b = section.endPoint;
+        if (!a || !b) return;
+        if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return;
+        seen.add(section);
+        out.push(section);
+    };
+
+    if (Array.isArray(mapRef.objects)) {
+        for (let i = 0; i < mapRef.objects.length; i++) {
+            pushIfValid(mapRef.objects[i]);
+        }
+    }
+
+    if (mapRef.nodes) {
+        Object.keys(mapRef.nodes).forEach(xKey => {
+            const col = mapRef.nodes[xKey];
+            if (!col) return;
+            Object.keys(col).forEach(yKey => {
+                const node = col[yKey];
+                if (!node || !Array.isArray(node.objects)) return;
+                for (let i = 0; i < node.objects.length; i++) {
+                    pushIfValid(node.objects[i]);
+                }
+            });
+        });
+    }
+
+    return out;
+}
+
+function collectMountableWallSegments(mapRef) {
+    const out = [];
+    if (!mapRef) return out;
+
+    const wallSections = collectWallSectionUnitsFromMap(mapRef);
+    for (let i = 0; i < wallSections.length; i++) {
+        const section = wallSections[i];
+        const a = section.startPoint;
+        const b = section.endPoint;
+        out.push({
+            type: "wallSection",
+            source: section,
+            groupId: Number.isInteger(section.id) ? Number(section.id) : null,
+            ax: Number(a.x),
+            ay: Number(a.y),
+            bx: Number(b.x),
+            by: Number(b.y),
+            height: Math.max(0, Number(section.height) || 0),
+            thickness: Math.max(0.001, Number(section.thickness) || 0.001)
+        });
+    }
+
+    return out.filter(seg =>
+        Number.isFinite(seg.ax) &&
+        Number.isFinite(seg.ay) &&
+        Number.isFinite(seg.bx) &&
+        Number.isFinite(seg.by)
+    );
+}
+
+function buildSegmentFaceProfile(segment, seedX, seedY, mapRef) {
+    if (!segment || !mapRef) return null;
+    const shortestDX = (fromX, toX) =>
+        (typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(fromX, toX)
+            : (toX - fromX);
+    const shortestDY = (fromY, toY) =>
+        (typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(fromY, toY)
+            : (toY - fromY);
+
+    if (segment.source && typeof segment.source.getWallProfile === "function") {
+        const p = segment.source.getWallProfile();
+        if (p && p.aLeft && p.bLeft && p.aRight && p.bRight) {
+            const toSeed = (raw) => ({
+                x: seedX + shortestDX(seedX, Number(raw.x)),
+                y: seedY + shortestDY(seedY, Number(raw.y))
+            });
+            return {
+                aLeft: toSeed(p.aLeft),
+                bLeft: toSeed(p.bLeft),
+                aRight: toSeed(p.aRight),
+                bRight: toSeed(p.bRight)
+            };
+        }
+    }
+
+    const ax = seedX + shortestDX(seedX, Number(segment.ax));
+    const ay = seedY + shortestDY(seedY, Number(segment.ay));
+    const bx = seedX + shortestDX(seedX, Number(segment.bx));
+    const by = seedY + shortestDY(seedY, Number(segment.by));
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (!(len > 1e-6)) return null;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const halfT = Math.max(0.0005, Number(segment.thickness) * 0.5);
+    return {
+        aLeft: { x: ax + nx * halfT, y: ay + ny * halfT },
+        bLeft: { x: bx + nx * halfT, y: by + ny * halfT },
+        aRight: { x: ax - nx * halfT, y: ay - ny * halfT },
+        bRight: { x: bx - nx * halfT, y: by - ny * halfT }
+    };
+}
+
+function collectMountableWallSegmentsForMountedId(mapRef, mountedId) {
+    const out = [];
+    if (!mapRef || !Number.isInteger(mountedId)) return out;
+
+    const wallSectionClass = (typeof WallSectionUnit !== "undefined") ? WallSectionUnit : null;
+    const section = (wallSectionClass && wallSectionClass._allSections instanceof Map)
+        ? wallSectionClass._allSections.get(Number(mountedId))
+        : null;
+    if (
+        section &&
+        !section.gone &&
+        section.startPoint &&
+        section.endPoint &&
+        Number.isFinite(section.startPoint.x) &&
+        Number.isFinite(section.startPoint.y) &&
+        Number.isFinite(section.endPoint.x) &&
+        Number.isFinite(section.endPoint.y)
+    ) {
+        out.push({
+            type: "wallSection",
+            source: section,
+            groupId: Number.isInteger(section.id) ? Number(section.id) : Number(mountedId),
+            ax: Number(section.startPoint.x),
+            ay: Number(section.startPoint.y),
+            bx: Number(section.endPoint.x),
+            by: Number(section.endPoint.y),
+            height: Math.max(0, Number(section.height) || 0),
+            thickness: Math.max(0.001, Number(section.thickness) || 0.001)
+        });
+    }
+
+    if (out.length === 0 && Array.isArray(mapRef.objects)) {
+        for (let i = 0; i < mapRef.objects.length; i++) {
+            const obj = mapRef.objects[i];
+            if (!obj || obj.gone) continue;
+            if (obj.type === "wallSection" && Number.isInteger(obj.id) && Number(obj.id) === Number(mountedId)) {
+                out.push({
+                    type: "wallSection",
+                    source: obj,
+                    groupId: Number(obj.id),
+                    ax: Number(obj.startPoint && obj.startPoint.x),
+                    ay: Number(obj.startPoint && obj.startPoint.y),
+                    bx: Number(obj.endPoint && obj.endPoint.x),
+                    by: Number(obj.endPoint && obj.endPoint.y),
+                    height: Math.max(0, Number(obj.height) || 0),
+                    thickness: Math.max(0.001, Number(obj.thickness) || 0.001)
+                });
+            }
+        }
+    }
+
+    return out.filter(seg =>
+        Number.isFinite(seg.ax) &&
+        Number.isFinite(seg.ay) &&
+        Number.isFinite(seg.bx) &&
+        Number.isFinite(seg.by)
+    );
+}
+
 function resolveMountedWallThickness(item) {
     if (!item || !item.map) return null;
     if (!Number.isFinite(item.placementRotation)) return null;
     const anchor = getPlacedObjectAnchorWorldPoint(item) || { x: item.x, y: item.y };
     if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) return null;
     const mapRef = item.map;
+    const mountedId = Number.isInteger(item.mountedWallLineGroupId)
+        ? Number(item.mountedWallLineGroupId)
+        : (Number.isInteger(item.mountedSectionId) ? Number(item.mountedSectionId) : null);
+    const wallSegments = Number.isInteger(mountedId)
+        ? collectMountableWallSegmentsForMountedId(mapRef, mountedId)
+        : [];
 
-    // Primary path: if we know the mounted wall line-group, use that group directly.
-    // This avoids orientation/projection misses (notably on near-vertical screen-facing walls).
-    if (Number.isInteger(item.mountedWallLineGroupId) && Array.isArray(mapRef.objects)) {
-        const groupWalls = mapRef.objects.filter(obj =>
-            obj &&
-            obj.type === "wall" &&
-            Number.isInteger(obj.lineGroupId) &&
-            obj.lineGroupId === item.mountedWallLineGroupId &&
-            Number.isFinite(obj.thickness)
-        );
+    // Primary path: if we know the mounted id, use that segment/group directly.
+    if (Number.isInteger(mountedId)) {
+        const groupWalls = wallSegments.filter(seg => Number.isInteger(seg.groupId) && Number(seg.groupId) === mountedId);
         if (groupWalls.length > 0) {
             let bestThickness = null;
             let bestDist = Infinity;
             for (let i = 0; i < groupWalls.length; i++) {
                 const wall = groupWalls[i];
-                const axRaw = Number(wall.a && wall.a.x);
-                const ayRaw = Number(wall.a && wall.a.y);
-                const bxRaw = Number(wall.b && wall.b.x);
-                const byRaw = Number(wall.b && wall.b.y);
+                const axRaw = Number(wall.ax);
+                const ayRaw = Number(wall.ay);
+                const bxRaw = Number(wall.bx);
+                const byRaw = Number(wall.by);
                 if (!Number.isFinite(axRaw) || !Number.isFinite(ayRaw) || !Number.isFinite(bxRaw) || !Number.isFinite(byRaw)) continue;
                 const ax = anchor.x + (typeof mapRef.shortestDeltaX === "function" ? mapRef.shortestDeltaX(anchor.x, axRaw) : (axRaw - anchor.x));
                 const ay = anchor.y + (typeof mapRef.shortestDeltaY === "function" ? mapRef.shortestDeltaY(anchor.y, ayRaw) : (ayRaw - anchor.y));
@@ -369,7 +552,7 @@ function resolveMountedWallThickness(item) {
                 }
                 if (dist < bestDist) {
                     bestDist = dist;
-                    bestThickness = Math.max(0.001, Number(wall.thickness) || 0.001);
+                    bestThickness = Math.max(0.001, Number(wall.thickness));
                 }
             }
             // Accept this persisted group only if it is plausibly near the mounted object.
@@ -382,19 +565,19 @@ function resolveMountedWallThickness(item) {
     const theta = Number(item.placementRotation) * (Math.PI / 180);
     const ux = Math.cos(theta);
     const uy = Math.sin(theta);
-    const walls = Array.isArray(mapRef.objects)
-        ? mapRef.objects
-        : [];
+    const walls = (wallSegments.length > 0)
+        ? wallSegments
+        : collectMountableWallSegments(mapRef);
     let bestThickness = null;
     let bestScore = Infinity;
     let bestWall = null;
     for (let i = 0; i < walls.length; i++) {
         const wall = walls[i];
-        if (!wall || wall.type !== "wall" || !wall.a || !wall.b) continue;
-        const ax = Number(wall.a.x);
-        const ay = Number(wall.a.y);
-        const bx = Number(wall.b.x);
-        const by = Number(wall.b.y);
+        if (!wall) continue;
+        const ax = Number(wall.ax);
+        const ay = Number(wall.ay);
+        const bx = Number(wall.bx);
+        const by = Number(wall.by);
         if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
         const wax = anchor.x + (typeof mapRef.shortestDeltaX === "function" ? mapRef.shortestDeltaX(anchor.x, ax) : (ax - anchor.x));
         const way = anchor.y + (typeof mapRef.shortestDeltaY === "function" ? mapRef.shortestDeltaY(anchor.y, ay) : (ay - anchor.y));
@@ -425,17 +608,17 @@ function resolveMountedWallThickness(item) {
     // Self-heal stale/missing mounted wall group once geometrically matched.
     if (
         bestWall &&
-        Number.isInteger(bestWall.lineGroupId) &&
-        item.mountedWallLineGroupId !== bestWall.lineGroupId
+        Number.isInteger(bestWall.groupId) &&
+        item.mountedWallLineGroupId !== bestWall.groupId
     ) {
         const previousSection = Number.isInteger(item.mountedWallLineGroupId)
             ? Number(item.mountedWallLineGroupId)
             : null;
-        item.mountedWallLineGroupId = bestWall.lineGroupId;
-        item.mountedSectionId = bestWall.lineGroupId;
+        item.mountedWallLineGroupId = bestWall.groupId;
+        item.mountedSectionId = bestWall.groupId;
         if (typeof globalThis !== "undefined" && typeof globalThis.markWallSectionDirty === "function") {
             if (Number.isInteger(previousSection)) globalThis.markWallSectionDirty(previousSection);
-            globalThis.markWallSectionDirty(bestWall.lineGroupId);
+            globalThis.markWallSectionDirty(bestWall.groupId);
         }
     }
     return Number.isFinite(bestThickness) ? bestThickness : null;
@@ -444,37 +627,22 @@ function resolveMountedWallThickness(item) {
 function getMountedWallFaceCentersForObject(item) {
     const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
         ? Number(item.mountedWallLineGroupId)
-        : null;
+        : (Number.isInteger(item && item.mountedSectionId) ? Number(item.mountedSectionId) : null);
     if (!Number.isInteger(mountedId)) return null;
     const worldX = Number(item && item.x);
     const worldY = Number(item && item.y);
     if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
 
     const mapRef = item && item.map ? item.map : null;
-    let walls = null;
-    const wallClass = (typeof Wall !== "undefined") ? Wall : null;
-    const sectionRegistry = wallClass && wallClass._sectionsById instanceof Map
-        ? wallClass._sectionsById
-        : null;
-    const sectionEntry = sectionRegistry ? sectionRegistry.get(mountedId) : null;
-    if (sectionEntry && Array.isArray(sectionEntry.walls) && sectionEntry.walls.length > 0) {
-        walls = sectionEntry.walls;
-    } else if (mapRef && Array.isArray(mapRef.objects)) {
-        walls = mapRef.objects.filter(obj =>
-            obj &&
-            obj.type === "wall" &&
-            Number.isInteger(obj.lineGroupId) &&
-            Number(obj.lineGroupId) === mountedId &&
-            typeof obj.getWallProfile === "function"
-        );
-    }
+    const allSegments = collectMountableWallSegmentsForMountedId(mapRef, mountedId);
+    const walls = allSegments.filter(seg => Number.isInteger(seg.groupId) && Number(seg.groupId) === mountedId);
     if (!Array.isArray(walls) || walls.length === 0) return null;
 
     let best = null;
     for (let i = 0; i < walls.length; i++) {
         const wall = walls[i];
-        if (!wall || typeof wall.getWallProfile !== "function") continue;
-        const profile = wall.getWallProfile();
+        if (!wall) continue;
+        const profile = buildSegmentFaceProfile(wall, worldX, worldY, mapRef);
         if (!profile || !profile.aLeft || !profile.bLeft || !profile.aRight || !profile.bRight) continue;
         const left = closestPointOnSegment2D(
             worldX, worldY,
@@ -619,6 +787,15 @@ void main(void) {
         this.pixiSprite.anchor.set(0.5, 1);
         objectLayer.addChild(this.pixiSprite);
 
+        this.animatedFrameCountX = 1;
+        this.animatedFrameCountY = 1;
+        this.animatedFps = 0;
+        this._animatedFrames = null;
+        this._animatedFrameIndex = 0;
+        this._animatedFrameProgress = 0;
+        this._animatedLastFrameCount = null;
+        this._animatedFrameSignature = "";
+
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
 
@@ -629,11 +806,130 @@ void main(void) {
         this.burned = false;
     }
 
-    ensureDepthBillboardMesh(pixiRef = null, alphaCutoff = 0.08) {
+    configureSpriteAnimation(metaEntry = null) {
+        const meta = (metaEntry && typeof metaEntry === "object") ? metaEntry : {};
+        const frameCountObj = (meta.framecount && typeof meta.framecount === "object")
+            ? meta.framecount
+            : ((meta.frameCount && typeof meta.frameCount === "object") ? meta.frameCount : null);
+        const frameCountX = Number.isFinite(meta.framecount_x)
+            ? Number(meta.framecount_x)
+            : (Number.isFinite(meta.frameCountX)
+                ? Number(meta.frameCountX)
+                : (Number.isFinite(frameCountObj && frameCountObj.x) ? Number(frameCountObj.x) : 1));
+        const frameCountY = Number.isFinite(meta.framecount_y)
+            ? Number(meta.framecount_y)
+            : (Number.isFinite(meta.frameCountY)
+                ? Number(meta.frameCountY)
+                : (Number.isFinite(frameCountObj && frameCountObj.y) ? Number(frameCountObj.y) : 1));
+        const animatedFps = Number.isFinite(meta.animated_fps)
+            ? Number(meta.animated_fps)
+            : (Number.isFinite(meta.animatedFps) ? Number(meta.animatedFps) : 0);
+
+        this.animatedFrameCountX = Math.max(1, Math.floor(frameCountX) || 1);
+        this.animatedFrameCountY = Math.max(1, Math.floor(frameCountY) || 1);
+        this.animatedFps = Math.max(0, Number(animatedFps) || 0);
+        this._animatedFrameProgress = 0;
+        this._animatedLastFrameCount = null;
+
+        const animationEnabled = this.animatedFps > 0 && (this.animatedFrameCountX > 1 || this.animatedFrameCountY > 1);
+        if (!animationEnabled) {
+            this._animatedFrames = null;
+            this._animatedFrameIndex = 0;
+            this._animatedFrameSignature = "";
+            if (this.pixiSprite) {
+                if (typeof this.texturePath === "string" && this.texturePath.length > 0) {
+                    this.pixiSprite.texture = PIXI.Texture.from(this.texturePath);
+                } else if (this.pixiSprite.texture && this.pixiSprite.texture.baseTexture) {
+                    this.pixiSprite.texture = new PIXI.Texture(this.pixiSprite.texture.baseTexture);
+                }
+            }
+            return;
+        }
+
+        this.rebuildAnimatedSpriteFrames(true);
+    }
+
+    rebuildAnimatedSpriteFrames(forceRebuild = false) {
+        if (!this.pixiSprite || !this.pixiSprite.texture) return null;
+        const fx = Math.max(1, Math.floor(this.animatedFrameCountX) || 1);
+        const fy = Math.max(1, Math.floor(this.animatedFrameCountY) || 1);
+        if (fx <= 1 && fy <= 1) {
+            this._animatedFrames = null;
+            this._animatedFrameIndex = 0;
+            return null;
+        }
+        const baseTexture = this.pixiSprite.texture.baseTexture;
+        if (!baseTexture) return null;
+        const baseW = Number(baseTexture.realWidth || baseTexture.width || 0);
+        const baseH = Number(baseTexture.realHeight || baseTexture.height || 0);
+        if (!(baseW > 0) || !(baseH > 0)) return null;
+
+        const signature = [
+            String(baseTexture.resource && baseTexture.resource.url ? baseTexture.resource.url : ""),
+            baseW,
+            baseH,
+            fx,
+            fy
+        ].join("|");
+        if (!forceRebuild && this._animatedFrames && this._animatedFrames.length > 0 && this._animatedFrameSignature === signature) {
+            return this._animatedFrames;
+        }
+
+        const frameW = baseW / fx;
+        const frameH = baseH / fy;
+        if (!(frameW > 0) || !(frameH > 0)) return null;
+        const frames = [];
+        for (let row = 0; row < fy; row++) {
+            for (let col = 0; col < fx; col++) {
+                const rect = new PIXI.Rectangle(col * frameW, row * frameH, frameW, frameH);
+                frames.push(new PIXI.Texture(baseTexture, rect));
+            }
+        }
+        if (frames.length === 0) return null;
+
+        this._animatedFrames = frames;
+        this._animatedFrameSignature = signature;
+        this._animatedFrameIndex = ((this._animatedFrameIndex % frames.length) + frames.length) % frames.length;
+        this.pixiSprite.texture = frames[this._animatedFrameIndex];
+        return this._animatedFrames;
+    }
+
+    updateSpriteAnimation() {
+        const fps = Math.max(0, Number(this.animatedFps) || 0);
+        if (!(fps > 0)) return;
+        if (Math.max(1, this.animatedFrameCountX || 1) <= 1 && Math.max(1, this.animatedFrameCountY || 1) <= 1) return;
+        const frames = this.rebuildAnimatedSpriteFrames();
+        if (!Array.isArray(frames) || frames.length <= 1 || !this.pixiSprite) return;
+
+        const currentFrameCount = Number.isFinite(frameCount) ? Number(frameCount) : 0;
+        if (!Number.isFinite(this._animatedLastFrameCount)) {
+            this._animatedLastFrameCount = currentFrameCount;
+            this.pixiSprite.texture = frames[this._animatedFrameIndex];
+            return;
+        }
+        const deltaFrames = Math.max(0, currentFrameCount - this._animatedLastFrameCount);
+        this._animatedLastFrameCount = currentFrameCount;
+        if (deltaFrames <= 0) {
+            this.pixiSprite.texture = frames[this._animatedFrameIndex];
+            return;
+        }
+        const simFps = Math.max(1, Number(frameRate) || 30);
+        this._animatedFrameProgress += deltaFrames * (fps / simFps);
+        const frameAdvance = Math.floor(this._animatedFrameProgress);
+        if (frameAdvance > 0) {
+            this._animatedFrameProgress -= frameAdvance;
+            this._animatedFrameIndex = (this._animatedFrameIndex + frameAdvance) % frames.length;
+        }
+        this.pixiSprite.texture = frames[this._animatedFrameIndex];
+    }
+
+    ensureDepthBillboardMesh(pixiRef = null, alphaCutoff = 0.08, options = {}) {
         const pixi = pixiRef || ((typeof PIXI !== "undefined") ? PIXI : null);
         if (!pixi) return null;
         const category = (typeof this.category === "string") ? this.category.trim().toLowerCase() : "";
+        const forceSinglePlane = !!(options && options.forceSinglePlane);
         const useDualWallPlanes = !!(
+            !forceSinglePlane &&
             this &&
             this.rotationAxis === "spatial" &&
             (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
@@ -687,28 +983,99 @@ void main(void) {
         mesh.visible = false;
         this._depthBillboardWorldPositions = geometry.getBuffer("aWorldPosition").data;
         this._depthBillboardLastSignature = "";
+        this._depthBillboardLastUvSignature = "";
         this._depthBillboardMeshMode = desiredMode;
         this._depthBillboardMesh = mesh;
         return mesh;
     }
 
+    updateDepthBillboardUvsForTexture(mesh, texture, useDualWallPlanes = false) {
+        if (!mesh || !mesh.geometry || !texture || !texture.baseTexture) return false;
+        const uvBuffer = mesh.geometry.getBuffer("aUvs");
+        if (!uvBuffer) return false;
+        const baseTexture = texture.baseTexture;
+        const baseW = Number(baseTexture.realWidth || baseTexture.width || 0);
+        const baseH = Number(baseTexture.realHeight || baseTexture.height || 0);
+        if (!(baseW > 0) || !(baseH > 0)) return false;
+        const frame = texture.frame || new PIXI.Rectangle(0, 0, baseW, baseH);
+        const u0 = Number(frame.x) / baseW;
+        const v0 = Number(frame.y) / baseH;
+        const u1 = (Number(frame.x) + Number(frame.width)) / baseW;
+        const v1 = (Number(frame.y) + Number(frame.height)) / baseH;
+        const mode = useDualWallPlanes ? "dual" : "single";
+        const uvSignature = `${mode}|${u0.toFixed(6)}|${v0.toFixed(6)}|${u1.toFixed(6)}|${v1.toFixed(6)}`;
+        if (this._depthBillboardLastUvSignature === uvSignature) return true;
+
+        if (useDualWallPlanes) {
+            uvBuffer.data = new Float32Array([
+                u0, v1,
+                u1, v1,
+                u1, v0,
+                u0, v0,
+                u1, v1,
+                u0, v1,
+                u0, v0,
+                u1, v0
+            ]);
+        } else {
+            uvBuffer.data = new Float32Array([
+                u0, v1,
+                u1, v1,
+                u1, v0,
+                u0, v0
+            ]);
+        }
+        uvBuffer.update();
+        this._depthBillboardLastUvSignature = uvSignature;
+        return true;
+    }
+
     updateDepthBillboardMesh(ctx = null, camera = null, options = {}) {
+        const hideDepthMesh = () => {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+        };
         const sprite = this.pixiSprite;
         const category = (typeof this.category === "string") ? this.category.trim().toLowerCase() : "";
-        const useDualWallPlanes = !!(
+        const wantsDualWallPlanes = !!(
             this &&
             this.rotationAxis === "spatial" &&
             (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
         );
+        let faceCenters = null;
+        let useDualWallPlanes = wantsDualWallPlanes;
+        if (useDualWallPlanes) {
+            faceCenters = getMountedWallFaceCentersForObject(this);
+            if (!faceCenters) {
+                useDualWallPlanes = false;
+            }
+        }
         const fallbackTexture = (typeof this.texturePath === "string" && this.texturePath.length > 0)
             ? PIXI.Texture.from(this.texturePath)
             : null;
-        if (!sprite && !fallbackTexture) return null;
-        if (!useDualWallPlanes && (!sprite || !sprite.texture)) return null;
+        if (!sprite && !fallbackTexture) {
+            hideDepthMesh();
+            return null;
+        }
+        if (!useDualWallPlanes && (!sprite || !sprite.texture)) {
+            hideDepthMesh();
+            return null;
+        }
         const cam = camera || null;
-        if (!cam) return null;
-        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff);
-        if (!mesh || !mesh.shader || !mesh.shader.uniforms) return null;
+        if (!cam) {
+            hideDepthMesh();
+            return null;
+        }
+        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
+            forceSinglePlane: !useDualWallPlanes
+        });
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms) {
+            hideDepthMesh();
+            return null;
+        }
+        const sourceTexture = (sprite && sprite.texture) ? sprite.texture : (fallbackTexture || PIXI.Texture.WHITE);
+        if (sourceTexture) {
+            StaticObject.prototype.updateDepthBillboardUvsForTexture.call(this, mesh, sourceTexture, useDualWallPlanes);
+        }
         const viewScale = Math.max(1e-6, Math.abs(Number(cam.viewscale) || 1));
         const xyRatio = Math.max(1e-6, Math.abs(Number(cam.xyratio) || 1));
         const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
@@ -717,8 +1084,6 @@ void main(void) {
 
         let signature = "";
         if (useDualWallPlanes) {
-            const faceCenters = getMountedWallFaceCentersForObject(this);
-            if (!faceCenters) return null;
             const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
             const height = Math.max(0.01, Number.isFinite(this.height) ? Number(this.height) : 1);
             const verticalWorldHeight = height / Math.max(0.0001, xyRatio);
@@ -812,7 +1177,7 @@ void main(void) {
         uniforms.uTint[2] = (tint & 255) / 255;
         uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
         uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
-        uniforms.uSampler = (sprite && sprite.texture) ? sprite.texture : (fallbackTexture || PIXI.Texture.WHITE);
+        uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
         mesh.visible = true;
         return mesh;
     }
@@ -899,6 +1264,8 @@ void main(void) {
     }
     
     update() {
+        this.updateSpriteAnimation();
+
         // Initialize max HP on first fire ignition
         if (this.isOnFire && !this.maxHP) {
             this.maxHP = this.hp;
@@ -1005,6 +1372,9 @@ void main(void) {
                         mountedSectionId: Number.isInteger(data.mountedSectionId)
                             ? data.mountedSectionId
                             : null,
+                        mountedWallSectionUnitId: Number.isInteger(data.mountedWallSectionUnitId)
+                            ? Number(data.mountedWallSectionUnitId)
+                            : null,
                         mountedWallFacingSign: Number.isFinite(data.mountedWallFacingSign)
                             ? Number(data.mountedWallFacingSign)
                             : null,
@@ -1014,7 +1384,8 @@ void main(void) {
                     });
                     break;
                 case 'wall':
-                    return Wall.loadJson(data, map);
+                    // Legacy wall type - no longer supported, skip
+                    return null;
                 case 'playground':
                     obj = new Playground(node, textures, map);
                     break;
@@ -1167,6 +1538,7 @@ class Tree extends StaticObject {
     applyTreeMetadata(metaEntry) {
         if (!metaEntry || typeof metaEntry !== "object") return;
         this._treeMetadata = metaEntry;
+        this.configureSpriteAnimation(metaEntry);
         if (metaEntry.anchor && typeof metaEntry.anchor === "object" && this.pixiSprite && this.pixiSprite.anchor) {
             const ax = Number.isFinite(metaEntry.anchor.x) ? Number(metaEntry.anchor.x) : this.pixiSprite.anchor.x;
             const ay = Number.isFinite(metaEntry.anchor.y) ? Number(metaEntry.anchor.y) : this.pixiSprite.anchor.y;
@@ -1376,7 +1748,7 @@ class Playground extends StaticObject {
 class PlacedObject extends StaticObject {
     constructor(location, map, options = {}) {
         const texturePath = (typeof options.texturePath === 'string' && options.texturePath.length > 0)
-            ? options.texturePath
+            ? normalizeTexturePathForMetadata(options.texturePath)
             : '/assets/images/doors/door5.png';
         const hasExplicitWidth = Number.isFinite(options.width);
         const hasExplicitHeight = Number.isFinite(options.height);
@@ -1402,6 +1774,9 @@ class PlacedObject extends StaticObject {
             : (Number.isInteger(options.mountedSectionId) ? Number(options.mountedSectionId) : null);
         this.mountedSectionId = Number.isInteger(this.mountedWallLineGroupId)
             ? Number(this.mountedWallLineGroupId)
+            : null;
+        this.mountedWallSectionUnitId = Number.isInteger(options.mountedWallSectionUnitId)
+            ? Number(options.mountedWallSectionUnitId)
             : null;
         this.mountedWallFacingSign = Number.isFinite(options.mountedWallFacingSign)
             ? Number(options.mountedWallFacingSign)
@@ -1437,6 +1812,17 @@ class PlacedObject extends StaticObject {
             placementRotation: hasExplicitPlacementRotation
         };
         this.snapToMountedWall();
+        if (
+            Number.isInteger(this.mountedWallSectionUnitId) &&
+            typeof WallSectionUnit !== "undefined" &&
+            WallSectionUnit &&
+            WallSectionUnit._allSections instanceof Map
+        ) {
+            const section = WallSectionUnit._allSections.get(Number(this.mountedWallSectionUnitId));
+            if (section && typeof section.attachObject === "function") {
+                section.attachObject(this, { direction: this.placementRotation });
+            }
+        }
         this.applyPlaceableMetadataFromServer();
         if (
             Number.isInteger(this.mountedWallLineGroupId) &&
@@ -1463,6 +1849,9 @@ class PlacedObject extends StaticObject {
             data.mountedWallLineGroupId = this.mountedWallLineGroupId;
             data.mountedSectionId = this.mountedWallLineGroupId;
         }
+        if (Number.isInteger(this.mountedWallSectionUnitId)) {
+            data.mountedWallSectionUnitId = Number(this.mountedWallSectionUnitId);
+        }
         if (Number.isFinite(this.mountedWallFacingSign)) {
             data.mountedWallFacingSign = Number(this.mountedWallFacingSign);
         }
@@ -1476,6 +1865,23 @@ class PlacedObject extends StaticObject {
         const mountedSection = Number.isInteger(this.mountedWallLineGroupId)
             ? Number(this.mountedWallLineGroupId)
             : null;
+        const mountedWallSectionUnitId = Number.isInteger(this.mountedWallSectionUnitId)
+            ? Number(this.mountedWallSectionUnitId)
+            : null;
+        if (
+            Number.isInteger(mountedWallSectionUnitId) &&
+            typeof WallSectionUnit !== "undefined" &&
+            WallSectionUnit &&
+            WallSectionUnit._allSections instanceof Map
+        ) {
+            const section = WallSectionUnit._allSections.get(mountedWallSectionUnitId);
+            if (section && typeof section.detachObject === "function") {
+                section.detachObject(this);
+            }
+        }
+        this.mountedWallLineGroupId = null;
+        this.mountedSectionId = null;
+        this.mountedWallSectionUnitId = null;
         super.removeFromGame();
         if (
             Number.isInteger(mountedSection) &&
@@ -1491,43 +1897,43 @@ class PlacedObject extends StaticObject {
         if (category !== "windows" && category !== "doors") return false;
         if (this.rotationAxis !== "spatial") return false;
         if (!this.map) return false;
+        const previousMountedId = Number.isInteger(this.mountedWallLineGroupId)
+            ? Number(this.mountedWallLineGroupId)
+            : null;
+        const previousWallSectionUnitId = Number.isInteger(this.mountedWallSectionUnitId)
+            ? Number(this.mountedWallSectionUnitId)
+            : null;
 
         const seedX = Number.isFinite(this.x) ? Number(this.x) : 0;
         const seedY = Number.isFinite(this.y) ? Number(this.y) : 0;
-        const wallClass = (typeof Wall !== "undefined") ? Wall : null;
-        if (!wallClass || typeof wallClass.collectAllWalls !== "function") return false;
-        const allWalls = wallClass.collectAllWalls(this.map).filter(w => w && w.a && w.b);
+        const allWalls = collectMountableWallSegments(this.map);
         if (!Array.isArray(allWalls) || allWalls.length === 0) return false;
 
-        let groupId = Number.isInteger(this.mountedWallLineGroupId) ? Number(this.mountedWallLineGroupId) : null;
+        let groupId = Number.isInteger(this.mountedWallLineGroupId)
+            ? Number(this.mountedWallLineGroupId)
+            : (Number.isInteger(this.mountedSectionId) ? Number(this.mountedSectionId) : null);
         let walls = [];
-        if (Number.isInteger(groupId) && wallClass._sectionsById instanceof Map) {
-            const entry = wallClass._sectionsById.get(groupId);
-            if (entry && Array.isArray(entry.walls) && entry.walls.length > 0) {
-                walls = entry.walls.filter(w => w && w.a && w.b);
-            }
-        }
         if (walls.length === 0 && Number.isInteger(groupId)) {
-            walls = allWalls.filter(w => Number.isInteger(w.lineGroupId) && Number(w.lineGroupId) === groupId);
+            walls = allWalls.filter(w => Number.isInteger(w.groupId) && Number(w.groupId) === groupId);
         }
         if (walls.length === 0) {
-            // Fallback: use nearest wall and adopt its line-group id.
+            // Fallback: use nearest wall segment and adopt its mounted id.
             let nearestWall = null;
             let nearestDist2 = Infinity;
             for (let i = 0; i < allWalls.length; i++) {
                 const w = allWalls[i];
-                const cp = closestPointOnSegment2D(seedX, seedY, Number(w.a.x), Number(w.a.y), Number(w.b.x), Number(w.b.y));
+                const cp = closestPointOnSegment2D(seedX, seedY, Number(w.ax), Number(w.ay), Number(w.bx), Number(w.by));
                 if (cp.dist2 < nearestDist2) {
                     nearestDist2 = cp.dist2;
                     nearestWall = w;
                 }
             }
             if (!nearestWall) return false;
-            groupId = Number.isInteger(nearestWall.lineGroupId) ? Number(nearestWall.lineGroupId) : null;
+            groupId = Number.isInteger(nearestWall.groupId) ? Number(nearestWall.groupId) : null;
             this.mountedWallLineGroupId = groupId;
             this.mountedSectionId = groupId;
             walls = Number.isInteger(groupId)
-                ? allWalls.filter(w => Number.isInteger(w.lineGroupId) && Number(w.lineGroupId) === groupId)
+                ? allWalls.filter(w => Number.isInteger(w.groupId) && Number(w.groupId) === groupId)
                 : [nearestWall];
         }
         if (walls.length === 0) return false;
@@ -1544,10 +1950,10 @@ class PlacedObject extends StaticObject {
                 : (toY - fromY);
         for (let i = 0; i < walls.length; i++) {
             const w = walls[i];
-            const ax = seedX + shortestDX(seedX, Number(w.a.x));
-            const ay = seedY + shortestDY(seedY, Number(w.a.y));
-            const bx = seedX + shortestDX(seedX, Number(w.b.x));
-            const by = seedY + shortestDY(seedY, Number(w.b.y));
+            const ax = seedX + shortestDX(seedX, Number(w.ax));
+            const ay = seedY + shortestDY(seedY, Number(w.ay));
+            const bx = seedX + shortestDX(seedX, Number(w.bx));
+            const by = seedY + shortestDY(seedY, Number(w.by));
             const cp = closestPointOnSegment2D(seedX, seedY, ax, ay, bx, by);
             if (cp.dist2 < bestDist2) {
                 bestDist2 = cp.dist2;
@@ -1556,10 +1962,10 @@ class PlacedObject extends StaticObject {
         }
         if (!wall) return false;
 
-        const axRaw = Number(wall && wall.a && wall.a.x);
-        const ayRaw = Number(wall && wall.a && wall.a.y);
-        const bxRaw = Number(wall && wall.b && wall.b.x);
-        const byRaw = Number(wall && wall.b && wall.b.y);
+        const axRaw = Number(wall && wall.ax);
+        const ayRaw = Number(wall && wall.ay);
+        const bxRaw = Number(wall && wall.bx);
+        const byRaw = Number(wall && wall.by);
         if (!Number.isFinite(axRaw) || !Number.isFinite(ayRaw) || !Number.isFinite(bxRaw) || !Number.isFinite(byRaw)) return false;
         const ax = seedX + shortestDX(seedX, axRaw);
         const ay = seedY + shortestDY(seedY, ayRaw);
@@ -1582,6 +1988,26 @@ class PlacedObject extends StaticObject {
         const anchorY = Number.isFinite(this.placeableAnchorY) ? Number(this.placeableAnchorY) : 1;
         const alongOffset = (anchorX - 0.5) * width;
         const wallHeight = Math.max(0, Number(wall && wall.height) || 0);
+        const nextWallSectionUnitId = (wall && wall.type === "wallSection" && Number.isInteger(wall.groupId))
+            ? Number(wall.groupId)
+            : null;
+        if (
+            Number.isInteger(previousWallSectionUnitId) &&
+            previousWallSectionUnitId !== nextWallSectionUnitId &&
+            typeof WallSectionUnit !== "undefined" &&
+            WallSectionUnit &&
+            WallSectionUnit._allSections instanceof Map
+        ) {
+            const prevSection = WallSectionUnit._allSections.get(previousWallSectionUnitId);
+            if (prevSection && typeof prevSection.detachObject === "function") {
+                prevSection.detachObject(this);
+            }
+        }
+        if (wall && wall.type === "wallSection") {
+            this.mountedWallSectionUnitId = Number.isInteger(wall.groupId) ? Number(wall.groupId) : null;
+        } else {
+            this.mountedWallSectionUnitId = null;
+        }
         if (category === "windows") {
             const wallThickness = Math.max(0.001, Number(wall && wall.thickness) || 0.001);
             const wallHalfT = wallThickness * 0.5;
@@ -1594,17 +2020,15 @@ class PlacedObject extends StaticObject {
             let faceStartY = ay + ny * wallHalfT * faceSign;
             let faceEndX = bx + nx * wallHalfT * faceSign;
             let faceEndY = by + ny * wallHalfT * faceSign;
-            if (typeof wall.getWallProfile === "function") {
-                const profile = wall.getWallProfile();
-                if (profile) {
-                    const faceA = faceSign >= 0 ? profile.aLeft : profile.aRight;
-                    const faceB = faceSign >= 0 ? profile.bLeft : profile.bRight;
-                    if (faceA && faceB && Number.isFinite(faceA.x) && Number.isFinite(faceA.y) && Number.isFinite(faceB.x) && Number.isFinite(faceB.y)) {
-                        faceStartX = seedX + shortestDX(seedX, Number(faceA.x));
-                        faceStartY = seedY + shortestDY(seedY, Number(faceA.y));
-                        faceEndX = seedX + shortestDX(seedX, Number(faceB.x));
-                        faceEndY = seedY + shortestDY(seedY, Number(faceB.y));
-                    }
+            const profile = buildSegmentFaceProfile(wall, seedX, seedY, this.map);
+            if (profile) {
+                const faceA = faceSign >= 0 ? profile.aLeft : profile.aRight;
+                const faceB = faceSign >= 0 ? profile.bLeft : profile.bRight;
+                if (faceA && faceB && Number.isFinite(faceA.x) && Number.isFinite(faceA.y) && Number.isFinite(faceB.x) && Number.isFinite(faceB.y)) {
+                    faceStartX = Number(faceA.x);
+                    faceStartY = Number(faceA.y);
+                    faceEndX = Number(faceB.x);
+                    faceEndY = Number(faceB.y);
                 }
             }
             const faceDx = faceEndX - faceStartX;
@@ -1625,8 +2049,31 @@ class PlacedObject extends StaticObject {
                 if (this.map && typeof this.map.wrapWorldY === "function") snappedY = this.map.wrapWorldY(snappedY);
                 this.x = snappedX;
                 this.y = snappedY;
-                this.z = wallHeight * 0.5;
+                if (Number.isInteger(nextWallSectionUnitId)) {
+                    // For WallSectionUnit mounts, center the window anchor point vertically on the wall.
+                    this.z = wallHeight * 0.5;
+                }
                 this.mountedWallFacingSign = faceSign;
+                if (
+                    Number.isInteger(nextWallSectionUnitId) &&
+                    typeof WallSectionUnit !== "undefined" &&
+                    WallSectionUnit &&
+                    WallSectionUnit._allSections instanceof Map
+                ) {
+                    const section = WallSectionUnit._allSections.get(nextWallSectionUnitId);
+                    if (section && typeof section.attachObject === "function") {
+                        section.attachObject(this, { direction: this.placementRotation });
+                    }
+                }
+                if (
+                    typeof globalThis !== "undefined" &&
+                    typeof globalThis.markWallSectionDirty === "function"
+                ) {
+                    if (Number.isInteger(previousMountedId) && previousMountedId !== groupId) {
+                        globalThis.markWallSectionDirty(previousMountedId);
+                    }
+                    if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
+                }
                 return true;
             }
         }
@@ -1640,12 +2087,33 @@ class PlacedObject extends StaticObject {
         if (this.map && typeof this.map.wrapWorldY === "function") snappedY = this.map.wrapWorldY(snappedY);
         this.x = snappedX;
         this.y = snappedY;
+        if (
+            Number.isInteger(nextWallSectionUnitId) &&
+            typeof WallSectionUnit !== "undefined" &&
+            WallSectionUnit &&
+            WallSectionUnit._allSections instanceof Map
+        ) {
+            const section = WallSectionUnit._allSections.get(nextWallSectionUnitId);
+            if (section && typeof section.attachObject === "function") {
+                section.attachObject(this, { direction: this.placementRotation });
+            }
+        }
+        if (
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.markWallSectionDirty === "function"
+        ) {
+            if (Number.isInteger(previousMountedId) && previousMountedId !== groupId) {
+                globalThis.markWallSectionDirty(previousMountedId);
+            }
+            if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
+        }
         return true;
     }
 
     applyPlaceableMetadata(metaEntry) {
         if (!metaEntry || typeof metaEntry !== 'object') return;
         const explicit = this._placedObjectExplicit || {};
+        this.configureSpriteAnimation(metaEntry);
         this.type = derivePlaceableType(this.category);
         if (!explicit.width && Number.isFinite(metaEntry.width)) {
             this.width = Math.max(0.25, Number(metaEntry.width));
@@ -1734,1525 +2202,6 @@ class PlacedObject extends StaticObject {
 if (typeof globalThis !== "undefined") {
     globalThis.getResolvedPlaceableMetadata = getResolvedPlaceableMetadata;
     globalThis.normalizePlaceableRotationAxis = normalizePlaceableRotationAxis;
-}
-
-class Wall {
-    static _stoneWallTexture = null;
-    static _nextLineGroupId = 1;
-    static _sectionHeightEpsilon = 1e-4;
-    static _sectionsById = new Map();
-    static _suspendGlobalRebuild = false;
-
-    static setBulkRebuildSuspended(nextValue) {
-        Wall._suspendGlobalRebuild = !!nextValue;
-    }
-
-    constructor(endpointA, endpointB, height, thickness, map, direction) {
-        this.type = 'wall';
-        this.map = map;
-        
-        if (endpointB instanceof MapNode && !(endpointA instanceof MapNode)) {
-            this.a = endpointB;
-            this.b = endpointA;
-            this.isDiagonal = true;
-        } else if (endpointA instanceof MapNode && !(endpointB instanceof MapNode)) {
-            this.a = endpointA;
-            this.b = endpointB;
-            this.isDiagonal = true;
-        } else {
-            this.a = endpointA;
-            this.b = endpointB;
-            this.isDiagonal = false;
-        }
-        // Position is at the center between endpoints
-        this.x = (this.a.x + this.b.x) / 2;
-        this.y = (this.a.y + this.b.y) / 2;
-        
-        this.height = height;
-        this.thickness = thickness;
-        this.direction = Number.isFinite(direction)
-            ? direction
-            : (this.map && typeof this.map.getHexDirection === "function"
-                ? this.map.getHexDirection(this.a.x - this.b.x, this.a.y - this.b.y)
-                : 0);
-        this.lineAxis = Wall.normalizeDirectionAxis(this.direction);
-        this.lineGroupId = null;
-        this.sectionId = null;
-        this.texturePhaseA = 0;
-        this.texturePhaseB = 1 / 3; // three map units per horizontal texture repeat
-        this.joinCorners = null;
-        this.blocksTile = false;
-        this.pixiSprite = new PIXI.Graphics();
-        this.skipTransform = true;
-        this.rebuildHitboxesFromJoinState();
-
-        // Arrays to track what this wall affects
-        this.nodes = [];           // All nodes this wall sits on
-        this.blockedLinks = [];    // All node connections this wall blocks
-        
-        for (let direction = 0; direction < 12; direction++) {
-            this.addBlockedLink(this.a.neighbors[direction], (direction + 6) % 12);
-            if (this.b instanceof MapNode) {
-                this.addBlockedLink(this.b.neighbors[direction], (direction + 6) % 12);
-            }
-        }
-        
-        if (this.isDiagonal) {
-            const d1 = (9 + direction) % 12;  // neighbor 9+dir
-            const d2 = (1 + direction) % 12;  // neighbor 1+dir
-            const d3 = (11 + direction) % 12; // neighbor 11+dir
-            const d4 = (3 + direction) % 12;  // neighbor 3+dir
-            
-            // Block the three cross-diagonal connections
-            this.blockCrossConnection(this.a, d1, d2);  // 9+dir ↔ 5+dir
-            this.blockCrossConnection(this.a, d3, d4);  // 7+dir ↔ 3+dir
-            this.blockCrossConnection(this.a, d2, d3);  // 5+dir ↔ 7+dir
-        } else {
-            // block one diagonal connection across the wall
-            const crossNodeA = this.a.neighbors[(direction + 2) % 12];
-            const crossNodeB = this.a.neighbors[(direction + 10) % 12];
-            this.addBlockedLink(crossNodeA, (direction + 9) % 12);
-            this.addBlockedLink(crossNodeB, (direction + 3) % 12);
-        }
-
-        this.findNodesAlongWall(endpointA, endpointB);
-        this.addToNodes();
-        this.updateConnectedWallJoins();
-        if (!Wall._suspendGlobalRebuild) {
-            const touchedBefore = Wall.collectSectionIdsFromWalls(this.collectPotentialJoinWalls());
-            Wall.recomputeLineGroups(this.map);
-            Wall.repairMountedSectionLinks(this.map);
-            Wall.markDirtyForTouchedSections([this], touchedBefore);
-        }
-
-        objectLayer.addChild(this.pixiSprite);
-    }
-
-    static normalizeDirectionAxis(direction) {
-        const d = Number(direction) || 0;
-        return ((d % 6) + 6) % 6;
-    }
-
-    getLineAxis() {
-        return Wall.normalizeDirectionAxis(this.direction);
-    }
-
-    sharesLineEndpointAndAxis(otherWall) {
-        if (!otherWall || otherWall.type !== 'wall') return false;
-        if (this.getLineAxis() !== otherWall.getLineAxis()) return false;
-        return (
-            Wall.pointsMatch(this.a, otherWall.a) ||
-            Wall.pointsMatch(this.a, otherWall.b) ||
-            Wall.pointsMatch(this.b, otherWall.a) ||
-            Wall.pointsMatch(this.b, otherWall.b)
-        );
-    }
-
-    static heightsMatch(a, b, epsilon = Wall._sectionHeightEpsilon) {
-        const ah = Number(a && a.height);
-        const bh = Number(b && b.height);
-        if (!Number.isFinite(ah) || !Number.isFinite(bh)) return false;
-        const eps = Number.isFinite(epsilon) ? Math.max(0, Number(epsilon)) : Wall._sectionHeightEpsilon;
-        return Math.abs(ah - bh) <= eps;
-    }
-
-    collectConnectedSectionNeighbors() {
-        return this.collectPotentialJoinWalls().filter(wall =>
-            this.sharesLineEndpointAndAxis(wall) &&
-            Wall.heightsMatch(this, wall)
-        );
-    }
-
-    static rebuildSectionRegistryFromWalls(walls) {
-        const registry = new Map();
-        if (Array.isArray(walls)) {
-            walls.forEach(wall => {
-                const id = Number.isInteger(wall && wall.sectionId) ? Number(wall.sectionId) : null;
-                if (!Number.isInteger(id)) return;
-                if (!registry.has(id)) {
-                    registry.set(id, {
-                        id,
-                        axis: Number.isFinite(wall && wall.lineAxis) ? Number(wall.lineAxis) : Wall.normalizeDirectionAxis(wall && wall.direction),
-                        height: Number(wall && wall.height),
-                        walls: []
-                    });
-                }
-                const section = registry.get(id);
-                section.walls.push(wall);
-            });
-        }
-        Wall._sectionsById = registry;
-        return registry;
-    }
-
-    static collectSectionIdsFromWalls(walls) {
-        const ids = new Set();
-        if (!Array.isArray(walls)) return ids;
-        walls.forEach(wall => {
-            if (!wall) return;
-            const id = Number.isInteger(wall.sectionId)
-                ? Number(wall.sectionId)
-                : (Number.isInteger(wall.lineGroupId) ? Number(wall.lineGroupId) : null);
-            if (Number.isInteger(id)) ids.add(id);
-        });
-        return ids;
-    }
-
-    static collectTouchingWalls(seedWalls) {
-        const out = new Set();
-        const queue = Array.isArray(seedWalls) ? seedWalls.slice() : [];
-        while (queue.length > 0) {
-            const wall = queue.shift();
-            if (!wall || out.has(wall)) continue;
-            out.add(wall);
-            if (typeof wall.collectPotentialJoinWalls !== "function") continue;
-            const neighbors = wall.collectPotentialJoinWalls();
-            if (!Array.isArray(neighbors)) continue;
-            neighbors.forEach(neighbor => {
-                if (!neighbor || out.has(neighbor)) return;
-                queue.push(neighbor);
-            });
-        }
-        return Array.from(out);
-    }
-
-    static markDirtySectionIds(sectionIds) {
-        const ids = Array.from(sectionIds || []).filter(id => Number.isInteger(id));
-        if (ids.length === 0) {
-            if (typeof globalThis !== "undefined" && typeof globalThis.markAllWallSectionsDirty === "function") {
-                globalThis.markAllWallSectionsDirty();
-            }
-            return;
-        }
-        if (typeof globalThis !== "undefined" && typeof globalThis.markWallSectionDirty === "function") {
-            ids.forEach(id => globalThis.markWallSectionDirty(id));
-            return;
-        }
-        if (typeof globalThis !== "undefined" && typeof globalThis.markAllWallSectionsDirty === "function") {
-            globalThis.markAllWallSectionsDirty();
-        }
-    }
-
-    static markDirtyForTouchedSections(seedWalls, previousSectionIds = null) {
-        const touchedWalls = Wall.collectTouchingWalls(seedWalls);
-        const ids = Wall.collectSectionIdsFromWalls(touchedWalls);
-        if (previousSectionIds && typeof previousSectionIds.forEach === "function") {
-            previousSectionIds.forEach(id => {
-                if (Number.isInteger(id)) ids.add(id);
-            });
-        }
-        Wall.markDirtySectionIds(ids);
-    }
-
-    static collectAllWalls(map) {
-        if (!map || !map.nodes) return [];
-        const walls = new Set();
-        Object.keys(map.nodes).forEach(xKey => {
-            const col = map.nodes[xKey];
-            if (!col) return;
-            Object.keys(col).forEach(yKey => {
-                const node = col[yKey];
-                if (!node || !Array.isArray(node.objects)) return;
-                node.objects.forEach(obj => {
-                    if (obj && obj.type === 'wall') {
-                        walls.add(obj);
-                    }
-                });
-            });
-        });
-        return Array.from(walls);
-    }
-
-    static recomputeLineGroups(map) {
-        const walls = Wall.collectAllWalls(map);
-        const usedIds = new Set();
-        walls.forEach(wall => {
-            wall.lineAxis = wall.getLineAxis();
-            wall._prevLineGroupId = Number.isInteger(wall.lineGroupId) ? wall.lineGroupId : null;
-            wall.lineGroupId = null;
-            wall.sectionId = null;
-        });
-
-        const existingMaxId = walls.reduce((maxSoFar, wall) => {
-            const id = Number.isInteger(wall && wall._prevLineGroupId) ? Number(wall._prevLineGroupId) : 0;
-            return Math.max(maxSoFar, id);
-        }, 0);
-        let nextGeneratedId = Math.max(1, existingMaxId + 1);
-        walls.forEach(seed => {
-            if (!seed || Number.isInteger(seed.lineGroupId)) return;
-            const queue = [seed];
-            const componentWalls = [];
-            seed.lineGroupId = -1;
-
-            while (queue.length > 0) {
-                const wall = queue.shift();
-                if (!wall) continue;
-                 componentWalls.push(wall);
-                const neighbors = wall.collectConnectedSectionNeighbors();
-                neighbors.forEach(neighbor => {
-                    if (!neighbor || Number.isInteger(neighbor.lineGroupId)) return;
-                    neighbor.lineGroupId = -1;
-                    queue.push(neighbor);
-                });
-            }
-
-            const priorIdCounts = new Map();
-            componentWalls.forEach(wall => {
-                const priorId = Number.isInteger(wall && wall._prevLineGroupId) ? Number(wall._prevLineGroupId) : null;
-                if (!Number.isInteger(priorId)) return;
-                priorIdCounts.set(priorId, (priorIdCounts.get(priorId) || 0) + 1);
-            });
-            let chosenId = null;
-            const sortedPriorIds = Array.from(priorIdCounts.entries())
-                .sort((a, b) => {
-                    if (b[1] !== a[1]) return b[1] - a[1];
-                    return a[0] - b[0];
-                })
-                .map(entry => entry[0]);
-            for (let i = 0; i < sortedPriorIds.length; i++) {
-                const candidate = sortedPriorIds[i];
-                if (usedIds.has(candidate)) continue;
-                chosenId = candidate;
-                break;
-            }
-            if (!Number.isInteger(chosenId)) {
-                while (usedIds.has(nextGeneratedId)) nextGeneratedId += 1;
-                chosenId = nextGeneratedId;
-                nextGeneratedId += 1;
-            }
-            usedIds.add(chosenId);
-            componentWalls.forEach(wall => {
-                wall.lineGroupId = chosenId;
-                wall.sectionId = chosenId;
-                wall._prevLineGroupId = null;
-            });
-        });
-
-        Wall.rebuildSectionRegistryFromWalls(walls);
-        Wall._nextLineGroupId = Math.max(nextGeneratedId, (usedIds.size > 0 ? (Math.max(...Array.from(usedIds)) + 1) : 1));
-    }
-
-    static reconcilePersistedSectionIds(map) {
-        const walls = Wall.collectAllWalls(map);
-        if (!walls || walls.length === 0) return;
-
-        const hasPersisted = walls.some(wall => Number.isInteger(wall && wall._persistedSectionId));
-        if (!hasPersisted) return;
-
-        const groups = new Map();
-        walls.forEach(wall => {
-            const groupId = Number.isInteger(wall && wall.lineGroupId) ? Number(wall.lineGroupId) : null;
-            if (!Number.isInteger(groupId)) return;
-            if (!groups.has(groupId)) groups.set(groupId, []);
-            groups.get(groupId).push(wall);
-        });
-
-        const usedSectionIds = new Set();
-        const remapped = new Set();
-        groups.forEach((groupWalls) => {
-            if (!Array.isArray(groupWalls) || groupWalls.length === 0) return;
-            const counts = new Map();
-            groupWalls.forEach(wall => {
-                const persisted = Number.isInteger(wall && wall._persistedSectionId) ? Number(wall._persistedSectionId) : null;
-                if (!Number.isInteger(persisted)) return;
-                counts.set(persisted, (counts.get(persisted) || 0) + 1);
-            });
-            if (counts.size === 0) return;
-            const preferred = Array.from(counts.entries())
-                .sort((a, b) => {
-                    if (b[1] !== a[1]) return b[1] - a[1];
-                    return a[0] - b[0];
-                })
-                .map(entry => entry[0]);
-            let chosen = null;
-            for (let i = 0; i < preferred.length; i++) {
-                if (usedSectionIds.has(preferred[i])) continue;
-                chosen = preferred[i];
-                break;
-            }
-            if (!Number.isInteger(chosen)) return;
-            usedSectionIds.add(chosen);
-            groupWalls.forEach(wall => {
-                wall.lineGroupId = chosen;
-                wall.sectionId = chosen;
-            });
-            remapped.add(chosen);
-        });
-
-        // Any group that did not map to a persisted id keeps current id, but ensure uniqueness.
-        let nextId = Math.max(1, walls.reduce((m, wall) => {
-            const id = Number.isInteger(wall && wall.lineGroupId) ? Number(wall.lineGroupId) : 0;
-            return Math.max(m, id);
-        }, 0) + 1);
-        groups.forEach((groupWalls) => {
-            if (!Array.isArray(groupWalls) || groupWalls.length === 0) return;
-            const first = groupWalls[0];
-            const id = Number.isInteger(first && first.lineGroupId) ? Number(first.lineGroupId) : null;
-            if (Number.isInteger(id) && !usedSectionIds.has(id)) {
-                usedSectionIds.add(id);
-                groupWalls.forEach(wall => {
-                    wall.lineGroupId = id;
-                    wall.sectionId = id;
-                });
-                return;
-            }
-            while (usedSectionIds.has(nextId)) nextId += 1;
-            const assigned = nextId;
-            usedSectionIds.add(assigned);
-            nextId += 1;
-            groupWalls.forEach(wall => {
-                wall.lineGroupId = assigned;
-                wall.sectionId = assigned;
-            });
-        });
-
-        walls.forEach(wall => {
-            wall._persistedSectionId = null;
-        });
-        Wall.rebuildSectionRegistryFromWalls(walls);
-        Wall._nextLineGroupId = Math.max(1, (usedSectionIds.size > 0 ? (Math.max(...Array.from(usedSectionIds)) + 1) : 1));
-    }
-
-    static repairMountedSectionLinks(map) {
-        if (!map || !Array.isArray(map.objects)) return;
-        const isWallMounted = (obj) => {
-            if (!obj) return false;
-            const category = (typeof obj.category === "string") ? obj.category.trim().toLowerCase() : "";
-            const type = (typeof obj.type === "string") ? obj.type.trim().toLowerCase() : "";
-            return category === "windows" || category === "doors" || type === "window" || type === "door";
-        };
-        for (let i = 0; i < map.objects.length; i++) {
-            const obj = map.objects[i];
-            if (!isWallMounted(obj)) continue;
-            if (!Number.isFinite(obj && obj.placementRotation)) continue;
-            // This resolver self-heals stale line-group ids when it finds a better geometric match.
-            resolveMountedWallThickness(obj);
-            if (typeof obj.snapToMountedWall === "function") {
-                obj.snapToMountedWall();
-            }
-        }
-    }
-
-    static pointsMatch(p1, p2, eps = 1e-6) {
-        if (!p1 || !p2) return false;
-        if (!Number.isFinite(p1.x) || !Number.isFinite(p1.y) || !Number.isFinite(p2.x) || !Number.isFinite(p2.y)) return false;
-        return Math.abs(p1.x - p2.x) <= eps && Math.abs(p1.y - p2.y) <= eps;
-    }
-
-    static lineIntersection(p, r, q, s) {
-        const cross = r.x * s.y - r.y * s.x;
-        if (Math.abs(cross) < 1e-7) return null;
-        const qpx = q.x - p.x;
-        const qpy = q.y - p.y;
-        const t = (qpx * s.y - qpy * s.x) / cross;
-        return {
-            x: p.x + r.x * t,
-            y: p.y + r.y * t
-        };
-    }
-
-    static distancePointToLine(point, linePoint, lineDir) {
-        if (!point || !linePoint || !lineDir) return Infinity;
-        const vx = point.x - linePoint.x;
-        const vy = point.y - linePoint.y;
-        const cross = Math.abs(vx * lineDir.y - vy * lineDir.x);
-        const dirLen = Math.hypot(lineDir.x, lineDir.y);
-        if (dirLen < 1e-7) return Infinity;
-        return cross / dirLen;
-    }
-
-    static hasFinitePoint(point) {
-        return !!point && Number.isFinite(point.x) && Number.isFinite(point.y);
-    }
-
-    getTexturePhaseAtEndpoint(endpoint) {
-        if (!endpoint) return null;
-        if (Wall.pointsMatch(endpoint, this.a)) return this.texturePhaseA;
-        if (Wall.pointsMatch(endpoint, this.b)) return this.texturePhaseB;
-        return null;
-    }
-
-    setTexturePhaseForOrderedEndpoints(fromEndpoint, toEndpoint, phaseFrom, phaseTo) {
-        if (Wall.pointsMatch(fromEndpoint, this.a) && Wall.pointsMatch(toEndpoint, this.b)) {
-            this.texturePhaseA = phaseFrom;
-            this.texturePhaseB = phaseTo;
-            return true;
-        }
-        if (Wall.pointsMatch(fromEndpoint, this.b) && Wall.pointsMatch(toEndpoint, this.a)) {
-            this.texturePhaseA = phaseTo;
-            this.texturePhaseB = phaseFrom;
-            return true;
-        }
-        return false;
-    }
-
-    static getStoneWallTexture() {
-        if (!Wall._stoneWallTexture) {
-            Wall._stoneWallTexture = PIXI.Texture.from('/assets/images/walls/stonewall.png');
-            if (Wall._stoneWallTexture && Wall._stoneWallTexture.baseTexture) {
-                Wall._stoneWallTexture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
-                Wall._stoneWallTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
-            }
-        }
-        return Wall._stoneWallTexture;
-    }
-
-    getWallProfile() {
-        const ax = Number(this.a && this.a.x);
-        const ay = Number(this.a && this.a.y);
-        const bx = Number(this.b && this.b.x);
-        const by = Number(this.b && this.b.y);
-        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return null;
-
-        const wallThickness = Math.max(0.001, Number(this.thickness) || 0.001);
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-6) return null;
-
-        const nx = -dy / len;
-        const ny = dx / len;
-        const halfThickness = wallThickness / 2;
-        const defaultALeft = { x: ax + nx * halfThickness, y: ay + ny * halfThickness };
-        const defaultARight = { x: ax - nx * halfThickness, y: ay - ny * halfThickness };
-        const defaultBLeft = { x: bx + nx * halfThickness, y: by + ny * halfThickness };
-        const defaultBRight = { x: bx - nx * halfThickness, y: by - ny * halfThickness };
-
-        const aLeft = this.joinCorners && this.joinCorners.aLeft ? this.joinCorners.aLeft : defaultALeft;
-        const aRight = this.joinCorners && this.joinCorners.aRight ? this.joinCorners.aRight : defaultARight;
-        const bLeft = this.joinCorners && this.joinCorners.bLeft ? this.joinCorners.bLeft : defaultBLeft;
-        const bRight = this.joinCorners && this.joinCorners.bRight ? this.joinCorners.bRight : defaultBRight;
-
-        return { aLeft, aRight, bLeft, bRight };
-    }
-
-    generateLosOcclusionSpan(wizardRef, options = {}) {
-        if (!wizardRef || !Number.isFinite(wizardRef.x) || !Number.isFinite(wizardRef.y)) return [];
-        const hitbox = this.groundPlaneHitbox;
-        if (!(hitbox instanceof PolygonHitbox) || !Array.isArray(hitbox.points) || hitbox.points.length < 2) {
-            return [];
-        }
-
-        const bins = Number.isFinite(options.bins) ? Math.max(1, Math.floor(options.bins)) : 0;
-        const angleForBin = (typeof options.angleForBin === "function") ? options.angleForBin : null;
-        const forEachBinInShortSpan = (typeof options.forEachBinInShortSpan === "function") ? options.forEachBinInShortSpan : null;
-        const raySegmentDistance = (typeof options.raySegmentDistance === "function") ? options.raySegmentDistance : null;
-        if (!bins || !angleForBin || !forEachBinInShortSpan || !raySegmentDistance) return [];
-
-        const shortestDX = (typeof options.shortestDeltaX === "function")
-            ? options.shortestDeltaX
-            : ((fromX, toX) => {
-                const mapRef = wizardRef.map || this.map || null;
-                if (mapRef && typeof mapRef.shortestDeltaX === "function") {
-                    return mapRef.shortestDeltaX(fromX, toX);
-                }
-                return toX - fromX;
-            });
-        const shortestDY = (typeof options.shortestDeltaY === "function")
-            ? options.shortestDeltaY
-            : ((fromY, toY) => {
-                const mapRef = wizardRef.map || this.map || null;
-                if (mapRef && typeof mapRef.shortestDeltaY === "function") {
-                    return mapRef.shortestDeltaY(fromY, toY);
-                }
-                return toY - fromY;
-            });
-
-        const wx = wizardRef.x;
-        const wy = wizardRef.y;
-        const localPoints = hitbox.points
-            .map(p => ({
-                x: wx + shortestDX(wx, p.x),
-                y: wy + shortestDY(wy, p.y)
-            }))
-            .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
-        if (localPoints.length < 2) return [];
-
-        const bestByBin = new Float32Array(bins);
-        const touched = new Uint8Array(bins);
-        for (let i = 0; i < bins; i++) bestByBin[i] = Infinity;
-
-        for (let i = 0; i < localPoints.length; i++) {
-            const p1 = localPoints[i];
-            const p2 = localPoints[(i + 1) % localPoints.length];
-            if (!p1 || !p2) continue;
-            const a0 = Math.atan2(p1.y - wy, p1.x - wx);
-            const a1 = Math.atan2(p2.y - wy, p2.x - wx);
-            forEachBinInShortSpan(a0, a1, bins, b => {
-                const theta = angleForBin(b);
-                const dirX = Math.cos(theta);
-                const dirY = Math.sin(theta);
-                const t = raySegmentDistance(wx, wy, dirX, dirY, p1.x, p1.y, p2.x, p2.y);
-                if (!Number.isFinite(t) || t < 0) return;
-                if (t < bestByBin[b]) {
-                    bestByBin[b] = t;
-                    touched[b] = 1;
-                }
-            });
-        }
-
-        const hits = [];
-        for (let i = 0; i < bins; i++) {
-            if (!touched[i] || !Number.isFinite(bestByBin[i])) continue;
-            hits.push({ binIdx: i, hitDist: bestByBin[i] });
-        }
-        return hits;
-    }
-
-    getEndpointLineData(endpointKey) {
-        const endpoint = endpointKey === 'a' ? this.a : this.b;
-        const other = endpointKey === 'a' ? this.b : this.a;
-        if (!endpoint || !other) return null;
-        const ex = Number(endpoint.x);
-        const ey = Number(endpoint.y);
-        const ox = Number(other.x);
-        const oy = Number(other.y);
-        if (!Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(ox) || !Number.isFinite(oy)) return null;
-
-        const tx = ox - ex;
-        const ty = oy - ey;
-        const tLen = Math.hypot(tx, ty);
-        if (tLen < 1e-7) return null;
-        const dir = { x: tx / tLen, y: ty / tLen };
-        const normal = { x: -dir.y, y: dir.x };
-        const half = Math.max(0.001, Number(this.thickness) || 0.001) / 2;
-        const plusPoint = { x: ex + normal.x * half, y: ey + normal.y * half };
-        const minusPoint = { x: ex - normal.x * half, y: ey - normal.y * half };
-        const leftPoint = endpointKey === 'a' ? plusPoint : minusPoint;
-        const rightPoint = endpointKey === 'a' ? minusPoint : plusPoint;
-
-        return {
-            endpoint: { x: ex, y: ey },
-            dir,
-            segmentLength: tLen,
-            leftPoint,
-            rightPoint
-        };
-    }
-
-    computeJoinedEndpointCorners(endpointKey) {
-        const lineData = this.getEndpointLineData(endpointKey);
-        if (!lineData) return null;
-        const endpoint = lineData.endpoint;
-        const otherEndpoint = endpointKey === 'a' ? this.b : this.a;
-        const ox = Number(otherEndpoint && otherEndpoint.x);
-        const oy = Number(otherEndpoint && otherEndpoint.y);
-        const candidates = this.collectPotentialJoinWalls().filter(wall => this.sharesEndpointWith(wall, endpoint));
-        if (!candidates.length) return null;
-
-        const defaultLeft = lineData.leftPoint;
-        const defaultRight = lineData.rightPoint;
-        const wallThickness = Math.max(0.001, Number(this.thickness) || 0.001);
-        const maxMiterDistance = Math.max(wallThickness * 24, lineData.segmentLength * 2);
-        const maxAlong = Math.max(
-            wallThickness * 24,
-            lineData.segmentLength + wallThickness * 2
-        );
-
-        const isEndpointLocalPoint = point => {
-            if (!point) return false;
-            const along = (point.x - endpoint.x) * lineData.dir.x + (point.y - endpoint.y) * lineData.dir.y;
-            if (along < -wallThickness * 2 || along > maxAlong) return false;
-            if (!Number.isFinite(ox) || !Number.isFinite(oy)) return true;
-            const distToEndpoint = Math.hypot(point.x - endpoint.x, point.y - endpoint.y);
-            const distToOther = Math.hypot(point.x - ox, point.y - oy);
-            return distToEndpoint <= distToOther + wallThickness * 2;
-        };
-
-        const orderPlanesByReference = (baseLineData, referencePoint) => {
-            if (!Wall.hasFinitePoint(referencePoint)) {
-                return {
-                    insidePoint: baseLineData.leftPoint,
-                    outsidePoint: baseLineData.rightPoint,
-                    insideIsLeft: true
-                };
-            }
-            const leftDist = Wall.distancePointToLine(referencePoint, baseLineData.leftPoint, baseLineData.dir);
-            const rightDist = Wall.distancePointToLine(referencePoint, baseLineData.rightPoint, baseLineData.dir);
-            const insideIsLeft = leftDist <= rightDist;
-            return {
-                insidePoint: insideIsLeft ? baseLineData.leftPoint : baseLineData.rightPoint,
-                outsidePoint: insideIsLeft ? baseLineData.rightPoint : baseLineData.leftPoint,
-                insideIsLeft
-            };
-        };
-
-        let bestLeft = null;
-        let bestRight = null;
-        let bestLeftDist = Infinity;
-        let bestRightDist = Infinity;
-
-        for (const neighbor of candidates) {
-            if (!neighbor) continue;
-            const neighborEndpointKey = Wall.pointsMatch(endpoint, neighbor.a) ? 'a' : (Wall.pointsMatch(endpoint, neighbor.b) ? 'b' : null);
-            if (!neighborEndpointKey) continue;
-            const neighborLineData = neighbor.getEndpointLineData(neighborEndpointKey);
-            if (!neighborLineData) continue;
-            const neighborOtherEndpoint = neighborEndpointKey === 'a' ? neighbor.b : neighbor.a;
-            if (!Wall.hasFinitePoint(neighborOtherEndpoint) || !Wall.hasFinitePoint(otherEndpoint)) continue;
-
-            const thisOrder = orderPlanesByReference(lineData, neighborOtherEndpoint);
-            const neighborOrder = orderPlanesByReference(neighborLineData, otherEndpoint);
-            const thisHeight = Number(this.height);
-            const neighborHeight = Number(neighbor.height);
-            const hasHeightMismatch = Number.isFinite(thisHeight) && Number.isFinite(neighborHeight) && !Wall.heightsMatch(this, neighbor);
-            const thisIsTaller = hasHeightMismatch && thisHeight > neighborHeight;
-
-            let leftCandidate = null;
-            let rightCandidate = null;
-            if (hasHeightMismatch) {
-                // Height mismatch joins are clipped against one side-line of the opposite wall:
-                // - Taller wall extends to the farther (outside) side-line of the shorter wall.
-                // - Shorter wall stops at the nearer (inside) side-line of the taller wall.
-                const neighborCutLine = thisIsTaller ? neighborOrder.outsidePoint : neighborOrder.insidePoint;
-                leftCandidate = Wall.lineIntersection(
-                    lineData.leftPoint, lineData.dir,
-                    neighborCutLine, neighborLineData.dir
-                );
-                rightCandidate = Wall.lineIntersection(
-                    lineData.rightPoint, lineData.dir,
-                    neighborCutLine, neighborLineData.dir
-                );
-            } else {
-                // Equal-height join: inside-to-inside and outside-to-outside miter.
-                const insideHit = Wall.lineIntersection(
-                    thisOrder.insidePoint, lineData.dir,
-                    neighborOrder.insidePoint, neighborLineData.dir
-                );
-                const outsideHit = Wall.lineIntersection(
-                    thisOrder.outsidePoint, lineData.dir,
-                    neighborOrder.outsidePoint, neighborLineData.dir
-                );
-                const mapInsideToLeft = thisOrder.insideIsLeft;
-                leftCandidate = mapInsideToLeft ? insideHit : outsideHit;
-                rightCandidate = mapInsideToLeft ? outsideHit : insideHit;
-            }
-
-            if (leftCandidate && isEndpointLocalPoint(leftCandidate)) {
-                const d = Math.hypot(leftCandidate.x - endpoint.x, leftCandidate.y - endpoint.y);
-                if (d <= maxMiterDistance && d < bestLeftDist) {
-                    bestLeftDist = d;
-                    bestLeft = leftCandidate;
-                }
-            }
-            if (rightCandidate && isEndpointLocalPoint(rightCandidate)) {
-                const d = Math.hypot(rightCandidate.x - endpoint.x, rightCandidate.y - endpoint.y);
-                if (d <= maxMiterDistance && d < bestRightDist) {
-                    bestRightDist = d;
-                    bestRight = rightCandidate;
-                }
-            }
-        }
-
-        let left = bestLeft || defaultLeft;
-        let right = bestRight || defaultRight;
-
-        // Keep wall volume valid even with pathological join geometry.
-        if (Math.hypot(left.x - right.x, left.y - right.y) < wallThickness * 0.15) {
-            left = defaultLeft;
-            right = defaultRight;
-        }
-        return { left, right };
-    }
-
-    shouldPreserveEndpointJunction(endpointKey) {
-        const endpoint = endpointKey === 'a' ? this.a : this.b;
-        if (!endpoint) return false;
-        const neighbors = this.collectPotentialJoinWalls().filter(wall => this.sharesEndpointWith(wall, endpoint));
-        if (neighbors.length < 2) return false;
-        if (!this.joinCorners) return false;
-        if (endpointKey === 'a') {
-            return Wall.hasFinitePoint(this.joinCorners.aLeft) && Wall.hasFinitePoint(this.joinCorners.aRight);
-        }
-        return Wall.hasFinitePoint(this.joinCorners.bLeft) && Wall.hasFinitePoint(this.joinCorners.bRight);
-    }
-
-    sharesEndpointWith(otherWall, endpoint) {
-        if (!otherWall || !endpoint) return false;
-        return (
-            Wall.pointsMatch(endpoint, otherWall.a) ||
-            Wall.pointsMatch(endpoint, otherWall.b)
-        );
-    }
-
-    collectPotentialJoinWalls() {
-        if (!this.map) return [];
-        const candidates = new Set();
-        const nodesToCheck = new Set();
-        const endpoints = [this.a, this.b];
-
-        endpoints.forEach(endpoint => {
-            if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return;
-            const node = this.map.worldToNode(endpoint.x, endpoint.y);
-            if (!node) return;
-            nodesToCheck.add(node);
-            if (Array.isArray(node.neighbors)) {
-                node.neighbors.forEach(neighbor => {
-                    if (neighbor) nodesToCheck.add(neighbor);
-                });
-            }
-        });
-
-        this.nodes.forEach(node => {
-            if (node) nodesToCheck.add(node);
-        });
-
-        nodesToCheck.forEach(node => {
-            if (!node || !Array.isArray(node.objects)) return;
-            node.objects.forEach(obj => {
-                if (!obj || obj === this || obj.type !== 'wall') return;
-                if (
-                    this.sharesEndpointWith(obj, this.a) ||
-                    this.sharesEndpointWith(obj, this.b)
-                ) {
-                    candidates.add(obj);
-                }
-            });
-        });
-
-        return Array.from(candidates);
-    }
-
-    hasConnectedWallAtEndpoint(endpointKey) {
-        const endpoint = endpointKey === "a" ? this.a : this.b;
-        if (!endpoint) return false;
-        return this.collectPotentialJoinWalls().some(wall => this.sharesEndpointWith(wall, endpoint));
-    }
-
-    getAdjacentCollinearWallHeightAtEndpoint(endpointKey) {
-        const endpoint = endpointKey === "a" ? this.a : this.b;
-        if (!endpoint) return null;
-        const neighbors = this.collectPotentialJoinWalls().filter(wall =>
-            this.sharesEndpointWith(wall, endpoint) &&
-            this.sharesLineEndpointAndAxis(wall)
-        );
-        if (!neighbors.length) return null;
-        let maxHeight = -Infinity;
-        for (let i = 0; i < neighbors.length; i++) {
-            const h = Number(neighbors[i] && neighbors[i].height);
-            if (!Number.isFinite(h)) continue;
-            maxHeight = Math.max(maxHeight, h);
-        }
-        return Number.isFinite(maxHeight) ? maxHeight : null;
-    }
-
-    collectWallsSharingDeletedEndpoints() {
-        if (!this.map) return [];
-        const walls = new Set();
-        const endpoints = [this.a, this.b];
-        const nodesToCheck = new Set();
-
-        endpoints.forEach(endpoint => {
-            if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return;
-            const node = this.map.worldToNode(endpoint.x, endpoint.y);
-            if (!node) return;
-            nodesToCheck.add(node);
-            if (Array.isArray(node.neighbors)) {
-                node.neighbors.forEach(neighbor => {
-                    if (neighbor) nodesToCheck.add(neighbor);
-                });
-            }
-        });
-
-        nodesToCheck.forEach(node => {
-            if (!node || !Array.isArray(node.objects)) return;
-            node.objects.forEach(obj => {
-                if (!obj || obj === this || obj.type !== 'wall') return;
-                if (
-                    this.sharesEndpointWith(obj, this.a) ||
-                    this.sharesEndpointWith(obj, this.b)
-                ) {
-                    walls.add(obj);
-                }
-            });
-        });
-
-        return Array.from(walls);
-    }
-
-    rebuildHitboxesFromJoinState() {
-        const profile = this.getWallProfile();
-        if (!profile) {
-            this.visualHitbox = null;
-            this.groundPlaneHitbox = null;
-            return;
-        }
-
-        const wallHeight = Math.max(0.001, Number(this.height) || 0.001);
-        const { aLeft, aRight, bLeft, bRight } = profile;
-        this.groundPlaneHitbox = new PolygonHitbox([aLeft, aRight, bRight, bLeft]);
-        this.visualHitbox = new PolygonHitbox([
-            { x: aLeft.x, y: aLeft.y },
-            { x: aLeft.x, y: aLeft.y - wallHeight },
-            { x: bLeft.x, y: bLeft.y - wallHeight },
-            { x: bLeft.x, y: bLeft.y },
-            { x: bRight.x, y: bRight.y },
-            { x: bRight.x, y: bRight.y - wallHeight },
-            { x: aRight.x, y: aRight.y - wallHeight },
-            { x: aRight.x, y: aRight.y }
-        ]);
-    }
-
-    recomputeJoins(options = {}) {
-        const preserveMultiJunction = !!(options && options.preserveMultiJunction);
-        const keepA = preserveMultiJunction && this.shouldPreserveEndpointJunction('a');
-        const keepB = preserveMultiJunction && this.shouldPreserveEndpointJunction('b');
-
-        const aJoin = keepA
-            ? { left: this.joinCorners.aLeft, right: this.joinCorners.aRight }
-            : this.computeJoinedEndpointCorners('a');
-        const bJoin = keepB
-            ? { left: this.joinCorners.bLeft, right: this.joinCorners.bRight }
-            : this.computeJoinedEndpointCorners('b');
-
-        this.joinCorners = {
-            aLeft: aJoin ? aJoin.left : null,
-            aRight: aJoin ? aJoin.right : null,
-            bLeft: bJoin ? bJoin.left : null,
-            bRight: bJoin ? bJoin.right : null
-        };
-        this.rebuildHitboxesFromJoinState();
-    }
-
-    updateConnectedWallJoins() {
-        const neighbors = this.collectPotentialJoinWalls();
-        this.recomputeJoins();
-        neighbors.forEach(wall => {
-            if (wall && typeof wall.recomputeJoins === 'function') {
-                wall.recomputeJoins({ preserveMultiJunction: true });
-            }
-        });
-    }
-    
-    findNodesAlongWall(endpointA, endpointB) {
-        // Find all nodes between the two endpoints
-        // Only add actual MapNodes (check if they have xindex property)
-        if (this.isMapNode(endpointA)) {
-            this.nodes.push(endpointA);
-        }
-        if (this.isMapNode(endpointB) && endpointB !== endpointA) {
-            this.nodes.push(endpointB);
-        }
-    }
-    
-    isMapNode(obj) {
-        // MapNodes have xindex and yindex properties
-        return obj && typeof obj.xindex === 'number' && typeof obj.yindex === 'number';
-    }
-    
-    addToNodes() {
-        // Add this wall to all nodes it sits on
-        for (const node of this.nodes) {
-            if (node) {
-                node.addObject(this);
-            }
-        }
-    }
-    
-    removeFromNodes() {
-        // Remove this wall from all nodes it sits on
-        for (const node of this.nodes) {
-            if (node) {
-                node.removeObject(this);
-            }
-        }
-        
-        // Clear all blocked links
-        for (const link of this.blockedLinks) {
-            const {node, direction} = link;
-            if (node.blockedNeighbors && node.blockedNeighbors.has(direction)) {
-                const blockSet = node.blockedNeighbors.get(direction);
-                blockSet.delete(this);
-                if (blockSet.size === 0) {
-                    node.blockedNeighbors.delete(direction);
-                }
-            }
-        }
-        this.blockedLinks = [];
-
-        // Recompute only walls that shared an endpoint with this deleted wall.
-        // Their joins now resolve against the reduced local wall set.
-        const adjacentWalls = this.collectWallsSharingDeletedEndpoints();
-        const touchedBefore = Wall.collectSectionIdsFromWalls([this, ...adjacentWalls]);
-        adjacentWalls.forEach(wall => {
-            if (wall && typeof wall.recomputeJoins === 'function') {
-                wall.recomputeJoins();
-            }
-        });
-        Wall.recomputeLineGroups(this.map);
-        Wall.repairMountedSectionLinks(this.map);
-        Wall.markDirtyForTouchedSections(adjacentWalls, touchedBefore);
-    }
-
-    removeFromGame() {
-        if (this.gone) return;
-        this.gone = true;
-        this.vanishing = false;
-        if (this._vanishFinalizeTimeout) {
-            clearTimeout(this._vanishFinalizeTimeout);
-            this._vanishFinalizeTimeout = null;
-        }
-        this.removeFromNodes();
-        if (Array.isArray(this.map && this.map.objects)) {
-            const idx = this.map.objects.indexOf(this);
-            if (idx >= 0) this.map.objects.splice(idx, 1);
-        }
-    }
-    remove() {
-        this.removeFromGame();
-    }
-    
-    addBlockedLink(node, direction) {
-        if (!node.blockedNeighbors) {
-            node.blockedNeighbors = new Map();
-        }
-        if (!node.blockedNeighbors.has(direction)) {
-            node.blockedNeighbors.set(direction, new Set());
-        }
-        node.blockedNeighbors.get(direction).add(this);
-        
-        // Track this blocked link for cleanup later
-        this.blockedLinks.push({node, direction});
-    }
-    
-    blockCrossConnection(node, dirA, dirB) {
-        // Block the connection between node.neighbors[dirA] and node.neighbors[dirB]
-        const neighborA = node.neighbors[dirA];
-        const neighborB = node.neighbors[dirB];
-        
-        if (!neighborA || !neighborB) return;
-        
-        // Find the directions between the two neighbors
-        const dirAtoB = neighborA.neighbors.indexOf(neighborB);
-        const dirBtoA = neighborB.neighbors.indexOf(neighborA);
-        
-        if (dirAtoB !== -1) {
-            this.addBlockedLink(neighborA, dirAtoB);
-        }
-        if (dirBtoA !== -1) {
-            this.addBlockedLink(neighborB, dirBtoA);
-        }
-    }
-    
-    draw() {
-        // Clear previous frame's drawing
-        this.pixiSprite.clear();
-        // Use the static method to draw this wall
-        const profile = this.getWallProfile();
-        const wallHeight = Math.max(0.001, Number(this.height) || 0.001);
-        const adjacentHeightA = this.getAdjacentCollinearWallHeightAtEndpoint("a");
-        const adjacentHeightB = this.getAdjacentCollinearWallHeightAtEndpoint("b");
-        const capBaseHeightA = Number.isFinite(adjacentHeightA)
-            ? Math.max(0, Math.min(wallHeight, Number(adjacentHeightA)))
-            : 0;
-        const capBaseHeightB = Number.isFinite(adjacentHeightB)
-            ? Math.max(0, Math.min(wallHeight, Number(adjacentHeightB)))
-            : 0;
-        const capVisibleEps = 1e-5;
-        const renderCapA = capBaseHeightA < (wallHeight - capVisibleEps);
-        const renderCapB = capBaseHeightB < (wallHeight - capVisibleEps);
-        Wall.drawWall(
-            this.pixiSprite,
-            this.a,
-            this.b,
-            this.height,
-            this.thickness,
-            0x555555,
-            1.0,
-            {
-                profile,
-                texturePhaseA: this.texturePhaseA,
-                texturePhaseB: this.texturePhaseB,
-                renderCapA,
-                renderCapB,
-                capBaseHeightA,
-                capBaseHeightB
-            }
-        );
-    }
-
-    static buildPlacementPath(map, startPoint, endPoint, options = {}) {
-        if (!map || !startPoint || !endPoint) return [];
-        const startAnchor = (typeof map.worldToNodeOrMidpoint === "function")
-            ? map.worldToNodeOrMidpoint(startPoint.x, startPoint.y)
-            : map.worldToNode(startPoint.x, startPoint.y);
-        const endAnchor = (typeof map.worldToNodeOrMidpoint === "function")
-            ? map.worldToNodeOrMidpoint(endPoint.x, endPoint.y)
-            : map.worldToNode(endPoint.x, endPoint.y);
-        if (!startAnchor || !endAnchor) return [];
-        const centerPath = map.getHexLine(startAnchor, endAnchor);
-        if (!Array.isArray(centerPath) || centerPath.length === 0) return [];
-
-        const path = [];
-        const pushUnique = (pointLike) => {
-            if (!pointLike || !Number.isFinite(pointLike.x) || !Number.isFinite(pointLike.y)) return;
-            const last = path[path.length - 1];
-            if (last && Wall.pointsMatch(last, pointLike)) return;
-            path.push(pointLike);
-        };
-        pushUnique(startAnchor);
-        for (let i = 0; i < centerPath.length; i++) {
-            pushUnique(centerPath[i]);
-        }
-        pushUnique(endAnchor);
-        return path;
-    }
-
-    static planWallLineSegments(wallPath, map, options = {}) {
-        const routeIn = Array.isArray(wallPath) ? wallPath.slice() : [];
-        const skipExisting = options.skipExisting !== false;
-        const startReferenceWall = options.startReferenceWall || null;
-        const isMapNode = (obj) => obj && typeof obj.xindex === 'number' && typeof obj.yindex === 'number';
-        const isMidpointAnchor = (obj) => !!(
-            obj &&
-            !isMapNode(obj) &&
-            Number.isFinite(obj.x) &&
-            Number.isFinite(obj.y) &&
-            obj.nodeA &&
-            obj.nodeB
-        );
-        const nearlyEqual = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
-        const pointsMatch = (p1, p2) => nearlyEqual(p1.x, p2.x) && nearlyEqual(p1.y, p2.y);
-        const nodeKey = (node) => `n:${node.xindex},${node.yindex}`;
-        const midpointKeyFromNodes = (nodeA, nodeB) => {
-            if (!isMapNode(nodeA) || !isMapNode(nodeB)) return null;
-            const keyA = nodeKey(nodeA);
-            const keyB = nodeKey(nodeB);
-            return (keyA <= keyB) ? `m:${keyA}|${keyB}` : `m:${keyB}|${keyA}`;
-        };
-        const canonicalEndpointKey = (endpoint) => {
-            if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return null;
-            if (isMapNode(endpoint)) return nodeKey(endpoint);
-            if (endpoint.nodeA && endpoint.nodeB) {
-                const midKey = midpointKeyFromNodes(endpoint.nodeA, endpoint.nodeB);
-                if (midKey) return midKey;
-            }
-            if (map && typeof map.worldToNodeOrMidpoint === "function") {
-                const resolved = map.worldToNodeOrMidpoint(endpoint.x, endpoint.y);
-                if (isMapNode(resolved)) return nodeKey(resolved);
-                if (resolved && resolved.nodeA && resolved.nodeB) {
-                    const midKey = midpointKeyFromNodes(resolved.nodeA, resolved.nodeB);
-                    if (midKey) return midKey;
-                }
-            }
-            return `p:${Number(endpoint.x).toFixed(6)},${Number(endpoint.y).toFixed(6)}`;
-        };
-        const canonicalSegmentKey = (endpointA, endpointB) => {
-            const keyA = canonicalEndpointKey(endpointA);
-            const keyB = canonicalEndpointKey(endpointB);
-            if (!keyA || !keyB) return null;
-            return (keyA <= keyB) ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
-        };
-        const wallExistsBetween = (endpointA, endpointB) => {
-            const desiredSegmentKey = canonicalSegmentKey(endpointA, endpointB);
-            const nodesToCheck = [];
-            const seenNodeKeys = new Set();
-            const pushNode = (node) => {
-                if (!isMapNode(node)) return;
-                const k = nodeKey(node);
-                if (seenNodeKeys.has(k)) return;
-                seenNodeKeys.add(k);
-                nodesToCheck.push(node);
-            };
-            const pushEndpointNode = (endpoint) => {
-                if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return;
-                if (isMapNode(endpoint)) {
-                    pushNode(endpoint);
-                    return;
-                }
-                if (map && typeof map.worldToNode === "function") {
-                    pushNode(map.worldToNode(endpoint.x, endpoint.y));
-                }
-            };
-            pushEndpointNode(endpointA);
-            pushEndpointNode(endpointB);
-            for (const node of nodesToCheck) {
-                const nodeObjects = node.objects || [];
-                for (const obj of nodeObjects) {
-                    if (!obj || obj.type !== 'wall' || !obj.a || !obj.b) continue;
-                    if (desiredSegmentKey) {
-                        const existingSegmentKey = canonicalSegmentKey(obj.a, obj.b);
-                        if (existingSegmentKey && existingSegmentKey === desiredSegmentKey) return true;
-                    }
-                    const forwardMatch = pointsMatch(obj.a, endpointA) && pointsMatch(obj.b, endpointB);
-                    const reverseMatch = pointsMatch(obj.a, endpointB) && pointsMatch(obj.b, endpointA);
-                    if (forwardMatch || reverseMatch) return true;
-                }
-            }
-            return false;
-        };
-        const getWallsSharingEndpoint = endpoint => {
-            if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return [];
-            const node = map.worldToNode(endpoint.x, endpoint.y);
-            if (!node || !Array.isArray(node.objects)) return [];
-            return node.objects.filter(obj =>
-                obj &&
-                obj.type === 'wall' &&
-                (Wall.pointsMatch(obj.a, endpoint) || Wall.pointsMatch(obj.b, endpoint))
-            );
-        };
-
-        let route = routeIn;
-        if (route.length > 1) {
-            const startWalls = getWallsSharingEndpoint(route[0]);
-            const endWalls = getWallsSharingEndpoint(route[route.length - 1]);
-            if (!startWalls.length && endWalls.length) {
-                route = route.slice().reverse();
-            }
-        }
-
-        const segments = [];
-        for (let i = 0; i < route.length - 1; i++) {
-            let endpointA = route[i];
-            let endpointB = route[i + 1];
-            if (!endpointA || !endpointB) continue;
-
-            const endpointAIsNode = isMapNode(endpointA);
-            const endpointBIsNode = isMapNode(endpointB);
-            const directionAtoB = (endpointAIsNode && endpointBIsNode && endpointA.neighbors)
-                ? endpointA.neighbors.indexOf(endpointB)
-                : -1;
-            const directionBtoA = (endpointAIsNode && endpointBIsNode && endpointB.neighbors)
-                ? endpointB.neighbors.indexOf(endpointA)
-                : -1;
-            const dx = map && typeof map.shortestDeltaX === "function"
-                ? map.shortestDeltaX(endpointA.x, endpointB.x)
-                : (endpointB.x - endpointA.x);
-            const dy = map && typeof map.shortestDeltaY === "function"
-                ? map.shortestDeltaY(endpointA.y, endpointB.y)
-                : (endpointB.y - endpointA.y);
-            let wallDirection = (map && typeof map.getHexDirection === "function")
-                ? map.getHexDirection(dx, dy)
-                : 0;
-
-            if (directionAtoB >= 0 && directionBtoA >= 0) {
-                if (directionBtoA < directionAtoB) {
-                    wallDirection = directionBtoA;
-                    const endpointC = endpointA;
-                    endpointA = endpointB;
-                    endpointB = endpointC;
-                } else {
-                    wallDirection = directionAtoB;
-                }
-            }
-
-            const shouldSplitLongDiagonal = (directionAtoB >= 0 && directionBtoA >= 0 && (directionAtoB % 2 === 0));
-            if (shouldSplitLongDiagonal) {
-                const midpoint = {
-                    x: (endpointA.x + endpointB.x) / 2,
-                    y: (endpointA.y + endpointB.y) / 2
-                };
-                if (!skipExisting || !wallExistsBetween(endpointA, midpoint)) {
-                    segments.push({ from: endpointA, to: midpoint, direction: wallDirection });
-                }
-                if (!skipExisting || !wallExistsBetween(midpoint, endpointB)) {
-                    segments.push({ from: midpoint, to: endpointB, direction: wallDirection + 6 });
-                }
-            } else if (!skipExisting || !wallExistsBetween(endpointA, endpointB)) {
-                segments.push({ from: endpointA, to: endpointB, direction: wallDirection });
-            }
-        }
-
-        // Midpoint terminal anchors are only allowed when collinear with previous wall axis.
-        const terminal = route.length > 0 ? route[route.length - 1] : null;
-        if (isMidpointAnchor(terminal) && segments.length > 0) {
-            const lastSegment = segments[segments.length - 1];
-            const lastEndsAtTerminal = !!(lastSegment && pointsMatch(lastSegment.to, terminal));
-            if (lastEndsAtTerminal) {
-                let requiredAxis = null;
-                if (segments.length > 1) {
-                    requiredAxis = Wall.normalizeDirectionAxis(segments[segments.length - 2].direction);
-                } else if (startReferenceWall && Number.isFinite(startReferenceWall.direction)) {
-                    requiredAxis = Wall.normalizeDirectionAxis(startReferenceWall.direction);
-                }
-                const lastAxis = Number.isFinite(lastSegment.direction)
-                    ? Wall.normalizeDirectionAxis(lastSegment.direction)
-                    : null;
-                const allowTerminalMidpoint = (requiredAxis !== null && lastAxis !== null && requiredAxis === lastAxis);
-                if (!allowTerminalMidpoint) {
-                    segments.pop();
-                }
-            }
-        }
-
-        return { route, segments, getWallsSharingEndpoint };
-    }
-    
-    static createWallLine(wallPath, height, thickness, map, options = {}) {
-        // Create a chain of walls along a path, handling long diagonals
-        const walls = [];
-        const plan = Wall.planWallLineSegments(wallPath, map, {
-            skipExisting: true,
-            startReferenceWall: options.startReferenceWall || null
-        });
-        const plannedSegments = (plan && Array.isArray(plan.segments)) ? plan.segments : [];
-        const getWallsSharingEndpoint = (plan && typeof plan.getWallsSharingEndpoint === "function")
-            ? plan.getWallsSharingEndpoint
-            : (() => []);
-        const newSegments = [];
-        for (let i = 0; i < plannedSegments.length; i++) {
-            const seg = plannedSegments[i];
-            if (!seg || !seg.from || !seg.to) continue;
-            const wall = new Wall(seg.from, seg.to, height, thickness, map, seg.direction);
-            walls.push(wall);
-            newSegments.push({ wall, from: seg.from, to: seg.to });
-        }
-
-        // Keep horizontal wall texture phase continuous across newly placed segments.
-        if (newSegments.length > 0) {
-            const startEndpoint = newSegments[0].from;
-            const startAttachedWalls = getWallsSharingEndpoint(startEndpoint).filter(w => !newSegments.some(s => s.wall === w));
-            let phaseCursor = 0;
-            if (startAttachedWalls.length > 0) {
-                const inherited = startAttachedWalls[0].getTexturePhaseAtEndpoint(startEndpoint);
-                if (Number.isFinite(inherited)) phaseCursor = inherited;
-            }
-            for (const segment of newSegments) {
-                const segmentLength = Math.hypot(segment.to.x - segment.from.x, segment.to.y - segment.from.y);
-                const phaseStep = segmentLength / 3; // three map units per repeat
-                const nextPhase = phaseCursor + phaseStep;
-                segment.wall.setTexturePhaseForOrderedEndpoints(
-                    segment.from,
-                    segment.to,
-                    phaseCursor,
-                    nextPhase
-                );
-                phaseCursor = nextPhase;
-            }
-        }
-        
-        return walls;
-    }
-
-    static drawWall(graphics, endpointA, endpointB, height, thickness, color, alpha, options = {}) {
-        if (!graphics || !endpointA || !endpointB) return;
-        const ax = Number(endpointA.x);
-        const ay = Number(endpointA.y);
-        const bx = Number(endpointB.x);
-        const by = Number(endpointB.y);
-        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return;
-
-        const wallHeight = Math.max(0.001, Number(height) || 0.001);
-        const wallThickness = Math.max(0.001, Number(thickness) || 0.001);
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-6) return;
-
-        const halfThickness = wallThickness / 2;
-        const nx = -dy / len;
-        const ny = dx / len;
-
-        let aLeft = { x: ax + nx * halfThickness, y: ay + ny * halfThickness };
-        let aRight = { x: ax - nx * halfThickness, y: ay - ny * halfThickness };
-        let bLeft = { x: bx + nx * halfThickness, y: by + ny * halfThickness };
-        let bRight = { x: bx - nx * halfThickness, y: by - ny * halfThickness };
-        if (options && options.profile) {
-            const p = options.profile;
-            if (p.aLeft) aLeft = p.aLeft;
-            if (p.aRight) aRight = p.aRight;
-            if (p.bLeft) bLeft = p.bLeft;
-            if (p.bRight) bRight = p.bRight;
-        }
-
-        const toScreen = (pt, z = 0) => {
-            const screen = worldToScreen(pt);
-            return { x: screen.x, y: screen.y - z * viewscale * xyratio };
-        };
-
-        const gAL = toScreen(aLeft, 0);
-        const gAR = toScreen(aRight, 0);
-        const gBL = toScreen(bLeft, 0);
-        const gBR = toScreen(bRight, 0);
-        const tAL = toScreen(aLeft, wallHeight);
-        const tAR = toScreen(aRight, wallHeight);
-        const tBL = toScreen(bLeft, wallHeight);
-        const tBR = toScreen(bRight, wallHeight);
-        const capBaseA = Number.isFinite(options.capBaseHeightA)
-            ? Math.max(0, Math.min(wallHeight, Number(options.capBaseHeightA)))
-            : 0;
-        const capBaseB = Number.isFinite(options.capBaseHeightB)
-            ? Math.max(0, Math.min(wallHeight, Number(options.capBaseHeightB)))
-            : 0;
-        const mAL = toScreen(aLeft, capBaseA);
-        const mAR = toScreen(aRight, capBaseA);
-        const mBL = toScreen(bLeft, capBaseB);
-        const mBR = toScreen(bRight, capBaseB);
-
-        const shadeColor = (hex, factor) => {
-            const f = Math.max(0, factor);
-            const r = Math.min(255, Math.max(0, Math.round(((hex >> 16) & 0xff) * f)));
-            const g = Math.min(255, Math.max(0, Math.round(((hex >> 8) & 0xff) * f)));
-            const b = Math.min(255, Math.max(0, Math.round((hex & 0xff) * f)));
-            return (r << 16) | (g << 8) | b;
-        };
-
-        const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-        const longFaceA = [gAL, gBL, tBL, tAL];
-        const longFaceB = [gAR, gBR, tBR, tAR];
-        const capFaceA = [mAR, mAL, tAL, tAR];
-        const capFaceB = [mBL, mBR, tBR, tBL];
-        const topFace = [tAL, tBL, tBR, tAR];
-        const renderCapA = options.renderCapA !== false;
-        const renderCapB = options.renderCapB !== false;
-
-        const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
-        const capAFront = faceDepth(capFaceA) >= faceDepth(capFaceB);
-        const stoneTexture = options.disableWallTexture ? null : Wall.getStoneWallTexture();
-        const zUnitPx = Math.max(1, viewscale * xyratio);
-        const phaseA = Number.isFinite(options.texturePhaseA) ? options.texturePhaseA : 0;
-        const phaseB = Number.isFinite(options.texturePhaseB) ? options.texturePhaseB : (phaseA + len / 3);
-        const shadeColorFactor = 1.2;
-
-        const faces = [
-            longAFront
-                ? {
-                    pts: longFaceA,
-                    color: shadeColor(color, 1.18 * shadeColorFactor),
-                    textured: true
-                }
-                : {
-                    pts: longFaceB,
-                    color: shadeColor(color, 1.18 * shadeColorFactor),
-                    textured: true
-                },
-        ];
-        const frontCapIsA = capAFront;
-        if (frontCapIsA && renderCapA) {
-            faces.push({
-                pts: capFaceA,
-                color: shadeColor(color, 1.08 * shadeColorFactor),
-                textured: true
-            });
-        }
-        if (!frontCapIsA && renderCapB) {
-            faces.push({
-                pts: capFaceB,
-                color: shadeColor(color, 1.08 * shadeColorFactor),
-                textured: true
-            });
-        }
-
-        faces.sort((aFace, bFace) => faceDepth(aFace.pts) - faceDepth(bFace.pts));
-        graphics.lineStyle(0);
-        for (const face of faces) {
-            const pts = face.pts;
-            const shouldTexture = !!stoneTexture && face.textured;
-            if (shouldTexture) {
-                const bottomA = pts[0];
-                const bottomB = pts[1];
-                const topA = pts[3];
-                const u = {
-                    x: bottomB.x - bottomA.x,
-                    y: bottomB.y - bottomA.y
-                };
-                const v = {
-                    x: topA.x - bottomA.x,
-                    y: topA.y - bottomA.y
-                };
-                const uLen = Math.max(1e-6, Math.hypot(u.x, u.y));
-                const vLen = Math.max(1e-6, Math.hypot(v.x, v.y));
-                const uDir = { x: u.x / uLen, y: u.y / uLen };
-                const vDir = { x: v.x / vLen, y: v.y / vLen };
-                const texW = Math.max(1, stoneTexture.width || (stoneTexture.baseTexture && stoneTexture.baseTexture.width) || 256);
-                const texH = Math.max(1, stoneTexture.height || (stoneTexture.baseTexture && stoneTexture.baseTexture.height) || 256);
-                const repeatsAcrossFace = Math.max(1e-6, Math.abs(phaseB - phaseA));
-                const uRepeatPx = Math.max(1, uLen / repeatsAcrossFace);
-                const vRepeatPx = zUnitPx * 3; // three map height units per vertical repeat
-                const phaseShiftPx = phaseA * uRepeatPx;
-                const matrix = new PIXI.Matrix(
-                    uDir.x * (uRepeatPx / texW),
-                    uDir.y * (uRepeatPx / texW),
-                    vDir.x * (vRepeatPx / texH),
-                    vDir.y * (vRepeatPx / texH),
-                    bottomA.x - uDir.x * phaseShiftPx,
-                    bottomA.y - uDir.y * phaseShiftPx
-                );
-                graphics.beginTextureFill({
-                    texture: stoneTexture,
-                    color: face.color,
-                    alpha,
-                    matrix
-                });
-            } else {
-                graphics.beginFill(face.color, alpha);
-            }
-            graphics.moveTo(pts[0].x, pts[0].y);
-            for (let i = 1; i < pts.length; i++) {
-                graphics.lineTo(pts[i].x, pts[i].y);
-            }
-            graphics.closePath();
-            graphics.endFill();
-        }
-
-        // Draw the top cap last to ensure the prism appears closed.
-        const topCenter = topFace.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-        topCenter.x /= topFace.length;
-        topCenter.y /= topFace.length;
-        const orderedTop = topFace
-            .slice()
-            .sort((p1, p2) => Math.atan2(p1.y - topCenter.y, p1.x - topCenter.x) - Math.atan2(p2.y - topCenter.y, p2.x - topCenter.x));
-
-        graphics.lineStyle(0);
-        graphics.beginFill(shadeColor(color, 1.2), alpha);
-        graphics.moveTo(orderedTop[0].x, orderedTop[0].y);
-        for (let i = 1; i < orderedTop.length; i++) {
-            graphics.lineTo(orderedTop[i].x, orderedTop[i].y);
-        }
-        graphics.closePath();
-        graphics.endFill();
-    }
-
-    saveJson() {
-        return {
-            type: 'wall',
-            aX: this.a.x,
-            aY: this.a.y,
-            bX: this.b.x,
-            bY: this.b.y,
-            height: this.height,
-            thickness: this.thickness,
-            texturePhaseA: this.texturePhaseA,
-            texturePhaseB: this.texturePhaseB,
-            sectionId: Number.isInteger(this.sectionId)
-                ? this.sectionId
-                : (Number.isInteger(this.lineGroupId) ? this.lineGroupId : null)
-        };
-    }
-
-    static loadJson(data, map) {
-        if (!data || data.type !== 'wall' || !map) return null;
-
-        try {
-            let nodeA = map.worldToNode(data.aX, data.aY);
-            let nodeB = map.worldToNode(data.bX, data.bY);
-            if (Math.abs(nodeA.x - data.aX) > 0.1 || Math.abs(nodeA.y - data.aY) > 0.1) {
-                nodeA = {x: data.aX, y: data.aY}; // Use raw coordinates if no close node found
-            }
-            if (Math.abs(nodeB.x - data.bX) > 0.1 || Math.abs(nodeB.y - data.bY) > 0.1) {
-                nodeB = {x: data.bX, y: data.bY}; // Use raw coordinates if no close node found
-            }
-            if (!nodeA || !nodeB) return null;
-            let direction = map.getHexDirection(nodeA.x - nodeB.x, nodeA.y - nodeB.y) % 6;
-            const wall = new Wall(nodeA, nodeB, data.height || 1, data.thickness || 0.1, map, direction);
-            if (Number.isFinite(data.texturePhaseA)) wall.texturePhaseA = data.texturePhaseA;
-            if (Number.isFinite(data.texturePhaseB)) wall.texturePhaseB = data.texturePhaseB;
-            const persistedSectionId = Number.isInteger(data.sectionId)
-                ? Number(data.sectionId)
-                : (Number.isInteger(data.lineGroupId) ? Number(data.lineGroupId) : null);
-            if (Number.isInteger(persistedSectionId)) {
-                wall._persistedSectionId = persistedSectionId;
-            }
-            return wall;
-        } catch (e) {
-            console.error("Error loading wall:", e);
-            return null;
-        }
-    }
-
-    ignite() {
-        // these walls are non-flammable, so do nothing
-    }
 }
 
 class Road extends StaticObject {
@@ -3729,6 +2678,5 @@ if (typeof globalThis !== "undefined") {
     globalThis.StaticObject = StaticObject;
     globalThis.Tree = Tree;
     globalThis.Playground = Playground;
-    globalThis.Wall = Wall;
     globalThis.Road = Road;
 }

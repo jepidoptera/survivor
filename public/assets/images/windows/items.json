@@ -28,8 +28,8 @@
   },
   "items": [
     {
-      "file": "window.jpg",
-      "texturePath": "/assets/images/windows/window.jpg",
+      "file": "window.png",
+      "texturePath": "/assets/images/windows/window.png",
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
@@ -54,15 +54,15 @@
       },
       "lodTextures": [
         {
-          "texturePath": "/assets/images/windows/lod/window_lod096.jpg",
+          "texturePath": "/assets/images/windows/lod/window_lod096.png",
           "maxDistance": 120
         },
         {
-          "texturePath": "/assets/images/windows/lod/window_lod192.jpg",
+          "texturePath": "/assets/images/windows/lod/window_lod192.png",
           "maxDistance": 260
         },
         {
-          "texturePath": "/assets/images/windows/window.jpg"
+          "texturePath": "/assets/images/windows/window.png"
         }
       ]
     }

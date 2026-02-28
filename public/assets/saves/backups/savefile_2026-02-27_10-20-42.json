@@ -1,23 +1,23 @@
 {
   "version": 1,
-  "timestamp": "2026-02-27T16:20:42.911Z",
+  "timestamp": "2026-02-27T15:52:39.141Z",
   "wizard": {
     "type": "wizard",
-    "x": 183.92532111840785,
-    "y": 204.38195851540922,
+    "x": 187.27970950898305,
+    "y": 203.4883157596305,
     "hp": 100,
     "maxHp": 100,
     "magic": 100,
     "maxMagic": 100,
     "magicRegenPerSecond": 8,
     "food": 0,
-    "currentSpell": "placeobject",
+    "currentSpell": "vanish",
     "activeAura": null,
     "activeAuras": [],
     "selectedFlooringTexture": "/assets/images/flooring/cobblestones.png",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "windows",
-    "selectedPlaceableTexturePath": "/assets/images/windows/window.png",
+    "selectedPlaceableCategory": "doors",
+    "selectedPlaceableTexturePath": "/assets/images/doors/door1.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/lily%20plant.png",
       "windows": "/assets/images/windows/window.png",
@@ -25,7 +25,7 @@
       "furniture": "/assets/images/furniture/mat.png",
       "signs": "/assets/images/signs/princess.png"
     },
-    "selectedPlaceableRenderOffset": 0,
+    "selectedPlaceableRenderOffset": 0.8,
     "selectedPlaceableRenderOffsetByTexture": {
       "/assets/images/doors/door5.png": 0,
       "/assets/images/doors/tree%20door.png": 0.8,
@@ -50,7 +50,7 @@
       "/assets/images/flowers/fairytale%20flowers.png": 0,
       "/assets/images/doors/door6.png": 0.8
     },
-    "selectedPlaceableScale": 1.694,
+    "selectedPlaceableScale": 2.624,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 2.137,
       "/assets/images/doors/tree%20door.png": 2.348,
@@ -75,7 +75,7 @@
       "/assets/images/flowers/fairytale%20flowers.png": 3.113,
       "/assets/images/doors/door6.png": 2.87
     },
-    "selectedPlaceableRotation": 0,
+    "selectedPlaceableRotation": 5,
     "selectedPlaceableRotationByTexture": {
       "/assets/images/doors/door5.png": -60,
       "/assets/images/windows/window.png": 0,
@@ -171,7 +171,7 @@
       },
       {
         "name": "placeobject",
-        "icon": "/assets/images/windows/window.png"
+        "icon": "/assets/images/doors/door1.png"
       },
       {
         "name": "firewall",
@@ -180,21 +180,21 @@
       }
     ],
     "viewport": {
-      "x": 168.41600000000005,
-      "y": 190.375
+      "x": 171.789,
+      "y": 183.48800000000006
     }
   },
   "animals": [
     {
       "type": "squirrel",
-      "x": 208.70600000000002,
-      "y": 61,
+      "x": 225.15999999999997,
+      "y": 43.5,
       "hp": 1
     },
     {
       "type": "squirrel",
-      "x": 225.15999999999997,
-      "y": 220.5,
+      "x": 245.07799999999997,
+      "y": 223,
       "hp": 1
     },
     {
@@ -289,8 +289,8 @@
     },
     {
       "type": "squirrel",
-      "x": 224.29399999999998,
-      "y": 85,
+      "x": 207.84000000000003,
+      "y": 95.5,
       "hp": 1
     },
     {
@@ -307,8 +307,8 @@
     },
     {
       "type": "squirrel",
-      "x": 184.45799999999997,
-      "y": 177,
+      "x": 175.798,
+      "y": 168,
       "hp": 1
     },
     {
@@ -319,14 +319,14 @@
     },
     {
       "type": "squirrel",
-      "x": 59.75399999999996,
-      "y": 375,
+      "x": 62.78499999999997,
+      "y": 387.25,
       "hp": 1
     },
     {
       "type": "squirrel",
-      "x": 49.362,
-      "y": 58,
+      "x": 49.79499999999996,
+      "y": 55.25,
       "hp": 1
     },
     {
@@ -367,8 +367,8 @@
     },
     {
       "type": "squirrel",
-      "x": 288.8109999999999,
-      "y": 180.75,
+      "x": 288.37799999999993,
+      "y": 182,
       "hp": 1
     },
     {
@@ -451,8 +451,8 @@
     },
     {
       "type": "squirrel",
-      "x": 105.652,
-      "y": 153.5,
+      "x": 119.07499999999993,
+      "y": 165.75,
       "hp": 1
     },
     {
@@ -529,8 +529,8 @@
     },
     {
       "type": "squirrel",
-      "x": 323.884,
-      "y": 92.5,
+      "x": 307.42999999999995,
+      "y": 87,
       "hp": 1
     },
     {
@@ -583,8 +583,8 @@
     },
     {
       "type": "squirrel",
-      "x": 162.808,
-      "y": 170,
+      "x": 165.406,
+      "y": 169,
       "hp": 1
     },
     {
@@ -637,8 +637,8 @@
     },
     {
       "type": "squirrel",
-      "x": 275.38800000000003,
-      "y": 34.5,
+      "x": 282.316,
+      "y": 29.5,
       "hp": 1
     },
     {
@@ -805,8 +805,8 @@
     },
     {
       "type": "squirrel",
-      "x": 169.736,
-      "y": 257.5,
+      "x": 170.60199999999998,
+      "y": 274.5,
       "hp": 1
     },
     {
@@ -823,8 +823,8 @@
     },
     {
       "type": "squirrel",
-      "x": 66.68200000000002,
-      "y": 265,
+      "x": 45.031999999999925,
+      "y": 253.5,
       "hp": 1
     },
     {
@@ -865,8 +865,8 @@
     },
     {
       "type": "squirrel",
-      "x": 72.74399999999997,
-      "y": 232.5,
+      "x": 85.734,
+      "y": 225,
       "hp": 1
     },
     {
@@ -931,8 +931,8 @@
     },
     {
       "type": "squirrel",
-      "x": 226.89199999999994,
-      "y": 31.5,
+      "x": 240.74799999999993,
+      "y": 44.5,
       "hp": 1
     },
     {
@@ -1033,8 +1033,8 @@
     },
     {
       "type": "squirrel",
-      "x": 101.32199999999995,
-      "y": 292,
+      "x": 96.126,
+      "y": 303,
       "hp": 1
     },
     {
@@ -1243,8 +1243,8 @@
     },
     {
       "type": "squirrel",
-      "x": 201.7779999999999,
-      "y": 182,
+      "x": 201.7202666666666,
+      "y": 183.9666666666667,
       "hp": -258.8500000000246
     },
     {
@@ -1357,14 +1357,14 @@
     },
     {
       "type": "deer",
-      "x": 146.78699999999998,
-      "y": 30.25,
+      "x": 148.952,
+      "y": 32,
       "hp": 12.47096841262321
     },
     {
       "type": "deer",
-      "x": 121.23999999999995,
-      "y": 32.5,
+      "x": 125.56999999999994,
+      "y": 33,
       "hp": 11.05516708222905
     },
     {
@@ -1381,8 +1381,8 @@
     },
     {
       "type": "deer",
-      "x": 182.726,
-      "y": 294,
+      "x": 190.51999999999998,
+      "y": 296.5,
       "hp": 8.364762827362425
     },
     {
@@ -1393,8 +1393,8 @@
     },
     {
       "type": "deer",
-      "x": 71.87799999999993,
-      "y": 177,
+      "x": 85.73399999999992,
+      "y": 178,
       "hp": 12.104467921032871
     },
     {
@@ -1501,8 +1501,8 @@
     },
     {
       "type": "deer",
-      "x": 206.97399999999993,
-      "y": 44,
+      "x": 214.768,
+      "y": 35.5,
       "hp": 11.601397375938895
     },
     {
@@ -1561,8 +1561,8 @@
     },
     {
       "type": "deer",
-      "x": 61.48599999999993,
-      "y": 286,
+      "x": 75.34199999999998,
+      "y": 271,
       "hp": 10.487538647095572
     },
     {
@@ -1597,8 +1597,8 @@
     },
     {
       "type": "deer",
-      "x": 102.18799999999993,
-      "y": 133.5,
+      "x": 96.99199999999996,
+      "y": 137.5,
       "hp": 11.416660617351017
     },
     {
@@ -1633,8 +1633,8 @@
     },
     {
       "type": "deer",
-      "x": 76.208,
-      "y": 229.5,
+      "x": 86.16699999999997,
+      "y": 231.25,
       "hp": 10.657973190070171
     },
     {
@@ -1645,8 +1645,8 @@
     },
     {
       "type": "deer",
-      "x": 80.53800000000001,
-      "y": 200,
+      "x": 90.06399999999996,
+      "y": 187.5,
       "hp": 9.494599733468458
     },
     {
@@ -1663,8 +1663,8 @@
     },
     {
       "type": "deer",
-      "x": 137.69399999999996,
-      "y": 193,
+      "x": 134.23,
+      "y": 203,
       "hp": 10.110443588585522
     },
     {
@@ -1675,8 +1675,8 @@
     },
     {
       "type": "deer",
-      "x": 175.365,
-      "y": 241.25,
+      "x": 179.26200000000006,
+      "y": 237,
       "hp": 9.694159210671602
     },
     {
@@ -1693,8 +1693,8 @@
     },
     {
       "type": "deer",
-      "x": 162.808,
-      "y": 168,
+      "x": 157.61199999999997,
+      "y": 156.5,
       "hp": 11.539628395962112
     },
     {
@@ -1723,8 +1723,8 @@
     },
     {
       "type": "bear",
-      "x": 54.125,
-      "y": 71.75,
+      "x": 78.37299999999993,
+      "y": 67.25,
       "hp": 32.82542691780836
     },
     {
@@ -1753,8 +1753,8 @@
     },
     {
       "type": "bear",
-      "x": 26.845999999999947,
-      "y": 297,
+      "x": 17.752999999999986,
+      "y": 316.25,
       "hp": 31.454499226880518
     },
     {
@@ -1765,8 +1765,8 @@
     },
     {
       "type": "bear",
-      "x": 181.85999999999999,
-      "y": 331.5,
+      "x": 188.7879999999999,
+      "y": 327.5,
       "hp": 34.03045784981106
     },
     {
@@ -2012,45 +2012,6 @@
       }
     },
     {
-      "type": "placedObject",
-      "x": 163.67400000000004,
-      "y": 194,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 90,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1683,
-      "mountedSectionId": 1683,
-      "mountedWallSectionUnitId": 1683,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 163.42399999999998,
-          "y": 197.65300000000002
-        },
-        {
-          "x": 163.42399999999998,
-          "y": 199.34699999999998
-        },
-        {
-          "x": 163.92399999999998,
-          "y": 199.34699999999998
-        },
-        {
-          "x": 163.92399999999998,
-          "y": 197.65300000000002
-        }
-      ]
-    },
-    {
       "type": "wallSection",
       "id": 1683,
       "height": 4,
@@ -2129,84 +2090,6 @@
       }
     },
     {
-      "type": "placedObject",
-      "x": 164.75302793430444,
-      "y": 203.37099707392213,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 60.00072777015235,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1685,
-      "mountedSectionId": 1685,
-      "mountedWallSectionUnitId": 1685,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 164.33300137856236,
-          "y": 202.6414683536923
-        },
-        {
-          "x": 165.1799827440841,
-          "y": 204.10852614616647
-        },
-        {
-          "x": 165.61299862143767,
-          "y": 203.8585316463077
-        },
-        {
-          "x": 164.76601725591593,
-          "y": 202.39147385383353
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
-      "x": 165.19297206569559,
-      "y": 193.87099707392213,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": -60.00072777015235,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1684,
-      "mountedSectionId": 1684,
-      "mountedWallSectionUnitId": 1684,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 164.76601725591593,
-          "y": 194.60852614616647
-        },
-        {
-          "x": 165.61299862143767,
-          "y": 193.1414683536923
-        },
-        {
-          "x": 165.1799827440841,
-          "y": 192.89147385383353
-        },
-        {
-          "x": 164.33300137856236,
-          "y": 194.3585316463077
-        }
-      ]
-    },
-    {
       "type": "wallSection",
       "id": 1686,
       "height": 4,
@@ -2257,84 +2140,6 @@
         "x": 170.602,
         "y": 208
       }
-    },
-    {
-      "type": "placedObject",
-      "x": 168.30999720590796,
-      "y": 206.96650471234784,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 30.000727780827145,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1687,
-      "mountedSectionId": 1687,
-      "mountedWallSectionUnitId": 1687,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 167.57847911233273,
-          "y": 206.54299544584978
-        },
-        {
-          "x": 169.0455153874858,
-          "y": 207.39001408046465
-        },
-        {
-          "x": 169.2955208876673,
-          "y": 206.95700455415022
-        },
-        {
-          "x": 167.82848461251422,
-          "y": 206.10998591953535
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
-      "x": 168.56400279409206,
-      "y": 190.46650471234784,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": -30.000727780827145,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1686,
-      "mountedSectionId": 1686,
-      "mountedWallSectionUnitId": 1686,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 167.82848461251422,
-          "y": 190.89001408046465
-        },
-        {
-          "x": 169.2955208876673,
-          "y": 190.04299544584978
-        },
-        {
-          "x": 169.0455153874858,
-          "y": 189.60998591953535
-        },
-        {
-          "x": 167.57847911233273,
-          "y": 190.45700455415022
-        }
-      ]
     },
     {
       "type": "wallSection",
@@ -2407,45 +2212,6 @@
     },
     {
       "type": "placedObject",
-      "x": 173.19999999999993,
-      "y": 189.25099999999998,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 0,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1688,
-      "mountedSectionId": 1688,
-      "mountedWallSectionUnitId": 1688,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 172.35299999999995,
-          "y": 189.25
-        },
-        {
-          "x": 174.0469999999999,
-          "y": 189.25
-        },
-        {
-          "x": 174.0469999999999,
-          "y": 188.75
-        },
-        {
-          "x": 172.35299999999995,
-          "y": 188.75
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
       "x": 173.14544105319567,
       "y": 207.1447471700277,
       "hp": 100,
@@ -2460,45 +2226,6 @@
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 1
-    },
-    {
-      "type": "placedObject",
-      "x": 173.19999999999993,
-      "y": 208.25099999999998,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 0,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1689,
-      "mountedSectionId": 1689,
-      "mountedWallSectionUnitId": 1689,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 172.35299999999995,
-          "y": 208.25
-        },
-        {
-          "x": 174.0469999999999,
-          "y": 208.25
-        },
-        {
-          "x": 174.0469999999999,
-          "y": 207.75
-        },
-        {
-          "x": 172.35299999999995,
-          "y": 207.75
-        }
-      ]
     },
     {
       "type": "placedObject",
@@ -2571,45 +2298,6 @@
     },
     {
       "type": "placedObject",
-      "x": 177.83599720590792,
-      "y": 190.46650471234784,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 30.000727780827795,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1690,
-      "mountedSectionId": 1690,
-      "mountedWallSectionUnitId": 1690,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 177.10447911233268,
-          "y": 190.04299544584978
-        },
-        {
-          "x": 178.57151538748576,
-          "y": 190.89001408046465
-        },
-        {
-          "x": 178.82152088766725,
-          "y": 190.45700455415022
-        },
-        {
-          "x": 177.35448461251417,
-          "y": 189.60998591953535
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
       "x": 177.64176688583018,
       "y": 209.0997357858323,
       "hp": 100,
@@ -2624,45 +2312,6 @@
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5
-    },
-    {
-      "type": "placedObject",
-      "x": 178.09000279409202,
-      "y": 206.96650471234784,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": -30.000727780827795,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1691,
-      "mountedSectionId": 1691,
-      "mountedWallSectionUnitId": 1691,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 177.35448461251417,
-          "y": 207.39001408046465
-        },
-        {
-          "x": 178.82152088766725,
-          "y": 206.54299544584978
-        },
-        {
-          "x": 178.57151538748576,
-          "y": 206.10998591953535
-        },
-        {
-          "x": 177.10447911233268,
-          "y": 206.95700455415022
-        }
-      ]
     },
     {
       "type": "placedObject",
@@ -2749,45 +2398,6 @@
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5
-    },
-    {
-      "type": "placedObject",
-      "x": 181.20702793430462,
-      "y": 193.87099707392235,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 60.00072777015344,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1692,
-      "mountedSectionId": 1692,
-      "mountedWallSectionUnitId": 1692,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 180.7870013785623,
-          "y": 193.1414683536923
-        },
-        {
-          "x": 181.63398274408405,
-          "y": 194.60852614616647
-        },
-        {
-          "x": 182.06699862143762,
-          "y": 194.3585316463077
-        },
-        {
-          "x": 181.22001725591588,
-          "y": 192.89147385383353
-        }
-      ]
     },
     {
       "type": "placedObject",
@@ -2878,45 +2488,6 @@
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5
-    },
-    {
-      "type": "placedObject",
-      "x": 182.726,
-      "y": 194,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "texturePath": "/assets/images/windows/window.png",
-      "category": "windows",
-      "width": 1.694,
-      "height": 1.694,
-      "renderDepthOffset": 0,
-      "rotationAxis": "spatial",
-      "placementRotation": 90,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "mountedWallLineGroupId": 1694,
-      "mountedSectionId": 1694,
-      "mountedWallSectionUnitId": 1694,
-      "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 182.476,
-          "y": 197.65300000000002
-        },
-        {
-          "x": 182.476,
-          "y": 199.34699999999998
-        },
-        {
-          "x": 182.976,
-          "y": 199.34699999999998
-        },
-        {
-          "x": 182.976,
-          "y": 197.65300000000002
-        }
-      ]
     },
     {
       "type": "wallSection",
@@ -4865,156 +4436,6 @@
         "x": 287.512,
         "y": 102.5
       }
-    },
-    {
-      "type": "road",
-      "x": 151.55,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 151.55,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 151.55,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 152.416,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 152.416,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 153.282,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 153.282,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 153.282,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 154.148,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 154.148,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 155.014,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 155.014,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 155.014,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 155.88,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 155.88,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 156.746,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 156.746,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 156.746,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 157.612,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 157.612,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 158.478,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 158.478,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 158.478,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 159.344,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 159.344,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
     {
       "type": "road",
@@ -8408,48 +7829,6 @@
     },
     {
       "type": "road",
-      "x": 148.952,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 148.952,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 149.818,
-      "y": 213,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 149.818,
-      "y": 214,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 149.818,
-      "y": 215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 150.684,
-      "y": 213.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 150.684,
-      "y": 214.5,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
       "x": 212.17,
       "y": 193,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
@@ -8900,6 +8279,108 @@
     },
     {
       "type": "road",
+      "x": 157.612,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 157.612,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 158.478,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 158.478,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 158.478,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 159.344,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 159.344,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 155.88,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 155.88,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 156.746,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 156.746,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 156.746,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 154.148,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 154.148,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 155.014,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 155.014,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 155.014,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
       "x": 147.22,
       "y": 213.5,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
@@ -8925,6 +8406,96 @@
     {
       "type": "road",
       "x": 148.086,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 148.952,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 148.952,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 149.818,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 149.818,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 149.818,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 150.684,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 150.684,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 151.55,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 151.55,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 151.55,
+      "y": 215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 152.416,
+      "y": 213.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 152.416,
+      "y": 214.5,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 153.282,
+      "y": 213,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 153.282,
+      "y": 214,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 153.282,
       "y": 215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -21716,132 +21287,6 @@
     },
     {
       "type": "tree",
-      "x": 152.416,
-      "y": 200.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 153.282,
-      "y": 169,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 153.282,
-      "y": 220,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 153.282,
-      "y": 226,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 154.148,
-      "y": 187.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 154.148,
-      "y": 195.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 154.148,
-      "y": 224.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 155.014,
-      "y": 213,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 155.88,
-      "y": 196.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 156.746,
-      "y": 169,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 156.746,
-      "y": 185,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 156.746,
-      "y": 191,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 158.478,
-      "y": 176,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 158.478,
-      "y": 183,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 160.21,
       "y": 217,
       "hp": 100,
@@ -21860,8 +21305,8 @@
     },
     {
       "type": "tree",
-      "x": 161.942,
-      "y": 169,
+      "x": 161.076,
+      "y": 230.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 1,
@@ -21978,6 +21423,15 @@
     {
       "type": "tree",
       "x": 170.602,
+      "y": 165,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 170.602,
       "y": 173,
       "hp": 100,
       "isOnFire": false,
@@ -22014,11 +21468,56 @@
     {
       "type": "tree",
       "x": 174.066,
+      "y": 138,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 174.066,
+      "y": 139,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 3.9492499999701978
+    },
+    {
+      "type": "tree",
+      "x": 174.066,
       "y": 179,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 174.932,
+      "y": 141.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 3.3107500000298025
+    },
+    {
+      "type": "tree",
+      "x": 174.932,
+      "y": 143.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 174.932,
+      "y": 152.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 6.15
     },
     {
       "type": "tree",
@@ -22050,6 +21549,33 @@
     {
       "type": "tree",
       "x": 176.664,
+      "y": 137.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 2.243500000014901
+    },
+    {
+      "type": "tree",
+      "x": 176.664,
+      "y": 142.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 13.273000000044707
+    },
+    {
+      "type": "tree",
+      "x": 176.664,
+      "y": 147.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.758250000029802
+    },
+    {
+      "type": "tree",
+      "x": 176.664,
       "y": 176.5,
       "hp": 100,
       "isOnFire": false,
@@ -22072,6 +21598,15 @@
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 176.664,
+      "y": 233.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
       "size": 4
     },
     {
@@ -22104,6 +21639,24 @@
     {
       "type": "tree",
       "x": 179.262,
+      "y": 141,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.9764999999850983
+    },
+    {
+      "type": "tree",
+      "x": 179.262,
+      "y": 145,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 179.262,
       "y": 178,
       "hp": 100,
       "isOnFire": false,
@@ -22113,11 +21666,56 @@
     {
       "type": "tree",
       "x": 180.128,
+      "y": 141.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4.172499999999999
+    },
+    {
+      "type": "tree",
+      "x": 180.128,
       "y": 169.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 180.128,
+      "y": 231.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 180.994,
+      "y": 130,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 180.994,
+      "y": 145,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 180.994,
+      "y": 154,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 3.212749999985099
     },
     {
       "type": "tree",
@@ -22158,11 +21756,56 @@
     {
       "type": "tree",
       "x": 182.726,
+      "y": 131,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 182.726,
+      "y": 135,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 5.245499999970198
+    },
+    {
+      "type": "tree",
+      "x": 182.726,
+      "y": 145,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 5.942999999970197
+    },
+    {
+      "type": "tree",
+      "x": 182.726,
+      "y": 151,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 182.726,
       "y": 180,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 2,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 183.59199999999998,
+      "y": 140.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 6.283500000014902
     },
     {
       "type": "tree",
@@ -22212,11 +21855,38 @@
     {
       "type": "tree",
       "x": 185.324,
+      "y": 139.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 3.716500000059605
+    },
+    {
+      "type": "tree",
+      "x": 185.324,
+      "y": 151.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 185.324,
       "y": 225.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 2,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 186.19,
+      "y": 132,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 6.341249999999999
     },
     {
       "type": "tree",
@@ -22240,6 +21910,15 @@
       "type": "tree",
       "x": 186.19,
       "y": 227,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 187.056,
+      "y": 146.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 4,
@@ -22284,11 +21963,56 @@
     {
       "type": "tree",
       "x": 187.922,
+      "y": 154,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 1.6357500000298024
+    },
+    {
+      "type": "tree",
+      "x": 187.922,
       "y": 179,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 4,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 188.788,
+      "y": 130.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 3.893749999999999
+    },
+    {
+      "type": "tree",
+      "x": 188.788,
+      "y": 132.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 5.6125000000000025
+    },
+    {
+      "type": "tree",
+      "x": 188.788,
+      "y": 160.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 7.7402499999850995
+    },
+    {
+      "type": "tree",
+      "x": 189.654,
+      "y": 137,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 6.408000000044703
     },
     {
       "type": "tree",
@@ -22311,6 +22035,33 @@
     {
       "type": "tree",
       "x": 191.386,
+      "y": 130,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 7.124499999955297
+    },
+    {
+      "type": "tree",
+      "x": 191.386,
+      "y": 142,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 191.386,
+      "y": 152,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 191.386,
       "y": 220,
       "hp": 100,
       "isOnFire": false,
@@ -22324,6 +22075,15 @@
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 192.252,
+      "y": 156.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
       "size": 4
     },
     {
@@ -22352,6 +22112,33 @@
       "isOnFire": false,
       "textureIndex": 1,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 192.252,
+      "y": 232.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 193.118,
+      "y": 133,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 7.251499999985103
+    },
+    {
+      "type": "tree",
+      "x": 193.118,
+      "y": 143,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 6.374250000044703
     },
     {
       "type": "tree",
@@ -22400,708 +22187,6 @@
     },
     {
       "type": "tree",
-      "x": 195.716,
-      "y": 203.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.137000000178814
-    },
-    {
-      "type": "tree",
-      "x": 195.716,
-      "y": 218.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 195.716,
-      "y": 226.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 199.18,
-      "y": 199.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 200.046,
-      "y": 208,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 200.912,
-      "y": 200.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 202.644,
-      "y": 196.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 202.644,
-      "y": 213.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 1.2484999999403954
-    },
-    {
-      "type": "tree",
-      "x": 203.51,
-      "y": 202,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 206.108,
-      "y": 196.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 5.12875
-    },
-    {
-      "type": "tree",
-      "x": 206.974,
-      "y": 200,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 2.130500000007451
-    },
-    {
-      "type": "tree",
-      "x": 206.974,
-      "y": 206,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 3.999250000007451
-    },
-    {
-      "type": "tree",
-      "x": 207.84,
-      "y": 180.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 207.84,
-      "y": 187.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 208.706,
-      "y": 203,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 2.39
-    },
-    {
-      "type": "tree",
-      "x": 209.572,
-      "y": 202.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 5.12074999999255
-    },
-    {
-      "type": "tree",
-      "x": 211.304,
-      "y": 189.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 148.952,
-      "y": 232.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 149.818,
-      "y": 210,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 149.818,
-      "y": 223,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 149.818,
-      "y": 240,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 150.684,
-      "y": 178.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 152.416,
-      "y": 237.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 152.416,
-      "y": 241.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 155.88,
-      "y": 238.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 157.612,
-      "y": 238.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 160.21,
-      "y": 239,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 161.076,
-      "y": 230.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 161.076,
-      "y": 238.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 165.406,
-      "y": 236,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 169.736,
-      "y": 235.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 170.602,
-      "y": 165,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 170.602,
-      "y": 239,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 174.066,
-      "y": 138,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 174.066,
-      "y": 139,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 3.9492499999701978
-    },
-    {
-      "type": "tree",
-      "x": 174.932,
-      "y": 141.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 3.3107500000298025
-    },
-    {
-      "type": "tree",
-      "x": 174.932,
-      "y": 143.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 174.932,
-      "y": 152.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 6.15
-    },
-    {
-      "type": "tree",
-      "x": 175.798,
-      "y": 237,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 176.664,
-      "y": 137.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 2.243500000014901
-    },
-    {
-      "type": "tree",
-      "x": 176.664,
-      "y": 142.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 13.273000000044707
-    },
-    {
-      "type": "tree",
-      "x": 176.664,
-      "y": 147.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.758250000029802
-    },
-    {
-      "type": "tree",
-      "x": 176.664,
-      "y": 233.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 179.262,
-      "y": 141,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.9764999999850983
-    },
-    {
-      "type": "tree",
-      "x": 179.262,
-      "y": 145,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 180.128,
-      "y": 141.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4.172499999999999
-    },
-    {
-      "type": "tree",
-      "x": 180.128,
-      "y": 231.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 180.994,
-      "y": 130,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 180.994,
-      "y": 145,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 180.994,
-      "y": 154,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 3.212749999985099
-    },
-    {
-      "type": "tree",
-      "x": 182.726,
-      "y": 131,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 182.726,
-      "y": 135,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 5.245499999970198
-    },
-    {
-      "type": "tree",
-      "x": 182.726,
-      "y": 145,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 5.942999999970197
-    },
-    {
-      "type": "tree",
-      "x": 182.726,
-      "y": 151,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 183.59199999999998,
-      "y": 140.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 6.283500000014902
-    },
-    {
-      "type": "tree",
-      "x": 184.458,
-      "y": 238,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 185.324,
-      "y": 139.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 3.716500000059605
-    },
-    {
-      "type": "tree",
-      "x": 185.324,
-      "y": 151.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 185.324,
-      "y": 239.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 186.19,
-      "y": 132,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 6.341249999999999
-    },
-    {
-      "type": "tree",
-      "x": 187.056,
-      "y": 146.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 187.922,
-      "y": 154,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 1.6357500000298024
-    },
-    {
-      "type": "tree",
-      "x": 188.788,
-      "y": 130.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 3.893749999999999
-    },
-    {
-      "type": "tree",
-      "x": 188.788,
-      "y": 132.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 5.6125000000000025
-    },
-    {
-      "type": "tree",
-      "x": 188.788,
-      "y": 160.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 7.7402499999850995
-    },
-    {
-      "type": "tree",
-      "x": 188.788,
-      "y": 239.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 189.654,
-      "y": 137,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 6.408000000044703
-    },
-    {
-      "type": "tree",
-      "x": 189.654,
-      "y": 236,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 189.654,
-      "y": 240,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 191.386,
-      "y": 130,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 7.124499999955297
-    },
-    {
-      "type": "tree",
-      "x": 191.386,
-      "y": 142,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 191.386,
-      "y": 152,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 192.252,
-      "y": 156.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 192.252,
-      "y": 232.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 192.252,
-      "y": 241.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 193.118,
-      "y": 133,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 7.251499999985103
-    },
-    {
-      "type": "tree",
-      "x": 193.118,
-      "y": 143,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 6.374250000044703
-    },
-    {
-      "type": "tree",
-      "x": 193.118,
-      "y": 237,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 3.65875
-    },
-    {
-      "type": "tree",
       "x": 194.85,
       "y": 148,
       "hp": 100,
@@ -23126,6 +22211,33 @@
       "isOnFire": false,
       "textureIndex": 4,
       "size": 3.7320000000298026
+    },
+    {
+      "type": "tree",
+      "x": 195.716,
+      "y": 203.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.137000000178814
+    },
+    {
+      "type": "tree",
+      "x": 195.716,
+      "y": 218.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 195.716,
+      "y": 226.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
     },
     {
       "type": "tree",
@@ -23174,21 +22286,21 @@
     },
     {
       "type": "tree",
-      "x": 197.448,
-      "y": 240.5,
+      "x": 199.18,
+      "y": 199.5,
       "hp": 100,
       "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4.0077500000037265
+      "textureIndex": 3,
+      "size": 4
     },
     {
       "type": "tree",
-      "x": 198.314,
-      "y": 236,
+      "x": 200.046,
+      "y": 208,
       "hp": 100,
       "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.097249999996274
+      "textureIndex": 4,
+      "size": 4
     },
     {
       "type": "tree",
@@ -23219,12 +22331,39 @@
     },
     {
       "type": "tree",
+      "x": 200.912,
+      "y": 200.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 201.778,
       "y": 137,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 202.644,
+      "y": 196.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 202.644,
+      "y": 213.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 1.2484999999403954
     },
     {
       "type": "tree",
@@ -23238,10 +22377,10 @@
     {
       "type": "tree",
       "x": 203.51,
-      "y": 241,
+      "y": 202,
       "hp": 100,
       "isOnFire": false,
-      "textureIndex": 0,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -23264,15 +22403,6 @@
     },
     {
       "type": "tree",
-      "x": 204.376,
-      "y": 236.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 206.108,
       "y": 130.5,
       "hp": 100,
@@ -23283,11 +22413,11 @@
     {
       "type": "tree",
       "x": 206.108,
-      "y": 238.5,
+      "y": 196.5,
       "hp": 100,
       "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
+      "textureIndex": 1,
+      "size": 5.12875
     },
     {
       "type": "tree",
@@ -23297,6 +22427,42 @@
       "isOnFire": false,
       "textureIndex": 3,
       "size": 16.024499999955296
+    },
+    {
+      "type": "tree",
+      "x": 206.974,
+      "y": 200,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 2.130500000007451
+    },
+    {
+      "type": "tree",
+      "x": 206.974,
+      "y": 206,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 3.999250000007451
+    },
+    {
+      "type": "tree",
+      "x": 207.84,
+      "y": 180.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 207.84,
+      "y": 187.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
     },
     {
       "type": "tree",
@@ -23315,6 +22481,15 @@
       "isOnFire": false,
       "textureIndex": 2,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 208.706,
+      "y": 203,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 2.39
     },
     {
       "type": "tree",
@@ -23346,20 +22521,20 @@
     {
       "type": "tree",
       "x": 209.572,
+      "y": 202.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 5.12074999999255
+    },
+    {
+      "type": "tree",
+      "x": 209.572,
       "y": 233.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 2,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 209.572,
-      "y": 237.5,
-      "hp": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4.77125
     },
     {
       "type": "tree",
@@ -23386,6 +22561,15 @@
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 211.304,
+      "y": 189.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
       "size": 4
     },
     {
@@ -24200,8 +23384,314 @@
     },
     {
       "type": "tree",
+      "x": 161.942,
+      "y": 169,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 158.478,
+      "y": 176,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 158.478,
+      "y": 183,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 155.88,
+      "y": 196.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 156.746,
+      "y": 185,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 156.746,
+      "y": 191,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 169.736,
+      "y": 235.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 155.88,
+      "y": 238.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 157.612,
+      "y": 238.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 160.21,
+      "y": 239,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 161.076,
+      "y": 238.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 165.406,
+      "y": 236,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 170.602,
+      "y": 239,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 175.798,
+      "y": 237,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 184.458,
+      "y": 238,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 185.324,
+      "y": 239.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 188.788,
+      "y": 239.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 189.654,
+      "y": 236,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 189.654,
+      "y": 240,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 192.252,
+      "y": 241.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 193.118,
+      "y": 237,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 3.65875
+    },
+    {
+      "type": "tree",
+      "x": 197.448,
+      "y": 240.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4.0077500000037265
+    },
+    {
+      "type": "tree",
+      "x": 198.314,
+      "y": 236,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.097249999996274
+    },
+    {
+      "type": "tree",
+      "x": 203.51,
+      "y": 241,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 204.376,
+      "y": 236.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 206.108,
+      "y": 238.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 209.572,
+      "y": 237.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4.77125
+    },
+    {
+      "type": "tree",
       "x": 150.684,
       "y": 174.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 150.684,
+      "y": 178.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 152.416,
+      "y": 200.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 153.282,
+      "y": 220,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 154.148,
+      "y": 187.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 154.148,
+      "y": 195.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 155.014,
+      "y": 213,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 154.148,
+      "y": 224.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 4,
@@ -24281,11 +23771,65 @@
     },
     {
       "type": "tree",
+      "x": 148.952,
+      "y": 232.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 149.818,
+      "y": 210,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 149.818,
+      "y": 223,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 150.684,
       "y": 171.5,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 153.282,
+      "y": 169,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 153.282,
+      "y": 226,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 156.746,
+      "y": 169,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -33524,6 +33068,24 @@
     },
     {
       "type": "tree",
+      "x": 152.416,
+      "y": 237.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 152.416,
+      "y": 241.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 217.36599999999999,
       "y": 246,
       "hp": 100,
@@ -33607,6 +33169,15 @@
       "type": "tree",
       "x": 145.488,
       "y": 240.5,
+      "hp": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 149.818,
+      "y": 240,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,

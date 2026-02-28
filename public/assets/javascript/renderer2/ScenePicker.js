@@ -64,6 +64,7 @@ void main(void) {
             this.objectById = new Map();
             this.pickContainer = new PIXI.Container();
             this.pickContainer.name = "renderer2PickerContainer";
+            this.pickPreviewSprite = null;
             this.pickBackgroundSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
             this.pickBackgroundSprite.name = "renderer2PickerBackground";
             this.pickBackgroundSprite.tint = 0x000000;
@@ -94,6 +95,7 @@ void main(void) {
                 registerObject: (obj) => this.ensureObjectPickerId(obj)
             };
             global.renderer2ScenePicker = this.publicApi;
+            global.renderingScenePicker = this.publicApi;
         }
 
         ensureObjects() {
@@ -141,6 +143,12 @@ void main(void) {
             }
             if (this.pickContainer && this.pickContainer.parent) {
                 this.pickContainer.parent.removeChild(this.pickContainer);
+            }
+            if (this.pickPreviewSprite) {
+                this.pickPreviewSprite.visible = false;
+                if (this.pickPreviewSprite.parent) {
+                    this.pickPreviewSprite.parent.removeChild(this.pickPreviewSprite);
+                }
             }
         }
 
@@ -234,17 +242,6 @@ void main(void) {
                     break;
                 }
             }
-            if (!entry && target.type === "wall") {
-                for (let i = 0; i < this.pickEntriesThisFrame.length; i++) {
-                    const candidate = this.pickEntriesThisFrame[i];
-                    const item = candidate && candidate.item ? candidate.item : null;
-                    if (!item || item.type !== "wallSectionComposite" || !Array.isArray(item._sectionMemberWalls)) continue;
-                    if (item._sectionMemberWalls.includes(target)) {
-                        entry = candidate;
-                        break;
-                    }
-                }
-            }
             if (!entry || !entry.record || !entry.record.shader || !entry.record.shader.uniforms) return false;
             const uniforms = entry.record.shader.uniforms;
             const base = Array.isArray(entry.rgb) ? entry.rgb : [0, 0, 0];
@@ -257,18 +254,40 @@ void main(void) {
 
         renderPickerScreenPreview(ctx) {
             const uiLayer = ctx && ctx.uiLayer;
-            const show = !!global.renderer2ShowPickerScreen;
-            if (!this.pickContainer || !uiLayer) return;
+            const app = ctx && ctx.app;
+            const show = (typeof global.renderer2ShowPickerScreen === "boolean")
+                ? !!global.renderer2ShowPickerScreen
+                : !!global.renderingShowPickerScreen;
+            if (!uiLayer) return;
+            if (!this.pickPreviewSprite) {
+                this.pickPreviewSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+                this.pickPreviewSprite.name = "renderer2PickerPreviewSprite";
+                this.pickPreviewSprite.interactive = false;
+                this.pickPreviewSprite.visible = false;
+                this.pickPreviewSprite.alpha = 1;
+            }
             if (!show) {
-                if (this.pickContainer.parent) {
-                    this.pickContainer.parent.removeChild(this.pickContainer);
+                if (this.pickPreviewSprite.parent) {
+                    this.pickPreviewSprite.parent.removeChild(this.pickPreviewSprite);
                 }
+                this.pickPreviewSprite.visible = false;
                 return;
             }
-            if (this.pickContainer.parent !== uiLayer) {
-                uiLayer.addChild(this.pickContainer);
+            if (!this.pickRenderTexture) {
+                this.pickPreviewSprite.visible = false;
+                return;
+            }
+            const screenWidth = Math.max(1, Math.round(Number(app && app.screen && app.screen.width) || Number(this.pickRenderTexture.width) || 1));
+            const screenHeight = Math.max(1, Math.round(Number(app && app.screen && app.screen.height) || Number(this.pickRenderTexture.height) || 1));
+            this.pickPreviewSprite.texture = this.pickRenderTexture;
+            this.pickPreviewSprite.position.set(0, 0);
+            this.pickPreviewSprite.width = screenWidth;
+            this.pickPreviewSprite.height = screenHeight;
+            this.pickPreviewSprite.visible = true;
+            if (this.pickPreviewSprite.parent !== uiLayer) {
+                uiLayer.addChild(this.pickPreviewSprite);
             } else {
-                uiLayer.setChildIndex(this.pickContainer, uiLayer.children.length - 1);
+                uiLayer.setChildIndex(this.pickPreviewSprite, uiLayer.children.length - 1);
             }
         }
 
@@ -699,19 +718,24 @@ void main(void) {
                     sortable.push({ item, displayObj, idx: i });
                 }
             } else {
-                const items = Array.isArray(onscreenObjects) ? onscreenObjects : [];
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i];
+                const items = Array.isArray(onscreenObjects)
+                    ? onscreenObjects
+                    : ((onscreenObjects && typeof onscreenObjects[Symbol.iterator] === "function")
+                        ? onscreenObjects
+                        : []);
+                let i = 0;
+                for (const item of items) {
+                    const idx = i++;
                     if (!item || item.gone || item.vanishing) continue;
                     const displayObj = this.getTargetDisplayObject(item, ctx);
                     if (!displayObj || !displayObj.parent || !displayObj.visible) continue;
-                    let childIndex = i;
+                    let childIndex = idx;
                     try {
                         childIndex = displayObj.parent.getChildIndex(displayObj);
                     } catch (_err) {
-                        childIndex = i;
+                        childIndex = idx;
                     }
-                    sortable.push({ item, displayObj, childIndex, idx: i });
+                    sortable.push({ item, displayObj, childIndex, idx });
                 }
                 sortable.sort((a, b) => {
                     if (a.displayObj.parent === b.displayObj.parent && a.childIndex !== b.childIndex) {
@@ -869,7 +893,9 @@ void main(void) {
             const spellSystem = (ctx && ctx.spellSystem) || null;
             const mousePos = (ctx && ctx.mousePos) || global.mousePos || null;
             const uiLayer = ctx && ctx.uiLayer;
-            const showPickerScreen = !!global.renderer2ShowPickerScreen;
+            const showPickerScreen = (typeof global.renderer2ShowPickerScreen === "boolean")
+                ? !!global.renderer2ShowPickerScreen
+                : !!global.renderingShowPickerScreen;
             const currentSpell = (wizard && typeof wizard.currentSpell === "string")
                 ? wizard.currentSpell
                 : "";
@@ -879,11 +905,6 @@ void main(void) {
                 currentSpell === "firewall" ||
                 currentSpell === "vanish" ||
                 currentSpell === "placeobject"
-            );
-            const onscreenObjectsRef = (
-                typeof global.getOnscreenObjects === "function"
-                    ? global.getOnscreenObjects()
-                    : (global.onscreenObjects ? Array.from(global.onscreenObjects) : [])
             );
             let target = null;
             const canResolveTarget = !!(
@@ -899,6 +920,17 @@ void main(void) {
             if (!needsPickPass) {
                 this.renderPickerScreenPreview(ctx || {});
                 return;
+            }
+
+            let onscreenObjectsRef = [];
+            if (global.onscreenObjects instanceof Set) {
+                // Hot path: avoid calling global.getOnscreenObjects() because it allocates
+                // a fresh Array.from(...) every frame. Build pick pass directly from the Set.
+                onscreenObjectsRef = global.onscreenObjects;
+            } else if (typeof global.getOnscreenObjects === "function") {
+                onscreenObjectsRef = global.getOnscreenObjects();
+            } else if (Array.isArray(global.onscreenObjects)) {
+                onscreenObjectsRef = global.onscreenObjects;
             }
 
             this.buildPickPass(ctx || {}, onscreenObjectsRef);
@@ -940,4 +972,5 @@ void main(void) {
     }
 
     global.Renderer2ScenePicker = Renderer2ScenePicker;
+    global.RenderingScenePicker = Renderer2ScenePicker;
 })(typeof globalThis !== "undefined" ? globalThis : window);

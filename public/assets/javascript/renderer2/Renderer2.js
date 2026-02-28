@@ -4,11 +4,30 @@
     if (typeof global.renderer2ShowPickerScreen !== "boolean") {
         global.renderer2ShowPickerScreen = false;
     }
+    if (typeof global.renderingShowPickerScreen !== "boolean") {
+        global.renderingShowPickerScreen = global.renderer2ShowPickerScreen;
+    }
+
+    function getShowPickerScreenFlag() {
+        if (typeof global.renderer2ShowPickerScreen === "boolean") {
+            return !!global.renderer2ShowPickerScreen;
+        }
+        return !!global.renderingShowPickerScreen;
+    }
+
+    function setShowPickerScreenFlag(enabled) {
+        const next = !!enabled;
+        global.renderingShowPickerScreen = next;
+        global.renderer2ShowPickerScreen = next;
+        return next;
+    }
 
     class Renderer2Impl {
         constructor() {
-            this.camera = new global.Renderer2Camera();
-            this.layers = new global.Renderer2Layers();
+            const CameraCtor = global.RenderingCamera || global.Renderer2Camera;
+            const LayersCtor = global.RenderingLayers || global.Renderer2Layers;
+            this.camera = new CameraCtor();
+            this.layers = new LayersCtor();
             this.initialized = false;
             this.wizardSprite = null;
             this.wizardShadowGraphics = null;
@@ -17,6 +36,12 @@
             this.placeObjectPreviewDisplayObject = null;
             this.placeObjectPreviewItem = null;
             this.placeObjectCenterSnapGuideGraphics = null;
+            this.wallPlacementPreviewGraphics = null;
+            this.hexGridTexture = null;
+            this.hexGridSprites = [];
+            this.hexGridContainer = null;
+            this.hexGridLastViewscale = 0;
+            this.hexGridLastXyratio = 0;
             this.groundSpriteByNodeKey = new Map();
             this.roadSpriteByObject = new Map();
             this.lastSectionInputItems = [];
@@ -24,9 +49,11 @@
             this.activeRoofMeshes = new Set();
             this.activeDepthBillboardMeshes = new Set();
             this.activeDepthBillboardItems = new Set();
+            this.activePowerupDisplayObjects = new Set();
             this.pickRenderItems = [];
-            this.scenePicker = (global.Renderer2ScenePicker && typeof global.Renderer2ScenePicker === "function")
-                ? new global.Renderer2ScenePicker()
+            const ScenePickerCtor = global.RenderingScenePicker || global.Renderer2ScenePicker;
+            this.scenePicker = (ScenePickerCtor && typeof ScenePickerCtor === "function")
+                ? new ScenePickerCtor()
                 : null;
         }
 
@@ -173,7 +200,7 @@
 
         shouldUseDepthBillboard(item) {
             if (!item || item.gone || item.vanishing) return false;
-            if (item.type === "road" || item.type === "roof" || item.type === "wall" || item.type === "wallSectionComposite") {
+            if (item.type === "road" || item.type === "roof" || item.type === "wallSection") {
                 return false;
             }
             const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
@@ -199,6 +226,9 @@
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!this.shouldUseDepthBillboard(item)) continue;
+                if (typeof item.updateSpriteAnimation === "function") {
+                    item.updateSpriteAnimation();
+                }
                 const sprite = item.pixiSprite;
                 const mesh = item.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
                 if (!mesh) continue;
@@ -383,8 +413,155 @@
             }
         }
 
+        renderHexGridOverlay(ctx) {
+            const layer = this.layers.ground;
+            if (!layer) return;
+
+            const gridEnabled = !!(
+                (typeof showHexGrid !== "undefined" && showHexGrid) ||
+                (typeof debugMode !== "undefined" && debugMode)
+            );
+            if (!gridEnabled) {
+                if (this.hexGridContainer) this.hexGridContainer.visible = false;
+                return;
+            }
+
+            const appRef = (ctx && ctx.app) || global.app || null;
+            const cam = this.camera;
+            if (!appRef || !appRef.renderer) return;
+
+            if (!this.hexGridContainer) {
+                this.hexGridContainer = new PIXI.Container();
+                this.hexGridContainer.name = "renderer2HexGridContainer";
+                this.hexGridContainer.interactiveChildren = false;
+                layer.addChild(this.hexGridContainer);
+            } else if (this.hexGridContainer.parent !== layer) {
+                layer.addChild(this.hexGridContainer);
+            }
+            this.hexGridContainer.visible = true;
+
+            const vs = cam.viewscale;
+            const vsy = cam.viewscale * cam.xyratio;
+            if (vs <= 0 || vsy <= 0) return;
+
+            // Hex geometry in screen pixels.
+            // Nodes: x = xIndex*0.866, y = yIndex + (xIndex%2===0 ? 0.5 : 0)
+            // Even columns are shifted DOWN by 0.5 world units.
+            const colStep = 0.866 * vs;       // horizontal distance between adjacent columns
+            const vy = vsy;                    // vertical distance between adjacent rows
+            const hexPxW = vs / 0.866;         // full hex bounding width
+            const halfW = hexPxW / 2;
+            const halfH = vy / 2;
+            const quarterW = hexPxW / 4;
+
+            // In the texture, hex[col][row] center is at:
+            //   tx = col*colStep + cx0
+            //   ty = row*vy + cy0 - (col%2===1 ? halfH : 0)
+            // cy0=vy ensures odd-col row-0 hexes don't clip above y=0.
+            const cx0 = halfW;
+            const cy0 = vy;
+
+            const TILE_COLS = 16;  // must be even so parity is preserved when tiling
+            const TILE_ROWS = 16;
+            // Texture bounding box:
+            //   width  = rightmost hex right-edge  = (TILE_COLS-1)*colStep + hexPxW
+            //   height = lowest hex bottom-edge    = TILE_ROWS*vy + halfH  (even-col last row)
+            const tileTexW = (TILE_COLS - 1) * colStep + hexPxW;
+            const tileTexH = TILE_ROWS * vy + halfH;
+
+            // Rebuild texture only when zoom or aspect ratio changes meaningfully.
+            let rebuildTexture = !this.hexGridTexture;
+            if (!rebuildTexture && Math.abs(vs - this.hexGridLastViewscale) > 1e-3) rebuildTexture = true;
+            if (!rebuildTexture && Math.abs(cam.xyratio - this.hexGridLastXyratio) > 1e-3) rebuildTexture = true;
+
+            if (rebuildTexture) {
+                const gfx = new PIXI.Graphics();
+                gfx.lineStyle(1, 0xffffff, 0.35);
+                for (let col = 0; col < TILE_COLS; col++) {
+                    const tx = col * colStep + cx0;
+                    for (let row = 0; row < TILE_ROWS; row++) {
+                        const ty = row * vy + cy0 - (col % 2 === 1 ? halfH : 0);
+                        gfx.moveTo(tx - halfW, ty);
+                        gfx.lineTo(tx - quarterW, ty - halfH);
+                        gfx.lineTo(tx + quarterW, ty - halfH);
+                        gfx.lineTo(tx + halfW, ty);
+                        gfx.lineTo(tx + quarterW, ty + halfH);
+                        gfx.lineTo(tx - quarterW, ty + halfH);
+                        gfx.closePath();
+                    }
+                }
+                const pxW = Math.ceil(tileTexW);
+                const pxH = Math.ceil(tileTexH);
+                const tex = appRef.renderer.generateTexture(gfx, {
+                    region: new PIXI.Rectangle(0, 0, pxW, pxH),
+                    resolution: 1
+                });
+                gfx.destroy(true);
+                if (this.hexGridTexture && this.hexGridTexture !== tex) {
+                    this.hexGridTexture.destroy(true);
+                }
+                this.hexGridTexture = tex;
+                this.hexGridLastViewscale = vs;
+                this.hexGridLastXyratio = cam.xyratio;
+            }
+
+            // Anchor: even column just offscreen to the top-left.
+            // xIndex must be even so the texture parity (even-col first) is always correct.
+            const xIndexRaw = Math.floor(cam.x / 0.866) - 1;
+            const xIndex = xIndexRaw % 2 === 0 ? xIndexRaw : xIndexRaw - 1;
+            const yIndex = Math.floor(cam.y) - 1;
+            // Even column: world y = yIndex + 0.5
+            const anchorWorldX = xIndex * 0.866;
+            const anchorWorldY = yIndex + 0.5;
+            const anchorScreen = cam.worldToScreen(anchorWorldX, anchorWorldY);
+
+            // Top-left of first tile sprite in screen space
+            const startScreenX = anchorScreen.x - cx0;
+            const startScreenY = anchorScreen.y - cy0;
+
+            // Step between successive tile copies (exactly 16 columns / 16 rows)
+            const stepX = TILE_COLS * colStep;   // 16 * 0.866 * vs
+            const stepY = TILE_ROWS * vy;         // 16 * vy
+
+            const screenW = Math.max(1, appRef.renderer.width || window.innerWidth || 800);
+            const screenH = Math.max(1, appRef.renderer.height || window.innerHeight || 600);
+
+            const colsNeeded = Math.ceil((screenW - startScreenX) / stepX) + 1;
+            const rowsNeeded = Math.ceil((screenH - startScreenY) / stepY) + 1;
+
+            let idx = 0;
+            for (let r = 0; r < rowsNeeded; r++) {
+                for (let c = 0; c < colsNeeded; c++) {
+                    let spr = this.hexGridSprites[idx];
+                    if (!spr) {
+                        spr = new PIXI.Sprite(this.hexGridTexture);
+                        spr.name = "renderer2HexGridTile";
+                        spr.anchor.set(0, 0);
+                        spr.interactive = false;
+                        this.hexGridContainer.addChild(spr);
+                        this.hexGridSprites[idx] = spr;
+                    }
+                    if (spr.texture !== this.hexGridTexture) spr.texture = this.hexGridTexture;
+                    spr.x = startScreenX + c * stepX;
+                    spr.y = startScreenY + r * stepY;
+                    spr.visible = true;
+                    idx++;
+                }
+            }
+            for (; idx < this.hexGridSprites.length; idx++) {
+                if (this.hexGridSprites[idx]) this.hexGridSprites[idx].visible = false;
+            }
+
+            // Float the container to the top of the ground layer.
+            if (this.hexGridContainer.parent === layer) {
+                const lastIdx = layer.children.length - 1;
+                if (layer.getChildIndex(this.hexGridContainer) !== lastIdx) {
+                    layer.setChildIndex(this.hexGridContainer, lastIdx);
+                }
+            }
+        }
+
         renderObjects3D(ctx, visibleNodes) {
-            const wallSections = global.WallSectionsRenderer;
             const container = this.layers.objects3d;
             if (!container) return;
 
@@ -394,46 +571,7 @@
                 item.type !== "roof" &&
                 item !== (ctx && ctx.wizard)
             );
-            this.lastSectionInputItems = mapItems;
-
-            let hiddenItems = new Set();
-            let compositeItems = [];
-            if (wallSections && typeof wallSections.buildCompositeRenderItems === "function") {
-                const sectionItems = mapItems.filter(item => {
-                    if (!item) return false;
-                    const type = (typeof item.type === "string") ? item.type.trim().toLowerCase() : "";
-                    if (type === "window" || type === "door") return false;
-                    const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-                    return !(category === "windows" || category === "doors");
-                });
-                wallSections.prepareFrame(this.camera.viewscale, this.camera.xyratio, { outputMode: "mesh3d" });
-                const sectionResult = wallSections.buildCompositeRenderItems({
-                    enabled: true,
-                    items: sectionItems,
-                    cachePrefix: "renderer2",
-                    outputMode: "mesh3d",
-                    camera: ctx.camera || this.camera,
-                    map: ctx.map,
-                    app: ctx.app,
-                    PIXI: (typeof PIXI !== "undefined") ? PIXI : null,
-                    viewscale: this.camera.viewscale,
-                    xyratio: this.camera.xyratio,
-                    isWallMountedPlaceable: (typeof global.isWallMountedPlaceable === "function")
-                        ? global.isWallMountedPlaceable
-                        : (() => false)
-                });
-                wallSections.endFrame();
-                hiddenItems = (sectionResult && sectionResult.hiddenItems instanceof Set)
-                    ? sectionResult.hiddenItems
-                    : new Set();
-                compositeItems = (sectionResult && Array.isArray(sectionResult.renderItems))
-                    ? sectionResult.renderItems
-                    : [];
-            }
-
-            const renderItems = mapItems
-                .filter(item => !hiddenItems.has(item))
-                .concat(compositeItems);
+            const renderItems = mapItems;
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
@@ -443,8 +581,12 @@
                     item.rotationAxis === "spatial" &&
                     (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
                 );
-                if (!isWallMountedSpatial && item.type !== "wallSectionComposite" && typeof global.applySpriteTransform === "function") {
-                    global.applySpriteTransform(item);
+                if (!isWallMountedSpatial) {
+                    if (item.skipTransform && typeof item.draw === "function") {
+                        item.draw();
+                    } else if (typeof global.applySpriteTransform === "function") {
+                        global.applySpriteTransform(item);
+                    }
                 }
             }
             const depthBillboardRenderedItems = this.renderDepthBillboardObjects(ctx, renderItems);
@@ -454,20 +596,33 @@
                 const item = renderItems[i];
                 if (!item) continue;
                 if (depthBillboardRenderedItems.has(item)) continue;
-                const displayObj = item.pixiSprite || null;
+                let displayObj = item.pixiSprite || null;
+                if (
+                    item.type === "wallSection" &&
+                    typeof item.getDepthMeshDisplayObject === "function"
+                ) {
+                    const depthDisplay = item.getDepthMeshDisplayObject({
+                        camera: ctx.camera || this.camera,
+                        app: ctx.app,
+                        viewscale: this.camera.viewscale,
+                        xyratio: this.camera.xyratio,
+                        tint: item.pixiSprite && Number.isFinite(item.pixiSprite.tint)
+                            ? item.pixiSprite.tint
+                            : 0xFFFFFF,
+                        alpha: item.pixiSprite && Number.isFinite(item.pixiSprite.alpha)
+                            ? item.pixiSprite.alpha
+                            : 1
+                    });
+                    if (depthDisplay) {
+                        displayObj = depthDisplay;
+                    }
+                }
                 if (!displayObj) continue;
                 if (displayObj.parent !== container) {
                     container.addChild(displayObj);
                 }
                 displayObj.visible = true;
                 item._renderer2DisplayObject = displayObj;
-                if (item.type === "wallSectionComposite" && Array.isArray(item._sectionMemberWalls)) {
-                    for (let w = 0; w < item._sectionMemberWalls.length; w++) {
-                        const memberWall = item._sectionMemberWalls[w];
-                        if (!memberWall) continue;
-                        memberWall._wallSectionCompositeDisplayObject = displayObj;
-                    }
-                }
                 if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
                     displayObj.renderable = true;
                 }
@@ -586,29 +741,31 @@
             const alpha = Number.isFinite(ctx.renderAlpha)
                 ? Math.max(0, Math.min(1, ctx.renderAlpha))
                 : 1;
-            const previousJumpHeight = Number.isFinite(wizard.prevJumpHeight)
-                ? wizard.prevJumpHeight
-                : (Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0);
-            const currentJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
-            const interpolatedJumpHeight = previousJumpHeight + (currentJumpHeight - previousJumpHeight) * alpha;
-
-            const p = this.camera.worldToScreen(wizard.x, wizard.y, Number.isFinite(wizard.z) ? wizard.z : 0);
+            const renderPos = (wizard && typeof wizard.getInterpolatedPosition === "function")
+                ? wizard.getInterpolatedPosition(alpha)
+                : {
+                    x: Number.isFinite(wizard.x) ? wizard.x : 0,
+                    y: Number.isFinite(wizard.y) ? wizard.y : 0,
+                    z: Number.isFinite(wizard.z) ? wizard.z : 0
+                };
+            const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, 0);
+            const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
 
-            this.wizardSprite.x = p.x;
-            this.wizardSprite.y = p.y - jumpOffsetPx;
+            this.wizardSprite.x = pGround.x;
+            this.wizardSprite.y = pGround.y - jumpOffsetPx;
             this.wizardSprite.width = this.camera.viewscale;
             this.wizardSprite.height = this.camera.viewscale;
             this.wizardSprite.visible = true;
             this.addPickRenderItem(wizard, this.wizardSprite, { forceInclude: true });
 
             const shadow = this.wizardShadowGraphics;
-            const shadowCenterY = p.y + 0.2 * this.camera.viewscale * this.camera.xyratio;
+            const shadowCenterY = pGround.y + 0.2 * this.camera.viewscale * this.camera.xyratio;
             const shadowRadiusX = 0.2 * this.camera.viewscale;
             const shadowRadiusY = shadowRadiusX * this.camera.xyratio;
             shadow.clear();
             shadow.beginFill(0x000000, 0.3);
-            shadow.drawEllipse(p.x, shadowCenterY, shadowRadiusX, shadowRadiusY);
+            shadow.drawEllipse(pGround.x, shadowCenterY, shadowRadiusX, shadowRadiusY);
             shadow.endFill();
             shadow.visible = true;
 
@@ -617,16 +774,99 @@
                 if (hat.parent !== e) {
                     e.addChild(hat);
                 }
-                hat.x = p.x;
-                hat.y = p.y - jumpOffsetPx;
+                hat.x = pGround.x;
+                const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
+                    * this.camera.viewscale * this.camera.xyratio;
+                hat.y = pGround.y - jumpOffsetPx - hatYOffset;
                 if (hat.scale && typeof hat.scale.set === "function") {
-                    hat.scale.set(this.camera.viewscale, this.camera.viewscale);
+                    const hatRes = Number.isFinite(wizard.hatResolution) ? Math.max(1, wizard.hatResolution) : 1;
+                    const hatRenderScale = Number.isFinite(wizard.hatRenderScale) ? Math.max(0.05, wizard.hatRenderScale) : 1;
+                    const s = (this.camera.viewscale / hatRes) * hatRenderScale;
+                    hat.scale.set(s, s);
                 }
                 hat.visible = true;
                 if (hat.parent && hat.parent.children[hat.parent.children.length - 1] !== hat) {
                     hat.parent.setChildIndex(hat, hat.parent.children.length - 1);
                 }
             }
+        }
+
+        renderPowerups(ctx) {
+            const depthContainer = this.layers.depthObjects;
+            if (!depthContainer) return;
+
+            const list = Array.isArray(ctx && ctx.powerups)
+                ? ctx.powerups
+                : (Array.isArray(global.powerups) ? global.powerups : []);
+            const currentDisplayObjects = new Set();
+
+            for (let i = 0; i < list.length; i++) {
+                const powerup = list[i];
+                if (!powerup || powerup.gone || powerup.collected) continue;
+                if (!Number.isFinite(powerup.x) || !Number.isFinite(powerup.y)) continue;
+                if (typeof powerup.ensureSprite === "function") {
+                    powerup.ensureSprite();
+                }
+                const sprite = powerup.pixiSprite;
+                if (!sprite) continue;
+                if (typeof powerup.updateSpriteAnimation === "function") {
+                    powerup.updateSpriteAnimation();
+                }
+
+                const point = this.camera.worldToScreen(
+                    powerup.x,
+                    powerup.y,
+                    Number.isFinite(powerup.z) ? powerup.z : 0
+                );
+                const w = Number.isFinite(powerup.width) ? Math.max(0.01, Number(powerup.width)) : 0.8;
+                const h = Number.isFinite(powerup.height) ? Math.max(0.01, Number(powerup.height)) : 0.8;
+                sprite.x = point.x;
+                sprite.y = point.y;
+                sprite.width = w * this.camera.viewscale;
+                sprite.height = h * this.camera.viewscale;
+
+                let depthMesh = null;
+                if (typeof powerup.updateDepthBillboardMesh === "function") {
+                    depthMesh = powerup.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
+                }
+
+                if (!depthMesh) {
+                    sprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                        sprite.renderable = false;
+                    }
+                    powerup._renderer2DepthMesh = null;
+                    powerup._renderer2DisplayObject = null;
+                    continue;
+                }
+
+                if (depthMesh.parent !== depthContainer) {
+                    depthContainer.addChild(depthMesh);
+                }
+                depthMesh.visible = true;
+                if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
+                    depthMesh.renderable = true;
+                }
+                sprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = false;
+                }
+
+                powerup._renderer2DepthMesh = depthMesh;
+                powerup._renderer2DisplayObject = depthMesh;
+                currentDisplayObjects.add(depthMesh);
+                this.addPickRenderItem(powerup, depthMesh, { forceInclude: true });
+            }
+
+            for (const sprite of this.activePowerupDisplayObjects) {
+                if (!currentDisplayObjects.has(sprite) && sprite) {
+                    sprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                        sprite.renderable = false;
+                    }
+                }
+            }
+            this.activePowerupDisplayObjects = currentDisplayObjects;
         }
 
         getMousePosRef(ctx) {
@@ -660,6 +900,139 @@
                 this.placeObjectCenterSnapGuideGraphics.clear();
                 this.placeObjectCenterSnapGuideGraphics.visible = false;
             }
+        }
+
+        clearWallPlacementPreview() {
+            if (!this.wallPlacementPreviewGraphics) return;
+            this.wallPlacementPreviewGraphics.clear();
+            this.wallPlacementPreviewGraphics.visible = false;
+        }
+
+        renderWallPlacementPreview(ctx) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.wallPlacementPreviewGraphics) {
+                this.wallPlacementPreviewGraphics = new PIXI.Graphics();
+                this.wallPlacementPreviewGraphics.name = "renderer2WallPlacementPreview";
+                this.wallPlacementPreviewGraphics.skipTransform = true;
+                this.wallPlacementPreviewGraphics.interactive = false;
+                this.wallPlacementPreviewGraphics.visible = false;
+                layer.addChild(this.wallPlacementPreviewGraphics);
+            } else if (this.wallPlacementPreviewGraphics.parent !== layer) {
+                layer.addChild(this.wallPlacementPreviewGraphics);
+            }
+
+            const g = this.wallPlacementPreviewGraphics;
+            g.clear();
+
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
+            const mousePosRef = this.getMousePosRef(ctx);
+            if (
+                !wizard ||
+                wizard.currentSpell !== "wall" ||
+                !wizard.wallLayoutMode ||
+                !wizard.wallStartPoint ||
+                !mapRef ||
+                !mousePosRef ||
+                !Number.isFinite(mousePosRef.worldX) ||
+                !Number.isFinite(mousePosRef.worldY)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            const spellSystemRef = (typeof SpellSystem !== "undefined")
+                ? SpellSystem
+                : (global.SpellSystem || null);
+            const adjustedWallDragPoint = (
+                spellSystemRef &&
+                typeof spellSystemRef.getAdjustedWallDragWorldPoint === "function"
+            ) ? spellSystemRef.getAdjustedWallDragWorldPoint(wizard, mousePosRef.worldX, mousePosRef.worldY) : null;
+            const dragWorldX = adjustedWallDragPoint && Number.isFinite(adjustedWallDragPoint.x)
+                ? adjustedWallDragPoint.x
+                : mousePosRef.worldX;
+            const dragWorldY = adjustedWallDragPoint && Number.isFinite(adjustedWallDragPoint.y)
+                ? adjustedWallDragPoint.y
+                : mousePosRef.worldY;
+
+            const startWorld = {
+                x: Number(wizard.wallStartPoint.x),
+                y: Number(wizard.wallStartPoint.y)
+            };
+            const endWorld = { x: Number(dragWorldX), y: Number(dragWorldY) };
+            if (
+                !Number.isFinite(startWorld.x) ||
+                !Number.isFinite(startWorld.y) ||
+                !Number.isFinite(endWorld.x) ||
+                !Number.isFinite(endWorld.y)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            let segments = [];
+            if (
+                typeof global.WallSectionUnit !== "undefined" &&
+                global.WallSectionUnit &&
+                typeof global.WallSectionUnit.planPlacementFromWorldPoints === "function"
+            ) {
+                const plan = global.WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld);
+                if (plan && Array.isArray(plan.segments)) {
+                    segments = plan.segments.slice();
+                }
+            }
+
+            if (segments.length === 0 && typeof mapRef.worldToNode === "function") {
+                const startNode = mapRef.worldToNode(startWorld.x, startWorld.y);
+                const endNode = mapRef.worldToNode(endWorld.x, endWorld.y);
+                if (
+                    startNode && endNode &&
+                    Number.isFinite(startNode.x) && Number.isFinite(startNode.y) &&
+                    Number.isFinite(endNode.x) && Number.isFinite(endNode.y)
+                ) {
+                    segments.push({ start: startNode, end: endNode });
+                }
+            }
+
+            if (segments.length === 0) {
+                g.visible = false;
+                return;
+            }
+
+            g.lineStyle(2, 0xff2222, 0.95);
+            const wallThickness = (wizard && Number.isFinite(wizard.selectedWallThickness))
+                ? wizard.selectedWallThickness : 0.1;
+            const halfT = wallThickness * 0.5;
+            const bottomZ = 0;
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                if (!seg || !seg.start || !seg.end) continue;
+                const sx = Number(seg.start.x);
+                const sy = Number(seg.start.y);
+                const ex = Number(seg.end.x);
+                const ey = Number(seg.end.y);
+                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) continue;
+                const dx = ex - sx;
+                const dy = ey - sy;
+                const len = Math.hypot(dx, dy);
+                if (len < 1e-6) continue;
+                // Perpendicular normal
+                const nx = -dy / len;
+                const ny = dx / len;
+                // Four corners of the base rectangle
+                const al = this.camera.worldToScreen(sx + nx * halfT, sy + ny * halfT, bottomZ);
+                const ar = this.camera.worldToScreen(sx - nx * halfT, sy - ny * halfT, bottomZ);
+                const bl = this.camera.worldToScreen(ex + nx * halfT, ey + ny * halfT, bottomZ);
+                const br = this.camera.worldToScreen(ex - nx * halfT, ey - ny * halfT, bottomZ);
+                // Draw closed rectangle
+                g.moveTo(al.x, al.y);
+                g.lineTo(bl.x, bl.y);
+                g.lineTo(br.x, br.y);
+                g.lineTo(ar.x, ar.y);
+                g.lineTo(al.x, al.y);
+            }
+            g.visible = true;
         }
 
         buildPlaceObjectPreviewRenderItem(ctx) {
@@ -795,21 +1168,10 @@
                 : 1;
             previewItem.rotationAxis = useSnapPlacement ? "spatial" : rotationAxis;
             previewItem.placementRotation = useSnapPlacement ? snapPlacement.snappedRotationDeg : effectivePlacementRotation;
-            previewItem.mountedWallLineGroupId = (
-                useSnapPlacement &&
-                Number.isInteger(snapPlacement.mountedWallLineGroupId)
-            ) ? Number(snapPlacement.mountedWallLineGroupId) : (
-                useSnapPlacement &&
-                snapPlacement.targetWall &&
-                Number.isInteger(snapPlacement.targetWall.lineGroupId)
-            ) ? Number(snapPlacement.targetWall.lineGroupId) : null;
             previewItem.mountedSectionId = (
                 useSnapPlacement &&
                 Number.isInteger(snapPlacement.mountedSectionId)
-            ) ? Number(snapPlacement.mountedSectionId) : (
-                useSnapPlacement &&
-                Number.isInteger(snapPlacement.mountedWallLineGroupId)
-            ) ? Number(snapPlacement.mountedWallLineGroupId) : null;
+            ) ? Number(snapPlacement.mountedSectionId) : null;
             previewItem.mountedWallFacingSign = (
                 useSnapPlacement &&
                 Number.isFinite(snapPlacement.mountedWallFacingSign)
@@ -1059,14 +1421,18 @@
             this.resetPickRenderItems();
             if (this.scenePicker && this.scenePicker.publicApi) {
                 global.renderer2ScenePicker = this.scenePicker.publicApi;
+                global.renderingScenePicker = this.scenePicker.publicApi;
             }
             const visibleNodes = this.collectVisibleNodes(ctx, 4, 4);
             this.syncOnscreenObjectsCache(ctx, visibleNodes);
             this.renderGroundTiles(ctx, visibleNodes);
+            this.renderHexGridOverlay(ctx);
             this.renderRoadsAndFloors(ctx, visibleNodes);
             this.renderObjects3D(ctx, visibleNodes);
+            this.renderWallPlacementPreview(ctx);
             this.renderPlaceObjectPreview(ctx);
             this.renderRoofs3D(ctx);
+            this.renderPowerups(ctx);
             this.renderWizard(ctx);
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
                 const spellSystemRef = (typeof SpellSystem !== "undefined")
@@ -1091,9 +1457,6 @@
                     getDisplayObjectForItem: (item) => {
                         if (!item) return null;
                         if (item._renderer2DepthMesh && item._renderer2DepthMesh.visible) return item._renderer2DepthMesh;
-                        if (item._wallSectionCompositeDisplayObject && item._wallSectionCompositeDisplayObject.parent) {
-                            return item._wallSectionCompositeDisplayObject;
-                        }
                         if (item.type === "road") {
                             const roadSprite = this.roadSpriteByObject.get(item);
                             if (roadSprite && roadSprite.parent) return roadSprite;
@@ -1106,7 +1469,8 @@
                     }
                 });
             }
-            const showPickerScreen = !!global.renderer2ShowPickerScreen;
+            const showPickerScreen = getShowPickerScreenFlag();
+            setShowPickerScreenFlag(showPickerScreen);
             this.layers.ground.visible = !showPickerScreen;
             this.layers.roadsFloor.visible = !showPickerScreen;
             this.layers.depthObjects.visible = !showPickerScreen;
@@ -1119,9 +1483,9 @@
 
     let singleton = null;
 
-    global.Renderer2 = {
+    const renderingApi = {
         renderFrame(ctx) {
-            if (!global.Renderer2Camera || !global.Renderer2Layers || typeof PIXI === "undefined") {
+            if (!(global.RenderingCamera || global.Renderer2Camera) || !(global.RenderingLayers || global.Renderer2Layers) || typeof PIXI === "undefined") {
                 return false;
             }
             if (!singleton) singleton = new Renderer2Impl();
@@ -1129,14 +1493,6 @@
         },
         disable() {
             if (!singleton) return;
-            if (global.WallSectionsRenderer && typeof global.WallSectionsRenderer.restoreRenderable === "function") {
-                global.WallSectionsRenderer.restoreRenderable(
-                    Array.isArray(singleton.lastSectionInputItems) ? singleton.lastSectionInputItems : [],
-                    (typeof global.isWallMountedPlaceable === "function")
-                        ? global.isWallMountedPlaceable
-                        : (() => false)
-                );
-            }
             for (const item of singleton.activeDepthBillboardItems) {
                 if (item && item.pixiSprite) {
                     item.pixiSprite.visible = true;
@@ -1154,15 +1510,29 @@
             }
             singleton.activeDepthBillboardItems.clear();
             singleton.activeDepthBillboardMeshes.clear();
+            for (const sprite of singleton.activePowerupDisplayObjects) {
+                if (!sprite) continue;
+                sprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = false;
+                }
+            }
+            singleton.activePowerupDisplayObjects.clear();
             singleton.clearPlaceObjectPreview();
+            singleton.clearWallPlacementPreview();
             if (singleton.scenePicker && typeof singleton.scenePicker.hideAll === "function") {
                 singleton.scenePicker.hideAll();
             }
             if (singleton.scenePicker && singleton.scenePicker.publicApi && global.renderer2ScenePicker === singleton.scenePicker.publicApi) {
                 global.renderer2ScenePicker = null;
             }
+            if (singleton.scenePicker && singleton.scenePicker.publicApi && global.renderingScenePicker === singleton.scenePicker.publicApi) {
+                global.renderingScenePicker = null;
+            }
             singleton.layers.root.visible = false;
             singleton.setLegacyLayersVisible(true);
         }
     };
+    global.Rendering = renderingApi;
+    global.Renderer2 = renderingApi;
 })(typeof globalThis !== "undefined" ? globalThis : window);

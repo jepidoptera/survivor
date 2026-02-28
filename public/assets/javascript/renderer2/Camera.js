@@ -36,4 +36,5 @@
     }
 
     global.Renderer2Camera = Renderer2Camera;
+    global.RenderingCamera = Renderer2Camera;
 })(typeof globalThis !== "undefined" ? globalThis : window);

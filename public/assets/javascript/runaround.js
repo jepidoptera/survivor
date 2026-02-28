@@ -16,7 +16,9 @@ let viewScale = 1;
 let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
 let projectiles = [];
 let animals = [];
+let powerups = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups)) ? globalThis.powerups : [];
 let mousePos = {x: 0, y: 0, clientX: NaN, clientY: NaN};
+const ENABLE_POINTER_LOCK = false;
 let pointerLockActive = false;
 let pointerLockAimWorld = {x: NaN, y: NaN};
 let pointerLockSensitivity = 1.0;
@@ -143,11 +145,11 @@ function isWindowLikeObject(obj) {
 
 function formatWindowWallLinkDebugSummary() {
     const objects = Array.from(onscreenObjects || []);
-    const walls = objects.filter(obj => obj && obj.type === "wall");
+    const walls = objects.filter(obj => obj && obj.type === "wallSection");
     const windows = objects.filter(isWindowLikeObject);
     const onscreenWallGroups = new Set(
         walls
-            .map(w => (Number.isInteger(w && w.lineGroupId) ? w.lineGroupId : null))
+            .map(w => (Number.isInteger(w && w.id) ? w.id : null))
             .filter(v => v !== null)
     );
     const worldWallGroups = new Set();
@@ -160,11 +162,11 @@ function formatWindowWallLinkDebugSummary() {
                 const node = col[y];
                 if (!node || !Array.isArray(node.objects)) continue;
                 node.objects.forEach(obj => {
-                    if (!obj || obj.type !== "wall") return;
+                    if (!obj || obj.type !== "wallSection") return;
                     if (seenWalls.has(obj)) return;
                     seenWalls.add(obj);
-                    if (Number.isInteger(obj.lineGroupId)) {
-                        worldWallGroups.add(obj.lineGroupId);
+                    if (Number.isInteger(obj.id)) {
+                        worldWallGroups.add(obj.id);
                     }
                 });
             }
@@ -212,6 +214,7 @@ function formatWindowWallLinkDebugSummary() {
 }
 
 if (typeof globalThis !== "undefined") {
+    globalThis.powerups = powerups;
     globalThis.onscreenObjects = onscreenObjects;
     globalThis.getOnscreenObjects = () => Array.from(onscreenObjects || []);
     globalThis.getOnscreenByType = (type) =>
@@ -221,13 +224,64 @@ if (typeof globalThis !== "undefined") {
     };
 }
 
+let renderer2UnavailableWarningShown = false;
+function presentGameFrame() {
+    if (typeof hydrateVisibleLazyRoads === "function") {
+        hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
+    }
+    if (typeof hydrateVisibleLazyTrees === "function") {
+        hydrateVisibleLazyTrees({ maxPerFrame: 64, paddingWorld: 12 });
+    }
+    if (
+        typeof globalThis !== "undefined" &&
+        (globalThis.Rendering || globalThis.Renderer2) &&
+        typeof (globalThis.Rendering || globalThis.Renderer2).renderFrame === "function"
+    ) {
+        const renderingApi = globalThis.Rendering || globalThis.Renderer2;
+        const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+            ? interpolatedViewport
+            : viewport;
+        const rendered = renderingApi.renderFrame({
+            app,
+            gameContainer,
+            map,
+            animals,
+            powerups,
+            wizard,
+            roof,
+            camera: renderCamera,
+            viewport,
+            viewscale,
+            xyratio,
+            wizardFrames,
+            renderNowMs,
+            frameRate,
+            renderAlpha
+        });
+        if (rendered) {
+            if (typeof updateCursor === "function") {
+                updateCursor();
+            }
+            return true;
+        }
+    }
+    if (!renderer2UnavailableWarningShown) {
+        console.warn("Rendering frame present failed; frame skipped.");
+        renderer2UnavailableWarningShown = true;
+    }
+    return false;
+}
+if (typeof globalThis !== "undefined") {
+    globalThis.presentGameFrame = presentGameFrame;
+}
+
 // Load sprite sheets before starting game
 PIXI.Loader.shared
     .add('/assets/spritesheet/bear.json')
     .add('/assets/spritesheet/deer.json')
     .add('/assets/spritesheet/squirrel.json')
     .add('/assets/images/runningman.png')
-    .add('/assets/images/fireball.png')
+    .add('/assets/images/magic/hi%20fi%20fireball.png')
     .add('/assets/images/arrow.png')
     .load(onAssetsLoaded);
 
@@ -339,9 +393,13 @@ class Character {
         this.node = node;
         this.x = this.node.x;
         this.y = this.node.y;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
         this.destination = null;
         this.path = []; // Array of MapNodes to follow
         this.nextNode = null;
+        this.useAStarPathfinding = false;
         
         // Create hitboxes
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
@@ -442,7 +500,9 @@ class Character {
         
         this.node = this.map.worldToNode(this.x, this.y);
         this.destination = destinationNode;
-        this.path = this.map.findPath(this.node, destinationNode);
+        this.path = (this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
+            ? this.map.findPathAStar(this.node, destinationNode)
+            : this.map.findPath(this.node, destinationNode);
         if (!Array.isArray(this.path)) {
             this.path = [];
         }
@@ -561,6 +621,7 @@ class Character {
 class Wizard extends Character {
     constructor(location, map) {
         super('human', location, 1, map);
+        this.useAStarPathfinding = true;
         this.speed = 5;
         this.roadSpeedMultiplier = 1.3;
         this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
@@ -604,6 +665,9 @@ class Wizard extends Character {
 
         // Create wizard hat graphics
         this.hatGraphics = new PIXI.Graphics();
+        this.hatResolution = 128;
+        this.hatRenderScale = 0.9; // Compensate apparent size after hat shape updates
+        this.hatRenderYOffsetUnits = 0.14; // Hat Y offset in map units (positive = up)
         characterLayer.addChild(this.hatGraphics);
         this.shadowGraphics = new PIXI.Graphics();
         characterLayer.addChild(this.shadowGraphics);
@@ -701,6 +765,37 @@ class Wizard extends Character {
             this.jumpLockedMovingBackward = false;
             this.z = 0;
         }
+    }
+    getInterpolatedPosition(alpha = null) {
+        const clampedAlpha = Number.isFinite(alpha)
+            ? Math.max(0, Math.min(1, alpha))
+            : ((typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1);
+
+        const prevX = Number.isFinite(this.prevX) ? this.prevX : this.x;
+        const prevY = Number.isFinite(this.prevY) ? this.prevY : this.y;
+        const prevZ = Number.isFinite(this.prevZ) ? this.prevZ : this.z;
+        const currX = Number.isFinite(this.x) ? this.x : prevX;
+        const currY = Number.isFinite(this.y) ? this.y : prevY;
+        const currZ = Number.isFinite(this.z) ? this.z : prevZ;
+
+        const x = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? (prevX + this.map.shortestDeltaX(prevX, currX) * clampedAlpha)
+            : (prevX + (currX - prevX) * clampedAlpha);
+        const y = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? (prevY + this.map.shortestDeltaY(prevY, currY) * clampedAlpha)
+            : (prevY + (currY - prevY) * clampedAlpha);
+        const z = prevZ + (currZ - prevZ) * clampedAlpha;
+
+        return { x, y, z };
+    }
+    get interpolatedX() {
+        return this.getInterpolatedPosition().x;
+    }
+    get interpolatedY() {
+        return this.getInterpolatedPosition().y;
+    }
+    get interpolatedZ() {
+        return this.getInterpolatedPosition().z;
     }
     getTurnStrengthFromAimVector(targetX, targetY) {
         const zeroDistance = Number.isFinite(this.zeroTurnDistanceUnits)
@@ -1165,15 +1260,17 @@ class Wizard extends Character {
         return true;
     }
     
-    drawHat(interpolatedJumpHeight = null) {
+    drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
-        const screenCoors = worldToScreen(this);
+        const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
+        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
         let wizardScreenX = screenCoors.x;
         const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
             ? interpolatedJumpHeight
-            : (Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0);
+            : (Number.isFinite(renderWorld.z) ? renderWorld.z : 0);
         const jumpOffsetPx = jumpHeightForRender * viewscale * xyratio;
-        let wizardScreenY = screenCoors.y - jumpOffsetPx;
+        const hatYOffset = (Number.isFinite(this.hatRenderYOffsetUnits) ? this.hatRenderYOffsetUnits : 0) * viewscale * xyratio;
+        let wizardScreenY = screenCoors.y - jumpOffsetPx - hatYOffset;
 
         if (!this.hatGraphics) return;
         if (this.hatGraphics.parent !== characterLayer) {
@@ -1181,7 +1278,9 @@ class Wizard extends Character {
         }
         this.hatGraphics.x = wizardScreenX;
         this.hatGraphics.y = wizardScreenY;
-        this.hatGraphics.scale.set(viewscale, viewscale);
+        const hatResolution = Number.isFinite(this.hatResolution) ? Math.max(1, this.hatResolution) : 1;
+        const hatRenderScale = Number.isFinite(this.hatRenderScale) ? Math.max(0.05, this.hatRenderScale) : 1;
+        this.hatGraphics.scale.set((viewscale / hatResolution) * hatRenderScale, (viewscale / hatResolution) * hatRenderScale);
         this.hatGraphics.visible = true;
 
         // Ensure hat graphics are rendered on top by moving to end of container
@@ -1191,14 +1290,16 @@ class Wizard extends Character {
     }
 
     redrawHatGeometry() {
+        const hatResolution = Number.isFinite(this.hatResolution) ? Math.max(1, this.hatResolution) : 1;
+
         // Wizard hat positioning constants
-        const brimX = 0;
-        const brimY = -0.625;
-        const brimWidth = 0.5;
-        const brimHeight = 0.25;
-        const pointX = 0;
-        const pointY = -0.65;
-        const pointHeight = 0.35;        
+        const brimX = 0 * hatResolution;
+        const brimY = -0.625 * hatResolution;
+        const brimWidth = 0.5 * hatResolution;
+        const brimHeight = 0.25 * hatResolution;
+        const pointX = 0 * hatResolution;
+        const pointY = -0.65 * hatResolution;
+        const pointHeight = 0.35 * hatResolution;
         const pointWidth = brimWidth * 0.6;
         const bandInnerHeight = brimHeight * 0.4;
         const bandInnerWidth = pointWidth * 0.8;
@@ -1216,7 +1317,7 @@ class Wizard extends Character {
         this.hatGraphics.drawEllipse(brimX, brimY, bandOuterWidth / 2, bandOuterHeight / 2);
         this.hatGraphics.endFill();
         
-        // Draw hat band inner (blue oval, smaller, same width as point)
+        // // Draw hat band inner (blue oval, smaller, same width as point)
         this.hatGraphics.beginFill(this.hatColor, 1);
         this.hatGraphics.drawEllipse(brimX, brimY, bandInnerWidth / 2, bandInnerHeight / 2);
         this.hatGraphics.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
@@ -1247,13 +1348,11 @@ class Wizard extends Character {
             characterLayer.addChild(this.pixiSprite);
         }
 
-        const alpha = (typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1;
-        const previousJumpHeight = Number.isFinite(this.prevJumpHeight) ? this.prevJumpHeight : (Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0);
-        const currentJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
-        const interpolatedJumpHeight = previousJumpHeight + (currentJumpHeight - previousJumpHeight) * alpha;
+        const renderWorld = this.getInterpolatedPosition();
+        const interpolatedJumpHeight = Number.isFinite(renderWorld.z) ? renderWorld.z : 0;
 
         // Draw a ground shadow from the same interpolated world position as the sprite.
-        const screenCoors = worldToScreen(this);
+        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
         const shadowCoors = {
             x: screenCoors.x,
             y: screenCoors.y + 0.2 * viewscale * xyratio
@@ -1308,7 +1407,7 @@ class Wizard extends Character {
         this.pixiSprite.width = viewscale;
         this.pixiSprite.height = viewscale;
 
-        this.drawHat(interpolatedJumpHeight);
+        this.drawHat(interpolatedJumpHeight, renderWorld);
     }
 
     saveJson() {
@@ -1357,6 +1456,31 @@ class Wizard extends Character {
     }
 
     loadJson(data) {
+        const normalizeTexturePath = (value) => {
+            if (typeof globalThis !== "undefined" && typeof globalThis.normalizeLegacyAssetPath === "function") {
+                return globalThis.normalizeLegacyAssetPath(value);
+            }
+            return value;
+        };
+        const normalizeTextureKeyMap = (obj) => {
+            if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+            const out = {};
+            Object.keys(obj).forEach((key) => {
+                const normalizedKey = normalizeTexturePath(key);
+                out[normalizedKey] = obj[key];
+            });
+            return out;
+        };
+        const normalizeTextureValueMap = (obj) => {
+            if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+            const out = {};
+            Object.keys(obj).forEach((key) => {
+                const value = obj[key];
+                out[key] = (typeof value === "string") ? normalizeTexturePath(value) : value;
+            });
+            return out;
+        };
+
         if (data.x !== undefined) this.x = data.x;
         if (data.y !== undefined) this.y = data.y;
         if (data.hp !== undefined) this.hp = data.hp;
@@ -1376,16 +1500,16 @@ class Wizard extends Character {
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
         if (data.selectedTreeTextureVariant !== undefined) this.selectedTreeTextureVariant = data.selectedTreeTextureVariant;
         if (data.selectedPlaceableCategory !== undefined) this.selectedPlaceableCategory = data.selectedPlaceableCategory;
-        if (data.selectedPlaceableTexturePath !== undefined) this.selectedPlaceableTexturePath = data.selectedPlaceableTexturePath;
-        if (data.selectedPlaceableByCategory !== undefined) this.selectedPlaceableByCategory = data.selectedPlaceableByCategory;
+        if (data.selectedPlaceableTexturePath !== undefined) this.selectedPlaceableTexturePath = normalizeTexturePath(data.selectedPlaceableTexturePath);
+        if (data.selectedPlaceableByCategory !== undefined) this.selectedPlaceableByCategory = normalizeTextureValueMap(data.selectedPlaceableByCategory);
         if (data.selectedPlaceableRenderOffset !== undefined) this.selectedPlaceableRenderOffset = data.selectedPlaceableRenderOffset;
-        if (data.selectedPlaceableRenderOffsetByTexture !== undefined) this.selectedPlaceableRenderOffsetByTexture = data.selectedPlaceableRenderOffsetByTexture;
+        if (data.selectedPlaceableRenderOffsetByTexture !== undefined) this.selectedPlaceableRenderOffsetByTexture = normalizeTextureKeyMap(data.selectedPlaceableRenderOffsetByTexture);
         if (data.selectedPlaceableScale !== undefined) this.selectedPlaceableScale = data.selectedPlaceableScale;
-        if (data.selectedPlaceableScaleByTexture !== undefined) this.selectedPlaceableScaleByTexture = data.selectedPlaceableScaleByTexture;
+        if (data.selectedPlaceableScaleByTexture !== undefined) this.selectedPlaceableScaleByTexture = normalizeTextureKeyMap(data.selectedPlaceableScaleByTexture);
         if (data.selectedPlaceableRotation !== undefined) this.selectedPlaceableRotation = data.selectedPlaceableRotation;
-        if (data.selectedPlaceableRotationByTexture !== undefined) this.selectedPlaceableRotationByTexture = data.selectedPlaceableRotationByTexture;
+        if (data.selectedPlaceableRotationByTexture !== undefined) this.selectedPlaceableRotationByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationByTexture);
         if (data.selectedPlaceableRotationAxis !== undefined) this.selectedPlaceableRotationAxis = data.selectedPlaceableRotationAxis;
-        if (data.selectedPlaceableRotationAxisByTexture !== undefined) this.selectedPlaceableRotationAxisByTexture = data.selectedPlaceableRotationAxisByTexture;
+        if (data.selectedPlaceableRotationAxisByTexture !== undefined) this.selectedPlaceableRotationAxisByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationAxisByTexture);
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (typeof data.showPerfReadout === "boolean") {
@@ -1441,6 +1565,7 @@ class Wizard extends Character {
         // Prevent stale interpolation from drawing wizard at pre-load coordinates.
         this.prevX = this.x;
         this.prevY = this.y;
+        this.prevZ = this.z;
         this.prevJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
         if (typeof previousViewport !== "undefined") {
             previousViewport.x = viewport.x;
@@ -2109,6 +2234,7 @@ jQuery(() => {
     }
 
     function requestGameplayPointerLock(event = null) {
+        if (!ENABLE_POINTER_LOCK) return;
         if (!app.view || typeof app.view.requestPointerLock !== "function") return;
         const rect = app.view.getBoundingClientRect();
         const fallbackX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : app.screen.width * 0.5;
@@ -2497,7 +2623,7 @@ jQuery(() => {
         const maxSimStepsPerFrame = 5;
         
         // Draw immediately on first frame
-        drawCanvas();
+        presentGameFrame();
         
         function runSimulationStep() {
             if (!wizard) return;
@@ -2604,6 +2730,9 @@ jQuery(() => {
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
             }
+            if (typeof updatePowerupsForWizard === "function") {
+                updatePowerupsForWizard(wizard);
+            }
             collisionMs = performance.now() - collisionStartMs;
             const pointerPostStartMs = performance.now();
             if (
@@ -2678,6 +2807,7 @@ jQuery(() => {
                     if (wizard) {
                         wizard.prevX = wizard.x;
                         wizard.prevY = wizard.y;
+                        wizard.prevZ = wizard.z;
                     }
                     runSimulationStep();
                     simAccumulatorMs -= simStepMs;
@@ -2770,7 +2900,7 @@ jQuery(() => {
                     clampVirtualCursorToCanvas(1);
                 }
             }
-            drawCanvas();
+            presentGameFrame();
             perfStats.drawMs = performance.now() - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
             if (typeof recordPerfAccumulatorSample === "function") {
@@ -3346,6 +3476,14 @@ jQuery(() => {
                 if (perfPanel) {
                     perfPanel.css("display", showPerfReadout ? "block" : "none");
                 }
+            }
+            return;
+        }
+
+        if (event.ctrlKey && keyLower === "m") {
+            event.preventDefault();
+            if (typeof toggleMinimap === "function") {
+                toggleMinimap();
             }
             return;
         }

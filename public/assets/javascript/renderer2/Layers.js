@@ -32,4 +32,5 @@
     }
 
     global.Renderer2Layers = Renderer2Layers;
+    global.RenderingLayers = Renderer2Layers;
 })(typeof globalThis !== "undefined" ? globalThis : window);

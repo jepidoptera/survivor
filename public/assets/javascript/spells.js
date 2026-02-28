@@ -1,12 +1,56 @@
 let spellKeyBindings = {
     "F": "fireball",
     "B": "wall",
+    "D": "blackdiamond",
+    "M": "maze",
     "V": "vanish",
     "T": "treegrow",
     "J": "teleport",
     "R": "buildroad",
     "FW": "firewall"
 };
+
+const MAGIC_ITEMS_CATEGORY = "magic";
+
+function resolveAnimatedSheetConfig(metaEntry, fallbackX = 1, fallbackY = 1, fallbackFps = 0) {
+    const meta = (metaEntry && typeof metaEntry === "object") ? metaEntry : {};
+    const frameCountObj = (meta.framecount && typeof meta.framecount === "object")
+        ? meta.framecount
+        : ((meta.frameCount && typeof meta.frameCount === "object") ? meta.frameCount : null);
+    const frameCountX = Number.isFinite(meta.framecount_x)
+        ? Number(meta.framecount_x)
+        : (Number.isFinite(meta.frameCountX)
+            ? Number(meta.frameCountX)
+            : (Number.isFinite(frameCountObj && frameCountObj.x) ? Number(frameCountObj.x) : fallbackX));
+    const frameCountY = Number.isFinite(meta.framecount_y)
+        ? Number(meta.framecount_y)
+        : (Number.isFinite(meta.frameCountY)
+            ? Number(meta.frameCountY)
+            : (Number.isFinite(frameCountObj && frameCountObj.y) ? Number(frameCountObj.y) : fallbackY));
+    const animatedFps = Number.isFinite(meta.animated_fps)
+        ? Number(meta.animated_fps)
+        : (Number.isFinite(meta.animatedFps) ? Number(meta.animatedFps) : fallbackFps);
+    return {
+        frameCountX: Math.max(1, Math.floor(frameCountX) || Math.floor(fallbackX) || 1),
+        frameCountY: Math.max(1, Math.floor(frameCountY) || Math.floor(fallbackY) || 1),
+        animatedFps: Math.max(0, Number(animatedFps) || 0)
+    };
+}
+
+async function getMagicAssetMetadata(texturePath) {
+    if (
+        !(typeof globalThis !== "undefined" && typeof globalThis.getResolvedPlaceableMetadata === "function") ||
+        typeof texturePath !== "string" ||
+        texturePath.length === 0
+    ) {
+        return null;
+    }
+    try {
+        return await globalThis.getResolvedPlaceableMetadata(MAGIC_ITEMS_CATEGORY, texturePath);
+    } catch (_) {
+        return null;
+    }
+}
 
 class Spell {
     constructor(x, y) {
@@ -278,9 +322,45 @@ class Rock extends Spell {
 
 class Fireball extends Spell {
     static frames = null;
-    static frameSourcePath = "/assets/images/fireball.png";
+    static frameSourcePath = "/assets/images/magic/hi%20fi%20fireball.png";
+    static frameCountX = 5;
+    static frameCountY = 2;
+    static animatedFps = 12;
+    static _metadataLoadPromise = null;
+    static _metadataLoaded = false;
+
+    static ensureMagicMetadataLoaded() {
+        if (Fireball._metadataLoaded) return;
+        if (Fireball._metadataLoadPromise) return;
+        Fireball._metadataLoadPromise = getMagicAssetMetadata(Fireball.frameSourcePath)
+            .then(meta => {
+                if (!meta) return;
+                const cfg = resolveAnimatedSheetConfig(
+                    meta,
+                    Fireball.frameCountX,
+                    Fireball.frameCountY,
+                    Fireball.animatedFps
+                );
+                const changed = (
+                    cfg.frameCountX !== Fireball.frameCountX ||
+                    cfg.frameCountY !== Fireball.frameCountY
+                );
+                Fireball.frameCountX = cfg.frameCountX;
+                Fireball.frameCountY = cfg.frameCountY;
+                Fireball.animatedFps = cfg.animatedFps;
+                if (changed) {
+                    Fireball.frames = null;
+                }
+            })
+            .catch(() => null)
+            .finally(() => {
+                Fireball._metadataLoaded = true;
+                Fireball._metadataLoadPromise = null;
+            });
+    }
 
     static getFrames() {
+        Fireball.ensureMagicMetadataLoaded();
         if (Array.isArray(Fireball.frames) && Fireball.frames.length > 0) {
             return Fireball.frames;
         }
@@ -291,18 +371,17 @@ class Fireball extends Spell {
         if (!baseTexture || !baseTexture.valid) return null;
 
         const frames = [];
-        const frameWidth = baseTexture.width / 5;
-        const frameHeight = baseTexture.height / 2;
+        const cols = Math.max(1, Math.floor(Fireball.frameCountX) || 1);
+        const rows = Math.max(1, Math.floor(Fireball.frameCountY) || 1);
+        const frameWidth = baseTexture.width / cols;
+        const frameHeight = baseTexture.height / rows;
 
-        for (let col = 0; col < 5; col++) {
-            frames.push(
-                new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, 0, frameWidth, frameHeight))
-            );
-        }
-        for (let col = 0; col < 5; col++) {
-            frames.push(
-                new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, frameHeight, frameWidth, frameHeight))
-            );
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                frames.push(
+                    new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight))
+                );
+            }
         }
 
         Fireball.frames = frames;
@@ -584,20 +663,6 @@ class Vanish extends Spell {
     }
     
     vanishTarget(target) {
-        if (
-            target &&
-            target.type === "wallSectionComposite" &&
-            Array.isArray(target._sectionMemberWalls) &&
-            target._sectionMemberWalls.length > 0
-        ) {
-            const members = Array.from(new Set(target._sectionMemberWalls));
-            for (let i = 0; i < members.length; i++) {
-                const member = members[i];
-                if (!member || member.gone || member.vanishing) continue;
-                this.vanishTarget(member);
-            }
-            return;
-        }
         // Mark as vanishing to avoid hitting multiple times
         target.vanishing = true;
         target.vanishStartTime = frameCount;
@@ -609,10 +674,10 @@ class Vanish extends Spell {
         const finalizeAfterMs = Math.max(0, (target.vanishDuration / Math.max(1, frameRate)) * 1000);
         target._vanishFinalizeTimeout = setTimeout(() => {
             if (!target || target.gone) return;
-            if (typeof target.remove === "function") {
-                target.remove();
-            } else if (typeof target.removeFromGame === "function") {
+            if (typeof target.removeFromGame === "function") {
                 target.removeFromGame();
+            } else if (typeof target.remove === "function") {
+                target.remove();
             } else if (typeof target.delete === "function") {
                 // Backward compatibility for entities not yet migrated.
                 target.delete();
@@ -975,21 +1040,14 @@ class PlaceObject extends Spell {
             placeableAnchorY: selectedAnchorY,
             rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
             placementRotation: resolvedPlacementRotation,
-            mountedWallLineGroupId: (
-                useWallSnapPlacement &&
-                Number.isInteger(wallSnapPlacement.mountedWallLineGroupId)
-            ) ? Number(wallSnapPlacement.mountedWallLineGroupId) : (
-                useWallSnapPlacement &&
-                wallSnapPlacement.targetWall &&
-                Number.isInteger(wallSnapPlacement.targetWall.lineGroupId)
-            ) ? Number(wallSnapPlacement.targetWall.lineGroupId) : null,
             mountedSectionId: (
                 useWallSnapPlacement &&
                 Number.isInteger(wallSnapPlacement.mountedSectionId)
-            ) ? Number(wallSnapPlacement.mountedSectionId) : (
+            ) ? Number(wallSnapPlacement.mountedSectionId) : null,
+            mountedWallSectionUnitId: (
                 useWallSnapPlacement &&
-                Number.isInteger(wallSnapPlacement.mountedWallLineGroupId)
-            ) ? Number(wallSnapPlacement.mountedWallLineGroupId) : null,
+                Number.isInteger(wallSnapPlacement.mountedWallSectionUnitId)
+            ) ? Number(wallSnapPlacement.mountedWallSectionUnitId) : null,
             mountedWallFacingSign: (
                 useWallSnapPlacement &&
                 Number.isFinite(wallSnapPlacement.mountedWallFacingSign)
@@ -1022,7 +1080,7 @@ function hitboxesIntersect(hitboxA, hitboxB) {
 }
 
 class FirewallEmitter {
-    constructor(location, map) {
+    constructor(location, map, animatedFrameIndex=null) {
         this.type = "firewall";
         this.map = map;
         const rawX = location && Number.isFinite(location.x) ? location.x : 0;
@@ -1033,12 +1091,13 @@ class FirewallEmitter {
         this.y = (this.map && typeof this.map.wrapWorldY === "function")
             ? this.map.wrapWorldY(rawY)
             : rawY;
-        this.width = 0.5;
+        this.width = 1.0;
         this.height = 1.0; // flames 1 map unit high
+        this.texturePath = "/assets/images/magic/fire.png";
         this.blocksTile = false;
         this.isPassable = true;
         this.gone = false;
-        this.pixiSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+        this.pixiSprite = new PIXI.Sprite(PIXI.Texture.from(this.texturePath));
         this.pixiSprite.anchor.set(0.5, 1);
         this.pixiSprite.renderable = false; // invisible body, only flame should render
         this.pixiSprite.alpha = 1;
@@ -1046,9 +1105,42 @@ class FirewallEmitter {
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, 0.1);
         this.isOnFire = true;
         this.fireSprite = null;
-        this.fireFrameIndex = Math.floor(Math.random() * 25); // random phase
+        this.fireFrameIndex = (animatedFrameIndex !== null) ? animatedFrameIndex : Math.floor(Math.random() * 25); // random phase
         this.fireWidthScale = 3.0; // stretch flames wider
         this.fireHeightScale = 1.0;
+        this.animatedFrameCountX = 5;
+        this.animatedFrameCountY = 5;
+        this.animatedFps = 12;
+        this._animatedFrames = null;
+        this._animatedFrameIndex = Math.floor(Math.random() * 25);
+        this._animatedFrameProgress = 0;
+        this._animatedLastFrameCount = null;
+        this._animatedFrameSignature = "";
+        this._depthBillboardMesh = null;
+        this._depthBillboardWorldPositions = null;
+        this._depthBillboardLastSignature = "";
+        this._depthBillboardMeshMode = "";
+
+        const staticProto = (typeof globalThis.StaticObject === "function" && globalThis.StaticObject.prototype)
+            ? globalThis.StaticObject.prototype
+            : null;
+        if (staticProto && typeof staticProto.ensureDepthBillboardMesh === "function") {
+            this.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
+        }
+        if (staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
+            this.updateDepthBillboardMesh = staticProto.updateDepthBillboardMesh;
+        }
+        if (staticProto && typeof staticProto.rebuildAnimatedSpriteFrames === "function") {
+            this.rebuildAnimatedSpriteFrames = staticProto.rebuildAnimatedSpriteFrames;
+        }
+        if (staticProto && typeof staticProto.updateSpriteAnimation === "function") {
+            this.updateSpriteAnimation = staticProto.updateSpriteAnimation;
+        }
+
+        if (typeof this.rebuildAnimatedSpriteFrames === "function") {
+            this.rebuildAnimatedSpriteFrames(true);
+        }
+        this.hydrateMagicMetadata();
 
         const node = this.map && typeof this.map.worldToNode === "function"
             ? this.map.worldToNode(this.x, this.y)
@@ -1118,6 +1210,28 @@ class FirewallEmitter {
         };
     }
 
+    async hydrateMagicMetadata() {
+        const meta = await getMagicAssetMetadata(this.texturePath);
+        if (!meta || this.gone) return;
+        const cfg = resolveAnimatedSheetConfig(meta, this.animatedFrameCountX, this.animatedFrameCountY, this.animatedFps);
+        this.animatedFrameCountX = cfg.frameCountX;
+        this.animatedFrameCountY = cfg.frameCountY;
+        this.animatedFps = cfg.animatedFps;
+        this._animatedFrames = null;
+        this._animatedFrameProgress = 0;
+        this._animatedLastFrameCount = null;
+        this._animatedFrameSignature = "";
+        if (typeof this.rebuildAnimatedSpriteFrames === "function") {
+            this.rebuildAnimatedSpriteFrames(true);
+        }
+    }
+
+    update() {
+        if (typeof this.updateSpriteAnimation === "function") {
+            this.updateSpriteAnimation();
+        }
+    }
+
     handleCharacterCollision(character) {
         if (!character || character.gone || character.dead) return;
         const characterHitbox = character.visualHitbox || character.groundPlaneHitbox || character.hitbox;
@@ -1149,13 +1263,15 @@ const SpellSystem = (() => {
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
         doors: "/assets/images/doors/door5.png",
         flowers: "/assets/images/flowers/red%20flower.png",
-        windows: "/assets/images/windows/window.jpg",
+        windows: "/assets/images/windows/window.png",
         furniture: "/assets/images/furniture/chair.png",
         signs: "/assets/images/signs/princess.png"
     };
     const AURA_MENU_ICON = "/assets/images/thumbnails/aura.png";
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
+        { name: "blackdiamond", icon: "/assets/images/powerups/black%20diamond.png" },
+        { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/thumbnails/vanish.png" },
@@ -1172,7 +1288,7 @@ const SpellSystem = (() => {
 
     const MAGIC_TICK_MS = 50;
     const HP_REGEN_PER_SECOND = 0.25;
-    let healingAuraHpMultiplier = 5;
+    let healingAuraHpMultiplier = 10;
     const WALL_HEIGHT_MIN = 0.5;
     const WALL_HEIGHT_MAX = 7.0;
     const WALL_HEIGHT_STEP = 0.5;
@@ -1430,11 +1546,9 @@ const SpellSystem = (() => {
 
     function getSpellTargetDisplayObject(item) {
         if (!item) return null;
-        if (item._wallSectionCompositeDisplayObject && item._wallSectionCompositeDisplayObject.parent) return item._wallSectionCompositeDisplayObject;
         if (item._renderer2DepthMesh && item._renderer2DepthMesh.parent) return item._renderer2DepthMesh;
         if (item._opaqueDepthMesh && item._opaqueDepthMesh.parent) return item._opaqueDepthMesh;
         if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
-        if (item._wallSectionCompositeSprite && item._wallSectionCompositeSprite.parent) return item._wallSectionCompositeSprite;
         return null;
     }
 
@@ -2122,7 +2236,7 @@ const SpellSystem = (() => {
     }
 
     function getDragSpellObjectType(spellName) {
-        if (spellName === "wall") return "wall";
+        if (spellName === "wall") return "wallSection";
         if (spellName === "buildroad") return "road";
         if (spellName === "firewall") return "firewall";
         return null;
@@ -2187,8 +2301,7 @@ const SpellSystem = (() => {
             wizardRef.wallLayoutMode &&
             wizardRef.currentSpell === "wall"
         ) {
-            const projectedPoint = projectWallDragPointFromMouseDelta(wizardRef, wrappedCurrentPoint);
-            return snapProjectedWallDragPoint(wizardRef, projectedPoint);
+            return wrappedCurrentPoint;
         }
         return wrappedCurrentPoint;
     }
@@ -2207,12 +2320,6 @@ const SpellSystem = (() => {
             ? mapRef.shortestDeltaY(ay, by)
             : (by - ay);
         return Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon;
-    }
-
-    function buildWallPathFromEndpoints(wizardRef, startPoint, endPoint) {
-        if (!wizardRef || !wizardRef.map || !startPoint || !endPoint) return [];
-        if (!(typeof Wall !== "undefined") || !Wall || typeof Wall.buildPlacementPath !== "function") return [];
-        return Wall.buildPlacementPath(wizardRef.map, startPoint, endPoint, { maxAnchorDistance: 1.0001 });
     }
 
     function getSpellTargetHistorySet(wizardRef, spellName) {
@@ -2338,17 +2445,6 @@ const SpellSystem = (() => {
         if (pickResult && pickResult.attempted) {
             const picked = pickResult.picked;
             if (picked && canTargetObject(picked)) return picked;
-            if (
-                objectType === "wall" &&
-                picked &&
-                picked.type === "wallSectionComposite" &&
-                Array.isArray(picked._sectionMemberWalls)
-            ) {
-                for (let i = 0; i < picked._sectionMemberWalls.length; i++) {
-                    const member = picked._sectionMemberWalls[i];
-                    if (canTargetObject(member)) return member;
-                }
-            }
             return null;
         }
         return null;
@@ -2357,10 +2453,10 @@ const SpellSystem = (() => {
     function getGroundAnchorPointForObject(obj, worldX, worldY) {
         if (!obj) return null;
         if (
-            obj.type === "wall" &&
-            obj.a && obj.b &&
-            Number.isFinite(obj.a.x) && Number.isFinite(obj.a.y) &&
-            Number.isFinite(obj.b.x) && Number.isFinite(obj.b.y) &&
+            obj.type === "wallSection" &&
+            obj.startPoint && obj.endPoint &&
+            Number.isFinite(obj.startPoint.x) && Number.isFinite(obj.startPoint.y) &&
+            Number.isFinite(obj.endPoint.x) && Number.isFinite(obj.endPoint.y) &&
             Number.isFinite(worldX) && Number.isFinite(worldY)
         ) {
             const endpointConnected = endpointKey => {
@@ -2378,18 +2474,18 @@ const SpellSystem = (() => {
             // Prefer extending from the free end when only one side is connected.
             if (aConnected !== bConnected) {
                 return aConnected
-                    ? { x: obj.b.x, y: obj.b.y }
-                    : { x: obj.a.x, y: obj.a.y };
+                    ? { x: obj.endPoint.x, y: obj.endPoint.y }
+                    : { x: obj.startPoint.x, y: obj.startPoint.y };
             }
 
             const clickScreen = (typeof worldToScreen === "function")
                 ? worldToScreen({ x: worldX, y: worldY })
                 : null;
             const endpointAScreen = (typeof worldToScreen === "function")
-                ? worldToScreen({ x: obj.a.x, y: obj.a.y })
+                ? worldToScreen({ x: obj.startPoint.x, y: obj.startPoint.y })
                 : null;
             const endpointBScreen = (typeof worldToScreen === "function")
-                ? worldToScreen({ x: obj.b.x, y: obj.b.y })
+                ? worldToScreen({ x: obj.endPoint.x, y: obj.endPoint.y })
                 : null;
             const hasScreenDistances = !!(
                 clickScreen &&
@@ -2410,23 +2506,23 @@ const SpellSystem = (() => {
                 db = Math.hypot(clickScreen.x - endpointBScreen.x, clickScreen.y - endpointBScreen.y);
             } else {
                 const dxA = (map && typeof map.shortestDeltaX === "function")
-                    ? map.shortestDeltaX(worldX, obj.a.x)
-                    : (obj.a.x - worldX);
+                    ? map.shortestDeltaX(worldX, obj.startPoint.x)
+                    : (obj.startPoint.x - worldX);
                 const dyA = (map && typeof map.shortestDeltaY === "function")
-                    ? map.shortestDeltaY(worldY, obj.a.y)
-                    : (obj.a.y - worldY);
+                    ? map.shortestDeltaY(worldY, obj.startPoint.y)
+                    : (obj.startPoint.y - worldY);
                 const dxB = (map && typeof map.shortestDeltaX === "function")
-                    ? map.shortestDeltaX(worldX, obj.b.x)
-                    : (obj.b.x - worldX);
+                    ? map.shortestDeltaX(worldX, obj.endPoint.x)
+                    : (obj.endPoint.x - worldX);
                 const dyB = (map && typeof map.shortestDeltaY === "function")
-                    ? map.shortestDeltaY(worldY, obj.b.y)
-                    : (obj.b.y - worldY);
+                    ? map.shortestDeltaY(worldY, obj.endPoint.y)
+                    : (obj.endPoint.y - worldY);
                 da = Math.hypot(dxA, dyA);
                 db = Math.hypot(dxB, dyB);
             }
             return da <= db
-                ? { x: obj.a.x, y: obj.a.y }
-                : { x: obj.b.x, y: obj.b.y };
+                ? { x: obj.startPoint.x, y: obj.startPoint.y }
+                : { x: obj.endPoint.x, y: obj.endPoint.y };
         }
         if (Number.isFinite(obj.x) && Number.isFinite(obj.y)) {
             return { x: obj.x, y: obj.y };
@@ -2491,7 +2587,7 @@ const SpellSystem = (() => {
                 ? wizardRef.selectedPlaceableCategory.trim().toLowerCase()
                 : "";
             if (category === "windows" || category === "doors") {
-                if (candidate.type !== "wall") return false;
+                if (candidate.type !== "wallSection") return false;
                 const placement = getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY);
                 return !!(placement && placement.targetWall === candidate);
             }
@@ -2501,70 +2597,6 @@ const SpellSystem = (() => {
             return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
         }
         return false;
-    }
-
-    function isPointInsideProjectedWallVolume(wall, screenPoint) {
-        if (!wall || wall.type !== "wall" || !wall.a || !wall.b || !screenPoint) return false;
-        const ax = Number(wall.a.x);
-        const ay = Number(wall.a.y);
-        const bx = Number(wall.b.x);
-        const by = Number(wall.b.y);
-        const wallHeight = Math.max(0.001, Number(wall.height) || 0.001);
-        const wallThickness = Math.max(0.001, Number(wall.thickness) || 0.001);
-        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-6) return false;
-
-        const halfT = wallThickness * 0.5;
-        const nx = -dy / len;
-        const ny = dx / len;
-
-        let aLeft = { x: ax + nx * halfT, y: ay + ny * halfT };
-        let aRight = { x: ax - nx * halfT, y: ay - ny * halfT };
-        let bLeft = { x: bx + nx * halfT, y: by + ny * halfT };
-        let bRight = { x: bx - nx * halfT, y: by - ny * halfT };
-        if (typeof wall.getWallProfile === "function") {
-            const profile = wall.getWallProfile();
-            if (profile) {
-                if (profile.aLeft) aLeft = profile.aLeft;
-                if (profile.aRight) aRight = profile.aRight;
-                if (profile.bLeft) bLeft = profile.bLeft;
-                if (profile.bRight) bRight = profile.bRight;
-            }
-        }
-
-        const toScreen = (pt, z = 0) => {
-            const s = worldToScreen(pt);
-            return { x: s.x, y: s.y - z * viewscale * xyratio };
-        };
-
-        const gAL = toScreen(aLeft, 0);
-        const gAR = toScreen(aRight, 0);
-        const gBL = toScreen(bLeft, 0);
-        const gBR = toScreen(bRight, 0);
-        const tAL = toScreen(aLeft, wallHeight);
-        const tAR = toScreen(aRight, wallHeight);
-        const tBL = toScreen(bLeft, wallHeight);
-        const tBR = toScreen(bRight, wallHeight);
-
-        const pointInTri = (p, a, b, c) => {
-            const bc = barycentricAtPoint(p.x, p.y, a.x, a.y, b.x, b.y, c.x, c.y);
-            if (!bc) return false;
-            const eps = 1e-4;
-            return bc.u >= -eps && bc.v >= -eps && bc.w >= -eps;
-        };
-        const pointInQuad = (p, q0, q1, q2, q3) =>
-            pointInTri(p, q0, q1, q2) || pointInTri(p, q0, q2, q3);
-
-        return (
-            pointInQuad(screenPoint, gAL, gBL, tBL, tAL) ||
-            pointInQuad(screenPoint, gAR, gBR, tBR, tAR) ||
-            pointInQuad(screenPoint, gAR, gAL, tAL, tAR) ||
-            pointInQuad(screenPoint, gBL, gBR, tBR, tBL) ||
-            pointInQuad(screenPoint, tAL, tBL, tBR, tAR)
-        );
     }
 
     function getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY) {
@@ -2590,25 +2622,230 @@ const SpellSystem = (() => {
             Number.isFinite(mousePos.screenX) &&
             Number.isFinite(mousePos.screenY)
         ) ? { x: mousePos.screenX, y: mousePos.screenY } : worldToScreen({ x: worldX, y: worldY });
-        const wallSectionsApi = (typeof globalThis !== "undefined" && globalThis.WallSectionsRenderer)
-            ? globalThis.WallSectionsRenderer
-            : null;
-        if (!wallSectionsApi || typeof wallSectionsApi.getWallMountedPlacementCandidate !== "function") return null;
-        return wallSectionsApi.getWallMountedPlacementCandidate({
-            map: wizardRef.map,
-            category,
-            worldX,
-            worldY,
-            worldToScreen,
-            mouseScreen,
-            objectWorldWidth: windowWorldWidth,
-            objectWorldHeight: windowWorldHeight,
-            anchorY: selectedAnchorY,
-            viewscale,
-            xyratio,
-            // Placement candidate handles hit-testing against visible section faces.
-            // No extra distance threshold is needed here.
+
+        // Wall-mounted placement: iterate over all WallSectionUnit instances
+        // and find the best placement candidate under the mouse cursor.
+        const WSU = (typeof globalThis !== "undefined") ? globalThis.WallSectionUnit : null;
+        if (!WSU || !WSU._allSections || WSU._allSections.size === 0) return null;
+
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
+        if (!worldToScreenFn) return null;
+
+        const mapRef = wizardRef.map;
+        const vs = Number.isFinite(viewscale) ? viewscale : 1;
+        const xyr = Number.isFinite(xyratio) ? xyratio : 0.66;
+
+        const pointInQuad = (p, q0, q1, q2, q3) => {
+            const inTri = (pt, a, b, c) => {
+                const bc = barycentricAtPoint(pt.x, pt.y, a.x, a.y, b.x, b.y, c.x, c.y);
+                if (!bc) return false;
+                const eps = 1e-4;
+                return bc.u >= -eps && bc.v >= -eps && bc.w >= -eps;
+            };
+            return inTri(p, q0, q1, q2) || inTri(p, q0, q2, q3);
+        };
+
+        let best = null;
+
+        WSU._allSections.forEach(section => {
+            if (!section || !section.startPoint || !section.endPoint) return;
+            const profile = section.getWallProfile();
+            if (!profile) return;
+
+            const wallHeight = Math.max(0, Number(section.height) || 0);
+            const halfT = Math.max(0.001, Number(section.thickness) || 0.001) * 0.5;
+
+            const sx = Number(section.startPoint.x);
+            const sy = Number(section.startPoint.y);
+            const ex = Number(section.endPoint.x);
+            const ey = Number(section.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
+                !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+
+            const dx = ex - sx;
+            const dy = ey - sy;
+            const len = Math.hypot(dx, dy);
+            if (!(len > 1e-6)) return;
+
+            const ux = dx / len;
+            const uy = dy / len;
+            const vx = -uy;
+            const vy = ux;
+            const { aLeft, aRight, bLeft, bRight } = profile;
+
+            // Compute cap base heights
+            const adjHA = (typeof section.getAdjacentCollinearWallHeightAtEndpoint === "function")
+                ? section.getAdjacentCollinearWallHeightAtEndpoint("a") : null;
+            const adjHB = (typeof section.getAdjacentCollinearWallHeightAtEndpoint === "function")
+                ? section.getAdjacentCollinearWallHeightAtEndpoint("b") : null;
+            const capBaseA = Number.isFinite(adjHA) ? Math.max(0, Math.min(wallHeight, Number(adjHA))) : 0;
+            const capBaseB = Number.isFinite(adjHB) ? Math.max(0, Math.min(wallHeight, Number(adjHB))) : 0;
+
+            const toScreen = (pt, z) => {
+                const s = worldToScreenFn(pt);
+                return { x: s.x, y: s.y - z * vs * xyr };
+            };
+
+            // Screen-space face polygons
+            const longFaceA = [toScreen(aLeft, 0), toScreen(bLeft, 0), toScreen(bLeft, wallHeight), toScreen(aLeft, wallHeight)];
+            const longFaceB = [toScreen(aRight, 0), toScreen(bRight, 0), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
+            const capFaceStart = [toScreen(aRight, capBaseA), toScreen(aLeft, capBaseA), toScreen(aLeft, wallHeight), toScreen(aRight, wallHeight)];
+            const capFaceEnd = [toScreen(bLeft, capBaseB), toScreen(bRight, capBaseB), toScreen(bRight, wallHeight), toScreen(bLeft, wallHeight)];
+            const topFace = [toScreen(aLeft, wallHeight), toScreen(bLeft, wallHeight), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
+
+            const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+            const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
+            const startCapFront = faceDepth(capFaceStart) >= faceDepth(capFaceEnd);
+            const showStartCap = capBaseA < wallHeight - 1e-5;
+            const showEndCap = capBaseB < wallHeight - 1e-5;
+
+            const visiblePolygons = [];
+            visiblePolygons.push(longAFront ? longFaceA : longFaceB);
+            visiblePolygons.push(topFace);
+            if (startCapFront && showStartCap) visiblePolygons.push(capFaceStart);
+            if (!startCapFront && showEndCap) visiblePolygons.push(capFaceEnd);
+
+            const containsMouse = visiblePolygons.some(poly =>
+                pointInQuad(mouseScreen, poly[0], poly[1], poly[2], poly[3])
+            );
+            if (!containsMouse) return;
+
+            // Mouse is over this wall section – compute placement.
+            const facingSign = longAFront ? 1 : -1;
+            const sectionStartScreen = (facingSign > 0) ? longFaceA[0] : longFaceB[0];
+            const sectionEndScreen = (facingSign > 0) ? longFaceA[1] : longFaceB[1];
+            const sdx = sectionEndScreen.x - sectionStartScreen.x;
+            const sdy = sectionEndScreen.y - sectionStartScreen.y;
+            const sLen2 = sdx * sdx + sdy * sdy;
+            if (!(sLen2 > 1e-6)) return;
+
+            const mouseRelX = mouseScreen.x - sectionStartScreen.x;
+            const mouseRelY = mouseScreen.y - sectionStartScreen.y;
+            const sectionProjT = Math.max(0, Math.min(1,
+                (mouseRelX * sdx + mouseRelY * sdy) / sLen2));
+
+            const sectionLength = len;
+            const halfWidth = windowWorldWidth * 0.5;
+            const fitsLength = sectionLength + 1e-6 >= windowWorldWidth;
+            const fitsHeight = windowWorldHeight <= wallHeight + 1e-6;
+
+            let along = sectionProjT * sectionLength;
+            along = fitsLength
+                ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, along))
+                : Math.max(0, Math.min(sectionLength, along));
+
+            // Center-snap when mouse is near section center
+            const sectionCenterAlong = sectionLength * 0.5;
+            const sectionCenterWorld = {
+                x: sx + ux * sectionCenterAlong + vx * halfT * facingSign,
+                y: sy + uy * sectionCenterAlong + vy * halfT * facingSign
+            };
+            const faceMinX = Math.min(sectionStartScreen.x, sectionEndScreen.x);
+            const faceMaxX = Math.max(sectionStartScreen.x, sectionEndScreen.x);
+            const faceSpanX = faceMaxX - faceMinX;
+            const centerSnapPx = 10;
+            let centerDistPx = Infinity;
+            if (faceSpanX > 1e-4) {
+                centerDistPx = Math.abs(mouseScreen.x - (faceMinX + faceMaxX) * 0.5);
+            } else {
+                let topMinY = Infinity, topMaxY = -Infinity;
+                for (let ti = 0; ti < topFace.length; ti++) {
+                    if (topFace[ti].y < topMinY) topMinY = topFace[ti].y;
+                    if (topFace[ti].y > topMaxY) topMaxY = topFace[ti].y;
+                }
+                if (Number.isFinite(topMinY) && Number.isFinite(topMaxY) && (topMaxY - topMinY) > 1e-4) {
+                    centerDistPx = Math.abs(mouseScreen.y - (topMinY + topMaxY) * 0.5);
+                }
+            }
+            let centerSnapActive = false;
+            if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
+                along = fitsLength
+                    ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, sectionCenterAlong))
+                    : Math.max(0, Math.min(sectionLength, sectionCenterAlong));
+                centerSnapActive = true;
+            }
+
+            const rotDeg = Math.atan2(uy, ux) * (180 / Math.PI);
+            const isDoorPlacement = category === "doors";
+            const hitboxHalfT = isDoorPlacement ? (halfT * 1.1) : halfT;
+
+            let centerX = sx + ux * along;
+            let centerY = sy + uy * along;
+            let wallFaceCenterX = centerX + vx * halfT * facingSign;
+            let wallFaceCenterY = centerY + vy * halfT * facingSign;
+            if (mapRef && typeof mapRef.wrapWorldX === "function") {
+                centerX = mapRef.wrapWorldX(centerX);
+                wallFaceCenterX = mapRef.wrapWorldX(wallFaceCenterX);
+            }
+            if (mapRef && typeof mapRef.wrapWorldY === "function") {
+                centerY = mapRef.wrapWorldY(centerY);
+                wallFaceCenterY = mapRef.wrapWorldY(wallFaceCenterY);
+            }
+
+            const normalBias = (category === "windows") ? 0.001 : 0;
+            const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
+            const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
+            const verticalOffset = (1 - selectedAnchorY) * windowWorldHeight;
+            let snappedX = desiredBaseX;
+            let snappedY = isDoorPlacement
+                ? (desiredBaseY - verticalOffset)
+                : desiredBaseY;
+            const snappedZ = (category === "windows") ? (wallHeight * 0.5) : 0;
+            if (mapRef && typeof mapRef.wrapWorldX === "function") snappedX = mapRef.wrapWorldX(snappedX);
+            if (mapRef && typeof mapRef.wrapWorldY === "function") snappedY = mapRef.wrapWorldY(snappedY);
+
+            // Ground hitbox
+            const p1 = { x: centerX - ux * halfWidth + vx * hitboxHalfT, y: centerY - uy * halfWidth + vy * hitboxHalfT };
+            const p2 = { x: centerX + ux * halfWidth + vx * hitboxHalfT, y: centerY + uy * halfWidth + vy * hitboxHalfT };
+            const p3 = { x: centerX + ux * halfWidth - vx * hitboxHalfT, y: centerY + uy * halfWidth - vy * hitboxHalfT };
+            const p4 = { x: centerX - ux * halfWidth - vx * hitboxHalfT, y: centerY - uy * halfWidth - vy * hitboxHalfT };
+            const wrapPt = (pt) => ({
+                x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(pt.x) : pt.x,
+                y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(pt.y) : pt.y
+            });
+
+            const candidate = {
+                valid: fitsLength && fitsHeight,
+                reason: !fitsLength
+                    ? (isDoorPlacement ? "Door is wider than this wall section." : "Window is wider than this wall section.")
+                    : (!fitsHeight
+                        ? (isDoorPlacement ? "Door is taller than this wall." : "Window is taller than this wall.")
+                        : null),
+                targetWall: section,
+                mountedWallLineGroupId: section.id,
+                mountedSectionId: section.id,
+                mountedWallSectionUnitId: section.id,
+                mountedWallFacingSign: facingSign,
+                snappedX,
+                snappedY,
+                snappedZ,
+                snappedRotationDeg: rotDeg,
+                wallGroundHitboxPoints: [wrapPt(p1), wrapPt(p2), wrapPt(p3), wrapPt(p4)],
+                wallHeight,
+                wallThickness: halfT * 2,
+                centerSnapActive,
+                sectionCenterX: (mapRef && typeof mapRef.wrapWorldX === "function")
+                    ? mapRef.wrapWorldX(sectionCenterWorld.x) : sectionCenterWorld.x,
+                sectionCenterY: (mapRef && typeof mapRef.wrapWorldY === "function")
+                    ? mapRef.wrapWorldY(sectionCenterWorld.y) : sectionCenterWorld.y,
+                sectionFacingSign: facingSign,
+                sectionNormalX: vx,
+                sectionNormalY: vy,
+                sectionDirX: ux,
+                sectionDirY: uy,
+                wallFaceCenterX,
+                wallFaceCenterY,
+                placementHalfWidth: halfWidth,
+                placementCenterX: desiredBaseX,
+                placementCenterY: desiredBaseY
+            };
+
+            if (!best) {
+                best = candidate;
+            }
         });
+
+        return best;
     }
 
     function beginDragSpell(wizardRef, spellName, worldX, worldY) {
@@ -2618,18 +2855,11 @@ const SpellSystem = (() => {
 
         if (spellName === "wall") {
             if (!keysPressed[" "]) return false;
-            const startPoint = (snapTarget && snapTarget.point)
-                ? { x: snapTarget.point.x, y: snapTarget.point.y }
-                : (() => {
-                    const fallbackNode = wizardRef.map.worldToNode(worldX, worldY);
-                    return fallbackNode ? { x: fallbackNode.x, y: fallbackNode.y } : null;
-                })();
+            const startPoint = { x: worldX, y: worldY };
             if (!startPoint) return false;
             wizardRef.wallLayoutMode = true;
             wizardRef.wallStartPoint = startPoint;
-            wizardRef.wallStartReferenceWall = (snapTarget && snapTarget.obj && snapTarget.obj.type === "wall")
-                ? snapTarget.obj
-                : null;
+            wizardRef.wallStartReferenceWall = null;
             wizardRef.wallDragMouseStartWorld = {
                 x: (wizardRef.map && typeof wizardRef.map.wrapWorldX === "function") ? wizardRef.map.wrapWorldX(worldX) : worldX,
                 y: (wizardRef.map && typeof wizardRef.map.wrapWorldY === "function") ? wizardRef.map.wrapWorldY(worldY) : worldY
@@ -2696,29 +2926,33 @@ const SpellSystem = (() => {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
-            const endSnapTarget = getDragStartSnapTargetAt(wizardRef, "wall", adjustedPoint.x, adjustedPoint.y);
-            const endPoint = (endSnapTarget && endSnapTarget.point)
-                ? { x: endSnapTarget.point.x, y: endSnapTarget.point.y }
-                : adjustedPoint;
+            const endPoint = adjustedPoint;
             const startPoint = wizardRef.wallStartPoint;
             if (pointsMatchWorld(wizardRef.map, startPoint, endPoint)) {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
-            const wallPath = buildWallPathFromEndpoints(wizardRef, startPoint, endPoint);
-            if (!Array.isArray(wallPath) || wallPath.length < 2) {
-                cancelDragSpell(wizardRef, "wall");
-                return true;
+
+            // Create permanent WallSectionUnit walls from the drag.
+            if (typeof WallSectionUnit !== "undefined" && wizardRef.map) {
+                const thickness = Number.isFinite(wizardRef.selectedWallThickness)
+                    ? wizardRef.selectedWallThickness : 0.1;
+                const height = Number.isFinite(wizardRef.selectedWallHeight)
+                    ? wizardRef.selectedWallHeight : 1;
+                const result = WallSectionUnit.createPlacementFromWorldPoints(
+                    wizardRef.map, startPoint, endPoint, {
+                        thickness,
+                        height,
+                        bottomZ: 0
+                    }
+                );
+                if (result && Array.isArray(result.sections)) {
+                    for (let i = 0; i < result.sections.length; i++) {
+                        result.sections[i].addToMapNodes();
+                    }
+                }
             }
-            Wall.createWallLine(
-                wallPath,
-                getSelectedWallHeight(wizardRef),
-                getSelectedWallThickness(wizardRef),
-                wizardRef.map,
-                { startReferenceWall: wizardRef.wallStartReferenceWall || null }
-            );
             cancelDragSpell(wizardRef, "wall");
-            cooldown(wizardRef, wizardRef.cooldownTime);
             return true;
         }
 
@@ -2761,7 +2995,7 @@ const SpellSystem = (() => {
                 const t = steps === 0 ? 0 : i / steps;
                 const px = startPoint.x + dx * t;
                 const py = startPoint.y + dy * t;
-                new FirewallEmitter({ x: px, y: py }, wizardRef.map);
+                new FirewallEmitter({ x: px, y: py }, wizardRef.map, (i * 11) % 25);
             }
             cancelDragSpell(wizardRef, "firewall");
             cooldown(wizardRef, wizardRef.cooldownTime);
@@ -2847,6 +3081,52 @@ const SpellSystem = (() => {
         return nearbyObjects;
     }
 
+    function getNearbyObjectsAroundWizard(mapRef, wizardRef, outArray = null, options = {}) {
+        if (!mapRef || !wizardRef || typeof mapRef.worldToNode !== "function") return [];
+        const centerNode = mapRef.worldToNode(wizardRef.x, wizardRef.y);
+        if (!centerNode) return [];
+
+        const tileRadius = Number.isFinite(options.tileRadius)
+            ? Math.max(0, Math.floor(options.tileRadius))
+            : 2;
+        const requireCollisionHandler = !!options.requireCollisionHandler;
+        const nearbyObjects = Array.isArray(outArray) ? outArray : [];
+        nearbyObjects.length = 0;
+
+        collisionQueryStamp += 1;
+        if (!Number.isFinite(collisionQueryStamp) || collisionQueryStamp > 2147483000) {
+            collisionQueryStamp = 1;
+        }
+        const queryStamp = collisionQueryStamp;
+
+        for (let dx = -tileRadius; dx <= tileRadius; dx++) {
+            for (let dy = -tileRadius; dy <= tileRadius; dy++) {
+                let xi = centerNode.xindex + dx;
+                let yi = centerNode.yindex + dy;
+                if (mapRef.wrapX && typeof mapRef.wrapIndexX === "function") {
+                    xi = mapRef.wrapIndexX(xi);
+                }
+                if (mapRef.wrapY && typeof mapRef.wrapIndexY === "function") {
+                    yi = mapRef.wrapIndexY(yi);
+                }
+                if (!mapRef.wrapX && (xi < 0 || xi >= mapRef.width)) continue;
+                if (!mapRef.wrapY && (yi < 0 || yi >= mapRef.height)) continue;
+
+                const node = mapRef.nodes[xi] && mapRef.nodes[xi][yi] ? mapRef.nodes[xi][yi] : null;
+                if (!node || !Array.isArray(node.objects) || node.objects.length === 0) continue;
+                for (const obj of node.objects) {
+                    if (!obj || obj.gone) continue;
+                    if (requireCollisionHandler && typeof obj.handleCharacterCollision !== "function") continue;
+                    if (obj._collisionQueryStamp === queryStamp) continue;
+                    obj._collisionQueryStamp = queryStamp;
+                    nearbyObjects.push(obj);
+                }
+            }
+        }
+
+        return nearbyObjects;
+    }
+
     function updateCharacterObjectCollisions(wizardRef) {
         if (!wizardRef || !wizardRef.map) return;
         const activeFirewalls = Number(
@@ -2855,37 +3135,19 @@ const SpellSystem = (() => {
                 : 0
         );
         if (activeFirewalls <= 0) return;
-        const targets = collisionTargetsScratch;
-        targets.length = 0;
-        if (!wizardRef.gone && !wizardRef.dead) targets.push(wizardRef);
-        if (Array.isArray(animals)) {
-            for (let animalIdx = 0; animalIdx < animals.length; animalIdx++) {
-                const animal = animals[animalIdx];
-                if (!animal || animal.gone || animal.dead) continue;
-                if (
-                    Number.isFinite(frameCount) &&
-                    CHARACTER_COLLISION_ANIMAL_STEP_INTERVAL > 1 &&
-                    ((frameCount + animalIdx) % CHARACTER_COLLISION_ANIMAL_STEP_INTERVAL) !== 0
-                ) {
-                    continue;
-                }
-                targets.push(animal);
-            }
-        }
-
-        for (const target of targets) {
-            const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
-            if (!targetHitbox) continue;
-            const nearbyObjects = getNearbyObjects(
-                wizardRef.map,
-                targetHitbox,
-                collisionNearbyObjectsScratch,
-                { margin: 0.35, requireCollisionHandler: true }
-            );
-            for (const obj of nearbyObjects) {
-                if (!obj) continue;
-                obj.handleCharacterCollision(target);
-            }
+        if (wizardRef.gone || wizardRef.dead) return;
+        const target = wizardRef;
+        const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
+        if (!targetHitbox) return;
+        const nearbyObjects = getNearbyObjectsAroundWizard(
+            wizardRef.map,
+            wizardRef,
+            collisionNearbyObjectsScratch,
+            { tileRadius: 2, requireCollisionHandler: true }
+        );
+        for (const obj of nearbyObjects) {
+            if (!obj) continue;
+            obj.handleCharacterCollision(target);
         }
     }
 
@@ -2942,6 +3204,100 @@ const SpellSystem = (() => {
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
             wizardRef.castDelay = true;
             projectiles.push(projectile.cast(worldX, worldY));
+            wizardRef.casting = true;
+            setTimeout(() => {
+                wizardRef.castDelay = false;
+                wizardRef.casting = false;
+            }, 1000 * delayTime);
+            return;
+        }
+
+        if (wizardRef.currentSpell === "blackdiamond") {
+            const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
+            const placeX = mapRef && typeof mapRef.wrapWorldX === "function"
+                ? mapRef.wrapWorldX(worldX)
+                : worldX;
+            const placeY = mapRef && typeof mapRef.wrapWorldY === "function"
+                ? mapRef.wrapWorldY(worldY)
+                : worldY;
+            if (Number.isFinite(placeX) && Number.isFinite(placeY) && typeof addPowerup === "function") {
+                addPowerup("black diamond.png", {
+                    x: placeX,
+                    y: placeY,
+                    map: mapRef
+                });
+            }
+            const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
+            wizardRef.castDelay = true;
+            wizardRef.casting = true;
+            setTimeout(() => {
+                wizardRef.castDelay = false;
+                wizardRef.casting = false;
+            }, 1000 * delayTime);
+            return;
+        }
+
+        if (wizardRef.currentSpell === "maze") {
+            const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
+            if (
+                !mapRef ||
+                typeof mapRef.worldToNode !== "function" ||
+                typeof mapRef.findPathAStar !== "function"
+            ) {
+                message("Pathfinding is unavailable.");
+                return;
+            }
+
+            const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(worldX) : worldX;
+            const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(worldY) : worldY;
+            const startNode = mapRef.worldToNode(wizardRef.x, wizardRef.y);
+            const destinationNode = mapRef.worldToNode(wrappedX, wrappedY);
+
+            if (!startNode || !destinationNode) {
+                message("Cannot find a path there.");
+                return;
+            }
+
+            const directDx = (typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(startNode.x, destinationNode.x)
+                : (destinationNode.x - startNode.x);
+            const directDy = (typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(startNode.y, destinationNode.y)
+                : (destinationNode.y - startNode.y);
+            const directDistance = Math.hypot(directDx, directDy);
+            const maxIterations = Math.max(
+                800,
+                Math.min(12000, Math.floor((directDistance + 8) * 180))
+            );
+
+            const astarPath = mapRef.findPathAStar(startNode, destinationNode, {
+                maxIterations
+            });
+
+            if (!Array.isArray(astarPath)) {
+                message("No path found.");
+                return;
+            }
+
+            const nodesAlongPath = [startNode, ...astarPath];
+            const seenNodes = new Set();
+            for (let i = 0; i < nodesAlongPath.length; i++) {
+                const node = nodesAlongPath[i];
+                if (!node) continue;
+                const key = `${node.xindex},${node.yindex}`;
+                if (seenNodes.has(key)) continue;
+                seenNodes.add(key);
+                if (typeof addPowerup === "function") {
+                    addPowerup("black diamond.png", {
+                        x: node.x,
+                        y: node.y,
+                        map: mapRef
+                    });
+                }
+            }
+
+            const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
+            wizardRef.castDelay = true;
             wizardRef.casting = true;
             setTimeout(() => {
                 wizardRef.castDelay = false;

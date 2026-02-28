@@ -23,7 +23,11 @@ function toRoadSaveRecord(data) {
         y: Number(data.y)
     };
     if (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0) {
-        record.fillTexturePath = data.fillTexturePath;
+        if (typeof globalThis !== "undefined" && typeof globalThis.normalizeLegacyAssetPath === "function") {
+            record.fillTexturePath = globalThis.normalizeLegacyAssetPath(data.fillTexturePath);
+        } else {
+            record.fillTexturePath = data.fillTexturePath;
+        }
     }
     return record;
 }
@@ -292,7 +296,9 @@ function saveGameState() {
                         if (treeRecord) loadedTreeRecords.push(treeRecord);
                         return;
                     }
-                    saveData.staticObjects.push(obj.saveJson());
+                    if (typeof obj.saveJson === "function") {
+                        saveData.staticObjects.push(obj.saveJson());
+                    }
                 }
             });
         }
@@ -345,17 +351,20 @@ function buildRestoreStaticObjectKey(objData, index = -1) {
         return `tree|${x}|${y}|${size}|${tex}|${hp}|${fire}`;
     }
 
-    if (type === "wall") {
-        const ax = Number.isFinite(objData.aX) ? Number(objData.aX).toFixed(3) : "";
-        const ay = Number.isFinite(objData.aY) ? Number(objData.aY).toFixed(3) : "";
-        const bx = Number.isFinite(objData.bX) ? Number(objData.bX).toFixed(3) : "";
-        const by = Number.isFinite(objData.bY) ? Number(objData.bY).toFixed(3) : "";
+    if (type === "wallSection") {
+        const id = Number.isInteger(objData.id) ? String(objData.id) : "";
         const h = Number.isFinite(objData.height) ? Number(objData.height).toFixed(3) : "";
         const t = Number.isFinite(objData.thickness) ? Number(objData.thickness).toFixed(3) : "";
+        const bz = Number.isFinite(objData.bottomZ) ? Number(objData.bottomZ).toFixed(3) : "";
         const pa = Number.isFinite(objData.texturePhaseA) ? Number(objData.texturePhaseA).toFixed(4) : "";
         const pb = Number.isFinite(objData.texturePhaseB) ? Number(objData.texturePhaseB).toFixed(4) : "";
-        const sid = Number.isInteger(objData.sectionId) ? String(objData.sectionId) : "";
-        return `wall|${ax}|${ay}|${bx}|${by}|${h}|${t}|${pa}|${pb}|${sid}`;
+        const sp = objData.startPoint || null;
+        const ep = objData.endPoint || null;
+        const spx = Number.isFinite(sp && sp.x) ? Number(sp.x).toFixed(3) : "";
+        const spy = Number.isFinite(sp && sp.y) ? Number(sp.y).toFixed(3) : "";
+        const epx = Number.isFinite(ep && ep.x) ? Number(ep.x).toFixed(3) : "";
+        const epy = Number.isFinite(ep && ep.y) ? Number(ep.y).toFixed(3) : "";
+        return `wallSection|${id}|${spx}|${spy}|${epx}|${epy}|${h}|${t}|${bz}|${pa}|${pb}`;
     }
 
     // Safety fallback for less common object shapes.
@@ -466,8 +475,17 @@ function loadGameState(saveData) {
         }
         existingStaticObjects.forEach(obj => {
             obj.gone = true;
-            if (typeof obj.removeFromNodes === "function") {
+            if (typeof obj.removeFromMapNodes === "function") {
+                obj.removeFromMapNodes();
+            } else if (typeof obj.removeFromNodes === "function") {
                 obj.removeFromNodes();
+            }
+            if (obj && obj.map && Array.isArray(obj.map.objects)) {
+                const idx = obj.map.objects.indexOf(obj);
+                if (idx >= 0) obj.map.objects.splice(idx, 1);
+            }
+            if (obj && obj.type === "wallSection" && typeof obj.destroy === "function") {
+                obj.destroy();
             }
             destroyDisplayObject(obj.pixiSprite);
             destroyDisplayObject(obj.fireSprite);
@@ -490,62 +508,35 @@ function loadGameState(saveData) {
         // Restore static objects (dedupe entries in save payload for backward compatibility)
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
             const restoredKeys = new Set();
-            const canSuspendWallRebuild = (
-                typeof Wall !== "undefined" &&
-                Wall &&
-                typeof Wall.setBulkRebuildSuspended === "function"
-            );
-            if (canSuspendWallRebuild) {
-                Wall.setBulkRebuildSuspended(true);
-            }
-            try {
-                saveData.staticObjects.forEach((objData, index) => {
-                    const key = buildRestoreStaticObjectKey(objData, index);
-                    if (restoredKeys.has(key)) return;
-                    restoredKeys.add(key);
+            saveData.staticObjects.forEach((objData, index) => {
+                const key = buildRestoreStaticObjectKey(objData, index);
+                if (restoredKeys.has(key)) return;
+                restoredKeys.add(key);
 
-                    if (objData && objData.type === 'road') {
-                        registerLazyRoadRecord(objData, false);
-                        return;
-                    }
-                    if (objData && objData.type === 'tree') {
-                        registerLazyTreeRecord(objData, false);
-                        return;
-                    }
-
-                    let obj = null;
-                    if (objData.type === 'wall') {
-                        obj = Wall.loadJson(objData, map);
-                    } else {
-                        obj = StaticObject.loadJson(objData, map);
-                    }
-                    if (obj) {
-                        // Objects handle their own node registration
-                    }
-                });
-            } finally {
-                if (canSuspendWallRebuild) {
-                    Wall.setBulkRebuildSuspended(false);
+                if (objData && objData.type === 'road') {
+                    registerLazyRoadRecord(objData, false);
+                    return;
                 }
-            }
-        }
+                if (objData && objData.type === 'tree') {
+                    registerLazyTreeRecord(objData, false);
+                    return;
+                }
 
-        if (typeof Wall !== "undefined" && Wall) {
-            if (typeof Wall.recomputeLineGroups === "function") {
-                Wall.recomputeLineGroups(map);
-            }
-            if (typeof Wall.reconcilePersistedSectionIds === "function") {
-                Wall.reconcilePersistedSectionIds(map);
-            }
-            if (typeof Wall.repairMountedSectionLinks === "function") {
-                Wall.repairMountedSectionLinks(map);
-            }
-            if (typeof globalThis !== "undefined" && typeof globalThis.markAllWallSectionsDirty === "function") {
-                globalThis.markAllWallSectionsDirty();
-            }
-            if (typeof globalThis !== "undefined" && typeof globalThis.queueWallSectionRebuildPass === "function") {
-                globalThis.queueWallSectionRebuildPass(12);
-            }
+                let obj = null;
+                if (
+                    objData.type === 'wallSection' &&
+                    typeof WallSectionUnit !== 'undefined' &&
+                    WallSectionUnit &&
+                    typeof WallSectionUnit.loadJson === 'function'
+                ) {
+                    obj = WallSectionUnit.loadJson(objData, map);
+                } else if (objData.type !== 'wall') {
+                    obj = StaticObject.loadJson(objData, map);
+                }
+                if (obj) {
+                    // Objects handle their own node registration
+                }
+            });
         }
 
         if (saveData.groundTiles) {
@@ -582,7 +573,9 @@ function loadGameState(saveData) {
         if (typeof invalidateGroundChunks === "function") {
             invalidateGroundChunks();
         }
-        drawCanvas();
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
 
         return true;
     } catch (e) {

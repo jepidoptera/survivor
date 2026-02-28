@@ -54,7 +54,6 @@ let lastLosComputeAtMs = 0;
 let nextLosObjectId = 1;
 let lastRenderFrameMs = 0;
 let renderer2QueryFlagCache = null;
-const wallSectionBatchingEnabled = true;
 const opaqueDepthMeshEnabled = true;
 const defaultWallTexturePath = "/assets/images/walls/stonewall.png";
 const defaultWallTextureRepeatsPerMapUnitX = 0.1; // 1 repetition per 2 map units.
@@ -105,12 +104,6 @@ void main(void) {
 }
 `;
 
-function getWallSectionsRendererApi() {
-    return (typeof globalThis !== "undefined" && globalThis.WallSectionsRenderer)
-        ? globalThis.WallSectionsRenderer
-        : null;
-}
-
 function getLosVisualSetting(key, fallback) {
     const settings = (typeof LOSVisualSettings !== "undefined") ? LOSVisualSettings : null;
     if (!settings || typeof settings !== "object") return fallback;
@@ -142,11 +135,6 @@ function ensureWallTextureConfigLoaded() {
         }
     };
     const rebuildSectionCompositesAfterTextureConfigLoad = () => {
-        const wallSections = getWallSectionsRendererApi();
-        if (wallSections && typeof wallSections.queueRebuildPass === "function") {
-            wallSections.queueRebuildPass(2);
-            return;
-        }
         if (typeof globalThis !== "undefined" && typeof globalThis.queueWallSectionRebuildPass === "function") {
             globalThis.queueWallSectionRebuildPass(2);
         }
@@ -587,11 +575,11 @@ function isLosPointVisible(worldX, worldY, slack = 0.05) {
 }
 
 function getWallVisibleLongEdgeSegment(item) {
-    if (!item || item.type !== "wall" || !item.a || !item.b) return null;
-    const ax = Number(item.a.x);
-    const ay = Number(item.a.y);
-    const bx = Number(item.b.x);
-    const by = Number(item.b.y);
+    if (!item || item.type !== "wallSection" || !item.startPoint || !item.endPoint) return null;
+    const ax = Number(item.startPoint.x);
+    const ay = Number(item.startPoint.y);
+    const bx = Number(item.endPoint.x);
+    const by = Number(item.endPoint.y);
     if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return null;
     const dx = bx - ax;
     const dy = by - ay;
@@ -633,7 +621,7 @@ function getWallVisibleLongEdgeSegment(item) {
 function isCurrentlyVisibleByLos(item) {
     if (!item || !item.groundPlaneHitbox || !wizard || !currentLosState) return true;
     if (currentLosVisibleSet && currentLosVisibleSet.has(item)) return true;
-    if (item.type === "wall" && item.a && item.b) {
+    if (item.type === "wallSection" && item.startPoint && item.endPoint) {
         const visibleEdge = getWallVisibleLongEdgeSegment(item);
         if (visibleEdge) {
             // Sample only along the wall's long span; ignore endpoint caps so
@@ -1402,15 +1390,15 @@ function wallIntersectsMaskHitboxes(wall, maskHitboxes) {
 
     // Fallback: sample the wall baseline segment in world space.
     if (
-        wall.a && wall.b &&
-        Number.isFinite(wall.a.x) && Number.isFinite(wall.a.y) &&
-        Number.isFinite(wall.b.x) && Number.isFinite(wall.b.y)
+        wall.startPoint && wall.endPoint &&
+        Number.isFinite(wall.startPoint.x) && Number.isFinite(wall.startPoint.y) &&
+        Number.isFinite(wall.endPoint.x) && Number.isFinite(wall.endPoint.y)
     ) {
         const samples = [0, 0.25, 0.5, 0.75, 1];
         for (let i = 0; i < samples.length; i++) {
             const t = samples[i];
-            const x = wall.a.x + (wall.b.x - wall.a.x) * t;
-            const y = wall.a.y + (wall.b.y - wall.a.y) * t;
+            const x = wall.startPoint.x + (wall.endPoint.x - wall.startPoint.x) * t;
+            const y = wall.startPoint.y + (wall.endPoint.y - wall.startPoint.y) * t;
             if (pointInsideMaskHitboxes(x, y, maskHitboxes)) return true;
         }
     }
@@ -1560,10 +1548,8 @@ function drawSpellHoverTargetHighlight() {
 
     const getHoverDisplayObject = obj => {
         if (!obj) return null;
-        if (obj._wallSectionCompositeDisplayObject && obj._wallSectionCompositeDisplayObject.parent) return obj._wallSectionCompositeDisplayObject;
         if (obj._opaqueDepthMesh && obj._opaqueDepthMesh.parent) return obj._opaqueDepthMesh;
         if (obj.pixiSprite && obj.pixiSprite.parent) return obj.pixiSprite;
-        if (obj._wallSectionCompositeSprite && obj._wallSectionCompositeSprite.parent) return obj._wallSectionCompositeSprite;
         return null;
     };
 
@@ -1592,61 +1578,6 @@ function drawSpellHoverTargetHighlight() {
         return;
     }
     const pulse = 0.55 + 0.45 * (Math.sin(frameCount * 0.12) * 0.5 + 0.5);
-
-    if (
-        target.type === "wall" &&
-        typeof Wall !== "undefined" &&
-        typeof Wall.drawWall === "function" &&
-        spellHoverHighlightWallGraphics
-    ) {
-        spellHoverHighlightSprite.visible = false;
-        if (spellHoverHighlightMesh) {
-            spellHoverHighlightMesh.visible = false;
-        }
-        const parent = targetSprite.parent;
-        spellHoverHighlightWallGraphics.clear();
-        const profile = (typeof target.getWallProfile === "function")
-            ? target.getWallProfile()
-            : null;
-        const renderCapA = (typeof target.hasConnectedWallAtEndpoint === "function")
-            ? !target.hasConnectedWallAtEndpoint("a")
-            : true;
-        const renderCapB = (typeof target.hasConnectedWallAtEndpoint === "function")
-            ? !target.hasConnectedWallAtEndpoint("b")
-            : true;
-        Wall.drawWall(
-            spellHoverHighlightWallGraphics,
-            target.a,
-            target.b,
-            target.height,
-            target.thickness,
-            0x66c2ff,
-            0.3 * pulse,
-            {
-                profile,
-                renderCapA,
-                renderCapB,
-                disableWallTexture: true,
-                texturePhaseA: target.texturePhaseA,
-                texturePhaseB: target.texturePhaseB
-            }
-        );
-        spellHoverHighlightWallGraphics.visible = true;
-        if (spellHoverHighlightWallGraphics.parent !== parent) {
-            if (spellHoverHighlightWallGraphics.parent) {
-                spellHoverHighlightWallGraphics.parent.removeChild(spellHoverHighlightWallGraphics);
-            }
-            parent.addChild(spellHoverHighlightWallGraphics);
-        } else {
-            const targetIndex = parent.getChildIndex(targetSprite);
-            const glowIndex = parent.getChildIndex(spellHoverHighlightWallGraphics);
-            const desiredIndex = Math.min(parent.children.length - 1, targetIndex + 1);
-            if (glowIndex !== desiredIndex) {
-                parent.setChildIndex(spellHoverHighlightWallGraphics, desiredIndex);
-            }
-        }
-        return;
-    }
 
     if (targetSprite instanceof PIXI.Sprite) {
         if (spellHoverHighlightWallGraphics) {
@@ -1912,12 +1843,19 @@ function buildPlaceObjectPreviewRenderItem() {
         SpellSystem &&
         typeof SpellSystem.getPlaceObjectPlacementCandidate === "function"
     ) ? SpellSystem.getPlaceObjectPlacementCandidate(wizard, worldX, worldY) : null;
-    const hasWallSnapTarget = !!(
-        isWallMountedPlacement &&
-        snapPlacement &&
-        snapPlacement.targetWall
-    );
-    const useSnapPlacement = hasWallSnapTarget;
+    const useSnapPlacement = !!(snapPlacement && snapPlacement.targetWall);
+    if (isWallMountedPlacement) {
+        if (
+            !useSnapPlacement ||
+            !Number.isFinite(snapPlacement.snappedX) ||
+            !Number.isFinite(snapPlacement.snappedY) ||
+            !Number.isFinite(snapPlacement.snappedRotationDeg) ||
+            !Number.isFinite(snapPlacement.snappedZ)
+        ) {
+            placeObjectPreviewSprite.visible = false;
+            return null;
+        }
+    }
     const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
         ? Number(wizard.selectedPlaceableScale)
         : 1;
@@ -1929,10 +1867,8 @@ function buildPlaceObjectPreviewRenderItem() {
     const placementYOffset = (rotationAxis === "spatial")
         ? 0
         : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
-    const previewX = (useSnapPlacement && Number.isFinite(snapPlacement.snappedX)) ? snapPlacement.snappedX : worldX;
-    let placedY = (useSnapPlacement && Number.isFinite(snapPlacement.snappedY))
-        ? snapPlacement.snappedY
-        : (worldY + placementYOffset);
+    const previewX = useSnapPlacement ? snapPlacement.snappedX : worldX;
+    let placedY = useSnapPlacement ? snapPlacement.snappedY : (worldY + placementYOffset);
     if (map && typeof map.wrapWorldY === "function") {
         placedY = map.wrapWorldY(placedY);
     }
@@ -1944,7 +1880,8 @@ function buildPlaceObjectPreviewRenderItem() {
     return {
         type: "placedObjectPreview",
         x: previewX,
-        y: (useSnapPlacement && Number.isFinite(snapPlacement.snappedY)) ? snapPlacement.snappedY : worldY,
+        y: useSnapPlacement ? snapPlacement.snappedY : worldY,
+        z: useSnapPlacement ? Number(snapPlacement.snappedZ) : 0,
         width: clampedScale,
         height: clampedScale,
         renderZ: placedY + renderDepthOffset,
@@ -1952,33 +1889,22 @@ function buildPlaceObjectPreviewRenderItem() {
         texturePath,
         category: selectedCategory,
         placeableAnchorX: (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
-            ? Number(wizard.selectedPlaceableAnchorX)
+            ? (useSnapPlacement ? 0.5 : Number(wizard.selectedPlaceableAnchorX))
             : 0.5,
         placeableAnchorY: (wizard && Number.isFinite(wizard.selectedPlaceableAnchorY))
             ? Number(wizard.selectedPlaceableAnchorY)
             : 1,
         rotationAxis: useSnapPlacement ? "spatial" : rotationAxis,
-        placementRotation: (useSnapPlacement && Number.isFinite(snapPlacement.snappedRotationDeg)) ? snapPlacement.snappedRotationDeg : effectivePlacementRotation,
-        mountedWallLineGroupId: (
-            useSnapPlacement &&
-            Number.isInteger(snapPlacement.mountedWallLineGroupId)
-        ) ? Number(snapPlacement.mountedWallLineGroupId) : (
-            useSnapPlacement &&
-            snapPlacement.targetWall &&
-            Number.isInteger(snapPlacement.targetWall.lineGroupId)
-        ) ? Number(snapPlacement.targetWall.lineGroupId) : null,
+        placementRotation: useSnapPlacement ? snapPlacement.snappedRotationDeg : effectivePlacementRotation,
         mountedSectionId: (
             useSnapPlacement &&
             Number.isInteger(snapPlacement.mountedSectionId)
-        ) ? Number(snapPlacement.mountedSectionId) : (
-            useSnapPlacement &&
-            Number.isInteger(snapPlacement.mountedWallLineGroupId)
-        ) ? Number(snapPlacement.mountedWallLineGroupId) : null,
+        ) ? Number(snapPlacement.mountedSectionId) : null,
         mountedWallFacingSign: (
             useSnapPlacement &&
             Number.isFinite(snapPlacement.mountedWallFacingSign)
         ) ? Number(snapPlacement.mountedWallFacingSign) : null,
-        previewDrawAfterWalls: !!(isWallMountedPlacement && useSnapPlacement),
+        previewDrawAfterWalls: !!useSnapPlacement,
         centerSnapGuide: useSnapPlacement
             ? {
                 centerSnapActive: !!snapPlacement.centerSnapActive,
@@ -2477,45 +2403,6 @@ function buildWallOpaqueDepthGeometry(item, range) {
     return geometry;
 }
 
-function buildWallSectionCompositeOpaqueDepthGeometry(item, range) {
-    if (!item || item.type !== "wallSectionComposite") return null;
-    const walls = Array.isArray(item._sectionMemberWalls) ? item._sectionMemberWalls : [];
-    if (walls.length === 0) return null;
-    const cacheKey = [
-        String(item._sectionCompositeMembershipSignature || ""),
-        String(Number.isInteger(item.lineGroupId) ? item.lineGroupId : "na"),
-        String(walls.length)
-    ].join("|");
-    if (item._sectionDepthGeometryCache && item._sectionDepthGeometryCache.key === cacheKey) {
-        return item._sectionDepthGeometryCache.geometry;
-    }
-
-    const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
-    let sharedTexture = null;
-    for (let i = 0; i < walls.length; i++) {
-        const wall = walls[i];
-        if (!wall || typeof wall.getWallProfile !== "function") continue;
-        const profile = wall.getWallProfile();
-        if (!profile) continue;
-        const uvInfo = resolveWallDepthUvAndTexture(wall, profile);
-        if (!uvInfo) continue;
-        if (!sharedTexture) sharedTexture = uvInfo.texture;
-        const wallHeight = Math.max(0.001, Number(wall.height) || 0.001);
-        const capInfo = getWallCapBasesForDepth(wall, wallHeight);
-        appendSingleWallDepthGeometry(builder, wall, profile, uvInfo, capInfo);
-    }
-    if (builder.vertexCount === 0) return null;
-    const geometry = {
-        positions: new Float32Array(builder.positions),
-        uvs: new Float32Array(builder.uvs),
-        indices: new Uint16Array(builder.indices),
-        texture: sharedTexture || PIXI.Texture.from(defaultWallTexturePath),
-        alphaCutoff: 0.02
-    };
-    item._sectionDepthGeometryCache = { key: cacheKey, geometry };
-    return geometry;
-}
-
 function buildRoofOpaqueDepthGeometry(item, range) {
     if (!item || item.type !== "roof" || !Array.isArray(item.vertices) || !Array.isArray(item.faces)) return null;
     const builder = { positions: [], uvs: [], indices: [], vertexCount: 0 };
@@ -2615,31 +2502,23 @@ function closestPointOnSegment2D(px, py, ax, ay, bx, by) {
 }
 
 function getMountedWallFaceCenters(item) {
-    const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
-        ? Number(item.mountedWallLineGroupId)
+    const mountedId = Number.isInteger(item && item.mountedSectionId)
+        ? Number(item.mountedSectionId)
         : null;
     if (!Number.isInteger(mountedId)) return null;
     const worldX = Number(item && item.x);
     const worldY = Number(item && item.y);
     if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
 
-    let walls = null;
-    const wallClass = (typeof Wall !== "undefined") ? Wall : null;
-    const sectionRegistry = wallClass && wallClass._sectionsById instanceof Map
-        ? wallClass._sectionsById
-        : null;
-    const sectionEntry = sectionRegistry ? sectionRegistry.get(mountedId) : null;
-    if (sectionEntry && Array.isArray(sectionEntry.walls) && sectionEntry.walls.length > 0) {
-        walls = sectionEntry.walls;
-    } else if (map && Array.isArray(map.objects)) {
-        walls = map.objects.filter(obj =>
+    const walls = (map && Array.isArray(map.objects))
+        ? map.objects.filter(obj =>
             obj &&
-            obj.type === "wall" &&
-            Number.isInteger(obj.lineGroupId) &&
-            Number(obj.lineGroupId) === mountedId &&
+            obj.type === "wallSection" &&
+            Number.isInteger(obj.id) &&
+            Number(obj.id) === mountedId &&
             typeof obj.getWallProfile === "function"
-        );
-    }
+        )
+        : null;
     if (!Array.isArray(walls) || walls.length === 0) return null;
 
     let best = null;
@@ -2777,8 +2656,7 @@ function buildMountedWallOpaqueDepthGeometry(item, range) {
 
 function buildOpaqueDepthGeometryForItem(item, range) {
     if (!item) return null;
-    if (item.type === "wall") return buildWallOpaqueDepthGeometry(item, range);
-    if (item.type === "wallSectionComposite") return buildWallSectionCompositeOpaqueDepthGeometry(item, range);
+    if (item.type === "wallSection") return buildWallOpaqueDepthGeometry(item, range);
     if (item.type === "roof") return buildRoofOpaqueDepthGeometry(item, range);
     if (isWallMountedPlaceable(item) && item.rotationAxis === "spatial") {
         const mounted = buildMountedWallOpaqueDepthGeometry(item, range);
@@ -2818,6 +2696,9 @@ function getOpaqueDepthDisplayObject(item, options = {}) {
 }
 
 function isRenderer2Enabled() {
+    if (typeof globalThis !== "undefined" && typeof globalThis.useRendering === "boolean") {
+        return !!globalThis.useRendering;
+    }
     if (typeof globalThis !== "undefined" && typeof globalThis.useRenderer2 === "boolean") {
         return !!globalThis.useRenderer2;
     }
@@ -2826,7 +2707,7 @@ function isRenderer2Enabled() {
         try {
             if (typeof window !== "undefined" && window.location && typeof window.location.search === "string") {
                 const params = new URLSearchParams(window.location.search);
-                const raw = (params.get("renderer2") || "").trim().toLowerCase();
+                const raw = (params.get("rendering") || params.get("renderer2") || "").trim().toLowerCase();
                 renderer2QueryFlagCache = raw === "1" || raw === "true" || raw === "on";
             }
         } catch (_) {}
@@ -2834,7 +2715,11 @@ function isRenderer2Enabled() {
     if (renderer2QueryFlagCache) return true;
     try {
         if (typeof localStorage !== "undefined") {
-            const raw = (localStorage.getItem("survivor.renderer2") || "").trim().toLowerCase();
+            const raw = (
+                localStorage.getItem("survivor.rendering") ||
+                localStorage.getItem("survivor.renderer2") ||
+                ""
+            ).trim().toLowerCase();
             return raw === "1" || raw === "true" || raw === "on";
         }
     } catch (_) {}
@@ -2855,17 +2740,20 @@ function drawCanvas() {
         : 0;
     const preLazyMs = performance.now() - lazyStartMs;
     const renderer2Enabled = isRenderer2Enabled();
+    const renderingApi = (typeof globalThis !== "undefined")
+        ? (globalThis.Rendering || globalThis.Renderer2 || null)
+        : null;
     if (
         renderer2Enabled &&
-        typeof globalThis !== "undefined" &&
-        globalThis.Renderer2 &&
-        typeof globalThis.Renderer2.renderFrame === "function"
+        renderingApi &&
+        typeof renderingApi.renderFrame === "function"
     ) {
-        const renderedByRenderer2 = globalThis.Renderer2.renderFrame({
+        const renderedByRenderer2 = renderingApi.renderFrame({
             app,
             gameContainer,
             map,
             animals,
+            powerups,
             wizard,
             roof,
             camera: renderCamera,
@@ -2884,11 +2772,10 @@ function drawCanvas() {
             return;
         }
     } else if (
-        typeof globalThis !== "undefined" &&
-        globalThis.Renderer2 &&
-        typeof globalThis.Renderer2.disable === "function"
+        renderingApi &&
+        typeof renderingApi.disable === "function"
     ) {
-        globalThis.Renderer2.disable();
+        renderingApi.disable();
     }
 
     const perfStartMs = performance.now();
@@ -3266,64 +3153,13 @@ function drawCanvas() {
     if (placePreviewItem) {
         mapItems.push(placePreviewItem);
     }
-    let wallSectionHiddenItems = new Set();
-    const composeWallSectionsStartMs = performance.now();
-    if (wallSectionBatchingEnabled) {
-        const wallSections = getWallSectionsRendererApi();
-        const sectionCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-            ? interpolatedViewport
-            : viewport;
-        if (wallSections && typeof wallSections.buildCompositeRenderItems === "function") {
-            wallSections.prepareFrame(viewscale, xyratio);
-            const sectionResult = wallSections.buildCompositeRenderItems({
-                enabled: wallSectionBatchingEnabled,
-                items: mapItems,
-                cachePrefix: "world",
-                camera: sectionCamera,
-                map,
-                app,
-                PIXI,
-                viewscale,
-                xyratio,
-                isWallMountedPlaceable
-            });
-            const compositeItems = (sectionResult && Array.isArray(sectionResult.renderItems))
-                ? sectionResult.renderItems
-                : [];
-            const sectionStats = (sectionResult && sectionResult.stats && typeof sectionResult.stats === "object")
-                ? sectionResult.stats
-                : null;
-            wallSectionHiddenItems = (sectionResult && sectionResult.hiddenItems instanceof Set)
-                ? sectionResult.hiddenItems
-                : new Set();
-            drawPerf.composeWallSectionsGroups = sectionStats && Number.isFinite(sectionStats.groups)
-                ? Number(sectionStats.groups)
-                : 0;
-            drawPerf.composeWallSectionsRebuilt = sectionStats && Number.isFinite(sectionStats.rebuilt)
-                ? Number(sectionStats.rebuilt)
-                : 0;
-            if (compositeItems.length > 0) {
-                mapItems.push(...compositeItems);
-            }
-            wallSections.endFrame();
-        }
-    } else {
-        const wallSections = getWallSectionsRendererApi();
-        if (wallSections) {
-            wallSections.restoreRenderable(mapItems, isWallMountedPlaceable);
-            wallSections.clearCache();
-        }
-    }
-    if (wallSectionHiddenItems.size > 0) {
-        mapItems = mapItems.filter(item => !wallSectionHiddenItems.has(item));
-    }
-    drawPerf.composeWallSectionsMs = performance.now() - composeWallSectionsStartMs;
+    drawPerf.composeWallSectionsMs = 0;
     drawPerf.composeSortMs = 0;
 
     if (typeof globalThis !== "undefined" && globalThis.windowWallDebugDumpRequested) {
         const roofs = mapItems.filter(obj => obj && obj.type === "roof");
         const trees = mapItems.filter(obj => obj && obj.type === "tree");
-        const walls = mapItems.filter(obj => obj && obj.type === "wall");
+        const walls = mapItems.filter(obj => obj && obj.type === "wallSection");
         const sortedIndex = new Map();
         mapItems.forEach((obj, idx) => sortedIndex.set(obj, idx));
         const roofRows = roofs.map((roofItem, idx) => ({
@@ -3350,7 +3186,7 @@ function drawCanvas() {
         }));
         const wallRows = walls.map((wallItem, idx) => ({
             idx,
-            lineGroupId: Number.isInteger(wallItem.lineGroupId) ? wallItem.lineGroupId : null,
+            sectionId: Number.isInteger(wallItem.id) ? wallItem.id : null,
             sortedIdx: sortedIndex.get(wallItem),
             x: Number(wallItem.x || 0).toFixed(3),
             y: Number(wallItem.y || 0).toFixed(3),
@@ -3373,20 +3209,20 @@ function drawCanvas() {
     const objectLayerInvariantItems = [];
     const indoorLayerInvariantItems = [];
     let invariantRelevantPresent = false;
-    const indoorWallLineGroupIds = new Set();
+    const indoorWallSectionIds = new Set();
     if (wizardInsideHouse && indoorObjectLayer && houseHitbox) {
         for (let i = 0; i < mapItems.length; i++) {
             const candidate = mapItems[i];
             if (
                 !candidate ||
-                (candidate.type !== "wall" && candidate.type !== "wallSectionComposite") ||
-                !Number.isInteger(candidate.lineGroupId) ||
+                candidate.type !== "wallSection" ||
+                !Number.isInteger(candidate.id) ||
                 !candidate.groundPlaneHitbox
             ) {
                 continue;
             }
             if (groundHitboxLikelyIntersectsCached(candidate.groundPlaneHitbox, houseHitbox)) {
-                indoorWallLineGroupIds.add(Number(candidate.lineGroupId));
+                indoorWallSectionIds.add(Number(candidate.id));
             }
         }
     }
@@ -3396,7 +3232,7 @@ function drawCanvas() {
         if (
             !invariantRelevantPresent &&
             item &&
-            (item.type === "wall" || item.type === "wallSectionComposite" || item.type === "roof" || item.type === "tree")
+            (item.type === "wallSection" || item.type === "roof" || item.type === "tree")
         ) {
             invariantRelevantPresent = true;
         }
@@ -3410,38 +3246,11 @@ function drawCanvas() {
             item._lastUpdateFrame = frameCount;
         }
 
-        if (item.vanishing && item.vanishStartTime !== undefined && item.vanishDuration !== undefined) {
-            const elapsedFrames = frameCount - item.vanishStartTime;
-            if (elapsedFrames >= item.vanishDuration) {
-                if (item.pixiSprite && item.pixiSprite.parent) {
-                    item.pixiSprite.parent.removeChild(item.pixiSprite);
-                }
-                removeItemOpaqueDepthMeshFromParent(item);
-                if (item._vanishFinalizeTimeout) {
-                    clearTimeout(item._vanishFinalizeTimeout);
-                    item._vanishFinalizeTimeout = null;
-                }
-                if (typeof item.removeFromNodes === "function") {
-                    item.removeFromNodes();
-                } else {
-                    const itemNode = map.worldToNode(item.x, item.y);
-                    if (itemNode) itemNode.removeObject(item);
-                }
-                if (typeof globalThis !== "undefined") {
-                    if (item.type === "tree" && typeof globalThis.unregisterLazyTreeRecordAt === "function") {
-                        globalThis.unregisterLazyTreeRecordAt(item.x, item.y);
-                    } else if (item.type === "road" && typeof globalThis.unregisterLazyRoadRecordAt === "function") {
-                        globalThis.unregisterLazyRoadRecordAt(item.x, item.y);
-                    }
-                }
-                item.gone = true;
-                item.vanishing = false;
-                return;
-            }
-        }
+        // Vanish finalization is owned by spell timers (see spells.js).
+        // Rendering only applies visual fade and does not remove gameplay objects.
 
             if (item.pixiSprite) {
-                const skipLegacyWallGraphicsDraw = !!(opaqueDepthMeshEnabled && item && item.type === "wall");
+                const skipLegacyWallGraphicsDraw = !!(opaqueDepthMeshEnabled && item && item.type === "wallSection");
                 const skipLegacyRoofTransform = !!(opaqueDepthMeshEnabled && item && item.type === "roof");
                 if (item.skipTransform && typeof item.draw === "function" && !skipLegacyWallGraphicsDraw) {
                     item.draw();
@@ -3541,10 +3350,10 @@ function drawCanvas() {
             const itemInsideHouse = canRouteToIndoorLayer
                 ? !!(houseHitbox && item.groundPlaneHitbox && groundHitboxLikelyIntersectsCached(item.groundPlaneHitbox, houseHitbox))
                 : false;
-            const mountedGroupId = Number.isInteger(item && item.mountedWallLineGroupId)
-                ? Number(item.mountedWallLineGroupId)
-                : (Number.isInteger(item && item.lineGroupId) ? Number(item.lineGroupId) : null);
-            const followsIndoorWallGroup = Number.isInteger(mountedGroupId) && indoorWallLineGroupIds.has(mountedGroupId);
+            const mountedGroupId = Number.isInteger(item && item.mountedSectionId)
+                ? Number(item.mountedSectionId)
+                : null;
+            const followsIndoorWallGroup = Number.isInteger(mountedGroupId) && indoorWallSectionIds.has(mountedGroupId);
             const useIndoorObjectLayer = !!(
                 canRouteToIndoorLayer &&
                 (itemInsideHouse || isPlacementPreview || followsIndoorWallGroup)
@@ -3573,16 +3382,6 @@ function drawCanvas() {
                 }
             } else {
                 removeItemOpaqueDepthMeshFromParent(item);
-            }
-            if (item && item.type === "wallSectionComposite" && Array.isArray(item._sectionMemberWalls)) {
-                for (let i = 0; i < item._sectionMemberWalls.length; i++) {
-                    const memberWall = item._sectionMemberWalls[i];
-                    if (!memberWall) continue;
-                    memberWall._wallSectionCompositeDisplayObject = displayObject;
-                    if (item.pixiSprite && item.pixiSprite.parent) {
-                        memberWall._wallSectionCompositeSprite = item.pixiSprite;
-                    }
-                }
             }
             targetLayer.addChild(displayObject);
             if (targetLayer === objectLayer) {
@@ -3685,10 +3484,7 @@ function drawCanvas() {
         const wallItems = [];
 
         layerItems.forEach(item => {
-            if (
-                (item.type === "wall" || item.type === "wallSectionComposite") &&
-                Number.isInteger(item.lineGroupId)
-            ) {
+            if (item.type === "wallSection" && Number.isInteger(item.id)) {
                 wallItems.push(item);
             }
         });
@@ -4076,51 +3872,32 @@ function updatePhantomWall(ax, ay, bx, by) {
     ) {
         return;
     }
-    const wallPath = (
-        typeof Wall !== "undefined" &&
-        Wall &&
-        typeof Wall.buildPlacementPath === "function"
-    ) ? Wall.buildPlacementPath(map, startPoint, endPoint, { maxAnchorDistance: 1.0001 }) : [];
-    if (!Array.isArray(wallPath) || wallPath.length === 0) return;
-    const planned = (
-        typeof Wall !== "undefined" &&
-        Wall &&
-        typeof Wall.planWallLineSegments === "function"
-    ) ? Wall.planWallLineSegments(wallPath, map, {
-        skipExisting: true,
-        startReferenceWall: (wizard && wizard.wallStartReferenceWall && wizard.wallStartReferenceWall.type === "wall")
-            ? wizard.wallStartReferenceWall
-            : null
-    }) : null;
-    const previewSegments = planned && Array.isArray(planned.segments) ? planned.segments : null;
-    const wallHeight = Number.isFinite(wizard.selectedWallHeight) ? wizard.selectedWallHeight : 3.0;
-    const wallThickness = Number.isFinite(wizard.selectedWallThickness) ? wizard.selectedWallThickness : 0.2;
-    const drawSegment = (from, to) => {
-        if (!from || !to || (typeof Wall !== "undefined" && Wall && Wall.pointsMatch(from, to))) return;
-        Wall.drawWall(wizard.phantomWall, from, to, wallHeight, wallThickness, 0x888888, 0.5);
-    };
+    const previewPlan = (
+        typeof WallSectionUnit !== "undefined" &&
+        WallSectionUnit &&
+        typeof WallSectionUnit.planPlacementFromWorldPoints === "function"
+    ) ? WallSectionUnit.planPlacementFromWorldPoints(map, startPoint, endPoint) : null;
 
-    if (previewSegments) {
-        for (let i = 0; i < previewSegments.length; i++) {
-            const seg = previewSegments[i];
-            if (!seg) continue;
-            drawSegment(seg.from, seg.to);
+    const plannedSegments = (previewPlan && Array.isArray(previewPlan.segments) && previewPlan.segments.length > 0)
+        ? previewPlan.segments
+        : [{ start: map.worldToNode(startPoint.x, startPoint.y), end: map.worldToNode(endPoint.x, endPoint.y) }];
+
+    wizard.phantomWall.lineStyle(4, 0xff2222, 0.95);
+    for (let i = 0; i < plannedSegments.length; i++) {
+        const seg = plannedSegments[i];
+        if (!seg || !seg.start || !seg.end) continue;
+        if (
+            !Number.isFinite(seg.start.x) ||
+            !Number.isFinite(seg.start.y) ||
+            !Number.isFinite(seg.end.x) ||
+            !Number.isFinite(seg.end.y)
+        ) {
+            continue;
         }
-        return;
-    }
-
-    if (!(typeof Wall !== "undefined" && Wall && Wall.pointsMatch(startPoint, wallPath[0]))) {
-        drawSegment(startPoint, wallPath[0]);
-    }
-    for (let i = 0; i < wallPath.length - 1; i++) {
-        const pathNodeA = wallPath[i];
-        const pathNodeB = wallPath[i + 1];
-
-        // Use the static NewWall.drawWall method with phantom styling
-        drawSegment(pathNodeA, pathNodeB);
-    }
-    if (!(typeof Wall !== "undefined" && Wall && Wall.pointsMatch(wallPath[wallPath.length - 1], endPoint))) {
-        drawSegment(wallPath[wallPath.length - 1], endPoint);
+        const fromScreen = worldToScreen({ x: seg.start.x, y: seg.start.y });
+        const toScreen = worldToScreen({ x: seg.end.x, y: seg.end.y });
+        wizard.phantomWall.moveTo(fromScreen.x, fromScreen.y);
+        wizard.phantomWall.lineTo(toScreen.x, toScreen.y);
     }
 }
 
@@ -4267,7 +4044,7 @@ function ensureSpriteFrames(item) {
 
 function ensureFireFrames() {
     if (fireFrames) return;
-    const baseTexture = PIXI.Texture.from('./assets/images/fire.png').baseTexture;
+    const baseTexture = PIXI.Texture.from('./assets/images/magic/fire.png').baseTexture;
     if (!baseTexture.valid) {
         baseTexture.once('loaded', () => {
             fireFrames = null;

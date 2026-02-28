@@ -1,0 +1,82 @@
+{
+  "category": "powerups",
+  "version": 1,
+  "sourceDirectory": "/assets/images/powerups",
+  "defaults": {
+    "width": 0.8,
+    "height": 0.8,
+    "z": 0,
+    "imagePath": "",
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "groundPlaneHitbox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radius": 0.35
+    },
+    "pickupCooldownMs": 0,
+    "respawnMs": null,
+    "billboard": {
+      "alpha": 1,
+      "tint": 16777215,
+      "blendMode": "normal"
+    },
+    "effects": {
+      "bobbing": {
+        "enabled": false,
+        "amplitude": 0.06,
+        "speed": 2
+      },
+      "pulse": {
+        "enabled": false,
+        "scaleMin": 0.95,
+        "scaleMax": 1.05,
+        "speed": 2
+      }
+    }
+  },
+  "items": [
+    {
+      "id": "black_diamond",
+      "name": "Black Diamond",
+      "file": "black diamond.png",
+      "imagePath": "/assets/images/powerups/black%20diamond.png",
+      "width": 0.8,
+      "height": 0.8,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.35
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      }
+    }
+  ]
+}
