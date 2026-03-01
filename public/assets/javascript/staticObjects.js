@@ -714,11 +714,23 @@ uniform vec2 uCameraWorld;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
+uniform vec2 uWorldSize;
+uniform vec2 uWrapEnabled;
 varying vec2 vUvs;
 void main(void) {
     float camDx = aWorldPosition.x - uCameraWorld.x;
     float camDy = aWorldPosition.y - uCameraWorld.y;
     float camDz = aWorldPosition.z;
+    if (uWrapEnabled.x > 0.5 && uWorldSize.x > 0.0) {
+        camDx = mod(camDx + 0.5 * uWorldSize.x, uWorldSize.x);
+        if (camDx < 0.0) camDx += uWorldSize.x;
+        camDx -= 0.5 * uWorldSize.x;
+    }
+    if (uWrapEnabled.y > 0.5 && uWorldSize.y > 0.0) {
+        camDy = mod(camDy + 0.5 * uWorldSize.y, uWorldSize.y);
+        if (camDy < 0.0) camDy += uWorldSize.y;
+        camDy -= 0.5 * uWorldSize.y;
+    }
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
@@ -972,6 +984,8 @@ void main(void) {
             uViewScale: 1,
             uXyRatio: 1,
             uDepthRange: new Float32Array([0, 1]),
+            uWorldSize: new Float32Array([0, 0]),
+            uWrapEnabled: new Float32Array([0, 0]),
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
             uSampler: pixi.Texture.WHITE
@@ -1168,6 +1182,15 @@ void main(void) {
         uniforms.uScreenSize[1] = Math.max(1, screenH);
         uniforms.uCameraWorld[0] = Number(cam.x) || 0;
         uniforms.uCameraWorld[1] = Number(cam.y) || 0;
+        const mapRef = this.map || (ctx && ctx.map) || null;
+        uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
+            ? Number(mapRef.worldWidth)
+            : 0;
+        uniforms.uWorldSize[1] = (mapRef && Number.isFinite(mapRef.worldHeight) && mapRef.worldHeight > 0)
+            ? Number(mapRef.worldHeight)
+            : 0;
+        uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
+        uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
         uniforms.uViewScale = Number(cam.viewscale) || 1;
         uniforms.uXyRatio = Number(cam.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;
