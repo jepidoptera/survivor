@@ -559,17 +559,21 @@ function drawMapBorder() {
     const worldHeight = Number.isFinite(map.worldHeight) ? map.worldHeight : map.height;
     if (!(worldWidth > 0) || !(worldHeight > 0)) return;
 
+    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
+        ? interpolatedViewport
+        : viewport;
+
     const worldToScreenRaw = (x, y) => ({
-        x: (x - viewport.x) * viewscale,
-        y: (y - viewport.y) * viewscale * xyratio
+        x: (x - camera.x) * viewscale,
+        y: (y - camera.y) * viewscale * xyratio
     });
     const topLeft = worldToScreenRaw(0, 0);
     const topRight = worldToScreenRaw(worldWidth, 0);
     const bottomRight = worldToScreenRaw(worldWidth, worldHeight);
     const bottomLeft = worldToScreenRaw(0, worldHeight);
 
-    const dash = 8;
-    const gap = 6;
+    const dash = 2;
+    const gap = 7;
     const drawDashed = (a, b) => {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
