@@ -5,11 +5,13 @@
             this.y = 0;
             this.viewscale = 1;
             this.xyratio = 0.66;
+            this.map = null;
         }
 
-        update({ camera, wizard, viewport, viewscale, xyratio }) {
+        update({ camera, wizard, viewport, viewscale, xyratio, map }) {
             this.viewscale = Number.isFinite(viewscale) ? viewscale : this.viewscale;
             this.xyratio = Number.isFinite(xyratio) ? xyratio : this.xyratio;
+            this.map = map || null;
 
             if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.y)) {
                 this.x = camera.x;
@@ -26,8 +28,14 @@
         }
 
         worldToScreen(worldX, worldY, worldZ = 0) {
-            const dx = worldX - this.x;
-            const dy = worldY - this.y - worldZ;
+            const mapRef = this.map || (typeof global !== "undefined" ? global.map : null);
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(this.x, worldX)
+                : (worldX - this.x);
+            const dyBase = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(this.y, worldY)
+                : (worldY - this.y);
+            const dy = dyBase - worldZ;
             return {
                 x: dx * this.viewscale,
                 y: dy * this.viewscale * this.xyratio

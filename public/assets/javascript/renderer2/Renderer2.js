@@ -1416,7 +1416,8 @@
                 wizard: ctx.wizard,
                 viewport: ctx.viewport,
                 viewscale: ctx.viewscale,
-                xyratio: ctx.xyratio
+                xyratio: ctx.xyratio,
+                map: ctx.map
             });
             this.resetPickRenderItems();
             if (this.scenePicker && this.scenePicker.publicApi) {
@@ -1427,6 +1428,9 @@
             this.syncOnscreenObjectsCache(ctx, visibleNodes);
             this.renderGroundTiles(ctx, visibleNodes);
             this.renderHexGridOverlay(ctx);
+            if (typeof global.drawMapBorder === "function") {
+                global.drawMapBorder();
+            }
             this.renderRoadsAndFloors(ctx, visibleNodes);
             this.renderObjects3D(ctx, visibleNodes);
             this.renderWallPlacementPreview(ctx);
