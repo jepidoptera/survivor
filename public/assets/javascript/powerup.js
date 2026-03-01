@@ -177,7 +177,7 @@
                 this.radius
             );
             this.pixiSprite = null;
-            this._renderer2DisplayObject = null;
+            this._renderingDisplayObject = null;
             this.animatedFrameCountX = 1;
             this.animatedFrameCountY = 1;
             this.animatedFps = 0;

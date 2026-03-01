@@ -1802,11 +1802,6 @@
             }
             singleton.activeDepthBillboardItems.clear();
             singleton.activeDepthBillboardMeshes.clear();
-            singleton.clearLosStateDebug();
-            if (singleton.losShadowGraphics) {
-                singleton.losShadowGraphics.clear();
-                singleton.losShadowGraphics.visible = false;
-            }
             for (const sprite of singleton.activePowerupDisplayObjects) {
                 if (!sprite) continue;
                 sprite.visible = false;

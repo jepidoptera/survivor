@@ -1546,7 +1546,7 @@ const SpellSystem = (() => {
 
     function getSpellTargetDisplayObject(item) {
         if (!item) return null;
-        if (item._renderer2DepthMesh && item._renderer2DepthMesh.parent) return item._renderer2DepthMesh;
+        if (item._renderingDepthMesh && item._renderingDepthMesh.parent) return item._renderingDepthMesh;
         if (item._opaqueDepthMesh && item._opaqueDepthMesh.parent) return item._opaqueDepthMesh;
         if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
         return null;
@@ -2396,8 +2396,8 @@ const SpellSystem = (() => {
         return pb.x - pa.x;
     }
 
-    function pickObjectViaRenderer2ColorId(worldX, worldY, filterFn = null) {
-        const pickerApi = (typeof globalThis !== "undefined") ? globalThis.renderer2ScenePicker : null;
+    function pickObjectViaRenderingColorId(worldX, worldY, filterFn = null) {
+        const pickerApi = (typeof globalThis !== "undefined") ? globalThis.renderingScenePicker : null;
         if (!pickerApi) {
             return { picked: null, attempted: false };
         }
@@ -2439,7 +2439,7 @@ const SpellSystem = (() => {
             !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
         );
 
-        const pickResult = pickObjectViaRenderer2ColorId(worldX, worldY, (obj) =>
+        const pickResult = pickObjectViaRenderingColorId(worldX, worldY, (obj) =>
             canTargetObject(obj)
         );
         if (pickResult && pickResult.attempted) {
@@ -3160,7 +3160,7 @@ const SpellSystem = (() => {
             !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
         );
 
-        const pickResult = pickObjectViaRenderer2ColorId(worldX, worldY, (obj) =>
+        const pickResult = pickObjectViaRenderingColorId(worldX, worldY, (obj) =>
             canTargetObject(obj)
         );
         if (!pickResult || !pickResult.attempted) return null;

@@ -377,7 +377,7 @@ class GameMap {
             }
         })
 
-        // Ground is rendered per-tile in rendering.js using node.groundTextureId.
+        // Ground is rendered per-tile by the active rendering pipeline using node.groundTextureId.
         landTileSprite = null;
 
         console.log("generating nodes...");

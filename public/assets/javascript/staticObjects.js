@@ -716,21 +716,26 @@ uniform float uXyRatio;
 uniform vec2 uDepthRange;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
+uniform vec2 uWrapAnchorWorld;
 varying vec2 vUvs;
 void main(void) {
-    float camDx = aWorldPosition.x - uCameraWorld.x;
-    float camDy = aWorldPosition.y - uCameraWorld.y;
-    float camDz = aWorldPosition.z;
+    float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
+    float anchorDy = uWrapAnchorWorld.y - uCameraWorld.y;
     if (uWrapEnabled.x > 0.5 && uWorldSize.x > 0.0) {
-        camDx = mod(camDx + 0.5 * uWorldSize.x, uWorldSize.x);
-        if (camDx < 0.0) camDx += uWorldSize.x;
-        camDx -= 0.5 * uWorldSize.x;
+        anchorDx = mod(anchorDx + 0.5 * uWorldSize.x, uWorldSize.x);
+        if (anchorDx < 0.0) anchorDx += uWorldSize.x;
+        anchorDx -= 0.5 * uWorldSize.x;
     }
     if (uWrapEnabled.y > 0.5 && uWorldSize.y > 0.0) {
-        camDy = mod(camDy + 0.5 * uWorldSize.y, uWorldSize.y);
-        if (camDy < 0.0) camDy += uWorldSize.y;
-        camDy -= 0.5 * uWorldSize.y;
+        anchorDy = mod(anchorDy + 0.5 * uWorldSize.y, uWorldSize.y);
+        if (anchorDy < 0.0) anchorDy += uWorldSize.y;
+        anchorDy -= 0.5 * uWorldSize.y;
     }
+    float localDx = aWorldPosition.x - uWrapAnchorWorld.x;
+    float localDy = aWorldPosition.y - uWrapAnchorWorld.y;
+    float camDx = anchorDx + localDx;
+    float camDy = anchorDy + localDy;
+    float camDz = aWorldPosition.z;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
@@ -986,6 +991,7 @@ void main(void) {
             uDepthRange: new Float32Array([0, 1]),
             uWorldSize: new Float32Array([0, 0]),
             uWrapEnabled: new Float32Array([0, 0]),
+            uWrapAnchorWorld: new Float32Array([0, 0]),
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
             uSampler: pixi.Texture.WHITE
@@ -1191,6 +1197,8 @@ void main(void) {
             : 0;
         uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
         uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
+        uniforms.uWrapAnchorWorld[0] = worldX;
+        uniforms.uWrapAnchorWorld[1] = worldY;
         uniforms.uViewScale = Number(cam.viewscale) || 1;
         uniforms.uXyRatio = Number(cam.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;

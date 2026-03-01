@@ -9,6 +9,7 @@
 
             this.roadsFloor = new PIXI.Container();
             this.roadsFloor.name = "renderingRoadsFloor";
+
             this.losShadow = new PIXI.Container();
             this.losShadow.name = "renderer2LosShadow";
 

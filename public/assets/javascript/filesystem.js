@@ -537,6 +537,19 @@ function loadGameState(saveData) {
                     // Objects handle their own node registration
                 }
             });
+
+            if (
+                typeof WallSectionUnit !== 'undefined' &&
+                WallSectionUnit &&
+                WallSectionUnit._allSections instanceof Map &&
+                typeof WallSectionUnit.autoMergeContinuousSections === 'function'
+            ) {
+                const loadedSections = Array.from(WallSectionUnit._allSections.values())
+                    .filter(section => section && !section.gone && section.map === map);
+                if (loadedSections.length > 1) {
+                    WallSectionUnit.autoMergeContinuousSections(loadedSections);
+                }
+            }
         }
 
         if (saveData.groundTiles) {

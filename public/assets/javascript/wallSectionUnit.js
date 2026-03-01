@@ -360,6 +360,243 @@ void main(void) {
             return ((d % 12) + 12) % 12;
         }
 
+        static _numericEqual(a, b, eps = EPS) {
+            const av = Number(a);
+            const bv = Number(b);
+            if (!Number.isFinite(av) || !Number.isFinite(bv)) return false;
+            return Math.abs(av - bv) <= eps;
+        }
+
+        static _optionalNumericEqual(a, b, eps = EPS) {
+            const af = Number.isFinite(a);
+            const bf = Number.isFinite(b);
+            if (!af && !bf) return true;
+            if (af !== bf) return false;
+            return Math.abs(Number(a) - Number(b)) <= eps;
+        }
+
+        static _directionBetweenEndpoints(startPoint, endPoint, mapRef = null) {
+            if (!startPoint || !endPoint) return null;
+            const sx = Number(startPoint.x);
+            const sy = Number(startPoint.y);
+            const ex = Number(endPoint.x);
+            const ey = Number(endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+                return null;
+            }
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            if (Math.hypot(dx, dy) <= EPS) return null;
+            const dir = (mapRef && typeof mapRef.getHexDirection === "function")
+                ? mapRef.getHexDirection(dx, dy)
+                : Math.round((180 - (Math.atan2(-dy, dx) * 180 / Math.PI)) / 30);
+            if (!Number.isFinite(dir)) return null;
+            return WallSectionUnit._normalizeDirection(dir);
+        }
+
+        static _resolveSharedAndOuterEndpoints(sectionA, sectionB) {
+            if (!sectionA || !sectionB || sectionA === sectionB) return null;
+            const a0 = sectionA.startPoint;
+            const a1 = sectionA.endPoint;
+            const b0 = sectionB.startPoint;
+            const b1 = sectionB.endPoint;
+            if (!a0 || !a1 || !b0 || !b1) return null;
+
+            let shared = null;
+            let outerA = null;
+            let outerB = null;
+
+            if (WallSectionUnit._pointsMatch(a0, b0)) {
+                shared = a0;
+                outerA = a1;
+                outerB = b1;
+            } else if (WallSectionUnit._pointsMatch(a0, b1)) {
+                shared = a0;
+                outerA = a1;
+                outerB = b0;
+            } else if (WallSectionUnit._pointsMatch(a1, b0)) {
+                shared = a1;
+                outerA = a0;
+                outerB = b1;
+            } else if (WallSectionUnit._pointsMatch(a1, b1)) {
+                shared = a1;
+                outerA = a0;
+                outerB = b0;
+            }
+
+            if (!shared || !outerA || !outerB) return null;
+            if (WallSectionUnit._pointsMatch(outerA, outerB)) return null;
+
+            return { shared, outerA, outerB };
+        }
+
+        static canAutoMergeContinuous(sectionA, sectionB) {
+            if (!sectionA || !sectionB || sectionA === sectionB) return false;
+            if (sectionA.gone || sectionB.gone || sectionA.vanishing || sectionB.vanishing) return false;
+            if (sectionA.map !== sectionB.map) return false;
+            const endpoints = WallSectionUnit._resolveSharedAndOuterEndpoints(sectionA, sectionB);
+            if (!endpoints) return false;
+
+            const dirA = WallSectionUnit._normalizeDirection(sectionA.direction);
+            const dirB = WallSectionUnit._normalizeDirection(sectionB.direction);
+            const axisA = ((dirA % 6) + 6) % 6;
+            const axisB = ((dirB % 6) + 6) % 6;
+            if (axisA !== axisB) return false;
+
+            if (!WallSectionUnit._numericEqual(sectionA.height, sectionB.height, 1e-5)) return false;
+            if (!WallSectionUnit._numericEqual(sectionA.thickness, sectionB.thickness, 1e-5)) return false;
+            if (!WallSectionUnit._numericEqual(sectionA.bottomZ, sectionB.bottomZ, 1e-5)) return false;
+            if (!WallSectionUnit._optionalNumericEqual(sectionA.texturePhaseA, sectionB.texturePhaseA, 1e-5)) return false;
+            if (!WallSectionUnit._optionalNumericEqual(sectionA.texturePhaseB, sectionB.texturePhaseB, 1e-5)) return false;
+
+            const textureA = WallSectionUnit._normalizeWallTextureConfigPath(sectionA.wallTexturePath || DEFAULT_WALL_TEXTURE);
+            const textureB = WallSectionUnit._normalizeWallTextureConfigPath(sectionB.wallTexturePath || DEFAULT_WALL_TEXTURE);
+            if (textureA !== textureB) return false;
+
+            return true;
+        }
+
+        static mergeContinuousPair(sectionA, sectionB) {
+            if (!WallSectionUnit.canAutoMergeContinuous(sectionA, sectionB)) return null;
+
+            let survivor = sectionA;
+            let absorbed = sectionB;
+            if (Number.isInteger(sectionB.id) && Number.isInteger(sectionA.id) && Number(sectionB.id) < Number(sectionA.id)) {
+                survivor = sectionB;
+                absorbed = sectionA;
+            }
+
+            const endpointInfo = WallSectionUnit._resolveSharedAndOuterEndpoints(survivor, absorbed);
+            if (!endpointInfo) return null;
+            const mapRef = survivor.map || absorbed.map || null;
+            const targetDirection = WallSectionUnit._normalizeDirection(survivor.direction);
+            const targetAxis = ((targetDirection % 6) + 6) % 6;
+
+            let nextStart = endpointInfo.outerA;
+            let nextEnd = endpointInfo.outerB;
+            const dirForward = WallSectionUnit._directionBetweenEndpoints(endpointInfo.outerA, endpointInfo.outerB, mapRef);
+            const dirBackward = WallSectionUnit._directionBetweenEndpoints(endpointInfo.outerB, endpointInfo.outerA, mapRef);
+            const dirForwardAxis = Number.isFinite(dirForward) ? (((dirForward % 6) + 6) % 6) : null;
+            const dirBackwardAxis = Number.isFinite(dirBackward) ? (((dirBackward % 6) + 6) % 6) : null;
+            if (dirForwardAxis === targetAxis) {
+                nextStart = endpointInfo.outerA;
+                nextEnd = endpointInfo.outerB;
+            } else if (dirBackwardAxis === targetAxis) {
+                nextStart = endpointInfo.outerB;
+                nextEnd = endpointInfo.outerA;
+            }
+
+            const absorbedNeighbors = [];
+            for (const payload of absorbed.connections.values()) {
+                const other = payload && payload.section;
+                if (!other || other === absorbed || other.gone) continue;
+                if (other === survivor) continue;
+                if (!absorbedNeighbors.includes(other)) absorbedNeighbors.push(other);
+            }
+            const absorbedAttachments = Array.isArray(absorbed.attachedObjects)
+                ? absorbed.attachedObjects.slice()
+                : [];
+
+            survivor.detachFrom(absorbed);
+            absorbed.detachFrom(survivor);
+
+            for (let i = 0; i < absorbedNeighbors.length; i++) {
+                const neighbor = absorbedNeighbors[i];
+                if (!neighbor) continue;
+                if (typeof neighbor.detachFrom === "function") {
+                    neighbor.detachFrom(absorbed);
+                }
+            }
+            absorbed.connections.clear();
+
+            survivor.setEndpoints(nextStart, nextEnd, mapRef);
+
+            for (let i = 0; i < absorbedNeighbors.length; i++) {
+                const neighbor = absorbedNeighbors[i];
+                if (!neighbor || neighbor.gone) continue;
+                if (!survivor.sharesEndpointWith(neighbor)) continue;
+                survivor.connectTo(neighbor, { merged: true, absorbedSectionId: absorbed.id });
+                if (typeof neighbor.connectTo === "function") {
+                    neighbor.connectTo(survivor, { merged: true, absorbedSectionId: absorbed.id });
+                }
+            }
+
+            for (let i = 0; i < absorbedAttachments.length; i++) {
+                const entry = absorbedAttachments[i];
+                if (!entry || !entry.object) continue;
+                survivor.attachObject(entry.object, {
+                    direction: Number.isFinite(entry.direction) ? Number(entry.direction) : survivor.direction,
+                    offsetAlong: Number.isFinite(entry.offsetAlong) ? Number(entry.offsetAlong) : 0
+                });
+            }
+            absorbed.attachedObjects.length = 0;
+
+            absorbed.gone = true;
+            absorbed.vanishing = false;
+            absorbed.destroy();
+
+            survivor.addToMapNodes();
+
+            const impacted = [survivor, ...absorbedNeighbors];
+            const seen = new Set();
+            for (let i = 0; i < impacted.length; i++) {
+                const wall = impacted[i];
+                if (!wall || wall.gone) continue;
+                if (seen.has(wall)) continue;
+                seen.add(wall);
+                if (typeof wall.handleJoineryOnPlacement === "function") {
+                    wall.handleJoineryOnPlacement();
+                } else {
+                    if (typeof wall.rebuildMesh3d === "function") wall.rebuildMesh3d();
+                    if (typeof wall.draw === "function") wall.draw();
+                }
+            }
+
+            return survivor;
+        }
+
+        static autoMergeContinuousSections(seedSections = []) {
+            const seeds = Array.isArray(seedSections) ? seedSections.slice() : [];
+            const survivors = [];
+            const seen = new Set();
+
+            for (let i = 0; i < seeds.length; i++) {
+                let section = seeds[i];
+                if (!section || section.gone || section.vanishing) continue;
+
+                let merged = true;
+                let guard = 0;
+                while (merged && guard < 128) {
+                    merged = false;
+                    guard += 1;
+                    const allSections = Array.from(WallSectionUnit._allSections.values());
+                    for (let j = 0; j < allSections.length; j++) {
+                        const candidate = allSections[j];
+                        if (!candidate || candidate === section) continue;
+                        if (!WallSectionUnit.canAutoMergeContinuous(section, candidate)) continue;
+                        const next = WallSectionUnit.mergeContinuousPair(section, candidate);
+                        if (next) {
+                            section = next;
+                            merged = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!section || section.gone) continue;
+                const key = Number.isInteger(section.id) ? `id:${section.id}` : `obj:${i}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                survivors.push(section);
+            }
+
+            return survivors;
+        }
+
         static _directionUnitVector(direction, mapRef = null, anchorPoint = null) {
             const dir = WallSectionUnit._normalizeDirection(direction);
 
@@ -702,22 +939,24 @@ void main(void) {
                 sections.push(section);
             }
 
-            if (sections.length >= 2) {
-                for (let i = 0; i < sections.length - 1; i++) {
-                    sections[i].connectTo(sections[i + 1], { placementChain: true });
-                    sections[i + 1].connectTo(sections[i], { placementChain: true });
+            const mergedSections = WallSectionUnit.autoMergeContinuousSections(sections);
+
+            if (mergedSections.length >= 2) {
+                for (let i = 0; i < mergedSections.length - 1; i++) {
+                    mergedSections[i].connectTo(mergedSections[i + 1], { placementChain: true });
+                    mergedSections[i + 1].connectTo(mergedSections[i], { placementChain: true });
                 }
             }
 
             if (options.addToMapObjects === true && mapRef && Array.isArray(mapRef.objects)) {
-                for (let i = 0; i < sections.length; i++) {
-                    if (!mapRef.objects.includes(sections[i])) {
-                        mapRef.objects.push(sections[i]);
+                for (let i = 0; i < mergedSections.length; i++) {
+                    if (!mapRef.objects.includes(mergedSections[i])) {
+                        mapRef.objects.push(mergedSections[i]);
                     }
                 }
             }
 
-            return { plan, sections };
+            return { plan, sections: mergedSections };
         }
 
         setEndpoints(startPoint, endPoint, mapRef = null) {

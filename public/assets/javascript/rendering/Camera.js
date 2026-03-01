@@ -1,5 +1,5 @@
-(function attachRenderer2Camera(global) {
-    class Renderer2Camera {
+(function attachRenderingCamera(global) {
+    class RenderingCamera {
         constructor() {
             this.x = 0;
             this.y = 0;
@@ -43,6 +43,5 @@
         }
     }
 
-    global.Renderer2Camera = Renderer2Camera;
-    global.RenderingCamera = Renderer2Camera;
+    global.RenderingCamera = RenderingCamera;
 })(typeof globalThis !== "undefined" ? globalThis : window);

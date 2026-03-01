@@ -323,6 +323,12 @@
             const texGroup = textures[item.type];
             if (texGroup && texGroup.byKey) {
                 frameList = sheet.frameKeys.map(key => texGroup.byKey[key]).filter(Boolean);
+                if (frameList.length < rows * cols && Array.isArray(texGroup.list)) {
+                    const fallbackFrames = texGroup.list.filter(Boolean);
+                    if (fallbackFrames.length >= rows * cols) {
+                        frameList = fallbackFrames;
+                    }
+                }
             }
         } else if (Array.isArray(sheet.framePaths)) {
             frameList = sheet.framePaths.map(path => PIXI.Texture.from(path));
@@ -343,19 +349,19 @@
     }
 
     function updatePhantomWall() {
-        // Renderer2 owns wall preview rendering.
+        // Rendering owns wall preview rendering.
     }
 
     function updatePhantomFirewall() {
-        // Renderer2 owns firewall preview rendering.
+        // Rendering owns firewall preview rendering.
     }
 
     function updatePhantomRoad() {
-        // Renderer2 owns road preview rendering.
+        // Rendering owns road preview rendering.
     }
 
     function updateLandLayer() {
-        // Ground is rendered by Renderer2.
+        // Ground is rendered by Rendering.
     }
 
     function resolvePlacedObjectLodTexturePath(item) {
@@ -502,11 +508,11 @@
     }
 
     function clearGroundChunkCache() {
-        // Legacy ground chunk cache removed with rendering.js.
+        // Legacy ground chunk cache removed.
     }
 
     function invalidateGroundChunks() {
-        // Legacy ground chunk cache removed with rendering.js.
+        // Legacy ground chunk cache removed.
     }
 
     function ensureUiArrowCursorElement() {

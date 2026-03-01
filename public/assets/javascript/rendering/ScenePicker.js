@@ -1,4 +1,4 @@
-(function attachRenderer2ScenePicker(global) {
+(function attachRenderingScenePicker(global) {
     const PICK_MESH_VS = `
 precision mediump float;
 attribute vec2 aVertexPosition;
@@ -33,10 +33,27 @@ uniform vec2 uCameraWorld;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
+uniform vec2 uWorldSize;
+uniform vec2 uWrapEnabled;
+uniform vec2 uWrapAnchorWorld;
 varying vec2 vUvs;
 void main(void) {
-    float camDx = aWorldPosition.x - uCameraWorld.x;
-    float camDy = aWorldPosition.y - uCameraWorld.y;
+    float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
+    float anchorDy = uWrapAnchorWorld.y - uCameraWorld.y;
+    if (uWrapEnabled.x > 0.5 && uWorldSize.x > 0.0) {
+        anchorDx = mod(anchorDx + 0.5 * uWorldSize.x, uWorldSize.x);
+        if (anchorDx < 0.0) anchorDx += uWorldSize.x;
+        anchorDx -= 0.5 * uWorldSize.x;
+    }
+    if (uWrapEnabled.y > 0.5 && uWorldSize.y > 0.0) {
+        anchorDy = mod(anchorDy + 0.5 * uWorldSize.y, uWorldSize.y);
+        if (anchorDy < 0.0) anchorDy += uWorldSize.y;
+        anchorDy -= 0.5 * uWorldSize.y;
+    }
+    float localDx = aWorldPosition.x - uWrapAnchorWorld.x;
+    float localDy = aWorldPosition.y - uWrapAnchorWorld.y;
+    float camDx = anchorDx + localDx;
+    float camDy = anchorDy + localDy;
     float camDz = aWorldPosition.z;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
@@ -55,7 +72,7 @@ void main(void) {
 }
 `;
 
-    class Renderer2ScenePicker {
+    class RenderingScenePicker {
         constructor() {
             this.highlightSprite = null;
             this.highlightMesh = null;
@@ -63,10 +80,10 @@ void main(void) {
             this.objectIdByObject = new WeakMap();
             this.objectById = new Map();
             this.pickContainer = new PIXI.Container();
-            this.pickContainer.name = "renderer2PickerContainer";
+            this.pickContainer.name = "renderingPickerContainer";
             this.pickPreviewSprite = null;
             this.pickBackgroundSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-            this.pickBackgroundSprite.name = "renderer2PickerBackground";
+            this.pickBackgroundSprite.name = "renderingPickerBackground";
             this.pickBackgroundSprite.tint = 0x000000;
             this.pickBackgroundSprite.alpha = 1;
             this.pickBackgroundSprite.interactive = false;
@@ -94,14 +111,13 @@ void main(void) {
                 getObjectForColor: (rgb) => this.getObjectForColor(rgb),
                 registerObject: (obj) => this.ensureObjectPickerId(obj)
             };
-            global.renderer2ScenePicker = this.publicApi;
             global.renderingScenePicker = this.publicApi;
         }
 
         ensureObjects() {
             if (!this.highlightSprite) {
                 this.highlightSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-                this.highlightSprite.name = "renderer2HoverHighlightSprite";
+                this.highlightSprite.name = "renderingHoverHighlightSprite";
                 this.highlightSprite.visible = false;
                 this.highlightSprite.interactive = false;
                 this.highlightSprite.blendMode = PIXI.BLEND_MODES.ADD;
@@ -119,14 +135,14 @@ void main(void) {
                         .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3])),
                     new PIXI.MeshMaterial(PIXI.Texture.WHITE)
                 );
-                this.highlightMesh.name = "renderer2HoverHighlightMesh";
+                this.highlightMesh.name = "renderingHoverHighlightMesh";
                 this.highlightMesh.visible = false;
                 this.highlightMesh.interactive = false;
                 this.highlightMesh.blendMode = PIXI.BLEND_MODES.ADD;
             }
             if (!this.highlightGraphics) {
                 this.highlightGraphics = new PIXI.Graphics();
-                this.highlightGraphics.name = "renderer2HoverHighlightGraphics";
+                this.highlightGraphics.name = "renderingHoverHighlightGraphics";
                 this.highlightGraphics.visible = false;
                 this.highlightGraphics.interactive = false;
                 this.highlightGraphics.blendMode = PIXI.BLEND_MODES.ADD;
@@ -255,13 +271,11 @@ void main(void) {
         renderPickerScreenPreview(ctx) {
             const uiLayer = ctx && ctx.uiLayer;
             const app = ctx && ctx.app;
-            const show = (typeof global.renderer2ShowPickerScreen === "boolean")
-                ? !!global.renderer2ShowPickerScreen
-                : !!global.renderingShowPickerScreen;
+            const show = !!global.renderingShowPickerScreen;
             if (!uiLayer) return;
             if (!this.pickPreviewSprite) {
                 this.pickPreviewSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-                this.pickPreviewSprite.name = "renderer2PickerPreviewSprite";
+                this.pickPreviewSprite.name = "renderingPickerPreviewSprite";
                 this.pickPreviewSprite.interactive = false;
                 this.pickPreviewSprite.visible = false;
                 this.pickPreviewSprite.alpha = 1;
@@ -453,7 +467,7 @@ void main(void) {
                 uAlphaCutoff: 0.08
             });
             const mesh = new PIXI.Mesh(geometry, shader, PIXI.State.for2d(), PIXI.DRAW_MODES.TRIANGLES);
-            mesh.name = "renderer2PickerSpriteProxyMesh";
+            mesh.name = "renderingPickerSpriteProxyMesh";
             mesh.visible = false;
             mesh.interactive = false;
             mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
@@ -485,6 +499,9 @@ void main(void) {
                     uViewScale: 1,
                     uXyRatio: 1,
                     uDepthRange: new Float32Array([0, 1]),
+                    uWorldSize: new Float32Array([0, 0]),
+                    uWrapEnabled: new Float32Array([0, 0]),
+                    uWrapAnchorWorld: new Float32Array([0, 0]),
                     uSampler: PIXI.Texture.WHITE,
                     uPickColor: new Float32Array([1, 1, 1]),
                     uAlphaCutoff: 0.08
@@ -497,10 +514,10 @@ void main(void) {
             const mesh = new PIXI.Mesh(
                 geometry,
                 shader,
-                sourceMesh.state || PIXI.State.for2d(),
+                PIXI.State.for2d(),
                 sourceMesh.drawMode || PIXI.DRAW_MODES.TRIANGLES
             );
-            mesh.name = "renderer2PickerMeshProxy";
+            mesh.name = "renderingPickerMeshProxy";
             mesh.visible = false;
             mesh.interactive = false;
             mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
@@ -534,7 +551,7 @@ void main(void) {
             return record;
         }
 
-        syncPickProxyFromDisplayObject(record, displayObj, rgbColor) {
+        syncPickProxyFromDisplayObject(record, displayObj, rgbColor, item = null) {
             if (!record || !record.proxy || !displayObj) return false;
             const proxy = record.proxy;
             if (record.type === "spriteMesh") {
@@ -640,6 +657,27 @@ void main(void) {
                     if (record.useWorldPositions) {
                         const camera = this.pickLastCamera || null;
                         const depthRange = this.pickLastDepthRange || null;
+                        const mapRef = (item && item.map) ? item.map : (global.map || null);
+                        const anchorX = Number.isFinite(item && item.x)
+                            ? Number(item.x)
+                            : (Number.isFinite(item && item.center && item.center.x)
+                                ? Number(item.center.x)
+                                : (
+                                    Number.isFinite(item && item.startPoint && item.startPoint.x) &&
+                                    Number.isFinite(item && item.endPoint && item.endPoint.x)
+                                )
+                                    ? (Number(item.startPoint.x) + Number(item.endPoint.x)) * 0.5
+                                    : 0);
+                        const anchorY = Number.isFinite(item && item.y)
+                            ? Number(item.y)
+                            : (Number.isFinite(item && item.center && item.center.y)
+                                ? Number(item.center.y)
+                                : (
+                                    Number.isFinite(item && item.startPoint && item.startPoint.y) &&
+                                    Number.isFinite(item && item.endPoint && item.endPoint.y)
+                                )
+                                    ? (Number(item.startPoint.y) + Number(item.endPoint.y)) * 0.5
+                                    : 0);
                         const screenW = (this.pickRenderTexture && Number.isFinite(this.pickRenderTexture.width))
                             ? Number(this.pickRenderTexture.width)
                             : 1;
@@ -650,6 +688,16 @@ void main(void) {
                         record.shader.uniforms.uScreenSize[1] = Math.max(1, screenH);
                         record.shader.uniforms.uCameraWorld[0] = Number(camera && camera.x) || 0;
                         record.shader.uniforms.uCameraWorld[1] = Number(camera && camera.y) || 0;
+                        record.shader.uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
+                            ? Number(mapRef.worldWidth)
+                            : 0;
+                        record.shader.uniforms.uWorldSize[1] = (mapRef && Number.isFinite(mapRef.worldHeight) && mapRef.worldHeight > 0)
+                            ? Number(mapRef.worldHeight)
+                            : 0;
+                        record.shader.uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
+                        record.shader.uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
+                        record.shader.uniforms.uWrapAnchorWorld[0] = anchorX;
+                        record.shader.uniforms.uWrapAnchorWorld[1] = anchorY;
                         record.shader.uniforms.uViewScale = Number(camera && camera.viewscale) || 1;
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
@@ -753,7 +801,7 @@ void main(void) {
                 const rgb = this.idToRgb(id);
                 const record = this.ensurePickProxyForDisplayObject(item, displayObj);
                 if (!record) continue;
-                if (!this.syncPickProxyFromDisplayObject(record, displayObj, rgb)) continue;
+                if (!this.syncPickProxyFromDisplayObject(record, displayObj, rgb, item)) continue;
                 this.pickContainer.addChild(record.proxy);
                 this.pickProxiesActiveThisFrame.add(record);
                 this.pickEntriesThisFrame.push({ item, displayObj, record, rgb });
@@ -785,8 +833,8 @@ void main(void) {
             const frame = hasFrame ? Math.floor(frameSource) : -1;
             const readbackIntervalFrames = Math.max(
                 1,
-                Number.isFinite(global.renderer2PickerReadbackIntervalFrames)
-                    ? Number(global.renderer2PickerReadbackIntervalFrames)
+                Number.isFinite(global.renderingPickerReadbackIntervalFrames)
+                    ? Number(global.renderingPickerReadbackIntervalFrames)
                     : 2
             );
             if (
@@ -820,7 +868,7 @@ void main(void) {
             let picked = null;
             if (this.latestPickX === x && this.latestPickY === y) {
                 picked = this.latestPickObject || null;
-            } else if (global.renderer2PickerAllowSyncReadback === true) {
+            } else if (global.renderingPickerAllowSyncReadback === true) {
                 picked = this.getObjectAtPickPixel(x, y);
             }
             if (!picked) return null;
@@ -893,9 +941,7 @@ void main(void) {
             const spellSystem = (ctx && ctx.spellSystem) || null;
             const mousePos = (ctx && ctx.mousePos) || global.mousePos || null;
             const uiLayer = ctx && ctx.uiLayer;
-            const showPickerScreen = (typeof global.renderer2ShowPickerScreen === "boolean")
-                ? !!global.renderer2ShowPickerScreen
-                : !!global.renderingShowPickerScreen;
+            const showPickerScreen = !!global.renderingShowPickerScreen;
             const currentSpell = (wizard && typeof wizard.currentSpell === "string")
                 ? wizard.currentSpell
                 : "";
@@ -971,6 +1017,5 @@ void main(void) {
         }
     }
 
-    global.Renderer2ScenePicker = Renderer2ScenePicker;
-    global.RenderingScenePicker = Renderer2ScenePicker;
+    global.RenderingScenePicker = RenderingScenePicker;
 })(typeof globalThis !== "undefined" ? globalThis : window);

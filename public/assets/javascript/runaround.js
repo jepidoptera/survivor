@@ -224,7 +224,7 @@ if (typeof globalThis !== "undefined") {
     };
 }
 
-let renderer2UnavailableWarningShown = false;
+let renderingUnavailableWarningShown = false;
 function presentGameFrame() {
     if (typeof hydrateVisibleLazyRoads === "function") {
         hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
@@ -234,10 +234,10 @@ function presentGameFrame() {
     }
     if (
         typeof globalThis !== "undefined" &&
-        (globalThis.Rendering || globalThis.Renderer2) &&
-        typeof (globalThis.Rendering || globalThis.Renderer2).renderFrame === "function"
+        globalThis.Rendering &&
+        typeof globalThis.Rendering.renderFrame === "function"
     ) {
-        const renderingApi = globalThis.Rendering || globalThis.Renderer2;
+        const renderingApi = globalThis.Rendering;
         const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
             ? interpolatedViewport
             : viewport;
@@ -265,9 +265,9 @@ function presentGameFrame() {
             return true;
         }
     }
-    if (!renderer2UnavailableWarningShown) {
+    if (!renderingUnavailableWarningShown) {
         console.warn("Rendering frame present failed; frame skipped.");
-        renderer2UnavailableWarningShown = true;
+        renderingUnavailableWarningShown = true;
     }
     return false;
 }
@@ -294,9 +294,17 @@ function onAssetsLoaded() {
         textures[animal] = {list: [], byKey: {}};
         for (let i = 0; i < spriteNames.length; i++) {
             const texture = sheet.textures[`${animal}_${spriteNames[i]}.png`];
-            textures[animal].list.push(texture);
-            textures[animal].byKey[spriteNames[i]] = texture;
+            if (texture) {
+                textures[animal].list.push(texture);
+                textures[animal].byKey[spriteNames[i]] = texture;
+            }
         }    
+        if (textures[animal].list.length === 0) {
+            const allSheetTextures = Object.values(sheet.textures || {}).filter(Boolean);
+            if (allSheetTextures.length > 0) {
+                textures[animal].list = allSheetTextures;
+            }
+        }
     })
     
     // Load wizard sprite sheet (12 rows x 9 columns)
@@ -1651,8 +1659,8 @@ class Animal extends Character {
         // Create Pixi sprite — use the first frame from the sliced spritesheet
         // textures if available, NOT the raw full-sheet image from map.animalImages.
         const texGroup = (typeof textures !== "undefined" && textures[type]) ? textures[type] : null;
-        const firstFrameTexture = (texGroup && texGroup.list && texGroup.list.length > 0)
-            ? texGroup.list[0]
+        const firstFrameTexture = (texGroup && Array.isArray(texGroup.list) && texGroup.list.length > 0)
+            ? (texGroup.list.find(Boolean) || texGroup.list[0])
             : PIXI.Texture.WHITE;
         this.pixiSprite = new PIXI.Sprite(firstFrameTexture);
         this.pixiSprite.anchor.set(0.5, 0.5);
@@ -1668,7 +1676,7 @@ class Animal extends Character {
         this.frameCount = {x: 1, y: 1};
         
         // Default stats (can be overridden in subclasses)
-        this.size = 1;
+        // Keep constructor-provided size so class-specific sizing survives.
         this.width = this.size;
         this.height = this.size;
         this.walkSpeed = 1;
