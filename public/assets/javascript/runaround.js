@@ -527,6 +527,9 @@ class Character {
         }
         
         this.moving = true;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
         
         if (this.travelFrames === 0) {
             this.casting = false;
@@ -540,7 +543,7 @@ class Character {
             
             // Get next node from path
             this.nextNode = this.path.shift();
-            this.direction = this.node.neighbors.indexOf(this.nextNode);
+            this.directionIndex = this.node.neighbors.indexOf(this.nextNode);
 
             if (!this.nextNode) {
                 // Reached destination
@@ -560,6 +563,7 @@ class Character {
             this.travelFrames = Math.ceil(direction_distance / this.speed * this.frameRate);
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
+            this.direction = {x: xdist, y: ydist};
         }
         
         this.travelFrames--;
@@ -615,6 +619,41 @@ class Character {
     die() {
         this.dead = true;
         this.rotation = 180;
+    }
+
+    getInterpolatedPosition(alpha = null) {
+        const clampedAlpha = Number.isFinite(alpha)
+            ? Math.max(0, Math.min(1, alpha))
+            : ((typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1);
+
+        const prevX = Number.isFinite(this.prevX) ? this.prevX : this.x;
+        const prevY = Number.isFinite(this.prevY) ? this.prevY : this.y;
+        const prevZ = Number.isFinite(this.prevZ) ? this.prevZ : this.z;
+        const currX = Number.isFinite(this.x) ? this.x : prevX;
+        const currY = Number.isFinite(this.y) ? this.y : prevY;
+        const currZ = Number.isFinite(this.z) ? this.z : prevZ;
+
+        const x = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? (prevX + this.map.shortestDeltaX(prevX, currX) * clampedAlpha)
+            : (prevX + (currX - prevX) * clampedAlpha);
+        const y = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? (prevY + this.map.shortestDeltaY(prevY, currY) * clampedAlpha)
+            : (prevY + (currY - prevY) * clampedAlpha);
+        const z = prevZ + (currZ - prevZ) * clampedAlpha;
+
+        return { x, y, z };
+    }
+
+    get interpolatedX() {
+        return this.getInterpolatedPosition().x;
+    }
+
+    get interpolatedY() {
+        return this.getInterpolatedPosition().y;
+    }
+
+    get interpolatedZ() {
+        return this.getInterpolatedPosition().z;
     }
 }
 
@@ -830,8 +869,8 @@ class Wizard extends Character {
         if (!Number.isFinite(this.smoothedFacingAngleDeg)) {
             const currentRow = Number.isInteger(this.lastDirectionRow)
                 ? this.lastDirectionRow
-                : ((Number.isInteger(this.direction) && this.direction >= 0)
-                    ? ((this.direction + wizardDirectionRowOffset + 12) % 12)
+                : ((Number.isInteger(this.directionIndex) && this.directionIndex >= 0)
+                    ? ((this.directionIndex + wizardDirectionRowOffset + 12) % 12)
                     : 0);
             const directionIndex = ((currentRow - wizardDirectionRowOffset) % 12 + 12) % 12;
             const currentFacing = facingAngleDegByDirectionIndex[directionIndex];
@@ -1609,18 +1648,19 @@ class Animal extends Character {
         this.fireSprite = null;
         this.fireFrameIndex = 0;
         
-        // Create Pixi sprite
-        if (map.animalImages && map.animalImages[type]) {
-            this.pixiSprite = new PIXI.Sprite(map.animalImages[type]);
-        } else {
-            this.pixiSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-        }
+        // Create Pixi sprite — use the first frame from the sliced spritesheet
+        // textures if available, NOT the raw full-sheet image from map.animalImages.
+        const texGroup = (typeof textures !== "undefined" && textures[type]) ? textures[type] : null;
+        const firstFrameTexture = (texGroup && texGroup.list && texGroup.list.length > 0)
+            ? texGroup.list[0]
+            : PIXI.Texture.WHITE;
+        this.pixiSprite = new PIXI.Sprite(firstFrameTexture);
         this.pixiSprite.anchor.set(0.5, 0.5);
 
         this.spriteRows = 1;
         this.spriteCols = 1;
         this.spriteCol = 0;
-        this.spriteFrames = [[this.pixiSprite.texture]];
+        this.spriteFrames = [[firstFrameTexture]];
         this.spriteSheet = null;
         this.spriteSheetReady = false;
 
@@ -1656,7 +1696,7 @@ class Animal extends Character {
         } 
         super.move();
         // wander around
-        if (this.x && this.y && !this.moving) {
+        if (Number.isFinite(this.x) && Number.isFinite(this.y) && !this.moving) {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
             const wanderNode = this.map.worldToNode(wanderX, wanderY);
@@ -1669,15 +1709,6 @@ class Animal extends Character {
             this.frameRate = this.onScreen ? 30 : this.speed;
         }
 
-        // face the correct direction
-        if (this.direction && !this.attacking && this.frameCount.y > 1) {
-            if (this.direction.x > 0 || this.direction.x === 0 && this.direction.y > 0) {
-                this.imageFrame.y = 1;
-            }
-            else {
-                this.imageFrame.y = 0;
-            }
-        }
         if (this.fleeRadius > 0 && withinRadius(this.x, this.y, wizard.x, wizard.y, this.fleeRadius)) {
             this.flee()
         }
@@ -1688,15 +1719,22 @@ class Animal extends Character {
     get onScreen() {
         const safetyMargin = 5; // world units
         if (this.gone) return false;
-        const camera = viewport;
+        const interpolated = this.getInterpolatedPosition();
+        const itemX = Number.isFinite(interpolated.x) ? interpolated.x : this.x;
+        const itemY = Number.isFinite(interpolated.y) ? interpolated.y : this.y;
+        const camera = (
+            interpolatedViewport &&
+            Number.isFinite(interpolatedViewport.x) &&
+            Number.isFinite(interpolatedViewport.y)
+        ) ? interpolatedViewport : viewport;
         const centerX = camera.x + camera.width * 0.5;
         const centerY = camera.y + camera.height * 0.5;
         const dx = (this.map && typeof this.map.shortestDeltaX === "function")
-            ? this.map.shortestDeltaX(centerX, this.x)
-            : (this.x - centerX);
+            ? this.map.shortestDeltaX(centerX, itemX)
+            : (itemX - centerX);
         const dy = (this.map && typeof this.map.shortestDeltaY === "function")
-            ? this.map.shortestDeltaY(centerY, this.y)
-            : (this.y - centerY);
+            ? this.map.shortestDeltaY(centerY, itemY)
+            : (itemY - centerY);
         const maxX = camera.width * 0.5 + this.width + safetyMargin;
         const maxY = camera.height * 0.5 + this.height + safetyMargin / xyratio;
         this._onScreen = Math.abs(dx) <= maxX && Math.abs(dy) <= maxY;
@@ -1705,12 +1743,19 @@ class Animal extends Character {
     flee() {
         // flee the player
         let dist = distance(this.x, this.y, wizard.x, wizard.y);
+        if (!Number.isFinite(dist) || dist < 1e-6) return;
 
         let xdist = this.x - wizard.x;
         let ydist = this.y - wizard.y;
-        const fleeX = Math.floor(Math.max(Math.min(this.x + xdist / dist * 10, this.map.width - 1), 0));
-        const fleeY = Math.floor(Math.max(Math.min(this.y + ydist / dist * 10, this.map.height - 1), 0));
-        const fleeNode = this.map.nodes[fleeX] ? this.map.nodes[fleeX][fleeY] : null;
+        let fleeX = this.x + xdist / dist * 10;
+        let fleeY = this.y + ydist / dist * 10;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            fleeX = this.map.wrapWorldX(fleeX);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            fleeY = this.map.wrapWorldY(fleeY);
+        }
+        const fleeNode = this.map.worldToNode(fleeX, fleeY);
         if (fleeNode) this.goto(fleeNode);
         this.speed = this.runSpeed;
     }
@@ -1722,7 +1767,8 @@ class Animal extends Character {
         if (withinRadius(this.x, this.y, target.x, target.y, 1) && this.attacking == 1) {
             this.attacking = 2
             if (this.spriteCols > 1) this.spriteCol = 1;
-            this.imageFrame.y = (this.x > target.x) ? 0 : 1;
+            // Face toward the target
+            this.direction = {x: target.x - this.x, y: target.y - this.y};
             let damage = Math.floor((1 - Math.random() * Math.random()) * this.damage + 1);
             // message(`${this.type} ${this.attackVerb} ${target.name} for ${damage} damage!`)
             target.hp = Math.max(0, target.hp - damage);
@@ -2851,8 +2897,13 @@ jQuery(() => {
                 simPerfBreakdown.maxCollisionMs = 0;
                 simPerfBreakdown.maxPointerPostMs = 0;
                 renderAlpha = Math.max(0, Math.min(1, simAccumulatorMs / simStepMs));
-                interpolatedViewport.x = previousViewport.x + (viewport.x - previousViewport.x) * renderAlpha;
-                interpolatedViewport.y = previousViewport.y + (viewport.y - previousViewport.y) * renderAlpha;
+                if (map && typeof map.shortestDeltaX === "function" && typeof map.shortestDeltaY === "function") {
+                    interpolatedViewport.x = previousViewport.x + map.shortestDeltaX(previousViewport.x, viewport.x) * renderAlpha;
+                    interpolatedViewport.y = previousViewport.y + map.shortestDeltaY(previousViewport.y, viewport.y) * renderAlpha;
+                } else {
+                    interpolatedViewport.x = previousViewport.x + (viewport.x - previousViewport.x) * renderAlpha;
+                    interpolatedViewport.y = previousViewport.y + (viewport.y - previousViewport.y) * renderAlpha;
+                }
                 perfStats.simMs = performance.now() - simStartMs;
             }
             if (paused) {
