@@ -386,9 +386,28 @@
 
     function applySpriteTransform(item) {
         if (!item || !item.pixiSprite) return;
-        const coors = worldToScreen(item);
+        const interpolatedWorld = (typeof item.getInterpolatedPosition === "function")
+            ? item.getInterpolatedPosition()
+            : null;
+        const drawTarget = (
+            interpolatedWorld &&
+            Number.isFinite(interpolatedWorld.x) &&
+            Number.isFinite(interpolatedWorld.y)
+        ) ? interpolatedWorld : item;
+        const coors = worldToScreen(drawTarget);
         item.pixiSprite.x = coors.x;
         item.pixiSprite.y = coors.y;
+
+        // Resolve sprite sheet frames and pick the correct animation frame
+        ensureSpriteFrames(item);
+        if (item.spriteFrames && item.pixiSprite) {
+            const rowIndex = typeof item.getDirectionRow === "function" ? item.getDirectionRow() : 0;
+            const safeRow = Math.max(0, Math.min(rowIndex, (item.spriteRows || 1) - 1));
+            const safeCol = Math.max(0, Math.min(item.spriteCol || 0, (item.spriteCols || 1) - 1));
+            const rowFrames = item.spriteFrames[safeRow] || item.spriteFrames[0];
+            const nextTexture = rowFrames && (rowFrames[safeCol] || rowFrames[0]);
+            if (nextTexture) item.pixiSprite.texture = nextTexture;
+        }
 
         const spriteTexture = item.pixiSprite.texture || null;
         const nativeTexW = spriteTexture && Number.isFinite(spriteTexture.width) ? Number(spriteTexture.width) : null;
