@@ -9,6 +9,12 @@ const lazyTreeStore = {
     loadedKeys: new Set()
 };
 
+function markMinimapStaticDirty() {
+    if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+        globalThis.invalidateMinimap();
+    }
+}
+
 function roadRecordKey(x, y) {
     const qx = Math.round((Number(x) || 0) * 1000) / 1000;
     const qy = Math.round((Number(y) || 0) * 1000) / 1000;
@@ -49,10 +55,12 @@ function toTreeSaveRecord(data) {
 function resetLazyRoadStore() {
     lazyRoadStore.recordsByKey.clear();
     lazyRoadStore.loadedKeys.clear();
+    markMinimapStaticDirty();
 }
 function resetLazyTreeStore() {
     lazyTreeStore.recordsByKey.clear();
     lazyTreeStore.loadedKeys.clear();
+    markMinimapStaticDirty();
 }
 
 function registerLazyRoadRecord(data, loaded = false) {
@@ -65,6 +73,7 @@ function registerLazyRoadRecord(data, loaded = false) {
     if (loaded) {
         lazyRoadStore.loadedKeys.add(key);
     }
+    markMinimapStaticDirty();
     return true;
 }
 function registerLazyTreeRecord(data, loaded = false) {
@@ -77,6 +86,7 @@ function registerLazyTreeRecord(data, loaded = false) {
     if (loaded) {
         lazyTreeStore.loadedKeys.add(key);
     }
+    markMinimapStaticDirty();
     return true;
 }
 
@@ -84,12 +94,22 @@ function unregisterLazyRoadRecordAt(x, y) {
     const key = roadRecordKey(x, y);
     lazyRoadStore.recordsByKey.delete(key);
     lazyRoadStore.loadedKeys.delete(key);
+    markMinimapStaticDirty();
 }
 
 function unregisterLazyTreeRecordAt(x, y) {
     const key = roadRecordKey(x, y);
     lazyTreeStore.recordsByKey.delete(key);
     lazyTreeStore.loadedKeys.delete(key);
+    markMinimapStaticDirty();
+}
+
+function getLazyRoadRecordsForMinimap() {
+    return Array.from(lazyRoadStore.recordsByKey.values());
+}
+
+function getLazyTreeRecordsForMinimap() {
+    return Array.from(lazyTreeStore.recordsByKey.values());
 }
 
 function getAllRoadSaveRecords(loadedRoadRecords = []) {
@@ -207,6 +227,8 @@ if (typeof globalThis !== "undefined") {
     globalThis.hydrateVisibleLazyTrees = hydrateVisibleLazyTrees;
     globalThis.unregisterLazyRoadRecordAt = unregisterLazyRoadRecordAt;
     globalThis.unregisterLazyTreeRecordAt = unregisterLazyTreeRecordAt;
+    globalThis.getLazyRoadRecordsForMinimap = getLazyRoadRecordsForMinimap;
+    globalThis.getLazyTreeRecordsForMinimap = getLazyTreeRecordsForMinimap;
 }
 
 function encodeGroundTiles(mapRef) {
@@ -507,6 +529,15 @@ function loadGameState(saveData) {
 
         // Restore static objects (dedupe entries in save payload for backward compatibility)
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
+            const preexistingWallSections = (
+                typeof WallSectionUnit !== 'undefined' &&
+                WallSectionUnit &&
+                WallSectionUnit._allSections instanceof Map
+            )
+                ? Array.from(WallSectionUnit._allSections.values())
+                    .filter(section => section && !section.gone && section.map === map)
+                : [];
+            const loadedWallSections = [];
             const restoredKeys = new Set();
             saveData.staticObjects.forEach((objData, index) => {
                 const key = buildRestoreStaticObjectKey(objData, index);
@@ -530,6 +561,9 @@ function loadGameState(saveData) {
                     typeof WallSectionUnit.loadJson === 'function'
                 ) {
                     obj = WallSectionUnit.loadJson(objData, map);
+                    if (obj && !obj.gone) {
+                        loadedWallSections.push(obj);
+                    }
                 } else if (objData.type !== 'wall') {
                     obj = StaticObject.loadJson(objData, map);
                 }
@@ -544,10 +578,11 @@ function loadGameState(saveData) {
                 WallSectionUnit._allSections instanceof Map &&
                 typeof WallSectionUnit.autoMergeContinuousSections === 'function'
             ) {
-                const loadedSections = Array.from(WallSectionUnit._allSections.values())
-                    .filter(section => section && !section.gone && section.map === map);
-                if (loadedSections.length > 1) {
-                    WallSectionUnit.autoMergeContinuousSections(loadedSections);
+                if (typeof WallSectionUnit.harmonizeTexturePhaseForSections === 'function' && loadedWallSections.length > 0) {
+                    WallSectionUnit.harmonizeTexturePhaseForSections(loadedWallSections, preexistingWallSections);
+                }
+                if (loadedWallSections.length > 0) {
+                    WallSectionUnit.autoMergeContinuousSections(loadedWallSections);
                 }
             }
         }
