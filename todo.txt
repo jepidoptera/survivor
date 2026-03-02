@@ -12,13 +12,15 @@ X windows and doors snap to walls
   rugs rotate on ground plane
 X see-through windows
   buildable roofs
+X refactor walls
+X refactor rendering
 
 
 problems:
-  animals running through walls
+X animals running through walls
 X windows visible through roof
   rugs don't place correctly
-  walls don't always connect
+X walls don't always connect
 X animals don't correctly vanish
 X animals and spells are invisible inside house.
   wizard's min-radius sight circle should only go behind him

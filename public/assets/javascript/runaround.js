@@ -2176,9 +2176,44 @@ jQuery(() => {
         app.view.style.cursor = "url('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), default";
     }
 
-    document.addEventListener("mousemove", event => {
+    function updateMouseClientPosition(event) {
         mousePos.clientX = event.clientX;
         mousePos.clientY = event.clientY;
+    }
+
+    function syncMouseScreenFromClientPosition(event) {
+        if (pointerLockActive) return;
+        if (!app || !app.view) return;
+        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+        const rect = app.view.getBoundingClientRect();
+        mousePos.screenX = event.clientX - rect.left;
+        mousePos.screenY = event.clientY - rect.top;
+        if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
+            const worldCoors = screenToWorld(mousePos.screenX, mousePos.screenY);
+            const normalized = normalizeAimWorldPointForWizard(worldCoors.x, worldCoors.y);
+            mousePos.worldX = normalized.x;
+            mousePos.worldY = normalized.y;
+            const dest = screenToHex(mousePos.screenX, mousePos.screenY);
+            mousePos.x = dest.x;
+            mousePos.y = dest.y;
+        }
+        if (typeof updateCursor === "function") {
+            updateCursor();
+        }
+    }
+
+    document.addEventListener("mousemove", event => {
+        updateMouseClientPosition(event);
+    });
+
+    document.addEventListener("pointermove", event => {
+        updateMouseClientPosition(event);
+        syncMouseScreenFromClientPosition(event);
+    });
+
+    app.view.addEventListener("pointermove", event => {
+        updateMouseClientPosition(event);
+        syncMouseScreenFromClientPosition(event);
     });
 
     function isPointerLockedOnCanvas() {
@@ -3282,8 +3317,7 @@ jQuery(() => {
     });
 
     app.view.addEventListener("mousemove", event => {
-        mousePos.clientX = event.clientX;
-        mousePos.clientY = event.clientY;
+        updateMouseClientPosition(event);
         if (pointerLockActive) {
             ensurePointerLockAimInitialized();
             const dx = (Number(event.movementX) || 0) * pointerLockSensitivity;
