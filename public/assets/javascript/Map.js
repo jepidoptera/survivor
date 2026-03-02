@@ -220,6 +220,9 @@ class MapNode {
         if (!this.objects) this.objects = [];
         this.objects.push(obj);
         this.recountBlockingObjects();
+        if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+            globalThis.invalidateMinimap();
+        }
     }
 
     removeObject(obj) {
@@ -227,6 +230,9 @@ class MapNode {
         const idx = this.objects.indexOf(obj);
         if (idx !== -1) this.objects.splice(idx, 1);
         this.recountBlockingObjects();
+        if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+            globalThis.invalidateMinimap();
+        }
     }
 
     recountBlockingObjects() {
