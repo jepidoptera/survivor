@@ -39,6 +39,7 @@
     let dragStartY  = 0;
     let dragStartW  = 0;
     let dragStartH  = 0;
+    const HANDLE_SIZE = 18;
 
     // ---- helpers ----
     function ensureCanvas() {
@@ -50,7 +51,7 @@
         wrapper.style.cssText =
             "position:fixed;bottom:12px;right:12px;z-index:9999;" +
             "border:2px solid rgba(255,255,255,0.5);border-radius:4px;" +
-            "background:#000;display:none;line-height:0;";
+            "background:#000;display:none;line-height:0;pointer-events:none;";
         document.body.appendChild(wrapper);
 
         canvas = document.createElement("canvas");
@@ -65,12 +66,25 @@
         const handle = document.createElement("div");
         handle.style.cssText =
             "position:absolute;top:0;left:0;width:18px;height:18px;" +
-            "cursor:ew-resize;z-index:1;" +
+            "cursor:none;z-index:1;pointer-events:none;" +
             "background:linear-gradient(135deg,rgba(255,255,255,0.45) 40%,transparent 40%);";
         wrapper.appendChild(handle);
 
         // --- drag logic ---
-        function onPointerDown(e) {
+        function isInResizeHandle(clientX, clientY) {
+            if (!wrapper || wrapper.style.display === "none") return false;
+            const rect = wrapper.getBoundingClientRect();
+            return (
+                clientX >= rect.left &&
+                clientX <= rect.left + HANDLE_SIZE &&
+                clientY >= rect.top &&
+                clientY <= rect.top + HANDLE_SIZE
+            );
+        }
+
+        function onGlobalPointerDown(e) {
+            if (e.button !== 0) return;
+            if (!isInResizeHandle(e.clientX, e.clientY)) return;
             e.preventDefault();
             e.stopPropagation();
             dragging = true;
@@ -78,11 +92,10 @@
             dragStartY = e.clientY;
             dragStartW = canvas.width;
             dragStartH = canvas.height;
-            handle.setPointerCapture(e.pointerId);
         }
-        function onPointerMove(e) {
+
+        function onGlobalPointerMove(e) {
             if (!dragging) return;
-            e.preventDefault();
             // Top-left handle: moving left/up = bigger, right/down = smaller
             const dx = dragStartX - e.clientX;
             const dy = dragStartY - e.clientY;
@@ -90,14 +103,15 @@
             const newH = Math.max(MIN_SIZE, Math.round(dragStartH + dy));
             applySize(newW, newH);
         }
-        function onPointerUp(e) {
+
+        function onGlobalPointerUp() {
             if (!dragging) return;
             dragging = false;
-            try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
         }
-        handle.addEventListener("pointerdown", onPointerDown);
-        window.addEventListener("pointermove", onPointerMove);
-        window.addEventListener("pointerup", onPointerUp);
+
+        window.addEventListener("pointerdown", onGlobalPointerDown, true);
+        window.addEventListener("pointermove", onGlobalPointerMove);
+        window.addEventListener("pointerup", onGlobalPointerUp);
 
         staticCanvas = document.createElement("canvas");
         staticCtx = staticCanvas.getContext("2d");
