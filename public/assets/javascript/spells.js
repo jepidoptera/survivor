@@ -172,15 +172,20 @@ class Spell {
             this.landedWorldY = this.y;
             this.vanishTimeout = setTimeout(() => {
                 this.visible = false;
-                if (this.pixiSprite) {
-                    projectileLayer.removeChild(this.pixiSprite);
-                    this.pixiSprite = null;
-                }
+                this.detachPixiSprite();
             }, 3000);
             clearInterval(this.castInterval);
         }
     }
     land() {
+    }
+
+    detachPixiSprite() {
+        if (!this.pixiSprite) return;
+        if (this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        this.pixiSprite = null;
     }
 }
 
@@ -228,10 +233,7 @@ class Grenade extends Spell {
                 if (this.explosionFrame >= this.explosionFrames.length) {
                     clearInterval(this.explodeInterval);
                     this.visible = false;
-                    if (this.pixiSprite) {
-                        projectileLayer.removeChild(this.pixiSprite);
-                        this.pixiSprite = null;
-                    }
+                    this.detachPixiSprite();
                 }
             }, 50);
             this.apparentSize = 80;
@@ -510,10 +512,7 @@ class Fireball extends Spell {
             if (progress >= 1) {
                 // Snap to exact target position before finishing
                 this.visible = false;
-                if (this.pixiSprite) {
-                    projectileLayer.removeChild(this.pixiSprite);
-                    this.pixiSprite = null;
-                }
+                this.detachPixiSprite();
                 clearInterval(this.castInterval);
             }
         }, 1000 / frameRate);
@@ -545,14 +544,109 @@ class Fireball extends Spell {
 }
 
 
+const VANISH_DEFAULT_SPEED = 10;
+const VANISH_DEFAULT_RANGE = 20;
+const VANISH_REMOVE_WIDTH_WORLD = 1;
+
+function buildVanishTravelPlan(casterX, casterY, targetX, targetY, options = {}) {
+    const originX = Number(casterX);
+    const originY = Number(casterY);
+    const aimX = Number(targetX);
+    const aimY = Number(targetY);
+    if (!Number.isFinite(originX) || !Number.isFinite(originY) || !Number.isFinite(aimX) || !Number.isFinite(aimY)) {
+        return null;
+    }
+
+    const speed = Number.isFinite(options.speed) ? Math.max(0.0001, Number(options.speed)) : VANISH_DEFAULT_SPEED;
+    const range = Number.isFinite(options.range) ? Math.max(0.0001, Number(options.range)) : VANISH_DEFAULT_RANGE;
+    const frameRateValue = Number.isFinite(options.frameRateValue)
+        ? Math.max(1, Number(options.frameRateValue))
+        : Math.max(1, Number.isFinite(frameRate) ? Number(frameRate) : 60);
+    const mapRef = options.mapRef || null;
+
+    let xdist = aimX - originX;
+    let ydist = aimY - originY;
+    let totalDist = Math.hypot(xdist, ydist);
+
+    if (totalDist < 0.1) {
+        totalDist = 0.1;
+        xdist = 0.1;
+        ydist = 0;
+    }
+
+    if (totalDist > range) {
+        const fraction = range / totalDist;
+        ydist *= fraction;
+        xdist *= fraction;
+        totalDist = range;
+    }
+
+    const stepX = (xdist / totalDist) * (speed / frameRateValue);
+    const stepY = (ydist / totalDist) * (speed / frameRateValue);
+    const stepDist = Math.hypot(stepX, stepY);
+    if (!(stepDist > 0)) return null;
+
+    return {
+        originX,
+        originY,
+        targetX: aimX,
+        targetY: aimY,
+        totalDist,
+        stepX,
+        stepY,
+        stepDist,
+        speed,
+        range,
+        frameRateValue,
+        mapRef
+    };
+}
+
+function predictVanishImpactPoint(plan) {
+    if (!plan) return null;
+    const mapRef = plan.mapRef || null;
+    let x = Number(plan.originX);
+    let y = Number(plan.originY);
+    const stepX = Number(plan.stepX);
+    const stepY = Number(plan.stepY);
+    const stepDist = Number(plan.stepDist);
+    const totalDist = Number(plan.totalDist);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(stepX) || !Number.isFinite(stepY)) return null;
+    if (!(stepDist > 0) || !(totalDist > 0)) return null;
+
+    // Mirror Vanish.cast(): one immediate pre-step before interval begins.
+    x += stepX;
+    y += stepY;
+
+    let traveledDist = 0;
+    const maxTicks = Math.max(1, Math.ceil(totalDist / stepDist) + 8);
+    for (let tick = 0; tick < maxTicks; tick++) {
+        x += stepX;
+        y += stepY;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") {
+            x = mapRef.wrapWorldX(x);
+        }
+        if (mapRef && typeof mapRef.wrapWorldY === "function") {
+            y = mapRef.wrapWorldY(y);
+        }
+        traveledDist += stepDist;
+        if (traveledDist >= totalDist) {
+            return { x, y };
+        }
+    }
+
+    return { x, y };
+}
+
+
 class Vanish extends Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
         this.image.src = "./assets/images/thumbnails/vanish.png";
         this.gravity = 0; // No arc - straight line
-        this.speed = 10;
-        this.range = 20;
+        this.speed = VANISH_DEFAULT_SPEED;
+        this.range = VANISH_DEFAULT_RANGE;
         this.bounces = 0;
         this.apparentSize = 40;
         this.delayTime = 0;
@@ -573,30 +667,23 @@ class Vanish extends Spell {
         this.x = wizard.x;
         this.y = wizard.y;
         this.z = 0;
-        
-        let xdist = (targetX - this.x);
-        let ydist = targetY - this.y;
-        this.totalDist = distance(0, 0, xdist, ydist);
-        
-        // Prevent division by zero
-        if (this.totalDist < 0.1) {
-            this.totalDist = 0.1;
-            xdist = 0.1;
-            ydist = 0;
-        }
-        
-        if (this.totalDist > this.range) {
-            let fraction = this.range / this.totalDist;
-            ydist *= fraction;
-            xdist *= fraction;
-            this.totalDist = this.range;
+        const travelPlan = buildVanishTravelPlan(this.x, this.y, targetX, targetY, {
+            speed: this.speed,
+            range: this.range,
+            frameRateValue: frameRate,
+            mapRef: this.map || wizard.map || null
+        });
+        if (!travelPlan) {
+            this.visible = false;
+            return this;
         }
 
+        this.totalDist = travelPlan.totalDist;
         this.movement = {
-            x: xdist / this.totalDist * this.speed / frameRate,
-            y: ydist / this.totalDist * this.speed / frameRate,
+            x: travelPlan.stepX,
+            y: travelPlan.stepY,
             z: 0,
-        }
+        };
         this.x += this.movement.x;
         this.y += this.movement.y;
         this.traveledDist = 0;
@@ -628,7 +715,7 @@ class Vanish extends Spell {
                 if (this.forcedTarget) {
                     const obj = this.forcedTarget;
                     if (obj && !obj.gone && !obj.vanishing) {
-                        this.vanishTarget(obj);
+                        this.vanishTarget(obj, { x: this.x, y: this.y });
                     }
                 }
                 // Always end projectile at max travel distance (including misses).
@@ -641,10 +728,7 @@ class Vanish extends Spell {
 
     deactivate() {
         this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
+        this.detachPixiSprite();
         clearInterval(this.castInterval);
     }
     
@@ -656,18 +740,46 @@ class Vanish extends Spell {
             if (!obj.visualHitbox) continue;
             let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
             if (hit && !obj.vanishing) {
-                this.vanishTarget(obj);
+                this.vanishTarget(obj, { x: this.x, y: this.y });
                 this.deactivate();
             }
         }
     }
     
-    vanishTarget(target) {
+    vanishTarget(target, impactPoint = null) {
+        if (
+            target &&
+            target.type === "wallSection" &&
+            !target._vanishAsWholeSection &&
+            typeof target.vanishAroundPoint === "function" &&
+            impactPoint &&
+            Number.isFinite(impactPoint.x) &&
+            Number.isFinite(impactPoint.y)
+        ) {
+            const vanishFrames = 0.25 * frameRate;
+            const handled = target.vanishAroundPoint(
+                { x: Number(impactPoint.x), y: Number(impactPoint.y) },
+                { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD, vanishDurationFrames: vanishFrames }
+            );
+            if (handled) return;
+        }
+
         // Mark as vanishing to avoid hitting multiple times
         target.vanishing = true;
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
         target.percentVanished = 0;
+        if (target.type === "wallSection" && target._vanishAsWholeSection) {
+            target._disableChunkSplitOnVanish = true;
+        }
+        if (impactPoint && Number.isFinite(impactPoint.x) && Number.isFinite(impactPoint.y)) {
+            target._vanishWorldPoint = {
+                x: Number(impactPoint.x),
+                y: Number(impactPoint.y)
+            };
+        } else {
+            target._vanishWorldPoint = null;
+        }
         if (target._vanishFinalizeTimeout) {
             clearTimeout(target._vanishFinalizeTimeout);
         }
@@ -684,7 +796,9 @@ class Vanish extends Spell {
             } else {
                 target.gone = true;
             }
+            target._vanishWorldPoint = null;
             target.vanishing = false;
+            target._vanishAsWholeSection = false;
             target._vanishFinalizeTimeout = null;
         }, finalizeAfterMs);
     }
@@ -738,10 +852,7 @@ class Teleport extends Spell {
         }
 
         this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
+        this.detachPixiSprite();
         return this;
     }
 }
@@ -853,10 +964,7 @@ class TreeGrow extends Spell {
         
         // Deactivate this spell projectile immediately (tree is now placed)
         this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
+        this.detachPixiSprite();
         
         return this;
     }
@@ -907,10 +1015,7 @@ class BuildRoad extends Spell {
         
         // Deactivate this spell projectile immediately
         this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
+        this.detachPixiSprite();
         
         return this;
     }
@@ -1063,10 +1168,7 @@ class PlaceObject extends Spell {
         }
 
         this.visible = false;
-        if (this.pixiSprite) {
-            projectileLayer.removeChild(this.pixiSprite);
-            this.pixiSprite = null;
-        }
+        this.detachPixiSprite();
 
         return this;
     }
@@ -1295,7 +1397,17 @@ const SpellSystem = (() => {
     const WALL_THICKNESS_MIN = 0.125;
     const WALL_THICKNESS_MAX = 1.0;
     const WALL_THICKNESS_STEP = 0.125;
+    const VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD = 1;
+    const VANISH_BURST_SHOT_INTERVAL_MS = 45;
     const PLACEABLE_ROTATION_STEP_DEGREES = 5;
+    const POWERUP_PLACEMENT_FILE_NAME = "black diamond.png";
+    const POWERUP_PLACEMENT_IMAGE_PATH = "/assets/images/powerups/black%20diamond.png";
+    const POWERUP_PLACEMENT_DEFAULT_WIDTH = 0.8;
+    const POWERUP_PLACEMENT_DEFAULT_HEIGHT = 0.8;
+    const POWERUP_PLACEMENT_DEFAULT_RADIUS = 0.35;
+    const POWERUP_PLACEMENT_SCALE_MIN = 0.2;
+    const POWERUP_PLACEMENT_SCALE_MAX = 5;
+    const POWERUP_PLACEMENT_SCALE_DEFAULT = 1;
 
     let magicIntervalId = null;
     let lastMagicTickMs = 0;
@@ -1883,6 +1995,67 @@ const SpellSystem = (() => {
         return next;
     }
 
+    function clampPowerupPlacementScale(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return POWERUP_PLACEMENT_SCALE_DEFAULT;
+        const clamped = Math.max(POWERUP_PLACEMENT_SCALE_MIN, Math.min(POWERUP_PLACEMENT_SCALE_MAX, n));
+        return Math.round(clamped * 1000) / 1000;
+    }
+
+    function getPowerupPlacementBaseData() {
+        let imageData = null;
+        if (typeof getPowerupImageDataByFile === "function") {
+            imageData = getPowerupImageDataByFile(POWERUP_PLACEMENT_FILE_NAME);
+        }
+        const width = Number.isFinite(imageData && imageData.width)
+            ? Math.max(0.01, Number(imageData.width))
+            : POWERUP_PLACEMENT_DEFAULT_WIDTH;
+        const height = Number.isFinite(imageData && imageData.height)
+            ? Math.max(0.01, Number(imageData.height))
+            : POWERUP_PLACEMENT_DEFAULT_HEIGHT;
+        const radius = Number.isFinite(imageData && imageData.groundPlaneHitbox && imageData.groundPlaneHitbox.radius)
+            ? Math.max(0.01, Number(imageData.groundPlaneHitbox.radius))
+            : POWERUP_PLACEMENT_DEFAULT_RADIUS;
+        const imagePath = (imageData && typeof imageData.imagePath === "string" && imageData.imagePath.length > 0)
+            ? imageData.imagePath
+            : POWERUP_PLACEMENT_IMAGE_PATH;
+        return {
+            fileName: POWERUP_PLACEMENT_FILE_NAME,
+            imagePath,
+            width,
+            height,
+            radius
+        };
+    }
+
+    function getSelectedPowerupPlacementScale(wizardRef) {
+        if (!wizardRef) return POWERUP_PLACEMENT_SCALE_DEFAULT;
+        const scale = clampPowerupPlacementScale(wizardRef.selectedPowerupPlacementScale);
+        wizardRef.selectedPowerupPlacementScale = scale;
+        return scale;
+    }
+
+    function adjustPowerupPlacementScale(wizardRef, delta) {
+        if (!wizardRef || !Number.isFinite(delta) || delta === 0) return null;
+        const current = getSelectedPowerupPlacementScale(wizardRef);
+        const next = clampPowerupPlacementScale(current + delta);
+        wizardRef.selectedPowerupPlacementScale = next;
+        return next;
+    }
+
+    function getPowerupPlacementPreviewConfig(wizardRef) {
+        const base = getPowerupPlacementBaseData();
+        const scale = getSelectedPowerupPlacementScale(wizardRef);
+        return {
+            fileName: base.fileName,
+            imagePath: base.imagePath,
+            width: Math.max(0.01, base.width * scale),
+            height: Math.max(0.01, base.height * scale),
+            radius: Math.max(0.01, base.radius * scale),
+            scale
+        };
+    }
+
     function adjustPlaceableRotation(wizardRef, deltaDegrees) {
         if (!wizardRef || !Number.isFinite(deltaDegrees) || deltaDegrees === 0) return null;
         normalizePlaceableSelections(wizardRef);
@@ -2209,6 +2382,7 @@ const SpellSystem = (() => {
         if (spellName === "wall") return !!wizardRef.wallLayoutMode && !!wizardRef.wallStartPoint;
         if (spellName === "buildroad") return !!wizardRef.roadLayoutMode && !!wizardRef.roadStartPoint;
         if (spellName === "firewall") return !!wizardRef.firewallLayoutMode && !!wizardRef.firewallStartPoint;
+        if (spellName === "vanish") return !!wizardRef.vanishDragMode;
         return false;
     }
 
@@ -2232,6 +2406,11 @@ const SpellSystem = (() => {
             wizardRef.firewallLayoutMode = false;
             wizardRef.firewallStartPoint = null;
             clearDragPreview(wizardRef, "firewall");
+            return;
+        }
+        if (spellName === "vanish") {
+            wizardRef.vanishDragMode = false;
+            resetVanishDragTargetingState(wizardRef);
         }
     }
 
@@ -2347,6 +2526,250 @@ const SpellSystem = (() => {
         if (setForSpell) {
             setForSpell.add(obj);
         }
+    }
+
+    function getTargetAimPoint(wizardRef, target) {
+        if (!target || target.gone) return null;
+        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
+            return { x: Number(target.x), y: Number(target.y) };
+        }
+        if (
+            target.type === "wallSection" &&
+            target.startPoint && target.endPoint &&
+            Number.isFinite(target.startPoint.x) && Number.isFinite(target.startPoint.y) &&
+            Number.isFinite(target.endPoint.x) && Number.isFinite(target.endPoint.y)
+        ) {
+            const mapRef = (wizardRef && wizardRef.map) || null;
+            const sx = Number(target.startPoint.x);
+            const sy = Number(target.startPoint.y);
+            const ex = Number(target.endPoint.x);
+            const ey = Number(target.endPoint.y);
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            let x = sx + dx * 0.5;
+            let y = sy + dy * 0.5;
+            if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+            if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+            return { x, y };
+        }
+        return null;
+    }
+
+    function getWizardDistanceToTarget(wizardRef, target) {
+        if (!wizardRef || !target || target.gone) return Infinity;
+        const aim = getTargetAimPoint(wizardRef, target);
+        if (!aim || !Number.isFinite(aim.x) || !Number.isFinite(aim.y)) return Infinity;
+        const mapRef = wizardRef.map || null;
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(wizardRef.x, aim.x)
+            : (aim.x - wizardRef.x);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(wizardRef.y, aim.y)
+            : (aim.y - wizardRef.y);
+        return Math.hypot(dx, dy);
+    }
+
+    function ensureVanishDragTargetingState(wizardRef) {
+        if (!wizardRef) return null;
+        if (!wizardRef.vanishDragTargetingState || typeof wizardRef.vanishDragTargetingState !== "object") {
+            wizardRef.vanishDragTargetingState = {
+                queuedObjects: [],
+                queuedObjectSet: new Set(),
+                wallRanges: new Map()
+            };
+        }
+        return wizardRef.vanishDragTargetingState;
+    }
+
+    function resetVanishDragTargetingState(wizardRef) {
+        if (!wizardRef) return;
+        wizardRef.vanishDragTargetingState = null;
+    }
+
+    function queueVanishDragTargetAtPoint(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        if (wizardRef.currentSpell !== "vanish") return false;
+        if (!wizardRef.vanishDragMode) return false;
+
+        const state = ensureVanishDragTargetingState(wizardRef);
+        if (!state) return false;
+
+        const candidate = getObjectTargetAt(wizardRef, worldX, worldY);
+        if (!candidate || candidate.gone || candidate.vanishing) return false;
+
+        if (
+            candidate.type === "wallSection" &&
+            typeof candidate._parameterForWorldPointOnSection === "function"
+        ) {
+            const tRaw = candidate._parameterForWorldPointOnSection({ x: worldX, y: worldY });
+            const t = Number.isFinite(tRaw)
+                ? Math.max(0, Math.min(1, Number(tRaw)))
+                : 0.5;
+            const existing = state.wallRanges.get(candidate);
+            if (existing) {
+                existing.tStart = Math.min(existing.tStart, t);
+                existing.tEnd = Math.max(existing.tEnd, t);
+            } else {
+                state.wallRanges.set(candidate, {
+                    wall: candidate,
+                    tStart: t,
+                    tEnd: t
+                });
+            }
+            return true;
+        }
+
+        if (state.queuedObjectSet.has(candidate)) return false;
+        state.queuedObjectSet.add(candidate);
+        state.queuedObjects.push(candidate);
+        markObjectAsTargetedBySpell(wizardRef, "vanish", candidate);
+        return true;
+    }
+
+    function buildVanishBurstTargetsFromQueuedState(wizardRef) {
+        const state = wizardRef && wizardRef.vanishDragTargetingState;
+        if (!wizardRef || !state) return [];
+
+        const targets = [];
+        const seen = new Set();
+        const pushUnique = (obj) => {
+            if (!obj || obj.gone || obj.vanishing) return;
+            if (seen.has(obj)) return;
+            seen.add(obj);
+            targets.push(obj);
+        };
+
+        if (Array.isArray(state.queuedObjects)) {
+            for (let i = 0; i < state.queuedObjects.length; i++) {
+                pushUnique(state.queuedObjects[i]);
+            }
+        }
+
+        if (state.wallRanges instanceof Map) {
+            state.wallRanges.forEach(entry => {
+                const wall = entry && entry.wall;
+                if (!wall || wall.gone || wall.vanishing) return;
+
+                if (typeof wall.splitIntoTargetableVanishSegments === "function") {
+                    const split = wall.splitIntoTargetableVanishSegments(
+                        {
+                            tStart: Number(entry.tStart),
+                            tEnd: Number(entry.tEnd)
+                        },
+                        {
+                            targetSegmentLengthWorld: VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD
+                        }
+                    );
+                    if (split && Array.isArray(split.targetSegments) && split.targetSegments.length > 0) {
+                        for (let i = 0; i < split.targetSegments.length; i++) {
+                            pushUnique(split.targetSegments[i]);
+                        }
+                        return;
+                    }
+                }
+
+                pushUnique(wall);
+            });
+        }
+
+        targets.sort((a, b) => getWizardDistanceToTarget(wizardRef, a) - getWizardDistanceToTarget(wizardRef, b));
+        return targets;
+    }
+
+    function castQueuedVanishBurst(wizardRef, queuedTargets = []) {
+        if (!wizardRef || !Array.isArray(queuedTargets) || queuedTargets.length === 0) return false;
+
+        const shots = queuedTargets.slice();
+        let shotIndex = 0;
+        wizardRef.castDelay = true;
+        wizardRef.casting = true;
+
+        const finishBurst = () => {
+            wizardRef.castDelay = false;
+            wizardRef.casting = false;
+        };
+
+        const fireNext = () => {
+            if (!wizardRef || wizardRef.gone || shotIndex >= shots.length) {
+                finishBurst();
+                return;
+            }
+
+            const target = shots[shotIndex++];
+            if (target && !target.gone && !target.vanishing) {
+                const projectile = new Vanish();
+                const requiredMagic = Math.max(15, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
+                if (wizard.magic < requiredMagic) {
+                    finishBurst();
+                    return;
+                }
+
+                const aim = getTargetAimPoint(wizardRef, target);
+                if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                    projectile.forcedTarget = target;
+                    if (target.type === "wallSection") {
+                        target._vanishAsWholeSection = true;
+                        target._disableChunkSplitOnVanish = true;
+                    }
+                    markObjectAsTargetedBySpell(wizardRef, "vanish", target);
+                    const dx = aim.x - wizardRef.x;
+                    const dy = aim.y - wizardRef.y;
+                    if (typeof wizardRef.turnToward === "function") {
+                        wizardRef.turnToward(dx, dy);
+                    }
+                    projectiles.push(projectile.cast(aim.x, aim.y));
+                }
+            }
+
+            if (shotIndex >= shots.length) {
+                setTimeout(finishBurst, VANISH_BURST_SHOT_INTERVAL_MS);
+                return;
+            }
+            setTimeout(fireNext, VANISH_BURST_SHOT_INTERVAL_MS);
+        };
+
+        fireNext();
+        return true;
+    }
+
+    function getVanishDragHighlightState(wizardRef) {
+        if (!wizardRef || !wizardRef.vanishDragMode) return null;
+        const state = wizardRef.vanishDragTargetingState;
+        if (!state || typeof state !== "object") {
+            return { objects: [], wallPreviews: [] };
+        }
+
+        const objects = [];
+        const seen = new Set();
+        if (Array.isArray(state.queuedObjects)) {
+            for (let i = 0; i < state.queuedObjects.length; i++) {
+                const obj = state.queuedObjects[i];
+                if (!obj || obj.gone || obj.vanishing || seen.has(obj)) continue;
+                seen.add(obj);
+                objects.push(obj);
+            }
+        }
+
+        const wallPreviews = [];
+        if (state.wallRanges instanceof Map) {
+            state.wallRanges.forEach(entry => {
+                const wall = entry && entry.wall;
+                if (!wall || wall.gone || wall.vanishing) return;
+                if (typeof wall.getVanishPreviewPolygonForRange !== "function") return;
+                const preview = wall.getVanishPreviewPolygonForRange({
+                    tStart: Number(entry.tStart),
+                    tEnd: Number(entry.tEnd)
+                });
+                if (!preview || !Array.isArray(preview.points) || preview.points.length < 3) return;
+                wallPreviews.push({ target: wall, preview });
+            });
+        }
+
+        return { objects, wallPreviews };
     }
 
     function getRenderPriority(item) {
@@ -2550,6 +2973,35 @@ const SpellSystem = (() => {
             return { obj, point: anchor };
         }
         return null;
+    }
+
+    function getDragStartSnapTargetForSpell(wizardRef, spellName, worldX, worldY) {
+        if (!wizardRef || typeof spellName !== "string") return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        return getDragStartSnapTargetAt(wizardRef, spellName, worldX, worldY);
+    }
+
+    function getVanishWallPreviewPolygonForHover(wizardRef, candidate, worldX, worldY) {
+        if (!wizardRef || !candidate || candidate.gone || candidate.vanishing) return null;
+        if (candidate.type !== "wallSection") return null;
+        if (typeof candidate.getVanishPreviewPolygon !== "function") return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+
+        const travelPlan = buildVanishTravelPlan(wizardRef.x, wizardRef.y, worldX, worldY, {
+            speed: VANISH_DEFAULT_SPEED,
+            range: VANISH_DEFAULT_RANGE,
+            frameRateValue: frameRate,
+            mapRef: wizardRef.map || null
+        });
+        if (!travelPlan) return null;
+
+        const impactPoint = predictVanishImpactPoint(travelPlan);
+        if (!impactPoint || !Number.isFinite(impactPoint.x) || !Number.isFinite(impactPoint.y)) return null;
+
+        return candidate.getVanishPreviewPolygon(
+            { x: impactPoint.x, y: impactPoint.y },
+            { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD }
+        );
     }
 
     function getHoverTargetForCurrentSpell(wizardRef, worldX, worldY) {
@@ -2855,14 +3307,19 @@ const SpellSystem = (() => {
 
         if (spellName === "wall") {
             if (!keysPressed[" "]) return false;
-            const startPoint = { x: worldX, y: worldY };
+            const mapRef = wizardRef.map || null;
+            const startPoint = (snapTarget && snapTarget.point)
+                ? wrapWorldPointForMap(mapRef, Number(snapTarget.point.x), Number(snapTarget.point.y))
+                : wrapWorldPointForMap(mapRef, worldX, worldY);
             if (!startPoint) return false;
             wizardRef.wallLayoutMode = true;
             wizardRef.wallStartPoint = startPoint;
-            wizardRef.wallStartReferenceWall = null;
+            wizardRef.wallStartReferenceWall = (snapTarget && snapTarget.obj && snapTarget.obj.type === "wallSection")
+                ? snapTarget.obj
+                : null;
             wizardRef.wallDragMouseStartWorld = {
-                x: (wizardRef.map && typeof wizardRef.map.wrapWorldX === "function") ? wizardRef.map.wrapWorldX(worldX) : worldX,
-                y: (wizardRef.map && typeof wizardRef.map.wrapWorldY === "function") ? wizardRef.map.wrapWorldY(worldY) : worldY
+                x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX,
+                y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY
             };
             ensureDragPreview(wizardRef, "wall");
             return true;
@@ -2888,6 +3345,13 @@ const SpellSystem = (() => {
             return true;
         }
 
+        if (spellName === "vanish") {
+            wizardRef.vanishDragMode = true;
+            ensureVanishDragTargetingState(wizardRef);
+            queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
+            return true;
+        }
+
         return false;
     }
 
@@ -2897,6 +3361,7 @@ const SpellSystem = (() => {
             if (wizardRef.currentSpell === "wall") cancelDragSpell(wizardRef, "wall");
             if (wizardRef.currentSpell === "buildroad") cancelDragSpell(wizardRef, "buildroad");
             if (wizardRef.currentSpell === "firewall") cancelDragSpell(wizardRef, "firewall");
+            if (wizardRef.currentSpell === "vanish") cancelDragSpell(wizardRef, "vanish");
             return false;
         }
         if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint && wizardRef.phantomWall) {
@@ -2911,6 +3376,10 @@ const SpellSystem = (() => {
         }
         if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint && wizardRef.phantomFirewall) {
             updatePhantomFirewall(wizardRef.firewallStartPoint.x, wizardRef.firewallStartPoint.y, worldX, worldY);
+            return true;
+        }
+        if (wizardRef.currentSpell === "vanish" && wizardRef.vanishDragMode) {
+            queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
             return true;
         }
         return false;
@@ -2943,7 +3412,8 @@ const SpellSystem = (() => {
                     wizardRef.map, startPoint, endPoint, {
                         thickness,
                         height,
-                        bottomZ: 0
+                        bottomZ: 0,
+                        autoMergeContinuous: false
                     }
                 );
                 if (result && Array.isArray(result.sections)) {
@@ -2999,6 +3469,18 @@ const SpellSystem = (() => {
             }
             cancelDragSpell(wizardRef, "firewall");
             cooldown(wizardRef, wizardRef.cooldownTime);
+            return true;
+        }
+
+        if (spellName === "vanish") {
+            if (!isDragSpellActive(wizardRef, "vanish")) return false;
+            if (Number.isFinite(worldX) && Number.isFinite(worldY)) {
+                queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
+            }
+            const burstTargets = buildVanishBurstTargetsFromQueuedState(wizardRef);
+            cancelDragSpell(wizardRef, "vanish");
+            if (burstTargets.length === 0) return true;
+            castQueuedVanishBurst(wizardRef, burstTargets);
             return true;
         }
 
@@ -3172,6 +3654,11 @@ const SpellSystem = (() => {
     function castWizardSpell(wizardRef, worldX, worldY) {
         if (!wizardRef || wizardRef.castDelay) return;
 
+        if (wizardRef.currentSpell === "vanish" && isDragSpellActive(wizardRef, "vanish")) {
+            completeDragSpell(wizardRef, "vanish", worldX, worldY);
+            return;
+        }
+
         if (wizardRef.currentSpell === "wall") {
             if (isDragSpellActive(wizardRef, "wall")) {
                 completeDragSpell(wizardRef, "wall", worldX, worldY);
@@ -3220,11 +3707,16 @@ const SpellSystem = (() => {
             const placeY = mapRef && typeof mapRef.wrapWorldY === "function"
                 ? mapRef.wrapWorldY(worldY)
                 : worldY;
+            const powerupPlacement = getPowerupPlacementPreviewConfig(wizardRef);
             if (Number.isFinite(placeX) && Number.isFinite(placeY) && typeof addPowerup === "function") {
-                addPowerup("black diamond.png", {
+                addPowerup(powerupPlacement.fileName, {
                     x: placeX,
                     y: placeY,
-                    map: mapRef
+                    map: mapRef,
+                    imagePath: powerupPlacement.imagePath,
+                    width: powerupPlacement.width,
+                    height: powerupPlacement.height,
+                    radius: powerupPlacement.radius
                 });
             }
             const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
@@ -3901,6 +4393,7 @@ const SpellSystem = (() => {
         if (spellName !== "wall") cancelDragSpell(wizardRef, "wall");
         if (spellName !== "buildroad") cancelDragSpell(wizardRef, "buildroad");
         if (spellName !== "firewall") cancelDragSpell(wizardRef, "firewall");
+        if (spellName !== "vanish") cancelDragSpell(wizardRef, "vanish");
         wizardRef.currentSpell = spellName;
         if (previousSpell !== spellName) {
             const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
@@ -3920,6 +4413,7 @@ const SpellSystem = (() => {
         getSelectedFlooringTexture(wizardRef);
         getSelectedTreeTextureVariant(wizardRef);
         normalizePlaceableSelections(wizardRef);
+        getSelectedPowerupPlacementScale(wizardRef);
         getSelectedWallHeight(wizardRef);
         getSelectedWallThickness(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
@@ -3989,7 +4483,9 @@ const SpellSystem = (() => {
         showPlaceableMenu,
         adjustPlaceableRenderOffset,
         adjustPlaceableScale,
+        adjustPowerupPlacementScale,
         adjustPlaceableRotation,
+        getPowerupPlacementPreviewConfig,
         beginDragSpell,
         updateDragPreview,
         completeDragSpell,
@@ -4005,6 +4501,9 @@ const SpellSystem = (() => {
         ,
         getHoverTargetForCurrentSpell,
         isValidHoverTargetForCurrentSpell,
+        getVanishWallPreviewPolygonForHover,
+        getVanishDragHighlightState,
+        getDragStartSnapTargetForSpell,
         getPlaceObjectPlacementCandidate,
         getAdjustedWallDragWorldPoint
     };
