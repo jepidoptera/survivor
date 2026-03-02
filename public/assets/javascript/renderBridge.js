@@ -1,6 +1,7 @@
 (function attachRenderBridge(global) {
     const viewportNodeSampleEpsilon = 1e-4;
     let uiArrowCursorElement = null;
+    let uiGameCursorOverlayElement = null;
     let visibilityMaskEnabled = false;
     let visibilityMaskSources = [];
 
@@ -549,6 +550,42 @@
         el.style.display = "block";
     }
 
+    function ensureUiGameCursorOverlayElement() {
+        if (uiGameCursorOverlayElement || typeof document === "undefined" || !document.body) return uiGameCursorOverlayElement;
+        const el = document.createElement("img");
+        el.id = "uiGameCursorOverlay";
+        el.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-24 -24 48 48'%3E%3Cg stroke='%2344aaff' stroke-width='2' fill='none' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M 20 0 L 8.090169943749475 5.877852522924732 L 6.180339887498949 19.02113032590307 L -3.0901699437494736 9.510565162951536 L -16.180339887498945 11.755705045849465 L -10 0.0000000000000012246467991473533 L -16.180339887498953 -11.75570504584946 L -3.0901699437494754 -9.510565162951535 L 6.180339887498945 -19.021130325903073 L 8.090169943749473 -5.877852522924734 Z'/%3E%3C/g%3E%3C/svg%3E";
+        el.alt = "";
+        el.style.position = "fixed";
+        el.style.left = "0px";
+        el.style.top = "0px";
+        el.style.width = "40px";
+        el.style.height = "40px";
+        el.style.transform = "translate(-50%, -50%)";
+        el.style.transformOrigin = "50% 50%";
+        el.style.pointerEvents = "none";
+        el.style.zIndex = "200001";
+        el.style.display = "none";
+        document.body.appendChild(el);
+        uiGameCursorOverlayElement = el;
+        return uiGameCursorOverlayElement;
+    }
+
+    function setUiGameCursorOverlayVisible(visible, clientX = null, clientY = null, rotationRadians = 0) {
+        const el = ensureUiGameCursorOverlayElement();
+        if (!el) return;
+        if (!visible) {
+            el.style.display = "none";
+            return;
+        }
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        el.style.left = `${clientX}px`;
+        el.style.top = `${clientY}px`;
+        const deg = Number.isFinite(rotationRadians) ? (rotationRadians * 180 / Math.PI) : 0;
+        el.style.transform = `translate(-50%, -50%) rotate(${deg}deg)`;
+        el.style.display = "block";
+    }
+
     function getVirtualCursorClientPosition() {
         if (!app || !app.view) return { x: NaN, y: NaN };
         const rect = app.view.getBoundingClientRect();
@@ -575,6 +612,14 @@
         return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars");
     }
 
+    function isCursorOverMinimapAtClientPoint(clientX, clientY) {
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY) || typeof document === "undefined") return false;
+        const minimapWrapperEl = document.getElementById("minimap-wrapper");
+        if (!minimapWrapperEl || minimapWrapperEl.style.display === "none") return false;
+        const rect = minimapWrapperEl.getBoundingClientRect();
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    }
+
     function updateCursor() {
         const virtualClient = getVirtualCursorClientPosition();
         const physicalClientX = Number.isFinite(mousePos.clientX) ? mousePos.clientX : NaN;
@@ -583,36 +628,48 @@
         const hoverClientX = useVirtualPoint ? virtualClient.x : (Number.isFinite(physicalClientX) ? physicalClientX : virtualClient.x);
         const hoverClientY = useVirtualPoint ? virtualClient.y : (Number.isFinite(physicalClientY) ? physicalClientY : virtualClient.y);
         const overMenuUi = isCursorOverUiAtClientPoint(hoverClientX, hoverClientY);
+        const overMinimap = isCursorOverMinimapAtClientPoint(hoverClientX, hoverClientY);
         if (overMenuUi) {
             if (cursorSprite) cursorSprite.visible = false;
             if (spellCursor) spellCursor.visible = false;
+            setUiGameCursorOverlayVisible(false);
             setUiArrowCursorVisible(true, hoverClientX, hoverClientY);
             return;
         }
         setUiArrowCursorVisible(false);
 
         if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY) || !wizard) {
+            setUiGameCursorOverlayVisible(false);
             return;
         }
 
         const activeCursor = spellCursor || cursorSprite;
-        if (!activeCursor) return;
+        if (!activeCursor) {
+            setUiGameCursorOverlayVisible(false);
+            return;
+        }
         if (cursorSprite) cursorSprite.visible = false;
         if (spellCursor) spellCursor.visible = true;
 
         activeCursor.x = mousePos.screenX;
         activeCursor.y = mousePos.screenY;
 
+        let rotation = 0;
+
         const placingObject = wizard && wizard.currentSpell === "placeobject";
         if (placingObject) {
-            activeCursor.rotation = 0;
+            rotation = 0;
+            activeCursor.rotation = rotation;
+            setUiGameCursorOverlayVisible(overMinimap, hoverClientX, hoverClientY, rotation);
             return;
         }
 
         const wizardScreenCoors = worldToScreen(wizard);
         const dx = wizardScreenCoors.x - mousePos.screenX;
         const dy = wizardScreenCoors.y - mousePos.screenY;
-        activeCursor.rotation = Math.atan2(dy, dx) + Math.PI * 1.5;
+        rotation = Math.atan2(dy, dx) + Math.PI * 1.5;
+        activeCursor.rotation = rotation;
+        setUiGameCursorOverlayVisible(overMinimap, hoverClientX, hoverClientY, rotation);
     }
 
     function distance(x1, y1, x2, y2) {

@@ -514,7 +514,7 @@ void main(void) {
             const mesh = new PIXI.Mesh(
                 geometry,
                 shader,
-                PIXI.State.for2d(),
+                sourceMesh.state || PIXI.State.for2d(),
                 sourceMesh.drawMode || PIXI.DRAW_MODES.TRIANGLES
             );
             mesh.name = "renderingPickerMeshProxy";
@@ -658,26 +658,6 @@ void main(void) {
                         const camera = this.pickLastCamera || null;
                         const depthRange = this.pickLastDepthRange || null;
                         const mapRef = (item && item.map) ? item.map : (global.map || null);
-                        const anchorX = Number.isFinite(item && item.x)
-                            ? Number(item.x)
-                            : (Number.isFinite(item && item.center && item.center.x)
-                                ? Number(item.center.x)
-                                : (
-                                    Number.isFinite(item && item.startPoint && item.startPoint.x) &&
-                                    Number.isFinite(item && item.endPoint && item.endPoint.x)
-                                )
-                                    ? (Number(item.startPoint.x) + Number(item.endPoint.x)) * 0.5
-                                    : 0);
-                        const anchorY = Number.isFinite(item && item.y)
-                            ? Number(item.y)
-                            : (Number.isFinite(item && item.center && item.center.y)
-                                ? Number(item.center.y)
-                                : (
-                                    Number.isFinite(item && item.startPoint && item.startPoint.y) &&
-                                    Number.isFinite(item && item.endPoint && item.endPoint.y)
-                                )
-                                    ? (Number(item.startPoint.y) + Number(item.endPoint.y)) * 0.5
-                                    : 0);
                         const screenW = (this.pickRenderTexture && Number.isFinite(this.pickRenderTexture.width))
                             ? Number(this.pickRenderTexture.width)
                             : 1;
@@ -696,8 +676,8 @@ void main(void) {
                             : 0;
                         record.shader.uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
                         record.shader.uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
-                        record.shader.uniforms.uWrapAnchorWorld[0] = anchorX;
-                        record.shader.uniforms.uWrapAnchorWorld[1] = anchorY;
+                        record.shader.uniforms.uWrapAnchorWorld[0] = Number(item && item.x) || 0;
+                        record.shader.uniforms.uWrapAnchorWorld[1] = Number(item && item.y) || 0;
                         record.shader.uniforms.uViewScale = Number(camera && camera.viewscale) || 1;
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
@@ -1030,6 +1010,43 @@ void main(void) {
             return true;
         }
 
+        drawWallEndpointSnapOverlay(ctx, pulse, snapPoint) {
+            const g = this.highlightGraphics;
+            const camera = ctx && ctx.camera;
+            const uiLayer = ctx && ctx.uiLayer;
+            if (!g || !camera || typeof camera.worldToScreen !== "function" || !uiLayer) return false;
+            if (!snapPoint || !Number.isFinite(snapPoint.x) || !Number.isFinite(snapPoint.y)) return false;
+
+            const screen = camera.worldToScreen(Number(snapPoint.x), Number(snapPoint.y), 0.02);
+            if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) return false;
+
+            const alphaOuter = Math.max(0.35, 0.85 * pulse);
+            const alphaInner = Math.max(0.25, 0.7 * pulse);
+            const radiusOuter = 9;
+            const radiusInner = 4.5;
+
+            g.clear();
+            g.lineStyle(2.5, 0x66c2ff, alphaOuter);
+            g.beginFill(0x66c2ff, 0.16 * pulse);
+            g.drawCircle(screen.x, screen.y, radiusOuter);
+            g.endFill();
+
+            g.lineStyle(2, 0xcfeeff, alphaInner);
+            g.drawCircle(screen.x, screen.y, radiusInner);
+            g.moveTo(screen.x - 6, screen.y);
+            g.lineTo(screen.x + 6, screen.y);
+            g.moveTo(screen.x, screen.y - 6);
+            g.lineTo(screen.x, screen.y + 6);
+
+            g.visible = true;
+            if (g.parent !== uiLayer) {
+                uiLayer.addChild(g);
+            } else {
+                uiLayer.setChildIndex(g, uiLayer.children.length - 1);
+            }
+            return true;
+        }
+
         getTargetDisplayObject(target, ctx) {
             if (!target) return null;
             if (ctx && typeof ctx.getDisplayObjectForItem === "function") {
@@ -1171,6 +1188,31 @@ void main(void) {
                 }
                 const drewVanishChunk = this.drawVanishWallChunkOverlayBatch(ctx, pulse, wallOverlayEntries);
                 if (drewVanishChunk) return;
+            }
+
+            if (currentSpell === "wall" && target.type === "wallSection") {
+                const snapTarget = (
+                    spellSystem &&
+                    typeof spellSystem.getDragStartSnapTargetForSpell === "function" &&
+                    mousePos &&
+                    Number.isFinite(mousePos.worldX) &&
+                    Number.isFinite(mousePos.worldY)
+                )
+                    ? spellSystem.getDragStartSnapTargetForSpell(
+                        wizard,
+                        "wall",
+                        Number(mousePos.worldX),
+                        Number(mousePos.worldY)
+                    )
+                    : null;
+                if (
+                    snapTarget &&
+                    snapTarget.obj === target &&
+                    snapTarget.point &&
+                    this.drawWallEndpointSnapOverlay(ctx, pulse, snapTarget.point)
+                ) {
+                    return;
+                }
             }
 
             const targetDisplay = this.getTargetDisplayObject(target, ctx);

@@ -1261,11 +1261,15 @@
             if (
                 typeof global.WallSectionUnit !== "undefined" &&
                 global.WallSectionUnit &&
-                typeof global.WallSectionUnit.planPlacementFromWorldPoints === "function"
+                typeof global.WallSectionUnit.resolvePlacementSegmentsFromWorldPoints === "function"
             ) {
-                const plan = global.WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld);
-                if (plan && Array.isArray(plan.segments)) {
-                    segments = plan.segments.slice();
+                const resolved = global.WallSectionUnit.resolvePlacementSegmentsFromWorldPoints(
+                    mapRef,
+                    startWorld,
+                    endWorld
+                );
+                if (resolved && Array.isArray(resolved.segments)) {
+                    segments = resolved.segments.slice();
                 }
             }
 

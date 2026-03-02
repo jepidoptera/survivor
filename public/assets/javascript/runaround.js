@@ -247,6 +247,7 @@ function presentGameFrame() {
             map,
             animals,
             powerups,
+            projectiles,
             wizard,
             roof,
             camera: renderCamera,
@@ -1490,6 +1491,7 @@ class Wizard extends Character {
             selectedPlaceableRotationByTexture: this.selectedPlaceableRotationByTexture,
             selectedPlaceableRotationAxis: this.selectedPlaceableRotationAxis,
             selectedPlaceableRotationAxisByTexture: this.selectedPlaceableRotationAxisByTexture,
+            selectedPowerupPlacementScale: this.selectedPowerupPlacementScale,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
             showPerfReadout: !!showPerfReadout,
@@ -1557,6 +1559,7 @@ class Wizard extends Character {
         if (data.selectedPlaceableRotationByTexture !== undefined) this.selectedPlaceableRotationByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationByTexture);
         if (data.selectedPlaceableRotationAxis !== undefined) this.selectedPlaceableRotationAxis = data.selectedPlaceableRotationAxis;
         if (data.selectedPlaceableRotationAxisByTexture !== undefined) this.selectedPlaceableRotationAxisByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationAxisByTexture);
+        if (data.selectedPowerupPlacementScale !== undefined) this.selectedPowerupPlacementScale = data.selectedPowerupPlacementScale;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (typeof data.showPerfReadout === "boolean") {
@@ -3353,9 +3356,12 @@ jQuery(() => {
     app.view.addEventListener("wheel", event => {
         if (
             !wizard ||
-            wizard.currentSpell !== "placeobject" ||
+            (wizard.currentSpell !== "placeobject" && wizard.currentSpell !== "blackdiamond") ||
             typeof SpellSystem === "undefined" ||
-            typeof SpellSystem.adjustPlaceableScale !== "function"
+            (
+                (wizard.currentSpell === "placeobject" && typeof SpellSystem.adjustPlaceableScale !== "function") ||
+                (wizard.currentSpell === "blackdiamond" && typeof SpellSystem.adjustPowerupPlacementScale !== "function")
+            )
         ) {
             return;
         }
@@ -3379,7 +3385,11 @@ jQuery(() => {
         const delta = Math.max(-0.05, Math.min(0.05, unclampedDelta));
         if (Math.abs(delta) < 0.0005) return;
 
-        SpellSystem.adjustPlaceableScale(wizard, delta);
+        if (wizard.currentSpell === "placeobject") {
+            SpellSystem.adjustPlaceableScale(wizard, delta);
+        } else if (wizard.currentSpell === "blackdiamond") {
+            SpellSystem.adjustPowerupPlacementScale(wizard, delta);
+        }
     }, { passive: false });
 
     app.view.addEventListener("mousedown", event => {
@@ -3440,7 +3450,12 @@ jQuery(() => {
             wizard &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.beginDragSpell === "function" &&
-            (wizard.currentSpell === "wall" || wizard.currentSpell === "buildroad" || wizard.currentSpell === "firewall")
+            (
+                wizard.currentSpell === "wall" ||
+                wizard.currentSpell === "buildroad" ||
+                wizard.currentSpell === "firewall" ||
+                wizard.currentSpell === "vanish"
+            )
         ) {
             event.preventDefault();
             const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
@@ -3513,7 +3528,12 @@ jQuery(() => {
             wizard.travelFrames = 0;
             // Turn and cast at exact click coordinates.
             wizard.turnToward(aim.x, aim.y);
-            if (wizard.currentSpell === "wall") return;
+            if (
+                wizard.currentSpell === "wall" ||
+                wizard.currentSpell === "buildroad" ||
+                wizard.currentSpell === "firewall" ||
+                wizard.currentSpell === "vanish"
+            ) return;
             SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
             // Prevent keyup quick-cast from firing a duplicate cast.
             spacebarDownAt = null;
@@ -3835,6 +3855,7 @@ jQuery(() => {
                 SpellSystem.cancelDragSpell(wizard, "wall");
                 SpellSystem.cancelDragSpell(wizard, "buildroad");
                 SpellSystem.cancelDragSpell(wizard, "firewall");
+                SpellSystem.cancelDragSpell(wizard, "vanish");
             }
             SpellSystem.stopTreeGrowthChannel(wizard);
             if (wizard.currentSpell === "treegrow") {
@@ -3842,7 +3863,12 @@ jQuery(() => {
                 event.preventDefault();
                 return;
             }
-            if (wizard.currentSpell === "wall") return;
+            if (
+                wizard.currentSpell === "wall" ||
+                wizard.currentSpell === "buildroad" ||
+                wizard.currentSpell === "firewall" ||
+                wizard.currentSpell === "vanish"
+            ) return;
             event.preventDefault();
             const now = Date.now();
             const downAt = spacebarDownAt;

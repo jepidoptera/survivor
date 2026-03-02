@@ -32,6 +32,10 @@
             this.placeObjectPreviewDisplayObject = null;
             this.placeObjectPreviewItem = null;
             this.placeObjectCenterSnapGuideGraphics = null;
+            this.powerupPlacementPreviewSprite = null;
+            this.powerupPlacementPreviewTexturePath = "";
+            this.powerupPlacementPreviewDisplayObject = null;
+            this.powerupPlacementPreviewItem = null;
             this.wallPlacementPreviewGraphics = null;
             this.hexGridTexture = null;
             this.hexGridSprites = [];
@@ -46,6 +50,7 @@
             this.activeDepthBillboardMeshes = new Set();
             this.activeDepthBillboardItems = new Set();
             this.activePowerupDisplayObjects = new Set();
+            this.activeProjectileDisplayObjects = new Set();
             this.pickRenderItems = [];
             this.losShadowGraphics = null;
             this.currentLosState = null;
@@ -95,12 +100,35 @@
                 "objectLayer",
                 "roofLayer",
                 "characterLayer",
+                "projectileLayer",
                 "hitboxLayer"
             ];
             for (let i = 0; i < names.length; i++) {
                 const layer = global[names[i]];
                 if (layer && typeof layer.visible === "boolean") layer.visible = visible;
             }
+        }
+
+        getProjectileTexture(projectile) {
+            if (!projectile) return null;
+            const frames = Array.isArray(projectile.explosionFrames) ? projectile.explosionFrames : null;
+            if (frames && frames.length > 0) {
+                const rawFrame = Number.isFinite(projectile.explosionFrame)
+                    ? Math.floor(projectile.explosionFrame)
+                    : 0;
+                const frameIndex = ((rawFrame % frames.length) + frames.length) % frames.length;
+                const frameTexture = frames[frameIndex];
+                if (frameTexture) return frameTexture;
+            }
+            const imageSrc = (projectile.image && typeof projectile.image.src === "string" && projectile.image.src.length > 0)
+                ? projectile.image.src
+                : null;
+            if (imageSrc) return PIXI.Texture.from(imageSrc);
+            const texturePath = (typeof projectile.texturePath === "string" && projectile.texturePath.length > 0)
+                ? projectile.texturePath
+                : null;
+            if (texturePath) return PIXI.Texture.from(texturePath);
+            return null;
         }
 
         getLosVisualSetting(key, fallback) {
@@ -1155,6 +1183,89 @@
             this.activePowerupDisplayObjects = currentDisplayObjects;
         }
 
+        renderProjectiles(ctx) {
+            const container = this.layers.entities;
+            if (!container) return;
+
+            const list = Array.isArray(ctx && ctx.projectiles)
+                ? ctx.projectiles
+                : (
+                    (typeof projectiles !== "undefined" && Array.isArray(projectiles))
+                        ? projectiles
+                        : (Array.isArray(global.projectiles) ? global.projectiles : [])
+                );
+            const currentDisplayObjects = new Set();
+
+            for (let i = 0; i < list.length; i++) {
+                const projectile = list[i];
+                if (!projectile || projectile.gone) continue;
+
+                const texture = this.getProjectileTexture(projectile);
+                let sprite = projectile.pixiSprite || null;
+                if (!sprite) {
+                    sprite = new PIXI.Sprite(texture || PIXI.Texture.WHITE);
+                    sprite.anchor.set(0.5, 0.5);
+                    projectile.pixiSprite = sprite;
+                } else if (texture && sprite.texture !== texture) {
+                    sprite.texture = texture;
+                }
+
+                if (sprite.parent !== container) {
+                    container.addChild(sprite);
+                }
+
+                const visible = projectile.visible !== false;
+                sprite.visible = visible;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = visible;
+                }
+
+                if (visible) {
+                    const worldX = Number.isFinite(projectile.x) ? Number(projectile.x) : 0;
+                    const worldY = Number.isFinite(projectile.y) ? Number(projectile.y) : 0;
+                    const worldZ = Number.isFinite(projectile.z) ? Number(projectile.z) : 0;
+                    const p = this.camera.worldToScreen(worldX, worldY, 0);
+                    sprite.x = p.x;
+                    sprite.y = p.y - worldZ * this.camera.viewscale * this.camera.xyratio;
+
+                    const apparentSize = Number.isFinite(projectile.apparentSize)
+                        ? Number(projectile.apparentSize)
+                        : NaN;
+                    const fallbackSize = (
+                        Number.isFinite(projectile.size)
+                            ? Number(projectile.size)
+                            : 0.35
+                    ) * this.camera.viewscale;
+                    const sizePx = Math.max(1, Number.isFinite(apparentSize) && apparentSize > 0 ? apparentSize : fallbackSize);
+                    sprite.width = sizePx;
+                    sprite.height = sizePx;
+
+                    if (projectile.type === "arrow" && projectile.movement) {
+                        const moveX = Number(projectile.movement.x) || 0;
+                        const moveY = Number(projectile.movement.y) || 0;
+                        if (Math.hypot(moveX, moveY) > 1e-6) {
+                            sprite.rotation = Math.atan2(moveY, moveX) + Math.PI * 0.5;
+                        }
+                    }
+                }
+
+                currentDisplayObjects.add(sprite);
+            }
+
+            for (const sprite of this.activeProjectileDisplayObjects) {
+                if (!currentDisplayObjects.has(sprite) && sprite) {
+                    sprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                        sprite.renderable = false;
+                    }
+                    if (sprite.parent) {
+                        sprite.parent.removeChild(sprite);
+                    }
+                }
+            }
+            this.activeProjectileDisplayObjects = currentDisplayObjects;
+        }
+
         getMousePosRef(ctx) {
             if (ctx && ctx.mousePos) return ctx.mousePos;
             if (typeof mousePos !== "undefined") return mousePos;
@@ -1185,6 +1296,29 @@
             if (this.placeObjectCenterSnapGuideGraphics) {
                 this.placeObjectCenterSnapGuideGraphics.clear();
                 this.placeObjectCenterSnapGuideGraphics.visible = false;
+            }
+        }
+
+        clearPowerupPlacementPreview() {
+            if (this.powerupPlacementPreviewItem && this.powerupPlacementPreviewItem._depthBillboardMesh) {
+                const mesh = this.powerupPlacementPreviewItem._depthBillboardMesh;
+                mesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                    mesh.renderable = false;
+                }
+            }
+            if (this.powerupPlacementPreviewDisplayObject) {
+                this.powerupPlacementPreviewDisplayObject.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.powerupPlacementPreviewDisplayObject, "renderable")) {
+                    this.powerupPlacementPreviewDisplayObject.renderable = false;
+                }
+                this.powerupPlacementPreviewDisplayObject = null;
+            }
+            if (this.powerupPlacementPreviewSprite) {
+                this.powerupPlacementPreviewSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.powerupPlacementPreviewSprite, "renderable")) {
+                    this.powerupPlacementPreviewSprite.renderable = false;
+                }
             }
         }
 
@@ -1692,6 +1826,189 @@
             this.renderPlaceObjectCenterSnapGuide(previewItem);
         }
 
+        buildPowerupPlacementPreviewRenderItem(ctx) {
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            if (!wizard || wizard.currentSpell !== "blackdiamond") {
+                return null;
+            }
+            const mousePosRef = this.getMousePosRef(ctx);
+            if (!mousePosRef || !Number.isFinite(mousePosRef.worldX) || !Number.isFinite(mousePosRef.worldY)) {
+                return null;
+            }
+
+            const spellSystemRef = (typeof SpellSystem !== "undefined")
+                ? SpellSystem
+                : (global.SpellSystem || null);
+            const previewConfig = (
+                spellSystemRef &&
+                typeof spellSystemRef.getPowerupPlacementPreviewConfig === "function"
+            ) ? spellSystemRef.getPowerupPlacementPreviewConfig(wizard) : {
+                fileName: "black diamond.png",
+                imagePath: "/assets/images/powerups/black%20diamond.png",
+                width: 0.8,
+                height: 0.8,
+                radius: 0.35,
+                scale: 1
+            };
+
+            const texturePath = (previewConfig && typeof previewConfig.imagePath === "string" && previewConfig.imagePath.length > 0)
+                ? previewConfig.imagePath
+                : "/assets/images/powerups/black%20diamond.png";
+            if (!this.powerupPlacementPreviewSprite) {
+                this.powerupPlacementPreviewSprite = new PIXI.Sprite(PIXI.Texture.from(texturePath));
+                this.powerupPlacementPreviewSprite.anchor.set(0.5, 1);
+                this.powerupPlacementPreviewSprite.alpha = 0.55;
+                this.powerupPlacementPreviewSprite.interactive = false;
+                this.powerupPlacementPreviewSprite.visible = false;
+                this.powerupPlacementPreviewTexturePath = texturePath;
+            } else if (this.powerupPlacementPreviewTexturePath !== texturePath) {
+                this.powerupPlacementPreviewSprite.texture = PIXI.Texture.from(texturePath);
+                this.powerupPlacementPreviewTexturePath = texturePath;
+            }
+
+            const mapRef = (ctx && ctx.map) || wizard.map || global.map || null;
+            const worldX = (mapRef && typeof mapRef.wrapWorldX === "function")
+                ? mapRef.wrapWorldX(mousePosRef.worldX)
+                : mousePosRef.worldX;
+            const worldY = (mapRef && typeof mapRef.wrapWorldY === "function")
+                ? mapRef.wrapWorldY(mousePosRef.worldY)
+                : mousePosRef.worldY;
+            const width = Number.isFinite(previewConfig && previewConfig.width)
+                ? Math.max(0.01, Number(previewConfig.width))
+                : 0.8;
+            const height = Number.isFinite(previewConfig && previewConfig.height)
+                ? Math.max(0.01, Number(previewConfig.height))
+                : 0.8;
+
+            this.powerupPlacementPreviewSprite.tint = 0xFFFFFF;
+            this.powerupPlacementPreviewSprite.visible = true;
+            if (Object.prototype.hasOwnProperty.call(this.powerupPlacementPreviewSprite, "renderable")) {
+                this.powerupPlacementPreviewSprite.renderable = true;
+            }
+
+            if (!this.powerupPlacementPreviewItem) {
+                this.powerupPlacementPreviewItem = {
+                    type: "powerupPlacementPreview",
+                    map: mapRef || global.map || null,
+                    gone: false,
+                    vanishing: false,
+                    pixiSprite: this.powerupPlacementPreviewSprite,
+                    anchorX: 0.5,
+                    anchorY: 1
+                };
+                const powerupProto = global.Powerup && global.Powerup.prototype
+                    ? global.Powerup.prototype
+                    : null;
+                if (powerupProto && typeof powerupProto.ensureSprite === "function") {
+                    this.powerupPlacementPreviewItem.ensureSprite = powerupProto.ensureSprite;
+                }
+                if (powerupProto && typeof powerupProto.ensureDepthBillboardMesh === "function") {
+                    this.powerupPlacementPreviewItem.ensureDepthBillboardMesh = powerupProto.ensureDepthBillboardMesh;
+                }
+                if (powerupProto && typeof powerupProto.updateDepthBillboardMesh === "function") {
+                    this.powerupPlacementPreviewItem.updateDepthBillboardMesh = powerupProto.updateDepthBillboardMesh;
+                }
+            }
+
+            const previewItem = this.powerupPlacementPreviewItem;
+            previewItem.map = mapRef || previewItem.map || null;
+            previewItem.pixiSprite = this.powerupPlacementPreviewSprite;
+            previewItem.x = worldX;
+            previewItem.y = worldY;
+            previewItem.z = 0;
+            previewItem.width = width;
+            previewItem.height = height;
+            previewItem.renderZ = worldY;
+            previewItem.previewAlpha = 0.55;
+            previewItem.imagePath = texturePath;
+            previewItem.anchorX = 0.5;
+            previewItem.anchorY = 1;
+            return previewItem;
+        }
+
+        renderPowerupPlacementPreview(ctx) {
+            const previewItem = this.buildPowerupPlacementPreviewRenderItem(ctx);
+            if (!previewItem) {
+                this.clearPowerupPlacementPreview();
+                return;
+            }
+            if (previewItem.pixiSprite) {
+                const w = Number.isFinite(previewItem.width) ? Math.max(0.01, Number(previewItem.width)) : 0.8;
+                const h = Number.isFinite(previewItem.height) ? Math.max(0.01, Number(previewItem.height)) : 0.8;
+                const viewScale = Number.isFinite(this.camera && this.camera.viewscale)
+                    ? Number(this.camera.viewscale)
+                    : 1;
+                // Match live powerup render sizing exactly (see renderPowerups()).
+                previewItem.pixiSprite.width = w * viewScale;
+                previewItem.pixiSprite.height = h * viewScale;
+            }
+            let displayObj = null;
+            if (typeof previewItem.updateDepthBillboardMesh === "function") {
+                const mesh = previewItem.updateDepthBillboardMesh(
+                    ctx,
+                    this.camera,
+                    { alphaCutoff: TREE_ALPHA_CUTOFF }
+                );
+                if (mesh) {
+                    const depthContainer = this.layers.depthObjects;
+                    if (depthContainer && mesh.parent !== depthContainer) {
+                        depthContainer.addChild(mesh);
+                    }
+                    mesh.visible = true;
+                    if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                        mesh.renderable = true;
+                    }
+                    if (Number.isFinite(previewItem.previewAlpha)) {
+                        mesh.alpha = previewItem.previewAlpha;
+                    }
+                    displayObj = mesh;
+                }
+            }
+            if (!displayObj && typeof global.applySpriteTransform === "function") {
+                global.applySpriteTransform(previewItem);
+                displayObj = previewItem.pixiSprite || this.powerupPlacementPreviewSprite;
+            }
+            if (!displayObj) {
+                this.clearPowerupPlacementPreview();
+                return;
+            }
+
+            const container = (displayObj instanceof PIXI.Mesh)
+                ? this.layers.depthObjects
+                : this.layers.objects3d;
+            if (!container) {
+                this.clearPowerupPlacementPreview();
+                return;
+            }
+            if (displayObj.parent !== container) {
+                container.addChild(displayObj);
+            }
+            displayObj.visible = true;
+            if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
+                displayObj.renderable = true;
+            }
+            if (Number.isFinite(previewItem.previewAlpha)) {
+                displayObj.alpha = previewItem.previewAlpha;
+            }
+            if (Number.isFinite(displayObj.tint)) {
+                displayObj.tint = 0xFFFFFF;
+            }
+            const topIndex = container.children.length - 1;
+            if (topIndex >= 0) {
+                const currentIndex = container.getChildIndex(displayObj);
+                if (currentIndex !== topIndex) {
+                    container.setChildIndex(displayObj, topIndex);
+                }
+            }
+            if (this.powerupPlacementPreviewDisplayObject && this.powerupPlacementPreviewDisplayObject !== displayObj) {
+                this.powerupPlacementPreviewDisplayObject.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.powerupPlacementPreviewDisplayObject, "renderable")) {
+                    this.powerupPlacementPreviewDisplayObject.renderable = false;
+                }
+            }
+            this.powerupPlacementPreviewDisplayObject = displayObj;
+        }
+
         renderFrame(ctx) {
             this.init(ctx);
             if (!this.initialized) return false;
@@ -1722,9 +2039,11 @@
             this.renderObjects3D(ctx, visibleNodes);
             this.renderWallPlacementPreview(ctx);
             this.renderPlaceObjectPreview(ctx);
+            this.renderPowerupPlacementPreview(ctx);
             this.renderRoofs3D(ctx);
             this.renderPowerups(ctx);
             this.renderWizard(ctx);
+            this.renderProjectiles(ctx);
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
                 const spellSystemRef = (typeof SpellSystem !== "undefined")
                     ? SpellSystem
@@ -1810,7 +2129,19 @@
                 }
             }
             singleton.activePowerupDisplayObjects.clear();
+            for (const sprite of singleton.activeProjectileDisplayObjects) {
+                if (!sprite) continue;
+                sprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = false;
+                }
+                if (sprite.parent) {
+                    sprite.parent.removeChild(sprite);
+                }
+            }
+            singleton.activeProjectileDisplayObjects.clear();
             singleton.clearPlaceObjectPreview();
+            singleton.clearPowerupPlacementPreview();
             singleton.clearWallPlacementPreview();
             if (singleton.scenePicker && typeof singleton.scenePicker.hideAll === "function") {
                 singleton.scenePicker.hideAll();

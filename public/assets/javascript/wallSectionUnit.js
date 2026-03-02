@@ -450,8 +450,6 @@ void main(void) {
             if (!WallSectionUnit._numericEqual(sectionA.height, sectionB.height, 1e-5)) return false;
             if (!WallSectionUnit._numericEqual(sectionA.thickness, sectionB.thickness, 1e-5)) return false;
             if (!WallSectionUnit._numericEqual(sectionA.bottomZ, sectionB.bottomZ, 1e-5)) return false;
-            if (!WallSectionUnit._optionalNumericEqual(sectionA.texturePhaseA, sectionB.texturePhaseA, 1e-5)) return false;
-            if (!WallSectionUnit._optionalNumericEqual(sectionA.texturePhaseB, sectionB.texturePhaseB, 1e-5)) return false;
 
             const textureA = WallSectionUnit._normalizeWallTextureConfigPath(sectionA.wallTexturePath || DEFAULT_WALL_TEXTURE);
             const textureB = WallSectionUnit._normalizeWallTextureConfigPath(sectionB.wallTexturePath || DEFAULT_WALL_TEXTURE);
@@ -559,6 +557,50 @@ void main(void) {
             return survivor;
         }
 
+        static harmonizeTexturePhaseForSections(seedSections = [], referenceSections = null) {
+            const seeds = Array.isArray(seedSections)
+                ? seedSections.filter(section => !!section && !section.gone && !section.vanishing)
+                : [];
+            if (seeds.length === 0) return;
+
+            const seedSet = new Set(seeds);
+            const explicitRefs = Array.isArray(referenceSections)
+                ? referenceSections.filter(section => !!section && !section.gone && !section.vanishing)
+                : null;
+
+            const fallbackRefs = Array.from(WallSectionUnit._allSections.values())
+                .filter(section => !!section && !section.gone && !section.vanishing && !seedSet.has(section));
+
+            const chooseDonor = (seed) => {
+                const candidates = (explicitRefs && explicitRefs.length > 0) ? explicitRefs : fallbackRefs;
+                let donor = null;
+                for (let i = 0; i < candidates.length; i++) {
+                    const candidate = candidates[i];
+                    if (!candidate || candidate === seed) continue;
+                    if (!WallSectionUnit.canAutoMergeContinuous(seed, candidate)) continue;
+                    if (!donor) {
+                        donor = candidate;
+                        continue;
+                    }
+                    const donorId = Number.isInteger(donor.id) ? Number(donor.id) : Number.POSITIVE_INFINITY;
+                    const candidateId = Number.isInteger(candidate.id) ? Number(candidate.id) : Number.POSITIVE_INFINITY;
+                    if (candidateId < donorId) donor = candidate;
+                }
+                return donor;
+            };
+
+            for (let i = 0; i < seeds.length; i++) {
+                const seed = seeds[i];
+                const donor = chooseDonor(seed);
+                if (!donor) continue;
+
+                seed.texturePhaseA = Number.isFinite(donor.texturePhaseA) ? Number(donor.texturePhaseA) : NaN;
+                seed.texturePhaseB = Number.isFinite(donor.texturePhaseB) ? Number(donor.texturePhaseB) : NaN;
+                seed._depthGeometryCache = null;
+                if (typeof seed.rebuildMesh3d === "function") seed.rebuildMesh3d();
+            }
+        }
+
         static autoMergeContinuousSections(seedSections = []) {
             const seeds = Array.isArray(seedSections) ? seedSections.slice() : [];
             const survivors = [];
@@ -649,6 +691,48 @@ void main(void) {
             };
         }
 
+        static _clipSegmentToRect(p0, p1, minX, minY, maxX, maxY) {
+            if (!p0 || !p1) return null;
+            const x0 = Number(p0.x);
+            const y0 = Number(p0.y);
+            const x1 = Number(p1.x);
+            const y1 = Number(p1.y);
+            if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) {
+                return null;
+            }
+
+            const dx = x1 - x0;
+            const dy = y1 - y0;
+            let t0 = 0;
+            let t1 = 1;
+
+            const clipTest = (p, q) => {
+                if (Math.abs(p) <= EPS) {
+                    return q >= 0;
+                }
+                const r = q / p;
+                if (p < 0) {
+                    if (r > t1) return false;
+                    if (r > t0) t0 = r;
+                } else {
+                    if (r < t0) return false;
+                    if (r < t1) t1 = r;
+                }
+                return true;
+            };
+
+            if (!clipTest(-dx, x0 - minX)) return null;
+            if (!clipTest(dx, maxX - x0)) return null;
+            if (!clipTest(-dy, y0 - minY)) return null;
+            if (!clipTest(dy, maxY - y0)) return null;
+
+            if (t1 < t0) return null;
+            return {
+                tStart: Math.max(0, Math.min(1, t0)),
+                tEnd: Math.max(0, Math.min(1, t1))
+            };
+        }
+
         static _orientation2D(a, b, c) {
             return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
         }
@@ -707,10 +791,89 @@ void main(void) {
             return null;
         }
 
+        static _chooseMidpointBridgeNode(mapRef, midpoint, towardEntity = null) {
+            if (!WallSectionUnit._isNodeMidpoint(midpoint)) return null;
+
+            if (mapRef && typeof mapRef._chooseMidpointBridgeNode === "function") {
+                const chosen = mapRef._chooseMidpointBridgeNode(midpoint, towardEntity);
+                if (chosen && WallSectionUnit._isMapNode(chosen)) return chosen;
+            }
+
+            if (!Array.isArray(midpoint.neighbors) || midpoint.neighbors.length === 0) return null;
+            const tx = Number(towardEntity && towardEntity.x);
+            const ty = Number(towardEntity && towardEntity.y);
+
+            const shortDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? (a, b) => mapRef.shortestDeltaX(a, b)
+                : (a, b) => (b - a);
+            const shortDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? (a, b) => mapRef.shortestDeltaY(a, b)
+                : (a, b) => (b - a);
+
+            let best = null;
+            let bestDist = Infinity;
+            for (let i = 0; i < midpoint.neighbors.length; i++) {
+                const node = midpoint.neighbors[i];
+                if (!WallSectionUnit._isMapNode(node)) continue;
+                const dist = (Number.isFinite(tx) && Number.isFinite(ty))
+                    ? Math.hypot(shortDx(node.x, tx), shortDy(node.y, ty))
+                    : i;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = node;
+                }
+            }
+            return best;
+        }
+
         static planPlacementFromWorldPoints(mapRef, startWorld, endWorld, options = {}) {
             if (!mapRef || !startWorld || !endWorld) return null;
             if (!Number.isFinite(startWorld.x) || !Number.isFinite(startWorld.y)) return null;
             if (!Number.isFinite(endWorld.x) || !Number.isFinite(endWorld.y)) return null;
+
+            let prependStartSegment = null;
+
+            const finalizePlan = (plan) => {
+                if (!plan) return plan;
+                if (!prependStartSegment) return plan;
+                if (!Array.isArray(plan.segments)) plan.segments = [];
+
+                const segments = [prependStartSegment];
+                for (let i = 0; i < plan.segments.length; i++) {
+                    const seg = plan.segments[i];
+                    if (!seg || !seg.start || !seg.end) continue;
+                    const duplicatesBridge = (
+                        WallSectionUnit._pointsMatch(seg.start, prependStartSegment.start) &&
+                        WallSectionUnit._pointsMatch(seg.end, prependStartSegment.end)
+                    );
+                    if (!duplicatesBridge) segments.push(seg);
+                }
+
+                plan.start = prependStartSegment.start;
+                plan.segments = segments;
+                if (!Number.isFinite(plan.primaryDirection)) {
+                    plan.primaryDirection = prependStartSegment.direction;
+                }
+                return plan;
+            };
+
+            const allowStartMidpointBridge = options._skipStartMidpointBridge !== true;
+            if (allowStartMidpointBridge && typeof mapRef.worldToNodeOrMidpoint === "function") {
+                const startAnchor = mapRef.worldToNodeOrMidpoint(Number(startWorld.x), Number(startWorld.y));
+                if (startAnchor && WallSectionUnit._isNodeMidpoint(startAnchor)) {
+                    const bridgeNode = WallSectionUnit._chooseMidpointBridgeNode(mapRef, startAnchor, endWorld);
+                    if (!bridgeNode) return null;
+                    const bridgeDirection = WallSectionUnit._directionBetweenEndpoints(startAnchor, bridgeNode, mapRef);
+                    prependStartSegment = {
+                        start: startAnchor,
+                        end: bridgeNode,
+                        direction: Number.isFinite(bridgeDirection)
+                            ? WallSectionUnit._normalizeDirection(bridgeDirection)
+                            : 0
+                    };
+                    startWorld = { x: bridgeNode.x, y: bridgeNode.y };
+                }
+            }
 
             const startNode = WallSectionUnit._snapToNearestPlacementAnchor(mapRef, startWorld);
             if (!startNode) return null;
@@ -770,7 +933,7 @@ void main(void) {
                             );
                             if (distMouseToMid * 1.4 < distMouseToWalk && distMouseToMid * 1.4 < distMouseToNext) {
                                 // Mouse is closest to this midpoint — use it.
-                                return {
+                                return finalizePlan({
                                     start: startNode,
                                     end: midCandidate,
                                     junction: null,
@@ -781,7 +944,7 @@ void main(void) {
                                         end: midCandidate,
                                         direction: rawDir
                                     }]
-                                };
+                                });
                             }
                         }
                         walkDist += segLen;
@@ -796,14 +959,14 @@ void main(void) {
             if (!endNode) return null;
 
             if (WallSectionUnit._pointsMatch(startNode, endNode)) {
-                return {
+                return finalizePlan({
                     start: startNode,
                     end: endNode,
                     junction: null,
                     primaryDirection: null,
                     secondaryDirection: null,
                     segments: []
-                };
+                });
             }
 
             const dx = (typeof mapRef.shortestDeltaX === "function")
@@ -825,7 +988,7 @@ void main(void) {
 
             // Target lies on primary ray: one segment is enough.
             if (Math.abs(sideCross) <= sideTolerance) {
-                return {
+                return finalizePlan({
                     start: startNode,
                     end: endNode,
                     junction: null,
@@ -838,7 +1001,7 @@ void main(void) {
                             direction: primaryDirection
                         }
                     ]
-                };
+                });
             }
 
             // The secondary direction is the primary offset by ±1 toward
@@ -874,7 +1037,7 @@ void main(void) {
                 // No valid junction — draw two segments using the
                 // calculated directions anyway (no fallback to a
                 // single arbitrary segment).
-                return {
+                return finalizePlan({
                     start: startNode,
                     end: endNode,
                     junction: null,
@@ -892,10 +1055,10 @@ void main(void) {
                             direction: secondaryDirection
                         }
                     ]
-                };
+                });
             }
 
-            return {
+            return finalizePlan({
                 start: startNode,
                 end: endNode,
                 junction,
@@ -913,25 +1076,72 @@ void main(void) {
                         direction: secondaryDirection
                     }
                 ]
-            };
+            });
+        }
+
+        static resolvePlacementSegmentsFromWorldPoints(mapRef, startWorld, endWorld, options = {}) {
+            const plan = WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld, options);
+            let segments = [];
+            if (plan && Array.isArray(plan.segments)) {
+                segments = plan.segments.slice();
+            }
+
+            if (
+                segments.length === 0 &&
+                mapRef &&
+                typeof mapRef.worldToNode === "function" &&
+                startWorld &&
+                endWorld &&
+                Number.isFinite(startWorld.x) &&
+                Number.isFinite(startWorld.y) &&
+                Number.isFinite(endWorld.x) &&
+                Number.isFinite(endWorld.y)
+            ) {
+                const startNode = mapRef.worldToNode(Number(startWorld.x), Number(startWorld.y));
+                const endNode = mapRef.worldToNode(Number(endWorld.x), Number(endWorld.y));
+                if (
+                    startNode && endNode &&
+                    Number.isFinite(startNode.x) && Number.isFinite(startNode.y) &&
+                    Number.isFinite(endNode.x) && Number.isFinite(endNode.y)
+                ) {
+                    segments.push({ start: startNode, end: endNode });
+                }
+            }
+
+            return { plan, segments };
         }
 
         static createPlacementFromWorldPoints(mapRef, startWorld, endWorld, options = {}) {
-            const plan = WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld, options);
-            if (!plan || !Array.isArray(plan.segments) || plan.segments.length === 0) {
+            const resolved = WallSectionUnit.resolvePlacementSegmentsFromWorldPoints(
+                mapRef,
+                startWorld,
+                endWorld,
+                options
+            );
+            const plan = resolved && resolved.plan ? resolved.plan : null;
+            const sourceSegments = (resolved && Array.isArray(resolved.segments)) ? resolved.segments : [];
+            if (sourceSegments.length === 0) {
                 return { plan, sections: [] };
             }
 
+            const preexistingSections = Array.from(WallSectionUnit._allSections.values())
+                .filter(section => section && !section.gone && section.map === mapRef);
+
             const sections = [];
-            for (let i = 0; i < plan.segments.length; i++) {
-                const seg = plan.segments[i];
+            for (let i = 0; i < sourceSegments.length; i++) {
+                const seg = sourceSegments[i];
                 if (!seg || !seg.start || !seg.end) continue;
                 if (WallSectionUnit._pointsMatch(seg.start, seg.end)) continue;
                 const section = new WallSectionUnit(seg.start, seg.end, {
                     map: mapRef,
                     height: Number.isFinite(options.height) ? Number(options.height) : 1,
                     thickness: Number.isFinite(options.thickness) ? Number(options.thickness) : 0.1,
-                    bottomZ: Number.isFinite(options.bottomZ) ? Number(options.bottomZ) : 0
+                    bottomZ: Number.isFinite(options.bottomZ) ? Number(options.bottomZ) : 0,
+                    wallTexturePath: (typeof options.wallTexturePath === "string" && options.wallTexturePath.length > 0)
+                        ? options.wallTexturePath
+                        : DEFAULT_WALL_TEXTURE,
+                    texturePhaseA: Number.isFinite(options.texturePhaseA) ? Number(options.texturePhaseA) : NaN,
+                    texturePhaseB: Number.isFinite(options.texturePhaseB) ? Number(options.texturePhaseB) : NaN
                 });
                 section.direction = WallSectionUnit._normalizeDirection(seg.direction);
                 section.lineAxis = (((section.direction % 6) + 6) % 6);
@@ -939,7 +1149,13 @@ void main(void) {
                 sections.push(section);
             }
 
-            const mergedSections = WallSectionUnit.autoMergeContinuousSections(sections);
+            if (options.harmonizeTexturePhase !== false) {
+                WallSectionUnit.harmonizeTexturePhaseForSections(sections, preexistingSections);
+            }
+
+            const mergedSections = (options.autoMergeContinuous === false)
+                ? sections.slice()
+                : WallSectionUnit.autoMergeContinuousSections(sections);
 
             if (mergedSections.length >= 2) {
                 for (let i = 0; i < mergedSections.length - 1; i++) {
@@ -1298,6 +1514,8 @@ void main(void) {
                 Number(indexChecksum).toFixed(4),
                 Number(repeatX).toFixed(6),
                 Number(repeatY).toFixed(6),
+                Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
+                Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB).toFixed(6) : "nan",
                 wallTextureCfg.texturePath || this.wallTexturePath || DEFAULT_WALL_TEXTURE
             ].join("|");
             if (this._depthGeometryCache && this._depthGeometryCache.key === geometryKey) {
@@ -1308,8 +1526,12 @@ void main(void) {
             const sy = Number(this.startPoint && this.startPoint.y);
             const ex = Number(this.endPoint && this.endPoint.x);
             const ey = Number(this.endPoint && this.endPoint.y);
-            const dx = (Number.isFinite(ex) && Number.isFinite(sx)) ? (ex - sx) : 1;
-            const dy = (Number.isFinite(ey) && Number.isFinite(sy)) ? (ey - sy) : 0;
+            const dx = (this.map && typeof this.map.shortestDeltaX === "function" && Number.isFinite(ex) && Number.isFinite(sx))
+                ? this.map.shortestDeltaX(sx, ex)
+                : ((Number.isFinite(ex) && Number.isFinite(sx)) ? (ex - sx) : 1);
+            const dy = (this.map && typeof this.map.shortestDeltaY === "function" && Number.isFinite(ey) && Number.isFinite(sy))
+                ? this.map.shortestDeltaY(sy, ey)
+                : ((Number.isFinite(ey) && Number.isFinite(sy)) ? (ey - sy) : 0);
             const dirLen = Math.hypot(dx, dy) || 1;
             const ux = dx / dirLen;
             const uy = dy / dirLen;
@@ -1318,9 +1540,16 @@ void main(void) {
             const baseX = Number.isFinite(sx) ? sx : 0;
             const baseY = Number.isFinite(sy) ? sy : 0;
             const bottomZ = Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0;
+            const sectionLength = (Number.isFinite(this.length) && this.length > EPS)
+                ? Number(this.length)
+                : dirLen;
+            const phaseU = Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA) : 0;
+            const phaseV = Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB) : 0;
 
             const vertexCount = Math.floor(vertices.length / 3);
             const alongPerVertex = new Float32Array(vertexCount);
+            const alongStablePerVertex = new Float32Array(vertexCount);
+            const alongWorldPerVertex = new Float32Array(vertexCount);
             const acrossPerVertex = new Float32Array(vertexCount);
             const heightPerVertex = new Float32Array(vertexCount);
             for (let vtx = 0, vertex = 0; vtx < vertices.length; vtx += 3, vertex += 1) {
@@ -1332,6 +1561,8 @@ void main(void) {
                 const along = relX * ux + relY * uy;
                 const across = relX * vx + relY * vy;
                 alongPerVertex[vertex] = along;
+                alongStablePerVertex[vertex] = Math.max(0, Math.min(sectionLength, along));
+                alongWorldPerVertex[vertex] = wx * ux + wy * uy;
                 acrossPerVertex[vertex] = across;
                 heightPerVertex[vertex] = wz - bottomZ;
             }
@@ -1410,19 +1641,20 @@ void main(void) {
                     expandedPositions[dstPos] = Number(vertices[srcPos]) || 0;
                     expandedPositions[dstPos + 1] = Number(vertices[srcPos + 1]) || 0;
                     expandedPositions[dstPos + 2] = Number(vertices[srcPos + 2]) || 0;
-                    const along = Number(alongPerVertex[srcVertex]) || 0;
+                    const along = Number(alongStablePerVertex[srcVertex]) || 0;
+                    const alongWorld = Number(alongWorldPerVertex[srcVertex]) || 0;
                     const across = Number(acrossPerVertex[srcVertex]) || 0;
                     const height = Number(heightPerVertex[srcVertex]) || 0;
                     if (isTopFaceTri) {
                         const acrossNorm = (across - topAcrossMin) / Math.max(1e-6, (topAcrossMax - topAcrossMin));
-                        expandedUvs[dstUv] = along * repeatX;
-                        expandedUvs[dstUv + 1] = topTextureVMin + Math.max(0, Math.min(1, acrossNorm)) * topTextureVSpan;
+                        expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
+                        expandedUvs[dstUv + 1] = topTextureVMin + Math.max(0, Math.min(1, acrossNorm)) * topTextureVSpan + phaseV;
                     } else if (capFace) {
-                        expandedUvs[dstUv] = across * repeatX;
-                        expandedUvs[dstUv + 1] = height * repeatY;
+                        expandedUvs[dstUv] = across * repeatX + phaseU;
+                        expandedUvs[dstUv + 1] = height * repeatY + phaseV;
                     } else {
-                        expandedUvs[dstUv] = along * repeatX;
-                        expandedUvs[dstUv + 1] = height * repeatY;
+                        expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
+                        expandedUvs[dstUv + 1] = height * repeatY + phaseV;
                     }
                     expandedColors[dstColor] = colorR;
                     expandedColors[dstColor + 1] = colorG;
@@ -2214,6 +2446,1093 @@ void main(void) {
             this.nodes = [];
         }
 
+        _buildVanishChunkSplitPlan(vanishPoint, removeWidthWorld = 1) {
+            if (!this.map || !this.startPoint || !this.endPoint) return null;
+            if (!vanishPoint || !Number.isFinite(vanishPoint.x) || !Number.isFinite(vanishPoint.y)) return null;
+
+            const mapRef = this.map;
+            const sx = Number(this.startPoint.x);
+            const sy = Number(this.startPoint.y);
+            const ex = Number(this.endPoint.x);
+            const ey = Number(this.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return null;
+
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, ex) : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, ey) : (ey - sy);
+            const len = Math.hypot(dx, dy);
+            if (!(len > EPS)) return null;
+
+            const px = Number(vanishPoint.x);
+            const py = Number(vanishPoint.y);
+            const vx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, px) : (px - sx);
+            const vy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, py) : (py - sy);
+            const tCenter = Math.max(0, Math.min(1, (vx * dx + vy * dy) / Math.max(EPS, dx * dx + dy * dy)));
+
+            const halfWidth = Math.max(0.05, Number(removeWidthWorld) * 0.5);
+            const tRadius = Math.max(0.0001, halfWidth / len);
+            let tStart = Math.max(0, tCenter - tRadius);
+            let tEnd = Math.min(1, tCenter + tRadius);
+            if ((tEnd - tStart) <= 1e-4) return null;
+
+            const anchors = this._collectOrderedLineAnchors();
+            if (!Array.isArray(anchors) || anchors.length < 2) return null;
+
+            let startIdx = -1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t <= (tStart + 1e-6)) {
+                    startIdx = i;
+                } else {
+                    break;
+                }
+            }
+            if (startIdx < 0) startIdx = 0;
+
+            let endIdx = anchors.length - 1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t >= (tEnd - 1e-6)) {
+                    endIdx = i;
+                    break;
+                }
+            }
+
+            if (endIdx <= startIdx) {
+                let centerIdx = 0;
+                let bestDist = Infinity;
+                for (let i = 0; i < anchors.length; i++) {
+                    const dist = Math.abs(anchors[i].t - tCenter);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        centerIdx = i;
+                    }
+                }
+                startIdx = Math.max(0, centerIdx - 1);
+                endIdx = Math.min(anchors.length - 1, centerIdx + 1);
+                if (endIdx <= startIdx) return null;
+            }
+
+            const cutStartAnchor = anchors[startIdx].anchor;
+            const cutEndAnchor = anchors[endIdx].anchor;
+            tStart = anchors[startIdx].t;
+            tEnd = anchors[endIdx].t;
+            if (!cutStartAnchor || !cutEndAnchor) return null;
+            if ((tEnd - tStart) <= 1e-6) return null;
+
+            return {
+                tStart,
+                tEnd,
+                cutStartAnchor,
+                cutEndAnchor
+            };
+        }
+
+        getVanishChunkSplitPlan(vanishPoint, options = {}) {
+            const removeWidthWorld = Number.isFinite(options && options.removeWidthWorld)
+                ? Math.max(0.05, Number(options.removeWidthWorld))
+                : 1;
+            return this._buildVanishChunkSplitPlan(vanishPoint, removeWidthWorld);
+        }
+
+        splitIntoTargetableVanishSegments(rangeOptions = {}, options = {}) {
+            if (!this.map || this.gone || !this.startPoint || !this.endPoint) return null;
+
+            const anchors = this._collectOrderedLineAnchors();
+            if (!Array.isArray(anchors) || anchors.length < 2) return null;
+
+            let tStartRaw = Number(rangeOptions.tStart);
+            let tEndRaw = Number(rangeOptions.tEnd);
+            if (!Number.isFinite(tStartRaw) || !Number.isFinite(tEndRaw)) {
+                if (rangeOptions && rangeOptions.pointA && rangeOptions.pointB) {
+                    const ta = this._parameterForWorldPointOnSection(rangeOptions.pointA);
+                    const tb = this._parameterForWorldPointOnSection(rangeOptions.pointB);
+                    if (Number.isFinite(ta) && Number.isFinite(tb)) {
+                        tStartRaw = Math.min(ta, tb);
+                        tEndRaw = Math.max(ta, tb);
+                    }
+                }
+            }
+            if (!Number.isFinite(tStartRaw) || !Number.isFinite(tEndRaw)) return null;
+
+            const tStartTarget = Math.max(0, Math.min(1, Math.min(tStartRaw, tEndRaw)));
+            const tEndTarget = Math.max(0, Math.min(1, Math.max(tStartRaw, tEndRaw)));
+            if ((tEndTarget - tStartTarget) <= 1e-6) return null;
+
+            let startIdx = -1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t <= (tStartTarget + 1e-6)) {
+                    startIdx = i;
+                } else {
+                    break;
+                }
+            }
+            if (startIdx < 0) startIdx = 0;
+
+            let endIdx = anchors.length - 1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t >= (tEndTarget - 1e-6)) {
+                    endIdx = i;
+                    break;
+                }
+            }
+
+            if (endIdx <= startIdx) {
+                const fallbackEnd = Math.min(anchors.length - 1, startIdx + 1);
+                if (fallbackEnd <= startIdx) return null;
+                endIdx = fallbackEnd;
+            }
+
+            const targetSegmentLength = Number.isFinite(options.targetSegmentLengthWorld)
+                ? Math.max(0.25, Number(options.targetSegmentLengthWorld))
+                : 1;
+
+            const mapRef = this.map || null;
+            const distanceBetweenAnchors = (a, b) => {
+                if (!a || !b) return 0;
+                const ax = Number(a.x);
+                const ay = Number(a.y);
+                const bx = Number(b.x);
+                const by = Number(b.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+                    return 0;
+                }
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(ax, bx)
+                    : (bx - ax);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(ay, by)
+                    : (by - ay);
+                return Math.hypot(dx, dy);
+            };
+
+            let totalTargetLength = 0;
+            for (let i = startIdx; i < endIdx; i++) {
+                totalTargetLength += distanceBetweenAnchors(anchors[i].anchor, anchors[i + 1].anchor);
+            }
+
+            const atomicIntervalCount = Math.max(1, endIdx - startIdx);
+            const desiredTargetCount = Math.max(1, Math.ceil(totalTargetLength / Math.max(0.0001, targetSegmentLength)));
+            const targetCount = Math.max(1, Math.min(atomicIntervalCount, desiredTargetCount));
+
+            const targetSpecs = [];
+            let previousBoundary = startIdx;
+            for (let part = 1; part <= targetCount; part++) {
+                let nextBoundary = Math.round(startIdx + ((endIdx - startIdx) * part) / targetCount);
+                nextBoundary = Math.max(previousBoundary + 1, Math.min(endIdx, nextBoundary));
+
+                const startAnchor = anchors[previousBoundary] && anchors[previousBoundary].anchor;
+                const endAnchor = anchors[nextBoundary] && anchors[nextBoundary].anchor;
+                if (startAnchor && endAnchor && !WallSectionUnit._pointsMatch(startAnchor, endAnchor)) {
+                    targetSpecs.push({
+                        kind: "target",
+                        startAnchor,
+                        endAnchor,
+                        tStart: anchors[previousBoundary].t,
+                        tEnd: anchors[nextBoundary].t
+                    });
+                }
+                previousBoundary = nextBoundary;
+            }
+
+            if (targetSpecs.length === 0) return null;
+
+            const allSpecs = [];
+            const targetStartAnchor = anchors[startIdx] && anchors[startIdx].anchor;
+            const targetEndAnchor = anchors[endIdx] && anchors[endIdx].anchor;
+            if (
+                targetStartAnchor &&
+                !WallSectionUnit._pointsMatch(this.startPoint, targetStartAnchor)
+            ) {
+                allSpecs.push({
+                    kind: "preserve",
+                    startAnchor: this.startPoint,
+                    endAnchor: targetStartAnchor,
+                    tStart: 0,
+                    tEnd: anchors[startIdx].t
+                });
+            }
+            for (let i = 0; i < targetSpecs.length; i++) {
+                allSpecs.push(targetSpecs[i]);
+            }
+            if (
+                targetEndAnchor &&
+                !WallSectionUnit._pointsMatch(targetEndAnchor, this.endPoint)
+            ) {
+                allSpecs.push({
+                    kind: "preserve",
+                    startAnchor: targetEndAnchor,
+                    endAnchor: this.endPoint,
+                    tStart: anchors[endIdx].t,
+                    tEnd: 1
+                });
+            }
+
+            const sectionOptions = {
+                map: this.map,
+                height: Number(this.height),
+                thickness: Number(this.thickness),
+                bottomZ: Number(this.bottomZ),
+                wallTexturePath: this.wallTexturePath,
+                texturePhaseA: this.texturePhaseA,
+                texturePhaseB: this.texturePhaseB
+            };
+
+            const createdSections = [];
+            const tryCreateSection = (spec) => {
+                if (!spec || !spec.startAnchor || !spec.endAnchor) return null;
+                if (WallSectionUnit._pointsMatch(spec.startAnchor, spec.endAnchor)) return null;
+                let section = null;
+                try {
+                    section = new WallSectionUnit(spec.startAnchor, spec.endAnchor, sectionOptions);
+                } catch (_err) {
+                    section = null;
+                }
+                if (!section) return null;
+                section.rebuildMesh3d();
+                section.addToMapNodes();
+                if (spec.kind === "target") {
+                    section._vanishAsWholeSection = true;
+                    section._disableChunkSplitOnVanish = true;
+                }
+                createdSections.push({
+                    section,
+                    kind: spec.kind,
+                    tStart: Number(spec.tStart),
+                    tEnd: Number(spec.tEnd)
+                });
+                return section;
+            };
+
+            for (let i = 0; i < allSpecs.length; i++) {
+                tryCreateSection(allSpecs[i]);
+            }
+
+            if (createdSections.length === 0) return null;
+
+            const distanceToSection = (section, obj) => {
+                if (!section || !obj || !section.startPoint || !section.endPoint) return Infinity;
+                const sx = Number(section.startPoint.x);
+                const sy = Number(section.startPoint.y);
+                const ex = Number(section.endPoint.x);
+                const ey = Number(section.endPoint.y);
+                const px = Number(obj.x);
+                const py = Number(obj.y);
+                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(px) || !Number.isFinite(py)) {
+                    return Infinity;
+                }
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, ex) : (ex - sx);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, ey) : (ey - sy);
+                const vx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, px) : (px - sx);
+                const vy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, py) : (py - sy);
+                const lenSq = dx * dx + dy * dy;
+                if (!(lenSq > EPS)) return Infinity;
+                const t = Math.max(0, Math.min(1, (vx * dx + vy * dy) / lenSq));
+                const cx = sx + dx * t;
+                const cy = sy + dy * t;
+                const ox = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(cx, px) : (px - cx);
+                const oy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(cy, py) : (py - cy);
+                return Math.hypot(ox, oy);
+            };
+
+            const usedObjects = new Set();
+            const attachmentEntries = Array.isArray(this.attachedObjects) ? this.attachedObjects.slice() : [];
+            const rangeEps = 1e-4;
+            for (let i = 0; i < attachmentEntries.length; i++) {
+                const entry = attachmentEntries[i];
+                const obj = entry && entry.object;
+                if (!obj || usedObjects.has(obj) || obj.gone) continue;
+                const t = this._parameterForWorldPointOnSection(obj);
+                if (!Number.isFinite(t)) continue;
+
+                let candidates = createdSections.filter(row => (
+                    Number.isFinite(row.tStart) &&
+                    Number.isFinite(row.tEnd) &&
+                    t >= (row.tStart - rangeEps) &&
+                    t <= (row.tEnd + rangeEps)
+                ));
+                if (candidates.length === 0) {
+                    candidates = createdSections.slice();
+                }
+
+                let bestRow = null;
+                let bestDist = Infinity;
+                for (let c = 0; c < candidates.length; c++) {
+                    const row = candidates[c];
+                    if (!row || !row.section) continue;
+                    const dist = distanceToSection(row.section, obj);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestRow = row;
+                    }
+                }
+
+                if (bestRow && bestRow.section && typeof bestRow.section.attachObject === "function") {
+                    bestRow.section.attachObject(obj, {
+                        direction: Number.isFinite(entry.direction) ? Number(entry.direction) : bestRow.section.direction,
+                        offsetAlong: Number.isFinite(entry.offsetAlong) ? Number(entry.offsetAlong) : 0
+                    });
+                    usedObjects.add(obj);
+                }
+            }
+
+            const neighbors = [];
+            for (const payload of this.connections.values()) {
+                const section = payload && payload.section;
+                if (!section || section === this || section.gone) continue;
+                if (neighbors.includes(section)) continue;
+                neighbors.push(section);
+            }
+
+            this._removeWallPreserving(Array.from(usedObjects));
+
+            const sectionList = createdSections
+                .map(row => row.section)
+                .filter(section => !!section && !section.gone);
+
+            for (let i = 0; i < sectionList.length; i++) {
+                const section = sectionList[i];
+                if (!section) continue;
+                for (let j = i + 1; j < sectionList.length; j++) {
+                    const other = sectionList[j];
+                    if (!other || other === section) continue;
+                    if (!section.sharesEndpointWith(other)) continue;
+                    section.connectTo(other, { splitFromVanish: true, rangeSplit: true });
+                    if (typeof other.connectTo === "function") {
+                        other.connectTo(section, { splitFromVanish: true, rangeSplit: true });
+                    }
+                }
+            }
+
+            for (let i = 0; i < sectionList.length; i++) {
+                const section = sectionList[i];
+                if (!section || section.gone) continue;
+                for (let n = 0; n < neighbors.length; n++) {
+                    const neighbor = neighbors[n];
+                    if (!neighbor || neighbor.gone) continue;
+                    if (!section.sharesEndpointWith(neighbor)) continue;
+                    section.connectTo(neighbor, { splitFromVanish: true, rangeSplit: true });
+                    if (typeof neighbor.connectTo === "function") {
+                        neighbor.connectTo(section, { splitFromVanish: true, rangeSplit: true });
+                    }
+                }
+            }
+
+            for (let i = 0; i < sectionList.length; i++) {
+                const section = sectionList[i];
+                if (!section || section.gone) continue;
+                if (typeof section.handleJoineryOnPlacement === "function") {
+                    section.handleJoineryOnPlacement();
+                } else {
+                    if (typeof section.rebuildMesh3d === "function") section.rebuildMesh3d();
+                    if (typeof section.draw === "function") section.draw();
+                }
+            }
+
+            const targetSegments = createdSections
+                .filter(row => row && row.kind === "target" && row.section && !row.section.gone)
+                .map(row => row.section);
+
+            return {
+                allSections: sectionList,
+                targetSegments
+            };
+        }
+
+        getVanishPreviewPolygonForRange(rangeOptions = {}) {
+            if (!this.map || this.gone || !this.startPoint || !this.endPoint) return null;
+
+            const anchors = this._collectOrderedLineAnchors();
+            if (!Array.isArray(anchors) || anchors.length < 2) return null;
+
+            const tStartRaw = Number(rangeOptions.tStart);
+            const tEndRaw = Number(rangeOptions.tEnd);
+            if (!Number.isFinite(tStartRaw) || !Number.isFinite(tEndRaw)) return null;
+
+            const tStartTarget = Math.max(0, Math.min(1, Math.min(tStartRaw, tEndRaw)));
+            const tEndTarget = Math.max(0, Math.min(1, Math.max(tStartRaw, tEndRaw)));
+            if ((tEndTarget - tStartTarget) <= 1e-6) return null;
+
+            let startIdx = -1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t <= (tStartTarget + 1e-6)) {
+                    startIdx = i;
+                } else {
+                    break;
+                }
+            }
+            if (startIdx < 0) startIdx = 0;
+
+            let endIdx = anchors.length - 1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t >= (tEndTarget - 1e-6)) {
+                    endIdx = i;
+                    break;
+                }
+            }
+
+            if (endIdx <= startIdx) {
+                const fallbackEnd = Math.min(anchors.length - 1, startIdx + 1);
+                if (fallbackEnd <= startIdx) return null;
+                endIdx = fallbackEnd;
+            }
+
+            const startAnchor = anchors[startIdx] && anchors[startIdx].anchor;
+            const endAnchor = anchors[endIdx] && anchors[endIdx].anchor;
+            if (!startAnchor || !endAnchor || WallSectionUnit._pointsMatch(startAnchor, endAnchor)) return null;
+
+            const mapRef = this.map || null;
+            const ax = Number(startAnchor.x);
+            const ay = Number(startAnchor.y);
+            const bx = Number(endAnchor.x);
+            const by = Number(endAnchor.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return null;
+
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(ax, bx) : (bx - ax);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(ay, by) : (by - ay);
+            const len = Math.hypot(dx, dy);
+            if (!(len > EPS)) return null;
+
+            const ux = dx / len;
+            const uy = dy / len;
+            const nx = -uy;
+            const ny = ux;
+            const halfT = Math.max(0.001, Number(this.thickness) || 0.001) * 0.5;
+            const z = (Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0) + 0.001;
+
+            const offsetPoint = (px, py, sign) => {
+                let x = Number(px) + nx * halfT * sign;
+                let y = Number(py) + ny * halfT * sign;
+                if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+                if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+                return { x, y };
+            };
+
+            const points = [
+                offsetPoint(ax, ay, +1),
+                offsetPoint(bx, by, +1),
+                offsetPoint(bx, by, -1),
+                offsetPoint(ax, ay, -1)
+            ];
+
+            return {
+                points,
+                z
+            };
+        }
+
+        getVanishTargetSegmentCountForRange(rangeOptions = {}, options = {}) {
+            if (!this.map || this.gone || !this.startPoint || !this.endPoint) return 0;
+
+            const anchors = this._collectOrderedLineAnchors();
+            if (!Array.isArray(anchors) || anchors.length < 2) return 0;
+
+            const tStartRaw = Number(rangeOptions.tStart);
+            const tEndRaw = Number(rangeOptions.tEnd);
+            if (!Number.isFinite(tStartRaw) || !Number.isFinite(tEndRaw)) return 0;
+
+            const tStartTarget = Math.max(0, Math.min(1, Math.min(tStartRaw, tEndRaw)));
+            const tEndTarget = Math.max(0, Math.min(1, Math.max(tStartRaw, tEndRaw)));
+            if ((tEndTarget - tStartTarget) <= 1e-6) return 0;
+
+            let startIdx = -1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t <= (tStartTarget + 1e-6)) {
+                    startIdx = i;
+                } else {
+                    break;
+                }
+            }
+            if (startIdx < 0) startIdx = 0;
+
+            let endIdx = anchors.length - 1;
+            for (let i = 0; i < anchors.length; i++) {
+                if (anchors[i].t >= (tEndTarget - 1e-6)) {
+                    endIdx = i;
+                    break;
+                }
+            }
+
+            if (endIdx <= startIdx) {
+                const fallbackEnd = Math.min(anchors.length - 1, startIdx + 1);
+                if (fallbackEnd <= startIdx) return 0;
+                endIdx = fallbackEnd;
+            }
+
+            const targetSegmentLength = Number.isFinite(options.targetSegmentLengthWorld)
+                ? Math.max(0.25, Number(options.targetSegmentLengthWorld))
+                : 1;
+            const mapRef = this.map || null;
+            const distanceBetweenAnchors = (a, b) => {
+                if (!a || !b) return 0;
+                const ax = Number(a.x);
+                const ay = Number(a.y);
+                const bx = Number(b.x);
+                const by = Number(b.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+                    return 0;
+                }
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(ax, bx)
+                    : (bx - ax);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(ay, by)
+                    : (by - ay);
+                return Math.hypot(dx, dy);
+            };
+
+            let totalTargetLength = 0;
+            for (let i = startIdx; i < endIdx; i++) {
+                totalTargetLength += distanceBetweenAnchors(anchors[i].anchor, anchors[i + 1].anchor);
+            }
+
+            const atomicIntervalCount = Math.max(1, endIdx - startIdx);
+            const desiredTargetCount = Math.max(1, Math.ceil(totalTargetLength / Math.max(0.0001, targetSegmentLength)));
+            return Math.max(1, Math.min(atomicIntervalCount, desiredTargetCount));
+        }
+
+        getVanishPreviewPolygon(vanishPoint, options = {}) {
+            const plan = this.getVanishChunkSplitPlan(vanishPoint, options);
+            if (!plan || !plan.cutStartAnchor || !plan.cutEndAnchor) return null;
+
+            const mapRef = this.map || null;
+            const ax = Number(plan.cutStartAnchor.x);
+            const ay = Number(plan.cutStartAnchor.y);
+            const bx = Number(plan.cutEndAnchor.x);
+            const by = Number(plan.cutEndAnchor.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return null;
+
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(ax, bx) : (bx - ax);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(ay, by) : (by - ay);
+            const len = Math.hypot(dx, dy);
+            if (!(len > EPS)) return null;
+
+            const ux = dx / len;
+            const uy = dy / len;
+            const nx = -uy;
+            const ny = ux;
+            const halfT = Math.max(0.001, Number(this.thickness) || 0.001) * 0.5;
+            const z = (Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0) + 0.001;
+
+            const offsetPoint = (px, py, sign) => {
+                let x = Number(px) + nx * halfT * sign;
+                let y = Number(py) + ny * halfT * sign;
+                if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+                if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+                return { x, y };
+            };
+
+            const points = [
+                offsetPoint(ax, ay, +1),
+                offsetPoint(bx, by, +1),
+                offsetPoint(bx, by, -1),
+                offsetPoint(ax, ay, -1)
+            ];
+
+            return {
+                plan,
+                points,
+                z
+            };
+        }
+
+        _parameterForWorldPointOnSection(worldPoint) {
+            if (!worldPoint || !this.startPoint || !this.endPoint) return null;
+            const mapRef = this.map || null;
+            const sx = Number(this.startPoint.x);
+            const sy = Number(this.startPoint.y);
+            const ex = Number(this.endPoint.x);
+            const ey = Number(this.endPoint.y);
+            const px = Number(worldPoint.x);
+            const py = Number(worldPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(px) || !Number.isFinite(py)) {
+                return null;
+            }
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, ex) : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, ey) : (ey - sy);
+            const lenSq = dx * dx + dy * dy;
+            if (!(lenSq > EPS)) return null;
+            const vx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, px) : (px - sx);
+            const vy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, py) : (py - sy);
+            return (vx * dx + vy * dy) / lenSq;
+        }
+
+        _collectOrderedLineAnchors() {
+            const mapRef = this.map || null;
+            const start = this.startPoint;
+            const end = this.endPoint;
+            if (!mapRef || !start || !end || typeof mapRef.getHexLine !== "function") return [];
+
+            const line = mapRef.getHexLine(start, end, 0);
+            if (!Array.isArray(line) || line.length === 0) return [];
+
+            const anchors = [];
+            const seen = new Set();
+            const pushAnchor = (anchor) => {
+                if (!anchor) return;
+                const tRaw = this._parameterForWorldPointOnSection(anchor);
+                if (!Number.isFinite(tRaw)) return;
+                const t = Math.max(0, Math.min(1, Number(tRaw)));
+                const key = WallSectionUnit.endpointKey(anchor);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                anchors.push({
+                    anchor,
+                    t,
+                    key,
+                    isEndpoint: WallSectionUnit._pointsMatch(anchor, start) || WallSectionUnit._pointsMatch(anchor, end)
+                });
+            };
+
+            pushAnchor(start);
+            for (let i = 0; i < line.length; i++) {
+                const item = line[i];
+                if (WallSectionUnit._isMapNode(item) || WallSectionUnit._isNodeMidpoint(item)) {
+                    pushAnchor(item);
+                }
+                if (i >= (line.length - 1)) continue;
+
+                const a = line[i];
+                const b = line[i + 1];
+                if (!WallSectionUnit._isMapNode(a) || !WallSectionUnit._isMapNode(b)) continue;
+
+                const dx = (typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(a.x, b.x) : (b.x - a.x);
+                const dy = (typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(a.y, b.y) : (b.y - a.y);
+                let midX = Number(a.x) + dx * 0.5;
+                let midY = Number(a.y) + dy * 0.5;
+                if (typeof mapRef.wrapWorldX === "function") midX = mapRef.wrapWorldX(midX);
+                if (typeof mapRef.wrapWorldY === "function") midY = mapRef.wrapWorldY(midY);
+
+                const midpoint = (typeof mapRef.worldToNodeOrMidpoint === "function")
+                    ? mapRef.worldToNodeOrMidpoint(midX, midY)
+                    : null;
+                if (midpoint && WallSectionUnit._isNodeMidpoint(midpoint)) {
+                    pushAnchor(midpoint);
+                }
+            }
+            pushAnchor(end);
+
+            if (anchors.length === 0) return [];
+            anchors.sort((left, right) => {
+                const dt = left.t - right.t;
+                if (Math.abs(dt) > 1e-7) return dt;
+                if (left.isEndpoint && !right.isEndpoint) return -1;
+                if (!left.isEndpoint && right.isEndpoint) return 1;
+                return left.key.localeCompare(right.key);
+            });
+
+            return anchors;
+        }
+
+        _removeWallPreserving(listToPreserve = []) {
+            if (this.gone) return;
+            const preserveSet = new Set(Array.isArray(listToPreserve) ? listToPreserve : []);
+
+            const neighbors = [];
+            const mountedToRemove = [];
+            const mountedSeen = new Set();
+            for (const payload of this.connections.values()) {
+                const section = payload && payload.section;
+                if (!section || section === this) continue;
+                if (neighbors.includes(section)) continue;
+                neighbors.push(section);
+            }
+
+            const pushMounted = (obj) => {
+                if (!obj || obj.gone) return;
+                if (preserveSet.has(obj)) return;
+                if (mountedSeen.has(obj)) return;
+                mountedSeen.add(obj);
+                mountedToRemove.push(obj);
+            };
+
+            for (let i = 0; i < this.attachedObjects.length; i++) {
+                const entry = this.attachedObjects[i];
+                if (!entry) continue;
+                pushMounted(entry.object);
+            }
+
+            this.gone = true;
+            this.vanishing = false;
+            this._vanishWorldPoint = null;
+
+            for (let i = 0; i < mountedToRemove.length; i++) {
+                const obj = mountedToRemove[i];
+                if (!obj || obj.gone) continue;
+                if (typeof obj.remove === "function") {
+                    obj.remove();
+                } else if (typeof obj.removeFromGame === "function") {
+                    obj.removeFromGame();
+                } else if (typeof obj.delete === "function") {
+                    obj.delete();
+                } else {
+                    obj.gone = true;
+                }
+            }
+            this.attachedObjects.length = 0;
+
+            for (let i = 0; i < neighbors.length; i++) {
+                const neighbor = neighbors[i];
+                if (!neighbor) continue;
+                if (typeof neighbor.detachFrom === "function") {
+                    neighbor.detachFrom(this);
+                }
+            }
+            this.connections.clear();
+
+            this.destroy();
+
+            for (let i = 0; i < neighbors.length; i++) {
+                const neighbor = neighbors[i];
+                if (!neighbor || neighbor.gone) continue;
+                if (typeof neighbor.handleJoineryOnPlacement === "function") {
+                    neighbor.handleJoineryOnPlacement();
+                } else {
+                    if (typeof neighbor.rebuildMesh3d === "function") neighbor.rebuildMesh3d();
+                    if (typeof neighbor.draw === "function") neighbor.draw();
+                }
+            }
+        }
+
+        _splitForVanishAroundPoint() {
+            const vanishPoint = (this._vanishWorldPoint && Number.isFinite(this._vanishWorldPoint.x) && Number.isFinite(this._vanishWorldPoint.y))
+                ? this._vanishWorldPoint
+                : this.center;
+            const plan = this.getVanishChunkSplitPlan(vanishPoint, { removeWidthWorld: 1 });
+            if (!plan) return false;
+
+            const newSections = [];
+            const sectionOptions = {
+                map: this.map,
+                height: Number(this.height),
+                thickness: Number(this.thickness),
+                bottomZ: Number(this.bottomZ),
+                wallTexturePath: this.wallTexturePath,
+                texturePhaseA: this.texturePhaseA,
+                texturePhaseB: this.texturePhaseB
+            };
+
+            const tryCreateSection = (startAnchor, endAnchor) => {
+                if (!startAnchor || !endAnchor) return null;
+                if (WallSectionUnit._pointsMatch(startAnchor, endAnchor)) return null;
+                let section = null;
+                try {
+                    section = new WallSectionUnit(startAnchor, endAnchor, sectionOptions);
+                } catch (_err) {
+                    section = null;
+                }
+                if (!section) return null;
+                section.rebuildMesh3d();
+                section.addToMapNodes();
+                return section;
+            };
+
+            const eps = 1e-5;
+            if (plan.tStart > eps) {
+                const left = tryCreateSection(this.startPoint, plan.cutStartAnchor);
+                if (left) newSections.push({ side: "left", section: left });
+            }
+            if (plan.tEnd < (1 - eps)) {
+                const right = tryCreateSection(plan.cutEndAnchor, this.endPoint);
+                if (right) newSections.push({ side: "right", section: right });
+            }
+
+            if (newSections.length === 0) return false;
+
+            const preservedObjects = [];
+            const usedObjects = new Set();
+            const attachmentEntries = Array.isArray(this.attachedObjects) ? this.attachedObjects.slice() : [];
+            const rangeEps = 1e-4;
+
+            const mapRef = this.map || null;
+            const distanceToSection = (section, obj) => {
+                if (!section || !obj || !section.startPoint || !section.endPoint) return Infinity;
+                const sx = Number(section.startPoint.x);
+                const sy = Number(section.startPoint.y);
+                const ex = Number(section.endPoint.x);
+                const ey = Number(section.endPoint.y);
+                const px = Number(obj.x);
+                const py = Number(obj.y);
+                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(px) || !Number.isFinite(py)) {
+                    return Infinity;
+                }
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, ex) : (ex - sx);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, ey) : (ey - sy);
+                const vx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, px) : (px - sx);
+                const vy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, py) : (py - sy);
+                const lenSq = dx * dx + dy * dy;
+                if (!(lenSq > EPS)) return Infinity;
+                const t = Math.max(0, Math.min(1, (vx * dx + vy * dy) / lenSq));
+                const cx = sx + dx * t;
+                const cy = sy + dy * t;
+                const ox = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(cx, px) : (px - cx);
+                const oy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(cy, py) : (py - cy);
+                return Math.hypot(ox, oy);
+            };
+
+            for (let i = 0; i < attachmentEntries.length; i++) {
+                const entry = attachmentEntries[i];
+                const obj = entry && entry.object;
+                if (!obj || usedObjects.has(obj) || obj.gone) continue;
+                const t = this._parameterForWorldPointOnSection(obj);
+                if (!Number.isFinite(t)) continue;
+
+                let chosenSection = null;
+                if (t < (plan.tStart - rangeEps)) {
+                    for (let s = 0; s < newSections.length; s++) {
+                        if (newSections[s].side === "left") {
+                            chosenSection = newSections[s].section;
+                            break;
+                        }
+                    }
+                } else if (t > (plan.tEnd + rangeEps)) {
+                    for (let s = 0; s < newSections.length; s++) {
+                        if (newSections[s].side === "right") {
+                            chosenSection = newSections[s].section;
+                            break;
+                        }
+                    }
+                }
+                if (!chosenSection) continue;
+
+                let bestSection = chosenSection;
+                let bestDist = distanceToSection(bestSection, obj);
+                for (let s = 0; s < newSections.length; s++) {
+                    const candidate = newSections[s].section;
+                    if (!candidate) continue;
+                    if (newSections[s].side === "left" && t >= (plan.tStart - rangeEps)) continue;
+                    if (newSections[s].side === "right" && t <= (plan.tEnd + rangeEps)) continue;
+                    const dist = distanceToSection(candidate, obj);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestSection = candidate;
+                    }
+                }
+
+                if (bestSection && typeof bestSection.attachObject === "function") {
+                    bestSection.attachObject(obj, {
+                        direction: Number.isFinite(entry.direction) ? Number(entry.direction) : bestSection.direction,
+                        offsetAlong: Number.isFinite(entry.offsetAlong) ? Number(entry.offsetAlong) : 0
+                    });
+                    usedObjects.add(obj);
+                    preservedObjects.push(obj);
+                }
+            }
+
+            const allNewSections = newSections.map(row => row.section).filter(section => section && !section.gone);
+
+            const neighbors = [];
+            for (const payload of this.connections.values()) {
+                const section = payload && payload.section;
+                if (!section || section === this || section.gone) continue;
+                if (neighbors.includes(section)) continue;
+                neighbors.push(section);
+            }
+
+            this._removeWallPreserving(preservedObjects);
+
+            for (let i = 0; i < allNewSections.length; i++) {
+                const section = allNewSections[i];
+                if (!section || section.gone) continue;
+                for (let n = 0; n < neighbors.length; n++) {
+                    const neighbor = neighbors[n];
+                    if (!neighbor || neighbor.gone) continue;
+                    if (!section.sharesEndpointWith(neighbor)) continue;
+                    section.connectTo(neighbor, { splitFromVanish: true });
+                    if (typeof neighbor.connectTo === "function") {
+                        neighbor.connectTo(section, { splitFromVanish: true });
+                    }
+                }
+            }
+
+            for (let i = 0; i < allNewSections.length; i++) {
+                const section = allNewSections[i];
+                if (!section || section.gone) continue;
+                if (typeof section.handleJoineryOnPlacement === "function") {
+                    section.handleJoineryOnPlacement();
+                } else {
+                    if (typeof section.rebuildMesh3d === "function") section.rebuildMesh3d();
+                    if (typeof section.draw === "function") section.draw();
+                }
+            }
+
+            this._vanishWorldPoint = null;
+
+            return true;
+        }
+
+        vanishAroundPoint(vanishPoint, options = {}) {
+            const removeWidthWorld = Number.isFinite(options.removeWidthWorld)
+                ? Math.max(0.05, Number(options.removeWidthWorld))
+                : 1;
+            const plan = this.getVanishChunkSplitPlan(vanishPoint, { removeWidthWorld });
+            if (!plan) return false;
+
+            const sectionOptions = {
+                map: this.map,
+                height: Number(this.height),
+                thickness: Number(this.thickness),
+                bottomZ: Number(this.bottomZ),
+                wallTexturePath: this.wallTexturePath,
+                texturePhaseA: this.texturePhaseA,
+                texturePhaseB: this.texturePhaseB
+            };
+
+            const tryCreateSection = (startAnchor, endAnchor) => {
+                if (!startAnchor || !endAnchor) return null;
+                if (WallSectionUnit._pointsMatch(startAnchor, endAnchor)) return null;
+                let section = null;
+                try {
+                    section = new WallSectionUnit(startAnchor, endAnchor, sectionOptions);
+                } catch (_err) {
+                    section = null;
+                }
+                if (!section) return null;
+                section.rebuildMesh3d();
+                section.addToMapNodes();
+                return section;
+            };
+
+            const eps = 1e-5;
+            const leftSection = (plan.tStart > eps)
+                ? tryCreateSection(this.startPoint, plan.cutStartAnchor)
+                : null;
+            const centerSection = tryCreateSection(plan.cutStartAnchor, plan.cutEndAnchor);
+            const rightSection = (plan.tEnd < (1 - eps))
+                ? tryCreateSection(plan.cutEndAnchor, this.endPoint)
+                : null;
+
+            if (!centerSection) {
+                if (leftSection && !leftSection.gone) leftSection.removeFromGame();
+                if (rightSection && !rightSection.gone) rightSection.removeFromGame();
+                return false;
+            }
+
+            const createdSections = [leftSection, centerSection, rightSection].filter(section => !!section && !section.gone);
+            const preservedObjects = [];
+            const usedObjects = new Set();
+            const attachmentEntries = Array.isArray(this.attachedObjects) ? this.attachedObjects.slice() : [];
+            const rangeEps = 1e-4;
+
+            const mapRef = this.map || null;
+            const distanceToSection = (section, obj) => {
+                if (!section || !obj || !section.startPoint || !section.endPoint) return Infinity;
+                const sx = Number(section.startPoint.x);
+                const sy = Number(section.startPoint.y);
+                const ex = Number(section.endPoint.x);
+                const ey = Number(section.endPoint.y);
+                const px = Number(obj.x);
+                const py = Number(obj.y);
+                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey) || !Number.isFinite(px) || !Number.isFinite(py)) {
+                    return Infinity;
+                }
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, ex) : (ex - sx);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, ey) : (ey - sy);
+                const vx = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(sx, px) : (px - sx);
+                const vy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(sy, py) : (py - sy);
+                const lenSq = dx * dx + dy * dy;
+                if (!(lenSq > EPS)) return Infinity;
+                const t = Math.max(0, Math.min(1, (vx * dx + vy * dy) / lenSq));
+                const cx = sx + dx * t;
+                const cy = sy + dy * t;
+                const ox = (mapRef && typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(cx, px) : (px - cx);
+                const oy = (mapRef && typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(cy, py) : (py - cy);
+                return Math.hypot(ox, oy);
+            };
+
+            for (let i = 0; i < attachmentEntries.length; i++) {
+                const entry = attachmentEntries[i];
+                const obj = entry && entry.object;
+                if (!obj || usedObjects.has(obj) || obj.gone) continue;
+                const t = this._parameterForWorldPointOnSection(obj);
+                if (!Number.isFinite(t)) continue;
+
+                let chosenSection = centerSection;
+                if (t < (plan.tStart - rangeEps) && leftSection) {
+                    chosenSection = leftSection;
+                } else if (t > (plan.tEnd + rangeEps) && rightSection) {
+                    chosenSection = rightSection;
+                }
+
+                let bestSection = chosenSection;
+                let bestDist = distanceToSection(chosenSection, obj);
+                for (let s = 0; s < createdSections.length; s++) {
+                    const candidate = createdSections[s];
+                    const dist = distanceToSection(candidate, obj);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestSection = candidate;
+                    }
+                }
+
+                if (bestSection && typeof bestSection.attachObject === "function") {
+                    bestSection.attachObject(obj, {
+                        direction: Number.isFinite(entry.direction) ? Number(entry.direction) : bestSection.direction,
+                        offsetAlong: Number.isFinite(entry.offsetAlong) ? Number(entry.offsetAlong) : 0
+                    });
+                    usedObjects.add(obj);
+                    if (bestSection !== centerSection) {
+                        preservedObjects.push(obj);
+                    }
+                }
+            }
+
+            const neighbors = [];
+            for (const payload of this.connections.values()) {
+                const section = payload && payload.section;
+                if (!section || section === this || section.gone) continue;
+                if (neighbors.includes(section)) continue;
+                neighbors.push(section);
+            }
+
+            this._removeWallPreserving([...preservedObjects, ...Array.from(usedObjects)]);
+
+            for (let i = 0; i < createdSections.length; i++) {
+                const section = createdSections[i];
+                if (!section || section.gone) continue;
+                for (let n = 0; n < neighbors.length; n++) {
+                    const neighbor = neighbors[n];
+                    if (!neighbor || neighbor.gone) continue;
+                    if (!section.sharesEndpointWith(neighbor)) continue;
+                    section.connectTo(neighbor, { splitFromVanish: true });
+                    if (typeof neighbor.connectTo === "function") {
+                        neighbor.connectTo(section, { splitFromVanish: true });
+                    }
+                }
+            }
+
+            for (let i = 0; i < createdSections.length; i++) {
+                const section = createdSections[i];
+                if (!section || section.gone) continue;
+                if (typeof section.handleJoineryOnPlacement === "function") {
+                    section.handleJoineryOnPlacement();
+                } else {
+                    if (typeof section.rebuildMesh3d === "function") section.rebuildMesh3d();
+                    if (typeof section.draw === "function") section.draw();
+                }
+            }
+
+            const vanishFrames = Number.isFinite(options.vanishDurationFrames)
+                ? Math.max(1, Number(options.vanishDurationFrames))
+                : ((Number.isFinite(globalScope.frameRate) ? Number(globalScope.frameRate) : 60) * 0.25);
+            const frameRate = Math.max(1, Number.isFinite(globalScope.frameRate) ? Number(globalScope.frameRate) : 60);
+            centerSection._disableChunkSplitOnVanish = true;
+            centerSection.vanishing = true;
+            centerSection.vanishStartTime = Number.isFinite(globalScope.frameCount) ? Number(globalScope.frameCount) : 0;
+            centerSection.vanishDuration = vanishFrames;
+            centerSection.percentVanished = 0;
+            if (centerSection._vanishFinalizeTimeout) {
+                clearTimeout(centerSection._vanishFinalizeTimeout);
+            }
+            const finalizeAfterMs = Math.max(0, (vanishFrames / frameRate) * 1000);
+            centerSection._vanishFinalizeTimeout = setTimeout(() => {
+                if (!centerSection || centerSection.gone) return;
+                centerSection._disableChunkSplitOnVanish = true;
+                centerSection.removeFromGame();
+                centerSection._disableChunkSplitOnVanish = false;
+                centerSection._vanishFinalizeTimeout = null;
+            }, finalizeAfterMs);
+
+            return true;
+        }
+
         destroy() {
             this.removeFromMapNodes();
             WallSectionUnit._allSections.delete(this.id);
@@ -2233,6 +3552,10 @@ void main(void) {
 
         removeFromGame() {
             if (this.gone) return;
+            if (this.vanishing && !this._disableChunkSplitOnVanish) {
+                const splitHandled = this._splitForVanishAroundPoint();
+                if (splitHandled) return;
+            }
             const neighbors = [];
             const mountedToRemove = [];
             const mountedSeen = new Set();
