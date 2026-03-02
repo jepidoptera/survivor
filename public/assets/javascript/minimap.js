@@ -26,6 +26,7 @@
     let staticCanvas = null;
     let staticCtx    = null;
     let staticDirty  = true;
+    let lastMapRef   = null;
 
     // User-chosen size (null = use default 1/6 of screen)
     let userWidth  = null;
@@ -64,7 +65,7 @@
         const handle = document.createElement("div");
         handle.style.cssText =
             "position:absolute;top:0;left:0;width:18px;height:18px;" +
-            "cursor:nwse-resize;z-index:1;" +
+            "cursor:ew-resize;z-index:1;" +
             "background:linear-gradient(135deg,rgba(255,255,255,0.45) 40%,transparent 40%);";
         wrapper.appendChild(handle);
 
@@ -144,8 +145,22 @@
         const mh = staticCanvas.height;
         const worldW = map.worldWidth;
         const worldH = map.worldHeight;
+        if (!Number.isFinite(worldW) || !Number.isFinite(worldH) || worldW <= 0 || worldH <= 0) return;
         const dotW = Math.max(1, mw / map.width);
         const dotH = Math.max(1, mh / map.height);
+
+        function drawObjectType(type, x, y) {
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            const px = (x / worldW) * mw;
+            const py = (y / worldH) * mh;
+            if (type === "wallSection") {
+                drawDot(staticCtx, px, py, dotW, dotH, COL_WALL);
+            } else if (type === "tree") {
+                drawDot(staticCtx, px, py, dotW, dotH, COL_TREE);
+            } else if (type === "road") {
+                drawDot(staticCtx, px, py, dotW, dotH, COL_ROAD);
+            }
+        }
 
         // Clear to ground colour
         staticCtx.fillStyle = COL_GROUND;
@@ -177,12 +192,45 @@
             }
         }
 
+        // Also render from map.objects so static items not currently attached to
+        // node lists still appear on the minimap.
+        if (Array.isArray(map.objects)) {
+            for (let i = 0; i < map.objects.length; i++) {
+                const obj = map.objects[i];
+                if (!obj || !obj.type) continue;
+                drawObjectType(obj.type, obj.x, obj.y);
+            }
+        }
+
+        // Include lazy records that may not be hydrated into map nodes yet.
+        if (typeof getLazyRoadRecordsForMinimap === "function") {
+            const lazyRoads = getLazyRoadRecordsForMinimap();
+            for (let i = 0; i < lazyRoads.length; i++) {
+                const rec = lazyRoads[i];
+                if (!rec) continue;
+                drawObjectType("road", rec.x, rec.y);
+            }
+        }
+        if (typeof getLazyTreeRecordsForMinimap === "function") {
+            const lazyTrees = getLazyTreeRecordsForMinimap();
+            for (let i = 0; i < lazyTrees.length; i++) {
+                const rec = lazyTrees[i];
+                if (!rec) continue;
+                drawObjectType("tree", rec.x, rec.y);
+            }
+        }
+
         staticDirty = false;
     }
 
     // ---- main paint (called every frame while visible) ----
     function paint() {
         if (!visible || !canvas || typeof map === "undefined" || !map || !map.nodes) return;
+
+        if (map !== lastMapRef) {
+            lastMapRef = map;
+            staticDirty = true;
+        }
 
         ensureCanvas();
         sizeCanvas();
