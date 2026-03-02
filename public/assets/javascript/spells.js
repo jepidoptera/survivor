@@ -1399,6 +1399,7 @@ const SpellSystem = (() => {
     const WALL_THICKNESS_STEP = 0.125;
     const VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD = 1;
     const VANISH_BURST_SHOT_INTERVAL_MS = 45;
+    const VANISH_MAGIC_COST_PER_CAST = 5;
     const PLACEABLE_ROTATION_STEP_DEGREES = 5;
     const POWERUP_PLACEMENT_FILE_NAME = "black diamond.png";
     const POWERUP_PLACEMENT_IMAGE_PATH = "/assets/images/powerups/black%20diamond.png";
@@ -2579,10 +2580,53 @@ const SpellSystem = (() => {
             wizardRef.vanishDragTargetingState = {
                 queuedObjects: [],
                 queuedObjectSet: new Set(),
-                wallRanges: new Map()
+                wallRanges: new Map(),
+                selectionTimeline: []
             };
         }
         return wizardRef.vanishDragTargetingState;
+    }
+
+    function getMaxSelectableVanishTargets(wizardRef) {
+        const magic = (wizardRef && Number.isFinite(wizardRef.magic)) ? Number(wizardRef.magic) : 0;
+        const perCastCost = Math.max(1, Number(VANISH_MAGIC_COST_PER_CAST) || 1);
+        return Math.max(0, Math.floor(magic / perCastCost));
+    }
+
+    function getVanishWallRangeTargetCount(entry) {
+        if (!entry || !entry.wall || entry.wall.gone || entry.wall.vanishing) return 0;
+        const wall = entry.wall;
+        if (typeof wall.getVanishTargetSegmentCountForRange === "function") {
+            return Math.max(0, Number(wall.getVanishTargetSegmentCountForRange(
+                { tStart: Number(entry.tStart), tEnd: Number(entry.tEnd) },
+                { targetSegmentLengthWorld: VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD }
+            )) || 0);
+        }
+        return 1;
+    }
+
+    function getVanishQueuedSelectionCount(state, overrideWall = null) {
+        if (!state || typeof state !== "object") return 0;
+        let count = 0;
+        if (Array.isArray(state.queuedObjects)) {
+            count += state.queuedObjects.length;
+        }
+        if (state.wallRanges instanceof Map) {
+            state.wallRanges.forEach(entry => {
+                if (!entry || !entry.wall) return;
+                if (overrideWall && overrideWall.wall === entry.wall) {
+                    count += getVanishWallRangeTargetCount(overrideWall);
+                } else {
+                    count += getVanishWallRangeTargetCount(entry);
+                }
+            });
+            if (overrideWall && overrideWall.wall && !state.wallRanges.has(overrideWall.wall)) {
+                count += getVanishWallRangeTargetCount(overrideWall);
+            }
+        } else if (overrideWall && overrideWall.wall) {
+            count += getVanishWallRangeTargetCount(overrideWall);
+        }
+        return count;
     }
 
     function resetVanishDragTargetingState(wizardRef) {
@@ -2595,6 +2639,9 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell !== "vanish") return false;
         if (!wizardRef.vanishDragMode) return false;
 
+        const maxSelectable = getMaxSelectableVanishTargets(wizardRef);
+        if (maxSelectable <= 0) return false;
+
         const state = ensureVanishDragTargetingState(wizardRef);
         if (!state) return false;
 
@@ -2605,27 +2652,68 @@ const SpellSystem = (() => {
             candidate.type === "wallSection" &&
             typeof candidate._parameterForWorldPointOnSection === "function"
         ) {
+            const hoverPreview = getVanishWallPreviewPolygonForHover(
+                wizardRef,
+                candidate,
+                Number(worldX),
+                Number(worldY)
+            );
+            const hoverPlan = hoverPreview && hoverPreview.plan ? hoverPreview.plan : null;
+
             const tRaw = candidate._parameterForWorldPointOnSection({ x: worldX, y: worldY });
-            const t = Number.isFinite(tRaw)
+            const tCenter = Number.isFinite(tRaw)
                 ? Math.max(0, Math.min(1, Number(tRaw)))
                 : 0.5;
+            const touchedStart = (hoverPlan && Number.isFinite(hoverPlan.tStart))
+                ? Math.max(0, Math.min(1, Number(hoverPlan.tStart)))
+                : tCenter;
+            const touchedEnd = (hoverPlan && Number.isFinite(hoverPlan.tEnd))
+                ? Math.max(0, Math.min(1, Number(hoverPlan.tEnd)))
+                : tCenter;
+
             const existing = state.wallRanges.get(candidate);
             if (existing) {
-                existing.tStart = Math.min(existing.tStart, t);
-                existing.tEnd = Math.max(existing.tEnd, t);
+                const proposed = {
+                    ...existing,
+                    tStart: Math.min(existing.tStart, touchedStart),
+                    tEnd: Math.max(existing.tEnd, touchedEnd),
+                    lastTouchT: tCenter
+                };
+                const proposedCount = getVanishQueuedSelectionCount(state, proposed);
+                if (proposedCount > maxSelectable) {
+                    return false;
+                }
+                existing.tStart = proposed.tStart;
+                existing.tEnd = proposed.tEnd;
+                existing.lastTouchT = proposed.lastTouchT;
             } else {
-                state.wallRanges.set(candidate, {
+                const entry = {
                     wall: candidate,
-                    tStart: t,
-                    tEnd: t
-                });
+                    tStart: touchedStart,
+                    tEnd: touchedEnd,
+                    firstTouchT: tCenter,
+                    lastTouchT: tCenter
+                };
+                const proposedCount = getVanishQueuedSelectionCount(state, entry);
+                if (proposedCount > maxSelectable) {
+                    return false;
+                }
+                state.wallRanges.set(candidate, entry);
+                if (Array.isArray(state.selectionTimeline)) {
+                    state.selectionTimeline.push({ kind: "wall", wall: candidate });
+                }
             }
             return true;
         }
 
         if (state.queuedObjectSet.has(candidate)) return false;
+        const currentCount = getVanishQueuedSelectionCount(state);
+        if (currentCount >= maxSelectable) return false;
         state.queuedObjectSet.add(candidate);
         state.queuedObjects.push(candidate);
+        if (Array.isArray(state.selectionTimeline)) {
+            state.selectionTimeline.push({ kind: "object", object: candidate });
+        }
         markObjectAsTargetedBySpell(wizardRef, "vanish", candidate);
         return true;
     }
@@ -2643,16 +2731,25 @@ const SpellSystem = (() => {
             targets.push(obj);
         };
 
-        if (Array.isArray(state.queuedObjects)) {
-            for (let i = 0; i < state.queuedObjects.length; i++) {
-                pushUnique(state.queuedObjects[i]);
-            }
-        }
+        const timeline = Array.isArray(state.selectionTimeline)
+            ? state.selectionTimeline
+            : [];
 
-        if (state.wallRanges instanceof Map) {
-            state.wallRanges.forEach(entry => {
+        for (let i = 0; i < timeline.length; i++) {
+            const step = timeline[i];
+            if (!step || typeof step !== "object") continue;
+
+            if (step.kind === "object") {
+                pushUnique(step.object);
+                continue;
+            }
+
+            if (step.kind === "wall") {
+                const entry = (state.wallRanges instanceof Map)
+                    ? state.wallRanges.get(step.wall)
+                    : null;
                 const wall = entry && entry.wall;
-                if (!wall || wall.gone || wall.vanishing) return;
+                if (!wall || wall.gone || wall.vanishing) continue;
 
                 if (typeof wall.splitIntoTargetableVanishSegments === "function") {
                     const split = wall.splitIntoTargetableVanishSegments(
@@ -2665,19 +2762,27 @@ const SpellSystem = (() => {
                         }
                     );
                     if (split && Array.isArray(split.targetSegments) && split.targetSegments.length > 0) {
-                        for (let i = 0; i < split.targetSegments.length; i++) {
-                            pushUnique(split.targetSegments[i]);
+                        const orderedSegments = split.targetSegments.slice();
+                        const firstT = Number(entry.firstTouchT);
+                        const lastT = Number(entry.lastTouchT);
+                        if (Number.isFinite(firstT) && Number.isFinite(lastT) && lastT < firstT) {
+                            orderedSegments.reverse();
                         }
-                        return;
+                        for (let s = 0; s < orderedSegments.length; s++) {
+                            pushUnique(orderedSegments[s]);
+                        }
+                        continue;
                     }
                 }
 
                 pushUnique(wall);
-            });
+            }
         }
 
-        targets.sort((a, b) => getWizardDistanceToTarget(wizardRef, a) - getWizardDistanceToTarget(wizardRef, b));
-        return targets;
+        const maxSelectable = getMaxSelectableVanishTargets(wizardRef);
+        if (maxSelectable <= 0) return [];
+        if (targets.length <= maxSelectable) return targets;
+        return targets.slice(0, maxSelectable);
     }
 
     function castQueuedVanishBurst(wizardRef, queuedTargets = []) {
