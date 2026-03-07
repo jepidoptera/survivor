@@ -1,16 +1,9 @@
-(function attachRenderBridge(global) {
+(function attachRenderRuntime(global) {
     const viewportNodeSampleEpsilon = 1e-4;
     let uiArrowCursorElement = null;
     let uiGameCursorOverlayElement = null;
     let visibilityMaskEnabled = false;
     let visibilityMaskSources = [];
-
-    function isPlacedObjectEntity(item) {
-        return !!(
-            item &&
-            (item.isPlacedObject || item.objectType === "placedObject" || item.type === "placedObject")
-        );
-    }
 
     function normalizeLegacyAssetPath(path) {
         if (typeof path !== "string" || path.length === 0) return path;
@@ -26,21 +19,8 @@
         return `${mapped}${suffix}`;
     }
 
-    function isWallMountedPlaceable(item) {
-        if (!item) return false;
-        const explicitType = (typeof item.type === "string") ? item.type.trim().toLowerCase() : "";
-        const isExplicitWindowDoorType = explicitType === "window" || explicitType === "door";
-        const isPlacedOrPreview = isPlacedObjectEntity(item) || item.type === "placedObjectPreview" || isExplicitWindowDoorType;
-        if (!isPlacedOrPreview) return false;
-        const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-        if (category === "windows" || category === "doors") return true;
-        return isExplicitWindowDoorType;
-    }
-
     function worldToScreen(item) {
-        const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-            ? interpolatedViewport
-            : viewport;
+        const camera = viewport;
         const alpha = (typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1;
         const worldX = (item && Number.isFinite(item.prevX) && Number.isFinite(item.x))
             ? (
@@ -116,9 +96,7 @@
     }
 
     function screenToWorld(screenX, screenY) {
-        const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-            ? interpolatedViewport
-            : viewport;
+        const camera = viewport;
         let worldX = screenX / viewscale + camera.x;
         let worldY = screenY / (viewscale * xyratio) + camera.y;
         if (map && typeof map.wrapWorldX === "function" && Number.isFinite(worldX)) {
@@ -222,49 +200,10 @@
             } else {
                 viewport.x += seamShiftX;
                 viewport.y += seamShiftY;
-                if (typeof previousViewport !== "undefined") {
-                    previousViewport.x += seamShiftX;
-                    previousViewport.y += seamShiftY;
-                }
-                if (typeof interpolatedViewport !== "undefined") {
-                    interpolatedViewport.x += seamShiftX;
-                    interpolatedViewport.y += seamShiftY;
-                }
             }
         }
 
-        viewport.x = Math.round(viewport.x * 1000) / 1000;
-        viewport.y = Math.round(viewport.y * 1000) / 1000;
-    }
-
-    function forEachWrappedNodeInViewport(xPadding, yPadding, callback, cameraOverride = null) {
-        if (!map || typeof callback !== "function") return;
-        const camera = cameraOverride || (
-            (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-                ? interpolatedViewport
-                : viewport
-        );
-        const cameraWidth = Number.isFinite(camera.width) ? camera.width : viewport.width;
-        const cameraHeight = Number.isFinite(camera.height) ? camera.height : viewport.height;
-        const xScale = 0.866;
-        const xStart = Math.floor(camera.x / xScale) - xPadding;
-        const xEnd = Math.ceil((camera.x + cameraWidth) / xScale) + xPadding;
-        const yStart = Math.floor(camera.y) - yPadding;
-        const yEnd = Math.ceil(camera.y + cameraHeight) + yPadding;
-        const xRanges = getWrappedIndexRanges(xStart, xEnd, map.width, map.wrapX);
-        const yRanges = getWrappedIndexRanges(yStart, yEnd, map.height, map.wrapY);
-        if (xRanges.length === 0 || yRanges.length === 0) return;
-
-        yRanges.forEach(yRange => {
-            for (let y = yRange.start; y <= yRange.end; y++) {
-                xRanges.forEach(xRange => {
-                    for (let x = xRange.start; x <= xRange.end; x++) {
-                        const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
-                        if (node) callback(node);
-                    }
-                });
-            }
-        });
+        // Keep full-precision camera state to avoid micro-stutter at high present FPS.
     }
 
     function screenToHex(screenX, screenY) {
@@ -349,172 +288,256 @@
         }
     }
 
-    function updatePhantomWall() {
-        // Rendering owns wall preview rendering.
+    function makeTileKey(x, y) {
+        return `${x},${y}`;
     }
 
-    function updatePhantomFirewall() {
-        // Rendering owns firewall preview rendering.
+    function resolveAnimalTileFromWorld(worldX, worldY, mapRef) {
+        if (!mapRef || !mapRef.nodes) return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const wrappedX = (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
+        const wrappedY = (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
+        const approxX = Math.round(wrappedX / 0.866);
+        const clampedX = Math.max(0, Math.min(mapRef.width - 1, approxX));
+        const approxY = Math.round(wrappedY - (clampedX % 2 === 0 ? 0.5 : 0));
+        const clampedY = Math.max(0, Math.min(mapRef.height - 1, approxY));
+        return { x: clampedX, y: clampedY };
     }
 
-    function updatePhantomRoad() {
-        // Rendering owns road preview rendering.
+    const animalVisibilityState = {
+        map: null,
+        viewport: null,
+        animalsRef: null,
+        knownAnimals: new Set(),
+        tileToAnimals: new Map(),
+        activeAnimals: new Set(),
+        inactiveAnimals: new Set(),
+        activationTileKeys: new Set(),
+        retentionTileKeys: new Set(),
+        activeListCache: [],
+        inactiveListCache: [],
+        cacheDirty: true
+    };
+
+    function markAnimalVisibilityCachesDirty() {
+        animalVisibilityState.cacheDirty = true;
     }
 
-    function updateLandLayer() {
-        // Ground is rendered by Rendering.
+    function rebuildAnimalVisibilityCachesIfNeeded() {
+        if (!animalVisibilityState.cacheDirty) return;
+        animalVisibilityState.activeListCache = Array.from(animalVisibilityState.activeAnimals);
+        animalVisibilityState.inactiveListCache = Array.from(animalVisibilityState.inactiveAnimals);
+        animalVisibilityState.cacheDirty = false;
     }
 
-    function resolvePlacedObjectLodTexturePath(item) {
-        if (!item || !isPlacedObjectEntity(item)) return null;
-        const basePath = (typeof item.texturePath === "string" && item.texturePath.length > 0)
-            ? item.texturePath
-            : null;
-        const lodList = Array.isArray(item.lodTextures) ? item.lodTextures : null;
-        if (!lodList || lodList.length === 0) return basePath;
-        const itemWidthWorld = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
-        const itemHeightWorld = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
-        const rotationAxis = (typeof item.rotationAxis === "string") ? item.rotationAxis : "visual";
-        const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(xyratio) ? xyratio : 0.66));
-        const screenWidthPx = itemWidthWorld * viewscale;
-        const screenHeightPx = (rotationAxis === "spatial")
-            ? (itemHeightWorld * viewscale)
-            : (itemHeightWorld * viewscale * yIsoScale);
-        const sizeMetric = Math.max(screenWidthPx, screenHeightPx);
-
-        for (let i = 0; i < lodList.length; i++) {
-            const entry = lodList[i];
-            if (!entry || typeof entry.texturePath !== "string" || entry.texturePath.length === 0) continue;
-            const maxSize = Number.isFinite(entry.maxDistance) ? Number(entry.maxDistance) : Infinity;
-            if (sizeMetric <= maxSize) return entry.texturePath;
+    function addAnimalToTileIndex(animal, tileKey) {
+        if (!animal || typeof tileKey !== "string") return;
+        let bucket = animalVisibilityState.tileToAnimals.get(tileKey);
+        if (!bucket) {
+            bucket = new Set();
+            animalVisibilityState.tileToAnimals.set(tileKey, bucket);
         }
-        return basePath || (lodList[lodList.length - 1] && lodList[lodList.length - 1].texturePath) || null;
+        bucket.add(animal);
+        animal._visibilityTileKey = tileKey;
     }
 
-    function applySpriteTransform(item) {
-        if (!item || !item.pixiSprite) return;
-        const interpolatedWorld = (typeof item.getInterpolatedPosition === "function")
-            ? item.getInterpolatedPosition()
-            : null;
-        const drawTarget = (
-            interpolatedWorld &&
-            Number.isFinite(interpolatedWorld.x) &&
-            Number.isFinite(interpolatedWorld.y)
-        ) ? interpolatedWorld : item;
-        const coors = worldToScreen(drawTarget);
-        item.pixiSprite.x = coors.x;
-        item.pixiSprite.y = coors.y;
-
-        // Resolve sprite sheet frames and pick the correct animation frame
-        ensureSpriteFrames(item);
-        if (item.spriteFrames && item.pixiSprite) {
-            const rowIndex = typeof item.getDirectionRow === "function" ? item.getDirectionRow() : 0;
-            const safeRow = Math.max(0, Math.min(rowIndex, (item.spriteRows || 1) - 1));
-            const safeCol = Math.max(0, Math.min(item.spriteCol || 0, (item.spriteCols || 1) - 1));
-            const rowFrames = item.spriteFrames[safeRow] || item.spriteFrames[0];
-            const nextTexture = rowFrames && (rowFrames[safeCol] || rowFrames[0]);
-            if (nextTexture) item.pixiSprite.texture = nextTexture;
+    function removeAnimalFromTileIndex(animal, tileKey) {
+        if (!animal || typeof tileKey !== "string") return;
+        const bucket = animalVisibilityState.tileToAnimals.get(tileKey);
+        if (!bucket) return;
+        bucket.delete(animal);
+        if (bucket.size === 0) {
+            animalVisibilityState.tileToAnimals.delete(tileKey);
         }
+    }
 
-        const spriteTexture = item.pixiSprite.texture || null;
-        const nativeTexW = spriteTexture && Number.isFinite(spriteTexture.width) ? Number(spriteTexture.width) : null;
-        const nativeTexH = spriteTexture && Number.isFinite(spriteTexture.height) ? Number(spriteTexture.height) : null;
-        const useNativeLodSize = !!(
-            typeof debugUseLodNativePixelSize !== "undefined" &&
-            debugUseLodNativePixelSize &&
-            isPlacedObjectEntity(item) &&
-            item.rotationAxis !== "spatial" &&
-            Number.isFinite(nativeTexW) &&
-            Number.isFinite(nativeTexH)
-        );
+    function unregisterAnimalFromVisibility(animal) {
+        if (!animal) return;
+        removeAnimalFromTileIndex(animal, animal._visibilityTileKey);
+        animal._visibilityTileKey = null;
+        animalVisibilityState.knownAnimals.delete(animal);
+        animalVisibilityState.activeAnimals.delete(animal);
+        animalVisibilityState.inactiveAnimals.delete(animal);
+        markAnimalVisibilityCachesDirty();
+    }
 
-        if (item && isPlacedObjectEntity(item) && item.rotationAxis !== "spatial" && item.pixiSprite instanceof PIXI.Sprite) {
-            const lodTexturePath = resolvePlacedObjectLodTexturePath(item);
-            if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== item._activeLodTexturePath) {
-                item.pixiSprite.texture = PIXI.Texture.from(lodTexturePath);
-                item._activeLodTexturePath = lodTexturePath;
-            }
-        }
+    function updateAnimalTileIndex(animal, mapRef) {
+        if (!animal || !mapRef) return;
+        const tile = resolveAnimalTileFromWorld(animal.x, animal.y, mapRef);
+        if (!tile) return;
+        const key = makeTileKey(tile.x, tile.y);
+        if (animal._visibilityTileKey === key) return;
+        removeAnimalFromTileIndex(animal, animal._visibilityTileKey);
+        addAnimalToTileIndex(animal, key);
+    }
 
-        if (item.type === "road") {
-            item.pixiSprite.width = (item.width || 1) * viewscale * 1.1547;
-            item.pixiSprite.height = (item.height || 1) * viewscale * xyratio;
-        } else if (useNativeLodSize) {
-            item.pixiSprite.width = nativeTexW;
-            item.pixiSprite.height = nativeTexH;
+    function ensureAnimalTracked(animal, mapRef) {
+        if (!animal || animal.gone) return;
+        if (animalVisibilityState.knownAnimals.has(animal)) return;
+        animalVisibilityState.knownAnimals.add(animal);
+        updateAnimalTileIndex(animal, mapRef);
+        // If the animal's tile is already in the activation zone, start it active
+        const tileKey = animal._visibilityTileKey;
+        if (tileKey && animalVisibilityState.activationTileKeys.has(tileKey)) {
+            animalVisibilityState.activeAnimals.add(animal);
         } else {
-            item.pixiSprite.width = (item.width || 1) * viewscale;
-            item.pixiSprite.height = (item.height || 1) * viewscale;
+            animalVisibilityState.inactiveAnimals.add(animal);
         }
-
-        const visualRotation = (item && item.rotationAxis === "none")
-            ? 0
-            : Number.isFinite(item.placementRotation)
-                ? item.placementRotation
-                : item.rotation;
-        item.pixiSprite.rotation = visualRotation ? (visualRotation * (Math.PI / 180)) : 0;
+        markAnimalVisibilityCachesDirty();
     }
 
-    function updateRoofPreview(roof) {
-        if (!roof || !wizard) return;
-
-        const qPressed = keysPressed['q'] || false;
-        const rPressed = keysPressed['r'] || false;
-        const hotkeysPressed = qPressed && rPressed;
-
-        if (!roof.pixiMesh) {
-            roof.createPixiMesh();
-            if (roof.pixiMesh && roof.pixiMesh.parent) {
-                roof.pixiMesh.parent.removeChild(roof.pixiMesh);
+    function buildVisibleTileKeySet(mapRef, viewportRef, paddingTiles = 0) {
+        const out = new Set();
+        if (!mapRef || !viewportRef) return out;
+        const xPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
+        const yPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
+        const xScale = 0.866;
+        const xStart = Math.floor((Number(viewportRef.x) || 0) / xScale) - xPadding;
+        const xEnd = Math.ceil(((Number(viewportRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + xPadding;
+        const yStart = Math.floor(Number(viewportRef.y) || 0) - yPadding;
+        const yEnd = Math.ceil((Number(viewportRef.y) || 0) + (Number(viewportRef.height) || 0)) + yPadding;
+        const xRanges = getWrappedIndexRanges(xStart, xEnd, mapRef.width, mapRef.wrapX);
+        const yRanges = getWrappedIndexRanges(yStart, yEnd, mapRef.height, mapRef.wrapY);
+        for (let yr = 0; yr < yRanges.length; yr++) {
+            const yRange = yRanges[yr];
+            for (let xr = 0; xr < xRanges.length; xr++) {
+                const xRange = xRanges[xr];
+                for (let y = yRange.start; y <= yRange.end; y++) {
+                    for (let x = xRange.start; x <= xRange.end; x++) {
+                        out.add(makeTileKey(x, y));
+                    }
+                }
             }
         }
+        return out;
+    }
 
-        const justPressed = hotkeysPressed && !roof._placementChordWasDown;
-        roof._placementChordWasDown = hotkeysPressed;
-        if (justPressed) {
-            roof.x = wizard.x;
-            roof.y = wizard.y;
-            roof.placed = true;
-            if (typeof roof.updateGroundPlaneHitbox === 'function') {
-                roof.updateGroundPlaneHitbox();
+    function activateAnimalsOnTiles(tileKeys) {
+        if (!tileKeys || tileKeys.size === 0) return;
+        tileKeys.forEach(key => {
+            const bucket = animalVisibilityState.tileToAnimals.get(key);
+            if (!bucket || bucket.size === 0) return;
+            bucket.forEach(animal => {
+                if (!animal || animal.gone || animal.dead) return;
+                if (!animalVisibilityState.activeAnimals.has(animal)) {
+                    animalVisibilityState.activeAnimals.add(animal);
+                    animalVisibilityState.inactiveAnimals.delete(animal);
+                    markAnimalVisibilityCachesDirty();
+                }
+            });
+        });
+    }
+
+    function sweepAnimalsOutsideRetention() {
+        let changed = false;
+        animalVisibilityState.activeAnimals.forEach(animal => {
+            if (!animal || animal.gone || animal.dead) {
+                animalVisibilityState.activeAnimals.delete(animal);
+                animalVisibilityState.inactiveAnimals.delete(animal);
+                changed = true;
+                return;
             }
+            const key = animal._visibilityTileKey;
+            if (!key || !animalVisibilityState.retentionTileKeys.has(key)) {
+                animalVisibilityState.activeAnimals.delete(animal);
+                animalVisibilityState.inactiveAnimals.add(animal);
+                changed = true;
+            }
+        });
+        if (changed) markAnimalVisibilityCachesDirty();
+    }
+
+    function syncAnimalVisibility({
+        animals: animalsInput = null,
+        map: mapInput = null,
+        viewport: viewportInput = null,
+        activationPaddingTiles = 4,
+        retentionExtraTiles = 2
+    } = {}) {
+        const mapRef = mapInput || animalVisibilityState.map || (typeof map !== "undefined" ? map : null);
+        const viewportRef = viewportInput || animalVisibilityState.viewport || (typeof viewport !== "undefined" ? viewport : null);
+        const animalsRef = Array.isArray(animalsInput)
+            ? animalsInput
+            : (Array.isArray(animalVisibilityState.animalsRef)
+                ? animalVisibilityState.animalsRef
+                : (Array.isArray(global.animals) ? global.animals : []));
+        if (!mapRef || !viewportRef || !Array.isArray(animalsRef)) {
+            return { active: [], inactive: [] };
         }
 
-        const wizardInsideRoof = !!(
-            roof.placed &&
-            roof.groundPlaneHitbox &&
-            typeof roof.groundPlaneHitbox.containsPoint === 'function' &&
-            roof.groundPlaneHitbox.containsPoint(wizard.x, wizard.y)
+        animalVisibilityState.map = mapRef;
+        animalVisibilityState.viewport = viewportRef;
+        animalVisibilityState.animalsRef = animalsRef;
+
+        const seenThisSync = new Set();
+        for (let i = 0; i < animalsRef.length; i++) {
+            const animal = animalsRef[i];
+            if (!animal || animal.gone || animal.dead) continue;
+            seenThisSync.add(animal);
+            ensureAnimalTracked(animal, mapRef);
+            updateAnimalTileIndex(animal, mapRef);
+        }
+
+        animalVisibilityState.knownAnimals.forEach(animal => {
+            if (!seenThisSync.has(animal) || !animal || animal.gone || animal.dead) {
+                unregisterAnimalFromVisibility(animal);
+            }
+        });
+
+        const activationSet = buildVisibleTileKeySet(mapRef, viewportRef, activationPaddingTiles);
+        const retentionSet = buildVisibleTileKeySet(
+            mapRef,
+            viewportRef,
+            Math.max(activationPaddingTiles, activationPaddingTiles + Math.max(0, Number(retentionExtraTiles) || 0))
         );
-        if (!roof.pixiMesh) return;
-        roof.pixiMesh.visible = !!roof.placed && !wizardInsideRoof;
 
-        const targetRoofAlpha = wizardInsideRoof ? 0.0 : 1.0;
-        if (!Number.isFinite(roof.currentAlpha)) {
-            roof.currentAlpha = targetRoofAlpha;
-        }
-        const fadeSpeed = 0.15;
-        roof.currentAlpha += (targetRoofAlpha - roof.currentAlpha) * fadeSpeed;
-        if (Math.abs(targetRoofAlpha - roof.currentAlpha) < 0.01) {
-            roof.currentAlpha = targetRoofAlpha;
-        }
-        roof.pixiMesh.alpha = roof.currentAlpha;
+        const enteredActivation = new Set();
+        activationSet.forEach(key => {
+            if (!animalVisibilityState.activationTileKeys.has(key)) {
+                enteredActivation.add(key);
+            }
+        });
 
-        if (roof.placed) {
-            const roofCoords = worldToScreen(roof);
-            roof.pixiMesh.x = roofCoords.x;
-            roof.pixiMesh.y = roofCoords.y;
-            roof.pixiMesh.scale.set(viewscale, viewscale);
+        animalVisibilityState.activationTileKeys = activationSet;
+        animalVisibilityState.retentionTileKeys = retentionSet;
+        activateAnimalsOnTiles(enteredActivation);
+        if (animalVisibilityState.activeAnimals.size === 0) {
+            activateAnimalsOnTiles(activationSet);
         }
+        sweepAnimalsOutsideRetention();
+
+        rebuildAnimalVisibilityCachesIfNeeded();
+
+        return {
+            active: animalVisibilityState.activeListCache,
+            inactive: animalVisibilityState.inactiveListCache
+        };
     }
 
-    function clearGroundChunkCache() {
-        // Legacy ground chunk cache removed.
+    function noteAnimalMoved(animal, mapRef = null) {
+        if (!animal || animal.gone || animal.dead) return;
+        const effectiveMap = mapRef || animalVisibilityState.map || (typeof map !== "undefined" ? map : null);
+        if (!effectiveMap) return;
+        ensureAnimalTracked(animal, effectiveMap);
+        updateAnimalTileIndex(animal, effectiveMap);
     }
 
-    function invalidateGroundChunks() {
-        // Legacy ground chunk cache removed.
+    function getActiveAnimals() {
+        rebuildAnimalVisibilityCachesIfNeeded();
+        return animalVisibilityState.activeListCache;
     }
+
+    function getInactiveAnimals() {
+        rebuildAnimalVisibilityCachesIfNeeded();
+        return animalVisibilityState.inactiveListCache;
+    }
+
+    const renderRuntimeApi = {
+        syncAnimalVisibility,
+        noteAnimalMoved,
+        getActiveAnimals,
+        getInactiveAnimals
+    };
 
     function ensureUiArrowCursorElement() {
         if (uiArrowCursorElement || typeof document === "undefined" || !document.body) return uiArrowCursorElement;
@@ -684,38 +707,6 @@
         return dx * dx + dy * dy <= radius * radius;
     }
 
-    function pointInPolygon(point, polygon) {
-        if (!polygon || polygon.length < 3) return false;
-        let inside = false;
-        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-            const xi = polygon[i].x, yi = polygon[i].y;
-            const xj = polygon[j].x, yj = polygon[j].y;
-            const intersect = ((yi > point.y) !== (yj > point.y)) &&
-                (point.x < (xj - xi) * (point.y - yi) / ((yj - yi) || 1e-7) + xi);
-            if (intersect) inside = !inside;
-        }
-        return inside;
-    }
-
-    function cross2(ax, ay, bx, by) {
-        return ax * by - ay * bx;
-    }
-
-    function raySegmentDistance(wx, wy, dirX, dirY, x1, y1, x2, y2) {
-        const rx = dirX;
-        const ry = dirY;
-        const sx = x2 - x1;
-        const sy = y2 - y1;
-        const qpx = x1 - wx;
-        const qpy = y1 - wy;
-        const denom = cross2(rx, ry, sx, sy);
-        if (Math.abs(denom) < 1e-8) return null;
-        const t = cross2(qpx, qpy, sx, sy) / denom;
-        const u = cross2(qpx, qpy, rx, ry) / denom;
-        if (t >= 0 && u >= 0 && u <= 1) return t;
-        return null;
-    }
-
     function message(text) {
         if (!Array.isArray(messages)) return;
         messages.push(text);
@@ -734,42 +725,19 @@
         return visibilityMaskSources.length;
     }
 
-    function addVisibilityMaskSource(source) {
-        if (source) visibilityMaskSources.push(source);
-    }
-
-    function clearVisibilityMaskSources() {
-        visibilityMaskSources = [];
-    }
-
-    global.isPlacedObjectEntity = isPlacedObjectEntity;
     global.normalizeLegacyAssetPath = normalizeLegacyAssetPath;
-    global.isWallMountedPlaceable = isWallMountedPlaceable;
     global.worldToScreen = worldToScreen;
     global.getViewportNodeCorners = getViewportNodeCorners;
     global.getWrappedIndexRanges = getWrappedIndexRanges;
     global.screenToWorld = screenToWorld;
     global.centerViewport = centerViewport;
-    global.forEachWrappedNodeInViewport = forEachWrappedNodeInViewport;
     global.screenToHex = screenToHex;
     global.ensureSpriteFrames = ensureSpriteFrames;
-    global.updatePhantomWall = updatePhantomWall;
-    global.updatePhantomFirewall = updatePhantomFirewall;
-    global.updatePhantomRoad = updatePhantomRoad;
-    global.updateLandLayer = updateLandLayer;
-    global.resolvePlacedObjectLodTexturePath = resolvePlacedObjectLodTexturePath;
-    global.applySpriteTransform = applySpriteTransform;
-    global.updateRoofPreview = updateRoofPreview;
-    global.clearGroundChunkCache = clearGroundChunkCache;
-    global.invalidateGroundChunks = invalidateGroundChunks;
     global.updateCursor = updateCursor;
     global.distance = distance;
     global.withinRadius = withinRadius;
-    global.pointInPolygon = pointInPolygon;
-    global.raySegmentDistance = raySegmentDistance;
     global.message = message;
     global.setVisibilityMaskEnabled = setVisibilityMaskEnabled;
     global.setVisibilityMaskSources = setVisibilityMaskSources;
-    global.addVisibilityMaskSource = addVisibilityMaskSource;
-    global.clearVisibilityMaskSources = clearVisibilityMaskSources;
+    global.RenderRuntime = renderRuntimeApi;
 })(typeof globalThis !== "undefined" ? globalThis : window);

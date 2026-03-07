@@ -1,8 +1,8 @@
 / inside furniture
   checkpoints
-  dangerous monsters
+X dangerous monsters
 X 3d / textured walls
-  animal spells
+X animal creation spells
   mind control spells
   animals have magic points that protect them from spells
 X render depth determines spell targeting priority
@@ -10,10 +10,18 @@ X refactor: debug functions
   refactor: character class
 X windows and doors snap to walls
   rugs rotate on ground plane
-X see-through windows
-  buildable roofs
+  see-through windows
+X buildable roofs
 X refactor walls
 X refactor rendering
+X minimap
+X add editor panel
+X add scripting for objects
+X maze mode
+  message from princess
+  dialogs in scripting
+  hovering messages
+  yetis in maze
 
 
 problems:
@@ -23,4 +31,5 @@ X windows visible through roof
 X walls don't always connect
 X animals don't correctly vanish
 X animals and spells are invisible inside house.
-  wizard's min-radius sight circle should only go behind him
+X wizard's min-radius sight circle should only go behind him
+X wizard and animals jitter as they move

@@ -7,6 +7,7 @@ const LOSVisualSettings = (typeof globalThis !== "undefined" && globalThis.LOSVi
         shadowColor: 0x222222,
         shadowBlurEnabled: true,
         shadowBlurStrength: 12,
+        mazeMode: false,
         objectLitTransparencyEnabled: false,
         objectLitAlpha: 0.5,
         objectLitMaskDebugOnly: false,
@@ -158,6 +159,7 @@ const LOSSystem = (() => {
                     angleForBin,
                     forEachBinInShortSpan,
                     raySegmentDistance,
+                    mazeMode: !!options.mazeMode,
                     shortestDeltaX: (fromX, toX) => shortestDeltaX(mapRef, fromX, toX),
                     shortestDeltaY: (fromY, toY) => shortestDeltaY(mapRef, fromY, toY)
                 });
@@ -252,6 +254,9 @@ const LOSSystem = (() => {
             depth,
             boundaryBins,
             visibleObjects: Array.from(visibleSet),
+            hasForwardFov,
+            facingAngle,
+            halfFovRad,
             elapsedMs: performance.now() - startMs
         };
     }

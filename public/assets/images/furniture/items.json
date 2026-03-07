@@ -7,6 +7,7 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
+    "castsLosShadows": false,
     "anchor": {
       "x": 0.5,
       "y": 1
@@ -79,6 +80,32 @@
       }
     },
     {
+      "file": "table.png",
+      "texturePath": "/assets/images/furniture/table.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.5,
+        "minRadius": 0.12
+      },
+      "visualHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
       "file": "chair.png",
       "texturePath": "/assets/images/furniture/chair.png",
       "width": 1,
@@ -111,23 +138,24 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
-      "isPassable": true,
+      "isPassable": false,
+      "castsLosShadows": false,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
-        "radiusFromWidthMultiplier": 0.2,
+        "radiusFromWidthMultiplier": 0.3,
         "minRadius": 0.12
       },
       "visualHitbox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
-        "radiusFromMaxDimensionMultiplier": 0.5
+        "radiusFromMaxDimensionMultiplier": 0.3
       }
     },
     {
@@ -138,9 +166,11 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
       "anchor": {
         "x": 0.5,
-        "y": 1
+        "y": 0.5
       },
       "groundPlaneHitbox": {
         "type": "circle",

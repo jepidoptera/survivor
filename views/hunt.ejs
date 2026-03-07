@@ -14,13 +14,27 @@
     <script src="assets/javascript/los.js"></script>
     <script src="assets/javascript/roof.js"></script>
     <script src="assets/javascript/filesystem.js"></script>
+    <script src="assets/javascript/spells/Spell.js"></script>
+    <script src="assets/javascript/spells/Grenade.js"></script>
+    <script src="assets/javascript/spells/Rock.js"></script>
+    <script src="assets/javascript/spells/Fireball.js"></script>
+    <script src="assets/javascript/spells/Vanish.js"></script>
+    <script src="assets/javascript/spells/Teleport.js"></script>
+    <script src="assets/javascript/spells/Arrow.js"></script>
+    <script src="assets/javascript/spells/TreeGrow.js"></script>
+    <script src="assets/javascript/spells/BuildRoad.js"></script>
+    <script src="assets/javascript/spells/EditScript.js"></script>
+    <script src="assets/javascript/spells/PlaceObject.js"></script>
+    <script src="assets/javascript/spells/SpawnAnimal.js"></script>
     <script src="assets/javascript/spells.js"></script>
     <script src="assets/javascript/debug.js"></script>
-    <script src="assets/javascript/renderBridge.js"></script>
+    <script src="assets/javascript/rendering/RenderRuntime.js"></script>
+    <script src="assets/javascript/spells/scripting.js"></script>
     <script src="assets/javascript/runaround.js"></script>
     <script src="assets/javascript/minimap.js"></script>
     <script src="assets/javascript/rendering/Camera.js"></script>
     <script src="assets/javascript/rendering/Layers.js"></script>
+    <script src="assets/javascript/rendering/mazeMode.js"></script>
     <script src="assets/javascript/rendering/ScenePicker.js"></script>
     <script src="assets/javascript/rendering/Rendering.js"></script>
     <link rel="icon" type="image/png" href="assets/images/wizard-hat-favicon.png">
@@ -49,6 +63,12 @@
         <div id="activeAuraIcons" class="hidden"></div>
         <div id="auraMenu" class="hidden">
             <div id="auraGrid"></div>
+        </div>
+    </div>
+    <div id="editorSelector">
+        <div id="selectedEditor"></div>
+        <div id="editorMenu" class="hidden">
+            <div id="editorGrid"></div>
         </div>
     </div>
     <div id="spellSelector">

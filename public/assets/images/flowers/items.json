@@ -7,6 +7,7 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
+    "castsLosShadows": false,
     "rotationAxis": "none",
     "anchor": {
         "x": 0.5,
@@ -167,9 +168,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
+      "groundPlaneHitbox": "none",
       "visualHitbox": {
         "type": "circle",
         "xOffset": 0,

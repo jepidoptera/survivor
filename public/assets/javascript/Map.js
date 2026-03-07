@@ -333,9 +333,6 @@ class GameMap {
             const path = `/assets/images/land tiles/${name}.png`;
             this.groundTextures[idx] = createRuntimeGroundTexture(path, (processed) => {
                 this.groundTextures[idx] = processed;
-                if (typeof invalidateGroundChunks === "function") {
-                    invalidateGroundChunks();
-                }
             });
         });
 
@@ -869,6 +866,27 @@ class GameMap {
         return bestNode;
     }
 
+    _normalizeHexDirection(direction) {
+        return ((Math.round(Number(direction)) % 12) + 12) % 12;
+    }
+
+    _getMidpointDirectionBase(midpoint) {
+        if (!this._isNodeMidpoint(midpoint) || !midpoint.nodeA || !midpoint.nodeB) return null;
+        const dx = this.shortestDeltaX(midpoint.nodeA.x, midpoint.nodeB.x);
+        const dy = this.shortestDeltaY(midpoint.nodeA.y, midpoint.nodeB.y);
+        const axisDirection = this._normalizeHexDirection(this.getHexDirection(dx, dy));
+        const axisClass = ((axisDirection % 6) + 6) % 6;
+        if (axisClass !== 1 && axisClass !== 3 && axisClass !== 5) return null;
+        return axisClass;
+    }
+
+    _midpointSupportsDirection(midpoint, direction) {
+        const base = this._getMidpointDirectionBase(midpoint);
+        if (!Number.isFinite(base)) return false;
+        const dir = this._normalizeHexDirection(direction);
+        return ((dir - base + 12) % 3) === 0;
+    }
+
     getHexDirection(x, y) {
         if (x === 0 && y === 0) return 0;
         const angle = Math.atan2(-y, x) * (180 / Math.PI);
@@ -1017,9 +1035,6 @@ class GameMap {
         const nextId = Math.max(0, Math.min(maxId, Math.floor(Number(textureId) || 0)));
         if (node.groundTextureId === nextId) return false;
         node.groundTextureId = nextId;
-        if (typeof invalidateGroundChunks === "function") {
-            invalidateGroundChunks();
-        }
         return true;
     }
 

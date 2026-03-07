@@ -3,6 +3,9 @@
 const debugRenderMaxFps = 0; // keep debug uncapped to avoid hidden global frame caps
 
 let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal markers)
+if (typeof globalThis !== "undefined") {
+    globalThis.debugMode = debugMode;
+}
 let showHexGrid = false; // Toggle hex grid only (g key)
 let showBlockedNeighbors = false; // Toggle blocked-neighbor edge overlays
 
@@ -382,6 +385,7 @@ const losSettings = (typeof LOSVisualSettings !== "undefined" && LOSVisualSettin
             shadowColor: 0x777777,
             shadowBlurEnabled: true,
             shadowBlurStrength: 12,
+            mazeMode: false,
             objectLitTransparencyEnabled: true,
             objectLitAlpha: 0.5,
             objectLitMaskDebugOnly: false,
@@ -396,6 +400,7 @@ const losSettings = (typeof LOSVisualSettings !== "undefined" && LOSVisualSettin
             shadowColor: 0x777777,
             shadowBlurEnabled: true,
             shadowBlurStrength: 12,
+            mazeMode: false,
             objectLitTransparencyEnabled: true,
             objectLitAlpha: 0.5,
             objectLitMaskDebugOnly: false,
@@ -430,6 +435,9 @@ function toggleShowPerfReadout() {
 
 function toggleDebugMode() {
     debugMode = !debugMode;
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugMode = debugMode;
+    }
     return debugMode;
 }
 
@@ -501,6 +509,11 @@ if (typeof globalThis !== "undefined" && typeof globalThis.setLosShadowBlurStren
         losSettings.shadowBlurStrength = Math.max(0, n);
     };
 }
+if (typeof globalThis !== "undefined" && typeof globalThis.setLosMazeModeEnabled !== "function") {
+    globalThis.setLosMazeModeEnabled = function setLosMazeModeEnabled(enabled) {
+        losSettings.mazeMode = !!enabled;
+    };
+}
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosObjectLitTransparencyEnabled !== "function") {
     globalThis.setLosObjectLitTransparencyEnabled = function setLosObjectLitTransparencyEnabled(enabled) {
         losSettings.objectLitTransparencyEnabled = !!enabled;
@@ -559,9 +572,7 @@ function drawMapBorder() {
     const worldHeight = Number.isFinite(map.worldHeight) ? map.worldHeight : map.height;
     if (!(worldWidth > 0) || !(worldHeight > 0)) return;
 
-    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-        ? interpolatedViewport
-        : viewport;
+    const camera = viewport;
 
     const worldToScreenRaw = (x, y) => ({
         x: (x - camera.x) * viewscale,

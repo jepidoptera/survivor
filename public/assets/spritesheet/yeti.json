@@ -1,0 +1,43 @@
+{"frames": {
+
+"yeti_walk_left.png":
+{
+    "frame": {"x":0,"y":0,"w":450,"h":377},
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": {"x":0,"y":0,"w":450,"h":377},
+    "sourceSize": {"w":450,"h":377}
+},
+"yeti_attack_left.png":
+{
+    "frame": {"x":450,"y":0,"w":450,"h":377},
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": {"x":0,"y":0,"w":450,"h":377},
+    "sourceSize": {"w":450,"h":377}
+},
+"yeti_walk_right.png":
+{
+    "frame": {"x":0,"y":377,"w":450,"h":377},
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": {"x":0,"y":0,"w":450,"h":377},
+    "sourceSize": {"w":450,"h":377}
+},
+"yeti_attack_right.png":
+{
+    "frame": {"x":450,"y":377,"w":450,"h":377},
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": {"x":0,"y":0,"w":450,"h":377},
+    "sourceSize": {"w":450,"h":377}
+}},
+"meta": {
+    "app": "http://www.texturepacker.com",
+    "version": "1.0",
+    "image": "./images/yeti.png",
+    "format": "RGBA8888",
+    "size": {"w":900,"h":754},
+    "scale": "1"
+}
+}

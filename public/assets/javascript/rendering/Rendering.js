@@ -22,8 +22,13 @@
         constructor() {
             const CameraCtor = global.RenderingCamera;
             const LayersCtor = global.RenderingLayers;
+            const MazeModeCtor = global.RenderingMazeMode;
             this.camera = new CameraCtor();
             this.layers = new LayersCtor();
+            this.mazeModeRenderer = (MazeModeCtor && typeof MazeModeCtor === "function")
+                ? new MazeModeCtor()
+                : null;
+            this.mazeModeOverlayActive = false;
             this.initialized = false;
             this.wizardSprite = null;
             this.wizardShadowGraphics = null;
@@ -46,7 +51,6 @@
             this.roadSpriteByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
-            this.activeRoofMeshes = new Set();
             this.activeDepthBillboardMeshes = new Set();
             this.activeDepthBillboardItems = new Set();
             this.activePowerupDisplayObjects = new Set();
@@ -61,6 +65,15 @@
             this.lastLosCandidateHash = 0;
             this.lastLosComputeAtMs = 0;
             this.nextLosObjectId = 1;
+            this.drawPassProfiler = {
+                startMs: null,
+                deadlineMs: null,
+                frameCount: 0,
+                totalFrameMs: 0,
+                maxFrameMs: 0,
+                sections: Object.create(null),
+                printed: false
+            };
             const ScenePickerCtor = global.RenderingScenePicker;
             this.scenePicker = (ScenePickerCtor && typeof ScenePickerCtor === "function")
                 ? new ScenePickerCtor()
@@ -139,6 +152,69 @@
             return Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : fallback;
         }
 
+        isLosMazeModeEnabled() {
+            return !!this.getLosVisualSetting("mazeMode", false);
+        }
+
+        isMazeModeOverlayEligible(ctx) {
+            if (!this.mazeModeRenderer) return false;
+            if (!this.isLosMazeModeEnabled()) return false;
+            const wizard = (ctx && ctx.wizard) ? ctx.wizard : null;
+            return !this.isOmnivisionActive(wizard);
+        }
+
+        applyMazeModeCompositor(ctx) {
+            const overlayEligible = this.isMazeModeOverlayEligible(ctx);
+            if (!this.mazeModeRenderer) {
+                this.mazeModeOverlayActive = false;
+                return false;
+            }
+
+            this.mazeModeOverlayActive = !!this.mazeModeRenderer.apply(this, ctx, {
+                enabled: overlayEligible
+            });
+
+            const root = this.layers && this.layers.root ? this.layers.root : null;
+            if (!root) return this.mazeModeOverlayActive;
+            const bringToTop = (node) => {
+                if (node && node.parent === root) root.addChild(node);
+            };
+
+            if (this.mazeModeOverlayActive) {
+                const maskNode = this.mazeModeRenderer.occlusionMaskGraphics || null;
+                const backdropNode = this.mazeModeRenderer.blackBackdropGraphics || null;
+                if (maskNode && maskNode.parent === root) root.setChildIndex(maskNode, 0);
+                if (backdropNode && backdropNode.parent === root) root.setChildIndex(backdropNode, Math.min(1, root.children.length - 1));
+                bringToTop(this.layers.ground);
+                bringToTop(this.layers.roadsFloor);
+                bringToTop(this.layers.groundObjects);
+                bringToTop(this.layers.losShadow);
+                bringToTop(this.layers.depthObjects);
+                bringToTop(this.layers.objects3d);
+                bringToTop(this.layers.entities);
+                bringToTop(this.layers.ui);
+            } else {
+                bringToTop(this.layers.ground);
+                bringToTop(this.layers.roadsFloor);
+                bringToTop(this.layers.groundObjects);
+                bringToTop(this.layers.losShadow);
+                bringToTop(this.layers.depthObjects);
+                bringToTop(this.layers.objects3d);
+                bringToTop(this.layers.entities);
+                bringToTop(this.layers.ui);
+            }
+
+            return this.mazeModeOverlayActive;
+        }
+
+        isOmnivisionActive(wizard) {
+            if (!wizard) return false;
+            const activeAuras = (Array.isArray(wizard.activeAuras))
+                ? wizard.activeAuras
+                : ((typeof wizard.activeAura === "string") ? [wizard.activeAura] : []);
+            return activeAuras.includes("omnivision");
+        }
+
         getWizardFacingAngleRad(wizard) {
             if (!wizard) return 0;
             if (Number.isFinite(wizard.smoothedFacingAngleDeg)) {
@@ -160,21 +236,441 @@
             return 0;
         }
 
+        resolveInterpolatedItemWorldPosition(item, mapRef) {
+            if (!item) return null;
+            const interpolated = (typeof item.getInterpolatedPosition === "function")
+                ? item.getInterpolatedPosition()
+                : null;
+            if (interpolated && Number.isFinite(interpolated.x) && Number.isFinite(interpolated.y)) {
+                return { x: interpolated.x, y: interpolated.y };
+            }
+            const alpha = Number.isFinite(global.renderAlpha) ? Math.max(0, Math.min(1, global.renderAlpha)) : 1;
+            const x = (Number.isFinite(item.prevX) && Number.isFinite(item.x))
+                ? (
+                    Number.isFinite(alpha) && mapRef && typeof mapRef.shortestDeltaX === "function"
+                        ? (item.prevX + mapRef.shortestDeltaX(item.prevX, item.x) * alpha)
+                        : (item.prevX + (item.x - item.prevX) * alpha)
+                )
+                : item.x;
+            const y = (Number.isFinite(item.prevY) && Number.isFinite(item.y))
+                ? (
+                    Number.isFinite(alpha) && mapRef && typeof mapRef.shortestDeltaY === "function"
+                        ? (item.prevY + mapRef.shortestDeltaY(item.prevY, item.y) * alpha)
+                        : (item.prevY + (item.y - item.prevY) * alpha)
+                )
+                : item.y;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            return { x, y };
+        }
+
+        getMountedFaceCentersForItem(item) {
+            if (!item) return null;
+            const explicitFaceCenters = (
+                item.depthBillboardFaceCenters &&
+                item.depthBillboardFaceCenters.front &&
+                item.depthBillboardFaceCenters.back
+            ) ? item.depthBillboardFaceCenters : null;
+            if (
+                explicitFaceCenters &&
+                Number.isFinite(explicitFaceCenters.front.x) &&
+                Number.isFinite(explicitFaceCenters.front.y) &&
+                Number.isFinite(explicitFaceCenters.back.x) &&
+                Number.isFinite(explicitFaceCenters.back.y)
+            ) {
+                return {
+                    front: {
+                        x: Number(explicitFaceCenters.front.x),
+                        y: Number(explicitFaceCenters.front.y)
+                    },
+                    back: {
+                        x: Number(explicitFaceCenters.back.x),
+                        y: Number(explicitFaceCenters.back.y)
+                    }
+                };
+            }
+            const getFaceCenters = (typeof global.getMountedWallFaceCentersForObject === "function")
+                ? global.getMountedWallFaceCentersForObject
+                : null;
+            if (!getFaceCenters) return null;
+            const resolved = getFaceCenters(item);
+            if (
+                !resolved ||
+                !resolved.front ||
+                !resolved.back ||
+                !Number.isFinite(resolved.front.x) ||
+                !Number.isFinite(resolved.front.y) ||
+                !Number.isFinite(resolved.back.x) ||
+                !Number.isFinite(resolved.back.y)
+            ) {
+                return null;
+            }
+            return {
+                front: { x: Number(resolved.front.x), y: Number(resolved.front.y) },
+                back: { x: Number(resolved.back.x), y: Number(resolved.back.y) }
+            };
+        }
+
+        isWallMountedSpatialItem(item) {
+            if (!item) return false;
+            const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+            const isDoorOrWindow = (
+                category === "windows" ||
+                category === "doors" ||
+                item.type === "window" ||
+                item.type === "door"
+            );
+            if (!isDoorOrWindow || item.rotationAxis !== "spatial") return false;
+            return !!(
+                Number.isInteger(item.mountedWallSectionUnitId) ||
+                Number.isInteger(item.mountedWallLineGroupId) ||
+                Number.isInteger(item.mountedSectionId)
+            );
+        }
+
+        getLosVisibilitySamplePointForItem(item, mapRef, observer = null) {
+            if (!item) return null;
+            const isWallMountedSpatial = this.isWallMountedSpatialItem(item);
+            if (isWallMountedSpatial) {
+                const faceCenters = this.getMountedFaceCentersForItem(item);
+                if (faceCenters) {
+                    const refX = (observer && Number.isFinite(observer.x))
+                        ? Number(observer.x)
+                        : (Number.isFinite(item.x) ? Number(item.x) : 0);
+                    const refY = (observer && Number.isFinite(observer.y))
+                        ? Number(observer.y)
+                        : (Number.isFinite(item.y) ? Number(item.y) : 0);
+                    const frontDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                        ? mapRef.shortestDeltaX(refX, faceCenters.front.x)
+                        : (faceCenters.front.x - refX);
+                    const frontDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                        ? mapRef.shortestDeltaY(refY, faceCenters.front.y)
+                        : (faceCenters.front.y - refY);
+                    const backDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                        ? mapRef.shortestDeltaX(refX, faceCenters.back.x)
+                        : (faceCenters.back.x - refX);
+                    const backDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                        ? mapRef.shortestDeltaY(refY, faceCenters.back.y)
+                        : (faceCenters.back.y - refY);
+                    const frontDist2 = frontDx * frontDx + frontDy * frontDy;
+                    const backDist2 = backDx * backDx + backDy * backDy;
+                    const picked = frontDist2 <= backDist2 ? faceCenters.front : faceCenters.back;
+                    return { x: picked.x, y: picked.y };
+                }
+            }
+            return this.resolveInterpolatedItemWorldPosition(item, mapRef);
+        }
+
+        isWorldPointInLosShadow(worldX, worldY, wizard, mapRef = null) {
+            if (!wizard || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+            const state = this.currentLosState;
+            if (!state || !state.depth || !Number.isFinite(state.bins) || state.bins < 3) return false;
+            const bins = Math.floor(state.bins);
+            const depth = state.depth;
+            if (!depth || depth.length !== bins) return false;
+            const effectiveMap = mapRef || (wizard && wizard.map) || (this.camera && this.camera.map) || global.map || null;
+            const dx = (effectiveMap && typeof effectiveMap.shortestDeltaX === "function")
+                ? effectiveMap.shortestDeltaX(wizard.x, worldX)
+                : (worldX - wizard.x);
+            const dy = (effectiveMap && typeof effectiveMap.shortestDeltaY === "function")
+                ? effectiveMap.shortestDeltaY(wizard.y, worldY)
+                : (worldY - wizard.y);
+            const distance = Math.hypot(dx, dy);
+            const theta = Math.atan2(dy, dx);
+            const twoPi = Math.PI * 2;
+            const norm = ((theta + Math.PI) % twoPi + twoPi) % twoPi;
+            const binIdx = Math.max(0, Math.min(bins - 1, Math.floor((norm / twoPi) * bins)));
+            const losDepth = Number.isFinite(depth[binIdx]) ? Number(depth[binIdx]) : Infinity;
+            const losHasForwardFov = !!state.hasForwardFov;
+            const losFacingAngle = Number.isFinite(state.facingAngle) ? state.facingAngle : 0;
+            const losHalfFovRad = Number.isFinite(state.halfFovRad) ? state.halfFovRad : Math.PI;
+            let insideFov = true;
+            if (losHasForwardFov) {
+                let delta = theta - losFacingAngle;
+                while (delta <= -Math.PI) delta += twoPi;
+                while (delta > Math.PI) delta -= twoPi;
+                insideFov = Math.abs(delta) <= losHalfFovRad;
+            }
+            const nearReveal = insideFov ? 0 : LOS_NEAR_REVEAL_RADIUS;
+            const litDistance = Math.max(nearReveal, losDepth);
+            return distance > litDistance;
+        }
+
+        isPlacedObjectEntity(item) {
+            return !!(
+                item &&
+                (item.isPlacedObject || item.objectType === "placedObject" || item.type === "placedObject")
+            );
+        }
+
+        forEachWrappedNodeInViewport(mapRef, xPadding, yPadding, callback, cameraOverride = null) {
+            if (!mapRef || typeof callback !== "function") return;
+            const camera = cameraOverride || this.camera || {};
+            const viewportRef = global.viewport || null;
+            const cameraWidth = Number.isFinite(camera.width)
+                ? camera.width
+                : (viewportRef && Number.isFinite(viewportRef.width) ? viewportRef.width : 0);
+            const cameraHeight = Number.isFinite(camera.height)
+                ? camera.height
+                : (viewportRef && Number.isFinite(viewportRef.height) ? viewportRef.height : 0);
+            const padX = Math.max(0, Number.isFinite(xPadding) ? Math.floor(xPadding) : 0);
+            const padY = Math.max(0, Number.isFinite(yPadding) ? Math.floor(yPadding) : 0);
+            const xScale = 0.866;
+            const xStart = Math.floor(camera.x / xScale) - padX;
+            const xEnd = Math.ceil((camera.x + cameraWidth) / xScale) + padX;
+            const yStart = Math.floor(camera.y) - padY;
+            const yEnd = Math.ceil(camera.y + cameraHeight) + padY;
+            const xRanges = (typeof global.getWrappedIndexRanges === "function")
+                ? global.getWrappedIndexRanges(xStart, xEnd, mapRef.width, mapRef.wrapX)
+                : [];
+            const yRanges = (typeof global.getWrappedIndexRanges === "function")
+                ? global.getWrappedIndexRanges(yStart, yEnd, mapRef.height, mapRef.wrapY)
+                : [];
+            if (xRanges.length === 0 || yRanges.length === 0) return;
+
+            yRanges.forEach(yRange => {
+                for (let y = yRange.start; y <= yRange.end; y++) {
+                    xRanges.forEach(xRange => {
+                        for (let x = xRange.start; x <= xRange.end; x++) {
+                            const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
+                            if (node) callback(node);
+                        }
+                    });
+                }
+            });
+        }
+
+        resolvePlacedObjectLodTexturePath(item) {
+            if (!item || !this.isPlacedObjectEntity(item)) return null;
+            const basePath = (typeof item.texturePath === "string" && item.texturePath.length > 0)
+                ? item.texturePath
+                : null;
+            const lodList = Array.isArray(item.lodTextures) ? item.lodTextures : null;
+            if (!lodList || lodList.length === 0) return basePath;
+            const itemWidthWorld = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
+            const itemHeightWorld = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
+            const rotationAxis = (typeof item.rotationAxis === "string") ? item.rotationAxis : "visual";
+            const yIsoScale = Math.max(0.0001, Math.abs(Number.isFinite(this.camera.xyratio) ? this.camera.xyratio : 0.66));
+            const screenWidthPx = itemWidthWorld * this.camera.viewscale;
+            const screenHeightPx = (rotationAxis === "spatial")
+                ? (itemHeightWorld * this.camera.viewscale)
+                : (itemHeightWorld * this.camera.viewscale * yIsoScale);
+            const sizeMetric = Math.max(screenWidthPx, screenHeightPx);
+
+            for (let i = 0; i < lodList.length; i++) {
+                const entry = lodList[i];
+                if (!entry || typeof entry.texturePath !== "string" || entry.texturePath.length === 0) continue;
+                const maxSize = Number.isFinite(entry.maxDistance) ? Number(entry.maxDistance) : Infinity;
+                if (sizeMetric <= maxSize) return entry.texturePath;
+            }
+            return basePath || (lodList[lodList.length - 1] && lodList[lodList.length - 1].texturePath) || null;
+        }
+
+        applySpriteTransform(item) {
+            if (!item || !item.pixiSprite) return;
+            const interpolatedWorld = (typeof item.getInterpolatedPosition === "function")
+                ? item.getInterpolatedPosition()
+                : null;
+            const mapRef = this.camera.map || global.map || null;
+            const alpha = Number.isFinite(global.renderAlpha) ? Math.max(0, Math.min(1, global.renderAlpha)) : 1;
+            const fallbackWorldX = (item && Number.isFinite(item.prevX) && Number.isFinite(item.x))
+                ? (
+                    Number.isFinite(alpha) && mapRef && typeof mapRef.shortestDeltaX === "function"
+                        ? (item.prevX + mapRef.shortestDeltaX(item.prevX, item.x) * alpha)
+                        : (item.prevX + (item.x - item.prevX) * alpha)
+                )
+                : item.x;
+            const fallbackWorldY = (item && Number.isFinite(item.prevY) && Number.isFinite(item.y))
+                ? (
+                    Number.isFinite(alpha) && mapRef && typeof mapRef.shortestDeltaY === "function"
+                        ? (item.prevY + mapRef.shortestDeltaY(item.prevY, item.y) * alpha)
+                        : (item.prevY + (item.y - item.prevY) * alpha)
+                )
+                : item.y;
+            const drawX = (
+                interpolatedWorld &&
+                Number.isFinite(interpolatedWorld.x) &&
+                Number.isFinite(interpolatedWorld.y)
+            ) ? interpolatedWorld.x : fallbackWorldX;
+            const drawY = (
+                interpolatedWorld &&
+                Number.isFinite(interpolatedWorld.x) &&
+                Number.isFinite(interpolatedWorld.y)
+            ) ? interpolatedWorld.y : fallbackWorldY;
+            const coors = this.camera.worldToScreen(drawX, drawY, 0);
+            item.pixiSprite.x = coors.x;
+            item.pixiSprite.y = coors.y;
+
+            if (typeof global.ensureSpriteFrames === "function") {
+                global.ensureSpriteFrames(item);
+            }
+            if (item.spriteFrames && item.pixiSprite) {
+                const rowIndex = typeof item.getDirectionRow === "function" ? item.getDirectionRow() : 0;
+                const safeRow = Math.max(0, Math.min(rowIndex, (item.spriteRows || 1) - 1));
+                const safeCol = Math.max(0, Math.min(item.spriteCol || 0, (item.spriteCols || 1) - 1));
+                const rowFrames = item.spriteFrames[safeRow] || item.spriteFrames[0];
+                const nextTexture = rowFrames && (rowFrames[safeCol] || rowFrames[0]);
+                if (nextTexture) item.pixiSprite.texture = nextTexture;
+            }
+
+            const spriteTexture = item.pixiSprite.texture || null;
+            const nativeTexW = spriteTexture && Number.isFinite(spriteTexture.width) ? Number(spriteTexture.width) : null;
+            const nativeTexH = spriteTexture && Number.isFinite(spriteTexture.height) ? Number(spriteTexture.height) : null;
+            const useNativeLodSize = !!(
+                global.debugUseLodNativePixelSize &&
+                this.isPlacedObjectEntity(item) &&
+                item.rotationAxis !== "spatial" &&
+                Number.isFinite(nativeTexW) &&
+                Number.isFinite(nativeTexH)
+            );
+
+            if (this.isPlacedObjectEntity(item) && item.rotationAxis !== "spatial" && item.pixiSprite instanceof PIXI.Sprite) {
+                const lodTexturePath = this.resolvePlacedObjectLodTexturePath(item);
+                if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== item._activeLodTexturePath) {
+                    item.pixiSprite.texture = PIXI.Texture.from(lodTexturePath);
+                    item._activeLodTexturePath = lodTexturePath;
+                }
+            }
+
+            if (item.type === "road") {
+                item.pixiSprite.width = (item.width || 1) * this.camera.viewscale * 1.1547;
+                item.pixiSprite.height = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
+            } else if (item.rotationAxis === "ground") {
+                item.pixiSprite.width = (item.width || 1) * this.camera.viewscale;
+                item.pixiSprite.height = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
+            } else if (useNativeLodSize) {
+                item.pixiSprite.width = nativeTexW;
+                item.pixiSprite.height = nativeTexH;
+            } else {
+                item.pixiSprite.width = (item.width || 1) * this.camera.viewscale;
+                item.pixiSprite.height = (item.height || 1) * this.camera.viewscale;
+            }
+
+            const visualRotation = (item && item.rotationAxis === "none")
+                ? 0
+                : Number.isFinite(item.placementRotation)
+                    ? item.placementRotation
+                    : item.rotation;
+            item.pixiSprite.rotation = visualRotation ? (visualRotation * (Math.PI / 180)) : 0;
+        }
+
+        getRoofsList(ctx) {
+            const fromCtx = Array.isArray(ctx && ctx.roofs) ? ctx.roofs : null;
+            if (fromCtx) return fromCtx;
+            if (Array.isArray(global.roofs)) return global.roofs;
+            const legacy = global.roof || null;
+            return legacy ? [legacy] : [];
+        }
+
+        updateRoofPreview(roof, wizardRef) {
+            if (!roof) return;
+            if (!roof.pixiMesh) {
+                roof.createPixiMesh();
+                if (roof.pixiMesh && roof.pixiMesh.parent) {
+                    roof.pixiMesh.parent.removeChild(roof.pixiMesh);
+                }
+            }
+
+            if (!roof.pixiMesh) return;
+            const roofInteriorHitbox = (
+                roof.interiorHideHitbox &&
+                typeof roof.interiorHideHitbox.containsPoint === "function"
+            ) ? roof.interiorHideHitbox : roof.groundPlaneHitbox;
+            const wizardInsideRoof = !!(
+                wizardRef &&
+                roof.placed &&
+                roofInteriorHitbox &&
+                typeof roofInteriorHitbox.containsPoint === "function" &&
+                roofInteriorHitbox.containsPoint(wizardRef.x, wizardRef.y)
+            );
+
+            const targetRoofAlpha = wizardInsideRoof ? 0.0 : 1.0;
+            if (!Number.isFinite(roof.currentAlpha)) {
+                roof.currentAlpha = targetRoofAlpha;
+            }
+            const fadeSpeed = 0.15;
+            roof.currentAlpha += (targetRoofAlpha - roof.currentAlpha) * fadeSpeed;
+            if (Math.abs(targetRoofAlpha - roof.currentAlpha) < 0.01) {
+                roof.currentAlpha = targetRoofAlpha;
+            }
+            roof.pixiMesh.alpha = roof.currentAlpha;
+            roof.pixiMesh.visible = !!roof.placed && roof.currentAlpha > 0.01;
+
+            if (roof.placed) {
+                const baseZ = Number.isFinite(roof.z)
+                    ? Number(roof.z)
+                    : (Number.isFinite(roof.heightFromGround) ? Number(roof.heightFromGround) : 0);
+                const usesDepthShader = !!(
+                    roof.pixiMesh &&
+                    roof.pixiMesh._usesRoofDepthShader &&
+                    Array.isArray(roof.pixiMesh._roofDepthUniforms)
+                );
+                if (usesDepthShader) {
+                    const uniformsList = roof.pixiMesh._roofDepthUniforms;
+                    const appRef = (typeof app !== "undefined" && app) ? app : (global.app || null);
+                    const screenW = (appRef && appRef.screen && Number.isFinite(appRef.screen.width))
+                        ? Number(appRef.screen.width)
+                        : 1;
+                    const screenH = (appRef && appRef.screen && Number.isFinite(appRef.screen.height))
+                        ? Number(appRef.screen.height)
+                        : 1;
+                    const viewportRef = (global.viewport && Number.isFinite(global.viewport.height))
+                        ? global.viewport
+                        : { height: 30 };
+                    const viewportHeight = Number(viewportRef.height) || 30;
+                    const nearMetric = -Math.max(80, viewportHeight * 0.6);
+                    const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+                    const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
+                    const mapRef = roof.map || this.camera.map || global.map || null;
+                    const worldW = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
+                        ? Number(mapRef.worldWidth)
+                        : 0;
+                    const worldH = (mapRef && Number.isFinite(mapRef.worldHeight) && mapRef.worldHeight > 0)
+                        ? Number(mapRef.worldHeight)
+                        : 0;
+                    const wrapX = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
+                    const wrapY = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
+                    for (let i = 0; i < uniformsList.length; i++) {
+                        const u = uniformsList[i];
+                        if (!u) continue;
+                        u.uScreenSize[0] = Math.max(1, screenW);
+                        u.uScreenSize[1] = Math.max(1, screenH);
+                        u.uCameraWorld[0] = Number(this.camera.x) || 0;
+                        u.uCameraWorld[1] = Number(this.camera.y) || 0;
+                        u.uViewScale = Number(this.camera.viewscale) || 1;
+                        u.uXyRatio = Number(this.camera.xyratio) || 1;
+                        u.uDepthRange[0] = farMetric;
+                        u.uDepthRange[1] = depthSpanInv;
+                        u.uModelOrigin[0] = Number(roof.x) || 0;
+                        u.uModelOrigin[1] = Number(roof.y) || 0;
+                        u.uModelOrigin[2] = baseZ;
+                        u.uWorldSize[0] = worldW;
+                        u.uWorldSize[1] = worldH;
+                        u.uWrapEnabled[0] = wrapX;
+                        u.uWrapEnabled[1] = wrapY;
+                        u.uWrapAnchorWorld[0] = Number(roof.x) || 0;
+                        u.uWrapAnchorWorld[1] = Number(roof.y) || 0;
+                        u.uTint[3] = Number.isFinite(roof.currentAlpha) ? Number(roof.currentAlpha) : 1;
+                    }
+                    roof.pixiMesh.x = 0;
+                    roof.pixiMesh.y = 0;
+                    roof.pixiMesh.scale.set(1, 1);
+                    roof.pixiMesh.alpha = 1;
+                } else {
+                    const roofCoords = this.camera.worldToScreen(roof.x, roof.y, 0);
+                    const baseYOffsetPx = baseZ * this.camera.viewscale * this.camera.xyratio;
+                    roof.pixiMesh.x = roofCoords.x;
+                    roof.pixiMesh.y = roofCoords.y - baseYOffsetPx;
+                    roof.pixiMesh.scale.set(this.camera.viewscale, this.camera.viewscale);
+                }
+            }
+        }
+
         isLosOccluder(item) {
             if (!item || !item.groundPlaneHitbox) return false;
             if (item.type === "road" || item.type === "firewall" || item.type === "roof") return false;
+            if (typeof item.castsLosShadows === "boolean" && !item.castsLosShadows) return false;
             const isAnimal = (typeof Animal !== "undefined" && item instanceof Animal);
             if (isAnimal) return false;
-            const placedObjectEntity = (typeof global.isPlacedObjectEntity === "function")
-                ? global.isPlacedObjectEntity(item)
-                : !!(item && (item.isPlacedObject || item.objectType === "placedObject" || item.type === "placedObject"));
-            if (
-                placedObjectEntity &&
-                typeof item.category === "string" &&
-                item.category.trim().toLowerCase() === "windows"
-            ) {
-                return false;
-            }
             return true;
         }
 
@@ -216,7 +712,7 @@
             };
         }
 
-        updateLosState(ctx, visibleNodes) {
+        updateLosState(ctx, visibleNodes, visibleObjectsOverride = null) {
             const wizard = ctx && ctx.wizard ? ctx.wizard : null;
             const losSystem = (typeof LOSSystem !== "undefined") ? LOSSystem : global.LOSSystem;
             if (!wizard || !losSystem || typeof losSystem.computeState !== "function") {
@@ -224,17 +720,16 @@
                 return;
             }
 
-            const activeAuras = (wizard && Array.isArray(wizard.activeAuras))
-                ? wizard.activeAuras
-                : ((wizard && typeof wizard.activeAura === "string") ? [wizard.activeAura] : []);
-            const omnivisionActive = activeAuras.includes("omnivision");
+            const omnivisionActive = this.isOmnivisionActive(wizard);
             if (omnivisionActive) {
                 this.clearLosStateDebug();
                 return;
             }
 
             const losBuildStartMs = performance.now();
-            const visibleObjects = this.collectVisibleObjects(visibleNodes, ctx);
+            const visibleObjects = Array.isArray(visibleObjectsOverride)
+                ? visibleObjectsOverride
+                : this.collectVisibleObjects(visibleNodes, ctx);
             const losCandidates = [];
             for (let i = 0; i < visibleObjects.length; i++) {
                 const obj = visibleObjects[i];
@@ -273,14 +768,20 @@
 
             let losTraceMs = 0;
             if (shouldRecomputeLos) {
+                const mazeMode = this.isLosMazeModeEnabled();
                 const losForwardFovDegreesRaw = Number(this.getLosVisualSetting("forwardFovDegrees", 200));
-                const losForwardFovDegrees = Number.isFinite(losForwardFovDegreesRaw)
-                    ? Math.max(0, Math.min(360, losForwardFovDegreesRaw))
-                    : 200;
+                const losForwardFovDegrees = mazeMode
+                    ? 360
+                    : (
+                        Number.isFinite(losForwardFovDegreesRaw)
+                            ? Math.max(0, Math.min(360, losForwardFovDegreesRaw))
+                            : 200
+                    );
                 this.currentLosState = losSystem.computeState(wizard, losCandidates, {
                     bins: LOS_BINS,
                     facingAngle,
-                    fovDegrees: losForwardFovDegrees
+                    fovDegrees: losForwardFovDegrees,
+                    mazeMode
                 });
                 losTraceMs = Number.isFinite(this.currentLosState && this.currentLosState.elapsedMs)
                     ? Number(this.currentLosState.elapsedMs)
@@ -304,6 +805,137 @@
                 recomputed: shouldRecomputeLos,
                 candidates: candidateCount
             };
+        }
+
+        updateWallLosIlluminationTallies(ctx) {
+            const wallCtor = global.WallSectionUnit;
+            const allSections = (wallCtor && wallCtor._allSections instanceof Map)
+                ? wallCtor._allSections
+                : null;
+            if (!allSections) return;
+
+            for (const section of allSections.values()) {
+                if (!section || typeof section.resetLosIlluminationTally !== "function") continue;
+                section.resetLosIlluminationTally();
+            }
+
+            const wizard = ctx && ctx.wizard ? ctx.wizard : null;
+            const mazeMode = this.isLosMazeModeEnabled() && !this.isOmnivisionActive(wizard);
+            if (!mazeMode) return;
+
+            const state = this.currentLosState;
+            if (!wizard || !state || !Array.isArray(state.owner) || !state.depth || !Number.isFinite(state.bins)) return;
+
+            const bins = Math.max(1, Math.floor(state.bins));
+            if (bins <= 0) return;
+            const minAngle = Number.isFinite(state.minAngle) ? state.minAngle : -Math.PI;
+            const twoPi = Math.PI * 2;
+            const mapRef = (wizard && wizard.map) || global.map || null;
+
+            const angleToBinIndex = theta => {
+                const relative = ((theta - minAngle) % twoPi + twoPi) % twoPi;
+                const rawIndex = Math.floor((relative / twoPi) * bins);
+                if (rawIndex < 0) return 0;
+                if (rawIndex >= bins) return bins - 1;
+                return rawIndex;
+            };
+
+            const collectEndpointOwners = endpoint => {
+                if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return [];
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(wizard.x, endpoint.x)
+                    : (endpoint.x - wizard.x);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(wizard.y, endpoint.y)
+                    : (endpoint.y - wizard.y);
+                if (!Number.isFinite(dx) || !Number.isFinite(dy)) return [];
+                const endpointDistance = Math.hypot(dx, dy);
+                const theta = Math.atan2(dy, dx);
+                const centerBin = angleToBinIndex(theta);
+                const endpointSampleRadius = 0.8;
+                const angularTolerance = endpointDistance > 1e-6
+                    ? Math.atan2(endpointSampleRadius, endpointDistance)
+                    : Math.PI;
+                const dynamicRadius = Math.ceil((angularTolerance / twoPi) * bins);
+                const searchRadiusBins = Math.min(
+                    Math.max(2, dynamicRadius),
+                    Math.max(2, Math.min(24, Math.floor(bins / 6)))
+                );
+                const endpointDepthSlack = 0.35;
+                const out = [];
+                const seen = new Set();
+                for (let offset = 0; offset <= searchRadiusBins; offset++) {
+                    const candidates = offset === 0
+                        ? [centerBin]
+                        : [
+                            (centerBin - offset + bins) % bins,
+                            (centerBin + offset) % bins
+                        ];
+                    for (let i = 0; i < candidates.length; i++) {
+                        const binIndex = candidates[i];
+                        const owner = state.owner[binIndex] || null;
+                        if (!owner || seen.has(owner)) continue;
+                        const hitDist = Number(state.depth[binIndex]);
+                        if (!Number.isFinite(hitDist) || hitDist <= 0) continue;
+                        if (Number.isFinite(endpointDistance) && hitDist > (endpointDistance + endpointDepthSlack)) continue;
+                        seen.add(owner);
+                        out.push(owner);
+                    }
+                }
+                return out;
+            };
+
+            for (let i = 0; i < bins; i++) {
+                const owner = state.owner[i];
+                if (!owner || owner.type !== "wallSection" || typeof owner.accumulateLosIlluminationT !== "function") continue;
+                const hitDist = Number(state.depth[i]);
+                if (!Number.isFinite(hitDist) || hitDist <= 0) continue;
+
+                const theta = minAngle + ((i + 0.5) / bins) * twoPi;
+                const hitX = Number(wizard.x) + Math.cos(theta) * hitDist;
+                const hitY = Number(wizard.y) + Math.sin(theta) * hitDist;
+                const t = (typeof owner._parameterForWorldPointOnSection === "function")
+                    ? owner._parameterForWorldPointOnSection({ x: hitX, y: hitY })
+                    : null;
+                owner.accumulateLosIlluminationT(t);
+            }
+
+            for (const section of allSections.values()) {
+                if (!section || typeof section.getLosIlluminationRangeT !== "function") continue;
+                const range = section.getLosIlluminationRangeT();
+                if (!range) continue;
+
+                const sectionLength = Number.isFinite(section.length) ? Math.max(0, Number(section.length)) : 0;
+                const tMin = Number(range.tMin);
+                const tMax = Number(range.tMax);
+                const endpointSnapDistance = 1;
+                const nearStartByDistance = (
+                    sectionLength > 0 &&
+                    Number.isFinite(tMin) &&
+                    (Math.max(0, tMin) * sectionLength) <= endpointSnapDistance
+                );
+                const nearEndByDistance = (
+                    sectionLength > 0 &&
+                    Number.isFinite(tMax) &&
+                    (Math.max(0, 1 - tMax) * sectionLength) <= endpointSnapDistance
+                );
+
+                const ownersAtStart = collectEndpointOwners(section.startPoint);
+                const ownersAtEnd = collectEndpointOwners(section.endPoint);
+                const snapStartByOwner = (typeof section.isEndpointOwnedBySameWall === "function")
+                    ? ownersAtStart.some(owner => section.isEndpointOwnedBySameWall("a", owner))
+                    : false;
+                const snapEndByOwner = (typeof section.isEndpointOwnedBySameWall === "function")
+                    ? ownersAtEnd.some(owner => section.isEndpointOwnedBySameWall("b", owner))
+                    : false;
+                const snapStart = snapStartByOwner || nearStartByDistance;
+                const snapEnd = snapEndByOwner || nearEndByDistance;
+
+                if (typeof section.setLosEndpointSnapEligibility === "function") {
+                    section.setLosEndpointSnapEligibility("a", snapStart);
+                    section.setLosEndpointSnapEligibility("b", snapEnd);
+                }
+            }
         }
 
         ensureLosShadowGraphics() {
@@ -346,13 +978,21 @@
             const graphics = this.ensureLosShadowGraphics();
             if (!graphics) return;
             graphics.clear();
+            if (this.mazeModeOverlayActive) {
+                graphics.visible = false;
+                return;
+            }
 
             const shadowEnabled = !!this.getLosVisualSetting("shadowEnabled", true);
-            const shadowOpacityRaw = Number(this.getLosVisualSetting("shadowOpacity", 0.4));
-            const shadowOpacity = Number.isFinite(shadowOpacityRaw) ? Math.max(0, Math.min(1, shadowOpacityRaw)) : 0.4;
             const wizard = ctx && ctx.wizard ? ctx.wizard : null;
+            const omnivisionActive = this.isOmnivisionActive(wizard);
+            const mazeMode = this.isLosMazeModeEnabled() && !omnivisionActive;
+            const shadowOpacityRaw = Number(this.getLosVisualSetting("shadowOpacity", 0.4));
+            const shadowOpacity = mazeMode
+                ? 1
+                : (Number.isFinite(shadowOpacityRaw) ? Math.max(0, Math.min(1, shadowOpacityRaw)) : 0.4);
             const state = this.currentLosState;
-            if (!shadowEnabled || shadowOpacity <= 0 || !wizard || !state || !state.depth || !Number.isFinite(state.bins)) {
+            if (omnivisionActive || !shadowEnabled || shadowOpacity <= 0 || !wizard || !state || !state.depth || !Number.isFinite(state.bins)) {
                 graphics.visible = false;
                 return;
             }
@@ -371,6 +1011,16 @@
             const viewportH = viewportRef && Number.isFinite(viewportRef.height) ? viewportRef.height : 24;
             const farDist = Math.max(viewportW, viewportH) * 1.5;
             const angleForBin = idx => minAngle + ((idx + 0.5) / bins) * twoPi;
+            const losHasForwardFov = !!state.hasForwardFov;
+            const losFacingAngle = Number.isFinite(state.facingAngle) ? state.facingAngle : 0;
+            const losHalfFovRad = Number.isFinite(state.halfFovRad) ? state.halfFovRad : Math.PI;
+            const isInsideFov = theta => {
+                if (!losHasForwardFov) return true;
+                let delta = theta - losFacingAngle;
+                while (delta <= -Math.PI) delta += twoPi;
+                while (delta > Math.PI) delta -= twoPi;
+                return Math.abs(delta) <= losHalfFovRad;
+            };
             const wizardScreen = this.camera.worldToScreen(wizard.x, wizard.y, 0);
             const scaleX = this.camera.viewscale;
             const scaleY = this.camera.viewscale * this.camera.xyratio;
@@ -385,12 +1035,14 @@
             graphics.beginFill(shadowColor, shadowOpacity);
             for (let i = 0; i < bins; i++) {
                 const j = (i + 1) % bins;
-                const d0 = Number.isFinite(depth[i]) ? Math.max(LOS_NEAR_REVEAL_RADIUS, depth[i]) : farDist;
-                const d1 = Number.isFinite(depth[j]) ? Math.max(LOS_NEAR_REVEAL_RADIUS, depth[j]) : farDist;
-                if (d0 >= farDist && d1 >= farDist) continue;
-
                 const t0 = angleForBin(i);
                 const t1 = angleForBin(j);
+                const nearReveal0 = isInsideFov(t0) ? 0 : LOS_NEAR_REVEAL_RADIUS;
+                const nearReveal1 = isInsideFov(t1) ? 0 : LOS_NEAR_REVEAL_RADIUS;
+                const d0 = Number.isFinite(depth[i]) ? Math.max(nearReveal0, depth[i]) : farDist;
+                const d1 = Number.isFinite(depth[j]) ? Math.max(nearReveal1, depth[j]) : farDist;
+                if (d0 >= farDist && d1 >= farDist) continue;
+
                 const cos0 = Math.cos(t0);
                 const sin0 = Math.sin(t0);
                 const cos1 = Math.cos(t1);
@@ -430,10 +1082,11 @@
             const animalsList = Array.isArray(ctx && ctx.animals)
                 ? ctx.animals
                 : (Array.isArray(global.animals) ? global.animals : []);
+            const animalsPreFilteredVisible = !!(ctx && ctx.animalsPreFilteredVisible);
             for (let i = 0; i < animalsList.length; i++) {
                 const animal = animalsList[i];
                 if (!animal || animal.gone || animal.vanishing) continue;
-                if (!animal.onScreen) continue;
+                if (!animalsPreFilteredVisible && !animal.onScreen) continue;
                 if (seen.has(animal)) continue;
                 seen.add(animal);
                 out.push(animal);
@@ -446,18 +1099,16 @@
             if (!map || !Array.isArray(map.nodes)) return [];
             const nodes = [];
 
-            // Reuse legacy wrapped viewport sampling to keep layer culling consistent.
-            if (typeof global.forEachWrappedNodeInViewport === "function") {
-                global.forEachWrappedNodeInViewport(
-                    Math.max(0, Number.isFinite(xPadding) ? Math.floor(xPadding) : 0),
-                    Math.max(0, Number.isFinite(yPadding) ? Math.floor(yPadding) : 0),
-                    (node) => {
-                        if (node) nodes.push(node);
-                    },
-                    ctx.camera
-                );
-                return nodes;
-            }
+            this.forEachWrappedNodeInViewport(
+                map,
+                xPadding,
+                yPadding,
+                (node) => {
+                    if (node) nodes.push(node);
+                },
+                ctx.camera
+            );
+            if (nodes.length > 0) return nodes;
 
             const cam = this.camera;
             const padX = Math.max(0, Number.isFinite(xPadding) ? Math.floor(xPadding) : 0);
@@ -477,37 +1128,24 @@
             return nodes;
         }
 
-        syncOnscreenObjectsCache(ctx, visibleNodes) {
+        syncOnscreenObjectsCache(ctx, visibleNodes, visibleObjectsOverride = null) {
             const cache = (typeof global.onscreenObjects !== "undefined") ? global.onscreenObjects : null;
             if (!cache || typeof cache.clear !== "function" || typeof cache.add !== "function") return;
             cache.clear();
 
-            const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
-            const seen = new Set();
-            for (let n = 0; n < nodes.length; n++) {
-                const node = nodes[n];
-                if (!node || !Array.isArray(node.objects)) continue;
-                for (let i = 0; i < node.objects.length; i++) {
-                    const obj = node.objects[i];
-                    if (!obj || obj.gone || obj.vanishing) continue;
-                    if (seen.has(obj)) continue;
-                    seen.add(obj);
-                    cache.add(obj);
-                }
+            const visibleObjects = Array.isArray(visibleObjectsOverride)
+                ? visibleObjectsOverride
+                : this.collectVisibleObjects(visibleNodes, ctx);
+            for (let i = 0; i < visibleObjects.length; i++) {
+                const obj = visibleObjects[i];
+                if (!obj || obj.gone || obj.vanishing) continue;
+                cache.add(obj);
             }
 
-            const animals = Array.isArray(ctx && ctx.animals)
-                ? ctx.animals
-                : (Array.isArray(global.animals) ? global.animals : []);
-            for (let i = 0; i < animals.length; i++) {
-                const animal = animals[i];
-                if (!animal || animal.gone || animal.vanishing || animal.dead) continue;
-                if (!animal.onScreen) continue;
-                cache.add(animal);
-            }
-
-            const roofRef = ctx && ctx.roof ? ctx.roof : (global.roof || null);
-            if (roofRef && roofRef.placed && roofRef.pixiMesh && roofRef.pixiMesh.visible) {
+            const roofList = this.getRoofsList(ctx);
+            for (let i = 0; i < roofList.length; i++) {
+                const roofRef = roofList[i];
+                if (!roofRef || roofRef.gone || !roofRef.placed || !roofRef.pixiMesh || !roofRef.pixiMesh.visible) continue;
                 cache.add(roofRef);
             }
         }
@@ -518,24 +1156,27 @@
                 return false;
             }
             const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-            const isWallMountedSpatial = !!(
+            const isSpatialDoorOrWindow = !!(
                 item.rotationAxis === "spatial" &&
                 (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
             );
-            if (item.rotationAxis === "spatial" && !isWallMountedSpatial) return false;
+            const isWallMountedSpatial = this.isWallMountedSpatialItem(item);
+            if (item.rotationAxis === "spatial" && !isSpatialDoorOrWindow) return false;
             if (typeof item.updateDepthBillboardMesh !== "function") return false;
             const sprite = item.pixiSprite;
-            if (!isWallMountedSpatial && (!sprite || !sprite.texture)) return false;
-            if (isWallMountedSpatial && !sprite && !(typeof item.texturePath === "string" && item.texturePath.length > 0)) return false;
+            if (!sprite && !(typeof item.texturePath === "string" && item.texturePath.length > 0)) return false;
             return true;
         }
 
         renderDepthBillboardObjects(ctx, renderItems) {
             const container = this.layers.depthObjects;
+            const groundContainer = this.layers.groundObjects;
             if (!container) return new Set();
             const depthRenderedItems = new Set();
             const currentMeshes = new Set();
             const currentItems = new Set();
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            const mazeModeForDepth = this.isLosMazeModeEnabled() && !this.isOmnivisionActive(wizardRef);
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
@@ -544,12 +1185,19 @@
                     item.updateSpriteAnimation();
                 }
                 const sprite = item.pixiSprite;
-                const mesh = item.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
+                const mesh = item.updateDepthBillboardMesh(ctx, this.camera, {
+                    alphaCutoff: TREE_ALPHA_CUTOFF,
+                    mazeMode: mazeModeForDepth,
+                    player: wizardRef
+                });
                 if (!mesh) continue;
                 item._renderingDepthMesh = mesh;
 
-                if (mesh.parent !== container) {
-                    container.addChild(mesh);
+                const targetContainer = (item.rotationAxis === "ground" && groundContainer)
+                    ? groundContainer
+                    : container;
+                if (mesh.parent !== targetContainer) {
+                    targetContainer.addChild(mesh);
                 }
                 mesh.visible = true;
                 if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
@@ -558,12 +1206,9 @@
                 currentMeshes.add(mesh);
                 currentItems.add(item);
                 depthRenderedItems.add(item);
-                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-                const useMeshForPicking = !!(
-                    item.rotationAxis === "spatial" &&
-                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
-                );
-                this.addPickRenderItem(item, useMeshForPicking ? mesh : sprite, { forceInclude: true });
+                // Use the same depth billboard mesh for picker hits so picker-screen
+                // occlusion matches the regular depth-rendered scene (trees included).
+                this.addPickRenderItem(item, mesh, { forceInclude: true });
 
                 // Hide legacy sprite when depth mesh is active.
                 sprite.visible = false;
@@ -595,6 +1240,51 @@
             return depthRenderedItems;
         }
 
+        renderGroundObjects(ctx, renderItems, alreadyRenderedItems) {
+            const container = this.layers.groundObjects;
+            if (!container) return new Set();
+            const groundRenderedItems = new Set();
+            const currentSprites = new Set();
+
+            for (let i = 0; i < renderItems.length; i++) {
+                const item = renderItems[i];
+                if (!item || item.gone || item.vanishing) continue;
+                if (item.rotationAxis !== "ground") continue;
+                if (alreadyRenderedItems && alreadyRenderedItems.has(item)) continue;
+                const sprite = item.pixiSprite;
+                if (!sprite) continue;
+
+                // Fallback sprite path for ground items not handled by depth billboard
+                if (sprite.parent !== container) {
+                    container.addChild(sprite);
+                }
+                sprite.visible = true;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = true;
+                }
+                currentSprites.add(sprite);
+                groundRenderedItems.add(item);
+                this.addPickRenderItem(item, sprite);
+            }
+
+            if (!this._activeGroundObjectSprites) this._activeGroundObjectSprites = new Set();
+            for (const sprite of this._activeGroundObjectSprites) {
+                if (!currentSprites.has(sprite) && sprite) {
+                    sprite.visible = false;
+                }
+            }
+            this._activeGroundObjectSprites = currentSprites;
+
+            return groundRenderedItems;
+        }
+
+        getGroundTileZIndex(node, mapRef) {
+            const mapWidth = Number.isFinite(mapRef && mapRef.width) ? Math.max(1, Math.floor(mapRef.width)) : 1;
+            const y = Number.isFinite(node && node.yindex) ? Math.floor(node.yindex) : 0;
+            const x = Number.isFinite(node && node.xindex) ? Math.floor(node.xindex) : 0;
+            return y * mapWidth + x;
+        }
+
         renderGroundTiles(ctx, visibleNodes) {
             const map = ctx.map;
             const container = this.layers.ground;
@@ -621,8 +1311,10 @@
                     sprite = new PIXI.Sprite(PIXI.Texture.WHITE);
                     sprite.name = "renderingGroundTile";
                     sprite.anchor.set(0.5, 0.5);
+                    sprite.zIndex = this.getGroundTileZIndex(node, map);
                     this.groundSpriteByNodeKey.set(key, sprite);
                 }
+                const center = cam.worldToScreen(node.x, node.y, 0);
                 if (sprite.parent !== container) {
                     container.addChild(sprite);
                 }
@@ -639,7 +1331,6 @@
                     sprite.texture = texture;
                 }
 
-                const center = cam.worldToScreen(node.x, node.y, 0);
                 sprite.x = center.x;
                 sprite.y = center.y;
                 sprite.width = tileW;
@@ -748,6 +1439,7 @@
                 this.hexGridContainer = new PIXI.Container();
                 this.hexGridContainer.name = "renderingHexGridContainer";
                 this.hexGridContainer.interactiveChildren = false;
+                this.hexGridContainer.zIndex = Number.MAX_SAFE_INTEGER;
                 layer.addChild(this.hexGridContainer);
             } else if (this.hexGridContainer.parent !== layer) {
                 layer.addChild(this.hexGridContainer);
@@ -875,51 +1567,108 @@
             }
         }
 
-        renderObjects3D(ctx, visibleNodes) {
+        renderObjects3D(ctx, visibleNodes, visibleObjectsOverride = null) {
             const container = this.layers.objects3d;
             if (!container) return;
+            const wizard = (ctx && ctx.wizard) ? ctx.wizard : null;
+            const mapRef = (ctx && ctx.map) ? ctx.map : (this.camera && this.camera.map) || global.map || null;
+            const omnivisionActive = this.isOmnivisionActive(wizard);
+            const mazeMode = this.isLosMazeModeEnabled() && !omnivisionActive;
+            const useMazeLosClipping = mazeMode;
+            const losVisibleObjectSet = (
+                useMazeLosClipping &&
+                this.currentLosState &&
+                Array.isArray(this.currentLosState.visibleObjects)
+            ) ? new Set(this.currentLosState.visibleObjects) : null;
+            const visibleWallIdSet = (() => {
+                if (!useMazeLosClipping || !losVisibleObjectSet) return null;
+                const out = new Set();
+                for (const obj of losVisibleObjectSet) {
+                    if (!obj || obj.type !== "wallSection" || !Number.isInteger(obj.id)) continue;
+                    out.add(Number(obj.id));
+                }
+                return out;
+            })();
+            const animalsList = Array.isArray(ctx && ctx.animals)
+                ? ctx.animals
+                : (Array.isArray(global.animals) ? global.animals : null);
+            const animalSet = Array.isArray(animalsList) ? new Set(animalsList) : null;
+            const isAnimalHiddenByLos = (item) => {
+                if (!animalSet || !animalSet.has(item)) return false;
+                const worldPos = this.resolveInterpolatedItemWorldPosition(item, mapRef);
+                if (!worldPos) return false;
+                return this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef);
+            };
+            const isItemHiddenByMazeLos = (item) => {
+                if (!useMazeLosClipping || !wizard || !item) return false;
+                if (losVisibleObjectSet && this.isLosOccluder(item)) {
+                    return !losVisibleObjectSet.has(item);
+                }
+                const samplePos = this.getLosVisibilitySamplePointForItem(item, mapRef, wizard);
+                if (!samplePos) return false;
+                return this.isWorldPointInLosShadow(samplePos.x, samplePos.y, wizard, mapRef);
+            };
 
-            const mapItems = this.collectVisibleObjects(visibleNodes, ctx).filter(item =>
+            const visibleObjects = Array.isArray(visibleObjectsOverride)
+                ? visibleObjectsOverride
+                : this.collectVisibleObjects(visibleNodes, ctx);
+            const mapItems = visibleObjects.filter(item =>
                 item &&
                 item.type !== "road" &&
-                item.type !== "roof" &&
-                item !== (ctx && ctx.wizard)
+                item !== wizard &&
+                !isAnimalHiddenByLos(item) &&
+                !isItemHiddenByMazeLos(item)
             );
-            const renderItems = mapItems;
+            const roofItems = this.getRoofsList(ctx).filter(roofRef =>
+                roofRef &&
+                !roofRef.gone &&
+                !isItemHiddenByMazeLos(roofRef)
+            );
+            const renderItems = mapItems.concat(roofItems);
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item) continue;
-                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-                const isWallMountedSpatial = !!(
-                    item.rotationAxis === "spatial" &&
-                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
-                );
+                if (item.type === "roof") {
+                    this.updateRoofPreview(item, ctx.wizard || global.wizard || null);
+                    continue;
+                }
+                const isWallMountedSpatial = this.isWallMountedSpatialItem(item);
                 if (!isWallMountedSpatial) {
                     if (item.skipTransform && typeof item.draw === "function") {
                         item.draw();
-                    } else if (typeof global.applySpriteTransform === "function") {
-                        global.applySpriteTransform(item);
+                    } else {
+                        this.applySpriteTransform(item);
                     }
                 }
             }
             const depthBillboardRenderedItems = this.renderDepthBillboardObjects(ctx, renderItems);
+            const groundObjectsRenderedItems = this.renderGroundObjects(ctx, renderItems, depthBillboardRenderedItems);
             const currentDisplayObjects = new Set();
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item) continue;
                 if (depthBillboardRenderedItems.has(item)) continue;
-                let displayObj = item.pixiSprite || null;
+                if (groundObjectsRenderedItems.has(item)) continue;
+                let displayObj = (item.type === "roof")
+                    ? (item.pixiMesh || null)
+                    : (item.pixiSprite || null);
                 if (
                     item.type === "wallSection" &&
                     typeof item.getDepthMeshDisplayObject === "function"
                 ) {
                     const depthDisplay = item.getDepthMeshDisplayObject({
-                        camera: ctx.camera || this.camera,
+                        camera: this.camera,
                         app: ctx.app,
                         viewscale: this.camera.viewscale,
                         xyratio: this.camera.xyratio,
+                        worldToScreenFn: (pt) => this.camera.worldToScreen(Number(pt && pt.x) || 0, Number(pt && pt.y) || 0, 0),
+                        // Use regular wall geometry; LOS visibility still filters which walls render.
+                        mazeMode: false,
+                        clipToLosVisibleSpan: useMazeLosClipping,
+                        visibleWallIdSet,
+                        player: wizard,
                         tint: item.pixiSprite && Number.isFinite(item.pixiSprite.tint)
                             ? item.pixiSprite.tint
                             : 0xFFFFFF,
@@ -929,19 +1678,45 @@
                     });
                     if (depthDisplay) {
                         displayObj = depthDisplay;
+                    } else if (useMazeLosClipping) {
+                        displayObj = null;
                     }
                 }
                 if (!displayObj) continue;
+                const isRoofItem = item.type === "roof";
+                if (isRoofItem && !displayObj.visible) {
+                    if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
+                        displayObj.renderable = false;
+                    }
+                    item._renderingDisplayObject = displayObj;
+                    continue;
+                }
                 if (displayObj.parent !== container) {
                     container.addChild(displayObj);
                 }
-                displayObj.visible = true;
+                if (!isRoofItem) {
+                    displayObj.visible = true;
+                }
                 item._renderingDisplayObject = displayObj;
                 if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
                     displayObj.renderable = true;
                 }
                 currentDisplayObjects.add(displayObj);
-                this.addPickRenderItem(item, displayObj);
+                if (
+                    item.type === "roof" &&
+                    typeof PIXI !== "undefined" &&
+                    displayObj instanceof PIXI.Container
+                ) {
+                    const roofChildren = Array.isArray(displayObj.children) ? displayObj.children : [];
+                    for (let c = 0; c < roofChildren.length; c++) {
+                        const child = roofChildren[c];
+                        if (!child) continue;
+                        if (!(child instanceof PIXI.Mesh) && !(child instanceof PIXI.Sprite)) continue;
+                        this.addPickRenderItem(item, child);
+                    }
+                } else {
+                    this.addPickRenderItem(item, displayObj);
+                }
             }
 
             // Ensure wall-mounted depth billboards (windows/doors) win picker hits over wall sections.
@@ -949,11 +1724,7 @@
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item || !depthBillboardRenderedItems.has(item)) continue;
-                const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-                const isWallMountedSpatial = !!(
-                    item.rotationAxis === "spatial" &&
-                    (category === "windows" || category === "doors" || item.type === "window" || item.type === "door")
-                );
+                const isWallMountedSpatial = this.isWallMountedSpatialItem(item);
                 if (!isWallMountedSpatial) continue;
                 const mesh = item._renderingDepthMesh;
                 if (!mesh || !mesh.parent || !mesh.visible) continue;
@@ -966,38 +1737,6 @@
                 }
             }
             this.activeObjectDisplayObjects = currentDisplayObjects;
-        }
-
-        renderRoofs3D(ctx) {
-            const container = this.layers.objects3d;
-            if (!container) return;
-            const roofRef = ctx.roof || global.roof || null;
-            const currentRoofMeshes = new Set();
-            if (roofRef) {
-                if (typeof global.updateRoofPreview === "function") {
-                    global.updateRoofPreview(roofRef);
-                }
-                if (roofRef.pixiMesh) {
-                    if (roofRef.pixiMesh.parent !== container) {
-                        container.addChild(roofRef.pixiMesh);
-                    }
-                    roofRef.pixiMesh.visible = !!roofRef.pixiMesh.visible;
-                    if (roofRef.pixiMesh.parent && roofRef.pixiMesh.parent.children.length > 1) {
-                        roofRef.pixiMesh.parent.setChildIndex(
-                            roofRef.pixiMesh,
-                            roofRef.pixiMesh.parent.children.length - 1
-                        );
-                    }
-                    currentRoofMeshes.add(roofRef.pixiMesh);
-                }
-            }
-
-            for (const mesh of this.activeRoofMeshes) {
-                if (!currentRoofMeshes.has(mesh) && mesh) {
-                    mesh.visible = false;
-                }
-            }
-            this.activeRoofMeshes = currentRoofMeshes;
         }
 
         renderWizard(ctx) {
@@ -1348,6 +2087,7 @@
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
             const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
             const mousePosRef = this.getMousePosRef(ctx);
+            if (wizard) wizard.wallPreviewPlacement = null;
             if (
                 !wizard ||
                 wizard.currentSpell !== "wall" ||
@@ -1392,26 +2132,29 @@
             }
 
             let segments = [];
+            let previewPlan = null;
             if (
                 typeof global.WallSectionUnit !== "undefined" &&
                 global.WallSectionUnit &&
                 typeof global.WallSectionUnit.planPlacementFromWorldPoints === "function"
             ) {
-                const plan = global.WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld);
+                const plan = global.WallSectionUnit.planPlacementFromWorldPoints(mapRef, startWorld, endWorld, {
+                    rawStartWorld: (
+                        wizard.wallDragMouseStartWorld &&
+                        Number.isFinite(wizard.wallDragMouseStartWorld.x) &&
+                        Number.isFinite(wizard.wallDragMouseStartWorld.y)
+                    ) ? {
+                        x: Number(wizard.wallDragMouseStartWorld.x),
+                        y: Number(wizard.wallDragMouseStartWorld.y)
+                    } : { x: startWorld.x, y: startWorld.y },
+                    startFromExistingWall: !!wizard.wallStartFromExistingWall,
+                    startReferenceWall: wizard.wallStartReferenceWall || null
+                });
+                if (plan) {
+                    previewPlan = plan;
+                }
                 if (plan && Array.isArray(plan.segments)) {
                     segments = plan.segments.slice();
-                }
-            }
-
-            if (segments.length === 0 && typeof mapRef.worldToNode === "function") {
-                const startNode = mapRef.worldToNode(startWorld.x, startWorld.y);
-                const endNode = mapRef.worldToNode(endWorld.x, endWorld.y);
-                if (
-                    startNode && endNode &&
-                    Number.isFinite(startNode.x) && Number.isFinite(startNode.y) &&
-                    Number.isFinite(endNode.x) && Number.isFinite(endNode.y)
-                ) {
-                    segments.push({ start: startNode, end: endNode });
                 }
             }
 
@@ -1419,6 +2162,36 @@
                 g.visible = false;
                 return;
             }
+
+            const normalizedSegments = [];
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                if (!seg || !seg.start || !seg.end) continue;
+                const sx = Number(seg.start.x);
+                const sy = Number(seg.start.y);
+                const ex = Number(seg.end.x);
+                const ey = Number(seg.end.y);
+                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) continue;
+                normalizedSegments.push({
+                    start: { x: sx, y: sy },
+                    end: { x: ex, y: ey },
+                    direction: Number.isFinite(seg.direction) ? Number(seg.direction) : undefined
+                });
+            }
+            wizard.wallPreviewPlacement = {
+                startWorld: { x: startWorld.x, y: startWorld.y },
+                endWorld: { x: endWorld.x, y: endWorld.y },
+                rawStartWorld: (
+                    wizard.wallDragMouseStartWorld &&
+                    Number.isFinite(wizard.wallDragMouseStartWorld.x) &&
+                    Number.isFinite(wizard.wallDragMouseStartWorld.y)
+                ) ? {
+                    x: Number(wizard.wallDragMouseStartWorld.x),
+                    y: Number(wizard.wallDragMouseStartWorld.y)
+                } : { x: startWorld.x, y: startWorld.y },
+                plan: previewPlan,
+                segments: normalizedSegments
+            };
 
             g.lineStyle(2, 0xff2222, 0.95);
             const wallThickness = (wizard && Number.isFinite(wizard.selectedWallThickness))
@@ -1457,7 +2230,7 @@
 
         buildPlaceObjectPreviewRenderItem(ctx) {
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
-            if (!wizard || wizard.currentSpell !== "placeobject") {
+            if (!wizard || wizard.currentSpell !== "placeobject" || wizard.editorPlacementActive !== true) {
                 return null;
             }
             const mousePosRef = this.getMousePosRef(ctx);
@@ -1476,7 +2249,7 @@
             const rawAxis = (typeof wizard.selectedPlaceableRotationAxis === "string")
                 ? wizard.selectedPlaceableRotationAxis.trim().toLowerCase()
                 : "";
-            const rotationAxis = (rawAxis === "spatial" || rawAxis === "visual" || rawAxis === "none")
+            const rotationAxis = (rawAxis === "spatial" || rawAxis === "visual" || rawAxis === "none" || rawAxis === "ground")
                 ? rawAxis
                 : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
             const placementRotation = Number.isFinite(wizard.selectedPlaceableRotation)
@@ -1503,17 +2276,56 @@
             const worldY = (mapRef && typeof mapRef.wrapWorldY === "function")
                 ? mapRef.wrapWorldY(mousePosRef.worldY)
                 : mousePosRef.worldY;
-            const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
+            const supportsWallSnapPlacement = selectedCategory === "windows" || selectedCategory === "doors";
+            const requiresWallSnapPlacement = selectedCategory === "windows";
+            const isRoofPlacement = selectedCategory === "roof";
+            const roofApi = (typeof global.Roof === "function")
+                ? global.Roof
+                : ((typeof Roof === "function") ? Roof : null);
+            const roofDiagnostics = (
+                isRoofPlacement &&
+                roofApi &&
+                typeof roofApi.getPlacementDiagnostics === "function"
+            ) ? roofApi.getPlacementDiagnostics(wizard, worldX, worldY, { maxDepth: 12 }) : null;
             const spellSystemRef = (typeof SpellSystem !== "undefined")
                 ? SpellSystem
                 : (global.SpellSystem || null);
             const snapPlacement = (
-                isWallMountedPlacement &&
+                (supportsWallSnapPlacement || isRoofPlacement) &&
                 spellSystemRef &&
                 typeof spellSystemRef.getPlaceObjectPlacementCandidate === "function"
             ) ? spellSystemRef.getPlaceObjectPlacementCandidate(wizard, worldX, worldY) : null;
+            if (isRoofPlacement) {
+                if (!roofDiagnostics || !roofDiagnostics.hoveredSection) return null;
+                if (!this.placeObjectPreviewItem) {
+                    this.placeObjectPreviewItem = {
+                        type: "placedObjectPreview",
+                        map: mapRef || global.map || null,
+                        gone: false,
+                        vanishing: false,
+                        isPlacedObject: true,
+                        objectType: "placedObject",
+                        pixiSprite: this.placeObjectPreviewSprite
+                    };
+                }
+                const previewItem = this.placeObjectPreviewItem;
+                previewItem.map = mapRef || previewItem.map || null;
+                previewItem.roofHighlightOnly = true;
+                previewItem.roofLoopSections = Array.isArray(roofDiagnostics.wallSections)
+                    ? roofDiagnostics.wallSections.slice()
+                    : [roofDiagnostics.hoveredSection];
+                previewItem.centerSnapGuide = null;
+                return previewItem;
+            }
             const useSnapPlacement = !!(snapPlacement && snapPlacement.targetWall);
-            if (isWallMountedPlacement) {
+            const useRoofPlacement = !!(
+                isRoofPlacement &&
+                useSnapPlacement &&
+                Number.isFinite(snapPlacement.previewX) &&
+                Number.isFinite(snapPlacement.previewY) &&
+                Number.isFinite(snapPlacement.previewZ)
+            );
+            if (requiresWallSnapPlacement) {
                 if (
                     !useSnapPlacement ||
                     !Number.isFinite(snapPlacement.snappedX) ||
@@ -1524,6 +2336,7 @@
                     return null;
                 }
             }
+            if (isRoofPlacement && !useRoofPlacement) return null;
             const placeableScale = Number.isFinite(wizard.selectedPlaceableScale)
                 ? Number(wizard.selectedPlaceableScale)
                 : 1;
@@ -1531,12 +2344,25 @@
             const selectedAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
                 ? Number(wizard.selectedPlaceableAnchorY)
                 : 1;
+            const effectiveAnchorY = isRoofPlacement ? 0.5 : selectedAnchorY;
             const yScale = Math.max(0.1, Math.abs(Number.isFinite(this.camera.xyratio) ? this.camera.xyratio : 0.66));
-            const placementYOffset = (rotationAxis === "spatial")
+            const placementYOffset = (rotationAxis === "spatial" || rotationAxis === "ground" || isRoofPlacement)
                 ? 0
-                : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
-            const previewX = useSnapPlacement ? snapPlacement.snappedX : worldX;
-            let placedY = useSnapPlacement ? snapPlacement.snappedY : (worldY + placementYOffset);
+                : (((effectiveAnchorY - 0.5) * clampedScale) / yScale);
+            const spatialAnchorPlacementYOffset = (
+                rotationAxis === "spatial" &&
+                !useSnapPlacement &&
+                !useRoofPlacement &&
+                (selectedCategory === "doors" || selectedCategory === "windows")
+            )
+                ? (((effectiveAnchorY - 0.5) * clampedScale) / yScale)
+                : 0;
+            const previewX = useRoofPlacement
+                ? Number(snapPlacement.previewX)
+                : (useSnapPlacement ? snapPlacement.snappedX : worldX);
+            let placedY = useRoofPlacement
+                ? Number(snapPlacement.previewY)
+                : (useSnapPlacement ? snapPlacement.snappedY : (worldY + placementYOffset + spatialAnchorPlacementYOffset));
             if (mapRef && typeof mapRef.wrapWorldY === "function") {
                 placedY = mapRef.wrapWorldY(placedY);
             }
@@ -1572,8 +2398,12 @@
             previewItem.map = mapRef || previewItem.map || null;
             previewItem.pixiSprite = this.placeObjectPreviewSprite;
             previewItem.x = previewX;
-            previewItem.y = useSnapPlacement ? snapPlacement.snappedY : worldY;
-            previewItem.z = useSnapPlacement ? Number(snapPlacement.snappedZ) : 0;
+            previewItem.y = useRoofPlacement
+                ? Number(snapPlacement.previewY)
+                : (useSnapPlacement ? snapPlacement.snappedY : placedY);
+            previewItem.z = useRoofPlacement
+                ? Number(snapPlacement.previewZ)
+                : (useSnapPlacement ? Number(snapPlacement.snappedZ) : 0);
             previewItem.width = clampedScale;
             previewItem.height = clampedScale;
             previewItem.renderZ = placedY + renderDepthOffset;
@@ -1581,22 +2411,70 @@
             previewItem.texturePath = texturePath;
             previewItem.category = selectedCategory;
             previewItem.placeableAnchorX = Number.isFinite(wizard.selectedPlaceableAnchorX)
-                ? (useSnapPlacement ? 0.5 : Number(wizard.selectedPlaceableAnchorX))
+                ? ((useSnapPlacement && !useRoofPlacement) ? 0.5 : Number(wizard.selectedPlaceableAnchorX))
                 : 0.5;
-            previewItem.placeableAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
-                ? Number(wizard.selectedPlaceableAnchorY)
-                : 1;
-            previewItem.rotationAxis = useSnapPlacement ? "spatial" : rotationAxis;
-            previewItem.placementRotation = useSnapPlacement ? snapPlacement.snappedRotationDeg : effectivePlacementRotation;
+            previewItem.placeableAnchorY = effectiveAnchorY;
+            previewItem.rotationAxis = (useSnapPlacement && !useRoofPlacement) ? "spatial" : rotationAxis;
+            previewItem.placementRotation = (useSnapPlacement && !useRoofPlacement)
+                ? snapPlacement.snappedRotationDeg
+                : effectivePlacementRotation;
             previewItem.mountedSectionId = (
                 useSnapPlacement &&
+                !useRoofPlacement &&
                 Number.isInteger(snapPlacement.mountedSectionId)
             ) ? Number(snapPlacement.mountedSectionId) : null;
+            previewItem.mountedWallLineGroupId = (
+                useSnapPlacement &&
+                !useRoofPlacement &&
+                Number.isInteger(snapPlacement.mountedWallLineGroupId)
+            ) ? Number(snapPlacement.mountedWallLineGroupId) : null;
+            previewItem.mountedWallSectionUnitId = (
+                useSnapPlacement &&
+                !useRoofPlacement &&
+                Number.isInteger(snapPlacement.mountedWallSectionUnitId)
+            ) ? Number(snapPlacement.mountedWallSectionUnitId) : null;
             previewItem.mountedWallFacingSign = (
                 useSnapPlacement &&
+                !useRoofPlacement &&
                 Number.isFinite(snapPlacement.mountedWallFacingSign)
             ) ? Number(snapPlacement.mountedWallFacingSign) : null;
+            if (
+                useSnapPlacement &&
+                !useRoofPlacement &&
+                Number.isFinite(snapPlacement.wallFaceCenterX) &&
+                Number.isFinite(snapPlacement.wallFaceCenterY) &&
+                Number.isFinite(snapPlacement.sectionNormalX) &&
+                Number.isFinite(snapPlacement.sectionNormalY) &&
+                Number.isFinite(snapPlacement.wallThickness) &&
+                Number.isFinite(previewItem.mountedWallFacingSign)
+            ) {
+                const sign = Number(previewItem.mountedWallFacingSign) >= 0 ? 1 : -1;
+                const thickness = Math.max(0, Number(snapPlacement.wallThickness));
+                const nx = Number(snapPlacement.sectionNormalX);
+                const ny = Number(snapPlacement.sectionNormalY);
+                const frontX = Number(snapPlacement.wallFaceCenterX);
+                const frontY = Number(snapPlacement.wallFaceCenterY);
+                const faceEpsilon = 0.01;
+                const dirX = nx * sign;
+                const dirY = ny * sign;
+                const backBaseX = frontX - dirX * thickness;
+                const backBaseY = frontY - dirY * thickness;
+                previewItem.depthBillboardFaceCenters = {
+                    // Nudge both planes slightly away from wall faces to prevent preview z-fighting.
+                    front: {
+                        x: frontX + dirX * faceEpsilon,
+                        y: frontY + dirY * faceEpsilon
+                    },
+                    back: {
+                        x: backBaseX + dirX * faceEpsilon,
+                        y: backBaseY + dirY * faceEpsilon
+                    }
+                };
+            } else {
+                previewItem.depthBillboardFaceCenters = null;
+            }
             previewItem.centerSnapGuide = useSnapPlacement
+                && !useRoofPlacement
                 ? {
                     centerSnapActive: !!snapPlacement.centerSnapActive,
                     placementCenterX: Number(snapPlacement.placementCenterX),
@@ -1621,6 +2499,11 @@
                         : null
                 }
                 : null;
+            previewItem.roofHighlightOnly = false;
+            previewItem.roofLoopSections = (
+                useRoofPlacement &&
+                Array.isArray(snapPlacement.wallSections)
+            ) ? snapPlacement.wallSections.slice() : null;
             return previewItem;
         }
 
@@ -1640,6 +2523,36 @@
             const g = this.placeObjectCenterSnapGuideGraphics;
             g.clear();
             const guide = previewItem && previewItem.centerSnapGuide ? previewItem.centerSnapGuide : null;
+            const roofSections = (
+                previewItem &&
+                Array.isArray(previewItem.roofLoopSections)
+            ) ? previewItem.roofLoopSections : null;
+            let drewRoofLoop = false;
+            if (Array.isArray(roofSections) && roofSections.length > 0) {
+                for (let i = 0; i < roofSections.length; i++) {
+                    const section = roofSections[i];
+                    if (!section || typeof section.getWallProfile !== "function") continue;
+                    const profile = section.getWallProfile();
+                    if (!profile) continue;
+                    const topZ = Math.max(0, Number(section.bottomZ) || 0) + Math.max(0, Number(section.height) || 0);
+                    const topFace = [
+                        this.camera.worldToScreen(Number(profile.aLeft.x), Number(profile.aLeft.y), topZ),
+                        this.camera.worldToScreen(Number(profile.bLeft.x), Number(profile.bLeft.y), topZ),
+                        this.camera.worldToScreen(Number(profile.bRight.x), Number(profile.bRight.y), topZ),
+                        this.camera.worldToScreen(Number(profile.aRight.x), Number(profile.aRight.y), topZ)
+                    ];
+                    if (!topFace.every(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y))) continue;
+                    g.lineStyle(2, 0x66c2ff, 0.55);
+                    g.beginFill(0x66c2ff, 0.12);
+                    g.moveTo(topFace[0].x, topFace[0].y);
+                    g.lineTo(topFace[1].x, topFace[1].y);
+                    g.lineTo(topFace[2].x, topFace[2].y);
+                    g.lineTo(topFace[3].x, topFace[3].y);
+                    g.closePath();
+                    g.endFill();
+                    drewRoofLoop = true;
+                }
+            }
             if (
                 !guide ||
                 !Number.isFinite(guide.placementCenterX) ||
@@ -1647,7 +2560,7 @@
                 !Number.isFinite(guide.sectionCenterX) ||
                 !Number.isFinite(guide.sectionCenterY)
             ) {
-                g.visible = false;
+                g.visible = drewRoofLoop;
                 return;
             }
 
@@ -1756,10 +2669,35 @@
                 this.clearPlaceObjectPreview();
                 return;
             }
+            if (previewItem.roofHighlightOnly) {
+                if (this.placeObjectPreviewItem && this.placeObjectPreviewItem._depthBillboardMesh) {
+                    const mesh = this.placeObjectPreviewItem._depthBillboardMesh;
+                    mesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                        mesh.renderable = false;
+                    }
+                }
+                if (this.placeObjectPreviewDisplayObject) {
+                    this.placeObjectPreviewDisplayObject.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewDisplayObject, "renderable")) {
+                        this.placeObjectPreviewDisplayObject.renderable = false;
+                    }
+                    this.placeObjectPreviewDisplayObject = null;
+                }
+                if (this.placeObjectPreviewSprite) {
+                    this.placeObjectPreviewSprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(this.placeObjectPreviewSprite, "renderable")) {
+                        this.placeObjectPreviewSprite.renderable = false;
+                    }
+                }
+                this.renderPlaceObjectCenterSnapGuide(previewItem);
+                return;
+            }
             let displayObj = null;
+            // Keep preview sprite dimensions in world scale before any depth-mesh extraction.
+            this.applySpriteTransform(previewItem);
             if (
-                typeof previewItem.updateDepthBillboardMesh === "function" &&
-                previewItem.rotationAxis === "spatial"
+                typeof previewItem.updateDepthBillboardMesh === "function"
             ) {
                 const mesh = previewItem.updateDepthBillboardMesh(
                     ctx,
@@ -1767,11 +2705,6 @@
                     { alphaCutoff: TREE_ALPHA_CUTOFF }
                 );
                 if (mesh) {
-                    const depthContainer = this.layers.depthObjects;
-                    if (depthContainer && mesh.parent !== depthContainer) {
-                        depthContainer.addChild(mesh);
-                    }
-                    mesh.visible = true;
                     if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
                         mesh.renderable = true;
                     }
@@ -1781,8 +2714,7 @@
                     displayObj = mesh;
                 }
             }
-            if (!displayObj && typeof global.applySpriteTransform === "function") {
-                global.applySpriteTransform(previewItem);
+            if (!displayObj) {
                 displayObj = previewItem.pixiSprite || this.placeObjectPreviewSprite;
             }
             if (!displayObj) {
@@ -1828,7 +2760,7 @@
 
         buildPowerupPlacementPreviewRenderItem(ctx) {
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
-            if (!wizard || wizard.currentSpell !== "blackdiamond") {
+            if (!wizard || wizard.currentSpell !== "blackdiamond" || wizard.editorPlacementActive !== true) {
                 return null;
             }
             const mousePosRef = this.getMousePosRef(ctx);
@@ -1964,8 +2896,8 @@
                     displayObj = mesh;
                 }
             }
-            if (!displayObj && typeof global.applySpriteTransform === "function") {
-                global.applySpriteTransform(previewItem);
+            if (!displayObj) {
+                this.applySpriteTransform(previewItem);
                 displayObj = previewItem.pixiSprite || this.powerupPlacementPreviewSprite;
             }
             if (!displayObj) {
@@ -2009,85 +2941,232 @@
             this.powerupPlacementPreviewDisplayObject = displayObj;
         }
 
+        beginDrawPassProfiling(ctx) {
+            const profiler = this.drawPassProfiler;
+            if (!profiler || profiler.printed) return null;
+            const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : performance.now();
+            if (!Number.isFinite(profiler.startMs)) {
+                profiler.startMs = nowMs;
+                profiler.deadlineMs = nowMs + 60000;
+            }
+            return profiler;
+        }
+
+        recordDrawPassSection(sectionName, elapsedMs) {
+            const profiler = this.drawPassProfiler;
+            if (!profiler || profiler.printed || !sectionName || !Number.isFinite(elapsedMs)) return;
+            let section = profiler.sections[sectionName];
+            if (!section) {
+                section = {
+                    count: 0,
+                    totalMs: 0,
+                    maxMs: 0
+                };
+                profiler.sections[sectionName] = section;
+            }
+            section.count += 1;
+            section.totalMs += elapsedMs;
+            if (elapsedMs > section.maxMs) {
+                section.maxMs = elapsedMs;
+            }
+        }
+
+        profileDrawPassSection(sectionName, fn) {
+            const t0 = performance.now();
+            const result = fn();
+            this.recordDrawPassSection(sectionName, performance.now() - t0);
+            return result;
+        }
+
+        maybePrintDrawPassProfileSummary(ctx) {
+            const profiler = this.drawPassProfiler;
+            if (!profiler || profiler.printed || !Number.isFinite(profiler.deadlineMs)) return;
+            const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : performance.now();
+            if (nowMs < profiler.deadlineMs) return;
+
+            const sections = {};
+            const sectionNames = Object.keys(profiler.sections);
+            for (let i = 0; i < sectionNames.length; i++) {
+                const name = sectionNames[i];
+                const section = profiler.sections[name];
+                if (!section) continue;
+                const avgMs = section.count > 0 ? section.totalMs / section.count : 0;
+                sections[name] = {
+                    samples: section.count,
+                    avgMs,
+                    maxMs: section.maxMs,
+                    totalMs: section.totalMs
+                };
+            }
+
+            const summary = {
+                durationMs: nowMs - profiler.startMs,
+                frameCount: profiler.frameCount,
+                avgFrameMs: profiler.frameCount > 0 ? profiler.totalFrameMs / profiler.frameCount : 0,
+                maxFrameMs: profiler.maxFrameMs,
+                sections
+            };
+            global.renderingDrawPassProfileSummary = summary;
+            console.log("Rendering draw-pass profile (60s):", summary);
+            profiler.printed = true;
+        }
+
         renderFrame(ctx) {
             this.init(ctx);
             if (!this.initialized) return false;
+            const frameStartMs = performance.now();
+            this.beginDrawPassProfiling(ctx);
+            this.profileDrawPassSection("resetWallDepthGeometryBudget", () => {
+                if (typeof global.resetWallDepthGeometryBudget === "function") {
+                    global.resetWallDepthGeometryBudget();
+                }
+            });
             this.setLegacyLayersVisible(false);
             this.layers.root.visible = true;
-            this.camera.update({
-                camera: ctx.camera,
-                wizard: ctx.wizard,
-                viewport: ctx.viewport,
-                viewscale: ctx.viewscale,
-                xyratio: ctx.xyratio,
-                map: ctx.map
+            this.profileDrawPassSection("camera.update", () => {
+                this.camera.update({
+                    camera: ctx.camera,
+                    wizard: ctx.wizard,
+                    viewport: ctx.viewport,
+                    viewscale: ctx.viewscale,
+                    xyratio: ctx.xyratio,
+                    map: ctx.map,
+                    renderAlpha: ctx.renderAlpha
+                });
             });
             this.resetPickRenderItems();
             if (this.scenePicker && this.scenePicker.publicApi) {
                 global.renderingScenePicker = this.scenePicker.publicApi;
             }
-            const visibleNodes = this.collectVisibleNodes(ctx, 4, 4);
-            this.syncOnscreenObjectsCache(ctx, visibleNodes);
-            this.updateLosState(ctx, visibleNodes);
-            this.renderGroundTiles(ctx, visibleNodes);
-            this.renderHexGridOverlay(ctx);
-            if (typeof global.drawMapBorder === "function") {
-                global.drawMapBorder();
-            }
-            this.renderRoadsAndFloors(ctx, visibleNodes);
-            this.renderLosShadowOverlay(ctx);
-            this.renderObjects3D(ctx, visibleNodes);
-            this.renderWallPlacementPreview(ctx);
-            this.renderPlaceObjectPreview(ctx);
-            this.renderPowerupPlacementPreview(ctx);
-            this.renderRoofs3D(ctx);
-            this.renderPowerups(ctx);
-            this.renderWizard(ctx);
-            this.renderProjectiles(ctx);
+            const visibleNodes = this.profileDrawPassSection("collectVisibleNodes", () =>
+                this.collectVisibleNodes(ctx, 4, 4)
+            );
+            const visibleObjects = this.profileDrawPassSection("collectVisibleObjects", () =>
+                this.collectVisibleObjects(visibleNodes, ctx)
+            );
+            this.profileDrawPassSection("syncOnscreenObjectsCache", () => {
+                this.syncOnscreenObjectsCache(ctx, visibleNodes, visibleObjects);
+            });
+            this.profileDrawPassSection("updateLosState", () => {
+                this.updateLosState(ctx, visibleNodes, visibleObjects);
+            });
+            this.profileDrawPassSection("updateWallLosIlluminationTallies", () => {
+                this.updateWallLosIlluminationTallies(ctx);
+            });
+            this.profileDrawPassSection("renderGroundTiles", () => {
+                this.renderGroundTiles(ctx, visibleNodes);
+            });
+            this.profileDrawPassSection("renderHexGridOverlay", () => {
+                this.renderHexGridOverlay(ctx);
+            });
+            this.profileDrawPassSection("drawMapBorder", () => {
+                const debugEnabled = !!(
+                    (typeof debugMode !== "undefined" && debugMode) ||
+                    global.debugMode
+                );
+                if (debugEnabled && typeof global.drawMapBorder === "function") {
+                    global.drawMapBorder();
+                }
+            });
+            this.profileDrawPassSection("renderRoadsAndFloors", () => {
+                this.renderRoadsAndFloors(ctx, visibleNodes);
+            });
+            this.profileDrawPassSection("applyMazeModeCompositor", () => {
+                this.applyMazeModeCompositor(ctx);
+            });
+            this.profileDrawPassSection("renderLosShadowOverlay", () => {
+                this.renderLosShadowOverlay(ctx);
+            });
+            this.profileDrawPassSection("renderObjects3D", () => {
+                this.renderObjects3D(ctx, visibleNodes, visibleObjects);
+            });
+            this.profileDrawPassSection("renderWallPlacementPreview", () => {
+                this.renderWallPlacementPreview(ctx);
+            });
+            this.profileDrawPassSection("renderPlaceObjectPreview", () => {
+                this.renderPlaceObjectPreview(ctx);
+            });
+            this.profileDrawPassSection("renderPowerupPlacementPreview", () => {
+                this.renderPowerupPlacementPreview(ctx);
+            });
+            this.profileDrawPassSection("renderPowerups", () => {
+                this.renderPowerups(ctx);
+            });
+            this.profileDrawPassSection("renderWizard", () => {
+                this.renderWizard(ctx);
+            });
+            this.profileDrawPassSection("renderProjectiles", () => {
+                this.renderProjectiles(ctx);
+            });
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
-                const spellSystemRef = (typeof SpellSystem !== "undefined")
-                    ? SpellSystem
-                    : (global.SpellSystem || null);
-                const mousePosRef = (typeof mousePos !== "undefined")
-                    ? mousePos
-                    : (global.mousePos || null);
-                const frameCountRef = (typeof frameCount !== "undefined")
-                    ? frameCount
-                    : (global.frameCount || 0);
-                this.scenePicker.renderHoverHighlight({
-                    app: ctx.app || global.app || null,
-                    wizard: ctx.wizard || global.wizard || null,
-                    spellSystem: spellSystemRef,
-                    mousePos: mousePosRef,
-                    frameCount: frameCountRef,
-                    viewport: ctx.viewport || null,
-                    pickRenderItems: this.pickRenderItems,
-                    camera: this.camera,
-                    uiLayer: this.layers.ui,
-                    getDisplayObjectForItem: (item) => {
-                        if (!item) return null;
-                        if (item._renderingDepthMesh && item._renderingDepthMesh.visible) return item._renderingDepthMesh;
-                        if (item.type === "road") {
-                            const roadSprite = this.roadSpriteByObject.get(item);
-                            if (roadSprite && roadSprite.parent) return roadSprite;
+                this.profileDrawPassSection("scenePicker.renderHoverHighlight", () => {
+                    const spellSystemRef = (typeof SpellSystem !== "undefined")
+                        ? SpellSystem
+                        : (global.SpellSystem || null);
+                    const mousePosRef = (typeof mousePos !== "undefined")
+                        ? mousePos
+                        : (global.mousePos || null);
+                    const frameCountRef = (typeof frameCount !== "undefined")
+                        ? frameCount
+                        : (global.frameCount || 0);
+                    const spaceHeldRef = !!(
+                        typeof keysPressed !== "undefined" &&
+                        keysPressed &&
+                        keysPressed[" "]
+                    );
+                    this.scenePicker.renderHoverHighlight({
+                        app: ctx.app || global.app || null,
+                        wizard: ctx.wizard || global.wizard || null,
+                        spellSystem: spellSystemRef,
+                        mousePos: mousePosRef,
+                        spaceHeld: spaceHeldRef,
+                        frameCount: frameCountRef,
+                        viewport: ctx.viewport || null,
+                        pickRenderItems: this.pickRenderItems,
+                        camera: this.camera,
+                        uiLayer: this.layers.ui,
+                        getDisplayObjectForItem: (item) => {
+                            if (!item) return null;
+                            if (item._renderingDepthMesh && item._renderingDepthMesh.visible) return item._renderingDepthMesh;
+                            if (item.type === "road") {
+                                const roadSprite = this.roadSpriteByObject.get(item);
+                                if (roadSprite && roadSprite.parent) return roadSprite;
+                            }
+                            if (item._renderingDisplayObject && item._renderingDisplayObject.parent) {
+                                return item._renderingDisplayObject;
+                            }
+                            if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
+                            return null;
                         }
-                        if (item._renderingDisplayObject && item._renderingDisplayObject.parent) {
-                            return item._renderingDisplayObject;
-                        }
-                        if (item.pixiSprite && item.pixiSprite.parent) return item.pixiSprite;
-                        return null;
-                    }
+                    });
                 });
             }
             const showPickerScreen = getShowPickerScreenFlag();
             setShowPickerScreenFlag(showPickerScreen);
             this.layers.ground.visible = !showPickerScreen;
             this.layers.roadsFloor.visible = !showPickerScreen;
-            this.layers.losShadow.visible = !showPickerScreen;
+            this.layers.groundObjects.visible = !showPickerScreen;
+            this.layers.losShadow.visible = !showPickerScreen && !this.mazeModeOverlayActive;
             this.layers.depthObjects.visible = !showPickerScreen;
             this.layers.objects3d.visible = !showPickerScreen;
             this.layers.entities.visible = !showPickerScreen;
             this.layers.ui.visible = true;
+            if (this.mazeModeRenderer && this.mazeModeRenderer.blackBackdropGraphics) {
+                this.mazeModeRenderer.blackBackdropGraphics.visible = !showPickerScreen && this.mazeModeOverlayActive;
+            }
+            if (this.mazeModeRenderer && this.mazeModeRenderer.occlusionMaskGraphics) {
+                this.mazeModeRenderer.occlusionMaskGraphics.visible = !showPickerScreen && this.mazeModeOverlayActive;
+            }
+            const frameElapsedMs = performance.now() - frameStartMs;
+            this.recordDrawPassSection("renderFrame.total", frameElapsedMs);
+            if (this.drawPassProfiler && !this.drawPassProfiler.printed) {
+                this.drawPassProfiler.frameCount += 1;
+                this.drawPassProfiler.totalFrameMs += frameElapsedMs;
+                if (frameElapsedMs > this.drawPassProfiler.maxFrameMs) {
+                    this.drawPassProfiler.maxFrameMs = frameElapsedMs;
+                }
+            }
+            this.maybePrintDrawPassProfileSummary(ctx);
             return true;
         }
     }

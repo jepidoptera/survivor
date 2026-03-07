@@ -128,10 +128,20 @@ app.get('/api/flooring', (req, res) => {
 app.get('/api/placeables', (req, res) => {
     try {
         const imageRoot = path.join(__dirname, 'public', 'assets', 'images');
-        const categories = ['flowers', 'windows', 'doors', 'furniture', 'signs'];
+        const categories = ['flowers', 'windows', 'doors', 'furniture', 'signs', 'roof', 'walls'];
+        const categoryDirByKey = {
+            flowers: 'flowers',
+            windows: 'windows',
+            doors: 'doors',
+            furniture: 'furniture',
+            signs: 'signs',
+            roof: 'roofs',
+            walls: 'walls'
+        };
         const out = {};
         categories.forEach(category => {
-            const dir = path.join(imageRoot, category);
+            const dirName = categoryDirByKey[category] || category;
+            const dir = path.join(imageRoot, dirName);
             if (!fs.existsSync(dir)) {
                 out[category] = [];
                 return;
@@ -141,7 +151,7 @@ app.get('/api/placeables', (req, res) => {
                 .map(entry => entry.name)
                 .filter(name => /\.(png|jpg|jpeg|webp|gif)$/i.test(name))
                 .sort((a, b) => a.localeCompare(b))
-                .map(name => `/assets/images/${category}/${encodeURIComponent(name)}`);
+                .map(name => `/assets/images/${dirName}/${encodeURIComponent(name)}`);
             out[category] = files;
         });
         return res.json({ ok: true, categories: out });

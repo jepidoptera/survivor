@@ -6,12 +6,16 @@
 
             this.ground = new PIXI.Container();
             this.ground.name = "renderingGround";
+            this.ground.sortableChildren = true;
 
             this.roadsFloor = new PIXI.Container();
             this.roadsFloor.name = "renderingRoadsFloor";
 
+            this.groundObjects = new PIXI.Container();
+            this.groundObjects.name = "renderingGroundObjects";
+
             this.losShadow = new PIXI.Container();
-            this.losShadow.name = "renderer2LosShadow";
+            this.losShadow.name = "renderingLosShadow";
 
             this.depthObjects = new PIXI.Container();
             this.depthObjects.name = "renderingDepthObjects";
@@ -27,6 +31,7 @@
 
             this.root.addChild(this.ground);
             this.root.addChild(this.roadsFloor);
+            this.root.addChild(this.groundObjects);
             this.root.addChild(this.losShadow);
             this.root.addChild(this.depthObjects);
             this.root.addChild(this.objects3d);

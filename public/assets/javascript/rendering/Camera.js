@@ -3,19 +3,34 @@
         constructor() {
             this.x = 0;
             this.y = 0;
+            this.prevX = 0;
+            this.prevY = 0;
             this.viewscale = 1;
             this.xyratio = 0.66;
             this.map = null;
         }
 
-        update({ camera, wizard, viewport, viewscale, xyratio, map }) {
+        update({ camera, wizard, viewport, viewscale, xyratio, map, renderAlpha }) {
             this.viewscale = Number.isFinite(viewscale) ? viewscale : this.viewscale;
             this.xyratio = Number.isFinite(xyratio) ? xyratio : this.xyratio;
             this.map = map || null;
+            const alpha = Number.isFinite(renderAlpha) ? Math.max(0, Math.min(1, renderAlpha)) : 1;
 
             if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.y)) {
-                this.x = camera.x;
-                this.y = camera.y;
+                const prevX = Number.isFinite(camera.prevX) ? camera.prevX : camera.x;
+                const prevY = Number.isFinite(camera.prevY) ? camera.prevY : camera.y;
+                if (this.map && typeof this.map.shortestDeltaX === "function") {
+                    this.x = prevX + this.map.shortestDeltaX(prevX, camera.x) * alpha;
+                } else {
+                    this.x = prevX + (camera.x - prevX) * alpha;
+                }
+                if (this.map && typeof this.map.shortestDeltaY === "function") {
+                    this.y = prevY + this.map.shortestDeltaY(prevY, camera.y) * alpha;
+                } else {
+                    this.y = prevY + (camera.y - prevY) * alpha;
+                }
+                this.prevX = prevX;
+                this.prevY = prevY;
                 return;
             }
 
@@ -24,6 +39,8 @@
                 const height = viewport && Number.isFinite(viewport.height) ? viewport.height : 30;
                 this.x = wizard.x - width * 0.5;
                 this.y = wizard.y - height * 0.5;
+                this.prevX = this.x;
+                this.prevY = this.y;
             }
         }
 

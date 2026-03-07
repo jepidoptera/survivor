@@ -8,6 +8,7 @@
     "rotationAxis": "spatial",
     "blocksTile": false,
     "isPassable": true,
+    "castsLosShadows": false,
     "anchor": {
       "x": 0.5,
       "y": 0.5

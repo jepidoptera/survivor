@@ -5,6 +5,12 @@
       "texturePath": "/assets/images/walls/stonewall.png",
       "repeatsPerMapUnitX": 0.4,
       "repeatsPerMapUnitY": 0.4
+    },
+    {
+      "file": "woodwall.png",
+      "texturePath": "/assets/images/walls/woodwall.png",
+      "repeatsPerMapUnitX": 0.5,
+      "repeatsPerMapUnitY": 0.5
     }
   ]
 }

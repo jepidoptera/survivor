@@ -55,6 +55,14 @@ body {
     cursor: default !important;
 }
 
+#editorSelector {
+    position: absolute;
+    left: 320px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
 #spellSelector {
     position: absolute;
     left: 248px;
@@ -64,6 +72,7 @@ body {
 }
 
 #selectedAura,
+#selectedEditor,
 #selectedSpell {
     width: 60px;
     height: 60px;
@@ -78,6 +87,10 @@ body {
 
 #selectedAura {
     background-image: url("/assets/images/thumbnails/aura.png");
+}
+
+#selectedEditor {
+    background-image: url("/assets/images/thumbnails/edit.png");
 }
 
 #activeAuraIcons {
@@ -101,11 +114,13 @@ body {
 }
 
 #selectedAura:hover,
+#selectedEditor:hover,
 #selectedSpell:hover {
     transform: scale(1.05);
 }
 
 #auraMenu,
+#editorMenu,
 #spellMenu {
     position: absolute;
     left: 0;
@@ -121,6 +136,8 @@ body {
 
 #auraMenu,
 #auraMenu *,
+#editorMenu,
+#editorMenu *,
 #spellMenu,
 #spellMenu * {
     color: #ffffff;
@@ -130,18 +147,54 @@ body {
 #auraMenu button,
 #auraMenu .auraIcon,
 #auraMenu input[type="range"],
+#editorMenu button,
+#editorMenu .spellIcon,
+#editorMenu input[type="range"],
 #spellMenu button,
 #spellMenu .spellIcon,
 #spellMenu input[type="range"] {
     cursor: pointer !important;
 }
 
+#scriptEditorPanel,
+#scriptEditorPanel * {
+    cursor: auto !important;
+}
+
+#scriptEditorHelpPanel,
+#scriptEditorHelpPanel * {
+    cursor: auto !important;
+}
+
+#scriptEditorPanel textarea {
+    cursor: text !important;
+}
+
+#scriptEditorPanel button {
+    cursor: pointer !important;
+}
+
+#scriptEditorHelpPanel button {
+    cursor: pointer !important;
+}
+
 #auraMenu.hidden,
+#editorMenu.hidden,
 #spellMenu.hidden {
     display: none;
 }
 
+#editorSelector.hidden {
+    display: none;
+}
+
 #spellGrid {
+    display: grid;
+    grid-template-columns: repeat(4, 60px);
+    gap: 10px;
+}
+
+#editorGrid {
     display: grid;
     grid-template-columns: repeat(4, 60px);
     gap: 10px;

@@ -7,6 +7,7 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
+    "castsLosShadows": true,
     "anchor": {
       "x": 0.5,
       "y": 1

@@ -5,9 +5,11 @@ let spellKeyBindings = {
     "M": "maze",
     "V": "vanish",
     "T": "treegrow",
+    "ET": "editscript",
     "J": "teleport",
     "R": "buildroad",
-    "FW": "firewall"
+    "FW": "firewall",
+    "A": "spawnanimal"
 };
 
 const MAGIC_ITEMS_CATEGORY = "magic";
@@ -51,1128 +53,8 @@ async function getMagicAssetMetadata(texturePath) {
         return null;
     }
 }
-
-class Spell {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/mokeball.png";
-        this.size = 6;
-        this.apparentSize = 16;
-        this.speed = 7;
-        this.range = 8;
-        this.bounced = 0;
-        this.bounces = 2;
-        this.gravity = .5;
-        this.bounceFactor = 1/3;
-        this.landed = false;
-        this.landedWorldX = 0;
-        this.landedWorldY = 0;
-        this.delayTime = 0;
-        this.radius = 0.25; // Default hitbox radius in hex units
-    }
-    canTrackForcedTarget(target) {
-        if (!target || target.gone || target.vanishing || target.dead) return false;
-        if (Array.isArray(animals) && animals.includes(target)) return true;
-        if (target.type === "human") return true;
-        if (typeof target.moveDirection === "function") return true;
-        if (typeof target.move === "function") return true;
-        return false;
-    }
-    getForcedTargetAimPoint() {
-        const target = this.forcedTarget;
-        if (!this.canTrackForcedTarget(target)) return null;
-        if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
-        return { x: target.x, y: target.y };
-    }
-    retargetMovementTo(point, speedPerFrame = null) {
-        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
-        const dx = point.x - this.x;
-        const dy = point.y - this.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 1e-6) return false;
-        const currentSpeed = Math.hypot(this.movement?.x || 0, this.movement?.y || 0);
-        const step = Number.isFinite(speedPerFrame)
-            ? Math.max(0, speedPerFrame)
-            : (currentSpeed > 1e-6 ? currentSpeed : (this.speed / frameRate));
-        this.movement.x = (dx / dist) * step;
-        this.movement.y = (dy / dist) * step;
-        return true;
-    }
-    cast(targetX, targetY) {
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        
-        let xdist = (targetX - this.x);
-        let ydist = targetY - this.y;
-        let dist = Math.sqrt(xdist ** 2 + ydist ** 2);
-        
-        // Prevent division by zero
-        if (dist < 0.1) {
-            dist = 0.1;
-            xdist = 0.1;
-            ydist = 0;
-        }
-        
-        if (dist > this.range) {
-            let fraction = this.range / dist;
-            ydist *= fraction;
-            xdist *= fraction;
-            dist = this.range;
-        }
-        this.movement = {
-            x: xdist / dist * this.speed / frameRate,
-            y: ydist / dist * this.speed / frameRate,
-            z: (dist - 0.5) / this.speed / 2 * this.gravity,
-        }
-
-
-        this.castInterval = setInterval(() => {
-            if (paused) return;
-            const forcedAim = this.getForcedTargetAimPoint();
-            if (forcedAim) {
-                this.retargetMovementTo(forcedAim);
-            }
-            this.x += this.movement.x;
-            this.y += this.movement.y;
-            this.z += this.movement.z;
-            this.movement.z -= this.gravity / frameRate;
-
-            // this.z = Math.sqrt((this.movement.max / 2  - Math.abs(this.movement.max / 2 - this.movement.total)) / 2) || 0 ;
-            this.apparentSize = (this.size * (this.z + 1) / 2 + 10) * Math.max($(document).width(), $(document).height()) / 1280;
-
-            // Call land for continuous effects (like fireball damage)
-            if (this.z === 0 && this.bounces === 0) {
-                this.land();
-            }
-
-            if (this.z <= 0) {
-                this.z = 0;
-                this.land();
-                this.bounce();
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-    bounce() {
-        if (this.bounced < this.bounces) {
-            this.movement = {
-                x: this.movement.x * this.bounceFactor,
-                y: this.movement.y * this.bounceFactor,
-                z: -this.movement.z * this.bounceFactor,
-            }
-            this.bounced += 1;
-        }
-        else {
-            this.landed = true;
-            this.landedWorldX = this.x;
-            this.landedWorldY = this.y;
-            this.vanishTimeout = setTimeout(() => {
-                this.visible = false;
-                this.detachPixiSprite();
-            }, 3000);
-            clearInterval(this.castInterval);
-        }
-    }
-    land() {
-    }
-
-    detachPixiSprite() {
-        if (!this.pixiSprite) return;
-        if (this.pixiSprite.parent) {
-            this.pixiSprite.parent.removeChild(this.pixiSprite);
-        }
-        this.pixiSprite = null;
-    }
-}
-
-class Grenade extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/grenade.png";
-        this.altimage = document.createElement('img');
-        this.altimage.src = "./assets/images/explosion.png";
-        this.explosionFrame = 0;
-        this.explosionFrames = null;
-        this.isExploding = false;
-        this.delayTime = 2;
-    }
-    land() {
-        if (this.bounced === this.bounces) setTimeout(() => {
-            this.isExploding = true;
-            this.explosionFrame = 0;
-            
-            // Load explosion spritesheet frames (5x2)
-            if (!this.explosionFrames) {
-                const baseTexture = PIXI.Texture.from(this.altimage.src).baseTexture;
-                this.explosionFrames = [];
-                const frameWidth = baseTexture.width / 5;
-                const frameHeight = baseTexture.height / 2;
-                
-                // Row 1 (frames 0-4)
-                for (let col = 0; col < 5; col++) {
-                    this.explosionFrames.push(
-                        new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, 0, frameWidth, frameHeight))
-                    );
-                }
-                // Row 2 (frames 5-9)
-                for (let col = 0; col < 5; col++) {
-                    this.explosionFrames.push(
-                        new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, frameHeight, frameWidth, frameHeight))
-                    );
-                }
-            }
-            
-            this.explodeInterval = setInterval(() => {
-                if (paused) return;
-                this.explosionFrame++;
-                if (this.explosionFrame >= this.explosionFrames.length) {
-                    clearInterval(this.explodeInterval);
-                    this.visible = false;
-                    this.detachPixiSprite();
-                }
-            }, 50);
-            this.apparentSize = 80;
-            animals.forEach((animal, n) => {
-                let margin = 4;
-                if (animal._onScreen && !animal.dead) {
-                    const targetCoors = worldToScreen(animal);
-                    targetCoors.y += animal.height / 2;
-                    targetCoors.x += animal.width / 2;
-                    const dist = distance(this.x, this.y, targetCoors.x, targetCoors.y);
-                    if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
-                        console.log('blast radius: ', dist);
-                        let damage = Math.min(40 / dist / Math.max(dist - 1, 1), 40);
-                        console.log('damage: ', damage);
-                        animal.hp -= damage;
-                        if (animal.hp <= 0) {
-                            let messageText = `You killed: ${animal.type}!` 
-                            if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;
-                            message(messageText);
-                            wizard.food += animal.foodValue;
-                            animal.explode(this.x, this.y - this.z);
-                            saveGame();
-                        }
-                        else if (animal.chaseRadius > 0) animal.attack(wizard);
-                    }
-                    // all visible animals flee
-                    if (animal.fleeRadius != 0 && !animal.attacking) animal.flee();
-                }
-            })
-        }, 500);
-    }
-}
-
-class Rock extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = `./assets/images/rock${Math.floor(Math.random() * 5)}.png`;
-        this.range = 10;
-        this.delayTime = 0.5;
-    }
-    land() {
-        if (this.bounced === 0) {
-            animals.forEach((animal, n) => {
-                let margin = animal.size + .15;
-                if (animal._onScreen && !animal.dead) {
-                    const targetCoors = worldToScreen(animal);
-                    targetCoors.y += animal.height / 2;
-                    targetCoors.x += animal.width / 2;
-                    if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
-                        animal.hp -= 1;
-                        if (animal.hp <= 0) {
-                            let messageText = `You killed: ${animal.type}!` 
-                            if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;
-                            wizard.food += animal.foodValue;
-                            message(messageText);
-                            animal.die();
-                            saveGame();
-                        }
-                        else {
-                            // didn't die
-                            let xmove = this.movement.x;
-                            let ymove = this.movement.y;
-                            // bounce off at 90 degrees
-                            if (Math.random() > .5) {
-                                xmove = -this.movement.y;
-                                ymove = this.movement.x;
-                            }
-                            else {
-                                xmove = this.movement.y;
-                                ymove = -this.movement.x;
-                            }
-                            this.movement.x = xmove * 2;
-                            this.movement.y = ymove * 2;
-                            if (animal.fleeRadius > 0) {
-                                animal.flee();
-                            }
-                            else if (animal.chaseRadius > 0) {
-                                animal.attack(wizard);
-                            }
-                        }
-                    }
-                }
-            })
-        }
-    }
-}
-
-class Fireball extends Spell {
-    static frames = null;
-    static frameSourcePath = "/assets/images/magic/hi%20fi%20fireball.png";
-    static frameCountX = 5;
-    static frameCountY = 2;
-    static animatedFps = 12;
-    static _metadataLoadPromise = null;
-    static _metadataLoaded = false;
-
-    static ensureMagicMetadataLoaded() {
-        if (Fireball._metadataLoaded) return;
-        if (Fireball._metadataLoadPromise) return;
-        Fireball._metadataLoadPromise = getMagicAssetMetadata(Fireball.frameSourcePath)
-            .then(meta => {
-                if (!meta) return;
-                const cfg = resolveAnimatedSheetConfig(
-                    meta,
-                    Fireball.frameCountX,
-                    Fireball.frameCountY,
-                    Fireball.animatedFps
-                );
-                const changed = (
-                    cfg.frameCountX !== Fireball.frameCountX ||
-                    cfg.frameCountY !== Fireball.frameCountY
-                );
-                Fireball.frameCountX = cfg.frameCountX;
-                Fireball.frameCountY = cfg.frameCountY;
-                Fireball.animatedFps = cfg.animatedFps;
-                if (changed) {
-                    Fireball.frames = null;
-                }
-            })
-            .catch(() => null)
-            .finally(() => {
-                Fireball._metadataLoaded = true;
-                Fireball._metadataLoadPromise = null;
-            });
-    }
-
-    static getFrames() {
-        Fireball.ensureMagicMetadataLoaded();
-        if (Array.isArray(Fireball.frames) && Fireball.frames.length > 0) {
-            return Fireball.frames;
-        }
-        const preloadedResource = PIXI.Loader.shared.resources[Fireball.frameSourcePath];
-        const baseTexture = (preloadedResource && preloadedResource.texture && preloadedResource.texture.baseTexture)
-            ? preloadedResource.texture.baseTexture
-            : PIXI.Texture.from(Fireball.frameSourcePath).baseTexture;
-        if (!baseTexture || !baseTexture.valid) return null;
-
-        const frames = [];
-        const cols = Math.max(1, Math.floor(Fireball.frameCountX) || 1);
-        const rows = Math.max(1, Math.floor(Fireball.frameCountY) || 1);
-        const frameWidth = baseTexture.width / cols;
-        const frameHeight = baseTexture.height / rows;
-
-        for (let row = 0; row < rows; row++) {
-            for (let col = 0; col < cols; col++) {
-                frames.push(
-                    new PIXI.Texture(baseTexture, new PIXI.Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight))
-                );
-            }
-        }
-
-        Fireball.frames = frames;
-        return Fireball.frames;
-    }
-
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = Fireball.frameSourcePath;
-        this.gravity = 0; // No arc - straight line
-        this.speed = 5;
-        this.range = 10;
-        this.bounces = 0;
-        this.apparentSize = 60;
-        this.explosionFrame = 0;
-        this.explosionFrames = null;
-        this.isAnimating = true;
-        this.damageRadius = 0.75;
-        this.delayTime = 0.5;
-        this.radius = this.damageRadius;
-    }
-    cast(targetX, targetY) {
-        const fireballFrames = Fireball.getFrames();
-
-        // check magic
-        if (wizard.magic < 10) {
-            message("Not enough magic to cast Fireball!");
-            return this;
-        }
-        wizard.magic -= 10;
-        this.explosionFrames = fireballFrames || [];
-        
-        // For fireball, only use target for direction.
-        // Speed and range are independent from click distance.
-        this.targetX = targetX;
-        this.targetY = targetY;
-        this.traveledDist = 0;
-        
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        
-        let xdist = targetX - this.x;
-        let ydist = targetY - this.y;
-        let aimDist = Math.hypot(xdist, ydist);
-        if (aimDist < 1e-4) {
-            // Fallback to facing direction when target is too close to define aim.
-            xdist = (wizard && wizard.direction && Number.isFinite(wizard.direction.x)) ? wizard.direction.x : 1;
-            ydist = (wizard && wizard.direction && Number.isFinite(wizard.direction.y)) ? wizard.direction.y : 0;
-            aimDist = Math.max(1e-4, Math.hypot(xdist, ydist));
-        }
-        const dirX = xdist / aimDist;
-        const dirY = ydist / aimDist;
-
-        // Start slightly away from wizard to avoid immediate self-collision.
-        this.x += dirX * 0.5;
-        this.y += dirY * 0.5;
-        this.startX = this.x;
-        this.startY = this.y;
-        this.castWizardX = wizard.x;
-        this.castWizardY = wizard.y;
-        this.baseDirX = dirX;
-        this.baseDirY = dirY;
-        this.totalDist = Math.max(0.1, this.range);
-        this.movement = {x: 0, y: 0, z: 0};
-                
-        // Lifetime tied to base spell range/speed.
-        const cycleDurationMs = Math.max(1, (this.totalDist / Math.max(this.speed, 0.001)) * 1000);
-        this.travelStartTime = performance.now();
-        this.travelPausedTime = 0;
-        this._pausedAt = null;
-        
-        // Single interval: update both movement and animation based on elapsed time
-        this.castInterval = setInterval(() => {
-            if (paused) {
-                if (!this._pausedAt) {
-                    this._pausedAt = performance.now();
-                }
-                return;
-            }
-            if (this._pausedAt) {
-                this.travelPausedTime += performance.now() - this._pausedAt;
-                this._pausedAt = null;
-            }
-            
-            const now = performance.now();
-            const elapsedMs = now - this.travelStartTime - this.travelPausedTime;
-            const progress = Math.min(elapsedMs / cycleDurationMs, 1);
-            
-            // Update animation frame based on same progress
-            if (this.explosionFrames && this.explosionFrames.length > 0) {
-                this.explosionFrame = Math.floor(progress * this.explosionFrames.length) % this.explosionFrames.length;
-            }
-            
-            // Base projectile movement (in aiming direction)
-            const elapsedSec = elapsedMs / 1000;
-            const baseDist = Math.min(this.totalDist, this.speed * elapsedSec);
-            const forcedAim = this.getForcedTargetAimPoint();
-            if (forcedAim) {
-                const dx = forcedAim.x - this.x;
-                const dy = forcedAim.y - this.y;
-                const aimDist = Math.hypot(dx, dy);
-                if (aimDist > 1e-6) {
-                    const step = this.speed / frameRate;
-                    this.x += (dx / aimDist) * step;
-                    this.y += (dy / aimDist) * step;
-                }
-                this.traveledDist += this.speed / frameRate;
-            } else {
-                // Add wizard displacement during flight. If wizard keeps moving at
-                // the same velocity, relative fireball speed/distance stay constant.
-                const wizardOffsetX = wizard.x - this.castWizardX;
-                const wizardOffsetY = wizard.y - this.castWizardY;
-
-                this.x = this.startX + this.baseDirX * baseDist + wizardOffsetX;
-                this.y = this.startY + this.baseDirY * baseDist + wizardOffsetY;
-                this.traveledDist = baseDist;
-            }
-            
-            // Check for continuous damage while moving
-            this.land();
-            
-            // Check if reached target
-            if (progress >= 1) {
-                // Snap to exact target position before finishing
-                this.visible = false;
-                this.detachPixiSprite();
-                clearInterval(this.castInterval);
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-    land() {
-
-        for (let obj of onscreenObjects) {
-            if (!obj || obj.gone || obj.vanishing) continue;
-            const visualHitbox = obj.visualHitbox || obj.hitbox;
-            if (!visualHitbox) continue;
-            if (obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius})) {
-                // Don't re-ignite objects that are already dead
-                if (obj.burned || obj.hp <= 0) {
-                    continue;
-                }
-                if (!obj.hp) {
-                    obj.hp = obj.maxHP || 100;
-                    obj.maxHP = obj.hp;
-                }
-                obj.hp -= 0.1 * (obj.flamability || 1); // Damage per frame
-                if (obj.hp < obj.maxHP) obj.isOnFire = true;
-                const fireDuration = 5 * (obj.flamability || 1)
-                obj.fireDuration = fireDuration * frameRate;
-                obj.ignite(fireDuration);
-            }
-        }
-    }
-}
-
-
-const VANISH_DEFAULT_SPEED = 10;
-const VANISH_DEFAULT_RANGE = 20;
-const VANISH_REMOVE_WIDTH_WORLD = 1;
-
-function buildVanishTravelPlan(casterX, casterY, targetX, targetY, options = {}) {
-    const originX = Number(casterX);
-    const originY = Number(casterY);
-    const aimX = Number(targetX);
-    const aimY = Number(targetY);
-    if (!Number.isFinite(originX) || !Number.isFinite(originY) || !Number.isFinite(aimX) || !Number.isFinite(aimY)) {
-        return null;
-    }
-
-    const speed = Number.isFinite(options.speed) ? Math.max(0.0001, Number(options.speed)) : VANISH_DEFAULT_SPEED;
-    const range = Number.isFinite(options.range) ? Math.max(0.0001, Number(options.range)) : VANISH_DEFAULT_RANGE;
-    const frameRateValue = Number.isFinite(options.frameRateValue)
-        ? Math.max(1, Number(options.frameRateValue))
-        : Math.max(1, Number.isFinite(frameRate) ? Number(frameRate) : 60);
-    const mapRef = options.mapRef || null;
-
-    let xdist = aimX - originX;
-    let ydist = aimY - originY;
-    let totalDist = Math.hypot(xdist, ydist);
-
-    if (totalDist < 0.1) {
-        totalDist = 0.1;
-        xdist = 0.1;
-        ydist = 0;
-    }
-
-    if (totalDist > range) {
-        const fraction = range / totalDist;
-        ydist *= fraction;
-        xdist *= fraction;
-        totalDist = range;
-    }
-
-    const stepX = (xdist / totalDist) * (speed / frameRateValue);
-    const stepY = (ydist / totalDist) * (speed / frameRateValue);
-    const stepDist = Math.hypot(stepX, stepY);
-    if (!(stepDist > 0)) return null;
-
-    return {
-        originX,
-        originY,
-        targetX: aimX,
-        targetY: aimY,
-        totalDist,
-        stepX,
-        stepY,
-        stepDist,
-        speed,
-        range,
-        frameRateValue,
-        mapRef
-    };
-}
-
-function predictVanishImpactPoint(plan) {
-    if (!plan) return null;
-    const mapRef = plan.mapRef || null;
-    let x = Number(plan.originX);
-    let y = Number(plan.originY);
-    const stepX = Number(plan.stepX);
-    const stepY = Number(plan.stepY);
-    const stepDist = Number(plan.stepDist);
-    const totalDist = Number(plan.totalDist);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(stepX) || !Number.isFinite(stepY)) return null;
-    if (!(stepDist > 0) || !(totalDist > 0)) return null;
-
-    // Mirror Vanish.cast(): one immediate pre-step before interval begins.
-    x += stepX;
-    y += stepY;
-
-    let traveledDist = 0;
-    const maxTicks = Math.max(1, Math.ceil(totalDist / stepDist) + 8);
-    for (let tick = 0; tick < maxTicks; tick++) {
-        x += stepX;
-        y += stepY;
-        if (mapRef && typeof mapRef.wrapWorldX === "function") {
-            x = mapRef.wrapWorldX(x);
-        }
-        if (mapRef && typeof mapRef.wrapWorldY === "function") {
-            y = mapRef.wrapWorldY(y);
-        }
-        traveledDist += stepDist;
-        if (traveledDist >= totalDist) {
-            return { x, y };
-        }
-    }
-
-    return { x, y };
-}
-
-
-class Vanish extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/vanish.png";
-        this.gravity = 0; // No arc - straight line
-        this.speed = VANISH_DEFAULT_SPEED;
-        this.range = VANISH_DEFAULT_RANGE;
-        this.bounces = 0;
-        this.apparentSize = 40;
-        this.delayTime = 0;
-        this.effectRadius = 0.5;
-        this.magicCost = 5;
-        this.radius = this.effectRadius;
-    }
-    
-    cast(targetX, targetY) {
-        // Check magic
-        if (wizard.magic < 15) {
-            message("Not enough magic to cast Vanish!");
-            return this;
-        }
-        wizard.magic -= this.magicCost;
-        
-        this.visible = true;
-        this.x = wizard.x;
-        this.y = wizard.y;
-        this.z = 0;
-        const travelPlan = buildVanishTravelPlan(this.x, this.y, targetX, targetY, {
-            speed: this.speed,
-            range: this.range,
-            frameRateValue: frameRate,
-            mapRef: this.map || wizard.map || null
-        });
-        if (!travelPlan) {
-            this.visible = false;
-            return this;
-        }
-
-        this.totalDist = travelPlan.totalDist;
-        this.movement = {
-            x: travelPlan.stepX,
-            y: travelPlan.stepY,
-            z: 0,
-        };
-        this.x += this.movement.x;
-        this.y += this.movement.y;
-        this.traveledDist = 0;
-        
-        this.castInterval = setInterval(() => {
-            if (paused) return;
-            const forcedAim = this.getForcedTargetAimPoint();
-            if (forcedAim) {
-                this.retargetMovementTo(forcedAim);
-            }
-            this.x += this.movement.x;
-            this.y += this.movement.y;
-            if (this.map && typeof this.map.wrapWorldX === "function") {
-                this.x = this.map.wrapWorldX(this.x);
-            }
-            if (this.map && typeof this.map.wrapWorldY === "function") {
-                this.y = this.map.wrapWorldY(this.y);
-            }
-            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
-            
-            if (!this.forcedTarget) {
-                // they didn't pinpoint a target, so this is a loose spell
-                this.land();
-            }
-
-            // Check if reached target
-            if (this.traveledDist >= this.totalDist) {
-                // If cursor was over a staticObject, only hit that object.
-                if (this.forcedTarget) {
-                    const obj = this.forcedTarget;
-                    if (obj && !obj.gone && !obj.vanishing) {
-                        this.vanishTarget(obj, { x: this.x, y: this.y });
-                    }
-                }
-                // Always end projectile at max travel distance (including misses).
-                this.deactivate();
-                return;
-            }
-        }, 1000 / frameRate);
-        return this;
-    }
-
-    deactivate() {
-        this.visible = false;
-        this.detachPixiSprite();
-        clearInterval(this.castInterval);
-    }
-    
-    land() {
-        // Check all onscreen objects
-        for(let obj of onscreenObjects) {
-            if (!obj || obj.gone || obj.vanishing) continue;
-            if (obj.type === "road") continue;
-            if (!obj.visualHitbox) continue;
-            let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
-            if (hit && !obj.vanishing) {
-                this.vanishTarget(obj, { x: this.x, y: this.y });
-                this.deactivate();
-            }
-        }
-    }
-    
-    vanishTarget(target, impactPoint = null) {
-        if (
-            target &&
-            target.type === "wallSection" &&
-            !target._vanishAsWholeSection &&
-            typeof target.vanishAroundPoint === "function" &&
-            impactPoint &&
-            Number.isFinite(impactPoint.x) &&
-            Number.isFinite(impactPoint.y)
-        ) {
-            const vanishFrames = 0.25 * frameRate;
-            const handled = target.vanishAroundPoint(
-                { x: Number(impactPoint.x), y: Number(impactPoint.y) },
-                { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD, vanishDurationFrames: vanishFrames }
-            );
-            if (handled) return;
-        }
-
-        // Mark as vanishing to avoid hitting multiple times
-        target.vanishing = true;
-        target.vanishStartTime = frameCount;
-        target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
-        target.percentVanished = 0;
-        if (target.type === "wallSection" && target._vanishAsWholeSection) {
-            target._disableChunkSplitOnVanish = true;
-        }
-        if (impactPoint && Number.isFinite(impactPoint.x) && Number.isFinite(impactPoint.y)) {
-            target._vanishWorldPoint = {
-                x: Number(impactPoint.x),
-                y: Number(impactPoint.y)
-            };
-        } else {
-            target._vanishWorldPoint = null;
-        }
-        if (target._vanishFinalizeTimeout) {
-            clearTimeout(target._vanishFinalizeTimeout);
-        }
-        const finalizeAfterMs = Math.max(0, (target.vanishDuration / Math.max(1, frameRate)) * 1000);
-        target._vanishFinalizeTimeout = setTimeout(() => {
-            if (!target || target.gone) return;
-            if (typeof target.removeFromGame === "function") {
-                target.removeFromGame();
-            } else if (typeof target.remove === "function") {
-                target.remove();
-            } else if (typeof target.delete === "function") {
-                // Backward compatibility for entities not yet migrated.
-                target.delete();
-            } else {
-                target.gone = true;
-            }
-            target._vanishWorldPoint = null;
-            target.vanishing = false;
-            target._vanishAsWholeSection = false;
-            target._vanishFinalizeTimeout = null;
-        }, finalizeAfterMs);
-    }
-}
-
-class Teleport extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/vanish.png";
-        this.gravity = 0;
-        this.speed = 0;
-        this.range = Infinity;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 5;
-        this.radius = 0;
-    }
-
-    cast(targetX, targetY) {
-        if (!wizard || !wizard.map) return this;
-        if (wizard.magic < this.magicCost) {
-            message("Not enough magic to cast Teleport!");
-            return this;
-        }
-
-        let destinationX = targetX;
-        let destinationY = targetY;
-        if (typeof wizard.map.wrapWorldX === "function") destinationX = wizard.map.wrapWorldX(destinationX);
-        if (typeof wizard.map.wrapWorldY === "function") destinationY = wizard.map.wrapWorldY(destinationY);
-        if (!Number.isFinite(destinationX) || !Number.isFinite(destinationY)) {
-            message("Cannot teleport there!");
-            return this;
-        }
-
-        wizard.magic -= this.magicCost;
-        wizard.x = destinationX;
-        wizard.y = destinationY;
-        wizard.node = wizard.map.worldToNode(destinationX, destinationY) || wizard.node;
-        wizard.path = [];
-        wizard.nextNode = null;
-        wizard.destination = null;
-        wizard.moving = false;
-        wizard.movementVector = { x: 0, y: 0 };
-        wizard.prevX = destinationX;
-        wizard.prevY = destinationY;
-        wizard.updateHitboxes();
-        if (typeof centerViewport === "function") {
-            centerViewport(wizard, 0);
-        }
-
-        this.visible = false;
-        this.detachPixiSprite();
-        return this;
-    }
-}
-
-
-class Arrow extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = `./assets/images/pointy arrow.png`;
-        this.range = 12
-        this.speed = 15
-        this.bounces = 0
-        this.gravity = .5
-        this.type = "arrow"
-        this.size = 50
-    }
-    bounce () {}
-    land() {
-        super.land()
-        clearInterval(this.castInterval)
-        animals.forEach((animal, n) => {
-            let margin = animal.size
-            if (animal._onScreen && !animal.dead) {
-                const dist = distance(this.x, this.y, animal.center_x, animal.center_y);
-                if (withinRadius(this.x, this.y, animal.center_x, animal.center_y, margin)) {
-                    this.hurt(animal, 25 * (margin - dist) / margin)
-                    this.x = animal.center_x
-                    this.y = animal.center_y
-                    if (animal.hp > 0) {
-                        this.visible = false
-                    }
-                }
-            }
-        })
-    }
-}
-
-class TreeGrow extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/tree.png";
-        this.gravity = 0;
-        this.speed = 0;
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 0;
-        this.initialSize = 1;
-        this.maxSize = 20;
-        this.growthPerSecond = 2.5;
-        this.magicPerSecond = 10;
-        this.radius = 0;
-    }
-    
-    cast(targetX, targetY) {
-        // Snap to nearest hex tile
-        const targetNode = wizard.map.worldToNode(targetX, targetY);
-        if (!targetNode) {
-            message("Cannot grow tree there!");
-            return this;
-        }
-        
-        // Check if there's already an object at this location
-        if (targetNode.objects && targetNode.objects.length > 0) {
-            message("Something is already growing there!");
-            return this;
-        }
-        
-        // Reuse map-managed tree textures when available to preserve variants.
-        const treeTextures = (wizard.map.scenery && wizard.map.scenery.tree && wizard.map.scenery.tree.textures)
-            ? wizard.map.scenery.tree.textures
-            : Array.from({length: 5}, (_, n) => PIXI.Texture.from(`/assets/images/trees/tree${n}.png`));
-        
-        const newTree = new Tree({x: targetNode.x, y: targetNode.y}, treeTextures, wizard.map);
-        const selectedTreeVariant = (
-            wizard &&
-            Number.isInteger(wizard.selectedTreeTextureVariant) &&
-            wizard.selectedTreeTextureVariant >= 0 &&
-            wizard.selectedTreeTextureVariant < treeTextures.length
-        )
-            ? wizard.selectedTreeTextureVariant
-            : null;
-        if (selectedTreeVariant !== null && newTree.pixiSprite) {
-            const selectedTexture = treeTextures[selectedTreeVariant];
-            if (selectedTexture) {
-                if (typeof newTree.setTreeTextureIndex === "function") {
-                    newTree.setTreeTextureIndex(selectedTreeVariant, treeTextures);
-                } else {
-                    newTree.pixiSprite.texture = selectedTexture;
-                    newTree.textureIndex = selectedTreeVariant;
-                }
-            }
-        }
-        newTree.applySize(this.initialSize);
-
-        // Holding space grows only the newly planted tree from this cast.
-        if (keysPressed[" "]) {
-            SpellSystem.startTreeGrowthChannel(
-                wizard,
-                newTree,
-                this.growthPerSecond,
-                this.magicPerSecond,
-                this.maxSize
-            );
-        }
-        
-        // Deactivate this spell projectile immediately (tree is now placed)
-        this.visible = false;
-        this.detachPixiSprite();
-        
-        return this;
-    }
-}
-
-class BuildRoad extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.gravity = 0;
-        this.speed = 0; // Instant placement
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 5;
-        this.radius = 0;
-    }
-    
-    cast(targetX, targetY) {
-        // Check magic
-        if (wizard.magic < this.magicCost) {
-            message("Not enough magic to cast Build Road!");
-            return this;
-        }
-        wizard.magic -= this.magicCost;
-        
-        // Snap to nearest hex tile
-        const targetNode = wizard.map.worldToNode(targetX, targetY);
-        if (!targetNode) {
-            message("Cannot place road there!");
-            return this;
-        }
-        
-        // Check if there's already road at this location
-        if (targetNode.objects && targetNode.objects.some(obj => obj.type === 'road')) {
-            message("Road already there!");
-            return this;
-        }
-        
-        // Create road (textures are generated dynamically in the constructor)
-        const selectedFlooring = (wizard && typeof wizard.selectedFlooringTexture === "string" && wizard.selectedFlooringTexture.length > 0)
-            ? wizard.selectedFlooringTexture
-            : "/assets/images/flooring/dirt.jpg";
-        const newRoad = new Road({x: targetNode.x, y: targetNode.y}, [], wizard.map, {
-            fillTexturePath: selectedFlooring
-        });
-        
-        // Deactivate this spell projectile immediately
-        this.visible = false;
-        this.detachPixiSprite();
-        
-        return this;
-    }
-}
-
-class PlaceObject extends Spell {
-    constructor(x, y) {
-        super(x, y);
-        this.image = document.createElement('img');
-        this.gravity = 0;
-        this.speed = 0;
-        this.range = 20;
-        this.bounces = 0;
-        this.apparentSize = 0;
-        this.delayTime = 0;
-        this.magicCost = 0;
-        this.radius = 0;
-    }
-
-    cast(targetX, targetY) {
-        const wrappedX = (wizard.map && typeof wizard.map.wrapWorldX === "function")
-            ? wizard.map.wrapWorldX(targetX)
-            : targetX;
-        const wrappedY = (wizard.map && typeof wizard.map.wrapWorldY === "function")
-            ? wizard.map.wrapWorldY(targetY)
-            : targetY;
-        if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) {
-            message("Cannot place object there!");
-            return this;
-        }
-        if (typeof PlacedObject !== "function") {
-            message("Object placement is unavailable.");
-            return this;
-        }
-
-        const selectedTexturePath = (
-            wizard &&
-            typeof wizard.selectedPlaceableTexturePath === "string" &&
-            wizard.selectedPlaceableTexturePath.length > 0
-        ) ? wizard.selectedPlaceableTexturePath : "/assets/images/doors/door5.png";
-        const selectedCategory = (
-            wizard &&
-            typeof wizard.selectedPlaceableCategory === "string" &&
-            wizard.selectedPlaceableCategory.length > 0
-        ) ? wizard.selectedPlaceableCategory : "doors";
-        const renderDepthOffset = (wizard && Number.isFinite(wizard.selectedPlaceableRenderOffset))
-            ? Number(wizard.selectedPlaceableRenderOffset)
-            : 0;
-        const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
-            ? Number(wizard.selectedPlaceableScale)
-            : 1;
-        const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
-        const selectedAnchorX = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
-            ? Number(wizard.selectedPlaceableAnchorX)
-            : 0.5;
-        const selectedAnchorY = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorY))
-            ? Number(wizard.selectedPlaceableAnchorY)
-            : 1;
-        const placementRotation = (wizard && Number.isFinite(wizard.selectedPlaceableRotation))
-            ? Number(wizard.selectedPlaceableRotation)
-            : 0;
-        const rotationAxisRaw = wizard ? wizard.selectedPlaceableRotationAxis : null;
-        const rotationAxisNormalized = (typeof rotationAxisRaw === "string")
-            ? rotationAxisRaw.trim().toLowerCase()
-            : "";
-        const rotationAxis = (rotationAxisNormalized === "spatial" || rotationAxisNormalized === "visual" || rotationAxisNormalized === "none")
-            ? rotationAxisNormalized
-            : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
-        const effectivePlacementRotation = (rotationAxis === "none") ? 0 : placementRotation;
-        const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
-        const wallSnapPlacement = isWallMountedPlacement
-            ? (
-                (typeof SpellSystem !== "undefined" &&
-                    SpellSystem &&
-                    typeof SpellSystem.getPlaceObjectPlacementCandidate === "function")
-                    ? SpellSystem.getPlaceObjectPlacementCandidate(wizard, wrappedX, wrappedY)
-                    : null
-            )
-            : null;
-        const useWallSnapPlacement = !!(
-            isWallMountedPlacement &&
-            wallSnapPlacement &&
-            wallSnapPlacement.targetWall
-        );
-        const effectiveAnchorX = useWallSnapPlacement ? 0.5 : selectedAnchorX;
-        const rawYScale = Number(
-            (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
-                ? globalThis.xyratio
-                : 0.66
-        );
-        const yScale = Math.max(0.1, Math.abs(rawYScale));
-        const placementYOffset = (rotationAxis === "spatial")
-            ? 0
-            : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
-        const placedX = (
-            useWallSnapPlacement &&
-            Number.isFinite(wallSnapPlacement.snappedX)
-        ) ? Number(wallSnapPlacement.snappedX) : wrappedX;
-        let placedY = (
-            useWallSnapPlacement &&
-            Number.isFinite(wallSnapPlacement.snappedY)
-        ) ? Number(wallSnapPlacement.snappedY) : (wrappedY + placementYOffset);
-        if (wizard.map && typeof wizard.map.wrapWorldY === "function") {
-            placedY = wizard.map.wrapWorldY(placedY);
-        }
-        if (
-            wizard.map &&
-            typeof wizard.map.worldToNode === "function" &&
-            !wizard.map.worldToNode(wrappedX, placedY) &&
-            wizard.map.worldToNode(wrappedX, wrappedY)
-        ) {
-            placedY = wrappedY;
-        }
-
-        const resolvedPlacementRotation = (
-            useWallSnapPlacement &&
-            Number.isFinite(wallSnapPlacement.snappedRotationDeg)
-        ) ? Number(wallSnapPlacement.snappedRotationDeg) : effectivePlacementRotation;
-
-        const placedObject = new PlacedObject({ x: placedX, y: placedY }, wizard.map, {
-            texturePath: selectedTexturePath,
-            category: selectedCategory,
-            renderDepthOffset,
-            width: clampedScale,
-            height: clampedScale,
-            placeableAnchorX: effectiveAnchorX,
-            placeableAnchorY: selectedAnchorY,
-            rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
-            placementRotation: resolvedPlacementRotation,
-            mountedSectionId: (
-                useWallSnapPlacement &&
-                Number.isInteger(wallSnapPlacement.mountedSectionId)
-            ) ? Number(wallSnapPlacement.mountedSectionId) : null,
-            mountedWallSectionUnitId: (
-                useWallSnapPlacement &&
-                Number.isInteger(wallSnapPlacement.mountedWallSectionUnitId)
-            ) ? Number(wallSnapPlacement.mountedWallSectionUnitId) : null,
-            mountedWallFacingSign: (
-                useWallSnapPlacement &&
-                Number.isFinite(wallSnapPlacement.mountedWallFacingSign)
-            ) ? Number(wallSnapPlacement.mountedWallFacingSign) : null,
-            groundPlaneHitboxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallGroundHitboxPoints : undefined
-        });
-        if (
-            useWallSnapPlacement &&
-            Number.isFinite(wallSnapPlacement.snappedZ) &&
-            placedObject
-        ) {
-            placedObject.z = Number(wallSnapPlacement.snappedZ);
-        }
-
-        this.visible = false;
-        this.detachPixiSprite();
-
-        return this;
-    }
-}
+globalThis.resolveAnimatedSheetConfig = resolveAnimatedSheetConfig;
+globalThis.getMagicAssetMetadata = getMagicAssetMetadata;
 
 function hitboxesIntersect(hitboxA, hitboxB) {
     if (!hitboxA || !hitboxB) return false;
@@ -1360,27 +242,33 @@ class FirewallEmitter {
 const SpellSystem = (() => {
     const DEFAULT_FLOORING_TEXTURE = "/assets/images/flooring/dirt.jpg";
     const RANDOM_TREE_VARIANT = "random";
-    const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "signs"];
+    const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "signs", "roof"];
+    const EDITOR_PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "roof"];
+    const EDITOR_CATEGORIES = [...EDITOR_PLACEABLE_CATEGORIES, "powerups"];
+    const EDITOR_MENU_ICON = "/assets/images/thumbnails/edit.png";
+    const ROOF_EDITOR_ICON = "/assets/images/thumbnails/roof.png";
+    const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
         doors: "/assets/images/doors/door5.png",
         flowers: "/assets/images/flowers/red%20flower.png",
         windows: "/assets/images/windows/window.png",
         furniture: "/assets/images/furniture/chair.png",
-        signs: "/assets/images/signs/princess.png"
+        signs: "/assets/images/signs/princess.png",
+        roof: DEFAULT_ROOF_TEXTURE
     };
     const AURA_MENU_ICON = "/assets/images/thumbnails/aura.png";
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
-        { name: "blackdiamond", icon: "/assets/images/powerups/black%20diamond.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
-        { name: "placeobject", icon: "/assets/images/doors/door5.png" },
-        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" }
+        { name: "editscript", icon: "/assets/images/thumbnails/edit.png" },
+        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" },
+        { name: "spawnanimal", icon: "/assets/images/animals/squirrel.png" }
     ];
     const AURA_DEFS = [
         { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 2 },
@@ -1389,14 +277,22 @@ const SpellSystem = (() => {
     ];
 
     const MAGIC_TICK_MS = 50;
-    const HP_REGEN_PER_SECOND = 0.25;
     let healingAuraHpMultiplier = 10;
     const WALL_HEIGHT_MIN = 0.5;
     const WALL_HEIGHT_MAX = 7.0;
     const WALL_HEIGHT_STEP = 0.5;
+    const DEFAULT_WALL_TEXTURE = "/assets/images/walls/stonewall.png";
     const WALL_THICKNESS_MIN = 0.125;
     const WALL_THICKNESS_MAX = 1.0;
     const WALL_THICKNESS_STEP = 0.125;
+    const ROOF_OVERHANG_MIN = 0;
+    const ROOF_OVERHANG_MAX = 1;
+    const ROOF_OVERHANG_STEP = 0.0625;
+    const ROOF_OVERHANG_DEFAULT = 0.25;
+    const ROOF_PEAK_HEIGHT_MIN = 0;
+    const ROOF_PEAK_HEIGHT_MAX = 10;
+    const ROOF_PEAK_HEIGHT_STEP = 0.25;
+    const ROOF_PEAK_HEIGHT_DEFAULT = 2;
     const VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD = 1;
     const VANISH_BURST_SHOT_INTERVAL_MS = 45;
     const VANISH_MAGIC_COST_PER_CAST = 5;
@@ -1410,15 +306,468 @@ const SpellSystem = (() => {
     const POWERUP_PLACEMENT_SCALE_MAX = 5;
     const POWERUP_PLACEMENT_SCALE_DEFAULT = 1;
 
+    const SPELL_CLASS_BY_NAME = {
+        fireball: "Fireball",
+        vanish: "Vanish",
+        editscript: "EditScript"
+    };
+
     let magicIntervalId = null;
     let lastMagicTickMs = 0;
     let spellMenuMode = "main";
+    let editorMenuMode = "categories";
     let flooringTexturePaths = [];
     let flooringTextureFetchPromise = null;
+    let wallTexturePaths = [];
+    let wallTextureFetchPromise = null;
     let placeableImagePathsByCategory = null;
     let placeableImageFetchPromise = null;
-    let placeableMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
+    let editorMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
     const textureAlphaMaskCache = new Map();
+    const SCRIPT_EDITOR_PANEL_ID = "scriptEditorPanel";
+    const SCRIPT_EDITOR_TEXTAREA_ID = "scriptEditorTextarea";
+    const SCRIPT_EDITOR_TARGET_LABEL_ID = "scriptEditorTargetLabel";
+    const SCRIPT_EDITOR_HELP_PANEL_ID = "scriptEditorHelpPanel";
+    const SCRIPT_EDITOR_DEFAULT_TEMPLATE = [
+        "playerExits {",
+        "    mazeMode=true",
+        "}",
+        "",
+        "playerEnters {",
+        "    mazeMode=false",
+        "}"
+    ].join("\n");
+    let scriptEditorTargetObject = null;
+
+    function getScriptEditorHelpMarkup() {
+        return [
+            "<div style='font-weight:bold;font-size:16px;margin-bottom:8px;'>Script Help</div>",
+            "<div style='margin-bottom:10px;'>Write scripts in block format. Scripts are saved as JSON internally.</div>",
+            "<div style='font-weight:bold;margin-top:8px;'>Event Blocks</div>",
+            "<pre style='white-space:pre-wrap;margin:6px 0 10px 0;'>playerExits {\n    mazeMode=true\n}\n\nplayerEnters {\n    mazeMode=false\n}\n\nplayerTouches {\n    healPlayer(5)\n}\n\nplayerUntouches {\n    drainMagic(10)\n}</pre>",
+            "<div style='font-weight:bold;margin-top:8px;'>Statement Syntax</div>",
+            "<ul style='margin:6px 0 10px 20px;padding:0;'>",
+            "  <li>Assignments: <code>mazeMode=true</code></li>",
+            "  <li>Commands: <code>transport(120, 88)</code>, <code>healPlayer(25)</code>, <code>hurtPlayer(10)</code>, <code>gainMagic(20)</code>, <code>drainMagic(15)</code>, <code>addSpell(\"fireball\")</code></li>",
+            "  <li>Semicolons are optional; newline also ends a statement.</li>",
+            "</ul>",
+            "<div style='font-weight:bold;margin-top:8px;'>Built-in Events</div>",
+            "<ul style='margin:6px 0 10px 20px;padding:0;'>",
+            "  <li><code>playerEnters</code>: fires when player crosses the door one way.</li>",
+            "  <li><code>playerExits</code>: fires when player crosses the opposite way.</li>",
+            "  <li><code>playerTouches</code>: fires once per contact (must leave and touch again to retrigger).</li>",
+            "  <li><code>playerUntouches</code>: fires when contact is broken after moving away from an object.</li>",
+            "</ul>",
+            "<div style='font-weight:bold;margin-top:8px;'>Built-in Commands</div>",
+            "<ul style='margin:6px 0 0 20px;padding:0;'>",
+            "  <li><code>mazeMode=true/false</code> (assignment)</li>",
+            "  <li><code>transport(x, y)</code></li>",
+            "  <li><code>healPlayer(hp)</code></li>",
+            "  <li><code>hurtPlayer(hp)</code></li>",
+            "  <li><code>gainMagic(amount)</code></li>",
+            "  <li><code>drainMagic(amount)</code></li>",
+            "  <li><code>addSpell(name)</code></li>",
+            "</ul>"
+        ].join("");
+    }
+
+    function getScriptEditorHelpPanel() {
+        let $panel = $(`#${SCRIPT_EDITOR_HELP_PANEL_ID}`);
+        if ($panel.length) return $panel;
+
+        $panel = $("<div>")
+            .attr("id", SCRIPT_EDITOR_HELP_PANEL_ID)
+            .css({
+                position: "fixed",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "min(760px, 84vw)",
+                height: "min(560px, 74vh)",
+                display: "none",
+                "z-index": 200200,
+                background: "rgba(12,12,12,0.98)",
+                border: "1px solid #ffd700",
+                "border-radius": "8px",
+                padding: "12px",
+                "box-sizing": "border-box",
+                color: "#fff"
+            })
+            .on("mousedown click keydown keyup", event => {
+                event.stopPropagation();
+            });
+
+        const $content = $("<div>")
+            .html(getScriptEditorHelpMarkup())
+            .css({
+                height: "calc(100% - 44px)",
+                overflow: "auto",
+                "padding-right": "4px",
+                "line-height": "1.35"
+            });
+
+        const $actions = $("<div>")
+            .css({
+                display: "flex",
+                "justify-content": "flex-end",
+                gap: "8px",
+                "margin-top": "10px"
+            });
+
+        const $close = $("<button>")
+            .text("Close")
+            .css({
+                padding: "6px 12px",
+                color: "#111",
+                background: "#ffd700",
+                border: "1px solid #caa700",
+                "border-radius": "4px",
+                cursor: "pointer",
+                "font-weight": "bold"
+            })
+            .on("click", () => closeScriptEditorHelpPanel());
+
+        $actions.append($close);
+        $panel.append($content, $actions);
+        $(document.body).append($panel);
+        return $panel;
+    }
+
+    function openScriptEditorHelpPanel() {
+        getScriptEditorHelpPanel().show();
+    }
+
+    function closeScriptEditorHelpPanel() {
+        $(`#${SCRIPT_EDITOR_HELP_PANEL_ID}`).hide();
+    }
+
+    function getScriptEditorPanel() {
+        let $panel = $(`#${SCRIPT_EDITOR_PANEL_ID}`);
+        if ($panel.length) return $panel;
+
+        $panel = $("<div>")
+            .attr("id", SCRIPT_EDITOR_PANEL_ID)
+            .css({
+                position: "fixed",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "min(820px, 85vw)",
+                height: "min(540px, 72vh)",
+                display: "none",
+                "z-index": 200100,
+                background: "rgba(15,15,15,0.96)",
+                border: "1px solid #ffd700",
+                "border-radius": "8px",
+                padding: "12px",
+                "box-sizing": "border-box",
+                color: "#fff"
+            })
+            .on("mousedown click keydown keyup", event => {
+                event.stopPropagation();
+            });
+
+        const $title = $("<div>")
+            .text("Object Script Editor")
+            .css({ "font-weight": "bold", "font-size": "16px" });
+
+        const $help = $("<button>")
+            .attr("type", "button")
+            .text("?")
+            .css({
+                width: "24px",
+                height: "24px",
+                padding: "0",
+                color: "#111",
+                background: "#ffd700",
+                border: "1px solid #caa700",
+                "border-radius": "50%",
+                cursor: "pointer",
+                "font-weight": "bold",
+                "line-height": "1"
+            })
+            .on("click", () => openScriptEditorHelpPanel());
+
+        const $header = $("<div>")
+            .css({
+                display: "flex",
+                "align-items": "center",
+                "justify-content": "space-between",
+                "margin-bottom": "6px"
+            })
+            .append($title, $help);
+
+        const $target = $("<div>")
+            .attr("id", SCRIPT_EDITOR_TARGET_LABEL_ID)
+            .text("No target selected")
+            .css({ "font-size": "12px", color: "#ddd", "margin-bottom": "8px" });
+
+        const $textarea = $("<textarea>")
+            .attr("id", SCRIPT_EDITOR_TEXTAREA_ID)
+            .attr("placeholder", SCRIPT_EDITOR_DEFAULT_TEMPLATE)
+            .css({
+                width: "100%",
+                height: "calc(100% - 90px)",
+                "box-sizing": "border-box",
+                resize: "none",
+                border: "1px solid #666",
+                "border-radius": "6px",
+                background: "#0b0b0b",
+                color: "#fff",
+                padding: "10px",
+                "font-family": "monospace",
+                "font-size": "13px"
+            });
+
+        const $actions = $("<div>")
+            .css({
+                display: "flex",
+                "justify-content": "flex-end",
+                gap: "8px",
+                "margin-top": "10px"
+            });
+
+        const $cancel = $("<button>")
+            .text("Cancel")
+            .css({
+                padding: "6px 12px",
+                color: "#fff",
+                background: "#444",
+                border: "1px solid #777",
+                "border-radius": "4px",
+                cursor: "pointer"
+            })
+            .on("click", () => closeScriptEditorPanel());
+
+        const $save = $("<button>")
+            .text("Save")
+            .css({
+                padding: "6px 12px",
+                color: "#111",
+                background: "#ffd700",
+                border: "1px solid #caa700",
+                "border-radius": "4px",
+                cursor: "pointer",
+                "font-weight": "bold"
+            })
+            .on("click", () => saveScriptEditorPanel());
+
+        $actions.append($cancel, $save);
+        $panel.append($header, $target, $textarea, $actions);
+        $(document.body).append($panel);
+        return $panel;
+    }
+
+    function closeScriptEditorPanel() {
+        scriptEditorTargetObject = null;
+        closeScriptEditorHelpPanel();
+        $(`#${SCRIPT_EDITOR_PANEL_ID}`).hide();
+    }
+
+    function parseEventBlockScriptEditorFormat(rawText) {
+        const text = String(rawText || "");
+        let index = 0;
+        const len = text.length;
+        const out = {};
+        let parsedAny = false;
+
+        const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+        const isIdentPart = (ch) => /[A-Za-z0-9_$]/.test(ch);
+
+        const skipWhitespace = () => {
+            while (index < len && /\s/.test(text[index])) {
+                index += 1;
+            }
+        };
+
+        while (index < len) {
+            skipWhitespace();
+            if (index >= len) break;
+
+            const start = index;
+            if (!isIdentStart(text[index])) {
+                return null;
+            }
+            index += 1;
+            while (index < len && isIdentPart(text[index])) {
+                index += 1;
+            }
+            const eventName = text.slice(start, index).trim();
+            if (!eventName) return null;
+
+            skipWhitespace();
+            if (text[index] !== "{") return null;
+            index += 1;
+
+            const bodyStart = index;
+            let depth = 1;
+            let inQuote = null;
+            let escapeNext = false;
+            while (index < len) {
+                const ch = text[index];
+                if (escapeNext) {
+                    escapeNext = false;
+                    index += 1;
+                    continue;
+                }
+                if (ch === "\\") {
+                    if (inQuote) {
+                        escapeNext = true;
+                    }
+                    index += 1;
+                    continue;
+                }
+                if (inQuote) {
+                    if (ch === inQuote) inQuote = null;
+                    index += 1;
+                    continue;
+                }
+                if (ch === '"' || ch === "'") {
+                    inQuote = ch;
+                    index += 1;
+                    continue;
+                }
+                if (ch === "{") depth += 1;
+                else if (ch === "}") {
+                    depth -= 1;
+                    if (depth === 0) break;
+                }
+                index += 1;
+            }
+            if (depth !== 0 || index >= len) return null;
+
+            const body = text.slice(bodyStart, index).trim();
+            out[eventName] = body;
+            parsedAny = true;
+            index += 1;
+        }
+
+        return parsedAny ? out : null;
+    }
+
+    function parseScriptEditorInput(rawText) {
+        const text = String(rawText || "").trim();
+        if (text.length === 0) {
+            return { ok: true, value: {} };
+        }
+
+        const parsedBlocks = parseEventBlockScriptEditorFormat(text);
+        if (parsedBlocks && typeof parsedBlocks === "object") {
+            return { ok: true, value: parsedBlocks };
+        }
+
+        return {
+            ok: false,
+            error: new Error("Invalid block script format")
+        };
+    }
+
+    function formatObjectScriptForEditor(target) {
+        if (!target) return "";
+        const source = target.script;
+        if (source === undefined || source === null) return "";
+
+        const formatScriptObjectAsBlocks = (scriptObj) => {
+            if (!scriptObj || typeof scriptObj !== "object" || Array.isArray(scriptObj)) return null;
+            const eventNames = Object.keys(scriptObj);
+            if (eventNames.length === 0) return "";
+            return eventNames.map(eventName => {
+                const rawBody = scriptObj[eventName];
+                const parts = String(rawBody === undefined || rawBody === null ? "" : rawBody)
+                    .split(/\r?\n/)
+                    .flatMap(line => line.split(";"))
+                    .map(part => part.trim())
+                    .filter(Boolean);
+                const body = parts.length > 0
+                    ? `\n${parts.map(part => `    ${part};`).join("\n")}\n`
+                    : "\n";
+                return `${eventName} {${body}}`;
+            }).join("\n\n");
+        };
+
+        if (typeof source === "string") {
+            const text = source.trim();
+            if (!text.length) return "";
+            const blockParsed = parseEventBlockScriptEditorFormat(text);
+            if (blockParsed) {
+                const formattedBlocks = formatScriptObjectAsBlocks(blockParsed);
+                return formattedBlocks !== null ? formattedBlocks : text;
+            }
+            try {
+                const parsed = (text.startsWith("{") || text.startsWith("["))
+                    ? JSON.parse(text)
+                    : JSON.parse(`{${text}}`);
+                const formattedBlocks = formatScriptObjectAsBlocks(parsed);
+                return formattedBlocks !== null ? formattedBlocks : text;
+            } catch (_err) {
+                return source;
+            }
+        }
+
+        if (source && typeof source === "object" && !Array.isArray(source)) {
+            const formattedBlocks = formatScriptObjectAsBlocks(source);
+            if (formattedBlocks !== null) return formattedBlocks;
+        }
+
+        try {
+            return JSON.stringify(source, null, 2);
+        } catch (_err) {
+            return String(source);
+        }
+    }
+
+    function describeScriptTarget(target) {
+        if (!target) return "Unknown object";
+        const parts = [];
+        if (typeof target.type === "string" && target.type.length > 0) {
+            parts.push(target.type);
+        }
+        if (typeof target.category === "string" && target.category.length > 0) {
+            parts.push(`(${target.category})`);
+        }
+        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
+            parts.push(`@ ${Number(target.x).toFixed(2)}, ${Number(target.y).toFixed(2)}`);
+        }
+        return parts.join(" ");
+    }
+
+    function openScriptEditorForTarget(target) {
+        if (!target || target.gone) return false;
+        const $panel = getScriptEditorPanel();
+        if (typeof globalThis !== "undefined" && typeof globalThis.releaseSpacebarCastingState === "function") {
+            globalThis.releaseSpacebarCastingState();
+        } else if (typeof keysPressed !== "undefined" && keysPressed) {
+            keysPressed[" "] = false;
+        }
+        const textareaEl = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).get(0);
+        if (typeof globalThis !== "undefined" && typeof globalThis.armSpacebarTypingGuardForElement === "function") {
+            globalThis.armSpacebarTypingGuardForElement(textareaEl);
+        }
+        scriptEditorTargetObject = target;
+        $(`#${SCRIPT_EDITOR_TARGET_LABEL_ID}`).text(describeScriptTarget(target));
+        $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val(formatObjectScriptForEditor(target));
+        $panel.show();
+        setTimeout(() => {
+            $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).trigger("focus");
+        }, 0);
+        return true;
+    }
+
+    function saveScriptEditorPanel() {
+        if (!scriptEditorTargetObject) {
+            closeScriptEditorPanel();
+            return;
+        }
+        const text = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val();
+        const parsed = parseScriptEditorInput(text);
+        if (!parsed.ok) {
+            message("Script is not valid. Use block style: eventName { ... }");
+            return;
+        }
+        scriptEditorTargetObject.script = parsed.value;
+        message("Object script saved.");
+        closeScriptEditorPanel();
+    }
 
     function getTextureAlphaMask(texture) {
         if (!texture || !texture.baseTexture || !texture.frame) return null;
@@ -1550,9 +899,7 @@ const SpellSystem = (() => {
             const indices = ib && ib.data ? ib.data : null;
             if ((!vertices && !worldVertices) || !uvs || !indices || indices.length < 3) return true;
 
-            const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-                ? interpolatedViewport
-                : viewport;
+            const camera = viewport;
             const projectWorldToScreen = (wx, wy, wz) => {
                 const dx = (map && typeof map.shortestDeltaX === "function")
                     ? map.shortestDeltaX(camera.x, wx)
@@ -1767,6 +1114,10 @@ const SpellSystem = (() => {
         return getSelectedFlooringTexture(wizardRef);
     }
 
+    function getWallSpellIcon(wizardRef) {
+        return getSelectedWallTexture(wizardRef);
+    }
+
     function getTreeVariantCount(wizardRef) {
         const textures = (
             wizardRef &&
@@ -1803,12 +1154,17 @@ const SpellSystem = (() => {
         return "/assets/images/thumbnails/tree.png";
     }
 
-    function getPlaceableCategories() {
-        return PLACEABLE_CATEGORIES.slice();
-    }
-
     function normalizePlaceableSelections(wizardRef) {
         if (!wizardRef) return;
+        const normalizeRoofTexturePath = (texturePath) => {
+            if (typeof texturePath !== "string" || texturePath.length === 0) return DEFAULT_ROOF_TEXTURE;
+            if (texturePath === ROOF_EDITOR_ICON) return DEFAULT_ROOF_TEXTURE;
+            const base = texturePath.split("?")[0].split("#")[0];
+            if (base.startsWith("/assets/images/roof/")) {
+                return texturePath.replace("/assets/images/roof/", "/assets/images/roofs/");
+            }
+            return texturePath;
+        };
         if (!wizardRef.selectedPlaceableByCategory || typeof wizardRef.selectedPlaceableByCategory !== "object") {
             wizardRef.selectedPlaceableByCategory = {};
         }
@@ -1834,6 +1190,10 @@ const SpellSystem = (() => {
             const existing = wizardRef.selectedPlaceableByCategory[category];
             if (typeof existing !== "string" || existing.length === 0) {
                 wizardRef.selectedPlaceableByCategory[category] = DEFAULT_PLACEABLE_BY_CATEGORY[category];
+                return;
+            }
+            if (category === "roof") {
+                wizardRef.selectedPlaceableByCategory[category] = normalizeRoofTexturePath(existing);
             }
         });
         const selectedCategory = (typeof wizardRef.selectedPlaceableCategory === "string")
@@ -1846,6 +1206,9 @@ const SpellSystem = (() => {
         wizardRef.selectedPlaceableTexturePath = (typeof selectedPath === "string" && selectedPath.length > 0)
             ? selectedPath
             : DEFAULT_PLACEABLE_BY_CATEGORY[wizardRef.selectedPlaceableCategory];
+        if (wizardRef.selectedPlaceableCategory === "roof") {
+            wizardRef.selectedPlaceableTexturePath = normalizeRoofTexturePath(wizardRef.selectedPlaceableTexturePath);
+        }
         const activeTexturePath = wizardRef.selectedPlaceableTexturePath;
         const selectedCategoryForActive = wizardRef.selectedPlaceableCategory;
         const defaultAxis = (selectedCategoryForActive === "doors" || selectedCategoryForActive === "windows")
@@ -1903,7 +1266,7 @@ const SpellSystem = (() => {
             wizardRef.selectedPlaceableRenderOffset = Number.isFinite(nextOffset) ? nextOffset : 0;
             wizardRef.selectedPlaceableScale = Number.isFinite(nextScale) ? Math.max(0.2, Math.min(5, nextScale)) : 1;
             wizardRef.selectedPlaceableRotation = Number.isFinite(nextRotation) ? nextRotation : 0;
-            wizardRef.selectedPlaceableRotationAxis = (nextAxisRaw === "spatial" || nextAxisRaw === "visual" || nextAxisRaw === "none")
+            wizardRef.selectedPlaceableRotationAxis = (nextAxisRaw === "spatial" || nextAxisRaw === "visual" || nextAxisRaw === "none" || nextAxisRaw === "ground")
                 ? nextAxisRaw
                 : defaultAxis;
             wizardRef.selectedPlaceableAnchorX = Number.isFinite(nextAnchorX) ? nextAnchorX : 0.5;
@@ -1920,7 +1283,7 @@ const SpellSystem = (() => {
 
     function normalizePlaceableRotationAxisForWizard(wizardRef, axis, category = null) {
         const normalized = (typeof axis === "string") ? axis.trim().toLowerCase() : "";
-        if (normalized === "spatial" || normalized === "visual" || normalized === "none") return normalized;
+        if (normalized === "spatial" || normalized === "visual" || normalized === "none" || normalized === "ground") return normalized;
         const fallbackCategory = (typeof category === "string" && category.length > 0)
             ? category
             : (wizardRef && typeof wizardRef.selectedPlaceableCategory === "string" ? wizardRef.selectedPlaceableCategory : DEFAULT_PLACEABLE_CATEGORY);
@@ -1932,6 +1295,15 @@ const SpellSystem = (() => {
         normalizePlaceableSelections(wizardRef);
         const category = getSelectedPlaceableCategory(wizardRef);
         const texturePath = getSelectedPlaceableTexture(wizardRef);
+        if (category === "roof") {
+            wizardRef.selectedPlaceableRotationAxisByTexture[texturePath] = "visual";
+            wizardRef.selectedPlaceableRotationAxis = "visual";
+            wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = 0.5;
+            wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = 0.5;
+            wizardRef.selectedPlaceableAnchorX = 0.5;
+            wizardRef.selectedPlaceableAnchorY = 0.5;
+            return null;
+        }
         if (!(typeof globalThis !== "undefined" && typeof globalThis.getResolvedPlaceableMetadata === "function")) {
             const fallbackAxis = normalizePlaceableRotationAxisForWizard(wizardRef, null, category);
             const fallbackAnchorY = category === "windows" ? 0.5 : 1;
@@ -2126,25 +1498,87 @@ const SpellSystem = (() => {
         return getSelectedPlaceableTextureForCategory(wizardRef, category);
     }
 
-    function getPlaceObjectSpellIcon(wizardRef) {
-        return getSelectedPlaceableTexture(wizardRef);
+    function isEditorSpellName(spellName) {
+        return spellName === "placeobject" || spellName === "blackdiamond";
     }
 
-    function fetchPlaceableImages() {
-        if (placeableImagePathsByCategory && typeof placeableImagePathsByCategory === "object") {
+    function getSelectedEditorCategory(wizardRef) {
+        if (!wizardRef) return DEFAULT_PLACEABLE_CATEGORY;
+        const raw = (typeof wizardRef.selectedEditorCategory === "string")
+            ? wizardRef.selectedEditorCategory.trim().toLowerCase()
+            : "";
+        if (EDITOR_CATEGORIES.includes(raw)) return raw;
+        if (wizardRef.currentSpell === "blackdiamond") return "powerups";
+        const placeableCategory = getSelectedPlaceableCategory(wizardRef);
+        return EDITOR_PLACEABLE_CATEGORIES.includes(placeableCategory)
+            ? placeableCategory
+            : DEFAULT_PLACEABLE_CATEGORY;
+    }
+
+    function normalizeSelectedEditorCategory(wizardRef) {
+        if (!wizardRef) return DEFAULT_PLACEABLE_CATEGORY;
+        const normalized = getSelectedEditorCategory(wizardRef);
+        wizardRef.selectedEditorCategory = normalized;
+        return normalized;
+    }
+
+    function getSelectedEditorIcon(wizardRef) {
+        const category = normalizeSelectedEditorCategory(wizardRef);
+        if (category === "powerups") {
+            const preview = getPowerupPlacementPreviewConfig(wizardRef);
+            if (preview && typeof preview.imagePath === "string" && preview.imagePath.length > 0) {
+                return preview.imagePath;
+            }
+            return POWERUP_PLACEMENT_IMAGE_PATH;
+        }
+        return getSelectedPlaceableTextureForCategory(wizardRef, category);
+    }
+
+    function getPowerupEditorCategoryIcon(wizardRef) {
+        const preview = getPowerupPlacementPreviewConfig(wizardRef);
+        if (preview && typeof preview.imagePath === "string" && preview.imagePath.length > 0) {
+            return preview.imagePath;
+        }
+        return POWERUP_PLACEMENT_IMAGE_PATH;
+    }
+
+    function fetchPlaceableImages(options = {}) {
+        const forceRefresh = !!(options && options.forceRefresh);
+        if (forceRefresh) {
+            placeableImagePathsByCategory = null;
+        }
+        if (!forceRefresh && placeableImagePathsByCategory && typeof placeableImagePathsByCategory === "object") {
             return Promise.resolve(placeableImagePathsByCategory);
         }
-        if (placeableImageFetchPromise) {
+        if (!forceRefresh && placeableImageFetchPromise) {
             return placeableImageFetchPromise;
         }
-        placeableImageFetchPromise = fetch("/api/placeables")
+        placeableImageFetchPromise = fetch("/api/placeables", { cache: "no-cache" })
             .then(response => response.json())
             .then(payload => {
                 const next = {};
                 PLACEABLE_CATEGORIES.forEach(category => {
-                    const listed = payload && payload.ok && payload.categories && Array.isArray(payload.categories[category])
+                    const listedRaw = payload && payload.ok && payload.categories && Array.isArray(payload.categories[category])
                         ? payload.categories[category]
-                        : [];
+                        : (
+                            category === "roof" &&
+                            payload &&
+                            payload.ok &&
+                            payload.categories &&
+                            Array.isArray(payload.categories.roofs)
+                        )
+                            ? payload.categories.roofs
+                            : [];
+                    const listed = (category === "roof")
+                        ? listedRaw.map(path => {
+                            if (typeof path !== "string") return DEFAULT_ROOF_TEXTURE;
+                            if (path.startsWith("/assets/images/roof/")) {
+                                return path.replace("/assets/images/roof/", "/assets/images/roofs/");
+                            }
+                            if (path === ROOF_EDITOR_ICON) return DEFAULT_ROOF_TEXTURE;
+                            return path;
+                        })
+                        : listedRaw;
                     next[category] = listed.length > 0 ? listed : [DEFAULT_PLACEABLE_BY_CATEGORY[category]];
                 });
                 placeableImagePathsByCategory = next;
@@ -2192,6 +1626,71 @@ const SpellSystem = (() => {
             WALL_THICKNESS_STEP
         );
         return wizardRef.selectedWallThickness;
+    }
+
+    function getSelectedWallTexture(wizardRef) {
+        if (!wizardRef) return DEFAULT_WALL_TEXTURE;
+        const current = (typeof wizardRef.selectedWallTexture === "string" && wizardRef.selectedWallTexture.length > 0)
+            ? wizardRef.selectedWallTexture
+            : DEFAULT_WALL_TEXTURE;
+        wizardRef.selectedWallTexture = current;
+        return current;
+    }
+
+    function fetchWallTextures() {
+        if (wallTexturePaths.length > 0) {
+            return Promise.resolve(wallTexturePaths);
+        }
+        if (wallTextureFetchPromise) {
+            return wallTextureFetchPromise;
+        }
+        wallTextureFetchPromise = fetch("/api/placeables")
+            .then(response => response.json())
+            .then(payload => {
+                const listed = (
+                    payload &&
+                    payload.ok &&
+                    payload.categories &&
+                    Array.isArray(payload.categories.walls)
+                ) ? payload.categories.walls : [];
+                const filtered = listed.filter(path =>
+                    typeof path === "string" &&
+                    path.length > 0 &&
+                    /\.(png|jpg|jpeg|webp|gif)(?:[?#].*)?$/i.test(path)
+                );
+                wallTexturePaths = (filtered.length > 0) ? filtered : [DEFAULT_WALL_TEXTURE];
+                return wallTexturePaths;
+            })
+            .catch(() => {
+                wallTexturePaths = [DEFAULT_WALL_TEXTURE];
+                return wallTexturePaths;
+            })
+            .finally(() => {
+                wallTextureFetchPromise = null;
+            });
+        return wallTextureFetchPromise;
+    }
+
+    function getSelectedRoofOverhang(wizardRef) {
+        if (!wizardRef) return ROOF_OVERHANG_DEFAULT;
+        wizardRef.selectedRoofOverhang = quantizeToStep(
+            wizardRef.selectedRoofOverhang,
+            ROOF_OVERHANG_MIN,
+            ROOF_OVERHANG_MAX,
+            ROOF_OVERHANG_STEP
+        );
+        return wizardRef.selectedRoofOverhang;
+    }
+
+    function getSelectedRoofPeakHeight(wizardRef) {
+        if (!wizardRef) return ROOF_PEAK_HEIGHT_DEFAULT;
+        wizardRef.selectedRoofPeakHeight = quantizeToStep(
+            wizardRef.selectedRoofPeakHeight,
+            ROOF_PEAK_HEIGHT_MIN,
+            ROOF_PEAK_HEIGHT_MAX,
+            ROOF_PEAK_HEIGHT_STEP
+        );
+        return wizardRef.selectedRoofPeakHeight;
     }
 
     function fetchFlooringTextures() {
@@ -2263,9 +1762,7 @@ const SpellSystem = (() => {
 
         const healingAuraActive = isAuraActive(wizardRef, "healing");
         const hpRegenMultiplier = healingAuraActive ? getHealingAuraHpMultiplier() : 1;
-        if (wizardRef.hp < wizardRef.maxHp) {
-            wizardRef.hp = Math.min(wizardRef.maxHp, wizardRef.hp + HP_REGEN_PER_SECOND * hpRegenMultiplier * dtSec);
-        }
+        wizardRef.healRateMultiplier = hpRegenMultiplier;
         const auraDrainPerSecond = getActiveAuraMagicDrainPerSecond(wizardRef);
         const auraActive = auraDrainPerSecond > 0;
         const magicRegenPerSecond = Number.isFinite(wizardRef.magicRegenPerSecond)
@@ -2393,7 +1890,10 @@ const SpellSystem = (() => {
             wizardRef.wallLayoutMode = false;
             wizardRef.wallStartPoint = null;
             wizardRef.wallStartReferenceWall = null;
+            wizardRef.wallStartSplitReference = null;
             wizardRef.wallDragMouseStartWorld = null;
+            wizardRef.wallStartFromExistingWall = false;
+            wizardRef.wallPreviewPlacement = null;
             clearDragPreview(wizardRef, "wall");
             return;
         }
@@ -2481,7 +1981,8 @@ const SpellSystem = (() => {
             wizardRef.wallLayoutMode &&
             wizardRef.currentSpell === "wall"
         ) {
-            return wrappedCurrentPoint;
+            const projected = projectWallDragPointFromMouseDelta(wizardRef, wrappedCurrentPoint);
+            return projected || wrappedCurrentPoint;
         }
         return wrappedCurrentPoint;
     }
@@ -2519,6 +2020,25 @@ const SpellSystem = (() => {
         if (!wizardRef || !spellName || !obj) return false;
         const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
         return !!(setForSpell && setForSpell.has(obj));
+    }
+
+    function getSpellClassForName(spellName) {
+        if (typeof spellName !== "string" || spellName.length === 0) return null;
+        const className = SPELL_CLASS_BY_NAME[spellName];
+        if (typeof className !== "string" || className.length === 0) return null;
+        const spellClass = globalThis[className];
+        return (typeof spellClass === "function") ? spellClass : null;
+    }
+
+    function spellSupportsObjectTargeting(spellName) {
+        const spellClass = getSpellClassForName(spellName);
+        return !!(spellClass && spellClass.supportsObjectTargeting);
+    }
+
+    function isValidObjectTargetForSpell(spellName, obj, wizardRef = null) {
+        const spellClass = getSpellClassForName(spellName);
+        if (!spellClass || typeof spellClass.isValidObjectTarget !== "function") return false;
+        return !!spellClass.isValidObjectTarget(obj, wizardRef);
     }
 
     function markObjectAsTargetedBySpell(wizardRef, spellName, obj) {
@@ -2629,6 +2149,120 @@ const SpellSystem = (() => {
         return count;
     }
 
+    function clampUnitInterval(value, fallback = 0) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return Math.max(0, Math.min(1, Number(fallback) || 0));
+        return Math.max(0, Math.min(1, n));
+    }
+
+    function fitVanishWallRangeToSelectionBudget(state, options = {}) {
+        if (!state || typeof state !== "object") return null;
+        const wall = options.wall || null;
+        const desired = options.desired || null;
+        const maxSelectable = Number.isFinite(options.maxSelectable)
+            ? Math.max(0, Number(options.maxSelectable))
+            : 0;
+        if (!wall || !desired || maxSelectable <= 0) return null;
+
+        const desiredEntry = {
+            ...desired,
+            wall,
+            tStart: clampUnitInterval(desired.tStart),
+            tEnd: clampUnitInterval(desired.tEnd)
+        };
+        if (desiredEntry.tStart > desiredEntry.tEnd) {
+            const swap = desiredEntry.tStart;
+            desiredEntry.tStart = desiredEntry.tEnd;
+            desiredEntry.tEnd = swap;
+        }
+
+        const desiredCount = getVanishQueuedSelectionCount(state, desiredEntry);
+        if (desiredCount <= maxSelectable) return desiredEntry;
+
+        const tCenter = clampUnitInterval(
+            options.tCenter,
+            (desiredEntry.tStart + desiredEntry.tEnd) * 0.5
+        );
+        const base = options.base
+            ? {
+                ...options.base,
+                wall,
+                tStart: clampUnitInterval(options.base.tStart, tCenter),
+                tEnd: clampUnitInterval(options.base.tEnd, tCenter)
+            }
+            : {
+                wall,
+                tStart: tCenter,
+                tEnd: tCenter
+            };
+        if (base.tStart > base.tEnd) {
+            const swap = base.tStart;
+            base.tStart = base.tEnd;
+            base.tEnd = swap;
+        }
+
+        const baseCount = getVanishQueuedSelectionCount(state, base);
+        if (baseCount > maxSelectable) return null;
+
+        let bestEntry = null;
+        let bestCount = -1;
+        let bestSpan = -1;
+
+        const tryFactor = (factorRaw) => {
+            const factor = Math.max(0, Math.min(1, Number(factorRaw) || 0));
+            const start = clampUnitInterval(base.tStart + (desiredEntry.tStart - base.tStart) * factor, tCenter);
+            const end = clampUnitInterval(base.tEnd + (desiredEntry.tEnd - base.tEnd) * factor, tCenter);
+            const entry = {
+                ...desiredEntry,
+                tStart: Math.min(start, end),
+                tEnd: Math.max(start, end)
+            };
+            const totalCount = getVanishQueuedSelectionCount(state, entry);
+            if (totalCount > maxSelectable) return;
+            const span = entry.tEnd - entry.tStart;
+            if (
+                totalCount > bestCount ||
+                (totalCount === bestCount && span > bestSpan)
+            ) {
+                bestEntry = entry;
+                bestCount = totalCount;
+                bestSpan = span;
+            }
+        };
+
+        tryFactor(0);
+        tryFactor(1);
+
+        // Discrete target-count transitions may happen at irregular t-values;
+        // sample and then refine to keep as much range as possible under budget.
+        const sampleSteps = 24;
+        for (let i = 1; i < sampleSteps; i++) {
+            tryFactor(i / sampleSteps);
+        }
+
+        let low = 0;
+        let high = 1;
+        for (let i = 0; i < 20; i++) {
+            const mid = (low + high) * 0.5;
+            const start = clampUnitInterval(base.tStart + (desiredEntry.tStart - base.tStart) * mid, tCenter);
+            const end = clampUnitInterval(base.tEnd + (desiredEntry.tEnd - base.tEnd) * mid, tCenter);
+            const entry = {
+                ...desiredEntry,
+                tStart: Math.min(start, end),
+                tEnd: Math.max(start, end)
+            };
+            const totalCount = getVanishQueuedSelectionCount(state, entry);
+            if (totalCount <= maxSelectable) {
+                tryFactor(mid);
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+
+        return bestEntry;
+    }
+
     function resetVanishDragTargetingState(wizardRef) {
         if (!wizardRef) return;
         wizardRef.vanishDragTargetingState = null;
@@ -2652,23 +2286,42 @@ const SpellSystem = (() => {
             candidate.type === "wallSection" &&
             typeof candidate._parameterForWorldPointOnSection === "function"
         ) {
-            const hoverPreview = getVanishWallPreviewPolygonForHover(
-                wizardRef,
-                candidate,
-                Number(worldX),
-                Number(worldY)
+            const mouseScreen = (
+                typeof mousePos !== "undefined" &&
+                mousePos &&
+                Number.isFinite(mousePos.screenX) &&
+                Number.isFinite(mousePos.screenY)
+            ) ? { x: mousePos.screenX, y: mousePos.screenY } : (
+                (typeof worldToScreen === "function")
+                    ? worldToScreen({ x: Number(worldX), y: Number(worldY) })
+                    : null
             );
-            const hoverPlan = hoverPreview && hoverPreview.plan ? hoverPreview.plan : null;
+            const hitSegment = (
+                mouseScreen &&
+                Number.isFinite(mouseScreen.x) &&
+                Number.isFinite(mouseScreen.y) &&
+                typeof candidate.getSegmentAtScreenPoint === "function"
+            ) ? candidate.getSegmentAtScreenPoint(
+                Number(mouseScreen.x),
+                Number(mouseScreen.y),
+                {
+                    worldX: Number(worldX),
+                    worldY: Number(worldY),
+                    worldToScreenFn: (typeof worldToScreen === "function") ? worldToScreen : null,
+                    viewscale: Number.isFinite(viewscale) ? Number(viewscale) : 1,
+                    xyratio: Number.isFinite(xyratio) ? Number(xyratio) : 0.66
+                }
+            ) : null;
 
             const tRaw = candidate._parameterForWorldPointOnSection({ x: worldX, y: worldY });
-            const tCenter = Number.isFinite(tRaw)
-                ? Math.max(0, Math.min(1, Number(tRaw)))
-                : 0.5;
-            const touchedStart = (hoverPlan && Number.isFinite(hoverPlan.tStart))
-                ? Math.max(0, Math.min(1, Number(hoverPlan.tStart)))
+            const tCenter = (hitSegment && Number.isFinite(hitSegment.t))
+                ? Math.max(0, Math.min(1, Number(hitSegment.t)))
+                : (Number.isFinite(tRaw) ? Math.max(0, Math.min(1, Number(tRaw))) : 0.5);
+            const touchedStart = (hitSegment && Number.isFinite(hitSegment.tStart))
+                ? Math.max(0, Math.min(1, Number(hitSegment.tStart)))
                 : tCenter;
-            const touchedEnd = (hoverPlan && Number.isFinite(hoverPlan.tEnd))
-                ? Math.max(0, Math.min(1, Number(hoverPlan.tEnd)))
+            const touchedEnd = (hitSegment && Number.isFinite(hitSegment.tEnd))
+                ? Math.max(0, Math.min(1, Number(hitSegment.tEnd)))
                 : tCenter;
 
             const existing = state.wallRanges.get(candidate);
@@ -2681,7 +2334,18 @@ const SpellSystem = (() => {
                 };
                 const proposedCount = getVanishQueuedSelectionCount(state, proposed);
                 if (proposedCount > maxSelectable) {
-                    return false;
+                    const fitted = fitVanishWallRangeToSelectionBudget(state, {
+                        wall: candidate,
+                        base: existing,
+                        desired: proposed,
+                        tCenter,
+                        maxSelectable
+                    });
+                    if (!fitted) return false;
+                    existing.tStart = fitted.tStart;
+                    existing.tEnd = fitted.tEnd;
+                    existing.lastTouchT = proposed.lastTouchT;
+                    return true;
                 }
                 existing.tStart = proposed.tStart;
                 existing.tEnd = proposed.tEnd;
@@ -2696,7 +2360,29 @@ const SpellSystem = (() => {
                 };
                 const proposedCount = getVanishQueuedSelectionCount(state, entry);
                 if (proposedCount > maxSelectable) {
-                    return false;
+                    const fitted = fitVanishWallRangeToSelectionBudget(state, {
+                        wall: candidate,
+                        base: {
+                            wall: candidate,
+                            tStart: tCenter,
+                            tEnd: tCenter
+                        },
+                        desired: entry,
+                        tCenter,
+                        maxSelectable
+                    });
+                    if (!fitted) return false;
+                    const fittedEntry = {
+                        ...entry,
+                        tStart: fitted.tStart,
+                        tEnd: fitted.tEnd
+                    };
+                    if (getVanishWallRangeTargetCount(fittedEntry) <= 0) return false;
+                    state.wallRanges.set(candidate, fittedEntry);
+                    if (Array.isArray(state.selectionTimeline)) {
+                        state.selectionTimeline.push({ kind: "wall", wall: candidate });
+                    }
+                    return true;
                 }
                 state.wallRanges.set(candidate, entry);
                 if (Array.isArray(state.selectionTimeline)) {
@@ -2806,7 +2492,7 @@ const SpellSystem = (() => {
 
             const target = shots[shotIndex++];
             if (target && !target.gone && !target.vanishing) {
-                const projectile = new Vanish();
+                const projectile = new globalThis.Vanish();
                 const requiredMagic = Math.max(15, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
                 if (wizard.magic < requiredMagic) {
                     finishBurst();
@@ -2816,10 +2502,6 @@ const SpellSystem = (() => {
                 const aim = getTargetAimPoint(wizardRef, target);
                 if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
                     projectile.forcedTarget = target;
-                    if (target.type === "wallSection") {
-                        target._vanishAsWholeSection = true;
-                        target._disableChunkSplitOnVanish = true;
-                    }
                     markObjectAsTargetedBySpell(wizardRef, "vanish", target);
                     const dx = aim.x - wizardRef.x;
                     const dy = aim.y - wizardRef.y;
@@ -2924,31 +2606,17 @@ const SpellSystem = (() => {
         return pb.x - pa.x;
     }
 
-    function pickObjectViaRenderingColorId(worldX, worldY, filterFn = null) {
+    function pickObjectViaRenderingColorId(filterFn = null) {
         const pickerApi = (typeof globalThis !== "undefined") ? globalThis.renderingScenePicker : null;
         if (!pickerApi) {
             return { picked: null, attempted: false };
         }
-        if (typeof pickerApi.pickObjectAtScreenPoint !== "function") {
-            return { picked: null, attempted: false };
-        }
-        const mouseScreen = (
-            typeof mousePos !== "undefined" &&
-            mousePos &&
-            Number.isFinite(mousePos.screenX) &&
-            Number.isFinite(mousePos.screenY)
-        ) ? { x: mousePos.screenX, y: mousePos.screenY } : null;
-        const clickScreen = mouseScreen || (
-            (typeof worldToScreen === "function")
-                ? worldToScreen({ x: worldX, y: worldY })
-                : null
-        );
-        if (!clickScreen || !Number.isFinite(clickScreen.x) || !Number.isFinite(clickScreen.y)) {
+        if (typeof pickerApi.getHoveredObject !== "function") {
             return { picked: null, attempted: false };
         }
         let picked = null;
         try {
-            picked = pickerApi.pickObjectAtScreenPoint(clickScreen.x, clickScreen.y, {
+            picked = pickerApi.getHoveredObject({
                 filter: filterFn
             });
         } catch (_err) {
@@ -2967,7 +2635,7 @@ const SpellSystem = (() => {
             !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
         );
 
-        const pickResult = pickObjectViaRenderingColorId(worldX, worldY, (obj) =>
+        const pickResult = pickObjectViaRenderingColorId((obj) =>
             canTargetObject(obj)
         );
         if (pickResult && pickResult.attempted) {
@@ -3058,9 +2726,81 @@ const SpellSystem = (() => {
         return null;
     }
 
+    function getWallBuildStartAnchorForObject(obj, worldX, worldY, minSplitDistanceWorld = 0.1) {
+        if (!obj || obj.type !== "wallSection") return null;
+        const baseAnchor = getGroundAnchorPointForObject(obj, worldX, worldY);
+        if (!baseAnchor) return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return { point: baseAnchor };
+
+        const mapRef = obj.map || map || null;
+        const sx = Number(obj.startPoint && obj.startPoint.x);
+        const sy = Number(obj.startPoint && obj.startPoint.y);
+        const ex = Number(obj.endPoint && obj.endPoint.x);
+        const ey = Number(obj.endPoint && obj.endPoint.y);
+        if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+            return { point: baseAnchor };
+        }
+
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(sx, ex)
+            : (ex - sx);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(sy, ey)
+            : (ey - sy);
+        const lenSq = dx * dx + dy * dy;
+        if (!(lenSq > 1e-6)) return { point: baseAnchor };
+
+        const vx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(sx, worldX)
+            : (worldX - sx);
+        const vy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(sy, worldY)
+            : (worldY - sy);
+        const tProjected = Math.max(0, Math.min(1, (vx * dx + vy * dy) / lenSq));
+        const projectedPoint = { x: sx + dx * tProjected, y: sy + dy * tProjected };
+        const nearest = (typeof obj.getNearestLineAnchorToWorldPoint === "function")
+            ? obj.getNearestLineAnchorToWorldPoint(projectedPoint)
+            : null;
+        if (!nearest || !nearest.anchor) {
+            return { point: baseAnchor };
+        }
+
+        const maxSnapDistanceWorld = 0.75;
+        if (Number.isFinite(nearest.distanceWorld) && nearest.distanceWorld > maxSnapDistanceWorld) {
+            return { point: baseAnchor };
+        }
+        const splitT = Number(nearest.t);
+        const sectionLength = Number.isFinite(obj.length) ? Number(obj.length) : Math.hypot(dx, dy);
+        const distToStart = Math.max(0, splitT * sectionLength);
+        const distToEnd = Math.max(0, (1 - splitT) * sectionLength);
+        const canSplit = !nearest.isEndpoint &&
+            distToStart >= Number(minSplitDistanceWorld) &&
+            distToEnd >= Number(minSplitDistanceWorld);
+        if (!canSplit) return { point: baseAnchor };
+
+        return {
+            point: { x: Number(nearest.anchor.x), y: Number(nearest.anchor.y) },
+            splitReference: {
+                wall: obj,
+                anchor: nearest.anchor
+            }
+        };
+    }
+
     function getDragStartSnapTargetAt(wizardRef, spellName, worldX, worldY) {
         const obj = getSameTypeObjectTargetAt(wizardRef, spellName, worldX, worldY);
         if (!obj) return null;
+        if (spellName === "wall" && obj.type === "wallSection") {
+            const wallStart = getWallBuildStartAnchorForObject(obj, worldX, worldY, 0.1);
+            if (!wallStart || !wallStart.point) return null;
+            const node = wizardRef.map.worldToNode(wallStart.point.x, wallStart.point.y);
+            return {
+                obj,
+                node,
+                point: { x: wallStart.point.x, y: wallStart.point.y },
+                splitReference: wallStart.splitReference || null
+            };
+        }
         const anchor = getGroundAnchorPointForObject(obj, worldX, worldY);
         if (!anchor) return null;
         if (spellName === "wall") {
@@ -3089,29 +2829,47 @@ const SpellSystem = (() => {
     function getVanishWallPreviewPolygonForHover(wizardRef, candidate, worldX, worldY) {
         if (!wizardRef || !candidate || candidate.gone || candidate.vanishing) return null;
         if (candidate.type !== "wallSection") return null;
-        if (typeof candidate.getVanishPreviewPolygon !== "function") return null;
+        if (typeof candidate.getVanishPreviewPolygonForRange !== "function") return null;
         if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
 
-        const travelPlan = buildVanishTravelPlan(wizardRef.x, wizardRef.y, worldX, worldY, {
-            speed: VANISH_DEFAULT_SPEED,
-            range: VANISH_DEFAULT_RANGE,
-            frameRateValue: frameRate,
-            mapRef: wizardRef.map || null
-        });
-        if (!travelPlan) return null;
-
-        const impactPoint = predictVanishImpactPoint(travelPlan);
-        if (!impactPoint || !Number.isFinite(impactPoint.x) || !Number.isFinite(impactPoint.y)) return null;
-
-        return candidate.getVanishPreviewPolygon(
-            { x: impactPoint.x, y: impactPoint.y },
-            { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD }
+        const mouseScreen = (
+            typeof mousePos !== "undefined" &&
+            mousePos &&
+            Number.isFinite(mousePos.screenX) &&
+            Number.isFinite(mousePos.screenY)
+        ) ? { x: mousePos.screenX, y: mousePos.screenY } : (
+            (typeof worldToScreen === "function")
+                ? worldToScreen({ x: Number(worldX), y: Number(worldY) })
+                : null
         );
+        if (!mouseScreen || !Number.isFinite(mouseScreen.x) || !Number.isFinite(mouseScreen.y)) return null;
+        if (typeof candidate.getSegmentAtScreenPoint !== "function") return null;
+
+        const hitSegment = candidate.getSegmentAtScreenPoint(
+            Number(mouseScreen.x),
+            Number(mouseScreen.y),
+            {
+                worldX: Number(worldX),
+                worldY: Number(worldY),
+                worldToScreenFn: (typeof worldToScreen === "function") ? worldToScreen : null,
+                viewscale: Number.isFinite(viewscale) ? Number(viewscale) : 1,
+                xyratio: Number.isFinite(xyratio) ? Number(xyratio) : 0.66
+            }
+        );
+        if (!hitSegment || !Number.isFinite(hitSegment.tStart) || !Number.isFinite(hitSegment.tEnd)) return null;
+
+        return candidate.getVanishPreviewPolygonForRange({
+            tStart: Number(hitSegment.tStart),
+            tEnd: Number(hitSegment.tEnd)
+        });
     }
 
     function getHoverTargetForCurrentSpell(wizardRef, worldX, worldY) {
         if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
         const spell = wizardRef.currentSpell;
+        if (spellSupportsObjectTargeting(spell)) {
+            return getObjectTargetAt(wizardRef, worldX, worldY);
+        }
         if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
             return getSameTypeObjectTargetAt(wizardRef, spell, worldX, worldY);
         }
@@ -3123,9 +2881,10 @@ const SpellSystem = (() => {
                 const placement = getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY);
                 return placement && placement.targetWall ? placement.targetWall : null;
             }
-        }
-        if (spell === "vanish") {
-            return getObjectTargetAt(wizardRef, worldX, worldY);
+            if (category === "roof") {
+                const placement = getRoofPlacementCandidate(wizardRef, worldX, worldY);
+                return placement && placement.targetWall ? placement.targetWall : null;
+            }
         }
         return null;
     }
@@ -3133,6 +2892,10 @@ const SpellSystem = (() => {
     function isValidHoverTargetForCurrentSpell(wizardRef, candidate, worldX, worldY) {
         if (!wizardRef || !candidate || candidate.gone || candidate.vanishing) return false;
         const spell = wizardRef.currentSpell;
+        if (spellSupportsObjectTargeting(spell)) {
+            if (hasSpellAlreadyTargetedObject(wizardRef, spell, candidate)) return false;
+            return isValidObjectTargetForSpell(spell, candidate, wizardRef);
+        }
         if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
             const objectType = getDragSpellObjectType(spell);
             if (!objectType) return false;
@@ -3148,10 +2911,12 @@ const SpellSystem = (() => {
                 const placement = getPlaceObjectPlacementCandidate(wizardRef, worldX, worldY);
                 return !!(placement && placement.targetWall === candidate);
             }
+            if (category === "roof") {
+                if (candidate.type !== "wallSection") return false;
+                const placement = getRoofPlacementCandidate(wizardRef, worldX, worldY);
+                return !!(placement && placement.targetWall === candidate && Array.isArray(placement.wallSections) && placement.wallSections.length >= 3);
+            }
             return false;
-        }
-        if (spell === "vanish") {
-            return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
         }
         return false;
     }
@@ -3161,6 +2926,7 @@ const SpellSystem = (() => {
         const category = (typeof wizardRef.selectedPlaceableCategory === "string")
             ? wizardRef.selectedPlaceableCategory.trim().toLowerCase()
             : "";
+        if (category === "roof") return getRoofPlacementCandidate(wizardRef, worldX, worldY);
         if (category !== "windows" && category !== "doors") return null;
 
         const placeableScale = Number.isFinite(wizardRef.selectedPlaceableScale)
@@ -3179,230 +2945,203 @@ const SpellSystem = (() => {
             Number.isFinite(mousePos.screenX) &&
             Number.isFinite(mousePos.screenY)
         ) ? { x: mousePos.screenX, y: mousePos.screenY } : worldToScreen({ x: worldX, y: worldY });
-
-        // Wall-mounted placement: iterate over all WallSectionUnit instances
-        // and find the best placement candidate under the mouse cursor.
-        const WSU = (typeof globalThis !== "undefined") ? globalThis.WallSectionUnit : null;
-        if (!WSU || !WSU._allSections || WSU._allSections.size === 0) return null;
-
+        if (!mouseScreen || !Number.isFinite(mouseScreen.x) || !Number.isFinite(mouseScreen.y)) return null;
         const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
         if (!worldToScreenFn) return null;
+
+        const pickResult = pickObjectViaRenderingColorId((obj) =>
+            !!(obj && obj.type === "wallSection" && !obj.gone && !obj.vanishing)
+        );
+        if (!pickResult || !pickResult.picked || pickResult.picked.type !== "wallSection") return null;
+        const section = pickResult.picked;
+        if (!section.startPoint || !section.endPoint) return null;
+        const profile = section.getWallProfile();
+        if (!profile) return null;
 
         const mapRef = wizardRef.map;
         const vs = Number.isFinite(viewscale) ? viewscale : 1;
         const xyr = Number.isFinite(xyratio) ? xyratio : 0.66;
 
-        const pointInQuad = (p, q0, q1, q2, q3) => {
-            const inTri = (pt, a, b, c) => {
-                const bc = barycentricAtPoint(pt.x, pt.y, a.x, a.y, b.x, b.y, c.x, c.y);
-                if (!bc) return false;
-                const eps = 1e-4;
-                return bc.u >= -eps && bc.v >= -eps && bc.w >= -eps;
-            };
-            return inTri(p, q0, q1, q2) || inTri(p, q0, q2, q3);
+        const wallHeight = Math.max(0, Number(section.height) || 0);
+        const halfT = Math.max(0.001, Number(section.thickness) || 0.001) * 0.5;
+
+        const sx = Number(section.startPoint.x);
+        const sy = Number(section.startPoint.y);
+        const ex = Number(section.endPoint.x);
+        const ey = Number(section.endPoint.y);
+        if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
+            !Number.isFinite(ex) || !Number.isFinite(ey)) return null;
+
+        const dx = ex - sx;
+        const dy = ey - sy;
+        const len = Math.hypot(dx, dy);
+        if (!(len > 1e-6)) return null;
+
+        const ux = dx / len;
+        const uy = dy / len;
+        const vx = -uy;
+        const vy = ux;
+        const { aLeft, aRight, bLeft, bRight } = profile;
+
+        const toScreen = (pt, z) => {
+            const s = worldToScreenFn(pt);
+            return { x: s.x, y: s.y - z * vs * xyr };
         };
 
-        let best = null;
+        const longFaceA = [toScreen(aLeft, 0), toScreen(bLeft, 0), toScreen(bLeft, wallHeight), toScreen(aLeft, wallHeight)];
+        const longFaceB = [toScreen(aRight, 0), toScreen(bRight, 0), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
+        const topFace = [toScreen(aLeft, wallHeight), toScreen(bLeft, wallHeight), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
+        const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+        const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
+        const facingSign = longAFront ? 1 : -1;
 
-        WSU._allSections.forEach(section => {
-            if (!section || !section.startPoint || !section.endPoint) return;
-            const profile = section.getWallProfile();
-            if (!profile) return;
+        const sectionStartScreen = (facingSign > 0) ? longFaceA[0] : longFaceB[0];
+        const sectionEndScreen = (facingSign > 0) ? longFaceA[1] : longFaceB[1];
+        const sdx = sectionEndScreen.x - sectionStartScreen.x;
+        const sdy = sectionEndScreen.y - sectionStartScreen.y;
+        const sLen2 = sdx * sdx + sdy * sdy;
+        if (!(sLen2 > 1e-6)) return null;
 
-            const wallHeight = Math.max(0, Number(section.height) || 0);
-            const halfT = Math.max(0.001, Number(section.thickness) || 0.001) * 0.5;
+        const wallPosition = (typeof section.getWallPositionAtScreenPoint === "function")
+            ? section.getWallPositionAtScreenPoint(
+                Number(mouseScreen.x),
+                Number(mouseScreen.y),
+                {
+                    worldX: Number(worldX),
+                    worldY: Number(worldY),
+                    worldToScreenFn,
+                    viewscale: vs,
+                    xyratio: xyr
+                }
+            )
+            : null;
+        const mouseRelX = mouseScreen.x - sectionStartScreen.x;
+        const mouseRelY = mouseScreen.y - sectionStartScreen.y;
+        const fallbackProjT = Math.max(0, Math.min(1,
+            (mouseRelX * sdx + mouseRelY * sdy) / sLen2));
+        const sectionProjT = Number.isFinite(wallPosition)
+            ? Math.max(0, Math.min(1, Number(wallPosition)))
+            : fallbackProjT;
 
-            const sx = Number(section.startPoint.x);
-            const sy = Number(section.startPoint.y);
-            const ex = Number(section.endPoint.x);
-            const ey = Number(section.endPoint.y);
-            if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
-                !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+        const sectionLength = len;
+        const halfWidth = windowWorldWidth * 0.5;
+        const fitsLength = sectionLength + 1e-6 >= windowWorldWidth;
+        const fitsHeight = windowWorldHeight <= wallHeight + 1e-6;
 
-            const dx = ex - sx;
-            const dy = ey - sy;
-            const len = Math.hypot(dx, dy);
-            if (!(len > 1e-6)) return;
+        let along = sectionProjT * sectionLength;
+        along = fitsLength
+            ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, along))
+            : Math.max(0, Math.min(sectionLength, along));
 
-            const ux = dx / len;
-            const uy = dy / len;
-            const vx = -uy;
-            const vy = ux;
-            const { aLeft, aRight, bLeft, bRight } = profile;
-
-            // Compute cap base heights
-            const adjHA = (typeof section.getAdjacentCollinearWallHeightAtEndpoint === "function")
-                ? section.getAdjacentCollinearWallHeightAtEndpoint("a") : null;
-            const adjHB = (typeof section.getAdjacentCollinearWallHeightAtEndpoint === "function")
-                ? section.getAdjacentCollinearWallHeightAtEndpoint("b") : null;
-            const capBaseA = Number.isFinite(adjHA) ? Math.max(0, Math.min(wallHeight, Number(adjHA))) : 0;
-            const capBaseB = Number.isFinite(adjHB) ? Math.max(0, Math.min(wallHeight, Number(adjHB))) : 0;
-
-            const toScreen = (pt, z) => {
-                const s = worldToScreenFn(pt);
-                return { x: s.x, y: s.y - z * vs * xyr };
-            };
-
-            // Screen-space face polygons
-            const longFaceA = [toScreen(aLeft, 0), toScreen(bLeft, 0), toScreen(bLeft, wallHeight), toScreen(aLeft, wallHeight)];
-            const longFaceB = [toScreen(aRight, 0), toScreen(bRight, 0), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
-            const capFaceStart = [toScreen(aRight, capBaseA), toScreen(aLeft, capBaseA), toScreen(aLeft, wallHeight), toScreen(aRight, wallHeight)];
-            const capFaceEnd = [toScreen(bLeft, capBaseB), toScreen(bRight, capBaseB), toScreen(bRight, wallHeight), toScreen(bLeft, wallHeight)];
-            const topFace = [toScreen(aLeft, wallHeight), toScreen(bLeft, wallHeight), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
-
-            const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-            const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
-            const startCapFront = faceDepth(capFaceStart) >= faceDepth(capFaceEnd);
-            const showStartCap = capBaseA < wallHeight - 1e-5;
-            const showEndCap = capBaseB < wallHeight - 1e-5;
-
-            const visiblePolygons = [];
-            visiblePolygons.push(longAFront ? longFaceA : longFaceB);
-            visiblePolygons.push(topFace);
-            if (startCapFront && showStartCap) visiblePolygons.push(capFaceStart);
-            if (!startCapFront && showEndCap) visiblePolygons.push(capFaceEnd);
-
-            const containsMouse = visiblePolygons.some(poly =>
-                pointInQuad(mouseScreen, poly[0], poly[1], poly[2], poly[3])
-            );
-            if (!containsMouse) return;
-
-            // Mouse is over this wall section – compute placement.
-            const facingSign = longAFront ? 1 : -1;
-            const sectionStartScreen = (facingSign > 0) ? longFaceA[0] : longFaceB[0];
-            const sectionEndScreen = (facingSign > 0) ? longFaceA[1] : longFaceB[1];
-            const sdx = sectionEndScreen.x - sectionStartScreen.x;
-            const sdy = sectionEndScreen.y - sectionStartScreen.y;
-            const sLen2 = sdx * sdx + sdy * sdy;
-            if (!(sLen2 > 1e-6)) return;
-
-            const mouseRelX = mouseScreen.x - sectionStartScreen.x;
-            const mouseRelY = mouseScreen.y - sectionStartScreen.y;
-            const sectionProjT = Math.max(0, Math.min(1,
-                (mouseRelX * sdx + mouseRelY * sdy) / sLen2));
-
-            const sectionLength = len;
-            const halfWidth = windowWorldWidth * 0.5;
-            const fitsLength = sectionLength + 1e-6 >= windowWorldWidth;
-            const fitsHeight = windowWorldHeight <= wallHeight + 1e-6;
-
-            let along = sectionProjT * sectionLength;
+        const sectionCenterAlong = sectionLength * 0.5;
+        const sectionCenterWorld = {
+            x: sx + ux * sectionCenterAlong + vx * halfT * facingSign,
+            y: sy + uy * sectionCenterAlong + vy * halfT * facingSign
+        };
+        const faceMinX = Math.min(sectionStartScreen.x, sectionEndScreen.x);
+        const faceMaxX = Math.max(sectionStartScreen.x, sectionEndScreen.x);
+        const faceSpanX = faceMaxX - faceMinX;
+        const centerSnapPx = 10;
+        let centerDistPx = Infinity;
+        if (faceSpanX > 1e-4) {
+            centerDistPx = Math.abs(mouseScreen.x - (faceMinX + faceMaxX) * 0.5);
+        } else {
+            let topMinY = Infinity, topMaxY = -Infinity;
+            for (let ti = 0; ti < topFace.length; ti++) {
+                if (topFace[ti].y < topMinY) topMinY = topFace[ti].y;
+                if (topFace[ti].y > topMaxY) topMaxY = topFace[ti].y;
+            }
+            if (Number.isFinite(topMinY) && Number.isFinite(topMaxY) && (topMaxY - topMinY) > 1e-4) {
+                centerDistPx = Math.abs(mouseScreen.y - (topMinY + topMaxY) * 0.5);
+            }
+        }
+        let centerSnapActive = false;
+        if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
             along = fitsLength
-                ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, along))
-                : Math.max(0, Math.min(sectionLength, along));
+                ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, sectionCenterAlong))
+                : Math.max(0, Math.min(sectionLength, sectionCenterAlong));
+            centerSnapActive = true;
+        }
 
-            // Center-snap when mouse is near section center
-            const sectionCenterAlong = sectionLength * 0.5;
-            const sectionCenterWorld = {
-                x: sx + ux * sectionCenterAlong + vx * halfT * facingSign,
-                y: sy + uy * sectionCenterAlong + vy * halfT * facingSign
-            };
-            const faceMinX = Math.min(sectionStartScreen.x, sectionEndScreen.x);
-            const faceMaxX = Math.max(sectionStartScreen.x, sectionEndScreen.x);
-            const faceSpanX = faceMaxX - faceMinX;
-            const centerSnapPx = 10;
-            let centerDistPx = Infinity;
-            if (faceSpanX > 1e-4) {
-                centerDistPx = Math.abs(mouseScreen.x - (faceMinX + faceMaxX) * 0.5);
-            } else {
-                let topMinY = Infinity, topMaxY = -Infinity;
-                for (let ti = 0; ti < topFace.length; ti++) {
-                    if (topFace[ti].y < topMinY) topMinY = topFace[ti].y;
-                    if (topFace[ti].y > topMaxY) topMaxY = topFace[ti].y;
-                }
-                if (Number.isFinite(topMinY) && Number.isFinite(topMaxY) && (topMaxY - topMinY) > 1e-4) {
-                    centerDistPx = Math.abs(mouseScreen.y - (topMinY + topMaxY) * 0.5);
-                }
-            }
-            let centerSnapActive = false;
-            if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
-                along = fitsLength
-                    ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, sectionCenterAlong))
-                    : Math.max(0, Math.min(sectionLength, sectionCenterAlong));
-                centerSnapActive = true;
-            }
+        const rotDeg = Math.atan2(uy, ux) * (180 / Math.PI);
+        const isDoorPlacement = category === "doors";
+        const hitboxHalfT = isDoorPlacement ? (halfT * 1.1) : halfT;
 
-            const rotDeg = Math.atan2(uy, ux) * (180 / Math.PI);
-            const isDoorPlacement = category === "doors";
-            const hitboxHalfT = isDoorPlacement ? (halfT * 1.1) : halfT;
+        let centerX = sx + ux * along;
+        let centerY = sy + uy * along;
+        let wallFaceCenterX = centerX + vx * halfT * facingSign;
+        let wallFaceCenterY = centerY + vy * halfT * facingSign;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") {
+            centerX = mapRef.wrapWorldX(centerX);
+            wallFaceCenterX = mapRef.wrapWorldX(wallFaceCenterX);
+        }
+        if (mapRef && typeof mapRef.wrapWorldY === "function") {
+            centerY = mapRef.wrapWorldY(centerY);
+            wallFaceCenterY = mapRef.wrapWorldY(wallFaceCenterY);
+        }
 
-            let centerX = sx + ux * along;
-            let centerY = sy + uy * along;
-            let wallFaceCenterX = centerX + vx * halfT * facingSign;
-            let wallFaceCenterY = centerY + vy * halfT * facingSign;
-            if (mapRef && typeof mapRef.wrapWorldX === "function") {
-                centerX = mapRef.wrapWorldX(centerX);
-                wallFaceCenterX = mapRef.wrapWorldX(wallFaceCenterX);
-            }
-            if (mapRef && typeof mapRef.wrapWorldY === "function") {
-                centerY = mapRef.wrapWorldY(centerY);
-                wallFaceCenterY = mapRef.wrapWorldY(wallFaceCenterY);
-            }
+        const normalBias = (category === "windows") ? 0.001 : 0;
+        const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
+        const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
+        const verticalOffset = (1 - selectedAnchorY) * windowWorldHeight;
+        let snappedX = desiredBaseX;
+        let snappedY = isDoorPlacement
+            ? (desiredBaseY - verticalOffset)
+            : desiredBaseY;
+        const snappedZ = (category === "windows") ? (wallHeight * 0.5) : 0;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") snappedX = mapRef.wrapWorldX(snappedX);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") snappedY = mapRef.wrapWorldY(snappedY);
 
-            const normalBias = (category === "windows") ? 0.001 : 0;
-            const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
-            const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
-            const verticalOffset = (1 - selectedAnchorY) * windowWorldHeight;
-            let snappedX = desiredBaseX;
-            let snappedY = isDoorPlacement
-                ? (desiredBaseY - verticalOffset)
-                : desiredBaseY;
-            const snappedZ = (category === "windows") ? (wallHeight * 0.5) : 0;
-            if (mapRef && typeof mapRef.wrapWorldX === "function") snappedX = mapRef.wrapWorldX(snappedX);
-            if (mapRef && typeof mapRef.wrapWorldY === "function") snappedY = mapRef.wrapWorldY(snappedY);
-
-            // Ground hitbox
-            const p1 = { x: centerX - ux * halfWidth + vx * hitboxHalfT, y: centerY - uy * halfWidth + vy * hitboxHalfT };
-            const p2 = { x: centerX + ux * halfWidth + vx * hitboxHalfT, y: centerY + uy * halfWidth + vy * hitboxHalfT };
-            const p3 = { x: centerX + ux * halfWidth - vx * hitboxHalfT, y: centerY + uy * halfWidth - vy * hitboxHalfT };
-            const p4 = { x: centerX - ux * halfWidth - vx * hitboxHalfT, y: centerY - uy * halfWidth - vy * hitboxHalfT };
-            const wrapPt = (pt) => ({
-                x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(pt.x) : pt.x,
-                y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(pt.y) : pt.y
-            });
-
-            const candidate = {
-                valid: fitsLength && fitsHeight,
-                reason: !fitsLength
-                    ? (isDoorPlacement ? "Door is wider than this wall section." : "Window is wider than this wall section.")
-                    : (!fitsHeight
-                        ? (isDoorPlacement ? "Door is taller than this wall." : "Window is taller than this wall.")
-                        : null),
-                targetWall: section,
-                mountedWallLineGroupId: section.id,
-                mountedSectionId: section.id,
-                mountedWallSectionUnitId: section.id,
-                mountedWallFacingSign: facingSign,
-                snappedX,
-                snappedY,
-                snappedZ,
-                snappedRotationDeg: rotDeg,
-                wallGroundHitboxPoints: [wrapPt(p1), wrapPt(p2), wrapPt(p3), wrapPt(p4)],
-                wallHeight,
-                wallThickness: halfT * 2,
-                centerSnapActive,
-                sectionCenterX: (mapRef && typeof mapRef.wrapWorldX === "function")
-                    ? mapRef.wrapWorldX(sectionCenterWorld.x) : sectionCenterWorld.x,
-                sectionCenterY: (mapRef && typeof mapRef.wrapWorldY === "function")
-                    ? mapRef.wrapWorldY(sectionCenterWorld.y) : sectionCenterWorld.y,
-                sectionFacingSign: facingSign,
-                sectionNormalX: vx,
-                sectionNormalY: vy,
-                sectionDirX: ux,
-                sectionDirY: uy,
-                wallFaceCenterX,
-                wallFaceCenterY,
-                placementHalfWidth: halfWidth,
-                placementCenterX: desiredBaseX,
-                placementCenterY: desiredBaseY
-            };
-
-            if (!best) {
-                best = candidate;
-            }
+        const p1 = { x: centerX - ux * halfWidth + vx * hitboxHalfT, y: centerY - uy * halfWidth + vy * hitboxHalfT };
+        const p2 = { x: centerX + ux * halfWidth + vx * hitboxHalfT, y: centerY + uy * halfWidth + vy * hitboxHalfT };
+        const p3 = { x: centerX + ux * halfWidth - vx * hitboxHalfT, y: centerY + uy * halfWidth - vy * hitboxHalfT };
+        const p4 = { x: centerX - ux * halfWidth - vx * hitboxHalfT, y: centerY - uy * halfWidth - vy * hitboxHalfT };
+        const wrapPt = (pt) => ({
+            x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(pt.x) : pt.x,
+            y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(pt.y) : pt.y
         });
 
-        return best;
+        return {
+            valid: fitsLength && fitsHeight,
+            reason: !fitsLength
+                ? (isDoorPlacement ? "Door is wider than this wall section." : "Window is wider than this wall section.")
+                : (!fitsHeight
+                    ? (isDoorPlacement ? "Door is taller than this wall." : "Window is taller than this wall.")
+                    : null),
+            targetWall: section,
+            mountedWallLineGroupId: section.id,
+            mountedSectionId: section.id,
+            mountedWallSectionUnitId: section.id,
+            mountedWallFacingSign: facingSign,
+            snappedX,
+            snappedY,
+            snappedZ,
+            snappedRotationDeg: rotDeg,
+            wallGroundHitboxPoints: [wrapPt(p1), wrapPt(p2), wrapPt(p3), wrapPt(p4)],
+            wallHeight,
+            wallThickness: halfT * 2,
+            centerSnapActive,
+            sectionCenterX: (mapRef && typeof mapRef.wrapWorldX === "function")
+                ? mapRef.wrapWorldX(sectionCenterWorld.x) : sectionCenterWorld.x,
+            sectionCenterY: (mapRef && typeof mapRef.wrapWorldY === "function")
+                ? mapRef.wrapWorldY(sectionCenterWorld.y) : sectionCenterWorld.y,
+            sectionFacingSign: facingSign,
+            sectionNormalX: vx,
+            sectionNormalY: vy,
+            sectionDirX: ux,
+            sectionDirY: uy,
+            wallFaceCenterX,
+            wallFaceCenterY,
+            placementHalfWidth: halfWidth,
+            placementCenterX: desiredBaseX,
+            placementCenterY: desiredBaseY
+        };
+    }
+
+    function getRoofPlacementCandidate(wizardRef, worldX, worldY) {
+        const roofApi = (typeof globalThis !== "undefined" && globalThis.Roof) ? globalThis.Roof : null;
+        if (!roofApi || typeof roofApi.getPlacementCandidate !== "function") return null;
+        return roofApi.getPlacementCandidate(wizardRef, worldX, worldY, { maxDepth: 12 });
     }
 
     function beginDragSpell(wizardRef, spellName, worldX, worldY) {
@@ -3413,19 +3152,41 @@ const SpellSystem = (() => {
         if (spellName === "wall") {
             if (!keysPressed[" "]) return false;
             const mapRef = wizardRef.map || null;
+            const wrappedMouseStart = wrapWorldPointForMap(mapRef, worldX, worldY);
+            const nearestAnchor = (
+                mapRef && typeof mapRef.worldToNodeOrMidpoint === "function"
+            ) ? mapRef.worldToNodeOrMidpoint(worldX, worldY) : null;
             const startPoint = (snapTarget && snapTarget.point)
                 ? wrapWorldPointForMap(mapRef, Number(snapTarget.point.x), Number(snapTarget.point.y))
-                : wrapWorldPointForMap(mapRef, worldX, worldY);
+                : (
+                    nearestAnchor && Number.isFinite(nearestAnchor.x) && Number.isFinite(nearestAnchor.y)
+                        ? wrapWorldPointForMap(
+                            mapRef,
+                            Number(nearestAnchor.x),
+                            Number(nearestAnchor.y)
+                        )
+                        : wrapWorldPointForMap(mapRef, worldX, worldY)
+                );
             if (!startPoint) return false;
             wizardRef.wallLayoutMode = true;
             wizardRef.wallStartPoint = startPoint;
             wizardRef.wallStartReferenceWall = (snapTarget && snapTarget.obj && snapTarget.obj.type === "wallSection")
                 ? snapTarget.obj
                 : null;
-            wizardRef.wallDragMouseStartWorld = {
-                x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX,
-                y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY
-            };
+            wizardRef.wallStartSplitReference = (
+                snapTarget &&
+                snapTarget.splitReference &&
+                snapTarget.splitReference.wall &&
+                snapTarget.splitReference.anchor
+            ) ? {
+                wall: snapTarget.splitReference.wall,
+                anchor: snapTarget.splitReference.anchor
+            } : null;
+            wizardRef.wallStartFromExistingWall = !!wizardRef.wallStartReferenceWall;
+            wizardRef.wallDragMouseStartWorld = wizardRef.wallStartFromExistingWall
+                ? { x: Number(wrappedMouseStart.x), y: Number(wrappedMouseStart.y) }
+                : { x: Number(startPoint.x), y: Number(startPoint.y) };
+            wizardRef.wallPreviewPlacement = null;
             ensureDragPreview(wizardRef, "wall");
             return true;
         }
@@ -3469,18 +3230,15 @@ const SpellSystem = (() => {
             if (wizardRef.currentSpell === "vanish") cancelDragSpell(wizardRef, "vanish");
             return false;
         }
-        if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint && wizardRef.phantomWall) {
+        if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint) {
             const adjustedPoint = getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY);
             if (!adjustedPoint) return false;
-            updatePhantomWall(wizardRef.wallStartPoint.x, wizardRef.wallStartPoint.y, adjustedPoint.x, adjustedPoint.y);
             return true;
         }
-        if (wizardRef.currentSpell === "buildroad" && wizardRef.roadLayoutMode && wizardRef.roadStartPoint && wizardRef.phantomRoad) {
-            updatePhantomRoad(wizardRef.roadStartPoint.x, wizardRef.roadStartPoint.y, worldX, worldY);
+        if (wizardRef.currentSpell === "buildroad" && wizardRef.roadLayoutMode && wizardRef.roadStartPoint) {
             return true;
         }
-        if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint && wizardRef.phantomFirewall) {
-            updatePhantomFirewall(wizardRef.firewallStartPoint.x, wizardRef.firewallStartPoint.y, worldX, worldY);
+        if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint) {
             return true;
         }
         if (wizardRef.currentSpell === "vanish" && wizardRef.vanishDragMode) {
@@ -3500,9 +3258,68 @@ const SpellSystem = (() => {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
-            const endPoint = adjustedPoint;
             const startPoint = wizardRef.wallStartPoint;
-            if (pointsMatchWorld(wizardRef.map, startPoint, endPoint)) {
+            let placementStartPoint = startPoint;
+            let placementEndPoint = adjustedPoint;
+            const placementOptions = {
+                rawStartWorld: wizardRef.wallDragMouseStartWorld || startPoint,
+                startFromExistingWall: !!wizardRef.wallStartFromExistingWall,
+                startReferenceWall: wizardRef.wallStartReferenceWall || null,
+                startSplitReference: wizardRef.wallStartSplitReference || null,
+                endSplitReference: null
+            };
+
+            const previewPlacement = (
+                wizardRef.wallPreviewPlacement &&
+                typeof wizardRef.wallPreviewPlacement === "object"
+            ) ? wizardRef.wallPreviewPlacement : null;
+            if (
+                previewPlacement &&
+                previewPlacement.startWorld &&
+                previewPlacement.endWorld &&
+                pointsMatchWorld(wizardRef.map, startPoint, previewPlacement.startWorld)
+            ) {
+                placementStartPoint = previewPlacement.startWorld;
+                placementEndPoint = previewPlacement.endWorld;
+                if (
+                    previewPlacement.rawStartWorld &&
+                    Number.isFinite(previewPlacement.rawStartWorld.x) &&
+                    Number.isFinite(previewPlacement.rawStartWorld.y)
+                ) {
+                    placementOptions.rawStartWorld = {
+                        x: Number(previewPlacement.rawStartWorld.x),
+                        y: Number(previewPlacement.rawStartWorld.y)
+                    };
+                }
+                if (Array.isArray(previewPlacement.segments)) {
+                    placementOptions.preResolvedSegments = previewPlacement.segments;
+                }
+                if (previewPlacement.plan) {
+                    placementOptions.preResolvedPlan = previewPlacement.plan;
+                }
+            }
+
+            const findEndSplitReference = (probePoint) => {
+                if (!probePoint || !Number.isFinite(probePoint.x) || !Number.isFinite(probePoint.y)) return null;
+                const endSnapTarget = getDragStartSnapTargetAt(wizardRef, "wall", Number(probePoint.x), Number(probePoint.y));
+                if (!endSnapTarget || !endSnapTarget.splitReference) return null;
+                const splitRef = endSnapTarget.splitReference;
+                if (!splitRef.wall || !splitRef.anchor) return null;
+                const startSplit = placementOptions.startSplitReference;
+                if (
+                    startSplit &&
+                    startSplit.wall === splitRef.wall &&
+                    pointsMatchWorld(wizardRef.map, startSplit.anchor, splitRef.anchor)
+                ) {
+                    return null;
+                }
+                return splitRef;
+            };
+            placementOptions.endSplitReference = findEndSplitReference(placementEndPoint)
+                || findEndSplitReference(adjustedPoint)
+                || null;
+
+            if (pointsMatchWorld(wizardRef.map, placementStartPoint, placementEndPoint)) {
                 cancelDragSpell(wizardRef, "wall");
                 return true;
             }
@@ -3513,12 +3330,14 @@ const SpellSystem = (() => {
                     ? wizardRef.selectedWallThickness : 0.1;
                 const height = Number.isFinite(wizardRef.selectedWallHeight)
                     ? wizardRef.selectedWallHeight : 1;
+                const wallTexturePath = getSelectedWallTexture(wizardRef);
                 const result = WallSectionUnit.createPlacementFromWorldPoints(
-                    wizardRef.map, startPoint, endPoint, {
+                    wizardRef.map, placementStartPoint, placementEndPoint, {
                         thickness,
                         height,
                         bottomZ: 0,
-                        autoMergeContinuous: false
+                        wallTexturePath,
+                        ...placementOptions
                     }
                 );
                 if (result && Array.isArray(result.sections)) {
@@ -3744,10 +3563,11 @@ const SpellSystem = (() => {
             obj &&
             !obj.gone &&
             !obj.vanishing &&
+            isValidObjectTargetForSpell(activeSpell, obj, wizardRef) &&
             !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
         );
 
-        const pickResult = pickObjectViaRenderingColorId(worldX, worldY, (obj) =>
+        const pickResult = pickObjectViaRenderingColorId((obj) =>
             canTargetObject(obj)
         );
         if (!pickResult || !pickResult.attempted) return null;
@@ -3792,7 +3612,7 @@ const SpellSystem = (() => {
         }
 
         if (wizardRef.currentSpell === "teleport") {
-            const projectile = new Teleport();
+            const projectile = new globalThis.Teleport();
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
             wizardRef.castDelay = true;
             projectiles.push(projectile.cast(worldX, worldY));
@@ -3904,6 +3724,15 @@ const SpellSystem = (() => {
         }
 
         let clickTarget = getObjectTargetAt(wizardRef, worldX, worldY);
+        if (wizardRef.currentSpell === "editscript") {
+            if (!keysPressed[" "]) return;
+            if (!clickTarget) {
+                message("Hold space and click an object to edit its script.");
+                return;
+            }
+            openScriptEditorForTarget(clickTarget);
+            return;
+        }
         if (wizardRef.currentSpell === "treegrow") clickTarget = null;
         if (
             wizardRef.currentSpell === "treegrow" &&
@@ -3924,19 +3753,21 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell === "grenades") {
             if (!wizardRef.inventory.includes("grenades") || wizardRef.inventory.grenades <= 0) return;
             wizardRef.inventory.grenades--;
-            projectile = new Grenade();
+            projectile = new globalThis.Grenade();
         } else if (wizardRef.currentSpell === "rocks") {
-            projectile = new Rock();
+            projectile = new globalThis.Rock();
         } else if (wizardRef.currentSpell === "fireball") {
-            projectile = new Fireball();
+            projectile = new globalThis.Fireball();
         } else if (wizardRef.currentSpell === "vanish") {
-            projectile = new Vanish();
+            projectile = new globalThis.Vanish();
         } else if (wizardRef.currentSpell === "treegrow") {
-            projectile = new TreeGrow();
+            projectile = new globalThis.TreeGrow();
         } else if (wizardRef.currentSpell === "buildroad") {
-            projectile = new BuildRoad();
+            projectile = new globalThis.BuildRoad();
         } else if (wizardRef.currentSpell === "placeobject") {
-            projectile = new PlaceObject();
+            projectile = new globalThis.PlaceObject();
+        } else if (wizardRef.currentSpell === "spawnanimal") {
+            projectile = new globalThis.SpawnAnimal();
         }
 
         if (!projectile) return;
@@ -3958,15 +3789,20 @@ const SpellSystem = (() => {
         return SPELL_DEFS.map(spell => {
             const key = spell.name === "firewall"
                 ? "F+W"
-                : Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
+                : spell.name === "editscript"
+                    ? "E+T"
+                    : Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
+            if (spell.name === "wall") {
+                return {...spell, key, icon: getWallSpellIcon(wizardRef)};
+            }
             if (spell.name === "buildroad") {
                 return {...spell, key, icon: getRoadSpellIcon(wizardRef)};
             }
             if (spell.name === "treegrow") {
                 return {...spell, key, icon: getTreeSpellIcon(wizardRef)};
             }
-            if (spell.name === "placeobject") {
-                return {...spell, key, icon: getPlaceObjectSpellIcon(wizardRef)};
+            if (spell.name === "spawnanimal") {
+                return {...spell, key, icon: getSpawnAnimalSpellIcon(wizardRef)};
             }
             return {...spell, key};
         });
@@ -4181,34 +4017,20 @@ const SpellSystem = (() => {
         renderTreeSelector(wizardRef);
     }
 
-    function renderPlaceableCategorySelector(wizardRef) {
-        const $grid = $("#spellGrid");
+    function renderEditorCategorySelector(wizardRef) {
+        const $grid = $("#editorGrid");
         $grid.empty();
         $grid.css({
             display: "",
             "flex-direction": "",
             gap: ""
         });
-        const backButton = $("<div>")
-            .addClass("spellIcon")
-            .css({
-                "display": "flex",
-                "align-items": "center",
-                "justify-content": "center",
-                "font-size": "13px",
-                "font-weight": "bold",
-                "color": "#ffffff",
-                "background": "rgba(20,20,20,0.9)"
-            })
-            .text("Back")
-            .click(() => {
-                spellMenuMode = "main";
-                refreshSpellSelector(wizardRef);
-            });
-        $grid.append(backButton);
 
-        getPlaceableCategories().forEach(category => {
-            const selectedTexture = getSelectedPlaceableTextureForCategory(wizardRef, category);
+        const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
+        EDITOR_CATEGORIES.forEach(category => {
+            const selectedTexture = (category === "powerups")
+                ? getPowerupEditorCategoryIcon(wizardRef)
+                : getSelectedPlaceableTextureForCategory(wizardRef, category);
             const icon = $("<div>")
                 .addClass("spellIcon")
                 .css({
@@ -4218,24 +4040,43 @@ const SpellSystem = (() => {
                 })
                 .attr("title", category)
                 .click(() => {
-                    setSelectedPlaceableCategory(wizardRef, category);
-                    placeableMenuCategory = category;
-                    spellMenuMode = "placeable-items";
-                    renderPlaceableItemSelector(wizardRef, category);
-                    fetchPlaceableImages().then(() => {
-                        if (spellMenuMode === "placeable-items" && placeableMenuCategory === category) {
-                            renderPlaceableItemSelector(wizardRef, category);
-                        }
-                    });
+                    if (category === "powerups") {
+                        wizardRef.selectedEditorCategory = "powerups";
+                        setCurrentSpell(wizardRef, "blackdiamond");
+                    } else {
+                        setSelectedPlaceableCategory(wizardRef, category);
+                        wizardRef.selectedEditorCategory = category;
+                        refreshSelectedPlaceableMetadata(wizardRef);
+                        setCurrentSpell(wizardRef, "placeobject");
+                    }
+                    refreshEditorSelector(wizardRef);
+                    $("#editorMenu").addClass("hidden");
+                })
+                .on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    editorMenuMode = "items";
+                    editorMenuCategory = category;
+                    renderEditorItemSelector(wizardRef, category);
+                    if (category !== "powerups") {
+                        fetchPlaceableImages({ forceRefresh: true }).then(() => {
+                            if (editorMenuMode === "items" && editorMenuCategory === category) {
+                                renderEditorItemSelector(wizardRef, category);
+                            }
+                        });
+                    }
                 });
+            if (selectedEditorCategory === category) {
+                icon.addClass("selected");
+            }
             $grid.append(icon);
         });
     }
 
-    function renderPlaceableItemSelector(wizardRef, category) {
-        const safeCategory = PLACEABLE_CATEGORIES.includes(category) ? category : DEFAULT_PLACEABLE_CATEGORY;
-        placeableMenuCategory = safeCategory;
-        const $grid = $("#spellGrid");
+    function renderEditorItemSelector(wizardRef, category) {
+        const safeCategory = EDITOR_CATEGORIES.includes(category) ? category : DEFAULT_PLACEABLE_CATEGORY;
+        editorMenuCategory = safeCategory;
+        const $grid = $("#editorGrid");
         $grid.empty();
         $grid.css({
             display: "",
@@ -4255,14 +4096,37 @@ const SpellSystem = (() => {
             })
             .text("Back")
             .click(() => {
-                spellMenuMode = "placeable-categories";
-                renderPlaceableCategorySelector(wizardRef);
+                editorMenuMode = "categories";
+                renderEditorCategorySelector(wizardRef);
             });
         $grid.append(backButton);
 
+        if (safeCategory === "powerups") {
+            const preview = getPowerupPlacementPreviewConfig(wizardRef);
+            const texturePath = (preview && typeof preview.imagePath === "string" && preview.imagePath.length > 0)
+                ? preview.imagePath
+                : POWERUP_PLACEMENT_IMAGE_PATH;
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${texturePath}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", "blackdiamond")
+                .click(() => {
+                    wizardRef.selectedEditorCategory = "powerups";
+                    setCurrentSpell(wizardRef, "blackdiamond");
+                    refreshEditorSelector(wizardRef);
+                    $("#editorMenu").addClass("hidden");
+                });
+            $grid.append(icon);
+            return;
+        }
+
         const selectedTexture = getSelectedPlaceableTextureForCategory(wizardRef, safeCategory);
         const texturePaths = getPlaceableImageList(safeCategory);
-        texturePaths.forEach(texturePath => {
+        const buildTextureIcon = (texturePath) => {
             const icon = $("<div>")
                 .addClass("spellIcon")
                 .css({
@@ -4276,29 +4140,132 @@ const SpellSystem = (() => {
                     wizardRef.selectedPlaceableByCategory[safeCategory] = texturePath;
                     wizardRef.selectedPlaceableCategory = safeCategory;
                     wizardRef.selectedPlaceableTexturePath = texturePath;
+                    wizardRef.selectedEditorCategory = safeCategory;
                     normalizePlaceableSelections(wizardRef);
                     refreshSelectedPlaceableMetadata(wizardRef);
-                    spellMenuMode = "main";
                     setCurrentSpell(wizardRef, "placeobject");
-                    $("#spellMenu").addClass("hidden");
+                    refreshEditorSelector(wizardRef);
+                    $("#editorMenu").addClass("hidden");
                 });
             if (texturePath === selectedTexture) {
                 icon.addClass("selected");
             }
-            $grid.append(icon);
+            return icon;
+        };
+
+        if (safeCategory === "roof") {
+            $grid.css({
+                display: "flex",
+                "flex-direction": "column",
+                gap: "10px",
+                color: "#ffffff",
+                "min-width": "220px"
+            });
+            backButton.detach();
+            const $topRow = $("<div>")
+                .css({
+                    display: "flex",
+                    "align-items": "flex-start",
+                    "flex-wrap": "wrap",
+                    gap: "6px"
+                });
+            $topRow.append(backButton);
+            const $textureRow = $("<div>")
+                .css({
+                    display: "flex",
+                    "flex-wrap": "wrap",
+                    gap: "6px"
+                });
+            texturePaths.forEach(texturePath => {
+                $textureRow.append(buildTextureIcon(texturePath));
+            });
+            $topRow.append($textureRow);
+            $grid.append($topRow);
+
+            const roofOverhang = getSelectedRoofOverhang(wizardRef);
+            const roofPeakHeight = getSelectedRoofPeakHeight(wizardRef);
+
+            const $overhangLabel = $("<div>")
+                .text(`Overhang: ${roofOverhang.toFixed(4)} map units`)
+                .css({ color: "#ffffff", "font-size": "13px" });
+            const $overhangSlider = $("<input>")
+                .attr({
+                    type: "range",
+                    min: ROOF_OVERHANG_MIN,
+                    max: ROOF_OVERHANG_MAX,
+                    step: ROOF_OVERHANG_STEP,
+                    value: roofOverhang
+                })
+                .css({
+                    width: "100%",
+                    "accent-color": "#ffd700",
+                    cursor: "pointer"
+                })
+                .on("input change", event => {
+                    const value = quantizeToStep(event.target.value, ROOF_OVERHANG_MIN, ROOF_OVERHANG_MAX, ROOF_OVERHANG_STEP);
+                    wizardRef.selectedRoofOverhang = value;
+                    $overhangLabel.text(`Overhang: ${value.toFixed(4)} map units`);
+                });
+
+            const $peakHeightLabel = $("<div>")
+                .text(`Peak Height: ${roofPeakHeight.toFixed(2)} map units`)
+                .css({ color: "#ffffff", "font-size": "13px" });
+            const $peakHeightSlider = $("<input>")
+                .attr({
+                    type: "range",
+                    min: ROOF_PEAK_HEIGHT_MIN,
+                    max: ROOF_PEAK_HEIGHT_MAX,
+                    step: ROOF_PEAK_HEIGHT_STEP,
+                    value: roofPeakHeight
+                })
+                .css({
+                    width: "100%",
+                    "accent-color": "#ffd700",
+                    cursor: "pointer"
+                })
+                .on("input change", event => {
+                    const value = quantizeToStep(event.target.value, ROOF_PEAK_HEIGHT_MIN, ROOF_PEAK_HEIGHT_MAX, ROOF_PEAK_HEIGHT_STEP);
+                    wizardRef.selectedRoofPeakHeight = value;
+                    $peakHeightLabel.text(`Peak Height: ${value.toFixed(2)} map units`);
+                });
+
+            $grid.append($("<div>").text("Overhang").css({ color: "#ffffff", "font-weight": "bold" }));
+            $grid.append($overhangSlider);
+            $grid.append($overhangLabel);
+            $grid.append($("<div>").text("Peak Height").css({ color: "#ffffff", "font-weight": "bold" }));
+            $grid.append($peakHeightSlider);
+            $grid.append($peakHeightLabel);
+            return;
+        }
+
+        texturePaths.forEach(texturePath => {
+            $grid.append(buildTextureIcon(texturePath));
         });
     }
 
-    function openPlaceableSelector(wizardRef) {
-        spellMenuMode = "placeable-categories";
-        $("#spellMenu").removeClass("hidden");
-        placeableMenuCategory = getSelectedPlaceableCategory(wizardRef);
-        renderPlaceableCategorySelector(wizardRef);
-        fetchPlaceableImages().then(() => {
-            if (spellMenuMode === "placeable-items") {
-                renderPlaceableItemSelector(wizardRef, placeableMenuCategory || getSelectedPlaceableCategory(wizardRef));
-            } else if (spellMenuMode === "placeable-categories") {
-                renderPlaceableCategorySelector(wizardRef);
+    function refreshEditorSelector(wizardRef) {
+        if (!wizardRef) return;
+        const $selectedEditor = $("#selectedEditor");
+        if ($selectedEditor.length) {
+            $selectedEditor.css("background-image", `url('${getSelectedEditorIcon(wizardRef)}')`);
+        }
+        if (editorMenuMode === "items") {
+            renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
+            return;
+        }
+        renderEditorCategorySelector(wizardRef);
+    }
+
+    function openEditorSelector(wizardRef) {
+        editorMenuMode = "categories";
+        $("#editorMenu").removeClass("hidden");
+        editorMenuCategory = normalizeSelectedEditorCategory(wizardRef);
+        renderEditorCategorySelector(wizardRef);
+        fetchPlaceableImages({ forceRefresh: true }).then(() => {
+            if (editorMenuMode === "items") {
+                renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
+            } else if (editorMenuMode === "categories") {
+                renderEditorCategorySelector(wizardRef);
             }
         });
     }
@@ -4334,6 +4301,43 @@ const SpellSystem = (() => {
 
         const wallHeight = getSelectedWallHeight(wizardRef);
         const wallThickness = getSelectedWallThickness(wizardRef);
+        const selectedWallTexture = getSelectedWallTexture(wizardRef);
+
+        const $topRow = $("<div>")
+            .css({
+                display: "flex",
+                "align-items": "flex-start",
+                "flex-wrap": "wrap",
+                gap: "6px"
+            });
+        $back.detach();
+        $topRow.append($back);
+        const $textureRow = $("<div>")
+            .css({
+                display: "flex",
+                "flex-wrap": "wrap",
+                gap: "6px"
+            });
+        wallTexturePaths.forEach(texturePath => {
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${texturePath}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", decodeURIComponent((texturePath.split("/").pop() || texturePath)))
+                .on("click", () => {
+                    wizardRef.selectedWallTexture = texturePath;
+                    renderWallSelector(wizardRef);
+                });
+            if (texturePath === selectedWallTexture) {
+                icon.addClass("selected");
+            }
+            $textureRow.append(icon);
+        });
+        $topRow.append($textureRow);
+        $grid.append($topRow);
 
         const $heightLabel = $("<div>")
             .text(`Height: ${wallHeight.toFixed(1)}`)
@@ -4391,6 +4395,142 @@ const SpellSystem = (() => {
         spellMenuMode = "wall";
         $("#spellMenu").removeClass("hidden");
         renderWallSelector(wizardRef);
+        fetchWallTextures().then(() => {
+            if (spellMenuMode === "wall") {
+                renderWallSelector(wizardRef);
+            }
+        });
+    }
+
+    function getAnimalFrameCSS(typeName) {
+        const typeDef = (typeof SpawnAnimal !== "undefined" && Array.isArray(SpawnAnimal.ANIMAL_TYPES))
+            ? SpawnAnimal.ANIMAL_TYPES.find(t => t.name === typeName)
+            : null;
+        const fc = typeDef && typeDef.frameCount;
+        if (!fc) return {};
+        return {
+            "background-size": `${(fc.x || 1) * 100}% ${(fc.y || 1) * 100}%`,
+            "background-position": "0 0"
+        };
+    }
+
+    function getSpawnAnimalSpellIcon(wizardRef) {
+        const selectedType = (wizardRef && typeof wizardRef.selectedAnimalType === "string")
+            ? wizardRef.selectedAnimalType
+            : "squirrel";
+        const typeDef = (typeof SpawnAnimal !== "undefined" && Array.isArray(SpawnAnimal.ANIMAL_TYPES))
+            ? SpawnAnimal.ANIMAL_TYPES.find(t => t.name === selectedType)
+            : null;
+        return (typeDef && typeDef.icon) ? typeDef.icon : "/assets/images/animals/squirrel.png";
+    }
+
+    function renderAnimalSelector(wizardRef) {
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "flex",
+            "flex-direction": "column",
+            gap: "6px",
+            padding: "8px",
+            color: "#ffffff",
+            "min-width": "220px"
+        });
+
+        const $back = $("<button>")
+            .text("Back")
+            .css({
+                "align-self": "flex-start",
+                padding: "4px 8px",
+                "font-size": "12px",
+                cursor: "pointer",
+                color: "#ffffff",
+                background: "rgba(20,20,20,0.95)",
+                border: "1px solid #ffd700",
+                "border-radius": "4px"
+            })
+            .on("click", () => {
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
+            });
+        $grid.append($back);
+
+        const animalTypes = (typeof SpawnAnimal !== "undefined" && Array.isArray(SpawnAnimal.ANIMAL_TYPES))
+            ? SpawnAnimal.ANIMAL_TYPES
+            : [];
+        const selectedType = (wizardRef && typeof wizardRef.selectedAnimalType === "string")
+            ? wizardRef.selectedAnimalType
+            : "squirrel";
+
+        // Animal type icons row
+        const $typeRow = $("<div>")
+            .css({
+                display: "flex",
+                "flex-wrap": "wrap",
+                gap: "6px"
+            });
+        animalTypes.forEach(typeDef => {
+            const fc = typeDef.frameCount || {x:1, y:1};
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${typeDef.icon}')`,
+                    "background-size": `${(fc.x || 1) * 100}% ${(fc.y || 1) * 100}%`,
+                    "background-position": "0 0"
+                })
+                .attr("title", typeDef.name.charAt(0).toUpperCase() + typeDef.name.slice(1))
+                .on("click", () => {
+                    wizardRef.selectedAnimalType = typeDef.name;
+                    renderAnimalSelector(wizardRef);
+                });
+            if (typeDef.name === selectedType) {
+                icon.addClass("selected");
+            }
+            $typeRow.append(icon);
+        });
+        $grid.append($typeRow);
+
+        // Size slider (log scale: 25%–400%, 100% in the middle)
+        const currentScale = (wizardRef && Number.isFinite(wizardRef.selectedAnimalSizeScale))
+            ? wizardRef.selectedAnimalSizeScale
+            : 1;
+        const sliderValue = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.scaleToSlider === "function")
+            ? SpawnAnimal.scaleToSlider(currentScale)
+            : 0.5;
+
+        const $sizeLabel = $("<div>")
+            .text(`Size: ${Math.round(currentScale * 100)}%`)
+            .css({ color: "#ffffff", "font-size": "13px" });
+        const $sizeSlider = $("<input>")
+            .attr({
+                type: "range",
+                min: 0,
+                max: 1,
+                step: 0.005,
+                value: sliderValue
+            })
+            .css({
+                width: "100%",
+                "accent-color": "#ffd700",
+                cursor: "pointer"
+            })
+            .on("input change", event => {
+                const t = parseFloat(event.target.value);
+                const scale = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.sliderToScale === "function")
+                    ? SpawnAnimal.sliderToScale(t)
+                    : 1;
+                wizardRef.selectedAnimalSizeScale = scale;
+                $sizeLabel.text(`Size: ${Math.round(scale * 100)}%`);
+            });
+
+        $grid.append($("<div>").text("Animal Size").css({ color: "#ffffff", "font-weight": "bold" }));
+        $grid.append($sizeSlider);
+        $grid.append($sizeLabel);
+    }
+
+    function openAnimalSelector(wizardRef) {
+        spellMenuMode = "animal";
+        $("#spellMenu").removeClass("hidden");
+        renderAnimalSelector(wizardRef);
     }
 
     function refreshSpellSelector(wizardRef) {
@@ -4403,16 +4543,12 @@ const SpellSystem = (() => {
             renderTreeSelector(wizardRef);
             return;
         }
-        if (spellMenuMode === "placeable-items") {
-            renderPlaceableItemSelector(wizardRef, placeableMenuCategory || getSelectedPlaceableCategory(wizardRef));
-            return;
-        }
-        if (spellMenuMode === "placeable-categories") {
-            renderPlaceableCategorySelector(wizardRef);
-            return;
-        }
         if (spellMenuMode === "wall") {
             renderWallSelector(wizardRef);
+            return;
+        }
+        if (spellMenuMode === "animal") {
+            renderAnimalSelector(wizardRef);
             return;
         }
         $("#spellGrid").css({
@@ -4423,17 +4559,31 @@ const SpellSystem = (() => {
         wizardRef.spells = buildSpellList(wizardRef);
         const currentSpell = wizardRef.spells.find(s => s.name === wizardRef.currentSpell);
         if (currentSpell) {
-            $("#selectedSpell").css("background-image", `url('${currentSpell.icon}')`);
+            const selCss = {
+                "background-image": `url('${currentSpell.icon}')`,
+                "background-size": "",
+                "background-position": ""
+            };
+            if (currentSpell.name === "spawnanimal") {
+                const selectedType = (wizardRef && wizardRef.selectedAnimalType) || "squirrel";
+                Object.assign(selCss, getAnimalFrameCSS(selectedType));
+            }
+            $("#selectedSpell").css(selCss);
         }
 
         $("#spellGrid").empty();
         wizardRef.spells.forEach(spell => {
+            const iconCss = {
+                "background-image": `url('${spell.icon}')`,
+                "position": "relative"
+            };
+            if (spell.name === "spawnanimal") {
+                const selectedType = (wizardRef && wizardRef.selectedAnimalType) || "squirrel";
+                Object.assign(iconCss, getAnimalFrameCSS(selectedType));
+            }
             const spellIcon = $("<div>")
                 .addClass("spellIcon")
-                .css({
-                    "background-image": `url('${spell.icon}')`,
-                    "position": "relative"
-                })
+                .css(iconCss)
                 .attr("data-spell", spell.name)
                 .click(() => {
                     setCurrentSpell(wizardRef, spell.name);
@@ -4458,11 +4608,11 @@ const SpellSystem = (() => {
                     event.stopPropagation();
                     openTreeSelector(wizardRef);
                 });
-            } else if (spell.name === "placeobject") {
+            } else if (spell.name === "spawnanimal") {
                 spellIcon.on("contextmenu", event => {
                     event.preventDefault();
                     event.stopPropagation();
-                    openPlaceableSelector(wizardRef);
+                    openAnimalSelector(wizardRef);
                 });
             }
 
@@ -4495,6 +4645,9 @@ const SpellSystem = (() => {
         if (!wizardRef) return;
         const previousSpell = wizardRef.currentSpell;
         spellMenuMode = "main";
+        if (spellName !== "editscript") {
+            closeScriptEditorPanel();
+        }
         if (spellName !== "wall") cancelDragSpell(wizardRef, "wall");
         if (spellName !== "buildroad") cancelDragSpell(wizardRef, "buildroad");
         if (spellName !== "firewall") cancelDragSpell(wizardRef, "firewall");
@@ -4507,7 +4660,14 @@ const SpellSystem = (() => {
             }
         }
         wizardRef.spells = buildSpellList(wizardRef);
+        if (spellName === "blackdiamond") {
+            wizardRef.selectedEditorCategory = "powerups";
+        } else if (spellName === "placeobject") {
+            wizardRef.selectedEditorCategory = getSelectedPlaceableCategory(wizardRef);
+        }
+        normalizeSelectedEditorCategory(wizardRef);
         refreshSpellSelector(wizardRef);
+        refreshEditorSelector(wizardRef);
         if (wizardRef.currentSpell !== "treegrow") {
             stopTreeGrowthChannel(wizardRef, false);
         }
@@ -4518,23 +4678,35 @@ const SpellSystem = (() => {
         getSelectedFlooringTexture(wizardRef);
         getSelectedTreeTextureVariant(wizardRef);
         normalizePlaceableSelections(wizardRef);
+        normalizeSelectedEditorCategory(wizardRef);
         getSelectedPowerupPlacementScale(wizardRef);
         getSelectedWallHeight(wizardRef);
         getSelectedWallThickness(wizardRef);
+        getSelectedWallTexture(wizardRef);
+        getSelectedRoofOverhang(wizardRef);
+        getSelectedRoofPeakHeight(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
         normalizeActiveAuras(wizardRef);
-        if (!wizardRef.currentSpell || !wizardRef.spells.some(s => s.name === wizardRef.currentSpell)) {
+        if (
+            !wizardRef.currentSpell ||
+            (!wizardRef.spells.some(s => s.name === wizardRef.currentSpell) && !isEditorSpellName(wizardRef.currentSpell))
+        ) {
             wizardRef.currentSpell = "wall";
         }
         wizardRef.refreshSpellSelector = () => refreshSpellSelector(wizardRef);
-        refreshSpellSelector(wizardRef);
+        wizardRef.refreshEditorSelector = () => refreshEditorSelector(wizardRef);
+        // Keep startup spell state consistent with manual spell re-selection.
+        setCurrentSpell(wizardRef, wizardRef.currentSpell);
+        setEditorPanelVisible(wizardRef, wizardRef.showEditorPanel !== false);
         refreshAuraSelector(wizardRef);
         fetchFlooringTextures();
+        fetchWallTextures();
         fetchPlaceableImages().then(() => {
             normalizePlaceableSelections(wizardRef);
             refreshSelectedPlaceableMetadata(wizardRef);
             wizardRef.spells = buildSpellList(wizardRef);
             refreshSpellSelector(wizardRef);
+            refreshEditorSelector(wizardRef);
         });
     }
 
@@ -4563,14 +4735,74 @@ const SpellSystem = (() => {
         openWallSelector(wizardRef);
     }
 
+    function showAnimalMenu(wizardRef) {
+        if (!wizardRef) return;
+        setCurrentSpell(wizardRef, "spawnanimal");
+        openAnimalSelector(wizardRef);
+    }
+
+    function showEditorMenu(wizardRef) {
+        if (!wizardRef) return;
+        openEditorSelector(wizardRef);
+    }
+
+    function showEditorSubmenuForSelectedCategory(wizardRef) {
+        if (!wizardRef) return;
+        const category = normalizeSelectedEditorCategory(wizardRef);
+        editorMenuMode = "items";
+        editorMenuCategory = category;
+        $("#editorMenu").removeClass("hidden");
+        renderEditorItemSelector(wizardRef, category);
+        if (category !== "powerups") {
+            fetchPlaceableImages({ forceRefresh: true }).then(() => {
+                if (editorMenuMode === "items" && editorMenuCategory === category) {
+                    renderEditorItemSelector(wizardRef, category);
+                }
+            });
+        }
+    }
+
+    function setEditorPanelVisible(wizardRef, visible) {
+        if (!wizardRef) return;
+        wizardRef.showEditorPanel = !!visible;
+        if (wizardRef.showEditorPanel) {
+            $("#editorSelector").removeClass("hidden");
+            refreshEditorSelector(wizardRef);
+        } else {
+            $("#editorSelector").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
+        }
+    }
+
+    function toggleEditorPanelVisible(wizardRef) {
+        if (!wizardRef) return false;
+        const next = !(wizardRef.showEditorPanel !== false);
+        setEditorPanelVisible(wizardRef, next);
+        return next;
+    }
+
+    function activateSelectedEditorTool(wizardRef) {
+        if (!wizardRef) return null;
+        const category = normalizeSelectedEditorCategory(wizardRef);
+        if (category === "powerups") {
+            setCurrentSpell(wizardRef, "blackdiamond");
+            return "blackdiamond";
+        }
+        setSelectedPlaceableCategory(wizardRef, category);
+        refreshSelectedPlaceableMetadata(wizardRef);
+        setCurrentSpell(wizardRef, "placeobject");
+        return "placeobject";
+    }
+
     function showPlaceableMenu(wizardRef) {
         if (!wizardRef) return;
-        setCurrentSpell(wizardRef, "placeobject");
-        openPlaceableSelector(wizardRef);
+        showEditorMenu(wizardRef);
     }
 
     function primeSpellAssets() {
-        Fireball.getFrames();
+        if (globalThis.Fireball && typeof globalThis.Fireball.getFrames === "function") {
+            globalThis.Fireball.getFrames();
+        }
     }
 
     return {
@@ -4585,7 +4817,15 @@ const SpellSystem = (() => {
         showFlooringMenu,
         showTreeMenu,
         showWallMenu,
+        showAnimalMenu,
+        showEditorMenu,
+        showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
+        refreshEditorSelector,
+        setEditorPanelVisible,
+        toggleEditorPanelVisible,
+        activateSelectedEditorTool,
+        isEditorSpellName,
         adjustPlaceableRenderOffset,
         adjustPlaceableScale,
         adjustPowerupPlacementScale,

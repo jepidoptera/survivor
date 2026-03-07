@@ -163,9 +163,7 @@ function hydrateVisibleLazyRoads(options = {}) {
     if (!map || !viewport || lazyRoadStore.recordsByKey.size === 0) return 0;
     const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
     const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
-    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-        ? interpolatedViewport
-        : viewport;
+    const camera = viewport;
     const centerX = camera.x + viewport.width * 0.5;
     const centerY = camera.y + viewport.height * 0.5;
     const maxX = viewport.width * 0.5 + paddingWorld;
@@ -194,9 +192,7 @@ function hydrateVisibleLazyTrees(options = {}) {
     if (!map || !viewport || lazyTreeStore.recordsByKey.size === 0) return 0;
     const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
     const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
-    const camera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-        ? interpolatedViewport
-        : viewport;
+    const camera = viewport;
     const centerX = camera.x + viewport.width * 0.5;
     const centerY = camera.y + viewport.height * 0.5;
     const maxX = viewport.width * 0.5 + paddingWorld;
@@ -272,10 +268,31 @@ function decodeGroundTiles(mapRef, encoded) {
             i += 1;
         }
     }
-    if (typeof invalidateGroundChunks === "function") {
-        invalidateGroundChunks();
-    }
     return true;
+}
+
+function getSavedLosMazeModeValue() {
+    if (typeof globalThis === "undefined") return null;
+    const settings = globalThis.LOSVisualSettings;
+    if (!settings || typeof settings !== "object") return null;
+    if (typeof settings.mazeMode !== "boolean") return null;
+    return settings.mazeMode;
+}
+
+function applySavedLosMazeModeValue(value) {
+    if (typeof value !== "boolean") return;
+
+    if (typeof globalThis !== "undefined" && typeof globalThis.setLosMazeModeEnabled === "function") {
+        globalThis.setLosMazeModeEnabled(value);
+        return;
+    }
+
+    if (typeof globalThis !== "undefined") {
+        const settings = globalThis.LOSVisualSettings;
+        if (settings && typeof settings === "object") {
+            settings.mazeMode = value;
+        }
+    }
 }
 
 function saveGameState() {
@@ -284,16 +301,23 @@ function saveGameState() {
         return null;
     }
 
+    const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
+        ? globalThis.roofs
+        : [];
+
     const saveData = {
         version: 1,
         timestamp: new Date().toISOString(),
         wizard: wizard.saveJson(),
+        los: {
+            mazeMode: getSavedLosMazeModeValue()
+        },
         animals: animals
             .filter(animal => animal && !animal.gone && !animal.vanishing)
             .map(animal => animal.saveJson()),
         staticObjects: [],
         groundTiles: encodeGroundTiles(map),
-        roof: (roof && typeof roof.saveJson === 'function') ? roof.saveJson() : null
+        roof: null
     };
 
     const loadedRoadRecords = [];
@@ -327,6 +351,15 @@ function saveGameState() {
     }
     saveData.staticObjects.push(...getAllRoadSaveRecords(loadedRoadRecords));
     saveData.staticObjects.push(...getAllTreeSaveRecords(loadedTreeRecords));
+    const seenRoofs = new Set();
+    for (let i = 0; i < roofList.length; i++) {
+        const roofObj = roofList[i];
+        if (!roofObj || roofObj.gone || roofObj.vanishing || seenRoofs.has(roofObj)) continue;
+        seenRoofs.add(roofObj);
+        if (typeof roofObj.saveJson === "function") {
+            saveData.staticObjects.push(roofObj.saveJson());
+        }
+    }
 
     return saveData;
 }
@@ -387,6 +420,13 @@ function buildRestoreStaticObjectKey(objData, index = -1) {
         const epx = Number.isFinite(ep && ep.x) ? Number(ep.x).toFixed(3) : "";
         const epy = Number.isFinite(ep && ep.y) ? Number(ep.y).toFixed(3) : "";
         return `wallSection|${id}|${spx}|${spy}|${epx}|${epy}|${h}|${t}|${bz}|${pa}|${pb}`;
+    }
+
+    if (type === "roof") {
+        const z = Number.isFinite(objData.z) ? Number(objData.z).toFixed(3) : "";
+        const vertCount = Array.isArray(objData.vertices) ? objData.vertices.length : 0;
+        const triCount = Array.isArray(objData.triangles) ? objData.triangles.length : 0;
+        return `roof|${x}|${y}|${z}|${vertCount}|${triCount}`;
     }
 
     // Safety fallback for less common object shapes.
@@ -459,6 +499,13 @@ function loadGameState(saveData) {
             wizard.loadJson(saveData.wizard);
         }
 
+        const mazeModeFromSave = (
+            saveData.los && typeof saveData.los === "object" && typeof saveData.los.mazeMode === "boolean"
+        )
+            ? saveData.los.mazeMode
+            : (typeof saveData.mazeMode === "boolean" ? saveData.mazeMode : null);
+        applySavedLosMazeModeValue(mazeModeFromSave);
+
         // Clear existing animals and fully stop their timers before load.
         animals.forEach(animal => {
             if (!animal) return;
@@ -513,6 +560,28 @@ function loadGameState(saveData) {
             destroyDisplayObject(obj.fireSprite);
         });
 
+        // Clear existing runtime roofs (roofs are not node-registered).
+        const existingRoofs = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
+            ? globalThis.roofs.slice()
+            : [];
+        existingRoofs.forEach(roofObj => {
+            if (!roofObj) return;
+            roofObj.gone = true;
+            destroyDisplayObject(roofObj.pixiMesh);
+            if (roofObj.map && Array.isArray(roofObj.map.objects)) {
+                const idx = roofObj.map.objects.indexOf(roofObj);
+                if (idx >= 0) roofObj.map.objects.splice(idx, 1);
+            }
+        });
+        if (typeof globalThis !== "undefined") {
+            if (!Array.isArray(globalThis.roofs)) {
+                globalThis.roofs = [];
+            } else {
+                globalThis.roofs.length = 0;
+            }
+            globalThis.roof = null;
+        }
+
         // Drop road-generated runtime caches now that old instances are gone.
         if (typeof Road !== "undefined") {
             if (typeof Road.clearRuntimeCaches === "function") {
@@ -538,6 +607,7 @@ function loadGameState(saveData) {
                     .filter(section => section && !section.gone && section.map === map)
                 : [];
             const loadedWallSections = [];
+            const loadedRoofs = [];
             const restoredKeys = new Set();
             saveData.staticObjects.forEach((objData, index) => {
                 const key = buildRestoreStaticObjectKey(objData, index);
@@ -564,6 +634,20 @@ function loadGameState(saveData) {
                     if (obj && !obj.gone) {
                         loadedWallSections.push(obj);
                     }
+                } else if (
+                    objData.type === 'roof' &&
+                    typeof Roof !== 'undefined' &&
+                    Roof &&
+                    typeof Roof.loadJson === 'function'
+                ) {
+                    obj = Roof.loadJson(objData);
+                    if (obj && !obj.gone) {
+                        obj.map = map;
+                        if (Array.isArray(map.objects)) {
+                            map.objects.push(obj);
+                        }
+                        loadedRoofs.push(obj);
+                    }
                 } else if (objData.type !== 'wall') {
                     obj = StaticObject.loadJson(objData, map);
                 }
@@ -582,7 +666,31 @@ function loadGameState(saveData) {
                     WallSectionUnit.harmonizeTexturePhaseForSections(loadedWallSections, preexistingWallSections);
                 }
                 if (loadedWallSections.length > 0) {
-                    WallSectionUnit.autoMergeContinuousSections(loadedWallSections);
+                    const mergedWallSections = WallSectionUnit.autoMergeContinuousSections(loadedWallSections) || [];
+                    // Ensure endpoint corner caps/faces reflect post-merge topology.
+                    for (let i = 0; i < mergedWallSections.length; i++) {
+                        const section = mergedWallSections[i];
+                        if (!section || section.gone || typeof section.handleJoineryOnPlacement !== "function") continue;
+                        section.handleJoineryOnPlacement();
+                    }
+                    // Rebuild runtime connection maps from current topology.
+                    const sectionsForMap = Array.from(WallSectionUnit._allSections.values())
+                        .filter(section => section && !section.gone && section.map === map);
+                    for (let i = 0; i < sectionsForMap.length; i++) {
+                        const section = sectionsForMap[i];
+                        if (!section || typeof section.rebuildConnections !== "function") continue;
+                        section.rebuildConnections(sectionsForMap);
+                    }
+                }
+            }
+
+            if (loadedRoofs.length > 0) {
+                if (typeof globalThis !== "undefined") {
+                    if (!Array.isArray(globalThis.roofs)) globalThis.roofs = [];
+                    for (let i = 0; i < loadedRoofs.length; i++) {
+                        globalThis.roofs.push(loadedRoofs[i]);
+                    }
+                    globalThis.roof = loadedRoofs[loadedRoofs.length - 1] || null;
                 }
             }
         }
@@ -605,22 +713,25 @@ function loadGameState(saveData) {
             }
         }
 
-        // Restore roof state from save (fallback to existing roof if missing).
-        if (saveData.roof && typeof Roof !== 'undefined' && typeof Roof.loadJson === 'function') {
-            destroyDisplayObject(roof && roof.pixiMesh ? roof.pixiMesh : null);
+        // Backward compatibility: restore legacy singleton roof when no roofs were loaded.
+        const hasLoadedRoofs = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs) && globalThis.roofs.length > 0);
+        if (!hasLoadedRoofs && saveData.roof && typeof Roof !== 'undefined' && typeof Roof.loadJson === 'function') {
             const loadedRoof = Roof.loadJson(saveData.roof);
             if (loadedRoof) {
-                roof = loadedRoof;
+                loadedRoof.map = map;
+                if (Array.isArray(map.objects)) {
+                    map.objects.push(loadedRoof);
+                }
+                if (typeof globalThis !== "undefined") {
+                    if (!Array.isArray(globalThis.roofs)) globalThis.roofs = [];
+                    globalThis.roofs.length = 0;
+                    globalThis.roofs.push(loadedRoof);
+                    globalThis.roof = loadedRoof;
+                }
             }
         }
 
         // Wizard.loadJson restores viewport (or centers when missing in old saves)
-        if (typeof clearGroundChunkCache === "function") {
-            clearGroundChunkCache();
-        }
-        if (typeof invalidateGroundChunks === "function") {
-            invalidateGroundChunks();
-        }
         if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
             globalThis.presentGameFrame();
         }

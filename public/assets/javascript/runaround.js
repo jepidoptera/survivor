@@ -8,9 +8,7 @@ const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align 
 const wizardMouseTurnZeroDistanceUnits = 1;
 const wizardMouseTurnFullDistanceUnits = 3;
 
-let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494}
-let previousViewport = {x: viewport.x, y: viewport.y};
-let interpolatedViewport = {x: viewport.x, y: viewport.y};
+let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494, prevX: 488, prevY: 494}
 let renderAlpha = 1;
 let viewScale = 1;
 let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
@@ -31,6 +29,61 @@ let spellMenuKeyboardIndex = -1;
 let auraMenuKeyboardIndex = -1;
 let suppressNextCanvasMenuClose = false;
 
+if (typeof globalThis !== "undefined") {
+    globalThis.releaseSpacebarCastingState = function releaseSpacebarCastingState() {
+        keysPressed[" "] = false;
+        spacebarDownAt = null;
+    };
+
+    globalThis.armSpacebarTypingGuardForElement = function armSpacebarTypingGuardForElement(targetEl) {
+        const el = targetEl;
+        if (!el || typeof el.addEventListener !== "function") return;
+        el.__suppressHeldSpaceUntilKeyup = true;
+        if (el.__spacebarTypingGuardBound) return;
+        el.__spacebarTypingGuardBound = true;
+
+        el.addEventListener("keydown", event => {
+            if ((event.key === " " || event.code === "Space") && el.__suppressHeldSpaceUntilKeyup) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        });
+
+        el.addEventListener("keyup", event => {
+            if (event.key === " " || event.code === "Space") {
+                el.__suppressHeldSpaceUntilKeyup = false;
+                event.stopPropagation();
+            }
+        });
+    };
+
+    globalThis.isTextEntryElement = function isTextEntryElement(targetEl) {
+        if (!targetEl || typeof targetEl !== "object") return false;
+        if (targetEl.isContentEditable) return true;
+        const tag = (targetEl.tagName || "").toLowerCase();
+        if (tag === "textarea") return true;
+        if (tag !== "input") return false;
+        const type = String(targetEl.type || "text").toLowerCase();
+        const blockedTypes = new Set(["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"]);
+        return !blockedTypes.has(type);
+    };
+}
+
+if (typeof document !== "undefined") {
+    document.addEventListener("focusin", event => {
+        const target = event && event.target;
+        if (!(typeof globalThis !== "undefined" && typeof globalThis.isTextEntryElement === "function" && globalThis.isTextEntryElement(target))) {
+            return;
+        }
+        if (typeof globalThis !== "undefined" && typeof globalThis.releaseSpacebarCastingState === "function") {
+            globalThis.releaseSpacebarCastingState();
+        }
+        if (typeof globalThis !== "undefined" && typeof globalThis.armSpacebarTypingGuardForElement === "function") {
+            globalThis.armSpacebarTypingGuardForElement(target);
+        }
+    }, true);
+}
+
 let textures = {};
 let fireFrames = null;
 const runaroundViewportNodeSampleEpsilon = 1e-4;
@@ -41,15 +94,11 @@ function applyViewportWrapShift(deltaX, deltaY) {
 
     if (Math.abs(deltaX) > eps) {
         viewport.x += deltaX;
-        previousViewport.x += deltaX;
-        interpolatedViewport.x += deltaX;
         if (Number.isFinite(mousePos.worldX)) mousePos.worldX += deltaX;
         if (Number.isFinite(pointerLockAimWorld.x)) pointerLockAimWorld.x += deltaX;
     }
     if (Math.abs(deltaY) > eps) {
         viewport.y += deltaY;
-        previousViewport.y += deltaY;
-        interpolatedViewport.y += deltaY;
         if (Number.isFinite(mousePos.worldY)) mousePos.worldY += deltaY;
         if (Number.isFinite(pointerLockAimWorld.y)) pointerLockAimWorld.y += deltaY;
     }
@@ -128,9 +177,9 @@ let groundPlaneHitboxGraphics = null;
 let wizardBoundaryGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
 let wizard = null;
-let roof = null; // Roof preview mesh
 let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
+let animalPreviewSprite = null; // Semi-transparent preview for SpawnAnimal spell
 let onscreenObjects = new Set(); // Track visible staticObjects each frame
 const roadWidth = 3;
 
@@ -224,8 +273,65 @@ if (typeof globalThis !== "undefined") {
     };
 }
 
+function updateAnimalPreview() {
+    if (!animalPreviewSprite) return;
+    const showPreview = !!(
+        wizard &&
+        wizard.currentSpell === "spawnanimal" &&
+        keysPressed[" "] &&
+        Number.isFinite(mousePos.screenX) &&
+        Number.isFinite(mousePos.screenY)
+    );
+    if (!showPreview) {
+        animalPreviewSprite.visible = false;
+        return;
+    }
+
+    // Resolve the selected animal type and its texture
+    const selectedType = (wizard.selectedAnimalType) || "squirrel";
+    const texGroup = (typeof textures !== "undefined" && textures[selectedType]) ? textures[selectedType] : null;
+    const frameTex = (texGroup && Array.isArray(texGroup.list) && texGroup.list.length > 0)
+        ? (texGroup.list.find(Boolean) || texGroup.list[0])
+        : null;
+    if (!frameTex) {
+        // Fallback: load from PNG path
+        const typeDef = (typeof SpawnAnimal !== "undefined" && Array.isArray(SpawnAnimal.ANIMAL_TYPES))
+            ? SpawnAnimal.ANIMAL_TYPES.find(t => t.name === selectedType)
+            : null;
+        if (typeDef && typeDef.icon) {
+            animalPreviewSprite.texture = PIXI.Texture.from(typeDef.icon);
+        } else {
+            animalPreviewSprite.visible = false;
+            return;
+        }
+    } else {
+        animalPreviewSprite.texture = frameTex;
+    }
+
+    // Size: use average default size for that animal type, scaled by selected size scale
+    const sizeScale = (wizard && Number.isFinite(wizard.selectedAnimalSizeScale))
+        ? wizard.selectedAnimalSizeScale
+        : 1;
+    // Typical default sizes and width/height ratios per type
+    const animalMetrics = {
+        squirrel: { size: 0.5, wRatio: 1.0, hRatio: 1.0 },
+        goat:     { size: 0.85, wRatio: 1.2, hRatio: 1.0 },
+        deer:     { size: 1.0, wRatio: 1.0, hRatio: 1.0 },
+        bear:     { size: 1.45, wRatio: 1.4, hRatio: 1.0 },
+        yeti:     { size: 1.75, wRatio: 1.2, hRatio: 1.0 }
+    };
+    const metrics = animalMetrics[selectedType] || { size: 1, wRatio: 1, hRatio: 1 };
+    const previewSize = metrics.size * sizeScale;
+
+    animalPreviewSprite.width = previewSize * metrics.wRatio * viewscale;
+    animalPreviewSprite.height = previewSize * metrics.hRatio * viewscale;
+    animalPreviewSprite.x = mousePos.screenX;
+    animalPreviewSprite.y = mousePos.screenY;
+    animalPreviewSprite.visible = true;
+}
+
 let renderingUnavailableWarningShown = false;
-function presentGameFrame() {
+function presentGameFrame(renderAnimalsOverride = null) {
     if (typeof hydrateVisibleLazyRoads === "function") {
         hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
     }
@@ -238,19 +344,28 @@ function presentGameFrame() {
         typeof globalThis.Rendering.renderFrame === "function"
     ) {
         const renderingApi = globalThis.Rendering;
-        const renderCamera = (typeof interpolatedViewport !== "undefined" && interpolatedViewport)
-            ? interpolatedViewport
-            : viewport;
+        const runtimeApi = (typeof globalThis !== "undefined" && globalThis.RenderRuntime)
+            ? globalThis.RenderRuntime
+            : null;
+        const renderAnimals = Array.isArray(renderAnimalsOverride)
+            ? renderAnimalsOverride
+            : ((runtimeApi && typeof runtimeApi.getActiveAnimals === "function")
+                ? runtimeApi.getActiveAnimals()
+                : animals);
+        const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
+            ? globalThis.roofs
+            : [];
         const rendered = renderingApi.renderFrame({
             app,
             gameContainer,
             map,
-            animals,
+            animals: renderAnimals,
+            animalsPreFilteredVisible: !!(runtimeApi && typeof runtimeApi.getActiveAnimals === "function"),
             powerups,
             projectiles,
             wizard,
-            roof,
-            camera: renderCamera,
+            roofs: roofList,
+            camera: viewport,
             viewport,
             viewscale,
             xyratio,
@@ -281,6 +396,8 @@ PIXI.Loader.shared
     .add('/assets/spritesheet/bear.json')
     .add('/assets/spritesheet/deer.json')
     .add('/assets/spritesheet/squirrel.json')
+    .add('/assets/spritesheet/goat.json')
+    .add('/assets/spritesheet/yeti.json')
     .add('/assets/images/runningman.png')
     .add('/assets/images/magic/hi%20fi%20fireball.png')
     .add('/assets/images/arrow.png')
@@ -289,7 +406,7 @@ PIXI.Loader.shared
 function onAssetsLoaded() {
     // create an array to store the textures
     let spriteNames = ["walk_left", "walk_right", "attack_left", "attack_right"];
-    let animalNames = ["bear", "deer", "squirrel"]
+    let animalNames = ["bear", "deer", "squirrel", "goat", "yeti"]
     animalNames.forEach(animal => {
         let sheet = PIXI.Loader.shared.resources[`/assets/spritesheet/${animal}.json`].spritesheet;
         textures[animal] = {list: [], byKey: {}};
@@ -360,6 +477,13 @@ function onAssetsLoaded() {
         spellCursor.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
     }
 
+    // Initialize animal preview sprite (hidden by default)
+    animalPreviewSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+    animalPreviewSprite.anchor.set(0.5, 0.5);
+    animalPreviewSprite.visible = false;
+    animalPreviewSprite.alpha = 0.45;
+    cursorLayer.addChild(animalPreviewSprite);
+
     if (typeof SpellSystem !== "undefined" && typeof SpellSystem.primeSpellAssets === "function") {
         SpellSystem.primeSpellAssets();
     }
@@ -379,10 +503,13 @@ class Character {
         this.z = 0;
         this.travelFrames = 0;
         this.moving = false;
+        this.useExternalScheduler = false;
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
         this.fireDamageScale = 1;
+        this.healRate = 0.005; // Fraction of max HP restored per second
+        this.healRateMultiplier = 1;
         this.groundRadius = this.size / 3; // Default hitbox radius in hex units
         this.visualRadius = this.size / 2; // Default visual hitbox radius in hex units
         this.frameRate = 1;
@@ -519,7 +646,11 @@ class Character {
         this.nextNode = null;
     }
     move() {
-        this.moveTimeout = this.nextMove();
+        if (!this.useExternalScheduler) {
+            this.moveTimeout = this.nextMove();
+        } else {
+            this.moveTimeout = null;
+        }
         
         if (paused) {
             return;
@@ -527,7 +658,23 @@ class Character {
         
         if (this.isOnFire) {
             this.burn();
-        }        
+        }
+
+        if (
+            !this.dead &&
+            Number.isFinite(this.maxHp) &&
+            this.maxHp > 0 &&
+            Number.isFinite(this.hp) &&
+            this.hp < this.maxHp
+        ) {
+            const dtSec = 1 / Math.max(1, Number(this.frameRate) || 1);
+            const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
+            const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
+            const healPerSecond = this.maxHp * healRate * healMult;
+            if (healPerSecond > 0) {
+                this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
+            }
+        }
 
         // Check if we have a destination to move toward
         if (!this.destination) {
@@ -536,6 +683,8 @@ class Character {
         }
         
         this.moving = true;
+        const moveStartX = this.x;
+        const moveStartY = this.y;
         this.prevX = this.x;
         this.prevY = this.y;
         this.prevZ = this.z;
@@ -683,6 +832,9 @@ class Wizard extends Character {
         this.magicRegenPerSecond = 8;
         this.activeAura = null;
         this.activeAuras = [];
+        this.showEditorPanel = true;
+        this.editorPlacementActive = false;
+        this.selectedEditorCategory = "doors";
         this.name = 'you';
         this.groundRadius = 0.3;
         this.visualRadius = 0.5; // Hitbox radius in hex units
@@ -737,6 +889,7 @@ class Wizard extends Character {
         this.jumpPolyB = 0;
         this.jumpPolyC = 0;
         this.jumpHeight = 0;
+        this._doorTraversalStateById = new Map();
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
         this.updateHitboxes();
@@ -1072,20 +1225,48 @@ class Wizard extends Character {
         }
         
         this.moving = true;
+        const moveStartX = this.x;
+        const moveStartY = this.y;
         
         // Use accumulated movement vector for this frame's position change
         let newX = this.x + this.movementVector.x / this.frameRate;
         let newY = this.y + this.movementVector.y / this.frameRate;
         
         const wizardRadius = this.groundRadius;
+        const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
+            ? Scripting
+            : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
+        const isDoorPlacedObjectFn = (scriptingApi && typeof scriptingApi.isDoorPlacedObject === "function")
+            ? scriptingApi.isDoorPlacedObject
+            : null;
+        const isPointInDoorHitboxFn = (scriptingApi && typeof scriptingApi.isPointInDoorHitbox === "function")
+            ? scriptingApi.isPointInDoorHitbox
+            : null;
+        const processDoorTraversalEventsFn = (scriptingApi && typeof scriptingApi.processDoorTraversalEvents === "function")
+            ? scriptingApi.processDoorTraversalEvents
+            : null;
+        const processObjectTouchEventsFn = (scriptingApi && typeof scriptingApi.processObjectTouchEvents === "function")
+            ? scriptingApi.processObjectTouchEvents
+            : null;
         
         // Collect nearby objects once to avoid repeated grid traversal
         const nearbyObjects = Array.isArray(this._movementNearbyObjects) ? this._movementNearbyObjects : [];
         nearbyObjects.length = 0;
         this._movementNearbyObjects = nearbyObjects;
-        const nearbyDoorHitboxes = Array.isArray(this._movementNearbyDoorHitboxes) ? this._movementNearbyDoorHitboxes : [];
-        nearbyDoorHitboxes.length = 0;
-        this._movementNearbyDoorHitboxes = nearbyDoorHitboxes;
+        const nearbyDoors = Array.isArray(this._movementNearbyDoors) ? this._movementNearbyDoors : [];
+        nearbyDoors.length = 0;
+        this._movementNearbyDoors = nearbyDoors;
+        const nearbyScriptTouchables = Array.isArray(this._movementNearbyScriptTouchables) ? this._movementNearbyScriptTouchables : [];
+        nearbyScriptTouchables.length = 0;
+        this._movementNearbyScriptTouchables = nearbyScriptTouchables;
+        const nearbyScriptTouchableSet = (this._movementNearbyScriptTouchableSet instanceof Set) ? this._movementNearbyScriptTouchableSet : new Set();
+        nearbyScriptTouchableSet.clear();
+        this._movementNearbyScriptTouchableSet = nearbyScriptTouchableSet;
+        const nearbyScriptTouchableEntryByObject = (this._movementNearbyScriptTouchableEntryByObject instanceof Map)
+            ? this._movementNearbyScriptTouchableEntryByObject
+            : new Map();
+        nearbyScriptTouchableEntryByObject.clear();
+        this._movementNearbyScriptTouchableEntryByObject = nearbyScriptTouchableEntryByObject;
         const minNode = this.map.worldToNode(newX - 2, newY - 2);
         const maxNode = this.map.worldToNode(newX + 2, newY + 2);
         
@@ -1101,18 +1282,23 @@ class Wizard extends Character {
                     const nodeObjects = this.map.nodes[x][y].objects;
                     for (const obj of nodeObjects) {
                         if (!obj || obj.gone) continue;
-                        const doorCandidate = (
-                            (obj.isPlacedObject || obj.objectType === "placedObject" || obj.type === "placedObject") &&
-                            (
-                                obj.category === "doors" ||
-                                (typeof obj.texturePath === "string" && obj.texturePath.includes("/doors/"))
-                            )
-                        );
+                        const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
                         if (doorCandidate) {
                             const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
-                            if (doorHitbox && typeof doorHitbox.containsPoint === "function") {
-                                nearbyDoorHitboxes.push(doorHitbox);
+                            if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
+                                nearbyDoors.push({ obj, hitbox: doorHitbox });
                             }
+                        }
+                        const touchHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
+                        if (
+                            touchHitbox &&
+                            (typeof touchHitbox.containsPoint === "function" || typeof touchHitbox.intersects === "function") &&
+                            !nearbyScriptTouchableSet.has(obj)
+                        ) {
+                            nearbyScriptTouchableSet.add(obj);
+                            const entry = { obj, hitbox: touchHitbox, forceTouch: false };
+                            nearbyScriptTouchables.push(entry);
+                            nearbyScriptTouchableEntryByObject.set(obj, entry);
                         }
                         if (obj.groundPlaneHitbox && !obj.isPassable) {
                             nearbyObjects.push(obj);
@@ -1123,14 +1309,9 @@ class Wizard extends Character {
         }
 
         const isInOrTouchingNearbyDoor = (px, py, radius = 0) => {
-            const probe = { type: "circle", x: px, y: py, radius: Math.max(0, Number(radius) || 0) };
-            for (let i = 0; i < nearbyDoorHitboxes.length; i++) {
-                const hb = nearbyDoorHitboxes[i];
-                if (!hb) continue;
-                if (typeof hb.intersects === "function") {
-                    const hit = hb.intersects(probe);
-                    if (hit) return true;
-                } else if (typeof hb.containsPoint === "function" && hb.containsPoint(px, py)) {
+            for (let i = 0; i < nearbyDoors.length; i++) {
+                const hb = nearbyDoors[i] && nearbyDoors[i].hitbox;
+                if (isPointInDoorHitboxFn && isPointInDoorHitboxFn(hb, px, py, radius)) {
                     return true;
                 }
             }
@@ -1151,6 +1332,14 @@ class Wizard extends Character {
             this.y = wrappedY;
             this.updateHitboxes();
             centerViewport(this, 0);
+            if (this === wizard) {
+                if (processDoorTraversalEventsFn) {
+                    processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
+                }
+                if (processObjectTouchEventsFn) {
+                    processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
+                }
+            }
             return true;
         }
         
@@ -1182,6 +1371,12 @@ class Wizard extends Character {
                     totalPushY += collision.pushY;
                     const pushLen = Math.hypot(collision.pushX, collision.pushY);
                     maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (this === wizard) {
+                        const touchEntry = nearbyScriptTouchableEntryByObject.get(obj);
+                        if (touchEntry) {
+                            touchEntry.forceTouch = true;
+                        }
+                    }
                 }
             }
             
@@ -1196,6 +1391,14 @@ class Wizard extends Character {
                 this.y = wrappedY;
                 this.updateHitboxes();
                 centerViewport(this, 0);
+                if (this === wizard) {
+                    if (processDoorTraversalEventsFn) {
+                        processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
+                    }
+                    if (processObjectTouchEventsFn) {
+                        processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
+                    }
+                }
                 return true;
             }
             
@@ -1266,6 +1469,12 @@ class Wizard extends Character {
                 totalPushY += collision.pushY;
                 const pushLen = Math.hypot(collision.pushX, collision.pushY);
                 maxPushLen = Math.max(maxPushLen, pushLen);
+                if (this === wizard) {
+                    const touchEntry = nearbyScriptTouchableEntryByObject.get(obj);
+                    if (touchEntry) {
+                        touchEntry.forceTouch = true;
+                    }
+                }
             }
         }
         
@@ -1292,6 +1501,14 @@ class Wizard extends Character {
             this.y = wrappedY;
             this.updateHitboxes();
             centerViewport(this, 0);
+            if (this === wizard) {
+                if (processDoorTraversalEventsFn) {
+                    processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
+                }
+                if (processObjectTouchEventsFn) {
+                    processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
+                }
+            }
             return true;
         }
         
@@ -1305,6 +1522,14 @@ class Wizard extends Character {
         this.y = wrappedY;
         this.updateHitboxes();
         centerViewport(this, 0);
+        if (this === wizard) {
+            if (processDoorTraversalEventsFn) {
+                processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
+            }
+            if (processObjectTouchEventsFn) {
+                processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
+            }
+        }
         return true;
     }
     
@@ -1491,9 +1716,18 @@ class Wizard extends Character {
             selectedPlaceableRotationByTexture: this.selectedPlaceableRotationByTexture,
             selectedPlaceableRotationAxis: this.selectedPlaceableRotationAxis,
             selectedPlaceableRotationAxisByTexture: this.selectedPlaceableRotationAxisByTexture,
+            selectedPlaceableAnchorX: this.selectedPlaceableAnchorX,
+            selectedPlaceableAnchorY: this.selectedPlaceableAnchorY,
+            selectedPlaceableAnchorXByTexture: this.selectedPlaceableAnchorXByTexture,
+            selectedPlaceableAnchorYByTexture: this.selectedPlaceableAnchorYByTexture,
             selectedPowerupPlacementScale: this.selectedPowerupPlacementScale,
+            selectedEditorCategory: this.selectedEditorCategory,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
+            selectedWallTexture: this.selectedWallTexture,
+            selectedRoofOverhang: this.selectedRoofOverhang,
+            selectedRoofPeakHeight: this.selectedRoofPeakHeight,
+            showEditorPanel: this.showEditorPanel !== false,
             showPerfReadout: !!showPerfReadout,
             spells: this.spells,
             inventory: this.inventory,
@@ -1559,9 +1793,18 @@ class Wizard extends Character {
         if (data.selectedPlaceableRotationByTexture !== undefined) this.selectedPlaceableRotationByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationByTexture);
         if (data.selectedPlaceableRotationAxis !== undefined) this.selectedPlaceableRotationAxis = data.selectedPlaceableRotationAxis;
         if (data.selectedPlaceableRotationAxisByTexture !== undefined) this.selectedPlaceableRotationAxisByTexture = normalizeTextureKeyMap(data.selectedPlaceableRotationAxisByTexture);
+        if (data.selectedPlaceableAnchorX !== undefined) this.selectedPlaceableAnchorX = data.selectedPlaceableAnchorX;
+        if (data.selectedPlaceableAnchorY !== undefined) this.selectedPlaceableAnchorY = data.selectedPlaceableAnchorY;
+        if (data.selectedPlaceableAnchorXByTexture !== undefined) this.selectedPlaceableAnchorXByTexture = normalizeTextureKeyMap(data.selectedPlaceableAnchorXByTexture);
+        if (data.selectedPlaceableAnchorYByTexture !== undefined) this.selectedPlaceableAnchorYByTexture = normalizeTextureKeyMap(data.selectedPlaceableAnchorYByTexture);
         if (data.selectedPowerupPlacementScale !== undefined) this.selectedPowerupPlacementScale = data.selectedPowerupPlacementScale;
+        if (data.selectedEditorCategory !== undefined) this.selectedEditorCategory = data.selectedEditorCategory;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
+        if (data.selectedWallTexture !== undefined) this.selectedWallTexture = data.selectedWallTexture;
+        if (data.selectedRoofOverhang !== undefined) this.selectedRoofOverhang = data.selectedRoofOverhang;
+        if (data.selectedRoofPeakHeight !== undefined) this.selectedRoofPeakHeight = data.selectedRoofPeakHeight;
+        if (typeof data.showEditorPanel === "boolean") this.showEditorPanel = data.showEditorPanel;
         if (typeof data.showPerfReadout === "boolean") {
             if (typeof setShowPerfReadout === "function") {
                 setShowPerfReadout(data.showPerfReadout);
@@ -1580,6 +1823,7 @@ class Wizard extends Character {
         if (this.map && typeof this.map.wrapWorldY === "function" && Number.isFinite(this.y)) {
             this.y = this.map.wrapWorldY(this.y);
         }
+        this._doorTraversalStateById = new Map();
 
         this.node = this.map.worldToNode(this.x, this.y) || this.node;
         this.updateHitboxes();
@@ -1587,15 +1831,21 @@ class Wizard extends Character {
         if (data.viewport && Number.isFinite(data.viewport.x) && Number.isFinite(data.viewport.y)) {
             viewport.x = data.viewport.x;
             viewport.y = data.viewport.y;
+            viewport.prevX = viewport.x;
+            viewport.prevY = viewport.y;
         } else {
             centerViewport(this, 0, 0);
+            viewport.prevX = viewport.x;
+            viewport.prevY = viewport.y;
         }
 
         if (this.map && typeof this.map.wrapWorldX === "function") {
             viewport.x = this.map.wrapWorldX(viewport.x);
+            viewport.prevX = this.map.wrapWorldX(Number.isFinite(viewport.prevX) ? viewport.prevX : viewport.x);
         }
         if (this.map && typeof this.map.wrapWorldY === "function") {
             viewport.y = this.map.wrapWorldY(viewport.y);
+            viewport.prevY = this.map.wrapWorldY(Number.isFinite(viewport.prevY) ? viewport.prevY : viewport.y);
         }
         // Keep loaded camera on the wizard's nearest torus copy.
         if (
@@ -1617,14 +1867,6 @@ class Wizard extends Character {
         this.prevY = this.y;
         this.prevZ = this.z;
         this.prevJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
-        if (typeof previousViewport !== "undefined") {
-            previousViewport.x = viewport.x;
-            previousViewport.y = viewport.y;
-        }
-        if (typeof interpolatedViewport !== "undefined") {
-            interpolatedViewport.x = viewport.x;
-            interpolatedViewport.y = viewport.y;
-        }
         if (typeof mousePos !== "undefined") {
             if (
                 typeof syncMouseWorldFromScreenWithViewport === "function" &&
@@ -1645,6 +1887,12 @@ class Wizard extends Character {
         if (typeof this.refreshSpellSelector === 'function') {
             this.refreshSpellSelector();
         }
+        if (typeof this.refreshEditorSelector === "function") {
+            this.refreshEditorSelector();
+        }
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.setEditorPanelVisible === "function") {
+            SpellSystem.setEditorPanelVisible(this, this.showEditorPanel !== false);
+        }
         if (typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
             SpellSystem.refreshAuraSelector(this);
         }
@@ -1654,6 +1902,11 @@ class Wizard extends Character {
 class Animal extends Character {
     constructor(type, location, size, map) {
         super(type, location, size, map);
+        this.useExternalScheduler = true;
+        if (this.moveTimeout) {
+            clearTimeout(this.moveTimeout);
+            this.moveTimeout = null;
+        }
         this.radius = this.size / 2; // Animal hitbox radius in hex units
         this.isOnFire = false;
         this.fireSprite = null;
@@ -1690,23 +1943,124 @@ class Animal extends Character {
         this.damage = 0;
         this.foodValue = 0;
         this.hp = 1;
+        this.maxHp = this.hp;
         this.randomMotion = 1;
-        
+        this.lungeRadius = 2;
+        this.lungeSpeed = 5.0;
+        this.attackCooldown = 1.5;
+        this.strikeRange = 0.8;
+        this.retreatThreshold = 0.25;
+
         this.speed = this.walkSpeed;
         this._onScreen = false;
         this.rotation = 0;
         this.dead = false;
         this.frameRate = this.onScreen ? 30 : 1;
+        this.attackState = "idle";
+        this.attackTarget = null;
+        this.lastAttackTimeMs = -Infinity;
+        this.spriteDirectionLock = null;
+        this.attacking = false;
+        this._aiAccumulatorMs = Math.random() * 200;
         ensureSpriteFrames(this);
     }
-    move() {
-        if (this.dead || this.gone) {
-            clearTimeout(this.moveTimeout);
-            clearTimeout(this.attackTimeout);
+    getDirectionRow() {
+        const activeDirection = this.spriteDirectionLock || this.direction;
+        if (!activeDirection) return 0;
+        return (activeDirection.x > 0 || (activeDirection.x === 0 && activeDirection.y > 0)) ? 1 : 0;
+    }
+    hasAttackAnimation() {
+        if (this.spriteSheet && Array.isArray(this.spriteSheet.frameKeys)) {
+            return this.spriteSheet.frameKeys.some(key => typeof key === "string" && key.indexOf("attack_") === 0);
+        }
+        return this.spriteCols > 1;
+    }
+    hasReachedRetreatThreshold() {
+        if (!Number.isFinite(this.retreatThreshold) || this.retreatThreshold <= 0) return false;
+        if (!Number.isFinite(this.maxHp) || this.maxHp <= 0) return false;
+        const damageTakenRatio = (this.maxHp - Math.max(0, this.hp)) / this.maxHp;
+        return damageTakenRatio >= this.retreatThreshold;
+    }
+    resetAttackState() {
+        this.attackState = "idle";
+        this.attackTarget = null;
+        this.attacking = false;
+        this.spriteDirectionLock = null;
+        if (this.spriteCols > 1) this.spriteCol = 0;
+    }
+    setRetreatDestination(target) {
+        if (!target) return;
+        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(target.x, this.x)
+            : (this.x - target.x);
+        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(target.y, this.y)
+            : (this.y - target.y);
+        const dist = Math.hypot(dx, dy);
+        if (!Number.isFinite(dist) || dist < 1e-6) return;
+
+        const retreatDistance = Math.max(2, this.lungeRadius);
+        let retreatX = this.x + (dx / dist) * retreatDistance;
+        let retreatY = this.y + (dy / dist) * retreatDistance;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            retreatX = this.map.wrapWorldX(retreatX);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            retreatY = this.map.wrapWorldY(retreatY);
+        }
+        const retreatNode = this.map.worldToNode(retreatX, retreatY);
+        if (retreatNode) this.goto(retreatNode);
+    }
+    beginRetreat(target) {
+        this.attackState = "retreat";
+        this.attacking = true;
+        this.speed = this.walkSpeed;
+        this.spriteDirectionLock = this.direction
+            ? { x: this.direction.x, y: this.direction.y }
+            : this.spriteDirectionLock;
+        if (this.spriteCols > 1) this.spriteCol = 0;
+        this.setRetreatDestination(target);
+    }
+    updatePursuitDestination(target) {
+        if (!target) return;
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!targetNode) return;
+
+        const destinationChanged = this.destination !== targetNode;
+        const hasNoPath = !Array.isArray(this.path) || this.path.length === 0;
+        const betweenMoves = this.travelFrames === 0 || !this.moving;
+        if (destinationChanged && (hasNoPath || betweenMoves)) {
+            this.goto(targetNode);
+        }
+    }
+    runAiBehaviorTick() {
+        if (this.hasReachedRetreatThreshold()) {
+            this.resetAttackState();
+            if (!Number.isFinite(this._retreatBaseFleeRadius)) {
+                this._retreatBaseFleeRadius = this.fleeRadius;
+            }
+            this.fleeRadius = 20;
+        } else if (Number.isFinite(this._retreatBaseFleeRadius)) {
+            this.fleeRadius = this._retreatBaseFleeRadius;
+            this._retreatBaseFleeRadius = null;
+        }
+
+        if (this.fleeRadius > 0 && withinRadius(this.x, this.y, wizard.x, wizard.y, this.fleeRadius)) {
+            this.resetAttackState();
+            this.flee();
             return;
-        } 
-        super.move();
-        // wander around
+        }
+
+        if (this.chaseRadius > 0 && withinRadius(this.x, this.y, wizard.x, wizard.y, this.chaseRadius)) {
+            this.attack(wizard);
+            return;
+        }
+
+        if (this.attackState !== "idle") {
+            this.resetAttackState();
+        }
+
+        // Wander around when idle.
         if (Number.isFinite(this.x) && Number.isFinite(this.y) && !this.moving) {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
@@ -1714,18 +2068,65 @@ class Animal extends Character {
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
         }
+    }
 
-        // maintain a reasonable framerate only when visible
+    tickMovementOnly(simHz = null, movementScale = 1) {
+        if (this.dead || this.gone) return;
+        if (Number.isFinite(simHz) && simHz > 0) {
+            this.frameRate = simHz;
+        }
+        super.move();
+        const stepScale = Number.isFinite(movementScale) ? Math.max(1, movementScale) : 1;
+        if (
+            stepScale > 1 &&
+            this.moving &&
+            Number.isFinite(this.travelX) &&
+            Number.isFinite(this.travelY) &&
+            Number.isFinite(this.travelFrames) &&
+            this.travelFrames > 0
+        ) {
+            const extraWholeSteps = Math.max(0, Math.floor(stepScale - 1));
+            if (extraWholeSteps > 0) {
+                const consumedExtra = Math.min(extraWholeSteps, this.travelFrames);
+                this.x += this.travelX * consumedExtra;
+                this.y += this.travelY * consumedExtra;
+                this.travelFrames = Math.max(0, this.travelFrames - consumedExtra);
+            }
+            if (this.map && typeof this.map.wrapWorldX === "function") {
+                this.x = this.map.wrapWorldX(this.x);
+            }
+            if (this.map && typeof this.map.wrapWorldY === "function") {
+                this.y = this.map.wrapWorldY(this.y);
+            }
+            this.updateHitboxes();
+        }
+        if (!Number.isFinite(this.maxHp) || this.maxHp < this.hp) {
+            this.maxHp = this.hp;
+        }
+    }
+
+    tickBehaviorOnly() {
+        if (this.dead || this.gone) return;
+        this.runAiBehaviorTick();
+    }
+
+    move() {
+        if (this.dead || this.gone) {
+            clearTimeout(this.moveTimeout);
+            clearTimeout(this.attackTimeout);
+            return;
+        } 
+        super.move();
+
+        if (!Number.isFinite(this.maxHp) || this.maxHp < this.hp) {
+            this.maxHp = this.hp;
+        }
+
+        // Timer-driven mode keeps legacy dynamic rate selection.
         if (this.travelFrames === 0) {
             this.frameRate = this.onScreen ? 30 : this.speed;
         }
-
-        if (this.fleeRadius > 0 && withinRadius(this.x, this.y, wizard.x, wizard.y, this.fleeRadius)) {
-            this.flee()
-        }
-        else if (this.chaseRadius > 0 && withinRadius(this.x, this.y, wizard.x, wizard.y, this.chaseRadius)) {
-            this.attack(wizard);
-        }
+        this.runAiBehaviorTick();
     }
     get onScreen() {
         const safetyMargin = 5; // world units
@@ -1733,11 +2134,7 @@ class Animal extends Character {
         const interpolated = this.getInterpolatedPosition();
         const itemX = Number.isFinite(interpolated.x) ? interpolated.x : this.x;
         const itemY = Number.isFinite(interpolated.y) ? interpolated.y : this.y;
-        const camera = (
-            interpolatedViewport &&
-            Number.isFinite(interpolatedViewport.x) &&
-            Number.isFinite(interpolatedViewport.y)
-        ) ? interpolatedViewport : viewport;
+        const camera = viewport;
         const centerX = camera.x + camera.width * 0.5;
         const centerY = camera.y + camera.height * 0.5;
         const dx = (this.map && typeof this.map.shortestDeltaX === "function")
@@ -1771,23 +2168,59 @@ class Animal extends Character {
         this.speed = this.runSpeed;
     }
     attack(target) {
-        const targetNode = this.map.worldToNode(target.x, target.y);
-        if (targetNode) this.goto(targetNode);
-        this.speed = this.runSpeed;
-        this.attacking = this.attacking || 1;
-        if (withinRadius(this.x, this.y, target.x, target.y, 1) && this.attacking == 1) {
-            this.attacking = 2
-            if (this.spriteCols > 1) this.spriteCol = 1;
-            // Face toward the target
-            this.direction = {x: target.x - this.x, y: target.y - this.y};
-            let damage = Math.floor((1 - Math.random() * Math.random()) * this.damage + 1);
-            // message(`${this.type} ${this.attackVerb} ${target.name} for ${damage} damage!`)
-            target.hp = Math.max(0, target.hp - damage);
-            this.attackTimeout = setTimeout(() => {
-                if (this.spriteCols > 1) this.spriteCol = 0;
-                this.attacking = 1;
-            }, 1000);
+        if (!target || target.gone || target.dead) {
+            this.resetAttackState();
+            return;
         }
+
+        this.attackTarget = target;
+        this.attacking = true;
+
+        const now = Date.now();
+        const cooldownMs = Math.max(0, Number(this.attackCooldown) || 0) * 1000;
+        const dist = distance(this.x, this.y, target.x, target.y);
+
+        if (this.attackState === "retreat") {
+            this.speed = this.walkSpeed;
+            if (!this.destination || !this.moving) {
+                this.setRetreatDestination(target);
+            }
+            const hasRetreatedFarEnough = dist >= this.lungeRadius;
+            if ((now - this.lastAttackTimeMs) >= cooldownMs && hasRetreatedFarEnough) {
+                this.attackState = "approach";
+                this.spriteDirectionLock = null;
+            }
+            return;
+        }
+
+        if (dist > this.lungeRadius) {
+            this.attackState = "approach";
+            this.speed = this.runSpeed;
+            this.spriteDirectionLock = null;
+            if (this.spriteCols > 1) this.spriteCol = 0;
+            this.updatePursuitDestination(target);
+            return;
+        }
+
+        this.attackState = "lunge";
+        this.speed = this.lungeSpeed;
+        if (this.hasAttackAnimation()) {
+            this.spriteCol = 1;
+        } else if (this.spriteCols > 1) {
+            this.spriteCol = 0;
+        }
+        this.updatePursuitDestination(target);
+        this.direction = {x: target.x - this.x, y: target.y - this.y};
+
+        if (dist > this.strikeRange || (now - this.lastAttackTimeMs) < cooldownMs) {
+            return;
+        }
+
+        if (this.hasAttackAnimation()) this.spriteCol = 1;
+        const damage = Math.floor((1 - Math.random() * Math.random()) * this.damage + 1);
+        target.hp = Math.max(0, target.hp - damage);
+        this.lastAttackTimeMs = now;
+        this.beginRetreat(target);
     }
     catch(x, y) {
         this.dead = 1;
@@ -1845,7 +2278,8 @@ class Animal extends Character {
             type: this.type,
             x: this.x,
             y: this.y,
-            hp: this.hp
+            hp: this.hp,
+            size: this.size
         };
     }
 
@@ -1894,6 +2328,39 @@ class Animal extends Character {
                 animalInstance.x = data.x;
                 animalInstance.y = data.y;
                 if (data.hp !== undefined) animalInstance.hp = data.hp;
+
+                // Restore saved size and rescale derived properties
+                if (Number.isFinite(data.size) && data.size > 0) {
+                    const baseSize = animalInstance.size;
+                    const savedSize = data.size;
+                    if (Math.abs(baseSize - savedSize) > 1e-6 && baseSize > 0) {
+                        const ratio = savedSize / baseSize;
+                        animalInstance.size = savedSize;
+                        animalInstance.width = (animalInstance.width / baseSize) * savedSize;
+                        animalInstance.height = (animalInstance.height / baseSize) * savedSize;
+                        if (Number.isFinite(animalInstance.radius)) {
+                            animalInstance.radius *= ratio;
+                        }
+                        if (Number.isFinite(animalInstance.lungeRadius)) {
+                            animalInstance.lungeRadius *= ratio;
+                        }
+                        if (Number.isFinite(animalInstance.strikeRange)) {
+                            animalInstance.strikeRange *= ratio;
+                        }
+                        if (Number.isFinite(animalInstance.damage)) {
+                            animalInstance.damage *= ratio;
+                        }
+                        if (Number.isFinite(animalInstance.groundRadius)) {
+                            animalInstance.groundRadius *= ratio;
+                        }
+                        if (Number.isFinite(animalInstance.visualRadius)) {
+                            animalInstance.visualRadius *= ratio;
+                        }
+                        if (typeof animalInstance.updateHitboxes === "function") {
+                            animalInstance.updateHitboxes();
+                        }
+                    }
+                }
             }
 
             return animalInstance;
@@ -1922,9 +2389,15 @@ class Squirrel extends Animal {
         this.height = size;
         this.walkSpeed = 2;
         this.runSpeed = 2.5;
+        this.lungeRadius = 3;
+        this.lungeSpeed = 5.5;
+        this.attackCooldown = 2.5;
+        this.strikeRange = 0.5;
+        this.retreatThreshold = 1;
         this.fleeRadius = 5;
         this.foodValue = Math.floor(6 * this.size);
         this.hp = 1;
+        this.maxHp = this.hp;
         this.randomMotion = 3;
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
@@ -1949,9 +2422,15 @@ class Deer extends Animal {
         this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
+        this.lungeRadius = 2.5;
+        this.lungeSpeed = 4.5;
+        this.attackCooldown = 2.0;
+        this.strikeRange = 0.8;
+        this.retreatThreshold = 0.5;
         this.fleeRadius = 9;
         this.foodValue = Math.floor(90 * size);
         this.hp = 10 * size;
+        this.maxHp = this.hp;
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
     }
@@ -1972,17 +2451,26 @@ class Bear extends Animal {
             ]
         };
         this.radius = 1.0; // Animal hitbox radius in hex units
+        this.groundRadius *= 1.5;
+        this.visualRadius *= 1.5;
+        this.updateHitboxes();
         this.frameCount = {x: 2, y: 2};
         this.width = this.size * 1.4;
         this.height = this.size;
         this.walkSpeed = 1;
-        this.runSpeed = 3;
+        this.runSpeed = 3.5;
+        this.lungeRadius = 2;
+        this.lungeSpeed = 5.0;
+        this.attackCooldown = 1.5;
+        this.strikeRange = 0.8;
+        this.retreatThreshold = 0.25;
         this.chaseRadius = 9;
         this.fleeRadius = -1;
         this.attackVerb = "mauls";
         this.damage = 20;
         this.foodValue = Math.floor(240 * this.size);
         this.hp = 25 * this.size;
+        this.maxHp = this.hp;
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
     }
@@ -1991,11 +2479,11 @@ class Bear extends Animal {
 
 class Scorpion extends Animal {
     constructor(location, map) {
-        super('scorpion', location, map);
+        const size = Math.random() * .1 + .4;
+        super('scorpion', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .1 + .4;
-        this.width = this.size;
-        this.height = this.size;
+        this.width = size;
+        this.height = size;
         this.walkSpeed = .75;
         this.runSpeed = 1.5;
         this.chaseRadius = 4;
@@ -2009,85 +2497,107 @@ class Scorpion extends Animal {
 
 class Armadillo extends Animal {
     constructor(location, map) {
-        super('armadillo', location, map);
+        const size = Math.random() * .2 + .5;
+        super('armadillo', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .2 + .5;
-        this.width = this.size;
-        this.height = this.size;
+        this.width = size;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2;
         this.fleeRadius = 7;
-        this.foodValue = Math.floor(20 * this.size);
-        this.hp = 10 * this.size;
+        this.foodValue = Math.floor(20 * size);
+        this.hp = 10 * size;
         this.randomMotion = 3;
     }
 }
 
 class Coyote extends Animal {
     constructor(location, map) {
-        super('coyote', location, map);
+        const size = Math.random() * .25 + .7;
+        super('coyote', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .25 + .7;
-        this.width = this.size * 1.75;
-        this.height = this.size;
+        this.width = size * 1.75;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.fleeRadius = 10;
-        this.foodValue = Math.floor(60 * this.size);
-        this.hp = 15 * this.size;
+        this.foodValue = Math.floor(60 * size);
+        this.hp = 15 * size;
         this.randomMotion = 6;
     }
 }
 
 class Goat extends Animal {
     constructor(location, map) {
-        super('goat', location, map);
+        const size = Math.random() * .25 + .7;
+        super('goat', location, size, map);
+        this.spriteSheet = {
+            rows: 2,
+            cols: 1,
+            frameKeys: [
+                "walk_left",
+                "walk_right"
+            ]
+        };
         this.frameCount = {x: 1, y: 2};
-        this.size = Math.random() * .25 + .7;
-        this.width = this.size * 1.2;
-        this.height = this.size;
+        this.width = size * 1.2;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2.5;
         this.fleeRadius = 8;
-        this.foodValue = Math.floor(80 * this.size);
-        this.hp = 15 * this.size;
+        this.foodValue = Math.floor(80 * size);
+        this.hp = 15 * size;
         this.randomMotion = 6;
+        this.spriteSheetReady = false;
+        ensureSpriteFrames(this);
     }
 }
 
 class Porcupine extends Animal {
     constructor(location, map) {
-        super('porcupine', location, map);
+        const size = Math.random() * .2 + .5;
+        super('porcupine', location, size, map);
         this.frameCount = {x: 2, y: 2};
-        this.size = Math.random() * .2 + .5;
-        this.width = this.size * 1.15;
-        this.height = this.size;
+        this.width = size * 1.15;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2;
         this.fleeRadius = 7;
         this.chaseRadius = 4;
         this.damage = 3;
         this.attackVerb = "pokes";
-        this.foodValue = Math.floor(20 * this.size);
-        this.hp = 5 * this.size;
+        this.foodValue = Math.floor(20 * size);
+        this.hp = 5 * size;
         this.randomMotion = 3;
     }
 }
 
 class Yeti extends Animal {
     constructor(location, map) {
-        super('yeti', location, map);
+        const size = Math.random() * .5 + 1.5;
+        super('yeti', location, size, map);
+        this.spriteSheet = {
+            rows: 2,
+            cols: 2,
+            frameKeys: [
+                "walk_left",
+                "attack_left",
+                "walk_right",
+                "attack_right"
+            ]
+        };
         this.frameCount = {x: 2, y: 2};
-        this.size = Math.random() * .5 + 1.5;
-        this.width = this.size * 1.2;
-        this.height = this.size;
+        this.width = size * 1.2;
+        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2.75;
         this.chaseRadius = 6;
         this.attackVerb = "mauls";
         this.damage = 50;
-        this.foodValue = Math.floor(400 * this.size);
-        this.hp = 40 * this.size;
+        this.foodValue = Math.floor(400 * size);
+        this.hp = 40 * size;
+        this.spriteSheetReady = false;
+        ensureSpriteFrames(this);
     }
 }
 
@@ -2155,6 +2665,8 @@ jQuery(() => {
         top: "8px",
         right: "8px",
         "z-index": 99999,
+        width: "72ch",
+        "box-sizing": "border-box",
         padding: "6px 8px",
         "font-family": "monospace",
         "font-size": "11px",
@@ -2263,16 +2775,9 @@ jQuery(() => {
         };
     }
 
-    function syncMouseScreenFromWorldWithViewport(useInterpolatedCamera = false) {
+    function syncMouseScreenFromWorldWithViewport() {
         if (!Number.isFinite(pointerLockAimWorld.x) || !Number.isFinite(pointerLockAimWorld.y)) return;
-        const camera = (
-            useInterpolatedCamera &&
-            interpolatedViewport &&
-            Number.isFinite(interpolatedViewport.x) &&
-            Number.isFinite(interpolatedViewport.y)
-        )
-            ? interpolatedViewport
-            : viewport;
+        const camera = viewport;
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(camera.x, pointerLockAimWorld.x)
             : (pointerLockAimWorld.x - camera.x);
@@ -2388,7 +2893,7 @@ jQuery(() => {
     function isVirtualCursorOverMenuArea() {
         const hovered = getVirtualCursorHoveredElement();
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
     }
 
     function updateRangeInputFromClientX(rangeInput, clientX, emitChange = false) {
@@ -2469,47 +2974,10 @@ jQuery(() => {
 
         viewscale = app.screen.width / viewport.width;
 
-        // Reposition background tiles after resize
-        updateLandLayer();
-
-    }
-
-    function clearOnScreenObjects() {
-        if (!map || !wizard) return;
-
-        const { startNode, endNode } = getViewportCornerNodes();
-        if (!startNode || !endNode) return;
-
-        const xStart = Math.max(0, Math.min(startNode.xindex, endNode.xindex));
-        const xEnd = Math.min(mapWidth - 1, Math.max(startNode.xindex, endNode.xindex));
-        const yStart = Math.max(0, Math.min(startNode.yindex, endNode.yindex));
-        const yEnd = Math.min(mapHeight - 1, Math.max(startNode.yindex, endNode.yindex));
-
-        for (let y = yStart; y <= yEnd; y++) {
-            for (let x = xStart; x <= xEnd; x++) {
-                const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
-                if (!node || !node.objects || node.objects.length === 0) continue;
-
-                const objectsToRemove = node.objects.filter(obj => obj && obj.type === "tree");
-                objectsToRemove.forEach(obj => {
-                    obj.gone = true;
-                    obj.removeFromNodes();
-                    if (obj.pixiSprite && obj.pixiSprite.parent) {
-                        obj.pixiSprite.parent.removeChild(obj.pixiSprite);
-                    }
-                });
-            }
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
         }
 
-        animals = animals.filter(animal => {
-            if (!animal || animal.gone) return false;
-            if (animal.onScreen) {
-                if (typeof animal.delete === "function") animal.delete();
-                else animal.gone = true;
-                return false;
-            }
-            return true;
-        });
     }
 
     function getSpellMenuIconElements() {
@@ -2700,7 +3168,29 @@ jQuery(() => {
             initSpellMenuKeyboardFocus();
             return true;
         }
+        if (spellName === "spawnanimal" && typeof SpellSystem.showAnimalMenu === "function") {
+            SpellSystem.showAnimalMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
         return false;
+    }
+
+    function isEditorPlacementSpellActive() {
+        if (!wizard) return false;
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorSpellName === "function") {
+            return SpellSystem.isEditorSpellName(wizard.currentSpell);
+        }
+        return wizard.currentSpell === "placeobject" || wizard.currentSpell === "blackdiamond";
+    }
+
+    function isEditorPlacementKeyHeld() {
+        return !!keysPressed["e"];
+    }
+
+    function updateEditorPlacementActiveState(active) {
+        if (!wizard) return;
+        wizard.editorPlacementActive = !!active && isEditorPlacementSpellActive();
     }
 
     console.log("Generating map...");
@@ -2708,14 +3198,136 @@ jQuery(() => {
     map = new GameMap(mapHeight, mapWidth, {}, () => {
         frameRate = 30;
         const simStepMs = 1000 / frameRate;
+        const animalAiOnscreenHz = 10;
+        const animalAiOffscreenHz = 1.5;
+        const animalAiMaxStepsPerSim = 10;
+        const inactiveMovementDecimation = 6;
         let simAccumulatorMs = 0;
         let lastFrameMs = performance.now();
         let lastPresentedMs = 0;
         let nextPresentAtMs = 0;
         const maxSimStepsPerFrame = 5;
+        let inactiveMovementCursor = 0;
+        let animalAiCursorOn = 0;
+        let animalAiCursorOff = 0;
+        let animalVisibilitySnapshot = { active: animals, inactive: [] };
+
+        function refreshAnimalVisibilitySnapshot() {
+            const runtimeApi = (typeof globalThis !== "undefined" && globalThis.RenderRuntime)
+                ? globalThis.RenderRuntime
+                : null;
+            if (runtimeApi && typeof runtimeApi.syncAnimalVisibility === "function") {
+                const synced = runtimeApi.syncAnimalVisibility({
+                    animals,
+                    map,
+                    viewport,
+                    activationPaddingTiles: 4,
+                    retentionExtraTiles: 2
+                });
+                const active = Array.isArray(synced && synced.active) ? synced.active : animals;
+                const inactive = Array.isArray(synced && synced.inactive) ? synced.inactive : [];
+                animalVisibilitySnapshot = { active, inactive };
+                return animalVisibilitySnapshot;
+            }
+            animalVisibilitySnapshot = { active: animals, inactive: [] };
+            return animalVisibilitySnapshot;
+        }
+
+        function advanceAnimalsSimulation() {
+            if (!Array.isArray(animals) || animals.length === 0) return;
+            const runtimeApi = (typeof globalThis !== "undefined" && globalThis.RenderRuntime)
+                ? globalThis.RenderRuntime
+                : null;
+            const visibility = animalVisibilitySnapshot || { active: animals, inactive: [] };
+
+            const activeAnimals = Array.isArray(visibility.active) ? visibility.active : animals;
+            const inactiveAnimals = Array.isArray(visibility.inactive) ? visibility.inactive : [];
+            const dueOnscreen = [];
+            const dueOffscreen = [];
+
+            for (let i = 0; i < activeAnimals.length; i++) {
+                const animal = activeAnimals[i];
+                if (!animal || animal.gone || animal.dead) continue;
+                animal.prevX = animal.x;
+                animal.prevY = animal.y;
+                animal.prevZ = animal.z;
+                animal.tickMovementOnly(frameRate, 1);
+                if (runtimeApi && typeof runtimeApi.noteAnimalMoved === "function") {
+                    runtimeApi.noteAnimalMoved(animal, map);
+                }
+                const aiIntervalMs = 1000 / animalAiOnscreenHz;
+                if (!Number.isFinite(animal._aiAccumulatorMs)) {
+                    animal._aiAccumulatorMs = Math.random() * aiIntervalMs;
+                } else {
+                    animal._aiAccumulatorMs = Math.min(animal._aiAccumulatorMs + simStepMs, aiIntervalMs * 3);
+                }
+                if (animal._aiAccumulatorMs >= aiIntervalMs) {
+                    dueOnscreen.push(animal);
+                }
+            }
+
+            if (inactiveAnimals.length > 0) {
+                const perStepInactiveMoves = Math.max(1, Math.ceil(inactiveAnimals.length / inactiveMovementDecimation));
+                for (let moved = 0; moved < perStepInactiveMoves; moved++) {
+                    const idx = inactiveMovementCursor % inactiveAnimals.length;
+                    inactiveMovementCursor++;
+                    const animal = inactiveAnimals[idx];
+                    if (!animal || animal.gone || animal.dead) continue;
+                    animal.prevX = animal.x;
+                    animal.prevY = animal.y;
+                    animal.prevZ = animal.z;
+                    animal.tickMovementOnly(frameRate, inactiveMovementDecimation);
+                    if (runtimeApi && typeof runtimeApi.noteAnimalMoved === "function") {
+                        runtimeApi.noteAnimalMoved(animal, map);
+                    }
+                    const aiIntervalMs = 1000 / animalAiOffscreenHz;
+                    const simChunkMs = simStepMs * inactiveMovementDecimation;
+                    if (!Number.isFinite(animal._aiAccumulatorMs)) {
+                        animal._aiAccumulatorMs = Math.random() * aiIntervalMs;
+                    } else {
+                        animal._aiAccumulatorMs = Math.min(animal._aiAccumulatorMs + simChunkMs, aiIntervalMs * 3);
+                    }
+                    if (animal._aiAccumulatorMs >= aiIntervalMs) {
+                        dueOffscreen.push(animal);
+                    }
+                }
+            }
+
+            let aiBudget = animalAiMaxStepsPerSim;
+            if (dueOnscreen.length > 0) {
+                const startCursor = animalAiCursorOn % dueOnscreen.length;
+                let cursor = startCursor;
+                while (aiBudget > 0 && dueOnscreen.length > 0) {
+                    const animal = dueOnscreen[cursor];
+                    const aiIntervalMs = 1000 / animalAiOnscreenHz;
+                    animal.tickBehaviorOnly();
+                    animal._aiAccumulatorMs = Math.max(0, Number(animal._aiAccumulatorMs || 0) - aiIntervalMs);
+                    aiBudget--;
+                    cursor = (cursor + 1) % dueOnscreen.length;
+                    if (cursor === startCursor) break;
+                }
+                animalAiCursorOn = cursor;
+            }
+
+            if (aiBudget > 0 && dueOffscreen.length > 0) {
+                const startCursor = animalAiCursorOff % dueOffscreen.length;
+                let cursor = startCursor;
+                while (aiBudget > 0 && dueOffscreen.length > 0) {
+                    const animal = dueOffscreen[cursor];
+                    const aiIntervalMs = 1000 / animalAiOffscreenHz;
+                    animal.tickBehaviorOnly();
+                    animal._aiAccumulatorMs = Math.max(0, Number(animal._aiAccumulatorMs || 0) - aiIntervalMs);
+                    aiBudget--;
+                    cursor = (cursor + 1) % dueOffscreen.length;
+                    if (cursor === startCursor) break;
+                }
+                animalAiCursorOff = cursor;
+            }
+        }
         
         // Draw immediately on first frame
-        presentGameFrame();
+        refreshAnimalVisibilitySnapshot();
+        presentGameFrame(animalVisibilitySnapshot.active);
         
         function runSimulationStep() {
             if (!wizard) return;
@@ -2825,6 +3437,7 @@ jQuery(() => {
             if (typeof updatePowerupsForWizard === "function") {
                 updatePowerupsForWizard(wizard);
             }
+            advanceAnimalsSimulation();
             collisionMs = performance.now() - collisionStartMs;
             const pointerPostStartMs = performance.now();
             if (
@@ -2882,25 +3495,24 @@ jQuery(() => {
             const frameDeltaMs = Math.min(250, Math.max(0, nowMs - lastFrameMs));
             lastFrameMs = nowMs;
             const simStartMs = performance.now();
+            refreshAnimalVisibilitySnapshot();
 
             if (paused) {
                 perfStats.simSteps = 0;
                 perfStats.simMs = 0;
                 renderAlpha = 1;
-                interpolatedViewport.x = viewport.x;
-                interpolatedViewport.y = viewport.y;
             } else {
                 simAccumulatorMs += frameDeltaMs;
                 let simSteps = 0;
 
                 while (simAccumulatorMs >= simStepMs && simSteps < maxSimStepsPerFrame) {
-                    previousViewport.x = viewport.x;
-                    previousViewport.y = viewport.y;
                     if (wizard) {
                         wizard.prevX = wizard.x;
                         wizard.prevY = wizard.y;
                         wizard.prevZ = wizard.z;
                     }
+                    viewport.prevX = viewport.x;
+                    viewport.prevY = viewport.y;
                     runSimulationStep();
                     simAccumulatorMs -= simStepMs;
                     simSteps++;
@@ -2943,13 +3555,6 @@ jQuery(() => {
                 simPerfBreakdown.maxCollisionMs = 0;
                 simPerfBreakdown.maxPointerPostMs = 0;
                 renderAlpha = Math.max(0, Math.min(1, simAccumulatorMs / simStepMs));
-                if (map && typeof map.shortestDeltaX === "function" && typeof map.shortestDeltaY === "function") {
-                    interpolatedViewport.x = previousViewport.x + map.shortestDeltaX(previousViewport.x, viewport.x) * renderAlpha;
-                    interpolatedViewport.y = previousViewport.y + map.shortestDeltaY(previousViewport.y, viewport.y) * renderAlpha;
-                } else {
-                    interpolatedViewport.x = previousViewport.x + (viewport.x - previousViewport.x) * renderAlpha;
-                    interpolatedViewport.y = previousViewport.y + (viewport.y - previousViewport.y) * renderAlpha;
-                }
                 perfStats.simMs = performance.now() - simStartMs;
             }
             if (paused) {
@@ -2993,11 +3598,12 @@ jQuery(() => {
                 if (!isVirtualCursorOverMenuArea()) {
                     // Reproject lock-mode aim every render frame using the interpolated camera
                     // to keep cursor motion smooth while the viewport drifts.
-                    syncMouseScreenFromWorldWithViewport(true);
+                    syncMouseScreenFromWorldWithViewport();
                     clampVirtualCursorToCanvas(1);
                 }
             }
-            presentGameFrame();
+            updateAnimalPreview();
+            presentGameFrame(animalVisibilitySnapshot.active);
             perfStats.drawMs = performance.now() - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
             if (typeof recordPerfAccumulatorSample === "function") {
@@ -3034,29 +3640,17 @@ jQuery(() => {
             }
             const panelNow = performance.now();
             if (showPerfReadout && perfPanel && panelNow - perfStats.lastUiUpdateAt > 200) {
-                const losVisibleObjects = (typeof globalThis !== "undefined" && Array.isArray(globalThis.losDebugVisibleObjects))
-                    ? globalThis.losDebugVisibleObjects
-                    : [];
                 const losBreakdown = (typeof globalThis !== "undefined" && globalThis.losDebugBreakdown)
                     ? globalThis.losDebugBreakdown
                     : null;
-                const losBuildMs = (losBreakdown && Number.isFinite(losBreakdown.buildMs)) ? losBreakdown.buildMs : 0;
-                const losTraceMs = (losBreakdown && Number.isFinite(losBreakdown.traceMs)) ? losBreakdown.traceMs : 0;
                 const losTotalMs = (losBreakdown && Number.isFinite(losBreakdown.totalMs))
                     ? losBreakdown.totalMs
                     : ((typeof globalThis !== "undefined" && Number.isFinite(globalThis.losDebugLastMs)) ? globalThis.losDebugLastMs : 0);
                 const losRecomputed = !!(losBreakdown && losBreakdown.recomputed);
-                const losCandidates = (losBreakdown && Number.isFinite(losBreakdown.candidates))
-                    ? losBreakdown.candidates
-                    : 0;
                 const losSummary =
-                    `\nlos ${losTotalMs.toFixed(2)} ms${losRecomputed ? "" : " (cached)"}` +
-                    `\n  b ${losBuildMs.toFixed(2)} t ${losTraceMs.toFixed(2)} vis ${losVisibleObjects.length} cand ${losCandidates}`;
+                    `\nlos ${losTotalMs.toFixed(2)} ms${losRecomputed ? "" : " (cached)"}`;
                 const drawBreakdown = (typeof globalThis !== "undefined" && globalThis.drawPerfBreakdown)
                     ? globalThis.drawPerfBreakdown
-                    : null;
-                const simBreakdown = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
-                    ? globalThis.simPerfBreakdown
                     : null;
                 const cpuMs = perfStats.simMs + perfStats.drawMs;
                 const drawBuckets = drawBreakdown
@@ -3097,44 +3691,14 @@ jQuery(() => {
                         `${Number(drawBreakdown.composeInvariantSkipped || 0) > 0 ? " (skip)" : ""}`
                     )
                     : "";
-                const simBuckets = simBreakdown
-                    ? (
-                        `\nsimb a ${Number(simBreakdown.aimSyncMs || 0).toFixed(2)}` +
-                        ` f ${Number(simBreakdown.facingMs || 0).toFixed(2)}` +
-                        ` m ${Number(simBreakdown.movementMs || 0).toFixed(2)}` +
-                        ` c ${Number(simBreakdown.collisionMs || 0).toFixed(2)}` +
-                        ` p ${Number(simBreakdown.pointerPostMs || 0).toFixed(2)}`
-                    )
-                    : "";
-                const simMeta = simBreakdown
-                    ? (
-                        `\nstepmx ${Number(simBreakdown.maxStepMs || 0).toFixed(2)}` +
-                        ` acc ${Number(simBreakdown.accumulatorMs || 0).toFixed(1)}`
-                    )
-                    : "";
-                const simMaxBuckets = simBreakdown
-                    ? (
-                        `\nstepb a ${Number(simBreakdown.maxAimSyncMs || 0).toFixed(2)}` +
-                        ` f ${Number(simBreakdown.maxFacingMs || 0).toFixed(2)}` +
-                        ` m ${Number(simBreakdown.maxMovementMs || 0).toFixed(2)}` +
-                        ` c ${Number(simBreakdown.maxCollisionMs || 0).toFixed(2)}` +
-                        ` p ${Number(simBreakdown.maxPointerPostMs || 0).toFixed(2)}`
-                    )
-                    : "";
                 const wwDebug = debugMode ? formatWindowWallLinkDebugSummary() : "";
                 perfPanel.text(
                     `FPS ${perfStats.fps.toFixed(1)}\n` +
-                    `loop ${perfStats.loopMs.toFixed(1)} ms\n` +
                     `cpu ${cpuMs.toFixed(1)} ms\n` +
                     `simms ${perfStats.simMs.toFixed(1)} ms\n` +
                     `draw ${perfStats.drawMs.toFixed(1)} ms\n` +
                     `idle ${perfStats.idleMs.toFixed(1)} ms\n` +
                     `sim ${perfStats.simSteps}\n` +
-                    `target ${frameRate}` +
-                    simBuckets +
-                    simMeta +
-                    simMaxBuckets +
-                    (effectiveRenderMaxFps > 0 ? ` / render ${effectiveRenderMaxFps}` : "") +
                     drawBuckets +
                     drawPasses +
                     drawComposeBuckets +
@@ -3153,10 +3717,11 @@ jQuery(() => {
     wizard = new Wizard({x: mapWidth/2, y: mapHeight/2}, map);
     sizeView();
     centerViewport(wizard, 0, 0);
-    clearOnScreenObjects();
     
-    // Create roof preview
-    roof = new Roof(0, 0, 0);
+    // Roof instances are now created on placement.
+    if (typeof globalThis !== "undefined" && !Array.isArray(globalThis.roofs)) {
+        globalThis.roofs = [];
+    }
     if (typeof setVisibilityMaskSources === "function") {
         setVisibilityMaskSources([]);
     }
@@ -3235,8 +3800,28 @@ jQuery(() => {
         }
     });
 
+    function closeHudMenus(options = {}) {
+        const closeSpell = options.spell !== false;
+        const closeAura = options.aura !== false;
+        const closeEditor = options.editor !== false;
+        if (closeSpell) {
+            $("#spellMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+        }
+        if (closeAura) {
+            $("#auraMenu").addClass("hidden");
+            clearAuraMenuKeyboardFocus();
+        }
+        if (closeEditor) {
+            $("#editorMenu").addClass("hidden");
+        }
+    }
+
     $("#selectedSpell").click(() => {
         const wasHidden = $("#spellMenu").hasClass('hidden');
+        if (wasHidden) {
+            closeHudMenus({ spell: false, aura: true, editor: true });
+        }
         if ($("#spellMenu").hasClass('hidden') && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
             SpellSystem.showMainSpellMenu(wizard);
         }
@@ -3251,6 +3836,9 @@ jQuery(() => {
 
     $("#selectedAura").click(() => {
         const wasHidden = $("#auraMenu").hasClass("hidden");
+        if (wasHidden) {
+            closeHudMenus({ spell: true, aura: false, editor: true });
+        }
         $("#auraMenu").toggleClass("hidden");
         if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
             SpellSystem.refreshAuraSelector(wizard);
@@ -3263,6 +3851,34 @@ jQuery(() => {
         }
     });
 
+    $("#selectedEditor").click(() => {
+        if (!wizard || $("#editorSelector").hasClass("hidden")) return;
+        const wasHidden = $("#editorMenu").hasClass("hidden");
+        if (wasHidden) {
+            closeHudMenus({ spell: true, aura: true, editor: false });
+            if (typeof SpellSystem !== "undefined" && typeof SpellSystem.showEditorMenu === "function") {
+                SpellSystem.showEditorMenu(wizard);
+            } else {
+                $("#editorMenu").removeClass("hidden");
+            }
+        } else {
+            $("#editorMenu").addClass("hidden");
+        }
+    });
+
+    $("#selectedEditor").on("contextmenu", event => {
+        if (
+            wizard &&
+            !$("#editorSelector").hasClass("hidden") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showEditorSubmenuForSelectedCategory === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: true, aura: true, editor: false });
+            SpellSystem.showEditorSubmenuForSelectedCategory(wizard);
+        }
+    });
+
     $("#selectedSpell").on("contextmenu", event => {
         if (
             wizard &&
@@ -3271,6 +3887,7 @@ jQuery(() => {
             typeof SpellSystem.showWallMenu === "function"
         ) {
             event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
             SpellSystem.showWallMenu(wizard);
             return;
         }
@@ -3281,6 +3898,7 @@ jQuery(() => {
             typeof SpellSystem.showFlooringMenu === "function"
         ) {
             event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
             SpellSystem.showFlooringMenu(wizard);
             return;
         }
@@ -3291,17 +3909,20 @@ jQuery(() => {
             typeof SpellSystem.showTreeMenu === "function"
         ) {
             event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
             SpellSystem.showTreeMenu(wizard);
             return;
         }
         if (
             wizard &&
-            wizard.currentSpell === "placeobject" &&
+            wizard.currentSpell === "spawnanimal" &&
             typeof SpellSystem !== "undefined" &&
-            typeof SpellSystem.showPlaceableMenu === "function"
+            typeof SpellSystem.showAnimalMenu === "function"
         ) {
             event.preventDefault();
-            SpellSystem.showPlaceableMenu(wizard);
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showAnimalMenu(wizard);
+            return;
         }
     });
 
@@ -3310,10 +3931,7 @@ jQuery(() => {
             suppressNextCanvasMenuClose = false;
             return;
         }
-        $("#spellMenu").addClass('hidden');
-        $("#auraMenu").addClass('hidden');
-        clearSpellMenuKeyboardFocus();
-        clearAuraMenuKeyboardFocus();
+        closeHudMenus();
     });
 
     app.view.addEventListener("mousemove", event => {
@@ -3401,7 +4019,7 @@ jQuery(() => {
         }
         const overMenu = pointerLockActive
             ? isVirtualCursorOverMenuArea()
-            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars"));
+            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
         if (overMenu) return;
 
         event.preventDefault();
@@ -3436,10 +4054,13 @@ jQuery(() => {
             const selectedAuraEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedAura, #activeAuraIcons")
                 : null;
-            const menuInteractiveEl = hovered && typeof hovered.closest === "function"
-                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label")
+            const selectedEditorEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedEditor")
                 : null;
-            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedAuraEl;
+            const menuInteractiveEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
+                : null;
+            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedAuraEl || selectedEditorEl;
             const isRightClick = (event.button === 2);
             if (forwardTarget) {
                 event.preventDefault();
@@ -3541,37 +4162,39 @@ jQuery(() => {
     });
 
     app.view.addEventListener("click", event => {
-        if (keysPressed[' ']) {
-            if (wizard.currentSpell === "treegrow") {
-                event.preventDefault();
-                return;
-            }
+        const castWithSpace = !!keysPressed[" "];
+        const castWithEditorKey = isEditorPlacementSpellActive() && isEditorPlacementKeyHeld();
+        if (!castWithSpace && !castWithEditorKey) return;
+
+        if (castWithSpace && wizard.currentSpell === "treegrow") {
             event.preventDefault();
-            const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
-                ? {x: mousePos.worldX, y: mousePos.worldY}
-                : (() => {
-                    const rect = app.view.getBoundingClientRect();
-                    const screenX = event.clientX - rect.left;
-                    const screenY = event.clientY - rect.top;
-                    return screenToWorld(screenX, screenY);
-                })();
-            const aim = getWizardAimVectorTo(worldCoors.x, worldCoors.y);
-            // Stop wizard movement by setting destination to current node
-            wizard.destination = null;
-            wizard.path = [];
-            wizard.travelFrames = 0;
-            // Turn and cast at exact click coordinates.
-            wizard.turnToward(aim.x, aim.y);
-            if (
-                wizard.currentSpell === "wall" ||
-                wizard.currentSpell === "buildroad" ||
-                wizard.currentSpell === "firewall" ||
-                wizard.currentSpell === "vanish"
-            ) return;
-            SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
-            // Prevent keyup quick-cast from firing a duplicate cast.
-            spacebarDownAt = null;
+            return;
         }
+        event.preventDefault();
+        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+            ? {x: mousePos.worldX, y: mousePos.worldY}
+            : (() => {
+                const rect = app.view.getBoundingClientRect();
+                const screenX = event.clientX - rect.left;
+                const screenY = event.clientY - rect.top;
+                return screenToWorld(screenX, screenY);
+            })();
+        const aim = getWizardAimVectorTo(worldCoors.x, worldCoors.y);
+        // Stop wizard movement by setting destination to current node
+        wizard.destination = null;
+        wizard.path = [];
+        wizard.travelFrames = 0;
+        // Turn and cast at exact click coordinates.
+        wizard.turnToward(aim.x, aim.y);
+        if (
+            wizard.currentSpell === "wall" ||
+            wizard.currentSpell === "buildroad" ||
+            wizard.currentSpell === "firewall" ||
+            wizard.currentSpell === "vanish"
+        ) return;
+        SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
+        // Prevent keyup quick-cast from firing a duplicate cast.
+        spacebarDownAt = null;
     })
      
     $("#msg").contextmenu(event => event.preventDefault())
@@ -3579,6 +4202,7 @@ jQuery(() => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
         const auraMenuVisible = !$("#auraMenu").hasClass("hidden");
+        const editorMenuVisible = !$("#editorMenu").hasClass("hidden");
 
         if (event.ctrlKey && keyLower === "f") {
             event.preventDefault();
@@ -3601,8 +4225,33 @@ jQuery(() => {
             return;
         }
 
+        if (event.ctrlKey && keyLower === "e") {
+            event.preventDefault();
+            if (
+                wizard &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.toggleEditorPanelVisible === "function"
+            ) {
+                SpellSystem.toggleEditorPanelVisible(wizard);
+            } else {
+                const nextVisible = $("#editorSelector").hasClass("hidden");
+                $("#editorSelector").toggleClass("hidden", !nextVisible);
+                if (!nextVisible) {
+                    $("#editorMenu").addClass("hidden");
+                }
+                if (wizard) {
+                    wizard.showEditorPanel = nextVisible;
+                }
+            }
+            return;
+        }
+
         if (event.key === "Tab") {
             event.preventDefault();
+            if (editorMenuVisible) {
+                $("#editorMenu").addClass("hidden");
+                return;
+            }
             if (event.shiftKey) {
                 if (spellMenuVisible) {
                     $("#spellMenu").addClass("hidden");
@@ -3633,6 +4282,7 @@ jQuery(() => {
             } else if (spellMenuVisible) {
                 $("#spellMenu").addClass("hidden");
                 $("#auraMenu").addClass("hidden");
+                $("#editorMenu").addClass("hidden");
                 clearSpellMenuKeyboardFocus();
                 clearAuraMenuKeyboardFocus();
             } else if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
@@ -3643,10 +4293,11 @@ jQuery(() => {
             return;
         }
 
-        if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible)) {
+        if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible || editorMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
             $("#auraMenu").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
             clearAuraMenuKeyboardFocus();
             return;
@@ -3707,6 +4358,17 @@ jQuery(() => {
 
         // Track key state
         keysPressed[keyLower] = true;
+        if (keyLower === "e" && !event.ctrlKey) {
+            if (
+                wizard &&
+                !event.repeat &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.activateSelectedEditorTool === "function"
+            ) {
+                SpellSystem.activateSelectedEditorTool(wizard);
+            }
+            updateEditorPlacementActiveState(true);
+        }
 
         // Combo binding: F+W selects Firewall spell.
         if (
@@ -3717,6 +4379,19 @@ jQuery(() => {
             typeof SpellSystem.setCurrentSpell === "function"
         ) {
             SpellSystem.setCurrentSpell(wizard, "firewall");
+            updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+            return;
+        }
+
+        if (
+            wizard &&
+            keysPressed['e'] &&
+            keysPressed['t'] &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.setCurrentSpell === "function"
+        ) {
+            SpellSystem.setCurrentSpell(wizard, "editscript");
+            updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
             return;
         }
 
@@ -3730,6 +4405,7 @@ jQuery(() => {
             (isPlaceRotateLeft || isPlaceRotateRight) &&
             !spellMenuVisible &&
             !auraMenuVisible &&
+            !editorMenuVisible &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.adjustPlaceableRotation === "function"
         ) {
@@ -3745,6 +4421,7 @@ jQuery(() => {
             wizard &&
             wizard.currentSpell === "placeobject" &&
             (isPlusKey || isMinusKey) &&
+            !editorMenuVisible &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.adjustPlaceableRenderOffset === "function"
         ) {
@@ -3769,6 +4446,10 @@ jQuery(() => {
                     const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
                     wizard.turnToward(aim.x, aim.y);
                     SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
+                }
+                // SpawnAnimal: space alone just activates preview mode; click to cast
+                if (wizard && wizard.currentSpell === "spawnanimal") {
+                    // no-op: preview shown in render loop, cast on click
                 }
             }
         } else if ((event.key === "a" || event.key === "A") && !event.repeat) {
@@ -3795,6 +4476,7 @@ jQuery(() => {
             return;
         } else if (Object.keys(spellKeyBindings).includes(event.key.toUpperCase())) {
             SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
+            updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
         }
         
         // Toggle debug graphics with ctrl+d
@@ -3804,6 +4486,12 @@ jQuery(() => {
                 toggleDebugMode();
             } else {
                 debugMode = !debugMode;
+                if (typeof globalThis !== "undefined") {
+                    globalThis.debugMode = debugMode;
+                }
+            }
+            if (typeof globalThis !== "undefined") {
+                globalThis.renderingShowPickerScreen = !!debugMode;
             }
             console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
             if (debugMode) {
@@ -3884,6 +4572,9 @@ jQuery(() => {
     $(document).keyup(event => {
         // Track key state
         keysPressed[event.key.toLowerCase()] = false;
+        if (event.key.toLowerCase() === "e") {
+            updateEditorPlacementActiveState(false);
+        }
         if (event.key === " " || event.code === "Space") {
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
                 SpellSystem.cancelDragSpell(wizard, "wall");
@@ -3894,6 +4585,18 @@ jQuery(() => {
             SpellSystem.stopTreeGrowthChannel(wizard);
             if (wizard.currentSpell === "treegrow") {
                 spacebarDownAt = null;
+                event.preventDefault();
+                return;
+            }
+            if (isEditorPlacementSpellActive()) {
+                spacebarDownAt = null;
+                event.preventDefault();
+                return;
+            }
+            // SpawnAnimal: space-only never casts; must click while holding space
+            if (wizard.currentSpell === "spawnanimal") {
+                spacebarDownAt = null;
+                if (animalPreviewSprite) animalPreviewSprite.visible = false;
                 event.preventDefault();
                 return;
             }
