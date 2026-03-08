@@ -1593,11 +1593,63 @@
                 ? ctx.animals
                 : (Array.isArray(global.animals) ? global.animals : null);
             const animalSet = Array.isArray(animalsList) ? new Set(animalsList) : null;
+            const LOS_ANIMAL_EDGE_SAMPLES = 8;
             const isAnimalHiddenByLos = (item) => {
                 if (!animalSet || !animalSet.has(item)) return false;
                 const worldPos = this.resolveInterpolatedItemWorldPosition(item, mapRef);
                 if (!worldPos) return false;
-                return this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef);
+                // Fast path: center is visible → animal is visible
+                if (!this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef)) return false;
+
+                // Center is in shadow. Check whether the occluder shadow fully
+                // covers the animal's VISUAL angular span from the wizard.
+                const state = this.currentLosState;
+                if (!state || !state.depth || !Number.isFinite(state.bins) || state.bins < 3) return true;
+                const bins = Math.floor(state.bins);
+                const depth = state.depth;
+                if (!depth || depth.length !== bins) return true;
+
+                const effectiveMap = mapRef || (wizard && wizard.map) || (this.camera && this.camera.map) || global.map || null;
+                const dx = (effectiveMap && typeof effectiveMap.shortestDeltaX === "function")
+                    ? effectiveMap.shortestDeltaX(wizard.x, worldPos.x)
+                    : (worldPos.x - wizard.x);
+                const dy = (effectiveMap && typeof effectiveMap.shortestDeltaY === "function")
+                    ? effectiveMap.shortestDeltaY(wizard.y, worldPos.y)
+                    : (worldPos.y - wizard.y);
+                const dist = Math.hypot(dx, dy);
+                if (dist < 0.01) return false; // on top of wizard
+
+                // Use the largest visual extent as the visibility radius
+                const visR = Math.max(
+                    Number.isFinite(item.width) ? item.width / 2 : 0,
+                    Number.isFinite(item.height) ? item.height / 2 : 0,
+                    (item.groundPlaneHitbox && Number.isFinite(item.groundPlaneHitbox.radius))
+                        ? item.groundPlaneHitbox.radius : 0
+                );
+                if (visR <= 0) return true;
+
+                // Angular half-span the animal subtends from the wizard's view
+                const halfSpan = Math.asin(Math.min(1, visR / dist));
+                const centerAngle = Math.atan2(dy, dx);
+                const twoPi = Math.PI * 2;
+
+                // Convert angular span to bin range and check if ANY bin is
+                // unblocked (depth >= animal distance) → animal partially visible
+                const a0 = centerAngle - halfSpan;
+                const a1 = centerAngle + halfSpan;
+                const norm0 = ((a0 + Math.PI) % twoPi + twoPi) % twoPi;
+                const norm1 = ((a1 + Math.PI) % twoPi + twoPi) % twoPi;
+                const bin0 = Math.max(0, Math.min(bins - 1, Math.floor((norm0 / twoPi) * bins)));
+                const bin1 = Math.max(0, Math.min(bins - 1, Math.floor((norm1 / twoPi) * bins)));
+
+                // Walk bins from bin0 to bin1 (handling wrap-around)
+                const spanBins = ((bin1 - bin0 + bins) % bins) || 1;
+                for (let i = 0; i <= spanBins; i++) {
+                    const b = (bin0 + i) % bins;
+                    const d = Number.isFinite(depth[b]) ? depth[b] : Infinity;
+                    if (d >= dist) return false; // this bin reaches past the animal → visible
+                }
+                return true; // fully covered by shadow → hidden
             };
             const isItemHiddenByMazeLos = (item) => {
                 if (!useMazeLosClipping || !wizard || !item) return false;
@@ -2067,6 +2119,21 @@
             this.wallPlacementPreviewGraphics.visible = false;
         }
 
+        clearRoadPlacementPreview() {
+            if (this.roadPlacementPreviewContainer) {
+                this.roadPlacementPreviewContainer.visible = false;
+            }
+            if (this.roadPlacementPreviewSpriteByKey && this.roadPlacementPreviewSpriteByKey.size > 0) {
+                for (const sprite of this.roadPlacementPreviewSpriteByKey.values()) {
+                    if (!sprite) continue;
+                    sprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                        sprite.renderable = false;
+                    }
+                }
+            }
+        }
+
         renderWallPlacementPreview(ctx) {
             const layer = this.layers.ui;
             if (!layer) return;
@@ -2228,6 +2295,261 @@
             g.visible = true;
         }
 
+        renderRoadPlacementPreview(ctx) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.roadPlacementPreviewContainer) {
+                this.roadPlacementPreviewContainer = new PIXI.Container();
+                this.roadPlacementPreviewContainer.name = "renderingRoadPlacementPreview";
+                this.roadPlacementPreviewContainer.skipTransform = true;
+                this.roadPlacementPreviewContainer.interactive = false;
+                this.roadPlacementPreviewContainer.visible = false;
+                layer.addChild(this.roadPlacementPreviewContainer);
+            } else if (this.roadPlacementPreviewContainer.parent !== layer) {
+                layer.addChild(this.roadPlacementPreviewContainer);
+            }
+            if (!this.roadPlacementPreviewSpriteByKey) {
+                this.roadPlacementPreviewSpriteByKey = new Map();
+            }
+
+            const previewContainer = this.roadPlacementPreviewContainer;
+            const previewSpriteByKey = this.roadPlacementPreviewSpriteByKey;
+
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
+            const mousePosRef = this.getMousePosRef(ctx);
+            const RoadClass = (typeof global.Road !== "undefined") ? global.Road : null;
+            if (
+                !wizard ||
+                wizard.currentSpell !== "buildroad" ||
+                !wizard.roadLayoutMode ||
+                !wizard.roadStartPoint ||
+                !mapRef ||
+                typeof mapRef.getHexLine !== "function" ||
+                typeof mapRef.worldToNode !== "function" ||
+                !RoadClass ||
+                typeof RoadClass._getTextureForMaskAndPhase !== "function" ||
+                !mousePosRef ||
+                !Number.isFinite(mousePosRef.worldX) ||
+                !Number.isFinite(mousePosRef.worldY)
+            ) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const startNode = wizard.roadStartPoint;
+            const endNode = mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY);
+            if (!startNode || !endNode) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const configuredRoadWidth = Number.isFinite(wizard.selectedRoadWidth)
+                ? Math.max(1, Math.min(5, Math.round(Number(wizard.selectedRoadWidth))))
+                : (
+                    (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
+                        ? Number(roadWidth)
+                        : ((Number.isFinite(global.roadWidth) ? Number(global.roadWidth) : 3))
+                );
+            const width = (startNode === endNode) ? 1 : configuredRoadWidth;
+            const roadNodes = mapRef.getHexLine(startNode, endNode, width);
+            if (!Array.isArray(roadNodes) || roadNodes.length === 0) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const repeat = Number.isFinite(RoadClass._repeatWorldUnits) ? Number(RoadClass._repeatWorldUnits) : 10;
+            const repeatPx = repeat * (
+                Number.isFinite(RoadClass._pixelsPerWorldUnit)
+                    ? Number(RoadClass._pixelsPerWorldUnit)
+                    : ((128 * 2) / 1.1547)
+            );
+            const oddDirections = Array.isArray(RoadClass._oddDirections) && RoadClass._oddDirections.length > 0
+                ? RoadClass._oddDirections.slice()
+                : [1, 3, 5, 7, 9, 11];
+            const fillTexturePath = (
+                typeof wizard.selectedFlooringTexture === "string" &&
+                wizard.selectedFlooringTexture.length > 0
+            )
+                ? wizard.selectedFlooringTexture
+                : (
+                    (typeof RoadClass._defaultFillTexturePath === "string" && RoadClass._defaultFillTexturePath.length > 0)
+                        ? RoadClass._defaultFillTexturePath
+                        : "/assets/images/flooring/dirt.jpg"
+                );
+
+            const previewKeys = new Set();
+            const roadNodeByKey = new Map();
+            for (let i = 0; i < roadNodes.length; i++) {
+                const node = roadNodes[i];
+                if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+                const key = `${node.xindex},${node.yindex}`;
+                if (previewKeys.has(key)) continue;
+                previewKeys.add(key);
+                roadNodeByKey.set(key, node);
+            }
+
+            const hasRoadObjectAtNode = (node) => {
+                if (!node || !Array.isArray(node.objects)) return false;
+                for (let i = 0; i < node.objects.length; i++) {
+                    const obj = node.objects[i];
+                    if (obj && obj.type === "road" && !obj.gone && !obj.vanishing) return true;
+                }
+                return false;
+            };
+
+            const activeKeys = new Set();
+            for (const [key, node] of roadNodeByKey.entries()) {
+                const neighborDirections = [];
+                for (let i = 0; i < oddDirections.length; i++) {
+                    const dir = oddDirections[i];
+                    const neighbor = node.neighbors && node.neighbors[dir];
+                    if (!neighbor) continue;
+                    const neighborKey = `${neighbor.xindex},${neighbor.yindex}`;
+                    if (previewKeys.has(neighborKey) || hasRoadObjectAtNode(neighbor)) {
+                        neighborDirections.push(dir);
+                    }
+                }
+                const mask = (typeof RoadClass._getNeighborMask === "function")
+                    ? RoadClass._getNeighborMask(neighborDirections)
+                    : 0;
+                const offsetWorldX = ((Number(node.x) % repeat) + repeat) % repeat;
+                const offsetWorldY = ((Number(node.y) % repeat) + repeat) % repeat;
+                const phaseX = (offsetWorldX / repeat) * repeatPx;
+                const phaseY = (offsetWorldY / repeat) * repeatPx;
+                const texture = RoadClass._getTextureForMaskAndPhase(mask, phaseX, phaseY, fillTexturePath);
+                if (!texture) continue;
+
+                let sprite = previewSpriteByKey.get(key);
+                if (!sprite) {
+                    sprite = new PIXI.Sprite(texture);
+                    sprite.anchor.set(0.5, 0.5);
+                    sprite.name = `renderingRoadPlacementTile:${key}`;
+                    previewSpriteByKey.set(key, sprite);
+                    previewContainer.addChild(sprite);
+                } else if (sprite.texture !== texture) {
+                    sprite.texture = texture;
+                } else if (sprite.parent !== previewContainer) {
+                    previewContainer.addChild(sprite);
+                }
+
+                const center = this.camera.worldToScreen(Number(node.x), Number(node.y), 0);
+                sprite.x = center.x;
+                sprite.y = center.y;
+                sprite.width = this.camera.viewscale * 1.1547;
+                sprite.height = this.camera.viewscale * this.camera.xyratio;
+                sprite.alpha = 0.5;
+                sprite.visible = true;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = true;
+                }
+                activeKeys.add(key);
+            }
+
+            for (const [key, sprite] of previewSpriteByKey.entries()) {
+                if (!sprite || activeKeys.has(key)) continue;
+                sprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = false;
+                }
+            }
+
+            previewContainer.visible = activeKeys.size > 0;
+        }
+
+        clearFirewallPlacementPreview() {
+            if (!this.firewallPlacementPreviewGraphics) return;
+            this.firewallPlacementPreviewGraphics.clear();
+            this.firewallPlacementPreviewGraphics.visible = false;
+        }
+
+        renderFirewallPlacementPreview(ctx) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.firewallPlacementPreviewGraphics) {
+                this.firewallPlacementPreviewGraphics = new PIXI.Graphics();
+                this.firewallPlacementPreviewGraphics.name = "renderingFirewallPlacementPreview";
+                this.firewallPlacementPreviewGraphics.skipTransform = true;
+                this.firewallPlacementPreviewGraphics.interactive = false;
+                this.firewallPlacementPreviewGraphics.visible = false;
+                layer.addChild(this.firewallPlacementPreviewGraphics);
+            } else if (this.firewallPlacementPreviewGraphics.parent !== layer) {
+                layer.addChild(this.firewallPlacementPreviewGraphics);
+            }
+
+            const g = this.firewallPlacementPreviewGraphics;
+            g.clear();
+
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
+            const mousePosRef = this.getMousePosRef(ctx);
+            if (
+                !wizard ||
+                wizard.currentSpell !== "firewall" ||
+                !wizard.firewallLayoutMode ||
+                !wizard.firewallStartPoint ||
+                !mapRef ||
+                !mousePosRef ||
+                !Number.isFinite(mousePosRef.worldX) ||
+                !Number.isFinite(mousePosRef.worldY)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            const startWorld = {
+                x: Number(wizard.firewallStartPoint.x),
+                y: Number(wizard.firewallStartPoint.y)
+            };
+            const endWorld = { x: Number(mousePosRef.worldX), y: Number(mousePosRef.worldY) };
+            if (
+                !Number.isFinite(startWorld.x) ||
+                !Number.isFinite(startWorld.y) ||
+                !Number.isFinite(endWorld.x) ||
+                !Number.isFinite(endWorld.y)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            const screenStart = this.camera.worldToScreen(startWorld.x, startWorld.y, 0);
+            const screenEnd = this.camera.worldToScreen(endWorld.x, endWorld.y, 0);
+            if (!screenStart || !screenEnd) {
+                g.visible = false;
+                return;
+            }
+
+            // Draw red preview line
+            g.lineStyle(3, 0xff2222, 0.9);
+            g.moveTo(screenStart.x, screenStart.y);
+            g.lineTo(screenEnd.x, screenEnd.y);
+
+            // Draw tick marks along the line at emitter spacing intervals
+            const dx = endWorld.x - startWorld.x;
+            const dy = endWorld.y - startWorld.y;
+            const dist = Math.hypot(dx, dy);
+            const spacing = 0.5;
+            const steps = Math.max(1, Math.ceil(dist / spacing));
+            const perpScreenX = -(screenEnd.y - screenStart.y);
+            const perpScreenY = (screenEnd.x - screenStart.x);
+            const perpLen = Math.hypot(perpScreenX, perpScreenY);
+            const tickHalfLen = 4;
+            if (perpLen > 1e-6) {
+                const nx = (perpScreenX / perpLen) * tickHalfLen;
+                const ny = (perpScreenY / perpLen) * tickHalfLen;
+                g.lineStyle(2, 0xff4444, 0.7);
+                for (let i = 0; i <= steps; i++) {
+                    const t = steps === 0 ? 0 : i / steps;
+                    const px = screenStart.x + (screenEnd.x - screenStart.x) * t;
+                    const py = screenStart.y + (screenEnd.y - screenStart.y) * t;
+                    g.moveTo(px - nx, py - ny);
+                    g.lineTo(px + nx, py + ny);
+                }
+            }
+
+            g.visible = true;
+        }
+
         buildPlaceObjectPreviewRenderItem(ctx) {
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
             if (!wizard || wizard.currentSpell !== "placeobject" || wizard.editorPlacementActive !== true) {
@@ -2340,7 +2662,9 @@
             const placeableScale = Number.isFinite(wizard.selectedPlaceableScale)
                 ? Number(wizard.selectedPlaceableScale)
                 : 1;
-            const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+            const scaleMin = Number.isFinite(wizard.selectedPlaceableScaleMin) ? wizard.selectedPlaceableScaleMin : 0.2;
+            const scaleMax = Number.isFinite(wizard.selectedPlaceableScaleMax) ? wizard.selectedPlaceableScaleMax : 5;
+            const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
             const selectedAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
                 ? Number(wizard.selectedPlaceableAnchorY)
                 : 1;
@@ -3059,6 +3383,11 @@
             this.profileDrawPassSection("renderHexGridOverlay", () => {
                 this.renderHexGridOverlay(ctx);
             });
+            this.profileDrawPassSection("renderClearanceOverlay", () => {
+                if (typeof drawAnimalClearanceOverlay === "function") {
+                    drawAnimalClearanceOverlay(this.layers.ground, this.camera);
+                }
+            });
             this.profileDrawPassSection("drawMapBorder", () => {
                 const debugEnabled = !!(
                     (typeof debugMode !== "undefined" && debugMode) ||
@@ -3082,6 +3411,12 @@
             });
             this.profileDrawPassSection("renderWallPlacementPreview", () => {
                 this.renderWallPlacementPreview(ctx);
+            });
+            this.profileDrawPassSection("renderRoadPlacementPreview", () => {
+                this.renderRoadPlacementPreview(ctx);
+            });
+            this.profileDrawPassSection("renderFirewallPlacementPreview", () => {
+                this.renderFirewallPlacementPreview(ctx);
             });
             this.profileDrawPassSection("renderPlaceObjectPreview", () => {
                 this.renderPlaceObjectPreview(ctx);
@@ -3222,6 +3557,7 @@
             singleton.clearPlaceObjectPreview();
             singleton.clearPowerupPlacementPreview();
             singleton.clearWallPlacementPreview();
+            singleton.clearRoadPlacementPreview();
             if (singleton.scenePicker && typeof singleton.scenePicker.hideAll === "function") {
                 singleton.scenePicker.hideAll();
             }

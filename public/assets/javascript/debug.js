@@ -8,6 +8,7 @@ if (typeof globalThis !== "undefined") {
 }
 let showHexGrid = false; // Toggle hex grid only (g key)
 let showBlockedNeighbors = false; // Toggle blocked-neighbor edge overlays
+let showAnimalClearance = false; // Toggle animal clearance hex overlay
 
 let perfPanel = null;
 let showPerfReadout = false;
@@ -459,6 +460,10 @@ if (typeof globalThis !== "undefined") {
         setVisualHitboxesVisible: visible => {
             debugViewSettings.showVisualHitboxes = !!visible;
             return debugViewSettings.showVisualHitboxes;
+        },
+        toggleAnimalClearance: () => {
+            showAnimalClearance = !showAnimalClearance;
+            return showAnimalClearance;
         }
     };
     globalThis.DebugView = debugView;
@@ -1005,5 +1010,147 @@ function drawWizardBoundaries(redraw = true) {
             wizardBoundaryGraphics.closePath();
         });
         wizardBoundaryGraphics.endFill();
+    }
+}
+
+// --- Animal clearance overlay (red hex tiles + clearance numbers) ---
+let _clearanceOverlayContainer = null;
+let _clearanceOverlayGfx = null;
+let _clearanceOverlayTexts = [];
+
+/**
+ * Draw a red-tinted hex + clearance number on every animal's current tile
+ * (plus surrounding rings matching its pathfindingClearance).
+ * Called from the render pipeline; controlled by showAnimalClearance flag.
+ * @param {PIXI.Container} layer  - ground layer to attach overlay to
+ * @param {object} cam             - camera with viewscale, xyratio, worldToScreen
+ */
+function drawAnimalClearanceOverlay(layer, cam) {
+    if (!showAnimalClearance) {
+        if (_clearanceOverlayContainer) _clearanceOverlayContainer.visible = false;
+        return;
+    }
+    if (!layer || !cam) return;
+
+    const vs = cam.viewscale;
+    const vsy = cam.viewscale * cam.xyratio;
+    if (vs <= 0 || vsy <= 0) return;
+
+    const animalList = (typeof animals !== "undefined" && Array.isArray(animals)) ? animals : [];
+    const mapRef = (typeof map !== "undefined") ? map : null;
+
+    // Lazy-create container
+    if (!_clearanceOverlayContainer) {
+        _clearanceOverlayContainer = new PIXI.Container();
+        _clearanceOverlayContainer.name = "clearanceOverlay";
+        _clearanceOverlayContainer.interactiveChildren = false;
+        _clearanceOverlayContainer.zIndex = Number.MAX_SAFE_INTEGER;
+        layer.addChild(_clearanceOverlayContainer);
+    } else if (_clearanceOverlayContainer.parent !== layer) {
+        layer.addChild(_clearanceOverlayContainer);
+    }
+    _clearanceOverlayContainer.visible = true;
+
+    if (!_clearanceOverlayGfx) {
+        _clearanceOverlayGfx = new PIXI.Graphics();
+        _clearanceOverlayContainer.addChild(_clearanceOverlayGfx);
+    }
+    const gfx = _clearanceOverlayGfx;
+    gfx.clear();
+
+    // Hex half-dimensions in screen pixels
+    const hexPxW = vs / 0.866;
+    const halfW = hexPxW / 2;
+    const halfH = vsy / 2;
+    const quarterW = hexPxW / 4;
+
+    // Hide all old text sprites
+    for (let i = 0; i < _clearanceOverlayTexts.length; i++) {
+        _clearanceOverlayTexts[i].visible = false;
+    }
+
+    let textIdx = 0;
+    const seen = new Set();
+    const adjDirs = [1, 3, 5, 7, 9, 11]; // adjacent hex neighbour directions
+
+    const drawHex = (node, alpha) => {
+        const key = `${node.xindex},${node.yindex}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        const scr = cam.worldToScreen(node.x, node.y);
+        const sx = scr.x;
+        const sy = scr.y;
+
+        gfx.beginFill(0xFF0000, alpha);
+        gfx.moveTo(sx - halfW, sy);
+        gfx.lineTo(sx - quarterW, sy - halfH);
+        gfx.lineTo(sx + quarterW, sy - halfH);
+        gfx.lineTo(sx + halfW, sy);
+        gfx.lineTo(sx + quarterW, sy + halfH);
+        gfx.lineTo(sx - quarterW, sy + halfH);
+        gfx.closePath();
+        gfx.endFill();
+
+        const cl = Number.isFinite(node.clearance) ? node.clearance : -1;
+        let txt = _clearanceOverlayTexts[textIdx];
+        if (!txt) {
+            txt = new PIXI.Text("", {
+                fontFamily: "monospace",
+                fontSize: 12,
+                fill: 0xFFFFFF,
+                stroke: 0x000000,
+                strokeThickness: 2,
+                align: "center"
+            });
+            txt.anchor.set(0.5, 0.5);
+            _clearanceOverlayContainer.addChild(txt);
+            _clearanceOverlayTexts.push(txt);
+        }
+        txt.text = cl === Infinity ? "\u221E" : String(cl);
+        txt.x = sx;
+        txt.y = sy;
+        txt.visible = true;
+        textIdx++;
+    };
+
+    const collectRing = (center, rings) => {
+        const result = [center];
+        if (rings <= 0) return result;
+        const visited = new Set();
+        visited.add(`${center.xindex},${center.yindex}`);
+        let frontier = [center];
+        for (let r = 0; r < rings; r++) {
+            const next = [];
+            for (let f = 0; f < frontier.length; f++) {
+                for (let d = 0; d < adjDirs.length; d++) {
+                    const nb = frontier[f].neighbors[adjDirs[d]];
+                    if (!nb || nb.xindex < 0 || nb.yindex < 0) continue;
+                    const nk = `${nb.xindex},${nb.yindex}`;
+                    if (visited.has(nk)) continue;
+                    visited.add(nk);
+                    next.push(nb);
+                    result.push(nb);
+                }
+            }
+            frontier = next;
+        }
+        return result;
+    };
+
+    for (let a = 0; a < animalList.length; a++) {
+        const animal = animalList[a];
+        if (!animal || animal.gone || animal.dead) continue;
+        const node = mapRef ? mapRef.worldToNode(animal.x, animal.y) : null;
+        if (!node) continue;
+
+        const req = Number.isFinite(animal.pathfindingClearance) ? animal.pathfindingClearance : 0;
+        const tiles = collectRing(node, req);
+        for (let t = 0; t < tiles.length; t++) {
+            const tileNode = tiles[t];
+            const cl = Number.isFinite(tileNode.clearance) ? tileNode.clearance : -1;
+            const alpha = cl <= 0 ? 0.55 : cl <= 2 ? 0.35 : 0.18;
+            drawHex(tileNode, alpha);
+        }
     }
 }

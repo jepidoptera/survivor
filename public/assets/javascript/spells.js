@@ -285,6 +285,12 @@ const SpellSystem = (() => {
     const WALL_THICKNESS_MIN = 0.125;
     const WALL_THICKNESS_MAX = 1.0;
     const WALL_THICKNESS_STEP = 0.125;
+    const ROAD_WIDTH_MIN = 1;
+    const ROAD_WIDTH_MAX = 5;
+    const ROAD_WIDTH_STEP = 1;
+    const ROAD_WIDTH_DEFAULT = (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
+        ? Number(roadWidth)
+        : 3;
     const ROOF_OVERHANG_MIN = 0;
     const ROOF_OVERHANG_MAX = 1;
     const ROOF_OVERHANG_STEP = 0.0625;
@@ -328,6 +334,7 @@ const SpellSystem = (() => {
     const SCRIPT_EDITOR_TEXTAREA_ID = "scriptEditorTextarea";
     const SCRIPT_EDITOR_TARGET_LABEL_ID = "scriptEditorTargetLabel";
     const SCRIPT_EDITOR_HELP_PANEL_ID = "scriptEditorHelpPanel";
+    const SCRIPT_INIT_KEY = "__init";
     const SCRIPT_EDITOR_DEFAULT_TEMPLATE = [
         "playerExits {",
         "    mazeMode=true",
@@ -348,8 +355,10 @@ const SpellSystem = (() => {
             "<div style='font-weight:bold;margin-top:8px;'>Statement Syntax</div>",
             "<ul style='margin:6px 0 10px 20px;padding:0;'>",
             "  <li>Assignments: <code>mazeMode=true</code></li>",
-            "  <li>Commands: <code>transport(120, 88)</code>, <code>healPlayer(25)</code>, <code>hurtPlayer(10)</code>, <code>gainMagic(20)</code>, <code>drainMagic(15)</code>, <code>addSpell(\"fireball\")</code></li>",
+            "  <li>Object assignments: <code>this.tint=\"#ff8800\"</code>, <code>this.size=2</code>, <code>this.onfire=true</code></li>",
+            "  <li>Commands: <code>transport(120, 88)</code>, <code>healPlayer(25)</code>, <code>hurtPlayer(10)</code>, <code>gainMagic(20)</code>, <code>drainMagic(15)</code>, <code>addSpell(\"fireball\")</code>, <code>this.delete()</code>, <code>spawnCreature(type=\"squirrel\", size=1, location={\"x\":0,\"y\":0})</code></li>",
             "  <li>Semicolons are optional; newline also ends a statement.</li>",
+            "  <li>Top-level statements outside any event block run on script save and on fresh object creation (not on load).</li>",
             "</ul>",
             "<div style='font-weight:bold;margin-top:8px;'>Built-in Events</div>",
             "<ul style='margin:6px 0 10px 20px;padding:0;'>",
@@ -367,6 +376,9 @@ const SpellSystem = (() => {
             "  <li><code>gainMagic(amount)</code></li>",
             "  <li><code>drainMagic(amount)</code></li>",
             "  <li><code>addSpell(name)</code></li>",
+            "  <li><code>this.delete()</code></li>",
+            "  <li><code>spawnCreature(type, size, location)</code> where <code>location</code> is relative to the scripted object</li>",
+            "  <li><code>this.tint=#RRGGBB</code>, <code>this.size=number</code>, <code>this.onfire=true/false</code></li>",
             "</ul>"
         ].join("");
     }
@@ -564,11 +576,12 @@ const SpellSystem = (() => {
         $(`#${SCRIPT_EDITOR_PANEL_ID}`).hide();
     }
 
-    function parseEventBlockScriptEditorFormat(rawText) {
+    function parseScriptEditorMixedFormat(rawText) {
         const text = String(rawText || "");
         let index = 0;
         const len = text.length;
         const out = {};
+        const initStatements = [];
         let parsedAny = false;
 
         const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
@@ -584,25 +597,71 @@ const SpellSystem = (() => {
             skipWhitespace();
             if (index >= len) break;
 
-            const start = index;
-            if (!isIdentStart(text[index])) {
-                return null;
-            }
-            index += 1;
-            while (index < len && isIdentPart(text[index])) {
+            const statementStart = index;
+
+            if (isIdentStart(text[index])) {
+                const identStart = index;
                 index += 1;
+                while (index < len && isIdentPart(text[index])) {
+                    index += 1;
+                }
+                const ident = text.slice(identStart, index).trim();
+                let lookahead = index;
+                while (lookahead < len && /\s/.test(text[lookahead])) {
+                    lookahead += 1;
+                }
+                if (ident && text[lookahead] === "{") {
+                    index = lookahead + 1;
+                    const bodyStart = index;
+                    let depth = 1;
+                    let inQuote = null;
+                    let escapeNext = false;
+                    while (index < len) {
+                        const ch = text[index];
+                        if (escapeNext) {
+                            escapeNext = false;
+                            index += 1;
+                            continue;
+                        }
+                        if (ch === "\\") {
+                            if (inQuote) {
+                                escapeNext = true;
+                            }
+                            index += 1;
+                            continue;
+                        }
+                        if (inQuote) {
+                            if (ch === inQuote) inQuote = null;
+                            index += 1;
+                            continue;
+                        }
+                        if (ch === '"' || ch === "'") {
+                            inQuote = ch;
+                            index += 1;
+                            continue;
+                        }
+                        if (ch === "{") depth += 1;
+                        else if (ch === "}") {
+                            depth -= 1;
+                            if (depth === 0) break;
+                        }
+                        index += 1;
+                    }
+                    if (depth !== 0 || index >= len) return null;
+                    const body = text.slice(bodyStart, index).trim();
+                    out[ident] = body;
+                    parsedAny = true;
+                    index += 1;
+                    continue;
+                }
+                index = statementStart;
             }
-            const eventName = text.slice(start, index).trim();
-            if (!eventName) return null;
 
-            skipWhitespace();
-            if (text[index] !== "{") return null;
-            index += 1;
-
-            const bodyStart = index;
-            let depth = 1;
             let inQuote = null;
             let escapeNext = false;
+            let depthParen = 0;
+            let depthBrace = 0;
+            let depthBracket = 0;
             while (index < len) {
                 const ch = text[index];
                 if (escapeNext) {
@@ -611,9 +670,7 @@ const SpellSystem = (() => {
                     continue;
                 }
                 if (ch === "\\") {
-                    if (inQuote) {
-                        escapeNext = true;
-                    }
+                    if (inQuote) escapeNext = true;
                     index += 1;
                     continue;
                 }
@@ -627,19 +684,32 @@ const SpellSystem = (() => {
                     index += 1;
                     continue;
                 }
-                if (ch === "{") depth += 1;
-                else if (ch === "}") {
-                    depth -= 1;
-                    if (depth === 0) break;
+                if (ch === "(") depthParen += 1;
+                else if (ch === ")") depthParen = Math.max(0, depthParen - 1);
+                else if (ch === "{") depthBrace += 1;
+                else if (ch === "}") depthBrace = Math.max(0, depthBrace - 1);
+                else if (ch === "[") depthBracket += 1;
+                else if (ch === "]") depthBracket = Math.max(0, depthBracket - 1);
+
+                const atTopLevel = depthParen === 0 && depthBrace === 0 && depthBracket === 0;
+                if (atTopLevel && (ch === ";" || ch === "\n" || ch === "\r")) {
+                    break;
                 }
                 index += 1;
             }
-            if (depth !== 0 || index >= len) return null;
 
-            const body = text.slice(bodyStart, index).trim();
-            out[eventName] = body;
+            const statement = text.slice(statementStart, index).trim();
+            if (statement.length > 0) {
+                initStatements.push(statement);
+            }
+            while (index < len && (text[index] === ";" || text[index] === "\n" || text[index] === "\r")) {
+                index += 1;
+            }
+        }
+
+        if (initStatements.length > 0) {
+            out[SCRIPT_INIT_KEY] = initStatements.join(";\n");
             parsedAny = true;
-            index += 1;
         }
 
         return parsedAny ? out : null;
@@ -651,14 +721,14 @@ const SpellSystem = (() => {
             return { ok: true, value: {} };
         }
 
-        const parsedBlocks = parseEventBlockScriptEditorFormat(text);
-        if (parsedBlocks && typeof parsedBlocks === "object") {
-            return { ok: true, value: parsedBlocks };
+        const parsedScript = parseScriptEditorMixedFormat(text);
+        if (parsedScript && typeof parsedScript === "object") {
+            return { ok: true, value: parsedScript };
         }
 
         return {
             ok: false,
-            error: new Error("Invalid block script format")
+            error: new Error("Invalid script format")
         };
     }
 
@@ -669,9 +739,20 @@ const SpellSystem = (() => {
 
         const formatScriptObjectAsBlocks = (scriptObj) => {
             if (!scriptObj || typeof scriptObj !== "object" || Array.isArray(scriptObj)) return null;
-            const eventNames = Object.keys(scriptObj);
-            if (eventNames.length === 0) return "";
-            return eventNames.map(eventName => {
+            const eventNames = Object.keys(scriptObj).filter(eventName => eventName !== SCRIPT_INIT_KEY);
+            const sections = [];
+
+            const rawInit = scriptObj[SCRIPT_INIT_KEY];
+            const initParts = String(rawInit === undefined || rawInit === null ? "" : rawInit)
+                .split(/\r?\n/)
+                .flatMap(line => line.split(";"))
+                .map(part => part.trim())
+                .filter(Boolean);
+            if (initParts.length > 0) {
+                sections.push(initParts.map(part => `${part};`).join("\n"));
+            }
+
+            eventNames.forEach(eventName => {
                 const rawBody = scriptObj[eventName];
                 const parts = String(rawBody === undefined || rawBody === null ? "" : rawBody)
                     .split(/\r?\n/)
@@ -681,14 +762,15 @@ const SpellSystem = (() => {
                 const body = parts.length > 0
                     ? `\n${parts.map(part => `    ${part};`).join("\n")}\n`
                     : "\n";
-                return `${eventName} {${body}}`;
-            }).join("\n\n");
+                sections.push(`${eventName} {${body}}`);
+            });
+            return sections.join("\n\n");
         };
 
         if (typeof source === "string") {
             const text = source.trim();
             if (!text.length) return "";
-            const blockParsed = parseEventBlockScriptEditorFormat(text);
+            const blockParsed = parseScriptEditorMixedFormat(text);
             if (blockParsed) {
                 const formattedBlocks = formatScriptObjectAsBlocks(blockParsed);
                 return formattedBlocks !== null ? formattedBlocks : text;
@@ -761,10 +843,21 @@ const SpellSystem = (() => {
         const text = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val();
         const parsed = parseScriptEditorInput(text);
         if (!parsed.ok) {
-            message("Script is not valid. Use block style: eventName { ... }");
+            message("Script is not valid. Use statements and/or event blocks.");
             return;
         }
         scriptEditorTargetObject.script = parsed.value;
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.runObjectInitScript === "function"
+        ) {
+            globalThis.Scripting.runObjectInitScript(
+                scriptEditorTargetObject,
+                (typeof wizard !== "undefined") ? wizard : null,
+                { reason: "scriptSaved" }
+            );
+        }
         message("Object script saved.");
         closeScriptEditorPanel();
     }
@@ -1174,6 +1267,12 @@ const SpellSystem = (() => {
         if (!wizardRef.selectedPlaceableScaleByTexture || typeof wizardRef.selectedPlaceableScaleByTexture !== "object") {
             wizardRef.selectedPlaceableScaleByTexture = {};
         }
+        if (!wizardRef.selectedPlaceableScaleMinByTexture || typeof wizardRef.selectedPlaceableScaleMinByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleMinByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableScaleMaxByTexture || typeof wizardRef.selectedPlaceableScaleMaxByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleMaxByTexture = {};
+        }
         if (!wizardRef.selectedPlaceableRotationByTexture || typeof wizardRef.selectedPlaceableRotationByTexture !== "object") {
             wizardRef.selectedPlaceableRotationByTexture = {};
         }
@@ -1263,8 +1362,14 @@ const SpellSystem = (() => {
             const nextAxisRaw = wizardRef.selectedPlaceableRotationAxisByTexture[activeTexturePath];
             const nextAnchorX = Number(wizardRef.selectedPlaceableAnchorXByTexture[activeTexturePath]);
             const nextAnchorY = Number(wizardRef.selectedPlaceableAnchorYByTexture[activeTexturePath]);
+            const nextScaleMin = Number(wizardRef.selectedPlaceableScaleMinByTexture[activeTexturePath]);
+            const nextScaleMax = Number(wizardRef.selectedPlaceableScaleMaxByTexture[activeTexturePath]);
+            const effectiveScaleMin = Number.isFinite(nextScaleMin) ? nextScaleMin : 0.2;
+            const effectiveScaleMax = Number.isFinite(nextScaleMax) ? nextScaleMax : 5;
             wizardRef.selectedPlaceableRenderOffset = Number.isFinite(nextOffset) ? nextOffset : 0;
-            wizardRef.selectedPlaceableScale = Number.isFinite(nextScale) ? Math.max(0.2, Math.min(5, nextScale)) : 1;
+            wizardRef.selectedPlaceableScaleMin = effectiveScaleMin;
+            wizardRef.selectedPlaceableScaleMax = effectiveScaleMax;
+            wizardRef.selectedPlaceableScale = Number.isFinite(nextScale) ? Math.max(effectiveScaleMin, Math.min(effectiveScaleMax, nextScale)) : 1;
             wizardRef.selectedPlaceableRotation = Number.isFinite(nextRotation) ? nextRotation : 0;
             wizardRef.selectedPlaceableRotationAxis = (nextAxisRaw === "spatial" || nextAxisRaw === "visual" || nextAxisRaw === "none" || nextAxisRaw === "ground")
                 ? nextAxisRaw
@@ -1274,6 +1379,8 @@ const SpellSystem = (() => {
         } else {
             wizardRef.selectedPlaceableRenderOffset = 0;
             wizardRef.selectedPlaceableScale = 1;
+            wizardRef.selectedPlaceableScaleMin = 0.2;
+            wizardRef.selectedPlaceableScaleMax = 5;
             wizardRef.selectedPlaceableRotation = 0;
             wizardRef.selectedPlaceableRotationAxis = defaultAxis;
             wizardRef.selectedPlaceableAnchorX = 0.5;
@@ -1322,10 +1429,40 @@ const SpellSystem = (() => {
         wizardRef.selectedPlaceableRotationAxisByTexture[texturePath] = axis;
         wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = anchorX;
         wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = anchorY;
+
+        // Apply baseSize / minSize / maxSize from item metadata
+        const metaBaseSize = (meta && Number.isFinite(meta.baseSize) && meta.baseSize > 0) ? Number(meta.baseSize) : null;
+        const metaMinSize = (meta && Number.isFinite(meta.minSize) && meta.minSize > 0) ? Number(meta.minSize) : null;
+        const metaMaxSize = (meta && Number.isFinite(meta.maxSize) && meta.maxSize > 0) ? Number(meta.maxSize) : null;
+        const effectiveScaleMin = metaMinSize ?? (metaBaseSize ? metaBaseSize * 0.2 : 0.2);
+        const effectiveScaleMax = metaMaxSize ?? (metaBaseSize ? metaBaseSize * 5 : 5);
+        if (!wizardRef.selectedPlaceableScaleMinByTexture || typeof wizardRef.selectedPlaceableScaleMinByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleMinByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableScaleMaxByTexture || typeof wizardRef.selectedPlaceableScaleMaxByTexture !== "object") {
+            wizardRef.selectedPlaceableScaleMaxByTexture = {};
+        }
+        wizardRef.selectedPlaceableScaleMinByTexture[texturePath] = effectiveScaleMin;
+        wizardRef.selectedPlaceableScaleMaxByTexture[texturePath] = effectiveScaleMax;
+        if (!wizardRef._baseSizeApplied) wizardRef._baseSizeApplied = new Set();
+        if (metaBaseSize !== null && !wizardRef._baseSizeApplied.has(texturePath)) {
+            wizardRef._baseSizeApplied.add(texturePath);
+            wizardRef.selectedPlaceableScaleByTexture[texturePath] = metaBaseSize;
+        }
         if (wizardRef.selectedPlaceableTexturePath === texturePath) {
             wizardRef.selectedPlaceableRotationAxis = axis;
             wizardRef.selectedPlaceableAnchorX = anchorX;
             wizardRef.selectedPlaceableAnchorY = anchorY;
+            wizardRef.selectedPlaceableScaleMin = effectiveScaleMin;
+            wizardRef.selectedPlaceableScaleMax = effectiveScaleMax;
+            if (metaBaseSize !== null && wizardRef._baseSizeApplied.size > 0 &&
+                !Number.isFinite(wizardRef.selectedPlaceableScaleByTexture[texturePath])) {
+                wizardRef.selectedPlaceableScale = metaBaseSize;
+            }
+            const currentScale = Number(wizardRef.selectedPlaceableScaleByTexture[texturePath]);
+            if (Number.isFinite(currentScale)) {
+                wizardRef.selectedPlaceableScale = Math.max(effectiveScaleMin, Math.min(effectiveScaleMax, currentScale));
+            }
         }
         return meta;
     }
@@ -1358,7 +1495,9 @@ const SpellSystem = (() => {
         const current = Number.isFinite(wizardRef.selectedPlaceableScale)
             ? Number(wizardRef.selectedPlaceableScale)
             : 1;
-        const rawNext = Math.max(0.2, Math.min(5, current + delta));
+        const scaleMin = Number.isFinite(wizardRef.selectedPlaceableScaleMin) ? wizardRef.selectedPlaceableScaleMin : 0.2;
+        const scaleMax = Number.isFinite(wizardRef.selectedPlaceableScaleMax) ? wizardRef.selectedPlaceableScaleMax : 5;
+        const rawNext = Math.max(scaleMin, Math.min(scaleMax, current + delta));
         const next = Math.round(rawNext * 1000) / 1000;
         wizardRef.selectedPlaceableScale = next;
         if (!wizardRef.selectedPlaceableScaleByTexture || typeof wizardRef.selectedPlaceableScaleByTexture !== "object") {
@@ -1635,6 +1774,17 @@ const SpellSystem = (() => {
             : DEFAULT_WALL_TEXTURE;
         wizardRef.selectedWallTexture = current;
         return current;
+    }
+
+    function getSelectedRoadWidth(wizardRef) {
+        if (!wizardRef) return ROAD_WIDTH_DEFAULT;
+        wizardRef.selectedRoadWidth = quantizeToStep(
+            wizardRef.selectedRoadWidth,
+            ROAD_WIDTH_MIN,
+            ROAD_WIDTH_MAX,
+            ROAD_WIDTH_STEP
+        );
+        return wizardRef.selectedRoadWidth;
     }
 
     function fetchWallTextures() {
@@ -2932,7 +3082,9 @@ const SpellSystem = (() => {
         const placeableScale = Number.isFinite(wizardRef.selectedPlaceableScale)
             ? Number(wizardRef.selectedPlaceableScale)
             : 1;
-        const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+        const scaleMin = Number.isFinite(wizardRef.selectedPlaceableScaleMin) ? wizardRef.selectedPlaceableScaleMin : 0.2;
+        const scaleMax = Number.isFinite(wizardRef.selectedPlaceableScaleMax) ? wizardRef.selectedPlaceableScaleMax : 5;
+        const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
         const selectedAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
             ? Number(wizardRef.selectedPlaceableAnchorY)
             : 1;
@@ -3359,7 +3511,7 @@ const SpellSystem = (() => {
             }
             const nodeA = wizardRef.roadStartPoint;
             const nodeB = roadNode;
-            const width = (nodeA === nodeB) ? 1 : roadWidth;
+            const width = (nodeA === nodeB) ? 1 : getSelectedRoadWidth(wizardRef);
             const roadNodes = wizardRef.map.getHexLine(nodeA, nodeB, width);
             roadNodes.forEach(node => {
                 const hasRoad = node.objects && node.objects.some(obj => obj.type === "road");
@@ -3900,6 +4052,44 @@ const SpellSystem = (() => {
                 refreshSpellSelector(wizardRef);
             });
         $grid.append(backButton);
+
+        const selectedRoadWidth = getSelectedRoadWidth(wizardRef);
+        const $widthHeader = $("<div>")
+            .text("Road Width")
+            .css({
+                color: "#ffffff",
+                "font-weight": "bold",
+                "grid-column": "1 / -1"
+            });
+        const $widthLabel = $("<div>")
+            .text(`Width: ${selectedRoadWidth}`)
+            .css({
+                color: "#ffffff",
+                "font-size": "13px",
+                "grid-column": "1 / -1"
+            });
+        const $widthSlider = $("<input>")
+            .attr({
+                type: "range",
+                min: ROAD_WIDTH_MIN,
+                max: ROAD_WIDTH_MAX,
+                step: ROAD_WIDTH_STEP,
+                value: selectedRoadWidth
+            })
+            .css({
+                width: "100%",
+                "accent-color": "#ffd700",
+                cursor: "pointer",
+                "grid-column": "1 / -1"
+            })
+            .on("input change", event => {
+                const value = quantizeToStep(event.target.value, ROAD_WIDTH_MIN, ROAD_WIDTH_MAX, ROAD_WIDTH_STEP);
+                wizardRef.selectedRoadWidth = value;
+                $widthLabel.text(`Width: ${value}`);
+            });
+        $grid.append($widthHeader);
+        $grid.append($widthSlider);
+        $grid.append($widthLabel);
 
         const selected = getSelectedFlooringTexture(wizardRef);
         flooringTexturePaths.forEach(texturePath => {
@@ -4683,6 +4873,7 @@ const SpellSystem = (() => {
         getSelectedWallHeight(wizardRef);
         getSelectedWallThickness(wizardRef);
         getSelectedWallTexture(wizardRef);
+        getSelectedRoadWidth(wizardRef);
         getSelectedRoofOverhang(wizardRef);
         getSelectedRoofPeakHeight(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);

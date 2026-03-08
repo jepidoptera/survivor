@@ -5,6 +5,7 @@
     const LEGACY_PLAYER_TOUCH_EVENT_NAME = "playerTouch";
     const PLAYER_UNTOUCH_EVENT_NAME = "playerUntouches";
     const LEGACY_PLAYER_UNTOUCH_EVENT_NAME = "playerLeaves";
+    const SCRIPT_INIT_KEY = "__init";
     const eventListenersByName = new Map();
     const commandHandlersByName = new Map();
     const assignmentHandlersByPath = new Map();
@@ -258,14 +259,28 @@
     function parseCommandStatement(statement) {
         const text = String(statement || "").trim();
         if (!text.length) return null;
-        const match = text.match(/^([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)$/);
+        const match = text.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([\s\S]*)\)$/);
         if (!match) return null;
         const commandName = match[1];
         const argsSource = String(match[2] || "").trim();
-        const args = argsSource.length > 0
-            ? splitTopLevel(argsSource, ",").map(parseScriptValue)
-            : [];
-        return { commandName, args };
+        const positionalArgs = [];
+        const namedArgs = {};
+
+        if (argsSource.length > 0) {
+            const rawArgs = splitTopLevel(argsSource, ",");
+            for (let i = 0; i < rawArgs.length; i++) {
+                const rawArg = String(rawArgs[i] || "").trim();
+                if (!rawArg.length) continue;
+                const namedMatch = rawArg.match(/^([A-Za-z_$][\w$]*)\s*=\s*([\s\S]+)$/);
+                if (namedMatch) {
+                    namedArgs[namedMatch[1]] = parseScriptValue(namedMatch[2]);
+                } else {
+                    positionalArgs.push(parseScriptValue(rawArg));
+                }
+            }
+        }
+
+        return { commandName, args: positionalArgs, namedArgs };
     }
 
     function registerCommand(commandName, handler) {
@@ -354,13 +369,16 @@
         return false;
     }
 
-    function executeCommandStatement(commandName, args, context = null) {
+    function executeCommandStatement(commandName, args, namedArgs, context = null) {
         const name = String(commandName || "").trim();
         if (!name.length) return false;
         const handler = commandHandlersByName.get(name);
         if (typeof handler !== "function") return false;
         try {
-            return !!handler(Array.isArray(args) ? args : [], context || null);
+            const normalizedNamedArgs = (namedArgs && typeof namedArgs === "object")
+                ? namedArgs
+                : {};
+            return !!handler(Array.isArray(args) ? args : [], context || null, normalizedNamedArgs);
         } catch (error) {
             console.error(`Scripting command '${name}' failed:`, error);
             return false;
@@ -383,7 +401,7 @@
             }
             const command = parseCommandStatement(statement);
             if (command) {
-                const didRun = executeCommandStatement(command.commandName, command.args, context);
+                const didRun = executeCommandStatement(command.commandName, command.args, command.namedArgs, context);
                 changed = didRun || changed;
             }
         }
@@ -415,6 +433,18 @@
             const legacy = target[aliases[i]];
             if (typeof legacy === "string" && legacy.trim().length > 0) {
                 return legacy.trim();
+            }
+        }
+        return "";
+    }
+
+    function getInitScriptForTarget(target) {
+        if (!target) return "";
+        const scriptTag = target.script;
+        if (scriptTag && typeof scriptTag === "object") {
+            const initScript = scriptTag[SCRIPT_INIT_KEY];
+            if (typeof initScript === "string" && initScript.trim().length > 0) {
+                return initScript.trim();
             }
         }
         return "";
@@ -471,6 +501,21 @@
 
     function fireDoorTraversalEvent(door, eventName, wizardRef = null, context = null) {
         return fireObjectScriptEvent(door, eventName, wizardRef, context);
+    }
+
+    function runObjectInitScript(target, wizardRef = null, context = null) {
+        if (!target || target.gone) return false;
+        const initScript = getInitScriptForTarget(target);
+        if (!initScript) return false;
+        const execContext = {
+            wizard: wizardRef || null,
+            player: wizardRef || null,
+            map: (wizardRef && wizardRef.map) || (target && target.map) || null,
+            target,
+            eventName: SCRIPT_INIT_KEY,
+            payload: context || null
+        };
+        return runScript(initScript, execContext);
     }
 
     function processObjectTouchEvents(wizardRef, nearbyEntries, radius = 0) {
@@ -658,6 +703,101 @@
         return name;
     }
 
+    function parseRelativeOffset(rawLocation) {
+        if (rawLocation && typeof rawLocation === "object") {
+            if (Array.isArray(rawLocation) && rawLocation.length >= 2) {
+                const x = Number(rawLocation[0]);
+                const y = Number(rawLocation[1]);
+                if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+            }
+            const x = Number(rawLocation.x);
+            const y = Number(rawLocation.y);
+            if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+        }
+        if (typeof rawLocation === "string") {
+            const trimmed = rawLocation.trim();
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                try {
+                    const strictJson = trimmed.replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3');
+                    const parsed = JSON.parse(strictJson);
+                    const x = Number(parsed && parsed.x);
+                    const y = Number(parsed && parsed.y);
+                    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+                } catch (_) {
+                    // Fall through to simple parsing below.
+                }
+            }
+            const parts = rawLocation.split(",").map(part => Number(part.trim()));
+            if (parts.length >= 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
+                return { x: parts[0], y: parts[1] };
+            }
+        }
+        return { x: 0, y: 0 };
+    }
+
+    function getCreatureCtor(typeName) {
+        const type = String(typeName || "").trim().toLowerCase();
+        switch (type) {
+            case "squirrel":
+                return (typeof Squirrel === "function") ? Squirrel : global.Squirrel || null;
+            case "deer":
+                return (typeof Deer === "function") ? Deer : global.Deer || null;
+            case "bear":
+                return (typeof Bear === "function") ? Bear : global.Bear || null;
+            case "scorpion":
+                return (typeof Scorpion === "function") ? Scorpion : global.Scorpion || null;
+            case "armadillo":
+                return (typeof Armadillo === "function") ? Armadillo : global.Armadillo || null;
+            case "coyote":
+                return (typeof Coyote === "function") ? Coyote : global.Coyote || null;
+            case "goat":
+                return (typeof Goat === "function") ? Goat : global.Goat || null;
+            case "porcupine":
+                return (typeof Porcupine === "function") ? Porcupine : global.Porcupine || null;
+            case "yeti":
+                return (typeof Yeti === "function") ? Yeti : global.Yeti || null;
+            default:
+                return null;
+        }
+    }
+
+    function applyCreatureSizeScale(creature, sizeScaleRaw) {
+        const sizeScale = Number(sizeScaleRaw);
+        if (!Number.isFinite(sizeScale) || sizeScale <= 0 || Math.abs(sizeScale - 1) < 1e-6) return;
+        const baseSize = Number(creature && creature.size);
+        if (!Number.isFinite(baseSize) || baseSize <= 0) return;
+        const newSize = baseSize * sizeScale;
+        creature.size = newSize;
+
+        const scaledProps = ["width", "height", "radius", "lungeRadius", "strikeRange", "damage", "groundRadius", "visualRadius"];
+        for (let i = 0; i < scaledProps.length; i++) {
+            const prop = scaledProps[i];
+            if (!Number.isFinite(creature[prop])) continue;
+            creature[prop] = (Number(creature[prop]) / baseSize) * newSize;
+        }
+        if (typeof creature.updateHitboxes === "function") {
+            creature.updateHitboxes();
+        }
+    }
+
+    function removeTargetObject(target) {
+        if (!target || target.gone) return false;
+        if (typeof target.delete === "function") {
+            target.delete();
+            return true;
+        }
+        if (typeof target.remove === "function") {
+            target.remove();
+            return true;
+        }
+        if (typeof target.removeFromGame === "function") {
+            target.removeFromGame();
+            return true;
+        }
+        target.gone = true;
+        return true;
+    }
+
     function registerBuiltinScriptHandlers() {
         registerAssignmentHandler("mazeMode", value => {
             const enabled = !!value;
@@ -670,6 +810,80 @@
                 return true;
             }
             return false;
+        });
+
+        registerAssignmentHandler("this.tint", (value, context) => {
+            const target = context && context.target;
+            if (!target) return false;
+            let tint = null;
+            if (Number.isFinite(value)) {
+                tint = Number(value);
+            } else if (typeof value === "string") {
+                const text = value.trim().toLowerCase();
+                if (/^#?[0-9a-f]{6}$/.test(text)) {
+                    tint = parseInt(text.replace(/^#/, ""), 16);
+                } else if (/^0x[0-9a-f]{6}$/.test(text)) {
+                    tint = parseInt(text, 16);
+                }
+            }
+            if (!Number.isFinite(tint)) return false;
+            const normalizedTint = Math.max(0, Math.min(0xFFFFFF, Math.floor(tint)));
+            target.tint = normalizedTint;
+            if (target.pixiSprite) {
+                target.pixiSprite.tint = normalizedTint;
+            }
+            return true;
+        });
+
+        registerAssignmentHandler("this.size", (value, context) => {
+            const target = context && context.target;
+            const nextSize = Number(value);
+            if (!target || !Number.isFinite(nextSize) || nextSize <= 0) return false;
+            if (typeof target.applySize === "function") {
+                target.applySize(nextSize);
+                return true;
+            }
+            const prevSize = Number(target.size);
+            if (Number.isFinite(prevSize) && prevSize > 0) {
+                const ratio = nextSize / prevSize;
+                target.size = nextSize;
+                const maybeScaleProps = ["width", "height", "radius", "lungeRadius", "strikeRange", "damage", "groundRadius", "visualRadius"];
+                for (let i = 0; i < maybeScaleProps.length; i++) {
+                    const prop = maybeScaleProps[i];
+                    if (!Number.isFinite(target[prop])) continue;
+                    target[prop] = Number(target[prop]) * ratio;
+                }
+            } else {
+                target.size = nextSize;
+                if (Number.isFinite(target.width)) target.width = nextSize;
+                if (Number.isFinite(target.height)) target.height = nextSize;
+            }
+            if (typeof target.updateHitboxes === "function") {
+                target.updateHitboxes();
+            }
+            return true;
+        });
+
+        registerAssignmentHandler("this.onfire", (value, context) => {
+            const target = context && context.target;
+            if (!target) return false;
+            const enabled = !!value;
+            if (enabled) {
+                if (typeof target.ignite === "function") target.ignite();
+                else target.isOnFire = true;
+                return true;
+            }
+            target.isOnFire = false;
+            if (target.fireSprite) {
+                target.fireSprite.visible = false;
+            }
+            return true;
+        });
+
+        registerAssignmentHandler("this.isOnFire", (value, context) => {
+            const handler = assignmentHandlersByPath.get("this.onfire");
+            if (typeof handler !== "function") return false;
+            return handler(value, context);
         });
 
         registerCommand("transport", (args, context) => {
@@ -736,6 +950,60 @@
             }
             return true;
         });
+
+        registerCommand("this.delete", (_args, context) => {
+            const target = (context && context.target) || null;
+            return removeTargetObject(target);
+        });
+
+        registerCommand("spawnCreature", (args, context, namedArgs = {}) => {
+            const wizardRef = (context && context.wizard) || global.wizard || null;
+            const target = (context && context.target) || null;
+            const mapRef = (context && context.map) || (wizardRef && wizardRef.map) || (target && target.map) || global.map || null;
+            if (!mapRef || typeof mapRef.worldToNode !== "function") return false;
+
+            const typeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "type")) ? namedArgs.type : args[0];
+            const sizeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "size")) ? namedArgs.size : args[1];
+            const locationValue = (Object.prototype.hasOwnProperty.call(namedArgs, "location")) ? namedArgs.location : args[2];
+
+            const typeName = String(typeValue || "squirrel").trim().toLowerCase();
+            if (!typeName.length) return false;
+            const relativeOffset = parseRelativeOffset(locationValue);
+            const originX = Number.isFinite(target && target.x) ? Number(target.x) : (Number.isFinite(wizardRef && wizardRef.x) ? Number(wizardRef.x) : 0);
+            const originY = Number.isFinite(target && target.y) ? Number(target.y) : (Number.isFinite(wizardRef && wizardRef.y) ? Number(wizardRef.y) : 0);
+            let spawnX = originX + relativeOffset.x;
+            let spawnY = originY + relativeOffset.y;
+            if (typeof mapRef.wrapWorldX === "function") spawnX = mapRef.wrapWorldX(spawnX);
+            if (typeof mapRef.wrapWorldY === "function") spawnY = mapRef.wrapWorldY(spawnY);
+
+            const spawnNode = mapRef.worldToNode(spawnX, spawnY);
+            if (!spawnNode) return false;
+
+            const CreatureCtor = getCreatureCtor(typeName);
+            let creature = null;
+            if (typeof CreatureCtor === "function") {
+                creature = new CreatureCtor(spawnNode, mapRef);
+            } else if (typeof Animal === "function") {
+                creature = new Animal(typeName, spawnNode, 0.8, mapRef);
+            } else if (typeof global.Animal === "function") {
+                creature = new global.Animal(typeName, spawnNode, 0.8, mapRef);
+            }
+            if (!creature) return false;
+
+            applyCreatureSizeScale(creature, Number.isFinite(Number(sizeValue)) ? Number(sizeValue) : 1);
+            creature.x = spawnX;
+            creature.y = spawnY;
+            if (typeof creature.updateHitboxes === "function") {
+                creature.updateHitboxes();
+            }
+            const animalList = Array.isArray(global.animals)
+                ? global.animals
+                : ((typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null);
+            if (Array.isArray(animalList) && !animalList.includes(creature)) {
+                animalList.push(creature);
+            }
+            return true;
+        });
     }
 
     registerBuiltinScriptHandlers();
@@ -754,7 +1022,8 @@
         runScript,
         runAssignmentScript,
         fireObjectScriptEvent,
-        fireDoorTraversalEvent
+        fireDoorTraversalEvent,
+        runObjectInitScript
     };
 
     global.Scripting = scriptingApi;

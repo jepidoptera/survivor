@@ -57,6 +57,17 @@ class TreeGrow extends globalThis.Spell {
             }
         }
         newTree.applySize(this.initialSize);
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.runObjectInitScript === "function"
+        ) {
+            globalThis.Scripting.runObjectInitScript(
+                newTree,
+                (typeof wizard !== "undefined") ? wizard : null,
+                { reason: "objectCreated" }
+            );
+        }
 
         // Holding space grows only the newly planted tree from this cast.
         if (keysPressed[" "]) {

@@ -4027,6 +4027,7 @@ void main(void) {
         }
 
         _clearDirectionalBlocks() {
+            const affectedNodes = [];
             if (Array.isArray(this.blockedLinks)) {
                 for (let i = 0; i < this.blockedLinks.length; i++) {
                     const link = this.blockedLinks[i];
@@ -4039,12 +4040,21 @@ void main(void) {
                     blockers.delete(this);
                     if (blockers.size === 0) {
                         node.blockedNeighbors.delete(direction);
+                        affectedNodes.push(node);
                     }
                 }
             }
             this.blockedLinks = [];
             if (!(this._blockedLinkKeys instanceof Set)) this._blockedLinkKeys = new Set();
             this._blockedLinkKeys.clear();
+            // Wall edges removed — update clearance for affected tiles.
+            if (affectedNodes.length > 0 &&
+                typeof globalThis !== "undefined" && globalThis.map &&
+                typeof globalThis.map.updateClearanceAround === "function") {
+                for (let i = 0; i < affectedNodes.length; i++) {
+                    globalThis.map.updateClearanceAround(affectedNodes[i]);
+                }
+            }
             this._directionalBlockingDebug = {
                 centerlineNodes: [],
                 oddNeighborNodes: [],
@@ -4070,6 +4080,11 @@ void main(void) {
             node.blockedNeighbors.get(dir).add(this);
             this.blockedLinks.push({ node, direction: dir });
             this._blockedLinkKeys.add(key);
+            // Wall edge added — update clearance for large-entity pathfinding.
+            if (typeof globalThis !== "undefined" && globalThis.map &&
+                typeof globalThis.map.updateClearanceAround === "function") {
+                globalThis.map.updateClearanceAround(node);
+            }
             return true;
         }
 

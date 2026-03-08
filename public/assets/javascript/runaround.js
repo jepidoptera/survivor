@@ -181,6 +181,7 @@ let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
 let animalPreviewSprite = null; // Semi-transparent preview for SpawnAnimal spell
 let onscreenObjects = new Set(); // Track visible staticObjects each frame
+let activeSimObjects = new Set(); // Static objects needing per-tick simulation (on fire, growing, falling)
 const roadWidth = 3;
 
 function isWindowLikeObject(obj) {
@@ -265,6 +266,7 @@ function formatWindowWallLinkDebugSummary() {
 if (typeof globalThis !== "undefined") {
     globalThis.powerups = powerups;
     globalThis.onscreenObjects = onscreenObjects;
+    globalThis.activeSimObjects = activeSimObjects;
     globalThis.getOnscreenObjects = () => Array.from(onscreenObjects || []);
     globalThis.getOnscreenByType = (type) =>
         Array.from(onscreenObjects || []).filter(obj => obj && obj.type === type);
@@ -536,10 +538,23 @@ class Character {
         this.path = []; // Array of MapNodes to follow
         this.nextNode = null;
         this.useAStarPathfinding = false;
+
+        // Pathfinding clearance — how many hex-ring steps around each tile
+        // on the path must be obstacle-free for this character to fit.
+        // Computed dynamically via getter from current this.size.
         
         // Create hitboxes
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+    }
+
+    /**
+     * Pathfinding clearance — always derived from current size so it
+     * stays correct after save-load rescaling or runtime resizing.
+     * Size ≤1 → 0,  1.1–2.0 → 1,  2.1–4.0 → 2,  4.1–6.0 → 3, etc.
+     */
+    get pathfindingClearance() {
+        return Math.max(0, Math.ceil(this.size / 2) - 1);
     }
     
     updateHitboxes() {
@@ -594,6 +609,13 @@ class Character {
             this.pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
         }
         this.pixiSprite = null;
+        if (this._depthBillboardMesh && this._depthBillboardMesh.parent) {
+            this._depthBillboardMesh.parent.removeChild(this._depthBillboardMesh);
+        }
+        if (this._depthBillboardMesh && typeof this._depthBillboardMesh.destroy === "function") {
+            this._depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
+        }
+        this._depthBillboardMesh = null;
         if (this.fireSprite && this.fireSprite.parent) {
             this.fireSprite.parent.removeChild(this.fireSprite);
         }
@@ -636,9 +658,13 @@ class Character {
         
         this.node = this.map.worldToNode(this.x, this.y);
         this.destination = destinationNode;
+        const pathOptions = {};
+        if (this.pathfindingClearance > 0) {
+            pathOptions.clearance = this.pathfindingClearance;
+        }
         this.path = (this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
-            ? this.map.findPathAStar(this.node, destinationNode)
-            : this.map.findPath(this.node, destinationNode);
+            ? this.map.findPathAStar(this.node, destinationNode, pathOptions)
+            : this.map.findPath(this.node, destinationNode, pathOptions);
         if (!Array.isArray(this.path)) {
             this.path = [];
         }
@@ -1919,7 +1945,7 @@ class Animal extends Character {
             ? (texGroup.list.find(Boolean) || texGroup.list[0])
             : PIXI.Texture.WHITE;
         this.pixiSprite = new PIXI.Sprite(firstFrameTexture);
-        this.pixiSprite.anchor.set(0.5, 0.5);
+        this.pixiSprite.anchor.set(0.5, 1.0);
 
         this.spriteRows = 1;
         this.spriteCols = 1;
@@ -1963,6 +1989,43 @@ class Animal extends Character {
         this.attacking = false;
         this._aiAccumulatorMs = Math.random() * 200;
         ensureSpriteFrames(this);
+
+        // --- Depth billboard support (renders animal as a depth-tested billboard like trees) ---
+        this._depthBillboardMesh = null;
+        this._depthBillboardWorldPositions = null;
+        this._depthBillboardLastSignature = "";
+        this._depthBillboardLastUvSignature = "";
+        this._depthBillboardMeshMode = "";
+        const staticProto = (typeof globalThis.StaticObject === "function" && globalThis.StaticObject.prototype)
+            ? globalThis.StaticObject.prototype
+            : null;
+        if (staticProto) {
+            if (typeof staticProto.ensureDepthBillboardMesh === "function") {
+                this.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
+            }
+            if (typeof staticProto.updateDepthBillboardUvsForTexture === "function") {
+                this.updateDepthBillboardUvsForTexture = staticProto.updateDepthBillboardUvsForTexture;
+            }
+        }
+    }
+    updateDepthBillboardMesh(ctx, camera, options) {
+        // Use interpolated position for smooth movement between sim ticks
+        const interpolated = this.getInterpolatedPosition();
+        const savedX = this.x, savedY = this.y, savedZ = this.z;
+        this.x = interpolated.x;
+        this.y = interpolated.y;
+        this.z = interpolated.z;
+        const staticProto = (typeof globalThis.StaticObject === "function" && globalThis.StaticObject.prototype)
+            ? globalThis.StaticObject.prototype
+            : null;
+        let result = null;
+        if (staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
+            result = staticProto.updateDepthBillboardMesh.call(this, ctx, camera, options);
+        }
+        this.x = savedX;
+        this.y = savedY;
+        this.z = savedZ;
+        return result;
     }
     getDirectionRow() {
         const activeDirection = this.spriteDirectionLock || this.direction;
@@ -3438,6 +3501,20 @@ jQuery(() => {
                 updatePowerupsForWizard(wizard);
             }
             advanceAnimalsSimulation();
+            // Tick static objects that need simulation (burning, growing, falling)
+            for (const obj of activeSimObjects) {
+                if (!obj || obj.gone) {
+                    activeSimObjects.delete(obj);
+                    continue;
+                }
+                if (typeof obj.update === "function") {
+                    obj.update();
+                }
+                // Deregister when no longer needs ticking
+                if (!obj.isOnFire && !obj.isGrowing && !obj.falling && obj.fireFadeStart === undefined) {
+                    activeSimObjects.delete(obj);
+                }
+            }
             collisionMs = performance.now() - collisionStartMs;
             const pointerPostStartMs = performance.now();
             if (
@@ -3757,6 +3834,21 @@ jQuery(() => {
         return false;
     }
 
+    async function tryAutoLoadServerMainSaveOnStartup() {
+        if (typeof loadGameStateFromServerFile !== "function") {
+            return false;
+        }
+        const result = await loadGameStateFromServerFile();
+        if (result && result.ok) {
+            message("Loaded /assets/saves/savefile.json");
+            console.log("Auto-loaded game from server savefile.json at startup");
+            return true;
+        }
+        const reason = (result && result.reason) ? String(result.reason) : "unknown";
+        console.warn(`Startup server auto-load failed for /assets/saves/savefile.json (${reason})`, result);
+        return false;
+    }
+
     async function tryLoadFromStartupDirective() {
         const directive = consumeStartupLoadDirective();
         if (!directive || typeof directive.source !== "string") return false;
@@ -3794,9 +3886,18 @@ jQuery(() => {
         return false;
     }
 
-    void tryLoadFromStartupDirective().then(handled => {
+    void tryLoadFromStartupDirective().then(async handled => {
         if (!handled) {
-            tryAutoLoadLocalSaveOnStartup();
+            const loadedLocal = tryAutoLoadLocalSaveOnStartup();
+            if (loadedLocal) return;
+
+            // If no local save exists yet, boot from the default server save file.
+            if (typeof getSavedGameState === "function") {
+                const parsedSave = getSavedGameState();
+                if (parsedSave && parsedSave.reason === "missing") {
+                    await tryAutoLoadServerMainSaveOnStartup();
+                }
+            }
         }
     });
 

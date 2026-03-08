@@ -1507,6 +1507,9 @@ void main(void) {
             } else if (this.type === "road" && typeof globalThis.unregisterLazyRoadRecordAt === "function") {
                 globalThis.unregisterLazyRoadRecordAt(this.x, this.y);
             }
+            if (globalThis.activeSimObjects instanceof Set) {
+                globalThis.activeSimObjects.delete(this);
+            }
         }
     }
     remove() {
@@ -1515,6 +1518,10 @@ void main(void) {
     
     ignite() {
         this.isOnFire = true;
+        // Register for simulation ticking
+        if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+            globalThis.activeSimObjects.add(this);
+        }
     }
     
     update() {
@@ -1553,6 +1560,8 @@ void main(void) {
             const timeSinceFade = frameCount - this.fireFadeStart;
             if (timeSinceFade > fadeFrames) {
                 this.fireAlphaMult = 0;
+                // Fire fade complete — no more simulation needed
+                delete this.fireFadeStart;
             } else {
                 this.fireAlphaMult = Math.max(0, 1 - (timeSinceFade / fadeFrames));
             }
@@ -1672,6 +1681,12 @@ void main(void) {
                 obj.y = data.y;
                 if (data.hp !== undefined) obj.hp = data.hp;
                 if (data.isOnFire) obj.ignite();
+                // Also register for growing/falling state restored from save
+                if (obj.isGrowing || obj.falling) {
+                    if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+                        globalThis.activeSimObjects.add(obj);
+                    }
+                }
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     obj.script = data.script;
                 }

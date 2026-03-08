@@ -49,6 +49,13 @@ function toTreeSaveRecord(data) {
     if (typeof data.isOnFire === 'boolean') record.isOnFire = data.isOnFire;
     if (Number.isInteger(data.textureIndex)) record.textureIndex = data.textureIndex;
     if (Number.isFinite(data.size)) record.size = Number(data.size);
+    if (Object.prototype.hasOwnProperty.call(data, "script")) {
+        try {
+            record.script = JSON.parse(JSON.stringify(data.script));
+        } catch (_err) {
+            record.script = data.script;
+        }
+    }
     return record;
 }
 

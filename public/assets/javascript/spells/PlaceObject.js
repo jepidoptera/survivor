@@ -111,6 +111,17 @@ class PlaceObject extends globalThis.Spell {
                 // Keep legacy singleton for old code paths; newest roof wins.
                 globalThis.roof = targetRoof;
             }
+            if (
+                typeof globalThis !== "undefined" &&
+                globalThis.Scripting &&
+                typeof globalThis.Scripting.runObjectInitScript === "function"
+            ) {
+                globalThis.Scripting.runObjectInitScript(
+                    targetRoof,
+                    (typeof wizard !== "undefined") ? wizard : null,
+                    { reason: "objectCreated" }
+                );
+            }
             this.visible = false;
             this.detachPixiSprite();
             return this;
@@ -132,7 +143,9 @@ class PlaceObject extends globalThis.Spell {
         const placeableScale = (wizard && Number.isFinite(wizard.selectedPlaceableScale))
             ? Number(wizard.selectedPlaceableScale)
             : 1;
-        const clampedScale = Math.max(0.2, Math.min(5, placeableScale));
+        const scaleMin = (wizard && Number.isFinite(wizard.selectedPlaceableScaleMin)) ? wizard.selectedPlaceableScaleMin : 0.2;
+        const scaleMax = (wizard && Number.isFinite(wizard.selectedPlaceableScaleMax)) ? wizard.selectedPlaceableScaleMax : 5;
+        const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
         const selectedAnchorX = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
             ? Number(wizard.selectedPlaceableAnchorX)
             : 0.5;
@@ -237,6 +250,17 @@ class PlaceObject extends globalThis.Spell {
             placedObject
         ) {
             placedObject.z = Number(wallSnapPlacement.snappedZ);
+        }
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.runObjectInitScript === "function"
+        ) {
+            globalThis.Scripting.runObjectInitScript(
+                placedObject,
+                (typeof wizard !== "undefined") ? wizard : null,
+                { reason: "objectCreated" }
+            );
         }
 
         this.visible = false;
