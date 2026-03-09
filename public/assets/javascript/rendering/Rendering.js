@@ -3,7 +3,7 @@
     const TREE_ALPHA_CUTOFF = 0.08;
     const LOS_NEAR_REVEAL_RADIUS = 1.0;
     const LOS_THROTTLE_MS = 33;
-    const LOS_BINS = 1800;
+    const LOS_BINS = 3600;
     if (typeof global.renderingShowPickerScreen !== "boolean") {
         global.renderingShowPickerScreen = false;
     }
