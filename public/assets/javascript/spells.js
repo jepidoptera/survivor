@@ -2225,7 +2225,121 @@ const SpellSystem = (() => {
             return { x, y };
         }
 
-        const hitbox = target.groundPlaneHitbox || target.visualHitbox || target.hitbox || null;
+        // For deformed fallen trees, aim at the current rendered billboard center.
+        // (Do not use this for standing trees: single-plane billboard Y stays at trunk/base.)
+        const useDeformedTreeBillboardCenter = !!(
+            target &&
+            target.type === "tree" &&
+            (
+                target.falling ||
+                target.fallenHitboxCreated ||
+                Math.abs(Number(target.rotation) || 0) > 1e-4
+            )
+        );
+        const worldPositions = target && target._depthBillboardWorldPositions;
+        if (useDeformedTreeBillboardCenter && worldPositions && worldPositions.length >= 12) {
+            let centerX = 0;
+            let centerY = 0;
+            let count = 0;
+            for (let i = 0; i <= 9; i += 3) {
+                const vx = Number(worldPositions[i]);
+                const vy = Number(worldPositions[i + 1]);
+                if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
+                centerX += vx;
+                centerY += vy;
+                count += 1;
+            }
+            if (count > 0) {
+                centerX /= count;
+                centerY /= count;
+                const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
+                if (mapRef && typeof mapRef.wrapWorldX === "function") centerX = mapRef.wrapWorldX(centerX);
+                if (mapRef && typeof mapRef.wrapWorldY === "function") centerY = mapRef.wrapWorldY(centerY);
+                if (Number.isFinite(centerX) && Number.isFinite(centerY)) {
+                    return { x: centerX, y: centerY };
+                }
+            }
+        }
+
+        // Fallen trees update their collision polygons; prefer those over anchor math.
+        if (target && target.type === "tree" && (target.falling || target.fallenHitboxCreated)) {
+            const fallenHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+            if (fallenHitbox && typeof fallenHitbox.getBounds === "function") {
+                try {
+                    const bounds = fallenHitbox.getBounds();
+                    if (
+                        bounds &&
+                        Number.isFinite(bounds.x) &&
+                        Number.isFinite(bounds.y) &&
+                        Number.isFinite(bounds.width) &&
+                        Number.isFinite(bounds.height)
+                    ) {
+                        const centerX = Number(bounds.x) + Number(bounds.width) * 0.5;
+                        const centerY = Number(bounds.y) + Number(bounds.height) * 0.5;
+                        if (Number.isFinite(centerX) && Number.isFinite(centerY)) {
+                            return { x: centerX, y: centerY };
+                        }
+                    }
+                } catch (_err) {
+                    // Fall through to generic center math.
+                }
+            }
+        }
+
+        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
+            const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
+            const baseX = Number(target.x);
+            const baseY = Number(target.y);
+            const width = Number.isFinite(target.width) ? Math.max(0, Number(target.width)) : 0;
+            const height = Number.isFinite(target.height) ? Math.max(0, Number(target.height)) : 0;
+            const spriteAnchorX = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.x);
+            const spriteAnchorY = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.y);
+            const anchorX = Number.isFinite(target.placeableAnchorX)
+                ? Number(target.placeableAnchorX)
+                : (Number.isFinite(target.anchorX)
+                    ? Number(target.anchorX)
+                    : (Number.isFinite(spriteAnchorX) ? spriteAnchorX : 0.5));
+            const anchorY = Number.isFinite(target.placeableAnchorY)
+                ? Number(target.placeableAnchorY)
+                : (Number.isFinite(target.anchorY)
+                    ? Number(target.anchorY)
+                    : (Number.isFinite(spriteAnchorY) ? spriteAnchorY : 0.5));
+            const rotationAxis = (typeof target.rotationAxis === "string")
+                ? target.rotationAxis.trim().toLowerCase()
+                : "";
+            const angleDeg = Number.isFinite(target.placementRotation)
+                ? Number(target.placementRotation)
+                : (Number.isFinite(target.rotation) ? Number(target.rotation) : 0);
+            const theta = angleDeg * (Math.PI / 180);
+            const tx = Math.cos(theta);
+            const ty = Math.sin(theta);
+            const nx = -ty;
+            const ny = tx;
+            let x = baseX;
+            let y = baseY;
+
+            if (rotationAxis === "ground") {
+                const alongOffset = (0.5 - anchorX) * width;
+                const depthOffset = (0.5 - anchorY) * height;
+                x += (tx * alongOffset) + (nx * depthOffset);
+                y += (ty * alongOffset) + (ny * depthOffset);
+            } else if (rotationAxis === "spatial") {
+                const alongOffset = (0.5 - anchorX) * width;
+                x += tx * alongOffset;
+                y += ty * alongOffset;
+            } else {
+                x += (0.5 - anchorX) * width;
+                y += (0.5 - anchorY) * height;
+            }
+
+            if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+            if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                return { x, y };
+            }
+        }
+
+        const hitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
         if (hitbox && typeof hitbox.getBounds === "function") {
             try {
                 const bounds = hitbox.getBounds();
@@ -2243,59 +2357,11 @@ const SpellSystem = (() => {
                     }
                 }
             } catch (_err) {
-                // Fallback to anchor-based center below.
+                // Keep failing closed; null below.
             }
         }
 
-        if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
-        const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
-        const baseX = Number(target.x);
-        const baseY = Number(target.y);
-        const width = Number.isFinite(target.width) ? Math.max(0, Number(target.width)) : 0;
-        const height = Number.isFinite(target.height) ? Math.max(0, Number(target.height)) : 0;
-        const spriteAnchorX = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.x);
-        const spriteAnchorY = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.y);
-        const anchorX = Number.isFinite(target.placeableAnchorX)
-            ? Number(target.placeableAnchorX)
-            : (Number.isFinite(target.anchorX)
-                ? Number(target.anchorX)
-                : (Number.isFinite(spriteAnchorX) ? spriteAnchorX : 0.5));
-        const anchorY = Number.isFinite(target.placeableAnchorY)
-            ? Number(target.placeableAnchorY)
-            : (Number.isFinite(target.anchorY)
-                ? Number(target.anchorY)
-                : (Number.isFinite(spriteAnchorY) ? spriteAnchorY : 0.5));
-        const rotationAxis = (typeof target.rotationAxis === "string")
-            ? target.rotationAxis.trim().toLowerCase()
-            : "";
-        const angleDeg = Number.isFinite(target.placementRotation)
-            ? Number(target.placementRotation)
-            : (Number.isFinite(target.rotation) ? Number(target.rotation) : 0);
-        const theta = angleDeg * (Math.PI / 180);
-        const tx = Math.cos(theta);
-        const ty = Math.sin(theta);
-        const nx = -ty;
-        const ny = tx;
-        let x = baseX;
-        let y = baseY;
-
-        if (rotationAxis === "ground") {
-            const alongOffset = (0.5 - anchorX) * width;
-            const depthOffset = (0.5 - anchorY) * height;
-            x += (tx * alongOffset) + (nx * depthOffset);
-            y += (ty * alongOffset) + (ny * depthOffset);
-        } else if (rotationAxis === "spatial") {
-            const alongOffset = (0.5 - anchorX) * width;
-            x += tx * alongOffset;
-            y += ty * alongOffset;
-        } else {
-            x += (0.5 - anchorX) * width;
-        }
-
-        if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
-        if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: baseX, y: baseY };
-        return { x, y };
+        return null;
     }
     globalThis.getSpellTargetAimPoint = getTargetAimPoint;
 

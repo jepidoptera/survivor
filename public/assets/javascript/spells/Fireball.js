@@ -224,18 +224,36 @@ class Fireball extends globalThis.Spell {
 
         const doesImpactHitObject = (obj) => {
             if (!obj) return false;
-            // Tree targeting should key off the trunk/base location (ground plane),
-            // not canopy-only visual hitboxes.
-            const primaryHitbox = (obj.type === "tree")
-                ? (obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox)
-                : (obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox);
-            if (!primaryHitbox || typeof primaryHitbox.intersects !== "function") return false;
-            if (primaryHitbox.intersects(impactCircle)) return true;
+            const hitboxes = (obj.type === "tree")
+                ? [obj.visualHitbox, obj.groundPlaneHitbox, obj.hitbox]
+                : [obj.visualHitbox, obj.groundPlaneHitbox, obj.hitbox];
+            for (let i = 0; i < hitboxes.length; i++) {
+                const hb = hitboxes[i];
+                if (!hb || typeof hb.intersects !== "function") continue;
+                if (hb.intersects(impactCircle)) return true;
+            }
 
             // Small proximity fallback for directly forced targets to tolerate
             // tiny center/anchor mismatches while homing.
-            if (obj === directTarget && Number.isFinite(obj.x) && Number.isFinite(obj.y)) {
-                return distance(this.x, this.y, obj.x, obj.y) <= Math.max(this.radius + 0.35, 0.6);
+            if (obj === directTarget) {
+                const resolver = (typeof globalThis.getSpellTargetAimPoint === "function")
+                    ? globalThis.getSpellTargetAimPoint
+                    : null;
+                const resolvedAim = resolver
+                    ? resolver((typeof wizard !== "undefined") ? wizard : null, obj)
+                    : null;
+                const targetX = Number.isFinite(resolvedAim && resolvedAim.x)
+                    ? Number(resolvedAim.x)
+                    : (Number.isFinite(obj.x) ? Number(obj.x) : null);
+                const targetY = Number.isFinite(resolvedAim && resolvedAim.y)
+                    ? Number(resolvedAim.y)
+                    : (Number.isFinite(obj.y) ? Number(obj.y) : null);
+                if (Number.isFinite(targetX) && Number.isFinite(targetY)) {
+                    const sizeBias = (obj.type === "tree")
+                        ? Math.max(0.4, (Math.max(Number(obj.width) || 0, Number(obj.height) || 0) * 0.3))
+                        : 0;
+                    return distance(this.x, this.y, targetX, targetY) <= Math.max(this.radius + 0.35 + sizeBias, 0.6);
+                }
             }
             return false;
         };

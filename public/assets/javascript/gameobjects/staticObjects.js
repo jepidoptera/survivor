@@ -2140,10 +2140,18 @@ class Tree extends StaticObject {
         const baseCenterX = worldX + (0.5 - anchorX) * worldWidth;
         const baseY = worldY;
         const baseBottomZ = worldZ - (1 - anchorY) * worldHeightZ;
-        const rotateXZ = (x, z) => ({
-            x: (x * cosR) - (z * sinR),
-            z: (x * sinR) + (z * cosR)
-        });
+        // Rotate in screen-equivalent metric space so fall keeps visual aspect ratio
+        // under anisotropic projection (X vs Z uses xyratio on screen).
+        const safeXyRatio = Math.max(1e-6, xyRatio);
+        const rotateXZ = (x, z) => {
+            const zMetric = z * safeXyRatio;
+            const rx = (x * cosR) - (zMetric * sinR);
+            const rzMetric = (x * sinR) + (zMetric * cosR);
+            return {
+                x: rx,
+                z: rzMetric / safeXyRatio
+            };
+        };
 
         const localBL = rotateXZ(-worldWidth * 0.5, 0);
         const localBR = rotateXZ(worldWidth * 0.5, 0);
