@@ -163,6 +163,111 @@
         return 0;
     }
 
+    /**
+     * Lazily compute and cache which side of the door's traversal normal faces
+     * the interior of a closed wall loop.  Returns +1, -1, or 0 (unknown).
+     * The result is cached on `door._interiorNormalSign` and only recomputed
+     * when the mounted wall section changes.
+     */
+    function computeDoorInteriorSign(door, mapRef) {
+        if (!door) return 0;
+
+        // Check whether the cached value is still valid.
+        const currentMountId = Number.isInteger(door.mountedWallSectionUnitId)
+            ? door.mountedWallSectionUnitId
+            : (Number.isInteger(door.mountedWallLineGroupId)
+                ? door.mountedWallLineGroupId : null);
+        if (door._interiorNormalSign !== undefined &&
+            door._interiorSignMountedId === currentMountId) {
+            return door._interiorNormalSign;
+        }
+
+        // Default: unknown – callers fall back to the legacy convention.
+        door._interiorNormalSign = 0;
+        door._interiorSignMountedId = currentMountId;
+        if (currentMountId === null) return 0;
+
+        const wallCtor = (typeof globalThis !== "undefined" && globalThis.WallSectionUnit) || null;
+        const roofApi  = (typeof globalThis !== "undefined" && globalThis.Roof) || null;
+        if (!wallCtor || !wallCtor._allSections ||
+            !roofApi  || typeof roofApi.findConvexWallLoopFromStartSection !== "function") {
+            return 0;
+        }
+
+        const mountedSection = wallCtor._allSections.get(currentMountId);
+        if (!mountedSection) return 0;
+
+        const loopSections = roofApi.findConvexWallLoopFromStartSection(
+            mountedSection, mapRef, wallCtor, 12);
+        if (!Array.isArray(loopSections) || loopSections.length < 3) return 0;
+
+        // Compute centroid of the loop vertices (one startPoint per section).
+        let sumX = 0, sumY = 0, count = 0;
+        let baseX = null, baseY = null;
+        for (let i = 0; i < loopSections.length; i++) {
+            const sec = loopSections[i];
+            if (!sec || !sec.startPoint) continue;
+            const px = Number(sec.startPoint.x);
+            const py = Number(sec.startPoint.y);
+            if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+            if (baseX === null) {
+                baseX = px; baseY = py;
+                sumX += px;  sumY += py;
+            } else {
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(baseX, px) : (px - baseX);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(baseY, py) : (py - baseY);
+                sumX += baseX + dx;
+                sumY += baseY + dy;
+            }
+            count++;
+        }
+        if (count < 3) return 0;
+
+        let centroidX = sumX / count;
+        let centroidY = sumY / count;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") centroidX = mapRef.wrapWorldX(centroidX);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") centroidY = mapRef.wrapWorldY(centroidY);
+
+        // Which side of the door's normal is the loop interior on?
+        const hitbox = door.groundPlaneHitbox || door.visualHitbox || door.hitbox || null;
+        const sign = getDoorTraversalSide(door, hitbox, centroidX, centroidY, mapRef);
+        door._interiorNormalSign = sign;
+        return sign;
+    }
+
+    /**
+     * Resolve whether a traversal from one side to the other is
+     * "playerEnters" or "playerExits".
+     *
+     * Priority:
+     *   1. Closed-wall-loop interior detection  (computeDoorInteriorSign)
+     *   2. Learned convention from a previous traversal  (door._learnedEnterSign)
+     *   3. First-traversal rule: the very first crossing is always "entering"
+     *
+     * `destinationSide` is the side the player ends up on (+1 or -1).
+     */
+    function resolveDoorEventName(door, destinationSide, mapRef) {
+        if (!destinationSide) return "playerEnters"; // degenerate, shouldn't happen
+
+        // 1. Wall-loop detection (also teaches the door for future use).
+        const interiorSign = computeDoorInteriorSign(door, mapRef);
+        if (interiorSign !== 0) {
+            door._learnedEnterSign = interiorSign;
+            return destinationSide === interiorSign ? "playerEnters" : "playerExits";
+        }
+
+        // 2. Previously learned convention.
+        if (door._learnedEnterSign === 1 || door._learnedEnterSign === -1) {
+            return destinationSide === door._learnedEnterSign ? "playerEnters" : "playerExits";
+        }
+
+        // 3. First traversal — this crossing defines "entering".
+        door._learnedEnterSign = destinationSide;
+        return "playerEnters";
+    }
+
     function isPointInDoorHitbox(hitbox, px, py, radius = 0) {
         if (!hitbox) return false;
         const probe = { type: "circle", x: px, y: py, radius: Math.max(0, Number(radius) || 0) };
@@ -647,7 +752,7 @@
             if (state.inside && !insideTo) {
                 const exitSide = sideTo !== 0 ? sideTo : sideFrom;
                 if (state.entrySide !== 0 && exitSide !== 0 && exitSide !== state.entrySide) {
-                    const eventName = state.entrySide < exitSide ? "playerEnters" : "playerExits";
+                    const eventName = resolveDoorEventName(door, exitSide, wizardRef.map || null);
                         fireDoorTraversalEvent(door, eventName, wizardRef, {
                             doorId,
                             sideFrom,
@@ -666,7 +771,7 @@
             }
 
             if (!fired && !insideFrom && !insideTo && sideFrom !== 0 && sideTo !== 0 && sideFrom !== sideTo) {
-                const eventName = sideFrom < sideTo ? "playerEnters" : "playerExits";
+                const eventName = resolveDoorEventName(door, sideTo, wizardRef.map || null);
                 fireDoorTraversalEvent(door, eventName, wizardRef, {
                     doorId,
                     sideFrom,
