@@ -1524,6 +1524,86 @@ void main(void) {
         }
     }
     
+    static FIRE_TEXTURE_PATH = "/assets/images/magic/fire.png";
+    static FIRE_FRAME_COUNT_X = 5;
+    static FIRE_FRAME_COUNT_Y = 5;
+    static FIRE_FPS = 12;
+    static _fireFramesCache = null;
+
+    static getFireFrames() {
+        if (StaticObject._fireFramesCache && StaticObject._fireFramesCache.length > 0) {
+            return StaticObject._fireFramesCache;
+        }
+        const baseTex = PIXI.Texture.from(StaticObject.FIRE_TEXTURE_PATH).baseTexture;
+        if (!baseTex || !baseTex.valid) return null;
+        const cols = StaticObject.FIRE_FRAME_COUNT_X;
+        const rows = StaticObject.FIRE_FRAME_COUNT_Y;
+        const fw = baseTex.width / cols;
+        const fh = baseTex.height / rows;
+        const frames = [];
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                frames.push(new PIXI.Texture(baseTex, new PIXI.Rectangle(c * fw, r * fh, fw, fh)));
+            }
+        }
+        StaticObject._fireFramesCache = frames;
+        return frames;
+    }
+
+    _ensureFireSprite() {
+        if (this.fireSprite) return this.fireSprite;
+        const frames = StaticObject.getFireFrames();
+        if (!frames || frames.length === 0) return null;
+        this._fireFrameIndex = Math.floor(Math.random() * frames.length);
+        this._fireFrameProgress = 0;
+        this._fireLastFrameCount = null;
+        const sprite = new PIXI.Sprite(frames[this._fireFrameIndex]);
+        sprite.anchor.set(0.5, 1);
+        sprite.blendMode = PIXI.BLEND_MODES.ADD;
+        this.fireSprite = sprite;
+        // Add to objectLayer so it's part of the scene
+        if (typeof objectLayer !== "undefined" && objectLayer) {
+            objectLayer.addChild(sprite);
+        }
+        return sprite;
+    }
+
+    _updateFireAnimation() {
+        if (!this.fireSprite) return;
+        const frames = StaticObject.getFireFrames();
+        if (!frames || frames.length <= 1) return;
+
+        const currentFC = Number.isFinite(frameCount) ? Number(frameCount) : 0;
+        if (!Number.isFinite(this._fireLastFrameCount)) {
+            this._fireLastFrameCount = currentFC;
+            this.fireSprite.texture = frames[this._fireFrameIndex % frames.length];
+            return;
+        }
+        const delta = Math.max(0, currentFC - this._fireLastFrameCount);
+        this._fireLastFrameCount = currentFC;
+        if (delta <= 0) return;
+
+        const simFps = Math.max(1, Number(frameRate) || 30);
+        this._fireFrameProgress += delta * (StaticObject.FIRE_FPS / simFps);
+        const advance = Math.floor(this._fireFrameProgress);
+        if (advance > 0) {
+            this._fireFrameProgress -= advance;
+            this._fireFrameIndex = (this._fireFrameIndex + advance) % frames.length;
+        }
+        this.fireSprite.texture = frames[this._fireFrameIndex % frames.length];
+    }
+
+    _removeFireSprite() {
+        if (!this.fireSprite) return;
+        if (this.fireSprite.parent) {
+            this.fireSprite.parent.removeChild(this.fireSprite);
+        }
+        if (typeof this.fireSprite.destroy === "function") {
+            this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.fireSprite = null;
+    }
+
     update() {
         this.updateSpriteAnimation();
 
@@ -1540,7 +1620,7 @@ void main(void) {
                 const blackProgress = Math.max(0, (hpThreshold - this.hp) / hpThreshold);
                 const brightness = Math.floor(255 * (1 - blackProgress * 0.8));
                 const tintValue = (brightness << 16) | (brightness << 8) | brightness;
-                this.pixiSprite.tint = tintValue;
+                if (this.pixiSprite) this.pixiSprite.tint = tintValue;
             }
         }
         
@@ -1553,6 +1633,29 @@ void main(void) {
         if (this.hp <= 0 && !this.burned) {
             this.burned = true;
         }
+
+        // Manage animated fire sprite overlay
+        if (this.isOnFire || (this.fireFadeStart !== undefined)) {
+            this._ensureFireSprite();
+            this._updateFireAnimation();
+            // Scale fire alpha: full when on fire, fading after tree falls
+            const alphaMult = Number.isFinite(this.fireAlphaMult) ? this.fireAlphaMult : 1;
+            if (this.fireSprite) {
+                this.fireSprite.alpha = alphaMult;
+                // Scale fire size based on HP: starts small, grows as HP drops
+                if (this.maxHP && this.maxHP > 0) {
+                    const hpRatio = Math.max(0, Math.min(1, this.hp / this.maxHP));
+                    // Fire scale: 0.3 at full HP, 1.0 at 0 HP
+                    this.fireScale = 0.3 + 0.7 * (1 - hpRatio);
+                } else {
+                    this.fireScale = 1;
+                }
+            }
+        } else {
+            if (this.fireSprite) {
+                this._removeFireSprite();
+            }
+        }
         
         // Fade out fire after destruction
         if (this.fireFadeStart !== undefined) {
@@ -1560,6 +1663,7 @@ void main(void) {
             const timeSinceFade = frameCount - this.fireFadeStart;
             if (timeSinceFade > fadeFrames) {
                 this.fireAlphaMult = 0;
+                this._removeFireSprite();
                 // Fire fade complete — no more simulation needed
                 delete this.fireFadeStart;
             } else {
@@ -1971,6 +2075,142 @@ class Tree extends StaticObject {
                 }
             }
         }
+    }
+
+    updateDepthBillboardMesh(ctx = null, camera = null, options = {}) {
+        const isFalling = !!(
+            this &&
+            this.falling &&
+            Number.isFinite(this.rotation) &&
+            Math.abs(Number(this.rotation)) > 1e-4
+        );
+        if (!isFalling) {
+            return super.updateDepthBillboardMesh(ctx, camera, options);
+        }
+
+        const sprite = this.pixiSprite;
+        const fallbackTexture = (typeof this.texturePath === "string" && this.texturePath.length > 0)
+            ? PIXI.Texture.from(this.texturePath)
+            : null;
+        const sourceTexture = (sprite && sprite.texture) ? sprite.texture : (fallbackTexture || null);
+        if (!sourceTexture) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+        if (!camera) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+
+        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
+            forceSinglePlane: true
+        });
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillboardWorldPositions) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+        this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
+
+        const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
+        const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const worldZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        const viewScale = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1));
+        const xyRatio = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 1));
+        const anchorX = (sprite && sprite.anchor && Number.isFinite(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0.5;
+        const anchorY = (sprite && sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
+        const worldWidth = Math.max(0.01, Math.abs(Number(sprite && sprite.width) || 0) / viewScale);
+        const worldHeightZ = Math.max(0.01, Math.abs(Number(sprite && sprite.height) || 0) / (viewScale * xyRatio));
+
+        const absRotation = Math.min(90, Math.max(0, Math.abs(Number(this.rotation) || 0)));
+        const fallSign = (typeof this.fallDirection === "string")
+            ? (this.fallDirection === "right" ? 1 : -1)
+            : ((Number(this.rotation) || 0) >= 0 ? 1 : -1);
+        const fallRadians = (absRotation * Math.PI / 180) * fallSign;
+        const cosR = Math.cos(fallRadians);
+        const sinR = Math.sin(fallRadians);
+
+        let topWidth = worldWidth;
+        let deformedHeight = worldHeightZ;
+        if (absRotation >= 75) {
+            const lateProgress = Math.min((absRotation - 75) / 15, 1);
+            topWidth = worldWidth * (1 - lateProgress * 0.5);
+            deformedHeight = worldHeightZ * (1 + lateProgress * 0.1);
+        }
+
+        const baseCenterX = worldX + (0.5 - anchorX) * worldWidth;
+        const baseY = worldY;
+        const baseBottomZ = worldZ - (1 - anchorY) * worldHeightZ;
+        const rotateXZ = (x, z) => ({
+            x: (x * cosR) - (z * sinR),
+            z: (x * sinR) + (z * cosR)
+        });
+
+        const localBL = rotateXZ(-worldWidth * 0.5, 0);
+        const localBR = rotateXZ(worldWidth * 0.5, 0);
+        // In world space, positive Z is upward. Keep the crown above the base at rest
+        // so the billboard does not invert right before full fall.
+        const localTR = rotateXZ(topWidth * 0.5, deformedHeight);
+        const localTL = rotateXZ(-topWidth * 0.5, deformedHeight);
+
+        const bl = { x: baseCenterX + localBL.x, y: baseY, z: baseBottomZ + localBL.z };
+        const br = { x: baseCenterX + localBR.x, y: baseY, z: baseBottomZ + localBR.z };
+        const tr = { x: baseCenterX + localTR.x, y: baseY, z: baseBottomZ + localTR.z };
+        const tl = { x: baseCenterX + localTL.x, y: baseY, z: baseBottomZ + localTL.z };
+
+        const signature = [
+            bl.x, bl.z, br.x, br.z, tr.x, tr.z, tl.x, tl.z,
+            worldY, absRotation, topWidth, deformedHeight, fallSign
+        ].map(v => Number(v).toFixed(4)).join("|");
+        if (signature !== this._depthBillboardLastSignature) {
+            const positions = this._depthBillboardWorldPositions;
+            positions[0] = bl.x; positions[1] = bl.y; positions[2] = bl.z;
+            positions[3] = br.x; positions[4] = br.y; positions[5] = br.z;
+            positions[6] = tr.x; positions[7] = tr.y; positions[8] = tr.z;
+            positions[9] = tl.x; positions[10] = tl.y; positions[11] = tl.z;
+            const worldBuffer = mesh.geometry.getBuffer("aWorldPosition");
+            if (worldBuffer) worldBuffer.update();
+            this._depthBillboardLastSignature = signature;
+        }
+
+        const uniforms = mesh.shader.uniforms;
+        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
+        const nearMetric = -Math.max(80, viewportHeight * 0.6);
+        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
+        const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
+            ? Number(ctx.app.screen.width)
+            : 1;
+        const screenH = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.height))
+            ? Number(ctx.app.screen.height)
+            : 1;
+        const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
+        uniforms.uScreenSize[0] = Math.max(1, screenW);
+        uniforms.uScreenSize[1] = Math.max(1, screenH);
+        uniforms.uCameraWorld[0] = Number(camera.x) || 0;
+        uniforms.uCameraWorld[1] = Number(camera.y) || 0;
+        const mapRef = this.map || (ctx && ctx.map) || null;
+        uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
+            ? Number(mapRef.worldWidth)
+            : 0;
+        uniforms.uWorldSize[1] = (mapRef && Number.isFinite(mapRef.worldHeight) && mapRef.worldHeight > 0)
+            ? Number(mapRef.worldHeight)
+            : 0;
+        uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
+        uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
+        uniforms.uWrapAnchorWorld[0] = worldX;
+        uniforms.uWrapAnchorWorld[1] = worldY;
+        uniforms.uViewScale = Number(camera.viewscale) || 1;
+        uniforms.uXyRatio = Number(camera.xyratio) || 1;
+        uniforms.uDepthRange[0] = farMetric;
+        uniforms.uDepthRange[1] = depthSpanInv;
+        uniforms.uTint[0] = ((tint >> 16) & 255) / 255;
+        uniforms.uTint[1] = ((tint >> 8) & 255) / 255;
+        uniforms.uTint[2] = (tint & 255) / 255;
+        uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
+        uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
+        uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
+        mesh.visible = true;
+        return mesh;
     }
 
     saveJson() {

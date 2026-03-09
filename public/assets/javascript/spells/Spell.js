@@ -35,8 +35,17 @@ class Spell {
     getForcedTargetAimPoint() {
         const target = this.forcedTarget;
         if (!this.canTrackForcedTarget(target)) return null;
+        const resolver = (typeof globalThis.getSpellTargetAimPoint === "function")
+            ? globalThis.getSpellTargetAimPoint
+            : null;
+        if (resolver) {
+            const aim = resolver((typeof wizard !== "undefined") ? wizard : null, target);
+            if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                return { x: Number(aim.x), y: Number(aim.y) };
+            }
+        }
         if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
-        return { x: target.x, y: target.y };
+        return { x: Number(target.x), y: Number(target.y) };
     }
     retargetMovementTo(point, speedPerFrame = null) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;

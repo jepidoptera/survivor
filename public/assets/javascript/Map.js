@@ -223,8 +223,10 @@ class MapNode {
         const wasClear = !this.isBlocked();
         this.recountBlockingObjects();
         if (wasClear && this.isBlocked()) {
-            // Tile just became blocked — propagate clearance update.
+            // Tile just became blocked — propagate clearance update
+            // (skipped when bulk-loading a save with cached clearance).
             if (typeof globalThis !== "undefined" && globalThis.map &&
+                !globalThis.map._suppressClearanceUpdates &&
                 typeof globalThis.map.updateClearanceAround === "function") {
                 globalThis.map.updateClearanceAround(this);
             }
@@ -241,8 +243,10 @@ class MapNode {
         const wasBlocked = this.isBlocked();
         this.recountBlockingObjects();
         if (wasBlocked && !this.isBlocked()) {
-            // Tile just became passable — recompute clearance in neighbourhood.
+            // Tile just became passable — recompute clearance in neighbourhood
+            // (skipped when bulk-loading a save with cached clearance).
             if (typeof globalThis !== "undefined" && globalThis.map &&
+                !globalThis.map._suppressClearanceUpdates &&
                 typeof globalThis.map.updateClearanceAround === "function") {
                 globalThis.map.updateClearanceAround(this);
             }
@@ -332,6 +336,7 @@ class NodeMidpoint {
 
 class GameMap {
     constructor(width, height, options, callback) {
+        const _t0 = performance.now();
         const opts = options || {};
         this.width = width;
         this.height = height;
@@ -408,6 +413,8 @@ class GameMap {
         landTileSprite = null;
 
         console.log("generating nodes...");
+        const _t1 = performance.now();
+        console.log(`[MAP TIMING] setup/textures: ${(_t1 - _t0).toFixed(1)}ms`);
 
         let index = 0;
         for (let x = -1; x < this.width; x++) {
@@ -460,11 +467,15 @@ class GameMap {
         }
         
         // Now that all nodes are created, populate their neighbor references
+        const _t2 = performance.now();
+        console.log(`[MAP TIMING] node creation + scenery: ${(_t2 - _t1).toFixed(1)}ms`);
         for (let x = -1; x < this.width; x++) {
             for (let y = -1; y < this.height; y++) {
                 this.nodes[x][y].setNeighbors(this.nodes, this);
             }
         }
+        const _t3 = performance.now();
+        console.log(`[MAP TIMING] setNeighbors: ${(_t3 - _t2).toFixed(1)}ms`);
         animal_types.forEach((animal, i) => {
             console.log("generating animals:", animal.type);
             for (let n = 0; n < animal.frequency; n++) {
@@ -510,8 +521,17 @@ class GameMap {
             }
         })
         
-        // Compute initial clearance values after all scenery is placed.
-        this.computeClearance();
+        // Compute initial clearance values after all scenery is placed,
+        // unless the caller signals a save-file load will supply them.
+        if (!opts.skipClearance) {
+            const _t4 = performance.now();
+            this.computeClearance();
+            console.log(`[MAP TIMING] computeClearance: ${(performance.now() - _t4).toFixed(1)}ms`);
+        } else {
+            console.log(`[MAP TIMING] computeClearance: SKIPPED`);
+        }
+        const _tEnd = performance.now();
+        console.log(`[MAP TIMING] TOTAL constructor: ${(_tEnd - _t0).toFixed(1)}ms`);
 
         if (callback) setTimeout(() => callback(this), 100 );
     }
@@ -523,6 +543,63 @@ class GameMap {
     //
     // Large animals require `node.clearance >= requiredClearanceRings` to
     // pathfind through a tile.
+
+    /**
+     * Encode every node's clearance value into a compact base-36 char-grid
+     * string (one character per tile, row-major order).  Values 0–35 map
+     * to '0'–'z'; Infinity is stored as 'z' (cap at 35).
+     * Returns an object shaped like groundTiles for easy JSON storage,
+     * or null if the map isn't ready.
+     */
+    serializeClearance() {
+        if (!this.nodes) return null;
+        let out = "";
+        for (let y = 0; y < this.height; y++) {
+            for (let x = 0; x < this.width; x++) {
+                const node = this.nodes[x] && this.nodes[x][y] ? this.nodes[x][y] : null;
+                const raw  = node ? node.clearance : 0;
+                const v    = Number.isFinite(raw) ? Math.max(0, Math.min(35, raw)) : 35;
+                out += v.toString(36);
+            }
+        }
+        return {
+            encoding: "base36-char-grid",
+            width:    this.width,
+            height:   this.height,
+            data:     out
+        };
+    }
+
+    /**
+     * Restore clearance values from a previously serialised char-grid.
+     * Returns true on success, false if the data doesn't match.
+     */
+    deserializeClearance(encoded) {
+        if (!this.nodes || !encoded ||
+            encoded.encoding !== "base36-char-grid" ||
+            typeof encoded.data !== "string") {
+            return false;
+        }
+        if (encoded.width !== this.width || encoded.height !== this.height) {
+            return false;
+        }
+        const expectedLen = this.width * this.height;
+        if (encoded.data.length < expectedLen) return false;
+
+        let i = 0;
+        for (let y = 0; y < this.height; y++) {
+            for (let x = 0; x < this.width; x++) {
+                const node = this.nodes[x] && this.nodes[x][y] ? this.nodes[x][y] : null;
+                if (!node) { i++; continue; }
+                const v = parseInt(encoded.data[i], 36);
+                node.clearance = Number.isFinite(v) ? v : 0;
+                // 35 was the cap sentinel — treat it as "far from obstacles"
+                // but NOT Infinity, so the saved value round-trips cleanly.
+                i++;
+            }
+        }
+        return true;
+    }
 
     /**
      * Full BFS clearance recompute — called once after map generation and

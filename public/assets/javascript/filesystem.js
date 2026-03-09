@@ -324,6 +324,9 @@ function saveGameState() {
             .map(animal => animal.saveJson()),
         staticObjects: [],
         groundTiles: encodeGroundTiles(map),
+        clearanceMap: (typeof map.serializeClearance === "function")
+            ? map.serializeClearance()
+            : null,
         roof: null
     };
 
@@ -460,10 +463,15 @@ function loadGameState(saveData) {
         return false;
     }
 
+    const _lt0 = performance.now();
     try {
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = null;
         }
+
+        // Suppress per-tile incremental clearance updates while bulk-loading
+        // objects — we will restore the entire clearance map at the end.
+        if (map) map._suppressClearanceUpdates = true;
         const destroyDisplayObject = (displayObj) => {
             if (!displayObj) return;
             if (displayObj.parent && typeof displayObj.parent.removeChild === "function") {
@@ -502,6 +510,8 @@ function loadGameState(saveData) {
         }
 
         // Load wizard state
+        const _lt1 = performance.now();
+        console.log(`[LOAD TIMING] cleanup: ${(_lt1 - _lt0).toFixed(1)}ms`);
         if (wizard) {
             wizard.loadJson(saveData.wizard);
         }
@@ -527,6 +537,8 @@ function loadGameState(saveData) {
         animals.length = 0;
 
         // Restore animals
+        const _lt2 = performance.now();
+        console.log(`[LOAD TIMING] wizard + clear animals: ${(_lt2 - _lt1).toFixed(1)}ms`);
         if (saveData.animals && Array.isArray(saveData.animals)) {
             saveData.animals.forEach(animalData => {
                 if (!animalData || animalData.gone || animalData.vanishing) return;
@@ -538,6 +550,8 @@ function loadGameState(saveData) {
         }
 
         // Clear existing static objects (dedupe references shared across nodes)
+        const _lt3 = performance.now();
+        console.log(`[LOAD TIMING] restore animals: ${(_lt3 - _lt2).toFixed(1)}ms`);
         const existingStaticObjects = new Set();
         for (let x = 0; x < map.width; x++) {
             for (let y = 0; y < map.height; y++) {
@@ -604,15 +618,10 @@ function loadGameState(saveData) {
         }
 
         // Restore static objects (dedupe entries in save payload for backward compatibility)
+        const _lt4 = performance.now();
+        console.log(`[LOAD TIMING] clear static objects: ${(_lt4 - _lt3).toFixed(1)}ms`);
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
-            const preexistingWallSections = (
-                typeof WallSectionUnit !== 'undefined' &&
-                WallSectionUnit &&
-                WallSectionUnit._allSections instanceof Map
-            )
-                ? Array.from(WallSectionUnit._allSections.values())
-                    .filter(section => section && !section.gone && section.map === map)
-                : [];
+            const _st0 = performance.now();
             const loadedWallSections = [];
             const loadedRoofs = [];
             const restoredKeys = new Set();
@@ -637,7 +646,7 @@ function loadGameState(saveData) {
                     WallSectionUnit &&
                     typeof WallSectionUnit.loadJson === 'function'
                 ) {
-                    obj = WallSectionUnit.loadJson(objData, map);
+                    obj = WallSectionUnit.loadJson(objData, map, { deferSetup: true });
                     if (obj && !obj.gone) {
                         loadedWallSections.push(obj);
                     }
@@ -662,33 +671,20 @@ function loadGameState(saveData) {
                     // Objects handle their own node registration
                 }
             });
+            const _st1 = performance.now();
+            console.log(`[LOAD TIMING]   forEach restore loop: ${(_st1 - _st0).toFixed(1)}ms`);
 
-            if (
-                typeof WallSectionUnit !== 'undefined' &&
-                WallSectionUnit &&
-                WallSectionUnit._allSections instanceof Map &&
-                typeof WallSectionUnit.autoMergeContinuousSections === 'function'
-            ) {
-                if (typeof WallSectionUnit.harmonizeTexturePhaseForSections === 'function' && loadedWallSections.length > 0) {
-                    WallSectionUnit.harmonizeTexturePhaseForSections(loadedWallSections, preexistingWallSections);
+            // Batch wall setup: addToMapNodes + rebuildMesh3d in a single O(N) pass.
+            // Joinery/merge/rebuildConnections are skipped — walls are already
+            // merged correctly at save time.
+            if (loadedWallSections.length > 0) {
+                for (let i = 0; i < loadedWallSections.length; i++) {
+                    const section = loadedWallSections[i];
+                    if (!section || section.gone) continue;
+                    section.addToMapNodes();
+                    section.rebuildMesh3d();
                 }
-                if (loadedWallSections.length > 0) {
-                    const mergedWallSections = WallSectionUnit.autoMergeContinuousSections(loadedWallSections) || [];
-                    // Ensure endpoint corner caps/faces reflect post-merge topology.
-                    for (let i = 0; i < mergedWallSections.length; i++) {
-                        const section = mergedWallSections[i];
-                        if (!section || section.gone || typeof section.handleJoineryOnPlacement !== "function") continue;
-                        section.handleJoineryOnPlacement();
-                    }
-                    // Rebuild runtime connection maps from current topology.
-                    const sectionsForMap = Array.from(WallSectionUnit._allSections.values())
-                        .filter(section => section && !section.gone && section.map === map);
-                    for (let i = 0; i < sectionsForMap.length; i++) {
-                        const section = sectionsForMap[i];
-                        if (!section || typeof section.rebuildConnections !== "function") continue;
-                        section.rebuildConnections(sectionsForMap);
-                    }
-                }
+                console.log(`[LOAD TIMING]   wall batch addToMapNodes+rebuildMesh3d (${loadedWallSections.length}): ${(performance.now() - _st1).toFixed(1)}ms`);
             }
 
             if (loadedRoofs.length > 0) {
@@ -705,6 +701,8 @@ function loadGameState(saveData) {
         if (saveData.groundTiles) {
             decodeGroundTiles(map, saveData.groundTiles);
         }
+        const _lt5 = performance.now();
+        console.log(`[LOAD TIMING] restore static objects + ground: ${(_lt5 - _lt4).toFixed(1)}ms`);
 
         hydrateVisibleLazyRoads({ maxPerFrame: 192, paddingWorld: 12 });
         hydrateVisibleLazyTrees({ maxPerFrame: 256, paddingWorld: 12 });
@@ -719,6 +717,26 @@ function loadGameState(saveData) {
                 }
             }
         }
+
+        // Restore clearance from saved data (fast) or recompute from scratch.
+        map._suppressClearanceUpdates = false;
+        const _lt6 = performance.now();
+        console.log(`[LOAD TIMING] recount blocking: ${(_lt6 - _lt5).toFixed(1)}ms`);
+        if (saveData.clearanceMap &&
+            typeof map.deserializeClearance === "function" &&
+            map.deserializeClearance(saveData.clearanceMap)) {
+            // Clearance restored from cache — no BFS needed.
+            console.log("Clearance map restored from save data.");
+        } else {
+            // No cached clearance (old save) — full recompute.
+            console.log("No cached clearance map; running full recompute…");
+            if (typeof map.computeClearance === "function") {
+                map.computeClearance();
+            }
+        }
+        const _lt7 = performance.now();
+        console.log(`[LOAD TIMING] clearance restore/compute: ${(_lt7 - _lt6).toFixed(1)}ms`);
+        console.log(`[LOAD TIMING] TOTAL loadGameState: ${(_lt7 - _lt0).toFixed(1)}ms`);
 
         // Backward compatibility: restore legacy singleton roof when no roofs were loaded.
         const hasLoadedRoofs = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs) && globalThis.roofs.length > 0);
@@ -746,6 +764,8 @@ function loadGameState(saveData) {
         return true;
     } catch (e) {
         console.error("Error loading game state:", e);
+        // Ensure the suppression flag is always cleared even on error.
+        if (map) map._suppressClearanceUpdates = false;
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = e;
         }

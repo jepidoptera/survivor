@@ -1215,6 +1215,56 @@
                 if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
                     sprite.renderable = false;
                 }
+
+                // Position fire sprite overlay if present
+                if (item.fireSprite) {
+                    const fireSprite = item.fireSprite;
+                    const fireContainer = container;
+                    if (fireSprite.parent !== fireContainer) {
+                        fireContainer.addChild(fireSprite);
+                    }
+                    // Trees: center fire over the tree body (anchor 0.5,0.5), including
+                    // fallen/deformed billboard poses by sampling the current billboard quad.
+                    let fp = null;
+                    if (item.type === "tree") {
+                        fireSprite.anchor.set(0.5, 0.5);
+                        const worldPositions = item._depthBillboardWorldPositions;
+                        if (worldPositions && worldPositions.length >= 12) {
+                            const cx = (worldPositions[0] + worldPositions[3] + worldPositions[6] + worldPositions[9]) / 4;
+                            const cy = (worldPositions[1] + worldPositions[4] + worldPositions[7] + worldPositions[10]) / 4;
+                            const cz = (worldPositions[2] + worldPositions[5] + worldPositions[8] + worldPositions[11]) / 4;
+                            fp = this.camera.worldToScreen(cx, cy, cz);
+                        } else {
+                            const treeWidth = Number.isFinite(item.width) ? item.width : 4;
+                            const treeHeight = Number.isFinite(item.height) ? item.height : 4;
+                            const anchorX = (item.pixiSprite && item.pixiSprite.anchor && Number.isFinite(item.pixiSprite.anchor.x))
+                                ? Number(item.pixiSprite.anchor.x)
+                                : 0.5;
+                            const anchorY = (item.pixiSprite && item.pixiSprite.anchor && Number.isFinite(item.pixiSprite.anchor.y))
+                                ? Number(item.pixiSprite.anchor.y)
+                                : 1;
+                            const centerWorldX = item.x + (0.5 - anchorX) * treeWidth;
+                            const centerWorldY = item.y;
+                            const centerWorldZ = (anchorY * treeHeight) * 0.5;
+                            fp = this.camera.worldToScreen(centerWorldX, centerWorldY, centerWorldZ);
+                        }
+                    } else {
+                        if (fireSprite.anchor) fireSprite.anchor.set(0.5, 1);
+                        fp = this.camera.worldToScreen(item.x, item.y, 0);
+                    }
+                    fireSprite.x = fp.x;
+                    fireSprite.y = fp.y;
+
+                    // Size the fire relative to the tree's visual size
+                    const fireScale = Number.isFinite(item.fireScale) ? item.fireScale : 1;
+                    const treeWidth = Number.isFinite(item.width) ? item.width : 4;
+                    const treeHeight = Number.isFinite(item.height) ? item.height : 4;
+                    const vs = this.camera.viewscale;
+                    fireSprite.width = treeWidth * vs * fireScale * 0.8;
+                    fireSprite.height = treeHeight * vs * fireScale * 0.6;
+                    fireSprite.visible = true;
+                    fireSprite.renderable = true;
+                }
             }
 
             for (const mesh of this.activeDepthBillboardMeshes) {
@@ -1232,6 +1282,10 @@
                 }
                 if (item && item._renderingDepthMesh) {
                     item._renderingDepthMesh = null;
+                }
+                // Hide fire sprite when item leaves depth billboard rendering
+                if (item && item.fireSprite) {
+                    item.fireSprite.visible = false;
                 }
             }
             this.activeDepthBillboardMeshes = currentMeshes;

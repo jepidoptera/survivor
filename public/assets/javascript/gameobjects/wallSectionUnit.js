@@ -229,7 +229,10 @@ void main(void) {
             WallSectionUnit._allSections.set(this.id, this);
 
             // Solve joinery at both endpoints now that this section exists.
-            this.handleJoineryOnPlacement();
+            // Skipped during bulk-load; the caller will batch this afterwards.
+            if (!options.deferSetup) {
+                this.handleJoineryOnPlacement();
+            }
         }
 
         static _isMapNode(candidate) {
@@ -4050,6 +4053,7 @@ void main(void) {
             // Wall edges removed — update clearance for affected tiles.
             if (affectedNodes.length > 0 &&
                 typeof globalThis !== "undefined" && globalThis.map &&
+                !globalThis.map._suppressClearanceUpdates &&
                 typeof globalThis.map.updateClearanceAround === "function") {
                 for (let i = 0; i < affectedNodes.length; i++) {
                     globalThis.map.updateClearanceAround(affectedNodes[i]);
@@ -4082,6 +4086,7 @@ void main(void) {
             this._blockedLinkKeys.add(key);
             // Wall edge added — update clearance for large-entity pathfinding.
             if (typeof globalThis !== "undefined" && globalThis.map &&
+                !globalThis.map._suppressClearanceUpdates &&
                 typeof globalThis.map.updateClearanceAround === "function") {
                 globalThis.map.updateClearanceAround(node);
             }
@@ -5842,8 +5847,9 @@ void main(void) {
             return data;
         }
 
-        static loadJson(data, mapRef) {
+        static loadJson(data, mapRef, options) {
             if (!data || data.type !== "wallSection" || !mapRef) return null;
+            const opts = options || {};
             try {
                 const startPoint = WallSectionUnit._resolveSerializedEndpoint(data.startPoint, mapRef);
                 const endPoint = WallSectionUnit._resolveSerializedEndpoint(data.endPoint, mapRef);
@@ -5858,7 +5864,8 @@ void main(void) {
                         ? data.wallTexturePath
                         : DEFAULT_WALL_TEXTURE,
                     texturePhaseA: Number.isFinite(data.texturePhaseA) ? Number(data.texturePhaseA) : NaN,
-                    texturePhaseB: Number.isFinite(data.texturePhaseB) ? Number(data.texturePhaseB) : NaN
+                    texturePhaseB: Number.isFinite(data.texturePhaseB) ? Number(data.texturePhaseB) : NaN,
+                    deferSetup: !!opts.deferSetup
                 });
                 if (Number.isFinite(data.direction)) {
                     section.direction = WallSectionUnit._normalizeDirection(data.direction);
@@ -5869,8 +5876,10 @@ void main(void) {
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     section.script = data.script;
                 }
-                section.addToMapNodes();
-                section.rebuildMesh3d();
+                if (!opts.deferSetup) {
+                    section.addToMapNodes();
+                    section.rebuildMesh3d();
+                }
                 return section;
             } catch (e) {
                 console.error("Error loading wallSection:", e);

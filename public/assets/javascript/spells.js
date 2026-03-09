@@ -2201,16 +2201,13 @@ const SpellSystem = (() => {
 
     function getTargetAimPoint(wizardRef, target) {
         if (!target || target.gone) return null;
-        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
-            return { x: Number(target.x), y: Number(target.y) };
-        }
         if (
             target.type === "wallSection" &&
             target.startPoint && target.endPoint &&
             Number.isFinite(target.startPoint.x) && Number.isFinite(target.startPoint.y) &&
             Number.isFinite(target.endPoint.x) && Number.isFinite(target.endPoint.y)
         ) {
-            const mapRef = (wizardRef && wizardRef.map) || null;
+            const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
             const sx = Number(target.startPoint.x);
             const sy = Number(target.startPoint.y);
             const ex = Number(target.endPoint.x);
@@ -2227,8 +2224,80 @@ const SpellSystem = (() => {
             if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
             return { x, y };
         }
-        return null;
+
+        const hitbox = target.groundPlaneHitbox || target.visualHitbox || target.hitbox || null;
+        if (hitbox && typeof hitbox.getBounds === "function") {
+            try {
+                const bounds = hitbox.getBounds();
+                if (
+                    bounds &&
+                    Number.isFinite(bounds.x) &&
+                    Number.isFinite(bounds.y) &&
+                    Number.isFinite(bounds.width) &&
+                    Number.isFinite(bounds.height)
+                ) {
+                    const centerX = Number(bounds.x) + Number(bounds.width) * 0.5;
+                    const centerY = Number(bounds.y) + Number(bounds.height) * 0.5;
+                    if (Number.isFinite(centerX) && Number.isFinite(centerY)) {
+                        return { x: centerX, y: centerY };
+                    }
+                }
+            } catch (_err) {
+                // Fallback to anchor-based center below.
+            }
+        }
+
+        if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
+        const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
+        const baseX = Number(target.x);
+        const baseY = Number(target.y);
+        const width = Number.isFinite(target.width) ? Math.max(0, Number(target.width)) : 0;
+        const height = Number.isFinite(target.height) ? Math.max(0, Number(target.height)) : 0;
+        const spriteAnchorX = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.x);
+        const spriteAnchorY = Number(target && target.pixiSprite && target.pixiSprite.anchor && target.pixiSprite.anchor.y);
+        const anchorX = Number.isFinite(target.placeableAnchorX)
+            ? Number(target.placeableAnchorX)
+            : (Number.isFinite(target.anchorX)
+                ? Number(target.anchorX)
+                : (Number.isFinite(spriteAnchorX) ? spriteAnchorX : 0.5));
+        const anchorY = Number.isFinite(target.placeableAnchorY)
+            ? Number(target.placeableAnchorY)
+            : (Number.isFinite(target.anchorY)
+                ? Number(target.anchorY)
+                : (Number.isFinite(spriteAnchorY) ? spriteAnchorY : 0.5));
+        const rotationAxis = (typeof target.rotationAxis === "string")
+            ? target.rotationAxis.trim().toLowerCase()
+            : "";
+        const angleDeg = Number.isFinite(target.placementRotation)
+            ? Number(target.placementRotation)
+            : (Number.isFinite(target.rotation) ? Number(target.rotation) : 0);
+        const theta = angleDeg * (Math.PI / 180);
+        const tx = Math.cos(theta);
+        const ty = Math.sin(theta);
+        const nx = -ty;
+        const ny = tx;
+        let x = baseX;
+        let y = baseY;
+
+        if (rotationAxis === "ground") {
+            const alongOffset = (0.5 - anchorX) * width;
+            const depthOffset = (0.5 - anchorY) * height;
+            x += (tx * alongOffset) + (nx * depthOffset);
+            y += (ty * alongOffset) + (ny * depthOffset);
+        } else if (rotationAxis === "spatial") {
+            const alongOffset = (0.5 - anchorX) * width;
+            x += tx * alongOffset;
+            y += ty * alongOffset;
+        } else {
+            x += (0.5 - anchorX) * width;
+        }
+
+        if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: baseX, y: baseY };
+        return { x, y };
     }
+    globalThis.getSpellTargetAimPoint = getTargetAimPoint;
 
     function getWizardDistanceToTarget(wizardRef, target) {
         if (!wizardRef || !target || target.gone) return Infinity;
@@ -3923,6 +3992,13 @@ const SpellSystem = (() => {
         }
 
         if (!projectile) return;
+        if (clickTarget) {
+            const aim = getTargetAimPoint(wizardRef, clickTarget);
+            if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                worldX = aim.x;
+                worldY = aim.y;
+            }
+        }
         if (clickTarget) {
             projectile.forcedTarget = clickTarget;
             markObjectAsTargetedBySpell(wizardRef, wizardRef.currentSpell, clickTarget);
