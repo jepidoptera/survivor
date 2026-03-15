@@ -126,9 +126,21 @@
             this.anchorY = DEFAULT_ANCHOR_Y;
             this.billboardAlpha = 1;
             this.billboardTint = 0xffffff;
+            this.gravitateRadius = Number.isFinite(opts.gravitateRadius) ? Math.max(0, Number(opts.gravitateRadius)) : 0;
+            this.gravitateSpeed = Number.isFinite(opts.gravitateSpeed) ? Math.max(0, Number(opts.gravitateSpeed)) : 5;
             this.gone = false;
             this.collected = false;
             this.onCollect = (typeof opts.onCollect === "function") ? opts.onCollect : null;
+            if (Object.prototype.hasOwnProperty.call(opts, "script")) {
+                try {
+                    this.script = JSON.parse(JSON.stringify(opts.script));
+                } catch (_err) {
+                    this.script = opts.script;
+                }
+            }
+            if (typeof opts.scriptingName === "string") {
+                this.scriptingName = opts.scriptingName;
+            }
 
             this._explicitOverrides = {
                 width: Number.isFinite(opts.width),
@@ -141,7 +153,9 @@
                 hitboxOffsetX: Number.isFinite(opts.hitboxOffsetX),
                 hitboxOffsetY: Number.isFinite(opts.hitboxOffsetY),
                 billboardAlpha: Number.isFinite(opts.billboardAlpha),
-                billboardTint: Number.isFinite(opts.billboardTint)
+                billboardTint: Number.isFinite(opts.billboardTint),
+                gravitateRadius: Number.isFinite(opts.gravitateRadius),
+                gravitateSpeed: Number.isFinite(opts.gravitateSpeed)
             };
 
             if (this._explicitOverrides.z) {
@@ -266,6 +280,13 @@
                 this.billboardTint = Math.max(0, Math.min(0xffffff, Math.floor(Number(billboard.tint))));
             }
 
+            if (!this._explicitOverrides.gravitateRadius && Number.isFinite(imageData.gravitateRadius)) {
+                this.gravitateRadius = Math.max(0, Number(imageData.gravitateRadius));
+            }
+            if (!this._explicitOverrides.gravitateSpeed && Number.isFinite(imageData.gravitateSpeed)) {
+                this.gravitateSpeed = Math.max(0, Number(imageData.gravitateSpeed));
+            }
+
             if (typeof this.configureSpriteAnimation === "function") {
                 this.configureSpriteAnimation(imageData);
             }
@@ -344,8 +365,45 @@
             return !!this.groundPlaneHitbox.intersects(wizardHitbox);
         }
 
+        gravitateToward(targetX, targetY, dt) {
+            if (this.gone || this.collected) return;
+            if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || !Number.isFinite(dt) || dt <= 0) return;
+            const dx = targetX - this.x;
+            const dy = targetY - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 0.001) return;
+            const step = Math.min(this.gravitateSpeed * dt, dist);
+            this.x += (dx / dist) * step;
+            this.y += (dy / dist) * step;
+            this.updateHitbox();
+        }
+
         collect(wizard) {
             if (this.gone || this.collected) return false;
+            const scriptingApi = (typeof global.Scripting === "object" && global.Scripting)
+                ? global.Scripting
+                : null;
+            let touchScriptAlreadyTriggered = false;
+            const touchedMap = (wizard && wizard._scriptTouchedObjectsById instanceof Map)
+                ? wizard._scriptTouchedObjectsById
+                : null;
+            if (touchedMap) {
+                for (const touched of touchedMap.values()) {
+                    if (touched && touched.obj === this) {
+                        touchScriptAlreadyTriggered = true;
+                        break;
+                    }
+                }
+            }
+            if (!touchScriptAlreadyTriggered &&
+                scriptingApi &&
+                typeof scriptingApi.fireObjectScriptEvent === "function") {
+                scriptingApi.fireObjectScriptEvent(this, "playerTouches", wizard || null, {
+                    pickup: true,
+                    x: Number(this.x),
+                    y: Number(this.y)
+                });
+            }
             this.collected = true;
             this.gone = true;
             if (this.pixiSprite) {
@@ -363,6 +421,54 @@
                 }
             }
             return true;
+        }
+
+        saveJson() {
+            return {
+                type: "powerup",
+                file: this.imageFileName,
+                x: this.x,
+                y: this.y,
+                z: this.z,
+                width: this.width,
+                height: this.height,
+                radius: this.radius,
+                hitboxOffsetX: this.hitboxOffsetX,
+                hitboxOffsetY: this.hitboxOffsetY,
+                anchorX: this.anchorX,
+                anchorY: this.anchorY,
+                billboardAlpha: this.billboardAlpha,
+                billboardTint: this.billboardTint,
+                gravitateRadius: this.gravitateRadius,
+                gravitateSpeed: this.gravitateSpeed,
+                scriptingName: (typeof this.scriptingName === "string") ? this.scriptingName : "",
+                script: Object.prototype.hasOwnProperty.call(this, "script") ? this.script : undefined
+            };
+        }
+
+        static loadJson(data) {
+            if (!data || typeof data !== "object") return null;
+            const fileName = (typeof data.file === "string" && data.file.trim().length > 0)
+                ? data.file.trim()
+                : DEFAULT_IMAGE_FILE;
+            return new Powerup(fileName, {
+                x: data.x,
+                y: data.y,
+                z: data.z,
+                width: data.width,
+                height: data.height,
+                radius: data.radius,
+                hitboxOffsetX: data.hitboxOffsetX,
+                hitboxOffsetY: data.hitboxOffsetY,
+                anchorX: data.anchorX,
+                anchorY: data.anchorY,
+                billboardAlpha: data.billboardAlpha,
+                billboardTint: data.billboardTint,
+                gravitateRadius: data.gravitateRadius,
+                gravitateSpeed: data.gravitateSpeed,
+                script: data.script,
+                scriptingName: data.scriptingName
+            });
         }
     }
 
@@ -393,9 +499,65 @@
         return powerup;
     }
 
-    function updatePowerupsForWizard(wizard) {
+    /**
+     * Fast segment-vs-segment intersection test.
+     * Returns true if segment (ax,ay)-(bx,by) crosses segment (cx,cy)-(dx,dy).
+     */
+    function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+        const rx = bx - ax, ry = by - ay;
+        const sx = dx - cx, sy = dy - cy;
+        const denom = rx * sy - ry * sx;
+        if (Math.abs(denom) < 1e-10) return false;
+        const qpx = cx - ax, qpy = cy - ay;
+        const t = (qpx * sy - qpy * sx) / denom;
+        if (t < 0 || t > 1) return false;
+        const u = (qpx * ry - qpy * rx) / denom;
+        return u >= 0 && u <= 1;
+    }
+
+    /**
+     * Returns true if the line segment from (x0,y0) to (x1,y1) is blocked
+     * by any wall polygon edge.  Uses AABB pre-rejection per wall for speed.
+     */
+    function isSegmentBlockedByWalls(x0, y0, x1, y1) {
+        const WallCtor = global.WallSectionUnit;
+        if (!WallCtor || !(WallCtor._allSections instanceof Map)) return false;
+
+        // AABB of the query segment, with a small margin for wall thickness
+        const margin = 0.3;
+        const minX = Math.min(x0, x1) - margin;
+        const maxX = Math.max(x0, x1) + margin;
+        const minY = Math.min(y0, y1) - margin;
+        const maxY = Math.max(y0, y1) + margin;
+
+        for (const wall of WallCtor._allSections.values()) {
+            if (!wall || wall.gone || wall.vanishing) continue;
+            const hitbox = wall.groundPlaneHitbox;
+            if (!hitbox || !Array.isArray(hitbox.points) || hitbox.points.length < 2) continue;
+
+            // Quick AABB rejection using the hitbox bounds
+            const bounds = hitbox.getBounds();
+            if (!bounds) continue;
+            if (bounds.x > maxX || bounds.x + bounds.width < minX) continue;
+            if (bounds.y > maxY || bounds.y + bounds.height < minY) continue;
+
+            // Test query segment against every edge of this wall polygon
+            const pts = hitbox.points;
+            for (let i = 0, len = pts.length; i < len; i++) {
+                const a = pts[i];
+                const b = pts[(i + 1) % len];
+                if (segmentsIntersect(x0, y0, x1, y1, a.x, a.y, b.x, b.y)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function updatePowerupsForWizard(wizard, dt) {
         const list = getPowerupArray();
         if (!wizard) return;
+        const safeDt = (Number.isFinite(dt) && dt > 0) ? dt : (1 / 60);
         for (let i = list.length - 1; i >= 0; i--) {
             const powerup = list[i];
             if (!powerup || powerup.gone || powerup.collected) {
@@ -406,6 +568,18 @@
             if (powerup.intersectsWizard(wizard)) {
                 powerup.collect(wizard);
                 list.splice(i, 1);
+                continue;
+            }
+            // Gravitate toward wizard if within gravitateRadius and not blocked by a wall
+            if (powerup.gravitateRadius > 0) {
+                const dx = wizard.x - powerup.x;
+                const dy = wizard.y - powerup.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 0 && dist <= powerup.gravitateRadius) {
+                    if (!isSegmentBlockedByWalls(powerup.x, powerup.y, wizard.x, wizard.y)) {
+                        powerup.gravitateToward(wizard.x, wizard.y, safeDt);
+                    }
+                }
             }
         }
     }

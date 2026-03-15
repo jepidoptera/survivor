@@ -15,7 +15,11 @@ class Rock extends globalThis.Spell {
                     targetCoors.y += animal.height / 2;
                     targetCoors.x += animal.width / 2;
                     if (withinRadius(this.x, this.y, targetCoors.x, targetCoors.y, margin)) {
-                        animal.hp -= 1;
+                        if (typeof animal.takeDamage === "function") {
+                            animal.takeDamage(1);
+                        } else {
+                            animal.hp -= 1;
+                        }
                         if (animal.hp <= 0) {
                             let messageText = `You killed: ${animal.type}!` 
                             if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;

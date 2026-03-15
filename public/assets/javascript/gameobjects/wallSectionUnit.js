@@ -16,6 +16,7 @@ uniform vec2 uDepthRange;
 varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
+varying float vWorldZ;
 void main(void) {
     float camDx = aWorldPosition.x - uCameraWorld.x;
     float camDy = aWorldPosition.y - uCameraWorld.y;
@@ -36,6 +37,7 @@ void main(void) {
     vUvs = aUvs;
     vColor = aColor;
     vTextureMix = aTextureMix;
+    vWorldZ = aWorldPosition.z;
 }
 `;
     const WALL_DEPTH_FS = `
@@ -43,13 +45,38 @@ precision mediump float;
 varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
+varying float vWorldZ;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
+uniform float uBrightness;
 uniform float uAlphaCutoff;
+uniform float uClipMinZ;
+
+vec3 adjustSaturation(vec3 color, float saturation) {
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    return mix(vec3(luma), color, saturation);
+}
+
 void main(void) {
     vec4 sampled = texture2D(uSampler, vUvs);
     vec4 tex = mix(vec4(1.0, 1.0, 1.0, 1.0), sampled, clamp(vTextureMix, 0.0, 1.0));
     vec4 outColor = tex * uTint * vColor;
+    float b = clamp(uBrightness, -1.0, 1.0);
+    if (b >= 0.0) {
+        // Punchy profile: faster ramp + stronger saturation boost.
+        float t = pow(b, 1.35);
+        float saturation = 1.0 + (0.75 * t);
+        vec3 color = adjustSaturation(outColor.rgb, saturation);
+        float gamma = 1.0 / (1.0 + (1.05 * t));
+        color = pow(clamp(color, 0.0, 1.0), vec3(gamma));
+        outColor.rgb = mix(color, vec3(1.0, 1.0, 1.0), 0.25 * t);
+    } else {
+        float t = pow(-b, 1.35);
+        float saturation = 1.0 - (0.25 * t);
+        vec3 color = adjustSaturation(outColor.rgb, saturation);
+        outColor.rgb = color * (1.0 - t);
+    }
+    if (vWorldZ < uClipMinZ) discard;
     if (outColor.a < uAlphaCutoff) discard;
     gl_FragColor = outColor;
 }
@@ -61,6 +88,8 @@ void main(void) {
     class WallSectionUnit {
         static _nextId = 1;
         static _allSections = new Map();
+        static _placementDebugActive = false;
+        static _placementDebugFocusIds = null;
         static _showDirectionalBlockingDebug = false;
         static _depthMeshState = null;
         static _wallTextureConfigCache = null;
@@ -216,6 +245,13 @@ void main(void) {
             this._losIlluminationTMax = null;
             this._losSnapToStart = false;
             this._losSnapToEnd = false;
+            this._mazeVisibilityHeightAnim = {
+                value: 0,
+                from: 0,
+                to: 0,
+                startMs: 0,
+                lastSeenMs: null
+            };
 
             // PIXI display object — a Graphics that draws the base outline.
             this.pixiSprite = (typeof PIXI !== "undefined" && PIXI.Graphics)
@@ -240,14 +276,11 @@ void main(void) {
         }
 
         static _isNodeMidpoint(candidate) {
-            if (!candidate) return false;
-            if (typeof globalScope.NodeMidpoint !== "undefined" && candidate instanceof globalScope.NodeMidpoint) {
-                return true;
-            }
             return !!(
+                candidate &&
                 !WallSectionUnit._isMapNode(candidate) &&
                 candidate.nodeA && candidate.nodeB &&
-                Number.isFinite(candidate.x) && Number.isFinite(candidate.y)
+                candidate.k !== undefined
             );
         }
 
@@ -446,35 +479,192 @@ void main(void) {
             return { shared, outerA, outerB };
         }
 
+        static _hasExternalWallConnectionAtEndpoint(section, endpoint, excludeSections = [], options = {}) {
+            if (!section || !endpoint || !(section.connections instanceof Map)) return false;
+            const excludeSet = new Set(Array.isArray(excludeSections) ? excludeSections : []);
+            const requireNonCollinear = !!(options && options.requireNonCollinear);
+            const sectionAxis = ((WallSectionUnit._normalizeDirection(section.direction) % 6) + 6) % 6;
+            for (const payload of section.connections.values()) {
+                const other = payload && payload.section;
+                if (!other || other.gone) continue;
+                if (excludeSet.has(other)) continue;
+                if (!other.startPoint || !other.endPoint) continue;
+                const sharesEndpoint = (
+                    WallSectionUnit._pointsMatch(endpoint, other.startPoint) ||
+                    WallSectionUnit._pointsMatch(endpoint, other.endPoint)
+                );
+                if (!sharesEndpoint) continue;
+                if (!requireNonCollinear) return true;
+                const otherAxis = ((WallSectionUnit._normalizeDirection(other.direction) % 6) + 6) % 6;
+                if (otherAxis !== sectionAxis) return true;
+            }
+            return false;
+        }
+
+        static _mergeWouldCollapseConnectedJunction(sectionA, sectionB, mergedStart, mergedEnd) {
+            if (!sectionA || !sectionB || !mergedStart || !mergedEnd) return false;
+            const keepEndpoint = (point) => (
+                WallSectionUnit._pointsMatch(point, mergedStart) ||
+                WallSectionUnit._pointsMatch(point, mergedEnd)
+            );
+            const pair = [sectionA, sectionB];
+            const endpointsToCheck = [
+                sectionA.startPoint,
+                sectionA.endPoint,
+                sectionB.startPoint,
+                sectionB.endPoint
+            ];
+            for (let i = 0; i < endpointsToCheck.length; i++) {
+                const point = endpointsToCheck[i];
+                if (!point || keepEndpoint(point)) continue;
+                const owner = i < 2 ? sectionA : sectionB;
+                if (WallSectionUnit._hasExternalWallConnectionAtEndpoint(
+                    owner,
+                    point,
+                    pair,
+                    { requireNonCollinear: true }
+                )) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         static canAutoMergeContinuous(sectionA, sectionB) {
+            const debugEnabled = !!(
+                globalScope &&
+                globalScope.DEBUG_WALL_PLACEMENT &&
+                WallSectionUnit._placementDebugActive
+            );
+            const focusIds = (WallSectionUnit._placementDebugFocusIds instanceof Set)
+                ? WallSectionUnit._placementDebugFocusIds
+                : null;
+            const debugLog = (reason, extra = null) => {
+                if (!debugEnabled) return;
+                if (reason === "no-shared-endpoint") return;
+                const idA = Number.isInteger(sectionA && sectionA.id) ? Number(sectionA.id) : null;
+                const idB = Number.isInteger(sectionB && sectionB.id) ? Number(sectionB.id) : null;
+                if (
+                    focusIds &&
+                    !(
+                        (idA !== null && focusIds.has(idA)) ||
+                        (idB !== null && focusIds.has(idB))
+                    )
+                ) {
+                    return;
+                }
+                const label = (section) => {
+                    if (!section) return "wall<?>";
+                    const id = Number.isInteger(section.id) ? section.id : "?";
+                    const fmt = (p) => (p && Number.isFinite(p.x) && Number.isFinite(p.y))
+                        ? `(${Number(p.x).toFixed(4)}, ${Number(p.y).toFixed(4)})`
+                        : "(?, ?)";
+                    return `wall#${id} ${fmt(section.startPoint)} -> ${fmt(section.endPoint)}`;
+                };
+                console.log("[WALL_PLACE_DEBUG]", "continuous-check", {
+                    reason,
+                    a: label(sectionA),
+                    b: label(sectionB),
+                    ...(extra && typeof extra === "object" ? extra : {})
+                });
+            };
             if (!sectionA || !sectionB || sectionA === sectionB) return false;
-            if (sectionA.gone || sectionB.gone || sectionA.vanishing || sectionB.vanishing) return false;
+            if (sectionA.gone || sectionB.gone || sectionA.vanishing || sectionB.vanishing) {
+                debugLog("gone-or-vanishing");
+                return false;
+            }
             if (
                 sectionA._disableChunkSplitOnVanish ||
                 sectionB._disableChunkSplitOnVanish ||
                 sectionA._vanishAsWholeSection ||
                 sectionB._vanishAsWholeSection
             ) {
+                debugLog("vanish-flags");
                 return false;
             }
-            if (sectionA.map !== sectionB.map) return false;
+            if (sectionA.map !== sectionB.map) {
+                debugLog("different-map");
+                return false;
+            }
             const endpoints = WallSectionUnit._resolveSharedAndOuterEndpoints(sectionA, sectionB);
-            if (!endpoints) return false;
+            if (!endpoints) {
+                debugLog("no-shared-endpoint");
+                return false;
+            }
+            const sharedKey = WallSectionUnit.endpointKey(endpoints.shared);
+            const blockedA = !!(
+                sharedKey &&
+                sectionA &&
+                sectionA._crossSplitLockedEndpointKeys instanceof Set &&
+                sectionA._crossSplitLockedEndpointKeys.has(sharedKey)
+            );
+            const blockedB = !!(
+                sharedKey &&
+                sectionB &&
+                sectionB._crossSplitLockedEndpointKeys instanceof Set &&
+                sectionB._crossSplitLockedEndpointKeys.has(sharedKey)
+            );
+            if (blockedA || blockedB) {
+                const hasActiveCrossing = (
+                    WallSectionUnit._hasExternalWallConnectionAtEndpoint(
+                        sectionA,
+                        endpoints.shared,
+                        [sectionA, sectionB],
+                        { requireNonCollinear: true }
+                    ) ||
+                    WallSectionUnit._hasExternalWallConnectionAtEndpoint(
+                        sectionB,
+                        endpoints.shared,
+                        [sectionA, sectionB],
+                        { requireNonCollinear: true }
+                    )
+                );
+                if (hasActiveCrossing) {
+                    debugLog("cross-split-lock", { sharedKey, blockedA, blockedB, hasActiveCrossing });
+                    return false;
+                }
+
+                // Split locks are only needed while a crossing wall still exists.
+                // If that wall has been removed, clear stale locks so segments can re-merge.
+                if (blockedA && sectionA._crossSplitLockedEndpointKeys instanceof Set) {
+                    sectionA._crossSplitLockedEndpointKeys.delete(sharedKey);
+                }
+                if (blockedB && sectionB._crossSplitLockedEndpointKeys instanceof Set) {
+                    sectionB._crossSplitLockedEndpointKeys.delete(sharedKey);
+                }
+                debugLog("cross-split-lock-cleared", { sharedKey, blockedA, blockedB });
+            }
 
             const dirA = WallSectionUnit._normalizeDirection(sectionA.direction);
             const dirB = WallSectionUnit._normalizeDirection(sectionB.direction);
             const axisA = ((dirA % 6) + 6) % 6;
             const axisB = ((dirB % 6) + 6) % 6;
-            if (axisA !== axisB) return false;
+            if (axisA !== axisB) {
+                debugLog("axis-mismatch", { axisA, axisB, dirA, dirB });
+                return false;
+            }
 
-            if (!WallSectionUnit._numericEqual(sectionA.height, sectionB.height, 1e-5)) return false;
-            if (!WallSectionUnit._numericEqual(sectionA.thickness, sectionB.thickness, 1e-5)) return false;
-            if (!WallSectionUnit._numericEqual(sectionA.bottomZ, sectionB.bottomZ, 1e-5)) return false;
+            if (!WallSectionUnit._numericEqual(sectionA.height, sectionB.height, 1e-5)) {
+                debugLog("height-mismatch", { a: sectionA.height, b: sectionB.height });
+                return false;
+            }
+            if (!WallSectionUnit._numericEqual(sectionA.thickness, sectionB.thickness, 1e-5)) {
+                debugLog("thickness-mismatch", { a: sectionA.thickness, b: sectionB.thickness });
+                return false;
+            }
+            if (!WallSectionUnit._numericEqual(sectionA.bottomZ, sectionB.bottomZ, 1e-5)) {
+                debugLog("bottomz-mismatch", { a: sectionA.bottomZ, b: sectionB.bottomZ });
+                return false;
+            }
 
             const textureA = WallSectionUnit._normalizeWallTextureConfigPath(sectionA.wallTexturePath || DEFAULT_WALL_TEXTURE);
             const textureB = WallSectionUnit._normalizeWallTextureConfigPath(sectionB.wallTexturePath || DEFAULT_WALL_TEXTURE);
-            if (textureA !== textureB) return false;
+            if (textureA !== textureB) {
+                debugLog("texture-mismatch", { textureA, textureB });
+                return false;
+            }
 
+            debugLog("ok");
             return true;
         }
 
@@ -699,25 +889,172 @@ void main(void) {
             return !!WallSectionUnit._computeCollinearOverlapData(sectionA, sectionB, options);
         }
 
-        static mergeOverlappingPlacementPair(survivor, absorbed) {
+        static mergeOverlappingPlacementPair(survivor, absorbed, options = {}) {
             if (!survivor || !absorbed || survivor === absorbed) return null;
             const overlap = WallSectionUnit._computeCollinearOverlapData(survivor, absorbed);
             if (!overlap || !overlap.mergedStart || !overlap.mergedEnd) return null;
+            const applyDirectionalBlocking = options.applyDirectionalBlocking !== false;
+            const deferVisualUpdate = options.deferVisualUpdate === true;
 
             survivor.setEndpoints(overlap.mergedStart, overlap.mergedEnd, survivor.map || absorbed.map || null);
-            survivor.addToMapNodes();
+            survivor.addToMapNodes({ applyDirectionalBlocking });
 
-            if (typeof survivor.handleJoineryOnPlacement === "function") {
-                survivor.handleJoineryOnPlacement();
-            } else {
-                if (typeof survivor.rebuildMesh3d === "function") survivor.rebuildMesh3d();
-                if (typeof survivor.draw === "function") survivor.draw();
+            if (!deferVisualUpdate) {
+                if (typeof survivor.handleJoineryOnPlacement === "function") {
+                    survivor.handleJoineryOnPlacement();
+                } else {
+                    if (typeof survivor.rebuildMesh3d === "function") survivor.rebuildMesh3d();
+                    if (typeof survivor.draw === "function") survivor.draw();
+                }
             }
 
             absorbed.gone = true;
             absorbed.vanishing = false;
             absorbed.destroy();
             return survivor;
+        }
+
+        static _collectNearbyWallSections(seedSections = [], options = {}) {
+            const seeds = Array.isArray(seedSections)
+                ? seedSections.filter(section => !!section && !section.gone && !section.vanishing)
+                : [];
+            const includeNeighborNodes = options.includeNeighborNodes !== false;
+            const fallbackToGlobal = options.fallbackToGlobal !== false;
+            const allowedSet = options.allowedSet instanceof Set ? options.allowedSet : null;
+            const explicitMapRef = options.map || null;
+            const mapRef = explicitMapRef || (seeds.length > 0 ? seeds[0].map || null : null);
+
+            const nodesByKey = new Map();
+            const pushNode = (node) => {
+                if (!WallSectionUnit._isMapNode(node)) return;
+                if (mapRef && node.map && node.map !== mapRef) return;
+                const key = `${node.xindex},${node.yindex}`;
+                if (nodesByKey.has(key)) return;
+                nodesByKey.set(key, node);
+            };
+            const pushEndpointNodes = (endpoint) => {
+                if (!endpoint) return;
+                if (WallSectionUnit._isMapNode(endpoint)) {
+                    pushNode(endpoint);
+                    return;
+                }
+                if (!WallSectionUnit._isNodeMidpoint(endpoint)) return;
+                pushNode(endpoint.nodeA);
+                pushNode(endpoint.nodeB);
+            };
+
+            for (let i = 0; i < seeds.length; i++) {
+                const section = seeds[i];
+                const nodes = Array.isArray(section.nodes) ? section.nodes : [];
+                for (let n = 0; n < nodes.length; n++) {
+                    pushNode(nodes[n]);
+                }
+                pushEndpointNodes(section.startPoint);
+                pushEndpointNodes(section.endPoint);
+            }
+
+            if (includeNeighborNodes) {
+                const baseNodes = Array.from(nodesByKey.values());
+                for (let i = 0; i < baseNodes.length; i++) {
+                    const node = baseNodes[i];
+                    const neighbors = Array.isArray(node.neighbors) ? node.neighbors : [];
+                    for (let n = 0; n < neighbors.length; n++) {
+                        pushNode(neighbors[n]);
+                    }
+                }
+            }
+
+            const out = [];
+            const seen = new Set();
+            const pushSection = (section) => {
+                if (!section || section.gone || section.vanishing) return;
+                if (mapRef && section.map !== mapRef) return;
+                if (allowedSet && !allowedSet.has(section)) return;
+                const key = Number.isInteger(section.id) ? `id:${section.id}` : `obj:${String(section)}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                out.push(section);
+            };
+
+            const candidateNodes = Array.from(nodesByKey.values());
+            for (let i = 0; i < candidateNodes.length; i++) {
+                const node = candidateNodes[i];
+                const objects = Array.isArray(node.objects) ? node.objects : [];
+                for (let o = 0; o < objects.length; o++) {
+                    const obj = objects[o];
+                    if (!obj || obj.type !== "wallSection") continue;
+                    pushSection(obj);
+                }
+            }
+
+            if (out.length === 0 && fallbackToGlobal) {
+                if (allowedSet) {
+                    allowedSet.forEach(pushSection);
+                } else {
+                    for (const section of WallSectionUnit._allSections.values()) {
+                        pushSection(section);
+                    }
+                }
+            }
+
+            return out;
+        }
+
+        static _collectEndpointWallSections(section, options = {}) {
+            if (!section || section.gone || section.vanishing) return [];
+            const mapRef = options.map || section.map || null;
+            const fallbackToGlobal = options.fallbackToGlobal !== false;
+
+            const nodesByKey = new Map();
+            const pushNode = (node) => {
+                if (!WallSectionUnit._isMapNode(node)) return;
+                if (mapRef && node.map && node.map !== mapRef) return;
+                const key = `${node.xindex},${node.yindex}`;
+                if (nodesByKey.has(key)) return;
+                nodesByKey.set(key, node);
+            };
+            const pushEndpoint = (endpoint) => {
+                if (!endpoint) return;
+                if (WallSectionUnit._isMapNode(endpoint)) {
+                    pushNode(endpoint);
+                    return;
+                }
+                if (!WallSectionUnit._isNodeMidpoint(endpoint)) return;
+                pushNode(endpoint.nodeA);
+                pushNode(endpoint.nodeB);
+            };
+            pushEndpoint(section.startPoint);
+            pushEndpoint(section.endPoint);
+
+            const out = [];
+            const seen = new Set();
+            const pushSection = (candidate) => {
+                if (!candidate || candidate.gone || candidate.vanishing) return;
+                if (mapRef && candidate.map !== mapRef) return;
+                const key = Number.isInteger(candidate.id) ? `id:${candidate.id}` : `obj:${String(candidate)}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                out.push(candidate);
+            };
+
+            const nodes = Array.from(nodesByKey.values());
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                const objects = Array.isArray(node.objects) ? node.objects : [];
+                for (let j = 0; j < objects.length; j++) {
+                    const obj = objects[j];
+                    if (!obj || obj.type !== "wallSection") continue;
+                    pushSection(obj);
+                }
+            }
+
+            if (out.length === 0 && fallbackToGlobal) {
+                for (const candidate of WallSectionUnit._allSections.values()) {
+                    pushSection(candidate);
+                }
+            }
+
+            return out;
         }
 
         static harmonizeTexturePhaseForSections(seedSections = [], referenceSections = null) {
@@ -765,6 +1102,23 @@ void main(void) {
         }
 
         static autoMergeContinuousSections(seedSections = []) {
+            const debugEnabled = !!(
+                globalScope &&
+                globalScope.DEBUG_WALL_PLACEMENT &&
+                WallSectionUnit._placementDebugActive
+            );
+            const debugLabel = (section) => {
+                if (!section) return "wall<?>";
+                const id = Number.isInteger(section.id) ? section.id : "?";
+                const fmt = (p) => (p && Number.isFinite(p.x) && Number.isFinite(p.y))
+                    ? `(${Number(p.x).toFixed(4)}, ${Number(p.y).toFixed(4)})`
+                    : "(?, ?)";
+                return `wall#${id} ${fmt(section.startPoint)} -> ${fmt(section.endPoint)}`;
+            };
+            const debugLog = (kind, payload = {}) => {
+                if (!debugEnabled) return;
+                console.log("[WALL_PLACE_DEBUG]", `continuous-merge:${kind}`, payload);
+            };
             const seeds = Array.isArray(seedSections) ? seedSections.slice() : [];
             const survivors = [];
             const seen = new Set();
@@ -772,18 +1126,32 @@ void main(void) {
             for (let i = 0; i < seeds.length; i++) {
                 let section = seeds[i];
                 if (!section || section.gone || section.vanishing) continue;
+                debugLog("seed-start", { seed: debugLabel(section) });
 
                 let merged = true;
                 let guard = 0;
                 while (merged && guard < 128) {
                     merged = false;
                     guard += 1;
-                    const allSections = Array.from(WallSectionUnit._allSections.values());
-                    for (let j = 0; j < allSections.length; j++) {
-                        const candidate = allSections[j];
+                    const nearbySections = WallSectionUnit._collectEndpointWallSections(section, {
+                        fallbackToGlobal: true,
+                        map: section.map || null
+                    });
+                    for (let j = 0; j < nearbySections.length; j++) {
+                        const candidate = nearbySections[j];
                         if (!candidate || candidate === section) continue;
                         if (!WallSectionUnit.canAutoMergeContinuous(section, candidate)) continue;
+                        debugLog("attempt", {
+                            section: debugLabel(section),
+                            candidate: debugLabel(candidate)
+                        });
                         const next = WallSectionUnit.mergeContinuousPair(section, candidate);
+                        debugLog("result", {
+                            section: debugLabel(section),
+                            candidate: debugLabel(candidate),
+                            success: !!next,
+                            mergedInto: next ? debugLabel(next) : null
+                        });
                         if (next) {
                             section = next;
                             merged = true;
@@ -797,6 +1165,7 @@ void main(void) {
                 if (seen.has(key)) continue;
                 seen.add(key);
                 survivors.push(section);
+                debugLog("seed-end", { survivor: debugLabel(section) });
             }
 
             return survivors;
@@ -806,8 +1175,7 @@ void main(void) {
             const dir = WallSectionUnit._normalizeDirection(direction);
 
             // Only use neighbor lookup for actual MapNodes (12-slot directional array).
-            // NodeMidpoints have a .neighbors array too, but it's just [nodeA, nodeB]
-            // and NOT directional — using it would give garbage vectors.
+            // Midpoints ({ nodeA, nodeB, k }) have no neighbors array — don't try.
             if (
                 mapRef &&
                 anchorPoint &&
@@ -947,7 +1315,7 @@ void main(void) {
                 if (chosen && WallSectionUnit._isMapNode(chosen)) return chosen;
             }
 
-            if (!Array.isArray(midpoint.neighbors) || midpoint.neighbors.length === 0) return null;
+            const candidates = [midpoint.nodeA, midpoint.nodeB];
             const tx = Number(towardEntity && towardEntity.x);
             const ty = Number(towardEntity && towardEntity.y);
 
@@ -960,8 +1328,8 @@ void main(void) {
 
             let best = null;
             let bestDist = Infinity;
-            for (let i = 0; i < midpoint.neighbors.length; i++) {
-                const node = midpoint.neighbors[i];
+            for (let i = 0; i < candidates.length; i++) {
+                const node = candidates[i];
                 if (!WallSectionUnit._isMapNode(node)) continue;
                 const dist = (Number.isFinite(tx) && Number.isFinite(ty))
                     ? Math.hypot(shortDx(node.x, tx), shortDy(node.y, ty))
@@ -972,6 +1340,346 @@ void main(void) {
                 }
             }
             return best;
+        }
+
+        /**
+         * After placing new wall sections, scan for crossings with existing
+         * walls and split at every shared hex-grid anchor.  Three cases:
+         *
+         * 1. New wall interior anchor matches an existing wall's **endpoint**
+         *    → split the new wall at that anchor.
+         * 2. New wall endpoint matches an existing wall's **interior** anchor
+         *    → split the existing wall at that anchor.
+         * 3. New wall interior anchor matches an existing wall's **interior** anchor
+         *    → split **both** walls at that anchor.
+         *
+         * Because every wall section is a straight-line segment, any two
+         * non-collinear sections share at most one grid anchor (two lines
+         * intersect at most once).  Collinear overlaps are already resolved
+         * by the merge logic above, so each (newSection, existingWall) pair
+         * produces at most one crossing here.  A single new section can
+         * still cross *multiple different* existing walls, however, so we
+         * cascade-split when needed.
+         *
+         * Uses map-node overlap for spatial narrowing so the cost is
+         * proportional to the number of walls near the new placement, not
+         * the total wall count.
+         *
+         * @param {WallSectionUnit[]} placedSections  Sections just created.
+         * @param {object}            mapRef          The map they live on.
+         * @returns {WallSectionUnit[]}  The (possibly expanded) set of live
+         *          sections that should replace `placedSections` in the caller.
+         */
+        static applyCrossWallSplitsForPlacement(placedSections, mapRef) {
+            if (!Array.isArray(placedSections) || placedSections.length === 0 || !mapRef) {
+                return placedSections;
+            }
+
+            // Helper: shortest-delta aware line-segment intersection.
+            // Returns { t, u, x, y } or null.  t is the parameter on seg A,
+            // u on seg B; both in [0,1] if the segments actually cross.
+            const sdx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? (a, b) => mapRef.shortestDeltaX(a, b) : (a, b) => b - a;
+            const sdy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? (a, b) => mapRef.shortestDeltaY(a, b) : (a, b) => b - a;
+
+            const segSegIntersection = (a1, a2, b1, b2) => {
+                const d1x = sdx(a1.x, a2.x);
+                const d1y = sdy(a1.y, a2.y);
+                const d2x = sdx(b1.x, b2.x);
+                const d2y = sdy(b1.y, b2.y);
+                const d3x = sdx(a1.x, b1.x);
+                const d3y = sdy(a1.y, b1.y);
+                const denom = d1x * d2y - d1y * d2x;
+                if (Math.abs(denom) < 1e-9) return null;  // parallel / collinear
+                const t = (d3x * d2y - d3y * d2x) / denom;
+                const u = (d3x * d1y - d3y * d1x) / denom;
+                if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null;
+                let ix = a1.x + Math.max(0, Math.min(1, t)) * d1x;
+                let iy = a1.y + Math.max(0, Math.min(1, t)) * d1y;
+                if (typeof mapRef.wrapWorldX === "function") ix = mapRef.wrapWorldX(ix);
+                if (typeof mapRef.wrapWorldY === "function") iy = mapRef.wrapWorldY(iy);
+                return {
+                    t: Math.max(0, Math.min(1, t)),
+                    u: Math.max(0, Math.min(1, u)),
+                    x: ix, y: iy
+                };
+            };
+
+            // Helper: point-to-segment closest-point parameter.
+            // Returns { t, dist } where t ∈ [0,1] is the clamped parameter
+            // on A1→A2 closest to point P.
+            const pointSegParam = (p, a1, a2) => {
+                const dx = sdx(a1.x, a2.x);
+                const dy = sdy(a1.y, a2.y);
+                const lenSq = dx * dx + dy * dy;
+                if (lenSq < 1e-12) return { t: 0, dist: Math.hypot(sdx(a1.x, p.x), sdy(a1.y, p.y)) };
+                const raw = (sdx(a1.x, p.x) * dx + sdy(a1.y, p.y) * dy) / lenSq;
+                const t = Math.max(0, Math.min(1, raw));
+                let cx = a1.x + t * dx;
+                let cy = a1.y + t * dy;
+                if (typeof mapRef.wrapWorldX === "function") cx = mapRef.wrapWorldX(cx);
+                if (typeof mapRef.wrapWorldY === "function") cy = mapRef.wrapWorldY(cy);
+                return { t, dist: Math.hypot(sdx(cx, p.x), sdy(cy, p.y)) };
+            };
+
+            // Maximum distance from an intersection/endpoint to the nearest
+            // anchor for it to count as a valid split point.  Half the hex
+            // diagonal covers the worst-case snap.
+            const MAX_SNAP_DIST = 0.55;
+
+            // Endpoint-parameter threshold: anchors with t within this margin
+            // of 0 or 1 are treated as endpoints (already exist, nothing to
+            // split).
+            const ENDPOINT_EPS = 0.02;
+            const isInterior = (t) => t > ENDPOINT_EPS && t < (1 - ENDPOINT_EPS);
+
+            // ---- 1. Identify placed-section ids ----------------------------
+            const placedIds = new Set();
+            for (let i = 0; i < placedSections.length; i++) {
+                const s = placedSections[i];
+                if (s && Number.isInteger(s.id)) placedIds.add(s.id);
+            }
+
+            // ---- 2. Spatial narrowing via node-key overlap -----------------
+            //   Collect map-node keys that the new sections sit on (cheap —
+            //   their .nodes were populated by addToMapNodes just before this
+            //   call).  Include each node's immediate odd-direction neighbors
+            //   so that walls one hex step away are also considered.
+            const newNodeKeys = new Set();
+            for (let i = 0; i < placedSections.length; i++) {
+                const sec = placedSections[i];
+                if (!sec || sec.gone) continue;
+                const nodes = Array.isArray(sec.nodes) ? sec.nodes : [];
+                for (let n = 0; n < nodes.length; n++) {
+                    const node = nodes[n];
+                    if (!node || typeof node.xindex !== "number") continue;
+                    newNodeKeys.add(node.xindex + "," + node.yindex);
+                    // One-ring neighbors so diagonal crossing walls are found
+                    if (Array.isArray(node.neighbors)) {
+                        for (let d = 0; d < node.neighbors.length && d < 12; d++) {
+                            const nb = node.neighbors[d];
+                            if (nb && typeof nb.xindex === "number") {
+                                newNodeKeys.add(nb.xindex + "," + nb.yindex);
+                            }
+                        }
+                    }
+                }
+            }
+            if (newNodeKeys.size === 0) return placedSections;
+
+            // Collect candidate existing walls that share a node key.
+            const candidateWalls = [];
+            for (const [wid, wall] of WallSectionUnit._allSections) {
+                if (placedIds.has(wid)) continue;
+                if (!wall || wall.gone || wall.vanishing || wall.map !== mapRef) continue;
+                const wnodes = Array.isArray(wall.nodes) ? wall.nodes : [];
+                let nearby = false;
+                for (let n = 0; n < wnodes.length; n++) {
+                    const nd = wnodes[n];
+                    if (nd && newNodeKeys.has(nd.xindex + "," + nd.yindex)) {
+                        nearby = true;
+                        break;
+                    }
+                }
+                if (nearby) candidateWalls.push(wall);
+            }
+            if (candidateWalls.length === 0) return placedSections;
+
+            // ---- 3. Detect crossings via geometric tests -------------------
+            //   For each (new, existing) pair we run two tests:
+            //     A) Segment–segment intersection  → X‑crossings
+            //     B) Existing-endpoint proximity to new segment → T‑junctions
+            //        where an existing wall's endpoint lies on the new wall.
+            //   (New-endpoint-on-existing is already handled upstream by
+            //   startSplitReference / endSplitReference, so we skip it here.)
+            //
+            //   Each crossing records which wall(s) need an interior split
+            //   and the world point + resolved anchor for each.
+
+            const crossings = [];           // { newSec, existWall, anchor, splitNew, splitExisting }
+            const seenPair = new Set();     // "newId|existingId"
+
+            for (let i = 0; i < placedSections.length; i++) {
+                const ns = placedSections[i];
+                if (!ns || ns.gone || !ns.startPoint || !ns.endPoint) continue;
+                for (let j = 0; j < candidateWalls.length; j++) {
+                    const ew = candidateWalls[j];
+                    if (!ew || ew.gone || !ew.startPoint || !ew.endPoint) continue;
+                    const pairKey = ns.id + "|" + ew.id;
+                    if (seenPair.has(pairKey)) continue;
+
+                    // --- Test A: line-segment intersection ------------------
+                    const hit = segSegIntersection(
+                        ns.startPoint, ns.endPoint,
+                        ew.startPoint, ew.endPoint
+                    );
+                    if (hit) {
+                        seenPair.add(pairKey);
+                        const worldPt = { x: hit.x, y: hit.y };
+                        const splitNew = isInterior(hit.t);
+                        const splitExisting = isInterior(hit.u);
+                        // If both are at endpoints they already share a vertex
+                        // — joinery handles it, nothing to do.
+                        if (!splitNew && !splitExisting) continue;
+
+                        // Resolve to actual hex-grid anchors on each wall.
+                        let newAnchor = null;
+                        let existAnchor = null;
+                        if (splitNew) {
+                            const snap = ns.getNearestLineAnchorToWorldPoint(worldPt);
+                            if (snap && !snap.isEndpoint && snap.distanceWorld < MAX_SNAP_DIST) {
+                                newAnchor = snap.anchor;
+                            }
+                        }
+                        if (splitExisting) {
+                            const snap = ew.getNearestLineAnchorToWorldPoint(worldPt);
+                            if (snap && !snap.isEndpoint && snap.distanceWorld < MAX_SNAP_DIST) {
+                                existAnchor = snap.anchor;
+                            }
+                        }
+                        if (!newAnchor && !existAnchor) continue;
+                        crossings.push({
+                            newSec: ns,
+                            existWall: ew,
+                            newAnchor: newAnchor,
+                            existAnchor: existAnchor
+                        });
+                        continue;
+                    }
+
+                    // --- Test B: existing wall endpoint near new segment -----
+                    const ewEndpoints = [ew.startPoint, ew.endPoint];
+                    for (let ep = 0; ep < ewEndpoints.length; ep++) {
+                        const ept = ewEndpoints[ep];
+                        if (!ept || !Number.isFinite(ept.x) || !Number.isFinite(ept.y)) continue;
+                        const proj = pointSegParam(ept, ns.startPoint, ns.endPoint);
+                        if (!proj || proj.dist > MAX_SNAP_DIST || !isInterior(proj.t)) continue;
+                        // The existing endpoint is close to the interior of
+                        // the new segment → split the new segment there.
+                        const snap = ns.getNearestLineAnchorToWorldPoint(ept);
+                        if (!snap || !snap.anchor || snap.isEndpoint || snap.distanceWorld > MAX_SNAP_DIST) continue;
+                        if (!seenPair.has(pairKey)) {
+                            seenPair.add(pairKey);
+                            crossings.push({
+                                newSec: ns,
+                                existWall: ew,
+                                newAnchor: snap.anchor,
+                                existAnchor: null     // existing wall is already at its endpoint
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (crossings.length === 0) return placedSections;
+
+            // ---- 4. Split existing walls at interior crossings -------------
+            const allSpawnedFromExisting = [];
+            const existingSplitDone = new Set();
+            for (let c = 0; c < crossings.length; c++) {
+                const cr = crossings[c];
+                if (!cr.existAnchor) continue;
+                const ew = cr.existWall;
+                if (!ew || ew.gone) continue;
+                const aKey = WallSectionUnit.endpointKey(cr.existAnchor);
+                const doneKey = ew.id + "|" + aKey;
+                if (existingSplitDone.has(doneKey)) continue;
+                existingSplitDone.add(doneKey);
+
+                const result = ew.splitAtAnchor(cr.existAnchor, {
+                    connectSections: placedSections,
+                    metadata: { crossWallSplit: true }
+                });
+                if (result && Array.isArray(result.sections)) {
+                    for (let s = 0; s < result.sections.length; s++) {
+                        const ns = result.sections[s];
+                        if (ns && !ns.gone) {
+                            allSpawnedFromExisting.push(ns);
+                            ns.addToMapNodes();
+                        }
+                    }
+                }
+            }
+
+            // ---- 5. Split new sections at interior crossings ---------------
+            //   Group anchors per section id so cascade-splits are handled.
+            const newSplitMap = new Map();  // sectionId → [anchor, ...]
+            for (let c = 0; c < crossings.length; c++) {
+                const cr = crossings[c];
+                if (!cr.newAnchor) continue;
+                const sid = cr.newSec.id;
+                let arr = newSplitMap.get(sid);
+                if (!arr) { arr = []; newSplitMap.set(sid, arr); }
+                arr.push(cr.newAnchor);
+            }
+
+            const resultSections = [];
+            for (let i = 0; i < placedSections.length; i++) {
+                const section = placedSections[i];
+                if (!section || section.gone) continue;
+                const splitAnchors = newSplitMap.get(section.id);
+                if (!splitAnchors || splitAnchors.length === 0) {
+                    resultSections.push(section);
+                    continue;
+                }
+                // Cascade: after each split the original is gone and two
+                // halves take its place. Find which half contains the next
+                // anchor and split that one.
+                let live = [section];
+                for (let a = 0; a < splitAnchors.length; a++) {
+                    const anchor = splitAnchors[a];
+                    const anchorKey = WallSectionUnit.endpointKey(anchor);
+                    for (let li = 0; li < live.length; li++) {
+                        const seg = live[li];
+                        if (!seg || seg.gone) continue;
+                        if (
+                            WallSectionUnit._pointsMatch(anchor, seg.startPoint) ||
+                            WallSectionUnit._pointsMatch(anchor, seg.endPoint)
+                        ) continue;
+                        const nearest = (typeof seg.getNearestLineAnchorToWorldPoint === "function")
+                            ? seg.getNearestLineAnchorToWorldPoint(anchor) : null;
+                        if (!nearest || !nearest.anchor) continue;
+                        if (WallSectionUnit.endpointKey(nearest.anchor) !== anchorKey) continue;
+                        if (nearest.isEndpoint) continue;
+
+                        const connectTo = allSpawnedFromExisting.concat(
+                            live.filter(s => s && !s.gone && s !== seg)
+                        );
+                        const splitResult = seg.splitAtAnchor(anchor, {
+                            connectSections: connectTo,
+                            metadata: { crossWallSplit: true }
+                        });
+                        if (splitResult && Array.isArray(splitResult.sections)) {
+                            live.splice(li, 1, ...splitResult.sections.filter(s => s && !s.gone));
+                            for (let ns = 0; ns < splitResult.sections.length; ns++) {
+                                const s = splitResult.sections[ns];
+                                if (s && !s.gone) s.addToMapNodes();
+                            }
+                        }
+                        break;
+                    }
+                }
+                for (let li = 0; li < live.length; li++) {
+                    if (live[li] && !live[li].gone) resultSections.push(live[li]);
+                }
+            }
+
+            // ---- 6. Rebuild joinery for every section touched by a split ---
+            const affectedSet = new Set();
+            const addAffected = (s) => { if (s && !s.gone) affectedSet.add(s); };
+            for (let i = 0; i < resultSections.length; i++) addAffected(resultSections[i]);
+            for (let i = 0; i < allSpawnedFromExisting.length; i++) addAffected(allSpawnedFromExisting[i]);
+
+            for (const wall of affectedSet) {
+                if (wall.gone) continue;
+                if (typeof wall.handleJoineryOnPlacement === "function") {
+                    wall.handleJoineryOnPlacement();
+                }
+            }
+
+            return resultSections;
         }
 
         static planPlacementFromWorldPoints(mapRef, startWorld, endWorld, options = {}) {
@@ -1030,45 +1738,6 @@ void main(void) {
                 );
             };
             const normalizeDirection = (dir) => WallSectionUnit._normalizeDirection(dir);
-            const midpointBaseDirection = (midpoint) => {
-                if (!WallSectionUnit._isNodeMidpoint(midpoint) || !midpoint.nodeA || !midpoint.nodeB) return null;
-                if (typeof mapRef._getMidpointDirectionBase === "function") {
-                    const byMap = mapRef._getMidpointDirectionBase(midpoint);
-                    if (Number.isFinite(byMap)) return normalizeDirection(byMap);
-                }
-                const dx = shortDx(midpoint.nodeA.x, midpoint.nodeB.x);
-                const dy = shortDy(midpoint.nodeA.y, midpoint.nodeB.y);
-                const axisDirection = normalizeDirection(
-                    (typeof mapRef.getHexDirection === "function")
-                        ? mapRef.getHexDirection(dx, dy)
-                        : 0
-                );
-                const axisClass = ((axisDirection % 6) + 6) % 6;
-                return (axisClass === 1 || axisClass === 3 || axisClass === 5) ? axisClass : null;
-            };
-            const midpointSupportsDirection = (midpoint, direction) => {
-                if (!WallSectionUnit._isNodeMidpoint(midpoint) || !Number.isFinite(direction)) return false;
-                if (typeof mapRef._midpointSupportsDirection === "function") {
-                    return !!mapRef._midpointSupportsDirection(midpoint, direction);
-                }
-                const base = midpointBaseDirection(midpoint);
-                if (!Number.isFinite(base)) return false;
-                const dir = normalizeDirection(direction);
-                return ((dir - base + 12) % 3) === 0;
-            };
-            const midpointBetweenNodes = (nodeA, nodeB) => {
-                if (!WallSectionUnit._isMapNode(nodeA) || !WallSectionUnit._isMapNode(nodeB)) return null;
-                if (typeof mapRef.getMidpointNode === "function") {
-                    const midpoint = mapRef.getMidpointNode(nodeA, nodeB);
-                    if (midpoint && WallSectionUnit._isNodeMidpoint(midpoint)) return midpoint;
-                }
-                const mx = Number(nodeA.x) + shortDx(nodeA.x, nodeB.x) * 0.5;
-                const my = Number(nodeA.y) + shortDy(nodeA.y, nodeB.y) * 0.5;
-                const snapped = (typeof mapRef.worldToNodeOrMidpoint === "function")
-                    ? mapRef.worldToNodeOrMidpoint(mx, my)
-                    : null;
-                return (snapped && WallSectionUnit._isNodeMidpoint(snapped)) ? snapped : null;
-            };
             const lineVectorFrom = (originAnchor, direction) =>
                 WallSectionUnit._directionUnitVector(direction, mapRef, originAnchor);
             const pointLineMetrics = (originAnchor, lineVec, point) => {
@@ -1096,114 +1765,6 @@ void main(void) {
                 if (!Number.isFinite(candidateDir)) return false;
                 return directionDistance(candidateDir, direction) <= 1;
             };
-            const buildMidpointDirectionNodeMap = (midpoint) => {
-                const out = new Map();
-                if (!WallSectionUnit._isNodeMidpoint(midpoint)) return out;
-                const surrounding = [];
-                const pushNode = (node) => {
-                    if (!WallSectionUnit._isMapNode(node)) return;
-                    if (surrounding.includes(node)) return;
-                    surrounding.push(node);
-                };
-                pushNode(midpoint.nodeA);
-                pushNode(midpoint.nodeB);
-                if (Array.isArray(midpoint.neighbors)) {
-                    for (let i = 0; i < midpoint.neighbors.length; i++) {
-                        pushNode(midpoint.neighbors[i]);
-                    }
-                }
-                for (let i = 0; i < surrounding.length; i++) {
-                    const node = surrounding[i];
-                    const dir = normalizeDirection(
-                        (typeof mapRef.getHexDirection === "function")
-                            ? mapRef.getHexDirection(shortDx(midpoint.x, node.x), shortDy(midpoint.y, node.y))
-                            : 0
-                    );
-                    if (!out.has(dir)) out.set(dir, node);
-                }
-                return out;
-            };
-            const resolveArbitraryMidpointStart = (midpoint, primaryDirection) => {
-                const base = midpointBaseDirection(midpoint);
-                if (!Number.isFinite(base)) return midpoint;
-                const a = normalizeDirection(base);
-                const b = normalizeDirection(base + 3);
-                const c = normalizeDirection(base + 6);
-                const d = normalizeDirection(base + 9);
-                const dir = normalizeDirection(primaryDirection);
-                const dirToNode = buildMidpointDirectionNodeMap(midpoint);
-                const nodeAt = (direction) => dirToNode.get(normalizeDirection(direction)) || null;
-                const midpointBetween = (leftDir, rightDir) => midpointBetweenNodes(
-                    nodeAt(leftDir),
-                    nodeAt(rightDir)
-                );
-
-                if (dir === a || dir === b || dir === c || dir === d) return midpoint;
-                if (dir === normalizeDirection(a - 1)) return midpointBetween(a, d) || midpoint;
-                if (dir === normalizeDirection(a + 1)) return midpointBetween(a, b) || midpoint;
-                if (dir === normalizeDirection(a + 5)) return midpointBetween(b, c) || midpoint;
-                if (dir === normalizeDirection(a + 7)) return midpointBetween(c, d) || midpoint;
-                if (dir === normalizeDirection(a + 2)) return midpointBetween(b, c) || midpoint;
-                if (dir === normalizeDirection(a + 4)) return midpointBetween(a, b) || midpoint;
-                if (dir === normalizeDirection(a + 8)) return midpointBetween(d, a) || midpoint;
-                if (dir === normalizeDirection(a + 10)) return midpointBetween(c, d) || midpoint;
-                return midpoint;
-            };
-            const nextForwardAnchorOnDirection = (currentAnchor, originAnchor, direction, lineVec) => {
-                const currentAlong = pointLineMetrics(originAnchor, lineVec, currentAnchor).along;
-                if (WallSectionUnit._isMapNode(currentAnchor)) {
-                    const neighbor = Array.isArray(currentAnchor.neighbors)
-                        ? currentAnchor.neighbors[normalizeDirection(direction)]
-                        : null;
-                    if (!WallSectionUnit._isMapNode(neighbor)) return null;
-                    const midpoint = midpointBetweenNodes(currentAnchor, neighbor);
-                    if (
-                        midpoint &&
-                        (
-                            isForwardOnLine(originAnchor, lineVec, midpoint) ||
-                            isDirectionallyForward(originAnchor, lineVec, direction, midpoint)
-                        )
-                    ) {
-                        const midAlong = pointLineMetrics(originAnchor, lineVec, midpoint).along;
-                        if (midAlong > currentAlong + lineTolerance) return midpoint;
-                    }
-                    if (
-                        isForwardOnLine(originAnchor, lineVec, neighbor) ||
-                        isDirectionallyForward(originAnchor, lineVec, direction, neighbor)
-                    ) {
-                        const nodeAlong = pointLineMetrics(originAnchor, lineVec, neighbor).along;
-                        if (nodeAlong > currentAlong + lineTolerance) return neighbor;
-                    }
-                    return null;
-                }
-                if (WallSectionUnit._isNodeMidpoint(currentAnchor)) {
-                    const candidates = Array.isArray(currentAnchor.neighbors)
-                        ? currentAnchor.neighbors.filter(node => WallSectionUnit._isMapNode(node))
-                        : [];
-                    let bestNode = null;
-                    let bestDirDelta = Infinity;
-                    let bestAlong = Infinity;
-                    for (let i = 0; i < candidates.length; i++) {
-                        const node = candidates[i];
-                        const along = pointLineMetrics(originAnchor, lineVec, node).along;
-                        if (along <= currentAlong + lineTolerance) continue;
-                        const nodeDir = directionBetween(currentAnchor, node);
-                        if (!Number.isFinite(nodeDir)) continue;
-                        const dirDelta = directionDistance(nodeDir, direction);
-                        if (dirDelta > 1) continue;
-                        if (
-                            dirDelta < bestDirDelta - 1e-6 ||
-                            (Math.abs(dirDelta - bestDirDelta) <= 1e-6 && along < bestAlong - 1e-6)
-                        ) {
-                            bestDirDelta = dirDelta;
-                            bestAlong = along;
-                            bestNode = node;
-                        }
-                    }
-                    return bestNode;
-                }
-                return null;
-            };
             const collectForwardAnchorsOnDirection = (startAnchor, direction, targetForward = null) => {
                 const lineVec = lineVectorFrom(startAnchor, direction);
                 const anchors = [];
@@ -1223,7 +1784,7 @@ void main(void) {
                 const maxSteps = Math.max(12, Math.min(256, Math.ceil((forwardTarget + 3) / 0.5) + 8));
                 let current = startAnchor;
                 for (let i = 0; i < maxSteps; i++) {
-                    const next = nextForwardAnchorOnDirection(current, startAnchor, direction, lineVec);
+                    const next = anchorNeighborInDirection(current, direction);
                     if (!next) break;
                     if (!push(next)) break;
                     current = next;
@@ -1236,7 +1797,7 @@ void main(void) {
                 startAnchor,
                 direction,
                 targetPoint,
-                { requireNode = false, excludeStart = false } = {}
+                { excludeStart = false } = {}
             ) => {
                 const primaryVec = lineVectorFrom(startAnchor, direction);
                 const targetForward = pointLineMetrics(startAnchor, primaryVec, targetPoint).along;
@@ -1250,7 +1811,6 @@ void main(void) {
                     const anchor = anchors[i];
                     if (!anchor) continue;
                     if (excludeStart && WallSectionUnit._pointsMatch(anchor, startAnchor)) continue;
-                    if (requireNode && !WallSectionUnit._isMapNode(anchor)) continue;
                     if (
                         !isForwardOnLine(startAnchor, lineVec, anchor) &&
                         !isDirectionallyForward(startAnchor, lineVec, direction, anchor)
@@ -1294,87 +1854,7 @@ void main(void) {
                     chosenEndDirection = null;
                 }
             }
-            let startAnchor = null;
-            const bridgePrefixSegments = [];
-
-            if (startFromExistingWall) {
-                const strictStartAnchor = WallSectionUnit.normalizeEndpoint(startWorld, mapRef);
-                if (!strictStartAnchor) return emptyPlan;
-
-                if (WallSectionUnit._isMapNode(strictStartAnchor)) {
-                    startAnchor = strictStartAnchor;
-                } else if (
-                    WallSectionUnit._isNodeMidpoint(strictStartAnchor) &&
-                    midpointSupportsDirection(strictStartAnchor, chosenStartDirection)
-                ) {
-                    startAnchor = strictStartAnchor;
-                } else if (WallSectionUnit._isNodeMidpoint(strictStartAnchor)) {
-                    const midpoint = strictStartAnchor;
-                    const midpointNeighbors = Array.isArray(midpoint.neighbors)
-                        ? midpoint.neighbors.filter(node => WallSectionUnit._isMapNode(node))
-                        : [];
-                    if (midpointNeighbors.length === 0) return emptyPlan;
-
-                    let bridgeNode = null;
-                    if (
-                        startReferenceWall &&
-                        startReferenceWall.startPoint &&
-                        startReferenceWall.endPoint
-                    ) {
-                        let oppositeEndpoint = null;
-                        if (WallSectionUnit._pointsMatch(midpoint, startReferenceWall.startPoint)) {
-                            oppositeEndpoint = startReferenceWall.endPoint;
-                        } else if (WallSectionUnit._pointsMatch(midpoint, startReferenceWall.endPoint)) {
-                            oppositeEndpoint = startReferenceWall.startPoint;
-                        }
-
-                        if (oppositeEndpoint && Number.isFinite(oppositeEndpoint.x) && Number.isFinite(oppositeEndpoint.y)) {
-                            const lineDx = shortDx(oppositeEndpoint.x, midpoint.x);
-                            const lineDy = shortDy(oppositeEndpoint.y, midpoint.y);
-                            const lineLen = Math.hypot(lineDx, lineDy);
-                            if (lineLen > EPS) {
-                                let bestDot = -Infinity;
-                                for (let i = 0; i < midpointNeighbors.length; i++) {
-                                    const node = midpointNeighbors[i];
-                                    const ndx = shortDx(midpoint.x, node.x);
-                                    const ndy = shortDy(midpoint.y, node.y);
-                                    const dot = lineDx * ndx + lineDy * ndy;
-                                    if (dot > bestDot + EPS) {
-                                        bestDot = dot;
-                                        bridgeNode = node;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (!bridgeNode) {
-                        bridgeNode = WallSectionUnit._chooseMidpointBridgeNode(mapRef, midpoint, rawEnd);
-                    }
-                    if (!bridgeNode || !WallSectionUnit._isMapNode(bridgeNode)) return emptyPlan;
-
-                    const bridgeDirection = directionBetween(midpoint, bridgeNode);
-                    if (!Number.isFinite(bridgeDirection)) return emptyPlan;
-                    bridgePrefixSegments.push({
-                        start: midpoint,
-                        end: bridgeNode,
-                        direction: bridgeDirection
-                    });
-                    startAnchor = bridgeNode;
-                } else {
-                    return emptyPlan;
-                }
-            } else {
-                const nearestStartAnchor = WallSectionUnit.normalizeEndpoint(startWorld, mapRef);
-                if (!nearestStartAnchor) return emptyPlan;
-                if (WallSectionUnit._isMapNode(nearestStartAnchor)) {
-                    startAnchor = nearestStartAnchor;
-                } else if (WallSectionUnit._isNodeMidpoint(nearestStartAnchor)) {
-                    startAnchor = resolveArbitraryMidpointStart(nearestStartAnchor, chosenStartDirection);
-                } else {
-                    return emptyPlan;
-                }
-            }
+            const startAnchor = WallSectionUnit.normalizeEndpoint(startWorld, mapRef);
             if (!startAnchor) return emptyPlan;
 
             const startPrimaryVec = lineVectorFrom(startAnchor, chosenStartDirection);
@@ -1382,30 +1862,23 @@ void main(void) {
             const perpendicularDistance = Math.abs(endFromStartMetrics.perp);
 
             const finalizeSingleDirection = () => {
-                const endAnchor = chooseClosestForwardAnchor(startAnchor, chosenStartDirection, rawEnd, {
-                    requireNode: false,
-                    excludeStart: false
-                });
+                const endAnchor = chooseClosestForwardAnchor(startAnchor, chosenStartDirection, rawEnd);
                 const hasMainSegment = !!(
                     endAnchor &&
                     !WallSectionUnit._pointsMatch(startAnchor, endAnchor)
                 );
-                if (!hasMainSegment && bridgePrefixSegments.length === 0) return emptyPlan;
-                const segments = bridgePrefixSegments.slice();
-                if (hasMainSegment) {
-                    segments.push({
-                        start: startAnchor,
-                        end: endAnchor,
-                        direction: chosenStartDirection
-                    });
-                }
+                if (!hasMainSegment) return emptyPlan;
                 return {
                     start: startAnchor,
-                    end: hasMainSegment ? endAnchor : startAnchor,
+                    end: endAnchor,
                     junction: null,
                     primaryDirection: chosenStartDirection,
                     secondaryDirection: null,
-                    segments
+                    segments: [{
+                        start: startAnchor,
+                        end: endAnchor,
+                        direction: chosenStartDirection
+                    }]
                 };
             };
 
@@ -1425,47 +1898,42 @@ void main(void) {
                 return finalizeSingleDirection();
             }
 
-            const junctionNode = chooseClosestForwardAnchor(
+            const junctionAnchor = chooseClosestForwardAnchor(
                 startAnchor,
                 chosenStartDirection,
                 { x: lineIntersection.x, y: lineIntersection.y },
-                { requireNode: true, excludeStart: true }
+                { excludeStart: true }
             );
-            if (!junctionNode) return finalizeSingleDirection();
+            if (!junctionAnchor) return finalizeSingleDirection();
 
             const secondaryEndAnchor = chooseClosestForwardAnchor(
-                junctionNode,
+                junctionAnchor,
                 secondaryDirection,
-                rawEnd,
-                { requireNode: false, excludeStart: false }
+                rawEnd
             );
             if (!secondaryEndAnchor) {
                 return {
                     start: startAnchor,
-                    end: junctionNode,
-                    junction: junctionNode,
+                    end: junctionAnchor,
+                    junction: junctionAnchor,
                     primaryDirection: chosenStartDirection,
                     secondaryDirection,
-                    segments: bridgePrefixSegments.concat([
-                        {
-                            start: startAnchor,
-                            end: junctionNode,
-                            direction: chosenStartDirection
-                        }
-                    ])
+                    segments: [{
+                        start: startAnchor,
+                        end: junctionAnchor,
+                        direction: chosenStartDirection
+                    }]
                 };
             }
 
-            const segments = bridgePrefixSegments.concat([
-                {
-                    start: startAnchor,
-                    end: junctionNode,
-                    direction: chosenStartDirection
-                }
-            ]);
-            if (!WallSectionUnit._pointsMatch(junctionNode, secondaryEndAnchor)) {
+            const segments = [{
+                start: startAnchor,
+                end: junctionAnchor,
+                direction: chosenStartDirection
+            }];
+            if (!WallSectionUnit._pointsMatch(junctionAnchor, secondaryEndAnchor)) {
                 segments.push({
-                    start: junctionNode,
+                    start: junctionAnchor,
                     end: secondaryEndAnchor,
                     direction: secondaryDirection
                 });
@@ -1473,7 +1941,7 @@ void main(void) {
             return {
                 start: startAnchor,
                 end: secondaryEndAnchor,
-                junction: junctionNode,
+                junction: junctionAnchor,
                 primaryDirection: chosenStartDirection,
                 secondaryDirection,
                 segments
@@ -1491,9 +1959,14 @@ void main(void) {
         }
 
         static createPlacementFromWorldPoints(mapRef, startWorld, endWorld, options = {}) {
+            const prevPlacementDebugActive = WallSectionUnit._placementDebugActive;
+            const prevPlacementDebugFocusIds = WallSectionUnit._placementDebugFocusIds;
+            WallSectionUnit._placementDebugActive = true;
+            try {
             const preResolvedSegments = Array.isArray(options.preResolvedSegments)
                 ? options.preResolvedSegments
                 : null;
+            WallSectionUnit._placementDebugFocusIds = null;
             let plan = options.preResolvedPlan || null;
             let sourceSegments = [];
             if (preResolvedSegments && preResolvedSegments.length > 0) {
@@ -1514,13 +1987,40 @@ void main(void) {
 
             const preexistingSections = Array.from(WallSectionUnit._allSections.values())
                 .filter(section => section && !section.gone && section.map === mapRef);
+            const preexistingSectionSet = new Set(preexistingSections);
+            const placementDebugEnabled = !!(globalScope && globalScope.DEBUG_WALL_PLACEMENT);
+            const placementDebugLog = (...args) => {
+                if (!placementDebugEnabled) return;
+                console.log("[WALL_PLACE_DEBUG]", ...args);
+            };
+            const formatPoint = (pt) => {
+                if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return "(?, ?)";
+                return `(${Number(pt.x).toFixed(4)}, ${Number(pt.y).toFixed(4)})`;
+            };
+            const wallLabel = (wall) => {
+                if (!wall) return "wall<?>";
+                const id = Number.isInteger(wall.id) ? String(wall.id) : "?";
+                return `wall#${id} ${formatPoint(wall.startPoint)} -> ${formatPoint(wall.endPoint)}`;
+            };
 
             const sections = [];
             const mergedIntoExisting = [];
+            const overlapTouchedSections = new Set();
             for (let i = 0; i < sourceSegments.length; i++) {
-                const seg = sourceSegments[i];
+                let seg = sourceSegments[i];
                 if (!seg || !seg.start || !seg.end) continue;
                 if (WallSectionUnit._pointsMatch(seg.start, seg.end)) continue;
+                placementDebugLog("segment:source", {
+                    index: i,
+                    start: formatPoint(seg.start),
+                    end: formatPoint(seg.end)
+                });
+                if (WallSectionUnit._pointsMatch(seg.start, seg.end)) continue;
+                placementDebugLog("segment:resolved", {
+                    index: i,
+                    start: formatPoint(seg.start),
+                    end: formatPoint(seg.end)
+                });
                 const section = new WallSectionUnit(seg.start, seg.end, {
                     map: mapRef,
                     height: Number.isFinite(options.height) ? Number(options.height) : 1,
@@ -1558,12 +2058,28 @@ void main(void) {
                     overlapGuard += 1;
 
                     let overlapTarget = null;
-                    for (let j = 0; j < preexistingSections.length; j++) {
-                        const candidate = preexistingSections[j];
+                    const nearbySections = WallSectionUnit._collectNearbyWallSections([activeSection], {
+                        includeNeighborNodes: false,
+                        fallbackToGlobal: false,
+                        allowedSet: preexistingSectionSet,
+                        map: mapRef
+                    });
+                    const candidatePool = (nearbySections.length > 0) ? nearbySections : preexistingSections;
+                    for (let j = 0; j < candidatePool.length; j++) {
+                        const candidate = candidatePool[j];
                         if (!candidate || candidate === activeSection) continue;
                         if (candidate.gone || candidate.vanishing) continue;
                         if (candidate.map !== mapRef) continue;
-                        if (!WallSectionUnit.canMergeCollinearOverlap(candidate, activeSection)) continue;
+                        const overlapData = WallSectionUnit._computeCollinearOverlapData(candidate, activeSection)
+                            || WallSectionUnit._computeCollinearOverlapData(activeSection, candidate);
+                        if (!overlapData) continue;
+                        placementDebugLog("merge:overlap-candidate", {
+                            active: wallLabel(activeSection),
+                            candidate: wallLabel(candidate),
+                            overlapLength: Number((overlapData.overlapLength || 0).toFixed(6)),
+                            mergedStart: formatPoint(overlapData.mergedStart),
+                            mergedEnd: formatPoint(overlapData.mergedEnd)
+                        });
                         if (!overlapTarget) {
                             overlapTarget = candidate;
                             continue;
@@ -1582,13 +2098,25 @@ void main(void) {
                     const survivor = (targetId <= activeId) ? overlapTarget : activeSection;
                     const absorbed = (survivor === overlapTarget) ? activeSection : overlapTarget;
 
-                    const merged = WallSectionUnit.mergeOverlappingPlacementPair(survivor, absorbed);
+                    const merged = WallSectionUnit.mergeOverlappingPlacementPair(survivor, absorbed, {
+                        applyDirectionalBlocking: false,
+                        deferVisualUpdate: true
+                    });
                     if (!merged || merged.gone) {
+                        placementDebugLog("merge:failed", {
+                            survivor: wallLabel(survivor),
+                            absorbed: wallLabel(absorbed)
+                        });
                         activeSection = null;
                         break;
                     }
 
+                    placementDebugLog("merge:success", {
+                        survivor: wallLabel(merged),
+                        absorbedId: Number.isInteger(absorbed.id) ? absorbed.id : null
+                    });
                     activeSection = merged;
+                    overlapTouchedSections.add(merged);
                     overlapMerged = true;
                     mergedWithExisting = mergedWithExisting || (activeSection !== section) || (overlapTarget === section);
                 }
@@ -1604,6 +2132,19 @@ void main(void) {
                 sections.push(activeSection);
             }
 
+            if (overlapTouchedSections.size > 0) {
+                overlapTouchedSections.forEach((section) => {
+                    if (!section || section.gone || section.vanishing) return;
+                    section.addToMapNodes();
+                    if (typeof section.handleJoineryOnPlacement === "function") {
+                        section.handleJoineryOnPlacement();
+                    } else {
+                        if (typeof section.rebuildMesh3d === "function") section.rebuildMesh3d();
+                        if (typeof section.draw === "function") section.draw();
+                    }
+                });
+            }
+
             if (options.harmonizeTexturePhase !== false) {
                 WallSectionUnit.harmonizeTexturePhaseForSections(sections, preexistingSections);
             }
@@ -1611,6 +2152,15 @@ void main(void) {
             const seedsForContinuousMerge = sections.concat(
                 mergedIntoExisting.filter(section => !!section && !section.gone && !section.vanishing)
             );
+            if (placementDebugEnabled) {
+                const focus = new Set();
+                for (let i = 0; i < seedsForContinuousMerge.length; i++) {
+                    const section = seedsForContinuousMerge[i];
+                    if (!section || !Number.isInteger(section.id)) continue;
+                    focus.add(Number(section.id));
+                }
+                WallSectionUnit._placementDebugFocusIds = focus;
+            }
 
             const mergedSections = (options.autoMergeContinuous === false)
                 ? seedsForContinuousMerge.slice()
@@ -1645,9 +2195,18 @@ void main(void) {
                     if (!ref || !ref.wall || !ref.anchor) continue;
                     if (ref.wall.gone || ref.wall.map !== mapRef) continue;
                     if (typeof ref.wall.splitAtAnchor !== "function") continue;
+                    if (mergedSections.includes(ref.wall)) {
+                        if (placementDebugEnabled) {
+                            placementDebugLog("split-ref:skip-wall-already-in-merged-result", {
+                                wallId: Number.isInteger(ref.wall.id) ? Number(ref.wall.id) : null,
+                                anchor: formatPoint(ref.anchor)
+                            });
+                        }
+                        continue;
+                    }
+                    const anchorKey = WallSectionUnit.endpointKey(ref.anchor);
 
                     const wallKey = Number.isInteger(ref.wall.id) ? `id:${ref.wall.id}` : `obj:${i}`;
-                    const anchorKey = WallSectionUnit.endpointKey(ref.anchor);
                     const splitKey = `${wallKey}|${anchorKey}`;
                     if (!anchorKey || seenSplitKeys.has(splitKey)) continue;
                     seenSplitKeys.add(splitKey);
@@ -1656,6 +2215,29 @@ void main(void) {
                         connectSections: mergedSections,
                         metadata: { splitForWallPlacement: true }
                     });
+                }
+            }
+
+            // Cross-wall splitting: scan the newly placed sections for hex-grid
+            // anchors shared with existing walls and split at every crossing.
+            // (Handles T-junctions and X-junctions automatically.)
+            // Ensure each new section is registered on the map nodes it
+            // spans so the spatial-narrowing step can find candidate walls.
+            if (options.applyCrossSplits !== false) {
+                for (let ms = 0; ms < mergedSections.length; ms++) {
+                    const sec = mergedSections[ms];
+                    if (sec && !sec.gone && typeof sec.addToMapNodes === "function") {
+                        sec.addToMapNodes();
+                    }
+                }
+                const crossResult = WallSectionUnit.applyCrossWallSplitsForPlacement(
+                    mergedSections, mapRef
+                );
+                // Replace mergedSections contents in-place so downstream code
+                // (addToMapObjects, returnedSections) sees the updated list.
+                mergedSections.length = 0;
+                for (let ci = 0; ci < crossResult.length; ci++) {
+                    mergedSections.push(crossResult[ci]);
                 }
             }
 
@@ -1678,6 +2260,10 @@ void main(void) {
             }
 
             return { plan, sections: returnedSections };
+            } finally {
+                WallSectionUnit._placementDebugActive = prevPlacementDebugActive;
+                WallSectionUnit._placementDebugFocusIds = prevPlacementDebugFocusIds;
+            }
         }
 
         setEndpoints(startPoint, endPoint, mapRef = null) {
@@ -1970,6 +2556,7 @@ void main(void) {
                 const facingFace = this.getPlayerFacingLongSideCornersWorld({
                     player: wizardRef
                 });
+                const allFaces = this._buildFaceQuadsWorld();
                 if (Array.isArray(facingFace) && facingFace.length >= 2) {
                     const toLosSpace = point => {
                         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
@@ -1982,6 +2569,48 @@ void main(void) {
                     const faceEnd = toLosSpace(facingFace[1]);
                     if (faceStart && faceEnd) {
                         pushHitsForSegment(faceStart, faceEnd);
+                    }
+
+                    // In maze mode, wall ends should still occlude LOS.
+                    const sameFace = (a, b) => (
+                        Array.isArray(a) &&
+                        Array.isArray(b) &&
+                        a.length >= 4 &&
+                        b.length >= 4 &&
+                        this._faceCornersMatch(a, b)
+                    );
+                    const oppositeFace = (
+                        allFaces &&
+                        sameFace(facingFace, allFaces.longFaceLeft)
+                    )
+                        ? allFaces.longFaceRight
+                        : (
+                            allFaces &&
+                            sameFace(facingFace, allFaces.longFaceRight)
+                        )
+                            ? allFaces.longFaceLeft
+                            : null;
+
+                    if (Array.isArray(oppositeFace) && oppositeFace.length >= 2) {
+                        const capStartA = toLosSpace(facingFace[0]);
+                        const capStartB = toLosSpace(oppositeFace[0]);
+                        if (
+                            capStartA &&
+                            capStartB &&
+                            Math.hypot(capStartA.x - capStartB.x, capStartA.y - capStartB.y) > EPS
+                        ) {
+                            pushHitsForSegment(capStartA, capStartB);
+                        }
+
+                        const capEndA = toLosSpace(facingFace[1]);
+                        const capEndB = toLosSpace(oppositeFace[1]);
+                        if (
+                            capEndA &&
+                            capEndB &&
+                            Math.hypot(capEndA.x - capEndB.x, capEndA.y - capEndB.y) > EPS
+                        ) {
+                            pushHitsForSegment(capEndA, capEndB);
+                        }
                     }
                 }
                 return hits;
@@ -2095,6 +2724,7 @@ void main(void) {
             const repeatX = Math.max(0.0001, Number(wallTextureCfg.repeatsPerMapUnitX) || DEFAULT_REPEAT_X);
             const repeatY = Math.max(0.0001, Number(wallTextureCfg.repeatsPerMapUnitY) || DEFAULT_REPEAT_Y);
             const clipToLosVisibleSpan = !!options.clipToLosVisibleSpan;
+            const topFaceOnly = !!(options.topFaceOnly) && !clipToLosVisibleSpan && !options.mazeMode;
             const clippedSpanMode = clipToLosVisibleSpan || !!options.mazeMode;
             const mazePrismFaces = clippedSpanMode ? this.getMazeModeClippedPrismFacesWorld(options) : null;
             const mazePrismKey = (clippedSpanMode && Array.isArray(mazePrismFaces) && mazePrismFaces.length > 0)
@@ -2125,7 +2755,7 @@ void main(void) {
                 Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
                 Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB).toFixed(6) : "nan",
                 wallTextureCfg.texturePath || this.wallTexturePath || DEFAULT_WALL_TEXTURE,
-                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : "full",
+                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (topFaceOnly ? "topOnly" : "full"),
                 mazePrismKey
             ].join("|");
 
@@ -2195,8 +2825,8 @@ void main(void) {
                     topAcrossMin = -0.5;
                     topAcrossMax = 0.5;
                 }
-                const topTextureVMin = 0.25;
-                const topTextureVMax = 0.5;
+                const topTextureVMin = 0;
+                const topTextureVMax = 0.125;
                 const topTextureVSpan = topTextureVMax - topTextureVMin;
 
                 for (let f = 0; f < mazeFaces.length; f++) {
@@ -2242,20 +2872,21 @@ void main(void) {
                             const acrossNorm = (acrossWorld - topAcrossMin) / Math.max(1e-6, (topAcrossMax - topAcrossMin));
                             uvs.push(
                                 alongWorld * repeatX + phaseU,
-                                topTextureVMin + Math.max(0, Math.min(1, acrossNorm)) * topTextureVSpan + phaseV
+                                (1 - acrossNorm) * topTextureVSpan
                             );
                         } else if (isCapFace) {
                             uvs.push(
                                 acrossWorld * repeatX + phaseU,
-                                heightWorld * repeatY + phaseV
+                                (this.height - heightWorld) * repeatY
                             );
                         } else {
                             uvs.push(
                                 alongWorld * repeatX + phaseU,
-                                heightWorld * repeatY + phaseV
+                                (this.height - heightWorld) * repeatY
                             );
                         }
-                        colors.push(1, 1, 1, 1);
+                        const mazeC = isTopFace ? 1.25 : 1;
+                        colors.push(mazeC, mazeC, mazeC, 1);
                         textureMix.push(1);
                         outIndices.push(outIndices.length);
                     }
@@ -2313,8 +2944,8 @@ void main(void) {
             // Expand indexed triangles so we can color/tint faces independently.
             const nPerim = Math.floor((vertices.length / 3) * 0.5);
             const topFaceTriCount = Math.max(0, nPerim - 2);
-            const topTextureVMin = 0.25;
-            const topTextureVMax = 0.5;
+            const topTextureVMin = 0;
+            const topTextureVMax = 0.125;
             const topTextureVSpan = topTextureVMax - topTextureVMin;
             let topAcrossMin = Infinity;
             let topAcrossMax = -Infinity;
@@ -2338,6 +2969,7 @@ void main(void) {
 
             for (let tri = 0; tri < triCount; tri++) {
                 const isTopFaceTri = tri < topFaceTriCount;
+                if (topFaceOnly && !isTopFaceTri) continue;
                 const colorR = isTopFaceTri ? topLighten : 1;
                 const colorG = isTopFaceTri ? topLighten : 1;
                 const colorB = isTopFaceTri ? topLighten : 1;
@@ -2383,7 +3015,7 @@ void main(void) {
                     const dstColor = dstVertex * 4;
                     expandedPositions[dstPos] = Number(vertices[srcPos]) || 0;
                     expandedPositions[dstPos + 1] = Number(vertices[srcPos + 1]) || 0;
-                    expandedPositions[dstPos + 2] = Number(vertices[srcPos + 2]) || 0;
+                    expandedPositions[dstPos + 2] = topFaceOnly ? bottomZ : (Number(vertices[srcPos + 2]) || 0);
                     const along = Number(alongStablePerVertex[srcVertex]) || 0;
                     const alongWorld = Number(alongWorldPerVertex[srcVertex]) || 0;
                     const across = Number(acrossPerVertex[srcVertex]) || 0;
@@ -2391,13 +3023,13 @@ void main(void) {
                     if (isTopFaceTri) {
                         const acrossNorm = (across - topAcrossMin) / Math.max(1e-6, (topAcrossMax - topAcrossMin));
                         expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
-                        expandedUvs[dstUv + 1] = topTextureVMin + Math.max(0, Math.min(1, acrossNorm)) * topTextureVSpan + phaseV;
+                        expandedUvs[dstUv + 1] = (1 - acrossNorm) * topTextureVSpan;
                     } else if (capFace) {
                         expandedUvs[dstUv] = across * repeatX + phaseU;
-                        expandedUvs[dstUv + 1] = height * repeatY + phaseV;
+                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY;
                     } else {
                         expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
-                        expandedUvs[dstUv + 1] = height * repeatY + phaseV;
+                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY;
                     }
                     expandedColors[dstColor] = colorR;
                     expandedColors[dstColor + 1] = colorG;
@@ -2462,7 +3094,9 @@ void main(void) {
                 uXyRatio: 1,
                 uDepthRange: new Float32Array([0, 1]),
                 uTint: new Float32Array([1, 1, 1, 1]),
+                uBrightness: 0,
                 uAlphaCutoff: 0.02,
+                uClipMinZ: -1000000,
                 uSampler: PIXI.Texture.WHITE
             });
             const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
@@ -2510,6 +3144,7 @@ void main(void) {
                 : (Number.isFinite(globalScope.xyratio) ? Number(globalScope.xyratio) : 1);
             const tint = Number.isFinite(options.tint) ? Number(options.tint) : 0xFFFFFF;
             const alpha = Number.isFinite(options.alpha) ? Number(options.alpha) : 1;
+            const brightnessPercent = Number(options.brightness);
             const viewportHeight = Number(camera && camera.height) || 30;
             const nearMetric = -Math.max(80, viewportHeight * 0.6);
             const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
@@ -2533,7 +3168,11 @@ void main(void) {
             u.uTint[1] = ((tint >> 8) & 255) / 255;
             u.uTint[2] = (tint & 255) / 255;
             u.uTint[3] = Math.max(0, Math.min(1, alpha));
+            u.uBrightness = Number.isFinite(brightnessPercent)
+                ? Math.max(-1, Math.min(1, brightnessPercent / 100))
+                : 0;
             u.uAlphaCutoff = Number.isFinite(geometry.alphaCutoff) ? Number(geometry.alphaCutoff) : 0.02;
+            u.uClipMinZ = this._scriptSinkState ? 0 : -1000000;
             u.uSampler = geometry.texture || (PIXI.Texture ? PIXI.Texture.WHITE : null);
             mesh.visible = true;
             return mesh;
@@ -2638,13 +3277,22 @@ void main(void) {
             const centerPoint = isStart ? this.startPoint : this.endPoint;
             const center = { x: Number(centerPoint && centerPoint.x), y: Number(centerPoint && centerPoint.y) };
             if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return null;
+            const endpointPoint = (endpointKey === "a") ? this.startPoint : this.endPoint;
 
             const wallById = new Map([[Number(this.id), this]]);
             if (this.connections instanceof Map) {
                 for (const payload of this.connections.values()) {
-                    if (!payload || payload.sharedEndpointKey !== endpointKey) continue;
                     const other = payload.section;
                     if (!other || other.type !== "wallSection" || other.gone || other.vanishing) continue;
+                    const sharesByMetadata = !!(payload && payload.sharedEndpointKey === endpointKey);
+                    const sharesByGeometry = !!(
+                        endpointPoint &&
+                        (
+                            WallSectionUnit._pointsMatch(endpointPoint, other.startPoint) ||
+                            WallSectionUnit._pointsMatch(endpointPoint, other.endPoint)
+                        )
+                    );
+                    if (!sharesByMetadata && !sharesByGeometry) continue;
                     if (!Number.isInteger(other.id) || !visibleWallIdSet.has(Number(other.id))) continue;
                     wallById.set(Number(other.id), other);
                 }
@@ -2744,11 +3392,20 @@ void main(void) {
             const endKey = WallSectionUnit.endpointKey(this.endPoint) || "end";
             const endpointVisibleIdSig = endpointKey => {
                 const ids = [];
+                const endpointPoint = (endpointKey === "a") ? this.startPoint : this.endPoint;
                 if (Number.isInteger(this.id) && visibleWallIdSet.has(Number(this.id))) ids.push(Number(this.id));
                 if (this.connections instanceof Map) {
                     for (const payload of this.connections.values()) {
-                        if (!payload || payload.sharedEndpointKey !== endpointKey) continue;
                         const other = payload.section;
+                        const sharesByMetadata = !!(payload && payload.sharedEndpointKey === endpointKey);
+                        const sharesByGeometry = !!(
+                            endpointPoint &&
+                            (
+                                WallSectionUnit._pointsMatch(endpointPoint, other && other.startPoint) ||
+                                WallSectionUnit._pointsMatch(endpointPoint, other && other.endPoint)
+                            )
+                        );
+                        if (!sharesByMetadata && !sharesByGeometry) continue;
                         if (!other || !Number.isInteger(other.id) || !visibleWallIdSet.has(Number(other.id))) continue;
                         ids.push(Number(other.id));
                     }
@@ -3052,14 +3709,6 @@ void main(void) {
             const isVertical = (dir === 3 || dir === 9);
             if (isVertical) return faces.topFace;
 
-            const cameraPoint = this._resolveCameraReferencePoint(options);
-            const centerlineEps = Math.max(1e-4, (Number(this.thickness) || 0) * 0.01);
-            const cameraAcross = this._getSignedAcrossFromCenterline(cameraPoint);
-            if (Number.isFinite(cameraAcross)) {
-                if (cameraAcross > centerlineEps) return faces.longFaceRight;
-                if (cameraAcross < -centerlineEps) return faces.longFaceLeft;
-            }
-
             const worldToScreenFn = (typeof options.worldToScreenFn === "function")
                 ? options.worldToScreenFn
                 : ((typeof globalScope.worldToScreen === "function") ? globalScope.worldToScreen : null);
@@ -3070,31 +3719,32 @@ void main(void) {
                 ? Number(options.xyratio)
                 : (Number.isFinite(globalScope.xyratio) ? Number(globalScope.xyratio) : 0.66);
 
-            if (typeof worldToScreenFn === "function") {
-                const faceDepth = (face) => {
-                    let sum = 0;
-                    let n = 0;
-                    for (let i = 0; i < face.length; i++) {
-                        const c = face[i];
-                        if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.z)) continue;
-                        const s = worldToScreenFn({ x: Number(c.x), y: Number(c.y) });
-                        if (!s || !Number.isFinite(s.y)) continue;
-                        sum += Number(s.y) - Number(c.z) * vs * xyr;
-                        n++;
-                    }
-                    return n > 0 ? (sum / n) : -Infinity;
-                };
-                const leftDepth = faceDepth(faces.longFaceLeft);
-                const rightDepth = faceDepth(faces.longFaceRight);
-                return (leftDepth >= rightDepth) ? faces.longFaceLeft : faces.longFaceRight;
-            }
+            if (typeof worldToScreenFn !== "function") return faces.longFaceLeft;
+            const faceDepth = (face) => {
+                let sum = 0;
+                let n = 0;
+                for (let i = 0; i < face.length; i++) {
+                    const c = face[i];
+                    if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.z)) continue;
+                    const s = worldToScreenFn({ x: Number(c.x), y: Number(c.y) });
+                    if (!s || !Number.isFinite(s.y)) continue;
+                    sum += Number(s.y) - Number(c.z) * vs * xyr;
+                    n++;
+                }
+                return n > 0 ? (sum / n) : -Infinity;
+            };
+            const leftDepth = faceDepth(faces.longFaceLeft);
+            const rightDepth = faceDepth(faces.longFaceRight);
+            return (leftDepth >= rightDepth) ? faces.longFaceLeft : faces.longFaceRight;
+        }
 
-            if (!cameraPoint) return faces.longFaceLeft;
-            const leftCenter = this._getFaceCenterWorld(faces.longFaceLeft);
-            const rightCenter = this._getFaceCenterWorld(faces.longFaceRight);
-            const leftDistSq = this._distanceSqToWorldPoint(cameraPoint, leftCenter);
-            const rightDistSq = this._distanceSqToWorldPoint(cameraPoint, rightCenter);
-            return (leftDistSq <= rightDistSq) ? faces.longFaceLeft : faces.longFaceRight;
+        getScreenFacingLongFaceLabel(options = {}) {
+            const faces = this._buildFaceQuadsWorld();
+            if (!faces) return null;
+            const screenFacing = this.getScreenFacingSideCornersWorld(options);
+            const label = this._identifyFaceLabel(screenFacing, faces);
+            if (label === "longFaceLeft" || label === "longFaceRight") return label;
+            return null;
         }
 
         _faceCornersMatch(faceA, faceB, eps = 1e-4) {
@@ -3460,6 +4110,104 @@ void main(void) {
             );
         }
 
+        _getEndpointPointByKey(endpointKey) {
+            if (!endpointKey) return null;
+            const startKey = WallSectionUnit.endpointKey(this.startPoint);
+            if (startKey === endpointKey) return this.startPoint;
+            const endKey = WallSectionUnit.endpointKey(this.endPoint);
+            if (endKey === endpointKey) return this.endPoint;
+            return null;
+        }
+
+        _endpointPointMatchesKeyOnSection(section, endpointKey) {
+            if (!section || !endpointKey) return null;
+            if (WallSectionUnit.endpointKey(section.startPoint) === endpointKey) return section.startPoint;
+            if (WallSectionUnit.endpointKey(section.endPoint) === endpointKey) return section.endPoint;
+            return null;
+        }
+
+        _hasPlayerSideNonCollinearWallAtEndpoint(endpointKey, wizardRef, excludedSection = null) {
+            if (!(this.connections instanceof Map) || this.connections.size === 0) return false;
+            if (!wizardRef || !Number.isFinite(wizardRef.x) || !Number.isFinite(wizardRef.y)) return false;
+
+            const endpoint = this._getEndpointPointByKey(endpointKey);
+            if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return false;
+
+            const mapRef = this.map || (excludedSection && excludedSection.map) || (wizardRef && wizardRef.map) || null;
+            const shortestDeltaX = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? ((fromX, toX) => mapRef.shortestDeltaX(fromX, toX))
+                : ((fromX, toX) => toX - fromX);
+            const shortestDeltaY = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? ((fromY, toY) => mapRef.shortestDeltaY(fromY, toY))
+                : ((fromY, toY) => toY - fromY);
+
+            const sx = Number(this.startPoint && this.startPoint.x);
+            const sy = Number(this.startPoint && this.startPoint.y);
+            const ex = Number(this.endPoint && this.endPoint.x);
+            const ey = Number(this.endPoint && this.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+                return false;
+            }
+            const lineDx = shortestDeltaX(sx, ex);
+            const lineDy = shortestDeltaY(sy, ey);
+            const lineLen = Math.hypot(lineDx, lineDy);
+            if (!(lineLen > EPS)) return false;
+            const ux = lineDx / lineLen;
+            const uy = lineDy / lineLen;
+            const nx = -uy;
+            const ny = ux;
+
+            const playerDx = shortestDeltaX(Number(endpoint.x), Number(wizardRef.x));
+            const playerDy = shortestDeltaY(Number(endpoint.y), Number(wizardRef.y));
+            const playerSide = playerDx * nx + playerDy * ny;
+            if (Math.abs(playerSide) <= 1e-5) return false;
+
+            for (const payload of this.connections.values()) {
+                const candidate = payload && payload.section;
+                if (!candidate || candidate.type !== "wallSection") continue;
+                if (candidate === this || candidate === excludedSection) continue;
+                if (candidate.gone || candidate.vanishing) continue;
+
+                const sharesEndpointByMetadata = !!(payload && payload.sharedEndpointKey === endpointKey);
+                const sharesEndpointByCoords = !!(
+                    WallSectionUnit._pointsMatch(endpoint, candidate.startPoint) ||
+                    WallSectionUnit._pointsMatch(endpoint, candidate.endPoint)
+                );
+                if (!sharesEndpointByMetadata && !sharesEndpointByCoords) continue;
+                if (this._isSameWallLineForVisibility(candidate)) continue;
+
+                const candidateEndpoint = this._endpointPointMatchesKeyOnSection(candidate, endpointKey);
+                if (!candidateEndpoint) continue;
+                const candidateFarPoint = WallSectionUnit._pointsMatch(candidateEndpoint, candidate.startPoint)
+                    ? candidate.endPoint
+                    : candidate.startPoint;
+                if (!candidateFarPoint) continue;
+
+                const candDx = shortestDeltaX(Number(endpoint.x), Number(candidateFarPoint.x));
+                const candDy = shortestDeltaY(Number(endpoint.y), Number(candidateFarPoint.y));
+                const candidateSide = candDx * nx + candDy * ny;
+                if (Math.abs(candidateSide) <= 1e-5) continue;
+
+                if ((playerSide > 0 && candidateSide > 0) || (playerSide < 0 && candidateSide < 0)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        canShareMazeCollinearVisibilityWith(otherSection, wizardRef = null) {
+            if (!otherSection || otherSection.type !== "wallSection") return false;
+            if (otherSection === this) return true;
+            if (!this._isSameWallLineForVisibility(otherSection)) return false;
+
+            const sharedEndpointKey = this._resolveSharedEndpointKey(otherSection);
+            if (!sharedEndpointKey) return true;
+            if (!wizardRef || !Number.isFinite(wizardRef.x) || !Number.isFinite(wizardRef.y)) return true;
+
+            return !this._hasPlayerSideNonCollinearWallAtEndpoint(sharedEndpointKey, wizardRef, otherSection);
+        }
+
         isEndpointOwnedBySameWall(endpointKey, ownerSection) {
             if (!ownerSection) return false;
 
@@ -3583,6 +4331,25 @@ void main(void) {
             const visibleWallIdSet = (options && options.visibleWallIdSet instanceof Set)
                 ? options.visibleWallIdSet
                 : null;
+            const fullFaces = this._buildFaceQuadsWorld();
+            const playerFacing = this.getPlayerFacingLongSideCornersWorld(options);
+            const screenFacing = this.getScreenFacingSideCornersWorld(options);
+            const playerFacingLabel = this._identifyFaceLabel(playerFacing, fullFaces);
+            const screenFacingLabel = this._identifyFaceLabel(screenFacing, fullFaces);
+            const isKnownFaceLabel = (label) => (
+                label === "longFaceLeft" ||
+                label === "longFaceRight" ||
+                label === "topFace"
+            );
+            const useBottomOnlyForFacingMismatch = (
+                isKnownFaceLabel(playerFacingLabel) &&
+                isKnownFaceLabel(screenFacingLabel) &&
+                playerFacingLabel !== screenFacingLabel
+            );
+            const fullHeightTarget = !useBottomOnlyForFacingMismatch;
+            const nowMs = Number.isFinite(options && options.nowMs) ? Number(options.nowMs) : performance.now();
+            const skipMazeRevealAnimation = !!(options && options.skipMazeRevealAnimation);
+            const wallLikelyOnScreen = this._isLikelyOnScreenForMazeDebug(options, fullFaces);
             const profile = visibleWallIdSet
                 ? this.getWallProfileWithVisibleNeighborMiter(visibleWallIdSet)
                 : this.getWallProfile();
@@ -3594,17 +4361,301 @@ void main(void) {
             const left = this._clipFaceCornersByTRange(faces.longFaceLeft, clipRange.tMin, clipRange.tMax);
             const right = this._clipFaceCornersByTRange(faces.longFaceRight, clipRange.tMin, clipRange.tMax);
             const top = this._clipFaceCornersByTRange(faces.topFace, clipRange.tMin, clipRange.tMax);
-            const out = [];
-            if (Array.isArray(left) && left.length >= 4) out.push(left);
-            if (Array.isArray(right) && right.length >= 4) out.push(right);
-            if (Array.isArray(top) && top.length >= 4) out.push(top);
+            const tMinClamped = Math.max(0, Math.min(1, Number(clipRange.tMin)));
+            const tMaxClamped = Math.max(0, Math.min(1, Number(clipRange.tMax)));
+            const shortenStart = tMinClamped > 1e-4;
+            const shortenEnd = tMaxClamped < (1 - 1e-4);
+            const startKey = WallSectionUnit.endpointKey(this.startPoint);
+            const endKey = WallSectionUnit.endpointKey(this.endPoint);
+            const hasVisibleStartJoin = !!(
+                visibleWallIdSet instanceof Set &&
+                startKey &&
+                this._computeVisibleEndpointJoineryEntry(startKey, visibleWallIdSet)
+            );
+            const hasVisibleEndJoin = !!(
+                visibleWallIdSet instanceof Set &&
+                endKey &&
+                this._computeVisibleEndpointJoineryEntry(endKey, visibleWallIdSet)
+            );
+            const coreFaces = this._buildCoreFaceQuadsWorld();
+            const coreLeft = coreFaces
+                ? this._clipFaceCornersByTRange(coreFaces.longFaceLeft, clipRange.tMin, clipRange.tMax)
+                : null;
+            const coreRight = coreFaces
+                ? this._clipFaceCornersByTRange(coreFaces.longFaceRight, clipRange.tMin, clipRange.tMax)
+                : null;
+            const coreTop = coreFaces
+                ? this._clipFaceCornersByTRange(coreFaces.topFace, clipRange.tMin, clipRange.tMax)
+                : null;
+            if (
+                Array.isArray(left) && left.length >= 4 &&
+                Array.isArray(right) && right.length >= 4 &&
+                Array.isArray(coreLeft) && coreLeft.length >= 4 &&
+                Array.isArray(coreRight) && coreRight.length >= 4
+            ) {
+                if (shortenStart && !hasVisibleStartJoin) {
+                    left[0] = coreLeft[0];
+                    left[3] = coreLeft[3];
+                    right[0] = coreRight[0];
+                    right[3] = coreRight[3];
+                    if (Array.isArray(top) && top.length >= 4 && Array.isArray(coreTop) && coreTop.length >= 4) {
+                        top[0] = coreTop[0];
+                        top[3] = coreTop[3];
+                    }
+                }
+                if (shortenEnd && !hasVisibleEndJoin) {
+                    left[1] = coreLeft[1];
+                    left[2] = coreLeft[2];
+                    right[1] = coreRight[1];
+                    right[2] = coreRight[2];
+                    if (Array.isArray(top) && top.length >= 4 && Array.isArray(coreTop) && coreTop.length >= 4) {
+                        top[1] = coreTop[1];
+                        top[2] = coreTop[2];
+                    }
+                }
+            }
+            const bottom = (
+                Array.isArray(left) && left.length >= 4 &&
+                Array.isArray(right) && right.length >= 4
+            ) ? [left[0], left[1], right[1], right[0]] : null;
+            const capStart = (
+                Array.isArray(left) && left.length >= 4 &&
+                Array.isArray(right) && right.length >= 4
+            ) ? [left[0], right[0], right[3], left[3]] : null;
+            const capEnd = (
+                Array.isArray(left) && left.length >= 4 &&
+                Array.isArray(right) && right.length >= 4
+            ) ? [left[1], right[1], right[2], left[2]] : null;
+            if (!fullHeightTarget) {
+                return (Array.isArray(bottom) && bottom.length >= 4) ? [bottom] : [];
+            }
+            const playerPoint = this._resolvePlayerReferencePoint(options);
+            const playerTRaw = this._parameterForWorldPointOnSection(playerPoint);
+            const playerT = Number.isFinite(playerTRaw)
+                ? Math.max(0, Math.min(1, Number(playerTRaw)))
+                : 0.5;
+            const animProgress = skipMazeRevealAnimation
+                ? this._setMazeModeVisibilityHeightFactorImmediate(1, nowMs, wallLikelyOnScreen)
+                : this._getMazeModeVisibilityHeightFactor(fullHeightTarget, nowMs, wallLikelyOnScreen);
+            const nearAtStart = playerT <= 0.5;
+            const revealSpec = this._buildMazeRevealLineSpec(animProgress, nearAtStart);
 
-            if (Array.isArray(left) && left.length >= 4 && Array.isArray(right) && right.length >= 4) {
-                const capStart = [left[0], right[0], right[3], left[3]];
-                const capEnd = [left[1], right[1], right[2], left[2]];
-                out.push(capStart, capEnd);
+            const out = [];
+            const pushClippedFace = (face) => {
+                const clipped = this._clipFaceByMazeRevealLine(face, revealSpec);
+                if (!Array.isArray(clipped) || clipped.length === 0) return;
+                for (let i = 0; i < clipped.length; i++) {
+                    const c = clipped[i];
+                    if (Array.isArray(c) && c.length >= 4) out.push(c);
+                }
+            };
+            pushClippedFace(bottom);
+            pushClippedFace(left);
+            pushClippedFace(right);
+            pushClippedFace(top);
+            pushClippedFace(capStart);
+            pushClippedFace(capEnd);
+            return out;
+        }
+
+        isBottomOnlyVisibleInMazeMode(options = {}) {
+            const fullFaces = this._buildFaceQuadsWorld();
+            if (!fullFaces) return false;
+            const playerFacing = this.getPlayerFacingLongSideCornersWorld(options);
+            const screenFacing = this.getScreenFacingSideCornersWorld(options);
+            const playerFacingLabel = this._identifyFaceLabel(playerFacing, fullFaces);
+            const screenFacingLabel = this._identifyFaceLabel(screenFacing, fullFaces);
+            const isKnownFaceLabel = (label) => (
+                label === "longFaceLeft" ||
+                label === "longFaceRight" ||
+                label === "topFace"
+            );
+            return (
+                isKnownFaceLabel(playerFacingLabel) &&
+                isKnownFaceLabel(screenFacingLabel) &&
+                playerFacingLabel !== screenFacingLabel
+            );
+        }
+
+        _buildMazeRevealLineSpec(progress, nearAtStart) {
+            const p = Math.max(0, Math.min(1, Number(progress) || 0));
+            const u0 = nearAtStart ? 0 : 1;
+            const farU = nearAtStart ? 1 : 0;
+            const dirU = nearAtStart ? Math.sin(p * Math.PI * 0.5) : -Math.sin(p * Math.PI * 0.5);
+            const dirV = -Math.cos(p * Math.PI * 0.5);
+            const signedAt = (u, v) => {
+                const relU = Number(u) - u0;
+                const relV = Number(v) - 1;
+                // n = (-dirV, dirU)
+                return (-dirV * relU) + (dirU * relV);
+            };
+            const nearBottomSigned = signedAt(u0, 0);
+            const farTopSigned = signedAt(farU, 1);
+            let keepSign = 0;
+            if (Math.abs(nearBottomSigned) > 1e-8) {
+                keepSign = nearBottomSigned >= 0 ? 1 : -1;
+            } else if (Math.abs(farTopSigned) > 1e-8) {
+                keepSign = farTopSigned >= 0 ? -1 : 1;
+            } else {
+                keepSign = 1;
+            }
+            return { u0, dirU, dirV, keepSign };
+        }
+
+        _clipFaceByMazeRevealLine(faceCorners, revealSpec) {
+            if (!Array.isArray(faceCorners) || faceCorners.length < 3 || !revealSpec) return [];
+            const sectionHeight = Math.max(EPS, Number(this.height) || 0);
+            const bottomZ = Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0;
+            const signedAt = (u, v) => {
+                const relU = Number(u) - Number(revealSpec.u0);
+                const relV = Number(v) - 1;
+                return ((-Number(revealSpec.dirV) * relU) + (Number(revealSpec.dirU) * relV)) * Number(revealSpec.keepSign);
+            };
+            const toUvVertex = (pt) => {
+                if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y) || !Number.isFinite(pt.z)) return null;
+                const uRaw = this._parameterForWorldPointOnSection(pt);
+                if (!Number.isFinite(uRaw)) return null;
+                const u = Math.max(0, Math.min(1, Number(uRaw)));
+                const v = Math.max(0, Math.min(1, (Number(pt.z) - bottomZ) / sectionHeight));
+                return { x: Number(pt.x), y: Number(pt.y), z: Number(pt.z), u, v };
+            };
+            let poly = [];
+            for (let i = 0; i < faceCorners.length; i++) {
+                const v = toUvVertex(faceCorners[i]);
+                if (v) poly.push(v);
+            }
+            if (poly.length < 3) return [];
+
+            const clipAgainstLine = (inputPoly) => {
+                const output = [];
+                for (let i = 0; i < inputPoly.length; i++) {
+                    const a = inputPoly[i];
+                    const b = inputPoly[(i + 1) % inputPoly.length];
+                    const sa = signedAt(a.u, a.v);
+                    const sb = signedAt(b.u, b.v);
+                    const insideA = sa >= -1e-8;
+                    const insideB = sb >= -1e-8;
+                    if (insideA && insideB) {
+                        output.push(b);
+                        continue;
+                    }
+                    if (insideA !== insideB) {
+                        const denom = sa - sb;
+                        const t = Math.abs(denom) > 1e-8 ? (sa / denom) : 0;
+                        const clampedT = Math.max(0, Math.min(1, t));
+                        const hit = {
+                            x: a.x + (b.x - a.x) * clampedT,
+                            y: a.y + (b.y - a.y) * clampedT,
+                            z: a.z + (b.z - a.z) * clampedT,
+                            u: a.u + (b.u - a.u) * clampedT,
+                            v: a.v + (b.v - a.v) * clampedT
+                        };
+                        output.push(hit);
+                        if (!insideA && insideB) output.push(b);
+                    }
+                }
+                return output;
+            };
+
+            poly = clipAgainstLine(poly);
+            if (!Array.isArray(poly) || poly.length < 3) return [];
+
+            const toQuadFace = (a, b, c, d) => ([
+                { x: Number(a.x), y: Number(a.y), z: Number(a.z) },
+                { x: Number(b.x), y: Number(b.y), z: Number(b.z) },
+                { x: Number(c.x), y: Number(c.y), z: Number(c.z) },
+                { x: Number(d.x), y: Number(d.y), z: Number(d.z) }
+            ]);
+
+            if (poly.length === 3) {
+                return [toQuadFace(poly[0], poly[1], poly[2], poly[2])];
+            }
+            if (poly.length === 4) {
+                return [toQuadFace(poly[0], poly[1], poly[2], poly[3])];
+            }
+
+            // Fan-triangulate polygons with >4 vertices into degenerate quads.
+            const out = [];
+            for (let i = 1; i < poly.length - 1; i++) {
+                out.push(toQuadFace(poly[0], poly[i], poly[i + 1], poly[i + 1]));
             }
             return out;
+        }
+
+        _getMazeModeVisibilityHeightFactor(fullHeightTarget, nowMs, wallLikelyOnScreen = true) {
+            const durationMs = 500;
+            const reappearGapMs = 120;
+            const target = fullHeightTarget ? 1 : 0;
+            const tNow = Number.isFinite(nowMs) ? Number(nowMs) : performance.now();
+            const state = (this._mazeVisibilityHeightAnim && typeof this._mazeVisibilityHeightAnim === "object")
+                ? this._mazeVisibilityHeightAnim
+                : (this._mazeVisibilityHeightAnim = {
+                    value: 0,
+                    from: 0,
+                    to: 0,
+                    startMs: tNow,
+                    lastSeenMs: null
+                });
+            const evalCurrentValue = () => {
+                const from = Number.isFinite(state.from) ? Number(state.from) : 0;
+                const to = Number.isFinite(state.to) ? Number(state.to) : from;
+                const startMs = Number.isFinite(state.startMs) ? Number(state.startMs) : tNow;
+                if (Math.abs(to - from) <= 1e-6) {
+                    return to;
+                }
+                const progress = Math.max(0, Math.min(1, (tNow - startMs) / durationMs));
+                const value = from + (to - from) * progress;
+                return value;
+            };
+
+            if (!wallLikelyOnScreen) {
+                state.lastSeenMs = null;
+                return Math.max(0, Math.min(1, Number.isFinite(state.value) ? Number(state.value) : target));
+            }
+
+            const becameVisible = (
+                !Number.isFinite(state.lastSeenMs) ||
+                (tNow - Number(state.lastSeenMs)) > reappearGapMs
+            );
+            if (becameVisible) {
+                state.value = 0;
+                state.from = 0;
+                state.to = 0;
+                state.startMs = tNow;
+            } else {
+                state.value = evalCurrentValue();
+            }
+
+            if (!Number.isFinite(state.to) || Math.abs(Number(state.to) - target) > 1e-6) {
+                state.from = Number.isFinite(state.value) ? Number(state.value) : 0;
+                state.to = target;
+                state.startMs = tNow;
+            }
+
+            const out = evalCurrentValue();
+            state.value = Math.max(0, Math.min(1, Number.isFinite(out) ? Number(out) : target));
+            state.lastSeenMs = tNow;
+            return state.value;
+        }
+
+        _setMazeModeVisibilityHeightFactorImmediate(targetValue, nowMs, wallLikelyOnScreen = true) {
+            const tNow = Number.isFinite(nowMs) ? Number(nowMs) : performance.now();
+            const target = Math.max(0, Math.min(1, Number(targetValue) || 0));
+            const state = (this._mazeVisibilityHeightAnim && typeof this._mazeVisibilityHeightAnim === "object")
+                ? this._mazeVisibilityHeightAnim
+                : (this._mazeVisibilityHeightAnim = {
+                    value: target,
+                    from: target,
+                    to: target,
+                    startMs: tNow,
+                    lastSeenMs: wallLikelyOnScreen ? tNow : null
+                });
+            state.value = target;
+            state.from = target;
+            state.to = target;
+            state.startMs = tNow;
+            state.lastSeenMs = wallLikelyOnScreen ? tNow : null;
+            return target;
         }
 
         hasConnectedWallAtEndpoint(endpointKey) {
@@ -3768,6 +4819,166 @@ void main(void) {
                     const pb = toScreen(edge.b);
                     g.moveTo(pa.x, pa.y - z * vs * xyr);
                     g.lineTo(pb.x, pb.y - z * vs * xyr);
+                }
+            }
+        }
+
+        /**
+         * Batch joinery for many walls at once — O(N) instead of O(N²).
+         * Builds an endpoint→walls index once, then processes each shared
+         * endpoint exactly once using the same geometry logic as
+         * handleJoineryOnPlacement().
+         *
+         * @param {WallSectionUnit[]} walls  The walls to finalise.
+         */
+        static batchHandleJoinery(walls) {
+            if (!walls || walls.length === 0) return;
+
+            // 1. Build endpoint → [{wall, sharedEnd}] index.  O(N)
+            const endpointIndex = new Map(); // key → [{wall, sharedEnd, endpoint}]
+            for (let w = 0; w < walls.length; w++) {
+                const wall = walls[w];
+                if (!wall || wall.gone) continue;
+                const pairs = [
+                    { pt: wall.startPoint, end: "start" },
+                    { pt: wall.endPoint,   end: "end"   }
+                ];
+                for (let p = 0; p < pairs.length; p++) {
+                    const key = WallSectionUnit.endpointKey(pairs[p].pt);
+                    if (!key) continue;
+                    if (!endpointIndex.has(key)) endpointIndex.set(key, []);
+                    endpointIndex.get(key).push({
+                        wall,
+                        sharedEnd: pairs[p].end,
+                        endpoint: pairs[p].pt
+                    });
+                }
+            }
+
+            // 2. Process each endpoint with ≥ 2 walls.  Total work across all
+            //    endpoints is O(N) since each wall appears at most twice.
+            for (const [endpointKey, group] of endpointIndex) {
+                if (group.length < 2) continue;
+
+                const center = { x: Number(group[0].endpoint.x), y: Number(group[0].endpoint.y) };
+                if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) continue;
+
+                // Build entries (identical to handleJoineryOnPlacement inner loop
+                // but iterating only the indexed group instead of all sections).
+                const entries = [];
+                for (let g = 0; g < group.length; g++) {
+                    const { wall, sharedEnd } = group[g];
+                    const sp = wall.startPoint;
+                    const ep = wall.endPoint;
+                    const sharedPoint = (sharedEnd === "start") ? sp : ep;
+                    const farPoint   = (sharedEnd === "start") ? ep : sp;
+                    const mapRef = wall.map || null;
+                    const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                        ? mapRef.shortestDeltaX(sharedPoint.x, farPoint.x)
+                        : (farPoint.x - sharedPoint.x);
+                    const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                        ? mapRef.shortestDeltaY(sharedPoint.y, farPoint.y)
+                        : (farPoint.y - sharedPoint.y);
+                    const len = Math.hypot(dx, dy);
+                    if (!(len > EPS)) continue;
+
+                    const ux = dx / len;
+                    const uy = dy / len;
+                    const awayDir = { x: ux, y: uy };
+                    const leftN = { x: -awayDir.y, y: awayDir.x };
+                    const halfT = Math.max(0.001, Number(wall.thickness) || 0.001) * 0.5;
+
+                    entries.push({
+                        wall,
+                        sharedEnd,
+                        awayDir,
+                        angle: Math.atan2(awayDir.y, awayDir.x),
+                        leftFace:  { x: sharedPoint.x + leftN.x * halfT, y: sharedPoint.y + leftN.y * halfT },
+                        rightFace: { x: sharedPoint.x - leftN.x * halfT, y: sharedPoint.y - leftN.y * halfT },
+                        leftLabel:  (sharedEnd === "start") ? "posN" : "negN",
+                        rightLabel: (sharedEnd === "start") ? "negN" : "posN"
+                    });
+                }
+
+                if (entries.length < 2) continue;
+
+                // Connectivity
+                const endpointWallById = new Map();
+                for (let i = 0; i < entries.length; i++) {
+                    const wall = entries[i].wall;
+                    if (wall && Number.isInteger(wall.id)) endpointWallById.set(wall.id, wall);
+                }
+                const endpointWallIds = new Set(endpointWallById.keys());
+                for (const wall of endpointWallById.values()) {
+                    if (!(wall.connections instanceof Map)) continue;
+                    for (const [otherIdRaw, payload] of wall.connections.entries()) {
+                        if ((payload && payload.sharedEndpointKey) !== endpointKey) continue;
+                        if (!endpointWallIds.has(Number(otherIdRaw))) wall.connections.delete(otherIdRaw);
+                    }
+                }
+                const ewalls = Array.from(endpointWallById.values());
+                for (let i = 0; i < ewalls.length; i++) {
+                    for (let j = i + 1; j < ewalls.length; j++) {
+                        ewalls[i].connectTo(ewalls[j], { joineryEndpoint: endpointKey, rebuiltByJoinery: true });
+                        ewalls[j].connectTo(ewalls[i], { joineryEndpoint: endpointKey, rebuiltByJoinery: true });
+                    }
+                }
+
+                // Sort clockwise
+                entries.sort((a, b) => {
+                    const d = b.angle - a.angle;
+                    if (Math.abs(d) > EPS) return d;
+                    return (a.wall.id || 0) - (b.wall.id || 0);
+                });
+
+                // Reset + center corners
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    entry.wall._joineryCorners = entry.wall._joineryCorners || {};
+                    entry.wall._joineryCorners[endpointKey] = {
+                        sharedEnd: entry.sharedEnd,
+                        center: { x: center.x, y: center.y }
+                    };
+                }
+
+                // Compute ring corners
+                const ringCorners = new Array(entries.length).fill(null);
+                for (let i = 0; i < entries.length; i++) {
+                    const current = entries[i];
+                    const next = entries[(i + 1) % entries.length];
+                    let hit = WallSectionUnit._lineIntersection(
+                        current.rightFace, current.awayDir,
+                        next.leftFace, next.awayDir
+                    );
+                    if (!hit) {
+                        const currentHit = WallSectionUnit._sideLinePerpendicularCenterHit(
+                            current.rightFace, current.awayDir, center);
+                        const nextHit = WallSectionUnit._sideLinePerpendicularCenterHit(
+                            next.leftFace, next.awayDir, center);
+                        if (currentHit && nextHit) {
+                            const sep = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
+                            if (sep <= 1e-4) {
+                                hit = { x: (currentHit.x + nextHit.x) * 0.5, y: (currentHit.y + nextHit.y) * 0.5 };
+                            }
+                        }
+                    }
+                    if (hit) ringCorners[i] = { x: hit.x, y: hit.y };
+                }
+
+                // Assign corners
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    const rightCorner = ringCorners[i];
+                    const leftCorner  = ringCorners[(i - 1 + entries.length) % entries.length];
+                    const store = entry.wall._joineryCorners[endpointKey];
+                    if (rightCorner) store[entry.rightLabel] = rightCorner;
+                    if (leftCorner)  store[entry.leftLabel]  = leftCorner;
+                }
+
+                // Commit geometry
+                for (let i = 0; i < entries.length; i++) {
+                    entries[i].wall.rebuildMesh3d();
+                    entries[i].wall.draw();
                 }
             }
         }
@@ -3982,7 +5193,8 @@ void main(void) {
          * Register this wall section on the map nodes it spans
          * so the renderer's visibility collection picks it up.
          */
-        addToMapNodes() {
+        addToMapNodes(options = {}) {
+            const applyDirectionalBlocking = options.applyDirectionalBlocking !== false;
             this.removeFromMapNodes();
             this.nodes = [];
             const sp = this.startPoint;
@@ -4021,7 +5233,9 @@ void main(void) {
                 registerNode(ep.nodeB);
             }
 
-            this._applyDirectionalBlocking();
+            if (applyDirectionalBlocking) {
+                this._applyDirectionalBlocking();
+            }
         }
 
         _nodeKey(node) {
@@ -4037,10 +5251,13 @@ void main(void) {
                     if (!link || !link.node) continue;
                     const node = link.node;
                     const direction = Number(link.direction);
+                    const blockerOwner = (link.blocker && typeof link.blocker === "object")
+                        ? link.blocker
+                        : this;
                     if (!node.blockedNeighbors || !node.blockedNeighbors.has(direction)) continue;
                     const blockers = node.blockedNeighbors.get(direction);
                     if (!(blockers instanceof Set)) continue;
-                    blockers.delete(this);
+                    blockers.delete(blockerOwner);
                     if (blockers.size === 0) {
                         node.blockedNeighbors.delete(direction);
                         affectedNodes.push(node);
@@ -4066,13 +5283,18 @@ void main(void) {
             };
         }
 
-        _addBlockedLink(node, direction) {
+        _addBlockedLink(node, direction, blocker = this) {
             if (!WallSectionUnit._isMapNode(node)) return false;
             const dir = Number(direction);
             if (!Number.isInteger(dir) || dir < 0 || dir > 11) return false;
             if (!Array.isArray(node.neighbors) || !node.neighbors[dir]) return false;
+            if (!blocker || typeof blocker !== "object") return false;
 
-            const key = `${this._nodeKey(node)}|${dir}`;
+            const blockerId = (Number.isInteger(blocker.id) ? `id:${Number(blocker.id)}` : "")
+                || (typeof blocker._doorRuntimeId === "string" ? blocker._doorRuntimeId : "")
+                || (typeof blocker.texturePath === "string" ? blocker.texturePath : "")
+                || String(blocker.type || "blocker");
+            const key = `${this._nodeKey(node)}|${dir}|${blockerId}`;
             if (this._blockedLinkKeys.has(key)) return false;
 
             if (!(node.blockedNeighbors instanceof Map)) {
@@ -4081,8 +5303,8 @@ void main(void) {
             if (!node.blockedNeighbors.has(dir)) {
                 node.blockedNeighbors.set(dir, new Set());
             }
-            node.blockedNeighbors.get(dir).add(this);
-            this.blockedLinks.push({ node, direction: dir });
+            node.blockedNeighbors.get(dir).add(blocker);
+            this.blockedLinks.push({ node, direction: dir, blocker });
             this._blockedLinkKeys.add(key);
             // Wall edge added — update clearance for large-entity pathfinding.
             if (typeof globalThis !== "undefined" && globalThis.map &&
@@ -4093,7 +5315,7 @@ void main(void) {
             return true;
         }
 
-        _blockConnectionBetween(nodeA, nodeB, blockedConnectionKeySet, blockedConnectionsOut) {
+        _blockConnectionBetween(nodeA, nodeB, blockedConnectionKeySet, blockedConnectionsOut, blocker = this) {
             if (!WallSectionUnit._isMapNode(nodeA) || !WallSectionUnit._isMapNode(nodeB)) return false;
             if (!Array.isArray(nodeA.neighbors) || !Array.isArray(nodeB.neighbors)) return false;
 
@@ -4102,8 +5324,8 @@ void main(void) {
             if (dirA < 0 && dirB < 0) return false;
 
             let changed = false;
-            if (dirA >= 0) changed = this._addBlockedLink(nodeA, dirA) || changed;
-            if (dirB >= 0) changed = this._addBlockedLink(nodeB, dirB) || changed;
+            if (dirA >= 0) changed = this._addBlockedLink(nodeA, dirA, blocker) || changed;
+            if (dirB >= 0) changed = this._addBlockedLink(nodeB, dirB, blocker) || changed;
 
             if (changed && blockedConnectionKeySet instanceof Set && Array.isArray(blockedConnectionsOut)) {
                 const keyA = this._nodeKey(nodeA);
@@ -4112,12 +5334,120 @@ void main(void) {
                     const edgeKey = (keyA <= keyB) ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
                     if (!blockedConnectionKeySet.has(edgeKey)) {
                         blockedConnectionKeySet.add(edgeKey);
-                        blockedConnectionsOut.push({ a: nodeA, b: nodeB });
+                        blockedConnectionsOut.push({ a: nodeA, b: nodeB, blocker });
                     }
                 }
             }
 
             return changed;
+        }
+
+        _getConnectionWallIntersectionT(nodeA, nodeB) {
+            const mapRef = this.map || null;
+            const origin = this.startPoint;
+            const wallStart = this._toLocalFromOrigin(origin, this.startPoint, mapRef);
+            const wallEnd = this._toLocalFromOrigin(origin, this.endPoint, mapRef);
+            const segStart = this._toLocalFromOrigin(origin, nodeA, mapRef);
+            const segEnd = this._toLocalFromOrigin(origin, nodeB, mapRef);
+            if (!wallStart || !wallEnd || !segStart || !segEnd) return null;
+
+            const rx = wallEnd.x - wallStart.x;
+            const ry = wallEnd.y - wallStart.y;
+            const sx = segEnd.x - segStart.x;
+            const sy = segEnd.y - segStart.y;
+            const denom = (rx * sy) - (ry * sx);
+            if (Math.abs(denom) <= EPS) return null;
+
+            const qpx = segStart.x - wallStart.x;
+            const qpy = segStart.y - wallStart.y;
+            const t = ((qpx * sy) - (qpy * sx)) / denom;
+            const u = ((qpx * ry) - (qpy * rx)) / denom;
+            if (u < -EPS || u > 1 + EPS) return null;
+            return t;
+        }
+
+        _collectMountedDoorTraversalSpans() {
+            const out = [];
+            const mapRef = this.map || null;
+            const sx = Number(this.startPoint && this.startPoint.x);
+            const sy = Number(this.startPoint && this.startPoint.y);
+            const ex = Number(this.endPoint && this.endPoint.x);
+            const ey = Number(this.endPoint && this.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+                return out;
+            }
+
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            const wallLen = Math.hypot(dx, dy);
+            if (!(wallLen > EPS)) return out;
+            const ux = dx / wallLen;
+            const uy = dy / wallLen;
+
+            const attachments = Array.isArray(this.attachedObjects) ? this.attachedObjects : [];
+            for (let i = 0; i < attachments.length; i++) {
+                const entry = attachments[i];
+                const door = entry && entry.object;
+                if (!this._isDoorOrWindowObject(door)) continue;
+                const category = (typeof door.category === "string") ? door.category.trim().toLowerCase() : "";
+                const type = (typeof door.type === "string") ? door.type.trim().toLowerCase() : "";
+                if (category !== "doors" && type !== "door") continue;
+
+                const doorX = Number(door.x);
+                const doorY = Number(door.y);
+                const doorWidth = Math.max(0.01, Number.isFinite(door.width) ? Number(door.width) : 1);
+                const traversalWidth = Math.max(0.01, doorWidth * 0.63);
+                const anchorX = Number.isFinite(door.placeableAnchorX) ? Number(door.placeableAnchorX) : 0.5;
+                if (!Number.isFinite(doorX) || !Number.isFinite(doorY)) continue;
+
+                const centerX = doorX - ux * ((anchorX - 0.5) * doorWidth);
+                const centerY = doorY - uy * ((anchorX - 0.5) * doorWidth);
+                const relX = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(sx, centerX)
+                    : (centerX - sx);
+                const relY = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(sy, centerY)
+                    : (centerY - sy);
+                const centerT = ((relX * ux) + (relY * uy)) / wallLen;
+                const halfT = (traversalWidth * 0.5) / wallLen;
+                const padT = Math.max(0.0001, 0.05 / wallLen);
+                const isOpenDoor = !!(door.isOpen || door._doorLockedOpen || door.isFallenDoorEffect);
+                out.push({
+                    startT: centerT - halfT - padT,
+                    endT: centerT + halfT + padT,
+                    blocker: (isOpenDoor || door.falling || (Number.isFinite(door.hp) && Number(door.hp) <= 0)) ? null : door
+                });
+            }
+
+            return out;
+        }
+
+        _resolveDirectionalBlockerForConnection(nodeA, nodeB, doorSpans = null) {
+            const intersectionT = this._getConnectionWallIntersectionT(nodeA, nodeB);
+            const spans = Array.isArray(doorSpans) ? doorSpans : this._collectMountedDoorTraversalSpans();
+            if (Number.isFinite(intersectionT) && spans.length > 0) {
+                for (let i = 0; i < spans.length; i++) {
+                    const span = spans[i];
+                    if (!span) continue;
+                    const startT = Math.min(Number(span.startT), Number(span.endT));
+                    const endT = Math.max(Number(span.startT), Number(span.endT));
+                    if (intersectionT < startT || intersectionT > endT) continue;
+                    return span.blocker || null;
+                }
+            }
+            return this;
+        }
+
+        rebuildDirectionalBlocking() {
+            if (this.gone) {
+                this._clearDirectionalBlocks();
+                return;
+            }
+            this._applyDirectionalBlocking();
         }
 
         _toLocalFromOrigin(origin, point, mapRef) {
@@ -4132,39 +5462,47 @@ void main(void) {
             return { x: dx, y: dy };
         }
 
-        _connectionCrossesWallCenterline(nodeA, nodeB) {
+        // Returns true when the connection between nodeA and nodeB crosses either
+        // physical face of this wall (the two lines offset ±halfThickness from the
+        // centerline in the perpendicular direction).
+        _connectionCrossesEitherFace(nodeA, nodeB) {
             const mapRef = this.map || null;
             const origin = this.startPoint;
             const wallStart = this._toLocalFromOrigin(origin, this.startPoint, mapRef);
-            const wallEnd = this._toLocalFromOrigin(origin, this.endPoint, mapRef);
-            const segStart = this._toLocalFromOrigin(origin, nodeA, mapRef);
-            const segEnd = this._toLocalFromOrigin(origin, nodeB, mapRef);
+            const wallEnd   = this._toLocalFromOrigin(origin, this.endPoint,   mapRef);
+            const segStart  = this._toLocalFromOrigin(origin, nodeA, mapRef);
+            const segEnd    = this._toLocalFromOrigin(origin, nodeB, mapRef);
             if (!wallStart || !wallEnd || !segStart || !segEnd) return false;
 
             const wx = wallEnd.x - wallStart.x;
             const wy = wallEnd.y - wallStart.y;
             const wallLen = Math.hypot(wx, wy);
-            const segLen = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+            const segLen  = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
             if (!(wallLen > EPS) || !(segLen > EPS)) return false;
 
+            // Wall axis unit vector and perpendicular.
             const ux = wx / wallLen;
             const uy = wy / wallLen;
+            const px = -uy;   // perp pointing "left" of wall direction
+            const py =  ux;
+
+            const halfT = Math.max(EPS, (Number.isFinite(this.thickness) ? Number(this.thickness) : 0.1) * 0.5);
+
+            // Extend endpoints slightly so face lines reach the hex edge at each end.
             const halfHexToEdge = (mapRef && Number.isFinite(mapRef.hexHeight))
                 ? (Number(mapRef.hexHeight) * 0.5)
                 : 0.5;
-            const endpointOvershoot = 0.001;
-            const extend = Math.max(0, halfHexToEdge) + endpointOvershoot;
+            const extend = halfHexToEdge + 0.001;
 
-            const extendedWallStart = {
-                x: wallStart.x - ux * extend,
-                y: wallStart.y - uy * extend
-            };
-            const extendedWallEnd = {
-                x: wallEnd.x + ux * extend,
-                y: wallEnd.y + uy * extend
+            const testFace = (sign) => {
+                const offX = px * sign * halfT;
+                const offY = py * sign * halfT;
+                const faceStart = { x: wallStart.x + offX - ux * extend, y: wallStart.y + offY - uy * extend };
+                const faceEnd   = { x: wallEnd.x   + offX + ux * extend, y: wallEnd.y   + offY + uy * extend };
+                return WallSectionUnit._segmentsIntersect2D(faceStart, faceEnd, segStart, segEnd, EPS);
             };
 
-            return WallSectionUnit._segmentsIntersect2D(extendedWallStart, extendedWallEnd, segStart, segEnd, EPS);
+            return testFace(+1) || testFace(-1);
         }
 
         _collectCenterlineMapNodes() {
@@ -4208,20 +5546,14 @@ void main(void) {
             const oddNeighborsAll = new Map();
             const blockedConnectionKeys = new Set();
             const blockedConnections = [];
+            const doorSpans = this._collectMountedDoorTraversalSpans();
 
-            // First pass: block all links touching centerline nodes.
-            for (let i = 0; i < centerlineNodes.length; i++) {
-                const node = centerlineNodes[i];
-                if (!node || !Array.isArray(node.neighbors)) continue;
-                for (let dir = 0; dir < 12; dir++) {
-                    const neighbor = node.neighbors[dir];
-                    if (!WallSectionUnit._isMapNode(neighbor)) continue;
-                    this._blockConnectionBetween(node, neighbor, blockedConnectionKeys, blockedConnections);
-                }
-                this._collectOddNeighborsOfNode(node, oddNeighborsAll);
-            }
-
-            // Second pass: sequential odd-neighbor crossing checks.
+            // Single pass: for each consecutive pair of centerline nodes, gather their
+            // odd (adjacent-hex) neighbours and block any connection between those
+            // neighbours that crosses either physical face of the wall
+            // (centerline ± halfThickness in the perpendicular direction).
+            // This avoids blocking movement that runs *along* the wall while still
+            // blocking movement that cuts *through* the wall body.
             for (let i = 0; i < centerlineNodes.length - 1; i++) {
                 const nodeA = centerlineNodes[i];
                 const nodeB = centerlineNodes[i + 1];
@@ -4239,11 +5571,15 @@ void main(void) {
                         const keyB = this._nodeKey(other);
                         if (!keyB || !localNeighbors.has(keyB)) continue;
                         if (keyA >= keyB) continue;
-                        if (centerlineNodeKeySet.has(keyA) || centerlineNodeKeySet.has(keyB)) continue;
-                        if (!this._connectionCrossesWallCenterline(neighborNode, other)) continue;
-                        this._blockConnectionBetween(neighborNode, other, blockedConnectionKeys, blockedConnections);
+                        if (!this._connectionCrossesEitherFace(neighborNode, other)) continue;
+                        const blocker = this._resolveDirectionalBlockerForConnection(neighborNode, other, doorSpans);
+                        if (!blocker) continue;
+                        this._blockConnectionBetween(neighborNode, other, blockedConnectionKeys, blockedConnections, blocker);
                     }
                 });
+
+                this._collectOddNeighborsOfNode(nodeA, oddNeighborsAll);
+                this._collectOddNeighborsOfNode(nodeB, oddNeighborsAll);
             }
 
             const oddNeighborNodes = [];
@@ -4885,6 +6221,19 @@ void main(void) {
             const end = this.endPoint;
             if (!mapRef || !start || !end || typeof mapRef.getHexLine !== "function") return [];
 
+            // Precompute wall centerline for projecting anchor positions on-line.
+            // getHexLine returns "bridge nodes" for midpoint endpoints — those nodes
+            // are adjacent hex nodes that lie OFF the wall's geometric axis rather than
+            // on it. Projecting each anchor's t-value back onto the centerline and
+            // re-snapping via worldToNodeOrMidpoint finds the actual on-line grid
+            // entity, fixing misaligned selection highlights and post-vanish segment
+            // jumping for midpoint-to-midpoint walls.
+            const wallSx = Number(start.x);
+            const wallSy = Number(start.y);
+            const wallDx = (typeof mapRef.shortestDeltaX === "function") ? mapRef.shortestDeltaX(wallSx, Number(end.x)) : (Number(end.x) - wallSx);
+            const wallDy = (typeof mapRef.shortestDeltaY === "function") ? mapRef.shortestDeltaY(wallSy, Number(end.y)) : (Number(end.y) - wallSy);
+            const wallLen = Math.hypot(wallDx, wallDy);
+
             const line = mapRef.getHexLine(start, end, 0);
             if (!Array.isArray(line) || line.length === 0) return [];
 
@@ -4895,14 +6244,31 @@ void main(void) {
                 const tRaw = this._parameterForWorldPointOnSection(anchor);
                 if (!Number.isFinite(tRaw)) return;
                 const t = Math.max(0, Math.min(1, Number(tRaw)));
-                const key = WallSectionUnit.endpointKey(anchor);
+
+                // Project the anchor's t-position onto the wall centerline and re-snap
+                // to the nearest grid entity. For node-to-node walls this is a no-op
+                // (the entity snaps back to itself). For midpoint-endpoint walls this
+                // replaces off-axis bridge nodes with the correct on-line entity.
+                let resolvedAnchor = anchor;
+                if (wallLen > EPS && typeof mapRef.worldToNodeOrMidpoint === "function") {
+                    let projX = wallSx + wallDx * t;
+                    let projY = wallSy + wallDy * t;
+                    if (typeof mapRef.wrapWorldX === "function") projX = mapRef.wrapWorldX(projX);
+                    if (typeof mapRef.wrapWorldY === "function") projY = mapRef.wrapWorldY(projY);
+                    const snapped = mapRef.worldToNodeOrMidpoint(projX, projY);
+                    if (snapped && (WallSectionUnit._isMapNode(snapped) || WallSectionUnit._isNodeMidpoint(snapped))) {
+                        resolvedAnchor = snapped;
+                    }
+                }
+
+                const key = WallSectionUnit.endpointKey(resolvedAnchor);
                 if (!key || seen.has(key)) return;
                 seen.add(key);
                 anchors.push({
-                    anchor,
+                    anchor: resolvedAnchor,
                     t,
                     key,
-                    isEndpoint: WallSectionUnit._pointsMatch(anchor, start) || WallSectionUnit._pointsMatch(anchor, end)
+                    isEndpoint: WallSectionUnit._pointsMatch(resolvedAnchor, start) || WallSectionUnit._pointsMatch(resolvedAnchor, end)
                 });
             };
 
@@ -5190,6 +6556,22 @@ void main(void) {
             }
 
             const createdSections = [leftSection, rightSection];
+            const splitMeta = (options && options.metadata && typeof options.metadata === "object")
+                ? options.metadata
+                : null;
+            if (splitMeta && splitMeta.crossWallSplit) {
+                const junctionKey = WallSectionUnit.endpointKey(junctionAnchor);
+                if (junctionKey) {
+                    for (let cs = 0; cs < createdSections.length; cs++) {
+                        const section = createdSections[cs];
+                        if (!section || section.gone) continue;
+                        if (!(section._crossSplitLockedEndpointKeys instanceof Set)) {
+                            section._crossSplitLockedEndpointKeys = new Set();
+                        }
+                        section._crossSplitLockedEndpointKeys.add(junctionKey);
+                    }
+                }
+            }
             const usedObjects = new Set();
             const attachmentEntries = Array.isArray(this.attachedObjects) ? this.attachedObjects.slice() : [];
             const rangeEps = 1e-4;
@@ -5251,7 +6633,7 @@ void main(void) {
                 neighbors.push(section);
             }
 
-            this._removeWallPreserving(Array.from(usedObjects));
+            this._removeWallPreserving(Array.from(usedObjects), { skipAutoMerge: true });
 
             leftSection.connectTo(rightSection, { splitForWallPlacement: true });
             rightSection.connectTo(leftSection, { splitForWallPlacement: true });
@@ -5306,9 +6688,10 @@ void main(void) {
             };
         }
 
-        _removeWallPreserving(listToPreserve = []) {
+        _removeWallPreserving(listToPreserve = [], options = {}) {
             if (this.gone) return;
             const preserveSet = new Set(Array.isArray(listToPreserve) ? listToPreserve : []);
+            const skipAutoMerge = !!(options && options.skipAutoMerge);
 
             const neighbors = [];
             const mountedToRemove = [];
@@ -5365,7 +6748,9 @@ void main(void) {
             this.destroy();
 
             const mergeCandidates = neighbors.filter(neighbor => !!neighbor && !neighbor.gone);
-            const impacted = WallSectionUnit.autoMergeContinuousSections(mergeCandidates);
+            const impacted = skipAutoMerge
+                ? mergeCandidates
+                : WallSectionUnit.autoMergeContinuousSections(mergeCandidates);
 
             for (let i = 0; i < impacted.length; i++) {
                 const neighbor = impacted[i];
@@ -5796,8 +7181,11 @@ void main(void) {
 
             this.destroy();
 
-            for (let i = 0; i < neighbors.length; i++) {
-                const neighbor = neighbors[i];
+            const mergeCandidates = neighbors.filter(neighbor => !!neighbor && !neighbor.gone);
+            const impacted = WallSectionUnit.autoMergeContinuousSections(mergeCandidates);
+
+            for (let i = 0; i < impacted.length; i++) {
+                const neighbor = impacted[i];
                 if (!neighbor || neighbor.gone) continue;
                 if (typeof neighbor.handleJoineryOnPlacement === "function") {
                     neighbor.handleJoineryOnPlacement();
@@ -5837,12 +7225,26 @@ void main(void) {
                 startPoint: WallSectionUnit._serializeEndpoint(this.startPoint),
                 endPoint: WallSectionUnit._serializeEndpoint(this.endPoint)
             };
+            if (typeof this.visible === "boolean") {
+                data.visible = this.visible;
+            }
+            if (Number.isFinite(this.brightness)) {
+                data.brightness = Number(this.brightness);
+            }
+            if (Number.isFinite(this.tint)) {
+                data.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(this.tint))));
+            } else if (this.pixiSprite && Number.isFinite(this.pixiSprite.tint)) {
+                data.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(this.pixiSprite.tint))));
+            }
             if (typeof this.script !== "undefined") {
                 try {
                     data.script = JSON.parse(JSON.stringify(this.script));
                 } catch (_err) {
                     data.script = this.script;
                 }
+            }
+            if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
+                data.scriptingName = this.scriptingName.trim();
             }
             return data;
         }
@@ -5873,8 +7275,22 @@ void main(void) {
                 if (Number.isFinite(data.lineAxis)) {
                     section.lineAxis = Number(data.lineAxis);
                 }
+                if (typeof data.visible === "boolean") {
+                    section.visible = data.visible;
+                }
+                if (Number.isFinite(data.brightness)) {
+                    section.brightness = Number(data.brightness);
+                }
+                if (Number.isFinite(data.tint)) {
+                    const normalizedTint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.tint))));
+                    section.tint = normalizedTint;
+                    if (section.pixiSprite) section.pixiSprite.tint = normalizedTint;
+                }
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     section.script = data.script;
+                }
+                if (typeof data.scriptingName === "string") {
+                    section.scriptingName = data.scriptingName.trim();
                 }
                 if (!opts.deferSetup) {
                     section.addToMapNodes();
@@ -5897,6 +7313,78 @@ void main(void) {
     globalScope.WallSectionUnit = WallSectionUnit;
     globalScope.setWallSectionDirectionalBlockingDebug = function (enabled) {
         WallSectionUnit.setShowDirectionalBlockingDebug(enabled);
+    };
+    globalScope.debugDumpWallDirectionalBlocking = function (options = {}) {
+        const sections = (WallSectionUnit._allSections instanceof Map)
+            ? Array.from(WallSectionUnit._allSections.values())
+            : [];
+        const cam = globalScope.camera || null;
+        const viewport = globalScope.viewport || null;
+        const cameraX = Number.isFinite(cam && cam.x) ? Number(cam.x) : null;
+        const cameraY = Number.isFinite(cam && cam.y) ? Number(cam.y) : null;
+        const viewportW = Number.isFinite(viewport && viewport.width) ? Number(viewport.width) : null;
+        const viewportH = Number.isFinite(viewport && viewport.height) ? Number(viewport.height) : null;
+        const onlyNearCamera = options.onlyNearCamera !== false;
+        const marginX = Number.isFinite(options.marginX) ? Number(options.marginX) : Math.max(2, (viewportW || 20) * 0.15);
+        const marginY = Number.isFinite(options.marginY) ? Number(options.marginY) : Math.max(2, (viewportH || 20) * 0.15);
+        const rows = [];
+        let totalBlockedConnections = 0;
+        let totalCenterlineNodes = 0;
+        let totalOddNeighborNodes = 0;
+
+        for (let i = 0; i < sections.length; i++) {
+            const section = sections[i];
+            if (!section || section.gone) continue;
+            const center = section.center || null;
+            if (
+                onlyNearCamera &&
+                center &&
+                Number.isFinite(center.x) &&
+                Number.isFinite(center.y) &&
+                Number.isFinite(cameraX) &&
+                Number.isFinite(cameraY) &&
+                Number.isFinite(viewportW) &&
+                Number.isFinite(viewportH)
+            ) {
+                if (
+                    Number(center.x) < (cameraX - marginX) ||
+                    Number(center.x) > (cameraX + viewportW + marginX) ||
+                    Number(center.y) < (cameraY - marginY) ||
+                    Number(center.y) > (cameraY + viewportH + marginY)
+                ) {
+                    continue;
+                }
+            }
+
+            const debugData = section._directionalBlockingDebug || null;
+            const centerlineNodes = Array.isArray(debugData && debugData.centerlineNodes) ? debugData.centerlineNodes.length : 0;
+            const oddNeighborNodes = Array.isArray(debugData && debugData.oddNeighborNodes) ? debugData.oddNeighborNodes.length : 0;
+            const blockedConnections = Array.isArray(debugData && debugData.blockedConnections) ? debugData.blockedConnections.length : 0;
+            totalCenterlineNodes += centerlineNodes;
+            totalOddNeighborNodes += oddNeighborNodes;
+            totalBlockedConnections += blockedConnections;
+            rows.push({
+                id: Number.isInteger(section.id) ? Number(section.id) : "",
+                centerX: Number.isFinite(center && center.x) ? Number(center.x).toFixed(2) : "",
+                centerY: Number.isFinite(center && center.y) ? Number(center.y).toFixed(2) : "",
+                centerlineNodes,
+                oddNeighborNodes,
+                blockedConnections,
+                attachedObjects: Array.isArray(section.attachedObjects) ? section.attachedObjects.length : 0
+            });
+        }
+
+        console.group(`wall directional blocking (${rows.length} sections)`);
+        console.table(rows);
+        console.log({
+            sections: rows.length,
+            totalCenterlineNodes,
+            totalOddNeighborNodes,
+            totalBlockedConnections,
+            debugEnabled: !!WallSectionUnit._showDirectionalBlockingDebug
+        });
+        console.groupEnd();
+        return rows;
     };
     globalScope.resetWallDepthGeometryBudget = function () {
         WallSectionUnit._depthGeometryRebuildBudgetThisFrame = WallSectionUnit._depthGeometryRebuildBudgetPerFrame;

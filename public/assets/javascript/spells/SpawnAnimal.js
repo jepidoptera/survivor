@@ -18,7 +18,8 @@ class SpawnAnimal extends globalThis.Spell {
         { name: "goat",     icon: "/assets/images/animals/goat.png",     ctor: () => Goat,     frameCount: {x:1, y:2} },
         { name: "deer",     icon: "/assets/images/animals/deer.png",     ctor: () => Deer,     frameCount: {x:1, y:2} },
         { name: "bear",     icon: "/assets/images/animals/bear.png",     ctor: () => Bear,     frameCount: {x:2, y:2} },
-        { name: "yeti",     icon: "/assets/images/animals/yeti.png",     ctor: () => Yeti,     frameCount: {x:2, y:2} }
+        { name: "yeti",     icon: "/assets/images/animals/yeti.png",     ctor: () => Yeti,     frameCount: {x:2, y:2} },
+        { name: "blodia",   icon: "/assets/images/animals/blodia.png",   ctor: () => Blodia,   frameCount: {x:2, y:1} }
     ];
 
     // Log-scale slider helpers:

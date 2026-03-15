@@ -55,20 +55,30 @@ body {
     cursor: default !important;
 }
 
-#editorSelector {
-    position: absolute;
-    left: 320px;
-    top: 10px;
-    z-index: 2;
-    cursor: default !important;
-}
-
+#editorSelector,
 #spellSelector {
     position: absolute;
     left: 248px;
     top: 10px;
     z-index: 2;
     cursor: default !important;
+}
+
+#editorModeBanner {
+    position: absolute;
+    left: 318px;
+    top: 24px;
+    z-index: 2;
+    color: #ffffff;
+    font-size: 13px;
+    font-family: sans-serif;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+#editorModeBanner.hidden {
+    display: none;
 }
 
 #selectedAura,
@@ -166,6 +176,11 @@ body {
     cursor: auto !important;
 }
 
+#triggerAreaHelpPanel,
+#triggerAreaHelpPanel * {
+    cursor: auto !important;
+}
+
 #scriptEditorPanel textarea {
     cursor: text !important;
 }
@@ -175,6 +190,10 @@ body {
 }
 
 #scriptEditorHelpPanel button {
+    cursor: pointer !important;
+}
+
+#triggerAreaHelpPanel button {
     cursor: pointer !important;
 }
 

@@ -33,6 +33,62 @@
     margin: 10px;
     display: inline-block;
 }
+
+.scrollMessageBox {
+    position: absolute;
+    z-index: 999;
+    top: 50%;
+    left: 50%;
+    width: min(90vw, 640px);
+    min-height: min(80vh, 560px);
+    transform: translate(-50%, -50%);
+    box-sizing: border-box;
+    padding: 5.5rem 4.25rem 4rem;
+    color: #3d2714;
+    text-align: center;
+    background: center / 100% 100% no-repeat url("../images/scroll.png");
+}
+
+.scrollMessageContent {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+}
+
+.scrollMessageText {
+    width: 100%;
+    max-width: 420px;
+    font-size: clamp(18px, 2.3vmin, 28px);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-shadow: 0 1px 0 rgba(255, 248, 220, 0.45);
+}
+
+.scrollMessageButtons {
+    position: absolute;
+    left: 50%;
+    bottom: 2.2rem;
+    width: auto;
+    transform: translateX(-50%);
+}
+
+.scrollMessageButton {
+    min-width: 96px;
+    padding: 0.5rem 1.2rem;
+    border: 1px solid #6c4b2b;
+    border-radius: 999px;
+    background: rgba(246, 230, 190, 0.95);
+    color: #3d2714;
+    font-size: clamp(16px, 2vmin, 22px);
+    text-transform: lowercase;
+    cursor: pointer;
+}
+
+.scrollMessageButton:hover {
+    background: rgba(255, 241, 210, 1);
+}
 /* 
 .controlButton {
     display: inline;

@@ -26,6 +26,9 @@
             this.entities = new PIXI.Container();
             this.entities.name = "renderingEntities";
 
+            this.scriptMessages = new PIXI.Container();
+            this.scriptMessages.name = "renderingScriptMessages";
+
             this.ui = new PIXI.Container();
             this.ui.name = "renderingUi";
 
@@ -37,6 +40,7 @@
             this.root.addChild(this.objects3d);
             this.root.addChild(this.entities);
             this.root.addChild(this.ui);
+            this.root.addChild(this.scriptMessages);
         }
     }
 

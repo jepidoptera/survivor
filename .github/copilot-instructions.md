@@ -29,5 +29,12 @@
 - Start server: `npm install` then `npm start` (serves on port from `.env`, default 8080).
 - No test runner detected in repo; rely on manual in-browser testing via `/`.
 
+## Scripting system conventions
+- All script logic lives in [public/assets/javascript/spells/scripting.js](public/assets/javascript/spells/scripting.js).
+- `this.*` commands (e.g. `this.delete()`, `this.lock()`, `this.deactivate()`) **must** be registered via `registerCommand("this.xxx", handler)` — the handler receives `context.target` as the scripted object. Do NOT add them to the named-object branch of `executeCommandStatement`; that branch can never resolve `this`.
+- Command validation and execution must share the same resolution path (`resolveScriptCommand`). Do not add separate validator allow-lists for commands.
+- For cross-system runtime discovery (scripting names, hover messages, tooling scans), use `map.getGameObjects()` / `map.gameObjects` as the canonical source of truth. Avoid separate ad-hoc scans of `animals`, `powerups`, or other per-type arrays in scripting code.
+- `this.deactivate()` sets `target._scriptDeactivated = true`; `fireObjectScriptEvent` bails out immediately when this flag is set, silencing all further script events for that object. `this.activate()` clears the flag.
+
 ## Known incomplete areas
 - Firebase integration and auth token validation are stubbed/commented in [server.js](server.js).

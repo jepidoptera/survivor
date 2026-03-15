@@ -2,7 +2,7 @@ class Teleport extends globalThis.Spell {
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
-        this.image.src = "./assets/images/thumbnails/vanish.png";
+        this.image.src = "./assets/images/magic/teleport.png";
         this.gravity = 0;
         this.speed = 0;
         this.range = Infinity;

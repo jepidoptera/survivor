@@ -285,54 +285,91 @@ class MapNode {
     }
 }
 
-class NodeMidpoint {
-    constructor(nodeA, nodeB, mapRef) {
-        this.nodeA = nodeA;
-        this.nodeB = nodeB;
-        this.map = mapRef || null;
-        this.x = (Number(nodeA && nodeA.x) + Number(nodeB && nodeB.x)) * 0.5;
-        this.y = (Number(nodeA && nodeA.y) + Number(nodeB && nodeB.y)) * 0.5;
-        this.neighbors = [];
+// ─── Hex anchor navigation (nodes + midpoints unified) ────────────────────
+//
+// A midpoint is a pure value-type: { nodeA, nodeB, k } where
+//   nodeA.neighbors[k] === nodeB  and  k ∈ [0, 5].
+// Canonical form: the node whose neighbor slot index (k) is in 0–5 is nodeA.
+// No caching needed — identity is the unordered (nodeA, nodeB) pair.
+//
+// Direction numbering follows MapNode convention (0=far-left, 1=up-left, …).
+// Odd directions are immediate (1 hex step); even are diagonal (2 hex steps).
+// Both nodes and midpoints have neighbors at all 12 directions.
 
-        const pushUnique = (node) => {
-            if (!node || typeof node.xindex !== "number" || typeof node.yindex !== "number") return;
-            if (this.neighbors.some(existing => existing === node)) return;
-            this.neighbors.push(node);
-        };
+function makeMidpoint(nodeX, nodeY) {
+    if (!nodeX || !nodeY) return null;
+    for (let d = 0; d < 6; d++) {
+        if (nodeX.neighbors[d] === nodeY) return { nodeA: nodeX, nodeB: nodeY, k: d,
+            x: (nodeX.x + nodeY.x) * 0.5, y: (nodeX.y + nodeY.y) * 0.5 };
+        if (nodeY.neighbors[d] === nodeX) return { nodeA: nodeY, nodeB: nodeX, k: d,
+            x: (nodeX.x + nodeY.x) * 0.5, y: (nodeX.y + nodeY.y) * 0.5 };
+    }
+    return null; // nodes are not adjacent
+}
 
-        pushUnique(nodeA);
-        pushUnique(nodeB);
-
-        const common = [];
-        const neighborsA = (nodeA && Array.isArray(nodeA.neighbors)) ? nodeA.neighbors : [];
-        const neighborsB = (nodeB && Array.isArray(nodeB.neighbors)) ? nodeB.neighbors : [];
-        for (let i = 0; i < neighborsA.length; i++) {
-            const candidate = neighborsA[i];
-            if (!candidate || candidate === nodeA || candidate === nodeB) continue;
-            if (!neighborsB.includes(candidate)) continue;
-            if (common.includes(candidate)) continue;
-            common.push(candidate);
-        }
-        common.sort((left, right) => {
-            const ldx = (this.map && typeof this.map.shortestDeltaX === "function")
-                ? this.map.shortestDeltaX(this.x, left.x)
-                : (left.x - this.x);
-            const ldy = (this.map && typeof this.map.shortestDeltaY === "function")
-                ? this.map.shortestDeltaY(this.y, left.y)
-                : (left.y - this.y);
-            const rdx = (this.map && typeof this.map.shortestDeltaX === "function")
-                ? this.map.shortestDeltaX(this.x, right.x)
-                : (right.x - this.x);
-            const rdy = (this.map && typeof this.map.shortestDeltaY === "function")
-                ? this.map.shortestDeltaY(this.y, right.y)
-                : (right.y - this.y);
-            return (ldx * ldx + ldy * ldy) - (rdx * rdx + rdy * rdy);
-        });
-        for (let i = 0; i < common.length && i < 2; i++) {
-            pushUnique(common[i]);
-        }
+// Returns the next anchor (node or midpoint) from midpoint (nodeA, nodeB, k)
+// when stepping in direction d (0–11).
+//
+// Derivation: for k=3, the full table (verified against geometric layout) is:
+//   d=3 -> nodeB,  d=9 -> nodeA  (axis endpoints)
+//   all others -> a midpoint one step away, via one of the bounding nodes.
+// The general formula uses offset o = (d - k + 12) % 12 and two pivot
+// directions fwd=(k+4)%12 and bck=(k+10)%12.
+function midpointNeighborInDirection(nodeA, nodeB, k, d) {
+    const norm = v => ((v % 12) + 12) % 12;
+    const o   = norm(d - k);
+    const fwd = norm(k + 4);
+    const bck = norm(k + 10);
+    switch (o) {
+        case 0:  return nodeB;
+        case 1:  return makeMidpoint(nodeB, nodeB.neighbors[norm(k + 2)]);
+        case 2:  return makeMidpoint(nodeB, nodeB.neighbors[fwd]);
+        case 3:  return nodeB.neighbors[fwd];
+        case 4:  return makeMidpoint(nodeA, nodeB.neighbors[fwd]);
+        case 5:  return makeMidpoint(nodeA, nodeA.neighbors[fwd]);
+        case 6:  return nodeA;
+        case 7:  return makeMidpoint(nodeA, nodeA.neighbors[norm(k + 8)]);
+        case 8:  return makeMidpoint(nodeA, nodeA.neighbors[bck]);
+        case 9:  return nodeA.neighbors[bck];
+        case 10: return makeMidpoint(nodeB, nodeA.neighbors[bck]);
+        case 11: return makeMidpoint(nodeB, nodeB.neighbors[bck]);
+        default: return null;
     }
 }
+
+// Returns the next anchor from a plain node when stepping in direction d.
+//   Odd  d → midpoint between node and its immediate neighbor[d]
+//   Even d → midpoint between the two immediate neighbors flanking direction d
+//            i.e. between neighbors[d-1] and neighbors[d+1]
+function nodeNeighborInDirection(node, d) {
+    const dir = ((d % 12) + 12) % 12;
+    if (dir % 2 === 1) {
+        // Odd: land on the midpoint shared with the immediate neighbor.
+        const nb = node.neighbors[dir];
+        if (!nb) return null;
+        return makeMidpoint(node, nb);
+    } else {
+        // Even: diagonal step — land on midpoint between the two flanking nodes.
+        const L = node.neighbors[(dir + 11) % 12];
+        const R = node.neighbors[(dir +  1) % 12];
+        if (!L || !R) return null;
+        return makeMidpoint(L, R);
+    }
+}
+
+// Uniform entry point — works identically for nodes and midpoints.
+// anchor is either a MapNode or a midpoint descriptor { nodeA, nodeB, k }.
+function anchorNeighborInDirection(anchor, dir) {
+    if (!anchor) return null;
+    if (anchor.k !== undefined) {
+        return midpointNeighborInDirection(anchor.nodeA, anchor.nodeB, anchor.k, dir);
+    }
+    return nodeNeighborInDirection(anchor, dir);
+}
+
+// Bump this whenever the clearance BFS algorithm changes so that
+// save files with stale cached clearance are automatically recomputed.
+const CLEARANCE_VERSION = 2;
 
 class GameMap {
     constructor(width, height, options, callback) {
@@ -348,6 +385,10 @@ class GameMap {
         this.scenery = {};
         this.animalImages = {};
         this.nodes = [];
+        // Legacy static-object list used by existing save/load/editor paths.
+        this.objects = [];
+        // Canonical cross-system runtime registry (walls, placed objects, animals, powerups, etc).
+        this.gameObjects = [];
         this.hexHeight = 1;
         this.hexWidth = 1 / 0.866;
         this.worldWidth = this.width * 0.866;
@@ -536,6 +577,104 @@ class GameMap {
         if (callback) setTimeout(() => callback(this), 100 );
     }
 
+    registerGameObject(obj) {
+        if (!obj || (typeof obj !== "object" && typeof obj !== "function")) return false;
+        if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
+        if (!this.gameObjects.includes(obj)) {
+            this.gameObjects.push(obj);
+            return true;
+        }
+        return false;
+    }
+
+    unregisterGameObject(obj) {
+        if (!obj || !Array.isArray(this.gameObjects)) return false;
+        const idx = this.gameObjects.indexOf(obj);
+        if (idx < 0) return false;
+        this.gameObjects.splice(idx, 1);
+        return true;
+    }
+
+    rebuildGameObjectRegistry() {
+        if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
+        this.gameObjects.length = 0;
+        const seen = new Set();
+        const addObject = (obj) => {
+            if (!obj || obj.gone || (typeof obj !== "object" && typeof obj !== "function")) return;
+            if (obj.map && obj.map !== this) return;
+            if (seen.has(obj)) return;
+            seen.add(obj);
+            this.gameObjects.push(obj);
+        };
+
+        // Objects attached to map nodes (static objects, walls, placed objects, etc).
+        for (let x = 0; x < this.width; x++) {
+            const column = this.nodes[x];
+            if (!Array.isArray(column)) continue;
+            for (let y = 0; y < this.height; y++) {
+                const node = column[y];
+                if (!node || !Array.isArray(node.objects)) continue;
+                for (let i = 0; i < node.objects.length; i++) {
+                    addObject(node.objects[i]);
+                }
+            }
+        }
+
+        // Wall sections are authoritative in their own map.
+        const wallCtor = (typeof globalThis !== "undefined" && globalThis.WallSectionUnit)
+            ? globalThis.WallSectionUnit
+            : null;
+        if (wallCtor && wallCtor._allSections instanceof Map) {
+            for (const section of wallCtor._allSections.values()) {
+                addObject(section);
+            }
+        }
+
+        // Dynamic characters/pickups. Prefer globalThis refs, with loose-global
+        // fallback for runtime setups that don't mirror arrays onto globalThis.
+        const animalsCandidates = [
+            (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) ? globalThis.animals : null,
+            (typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null
+        ];
+        for (let i = 0; i < animalsCandidates.length; i++) {
+            const animalsList = animalsCandidates[i];
+            if (!Array.isArray(animalsList)) continue;
+            for (let j = 0; j < animalsList.length; j++) {
+                addObject(animalsList[j]);
+            }
+        }
+
+        const powerupsCandidates = [
+            (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups)) ? globalThis.powerups : null,
+            (typeof powerups !== "undefined" && Array.isArray(powerups)) ? powerups : null
+        ];
+        for (let i = 0; i < powerupsCandidates.length; i++) {
+            const powerupsList = powerupsCandidates[i];
+            if (!Array.isArray(powerupsList)) continue;
+            for (let j = 0; j < powerupsList.length; j++) {
+                addObject(powerupsList[j]);
+            }
+        }
+
+        const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard)
+            ? globalThis.wizard
+            : null;
+        if (wizardRef) {
+            addObject(wizardRef);
+        }
+
+        return this.gameObjects;
+    }
+
+    getGameObjects(options = null) {
+        const opts = (options && typeof options === "object") ? options : {};
+        if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
+        if (opts.refresh === true || this.gameObjects.length === 0) {
+            this.rebuildGameObjectRegistry();
+        }
+        return this.gameObjects;
+    }
+
     // ── Clearance map ────────────────────────────────────────────────
     // Each node stores `clearance`: the minimum number of hex-ring steps
     // to the nearest blocked tile.  0 = blocked, 1 = adjacent to blocked,
@@ -564,6 +703,7 @@ class GameMap {
         }
         return {
             encoding: "base36-char-grid",
+            version:  CLEARANCE_VERSION,
             width:    this.width,
             height:   this.height,
             data:     out
@@ -578,6 +718,10 @@ class GameMap {
         if (!this.nodes || !encoded ||
             encoded.encoding !== "base36-char-grid" ||
             typeof encoded.data !== "string") {
+            return false;
+        }
+        // Reject stale clearance from an older algorithm version.
+        if (!encoded.version || encoded.version < CLEARANCE_VERSION) {
             return false;
         }
         if (encoded.width !== this.width || encoded.height !== this.height) {
@@ -626,16 +770,26 @@ class GameMap {
             }
         }
 
-        // Second pass: seed wall-adjacent tiles at clearance 0.
-        // Tiles with wall edges are treated as obstacles for clearance
+        // Second pass: seed wall-adjacent tiles.
+        // Tiles with wall edges are treated as near-obstacles for clearance
         // purposes — large entities must not overlap them.
+        // Tiles whose blocked neighbors are ALL diagonal (even-index, i.e.
+        // far moves) seed at clearance 1 instead of 0, because the wall is
+        // farther away than a direct adjacency.
         for (let x = 0; x < this.width; x++) {
             for (let y = 0; y < this.height; y++) {
                 const node = this.nodes[x][y];
                 if (node.clearance <= 0) continue; // already seeded
                 if (node.blockedNeighbors && node.blockedNeighbors.size > 0) {
-                    node.clearance = 0;
-                    queue.push([node, 0]);
+                    let hasAdjacentBlocker = false;
+                    for (const dir of node.blockedNeighbors.keys()) {
+                        if (dir % 2 === 1) { hasAdjacentBlocker = true; break; }
+                    }
+                    const seed = hasAdjacentBlocker ? 0 : 1;
+                    if (seed < node.clearance) {
+                        node.clearance = seed;
+                        queue.push([node, seed]);
+                    }
                 }
             }
         }
@@ -698,12 +852,20 @@ class GameMap {
             }
         }
 
-        // Seed wall-adjacent tiles in the region at clearance 0.
+        // Seed wall-adjacent tiles in the region.
+        // Diagonal-only blockers seed at 1 instead of 0.
         for (const node of region) {
             if (node.clearance <= 0) continue;
             if (node.blockedNeighbors && node.blockedNeighbors.size > 0) {
-                node.clearance = 0;
-                seedQueue.push([node, 0]);
+                let hasAdjacentBlocker = false;
+                for (const dir of node.blockedNeighbors.keys()) {
+                    if (dir % 2 === 1) { hasAdjacentBlocker = true; break; }
+                }
+                const seed = hasAdjacentBlocker ? 0 : 1;
+                if (seed < node.clearance) {
+                    node.clearance = seed;
+                    seedQueue.push([node, seed]);
+                }
             }
         }
 
@@ -739,11 +901,16 @@ class GameMap {
 
     findPath(startingNode, destinationNode, options) {
         const opts = options || {};
+        const allowBlockedDestination = opts.allowBlockedDestination === true;
         // Clearance: number of hex rings that must be obstacle-free around
         // each tile on the path.  0 = legacy point-entity behaviour.
         const requiredClearance = Number.isFinite(opts.clearance)
             ? Math.max(0, Math.floor(opts.clearance))
             : 0;
+        // Allow only brief random detours before re-attempting a direct beeline.
+        const maxRandomDetours = Number.isFinite(opts.maxRandomDetours)
+            ? Math.max(0, Math.floor(opts.maxRandomDetours))
+            : 0; // unused — kept for API compatibility
 
         // Even indices are far (diagonal) moves, odd indices are adjacent moves
         // Blocker pairs for far moves: the two adjacent directions that flank the far direction
@@ -780,8 +947,14 @@ class GameMap {
             const blockingWalls = currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(n) : null;
             if (blockingWalls && blockingWalls.size > 0) return false;
 
-            // Tile blocking
-            if (neighborNode.hasBlockingObject() || neighborNode.blocked) return false;
+            // Tile blocking — allow if this is the destination and caller opts in
+            if (neighborNode.hasBlockingObject() || neighborNode.blocked) {
+                if (allowBlockedDestination && neighborNode === destinationNode) {
+                    // fall through — let canMoveDirection return true for the destination
+                } else {
+                    return false;
+                }
+            }
 
             // Anti-corner-cut for far moves
             if (blockerPairs[n]) {
@@ -809,24 +982,42 @@ class GameMap {
         };
 
         const path = [];
+        path.blockers = []; // blocking objects found when the ideal direction is impassable
+        const blockersSeen = new Set();
         let currentNode = startingNode;
         const visited = new Set();
         const maxSteps = Math.max(200, (this.width + this.height));
-        let stuckCount = 0; // consecutive times the greedy pick was visited
         if (currentNode) {
             visited.add(`${currentNode.xindex},${currentNode.yindex}`);
         }
 
         while (currentNode && path.length < maxSteps) {
-            // --- build list of all valid (unvisited) neighbor moves ---
-            let bestDistance = Infinity;
-            let bestDirection = -1;
-            const validDirections = []; // indices of passable, unvisited directions
+            let bestValidDistance = Infinity;
+            let bestValidDirection = -1;
+            let idealDirection = -1;
+            let idealDist = Infinity;
+            let idealDirectionPassable = false; // true if idealDirection passes canMoveDirection
+            const validDirections = [];
 
             for (let n = 0; n < 12; n++) {
-                if (!canMoveDirection(currentNode, n)) continue;
-
                 const neighborNode = currentNode.neighbors[n];
+                if (!neighborNode) continue;
+
+                const distFactor = distFactors[n];
+                const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x)
+                            - this.shortestDeltaX(currentNode.x, neighborNode.x) * distFactor;
+                const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y)
+                            - this.shortestDeltaY(currentNode.y, neighborNode.y) * distFactor;
+                const dist = xdist ** 2 + ydist ** 2;
+
+                // Track the best direction regardless of passability or visited state
+                if (dist < idealDist) {
+                    idealDist = dist;
+                    idealDirection = n;
+                    idealDirectionPassable = canMoveDirection(currentNode, n);
+                }
+
+                if (!canMoveDirection(currentNode, n)) continue;
 
                 // Reached destination?
                 if (neighborNode === destinationNode) {
@@ -838,68 +1029,127 @@ class GameMap {
                 if (visited.has(nKey)) continue;
 
                 validDirections.push(n);
-
-                // Greedy heuristic: pick the direction closest to destination
-                const distFactor = distFactors[n];
-                const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x)
-                            - this.shortestDeltaX(currentNode.x, neighborNode.x) * distFactor;
-                const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y)
-                            - this.shortestDeltaY(currentNode.y, neighborNode.y) * distFactor;
-                const dist = xdist ** 2 + ydist ** 2;
-
-                if (dist < bestDistance) {
-                    bestDistance = dist;
-                    bestDirection = n;
+                if (dist < bestValidDistance) {
+                    bestValidDistance = dist;
+                    bestValidDirection = n;
                 }
             }
 
-            // No valid unvisited direction — stuck for real
+            // The ideal direction toward the destination is physically blocked (fails
+            // canMoveDirection — not merely visited). Collect the culprit objects,
+            // take one random bounce step so the animal keeps moving, then return.
+            if (idealDirection !== -1 && !idealDirectionPassable) {
+                const directionalBlockers = currentNode.blockedNeighbors
+                    ? currentNode.blockedNeighbors.get(idealDirection)
+                    : null;
+                if (directionalBlockers instanceof Set) {
+                    directionalBlockers.forEach(blocker => {
+                        if (!blocker || blockersSeen.has(blocker)) return;
+                        blockersSeen.add(blocker);
+                        path.blockers.push(blocker);
+                    });
+                }
+
+                // BFS the entire clearance+1 hex area around currentNode.
+                // Collect all blocking objects that are closer to the destination
+                // than currentNode is — those are the objects in the way.
+                const ringRadius = requiredClearance + 1;
+                const scanNodes = new Set();
+                scanNodes.add(currentNode);
+                let bfsFrontier = [currentNode];
+                for (let r = 0; r < ringRadius; r++) {
+                    const next = [];
+                    for (let fi = 0; fi < bfsFrontier.length; fi++) {
+                        const fn = bfsFrontier[fi];
+                        for (let ni = 0; ni < fn.neighbors.length; ni++) {
+                            const nb = fn.neighbors[ni];
+                            if (!nb || scanNodes.has(nb)) continue;
+                            scanNodes.add(nb);
+                            next.push(nb);
+                        }
+                    }
+                    bfsFrontier = next;
+                }
+                const animalDistSq = this.shortestDeltaX(currentNode.x, destinationNode.x) ** 2
+                                   + this.shortestDeltaY(currentNode.y, destinationNode.y) ** 2;
+                scanNodes.forEach(sn => {
+                    if (!sn.objects) return;
+                    for (let oi = 0; oi < sn.objects.length; oi++) {
+                        const obj = sn.objects[oi];
+                        if (!obj || obj.blocksTile === false) continue;
+                        if (blockersSeen.has(obj)) continue;
+                        const objDistSq = this.shortestDeltaX(obj.x, destinationNode.x) ** 2
+                                        + this.shortestDeltaY(obj.y, destinationNode.y) ** 2;
+                        if (objDistSq < animalDistSq) {
+                            blockersSeen.add(obj);
+                            path.blockers.push(obj);
+                        }
+                    }
+                });
+
+                // Find a bounce step. Try valid (clearance-respecting) directions first;
+                // fall back to any unblocked direction so the animal never fully freezes.
+                let bounceDirections = validDirections.length > 0 ? validDirections : null;
+                if (!bounceDirections) {
+                    // Clearance-ignoring fallback: any neighbor that isn't hard-blocked
+                    bounceDirections = [];
+                    for (let n = 0; n < 12; n++) {
+                        const nb = currentNode.neighbors[n];
+                        const directionalBlockers = currentNode.blockedNeighbors
+                            ? currentNode.blockedNeighbors.get(n)
+                            : null;
+                        if (directionalBlockers && directionalBlockers.size > 0) continue;
+                        if (!nb || nb.hasBlockingObject() || nb.blocked) continue;
+                        const nKey = `${nb.xindex},${nb.yindex}`;
+                        if (visited.has(nKey)) continue;
+                        bounceDirections.push(n);
+                    }
+                }
+                if (bounceDirections.length > 0) {
+                    const bounce = bounceDirections[Math.floor(Math.random() * bounceDirections.length)];
+                    path.push(currentNode.neighbors[bounce]);
+                }
+                return path;
+            }
+
+            // Ideal direction is passable — take the greedy step.
+            // If no valid (clearance-respecting) direction exists, fall back to any
+            // unblocked direction so the animal can escape a tight spot.
             if (validDirections.length === 0) {
-                return path.length ? path : null;
+                for (let n = 0; n < 12; n++) {
+                    const nb = currentNode.neighbors[n];
+                    const directionalBlockers = currentNode.blockedNeighbors
+                        ? currentNode.blockedNeighbors.get(n)
+                        : null;
+                    if (directionalBlockers && directionalBlockers.size > 0) continue;
+                    if (!nb || nb.hasBlockingObject() || nb.blocked) continue;
+                    const nKey = `${nb.xindex},${nb.yindex}`;
+                    if (visited.has(nKey)) continue;
+                    validDirections.push(n);
+                    // Pick any single escape direction; recompute best as closest to dest
+                    const distFactor = distFactors[n];
+                    const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x)
+                                - this.shortestDeltaX(currentNode.x, nb.x) * distFactor;
+                    const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y)
+                                - this.shortestDeltaY(currentNode.y, nb.y) * distFactor;
+                    const dist = xdist ** 2 + ydist ** 2;
+                    if (dist < bestValidDistance) { bestValidDistance = dist; bestValidDirection = n; }
+                }
+                if (validDirections.length === 0) return path; // truly surrounded, give up
             }
 
-            // If the greedy pick keeps hitting dead-ends (stuckCount > 0),
-            // try a random valid direction instead to wander around the
-            // obstacle.  Resets once forward progress resumes.
-            let chosenDirection = bestDirection;
-            if (stuckCount > 0 && validDirections.length > 1) {
-                // Pick a random direction that isn't the greedy choice,
-                // so the animal explores a different route.
-                const others = validDirections.filter(d => d !== bestDirection);
-                chosenDirection = others[Math.floor(Math.random() * others.length)];
-            }
-
-            const chosenNeighbor = currentNode.neighbors[chosenDirection];
-            if (!chosenNeighbor) {
-                return path.length ? path : null;
-            }
+            const chosenNeighbor = currentNode.neighbors[bestValidDirection];
+            if (!chosenNeighbor) return path;
 
             const chosenKey = `${chosenNeighbor.xindex},${chosenNeighbor.yindex}`;
-            // Shouldn't happen (we filtered visited above) but guard anyway.
-            if (visited.has(chosenKey)) {
-                stuckCount++;
-                if (stuckCount > 3) return path.length ? path : null;
-                continue;
-            }
-
-            // Track "stuck": if we moved but got *farther* from the goal
-            // than when we started this segment, bump stuckCount.
-            const prevDist = bestDistance;
-            const newDx = this.shortestDeltaX(chosenNeighbor.x, destinationNode.x);
-            const newDy = this.shortestDeltaY(chosenNeighbor.y, destinationNode.y);
-            const newDist = newDx * newDx + newDy * newDy;
-            if (newDist > prevDist) {
-                stuckCount++;
-            } else {
-                stuckCount = Math.max(0, stuckCount - 1);
-            }
+            if (visited.has(chosenKey)) return path;
 
             path.push(chosenNeighbor);
             visited.add(chosenKey);
             currentNode = chosenNeighbor;
         }
 
-        return path.length ? path : null;
+        return path;
     }
 
     findPathAStar(startingNode, destinationNode, options = {}) {
@@ -931,6 +1181,14 @@ class GameMap {
             ? Math.max(0, Math.floor(options.clearance))
             : 0;
 
+        // wallAvoidance: when > 0, tiles near walls cost more to traverse.
+        // The penalty added per step is  wallAvoidance / (1 + clearance),
+        // so tiles with clearance 0 pay the full weight, tiles far from
+        // walls pay almost nothing.  Typical value: 2–5.
+        const wallAvoidance = Number.isFinite(options.wallAvoidance)
+            ? Math.max(0, options.wallAvoidance)
+            : 0;
+
         if (!allowBlockedDestination && (destinationNode.blocked || destinationNode.hasBlockingObject())) {
             return null;
         }
@@ -947,7 +1205,16 @@ class GameMap {
         const movementCost = (fromNode, toNode) => {
             const dx = this.shortestDeltaX(fromNode.x, toNode.x);
             const dy = this.shortestDeltaY(fromNode.y, toNode.y);
-            return Math.hypot(dx, dy);
+            const dist = Math.hypot(dx, dy);
+            // Penalise tiles close to walls so the path hugs open space.
+            // The penalty is proportional to step distance so that far moves
+            // (which cover more ground per step) aren't artificially cheap
+            // due to fewer penalty applications.
+            if (wallAvoidance > 0) {
+                const cl = Number.isFinite(toNode.clearance) ? toNode.clearance : 0;
+                return dist * (1 + wallAvoidance / (1 + cl));
+            }
+            return dist;
         };
         const heuristic = (node) => {
             const dx = this.shortestDeltaX(node.x, destinationNode.x);
@@ -1140,7 +1407,8 @@ class GameMap {
             if (seenPairs.has(pairKey)) continue;
             seenPairs.add(pairKey);
 
-            const midpoint = new NodeMidpoint(node, neighbor, this);
+            const midpoint = makeMidpoint(node, neighbor);
+            if (!midpoint) continue;
             const midDist = Math.hypot(
                 this.shortestDeltaX(midpoint.x, wrappedWorldX),
                 this.shortestDeltaY(midpoint.y, wrappedWorldY)
@@ -1158,7 +1426,7 @@ class GameMap {
     }
 
     _isNodeMidpoint(entity) {
-        return entity instanceof NodeMidpoint;
+        return !!(entity && entity.nodeA && entity.nodeB && entity.k !== undefined);
     }
 
     _resolveHexLineEndpoint(entity) {
@@ -1180,17 +1448,18 @@ class GameMap {
     }
 
     _chooseMidpointBridgeNode(midpoint, towardEntity) {
-        if (!this._isNodeMidpoint(midpoint) || !Array.isArray(midpoint.neighbors) || midpoint.neighbors.length === 0) return null;
+        if (!this._isNodeMidpoint(midpoint)) return null;
+        const candidates = [midpoint.nodeA, midpoint.nodeB];
         const tx = Number(towardEntity && towardEntity.x);
         const ty = Number(towardEntity && towardEntity.y);
         let bestNode = null;
         let bestDist = Infinity;
-        for (let i = 0; i < midpoint.neighbors.length; i++) {
-            const node = midpoint.neighbors[i];
-            if (!node || typeof node.xindex !== "number" || typeof node.yindex !== "number") continue;
+        for (let i = 0; i < candidates.length; i++) {
+            const node = candidates[i];
+            if (!node || typeof node.xindex !== "number") continue;
             const dist = Number.isFinite(tx) && Number.isFinite(ty)
                 ? Math.hypot(this.shortestDeltaX(node.x, tx), this.shortestDeltaY(node.y, ty))
-                : 0;
+                : i;
             if (dist < bestDist) {
                 bestDist = dist;
                 bestNode = node;
@@ -1461,6 +1730,65 @@ class GameMap {
         return path;
     }
 
+    /**
+     * Returns true when there is an unobstructed hex path (adjacent steps only)
+     * between nodeA and nodeB.  Checks every intermediate node for blockage and
+     * every connection for wall blockage via blockedNeighbors.
+     *
+     * This is intentionally a greedy walk so it is O(steps) with no allocations.
+     *
+     * @param {MapNode} nodeA  Starting node.
+     * @param {MapNode} nodeB  Destination node.
+     * @returns {boolean}  True if LOS is clear.
+     */
+    hasLineOfSight(nodeA, nodeB) {
+        if (!nodeA || !nodeB) return true;
+        if (nodeA === nodeB) return true;
+
+        // Adjacent direction indices (odd = one-step hex neighbours).
+        const adjDirs = [1, 3, 5, 7, 9, 11];
+        const maxSteps = Math.max(16, (this.width + this.height) * 2);
+
+        let current = nodeA;
+        for (let step = 0; step < maxSteps; step++) {
+            if (current === nodeB) return true;
+
+            // Greedy step: choose the adjacent neighbour that minimises distance to nodeB.
+            let bestNext = null;
+            let bestDir  = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < adjDirs.length; i++) {
+                const dir       = adjDirs[i];
+                const candidate = current.neighbors[dir];
+                if (!candidate) continue;
+                const dist = Math.hypot(
+                    this.shortestDeltaX(candidate.x, nodeB.x),
+                    this.shortestDeltaY(candidate.y, nodeB.y)
+                );
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestNext = candidate;
+                    bestDir  = dir;
+                }
+            }
+
+            if (!bestNext) return false; // no reachable neighbour
+
+            // Wall blocking on this edge.
+            const blockingWalls = current.blockedNeighbors
+                ? current.blockedNeighbors.get(bestDir)
+                : null;
+            if (blockingWalls && blockingWalls.size > 0) return false;
+
+            // Blocking object / terrain on the next tile (skip endpoints).
+            if (bestNext !== nodeB && bestNext.isBlocked()) return false;
+
+            current = bestNext;
+        }
+
+        return current === nodeB;
+    }
+
     getGroundTextureId(x, y) {
         const tx = this.wrapX ? this.wrapIndexX(x) : x;
         const ty = this.wrapY ? this.wrapIndexY(y) : y;
@@ -1518,6 +1846,19 @@ class GameMap {
         if (!this.wrapY || !Number.isFinite(delta) || this.worldHeight <= 0) return delta;
         delta = ((delta + this.worldHeight * 0.5) % this.worldHeight + this.worldHeight) % this.worldHeight - this.worldHeight * 0.5;
         return delta;
+    }
+
+    distanceBetweenPoints(ax, ay, bx, by) {
+        const dx = this.shortestDeltaX(ax, bx);
+        const dy = this.shortestDeltaY(ay, by);
+        return Math.hypot(dx, dy);
+    }
+
+    pointWithinRadius(ax, ay, bx, by, radius) {
+        if (!Number.isFinite(radius) || radius < 0) return false;
+        const dx = this.shortestDeltaX(ax, bx);
+        const dy = this.shortestDeltaY(ay, by);
+        return (dx * dx + dy * dy) <= (radius * radius);
     }
 
     wrapWorldPoint(point) {

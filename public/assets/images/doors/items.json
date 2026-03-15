@@ -39,7 +39,17 @@
       "xOffset": 0,
       "yOffsetFromHeightMultiplier": -0.25,
       "radiusFromMaxDimensionMultiplier": 0.5
-    }
+    },
+    "compositeLayers": [
+      {
+        "name": "arch",
+        "uRegion": [0, 0.5]
+      },
+      {
+        "name": "door",
+        "uRegion": [0.5, 1]
+      }
+    ]
   },
   "items": [
     {
@@ -77,6 +87,16 @@
         "yOffsetFromHeightMultiplier": -0.25,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door1_lod096.png",
@@ -126,6 +146,16 @@
         "yOffsetFromHeightMultiplier": -0.25,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door2_lod096.png",
@@ -175,6 +205,16 @@
         "yOffsetFromHeightMultiplier": -0.375,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door3_lod096.png",
@@ -224,6 +264,16 @@
         "yOffsetFromHeightMultiplier": -0.375,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door4_lod096.png",
@@ -273,6 +323,16 @@
         "yOffsetFromHeightMultiplier": -0.375,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door5_lod096.png",
@@ -322,6 +382,16 @@
         "yOffsetFromHeightMultiplier": -0.375,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/door6_lod096.png",
@@ -371,6 +441,16 @@
         "yOffsetFromHeightMultiplier": -0.25,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/tree%20door%202_lod096.png",
@@ -420,6 +500,16 @@
         "yOffsetFromHeightMultiplier": -0.25,
         "radiusFromMaxDimensionMultiplier": 0.5
       },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
       "lodTextures": [
         {
           "texturePath": "/assets/images/doors/lod/tree%20door_lod096.png",

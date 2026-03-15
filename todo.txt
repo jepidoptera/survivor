@@ -1,16 +1,59 @@
-/ inside furniture
-  checkpoints
+## WALL ANCHOR REFACTOR — CONTEXT FOR NEXT SESSION ##
+#
+# Goal: walls placeable from any anchor (node or midpoint) to any adjacent anchor
+# in any direction including diagonals. Current code has heavy midpoint special-
+# casing in wallSectionUnit.js. Fix: treat the whole grid as a denser hex grid
+# where midpoints and nodes are equivalent — navigation is one uniform call.
+#
+# Key insight: midpoints + nodes form one unified hex grid at double density.
+# A midpoint is a pure value-type { nodeA, nodeB, k } where
+# nodeA.neighbors[k] === nodeB and k ∈ [0,5] (canonical: lower slot = nodeA).
+# No caching needed. Identity = (nodeA === a && nodeB === b).
+#
+# WHAT WAS BUILT: four free functions in Map.js, after NodeMidpoint (~line 335):
+#
+# makeMidpoint(nodeX, nodeY)
+#   Scans neighbors[0..5], returns { nodeA, nodeB, k } or null if not adjacent.
+#
+# midpointNeighborInDirection(nodeA, nodeB, k, d)
+#   o = (d-k+12)%12, fwd=(k+4)%12, bck=(k+10)%12
+#   o=0  nodeB                            o=6  nodeA
+#   o=1  mid(nodeB, nodeB.nb[(k+2)%12])   o=7  mid(nodeA, nodeA.nb[(k+8)%12])
+#   o=2  mid(nodeB, nodeB.nb[fwd])        o=8  mid(nodeA, nodeB.nb[bck])  <--nodeB
+#   o=3  nodeB.nb[fwd]                    o=9  nodeA.nb[bck]
+#   o=4  mid(nodeA, nodeB.nb[fwd])        o=10 mid(nodeB, nodeA.nb[bck])
+#   o=5  mid(nodeA, nodeA.nb[fwd])        o=11 mid(nodeB, nodeB.nb[bck])
+#
+# nodeNeighborInDirection(node, d)
+#   odd d  → makeMidpoint(node, node.neighbors[d])
+#   even d → makeMidpoint(node.neighbors[(d+11)%12], node.neighbors[(d+1)%12])
+#
+# anchorNeighborInDirection(anchor, dir)   ← THE UNIFIED ENTRY POINT
+#   detects midpoint vs node by presence of anchor.k
+#
+# DIRECTION CONVENTION (MapNode):
+#   0=far-left 1=up-left 2=far-up-left 3=up 4=far-up-right 5=up-right
+#   6=far-right 7=down-right 8=far-down-right 9=down 10=far-dn-left 11=dn-left
+#   Odd = immediate (1 hex step). Even = diagonal (2 hex steps).
+#
+# WHAT STILL NEEDS TO HAPPEN:
+#   1. Test via spell/console: walk from known node, verify positions & identity
+#   2. Replace wallSectionUnit.js nextForwardAnchorOnDirection with anchorNeighborInDirection
+#   3. Delete: bridgePrefixSegments, resolveArbitraryMidpointStart,
+#      midpointSupportsDirection start-anchor checks, midpoint-vs-node branching
+#   4. Allow midpoint junction for two-leg walls (currently forced to node only)
+#
+## ──────────────────────────────────────────────────────────────────── ##
+
+X inside furniture
 X dangerous monsters
 X 3d / textured walls
 X animal creation spells
-  mind control spells
-  animals have magic points that protect them from spells
 X render depth determines spell targeting priority
 X refactor: debug functions
-  refactor: character class
+X refactor: character class
 X windows and doors snap to walls
-  rugs rotate on ground plane
-  see-through windows
+X rugs rotate on ground plane
 X buildable roofs
 X refactor walls
 X refactor rendering
@@ -18,18 +61,52 @@ X minimap
 X add editor panel
 X add scripting for objects
 X maze mode
+X hovering messages
+X yetis in maze
+X walls should split when built across each other
+X validate and auto-format scripting
+X objects should have scripting names that can be referred to in other scripts
+X maze solver should aim down the center of the path
+X mega bear knocks down tress
+X debug mode should show hext tiles and animal hex radii
+X blodia knocks down a wall in the maze
+X code completion in scripting
+X animals can knock down doors to attack
+X walls can go from any midpoint to any midpoint
+X animals don't go into attack mode unless they have line of sight
+X animals have health bars
+X fireballs should stop on walls
+X doors should have separate frame and door sprites
+
+  god mode/ adventure mod
+  treasures in the maze
+  mind control spells
+  time-slowing aura
+X animals have magic points that protect them from spells
+  see-through windows
   message from princess
   dialogs in scripting
-  hovering messages
-  yetis in maze
-
+  player dies
+  checkpoints
+  undo system for editor
+  refactor renderer
+  revamp maze mode
+  -acute wall corners clip to sight lines - no false corners in visible space.
+  -walls transition from upright to flat as the player changes angle to the wall
 
 problems:
 X animals running through walls
 X windows visible through roof
-  rugs don't place correctly
+X rugs don't place correctly
 X walls don't always connect
 X animals don't correctly vanish
 X animals and spells are invisible inside house.
 X wizard's min-radius sight circle should only go behind him
 X wizard and animals jitter as they move
+X can't cancel trigger area
+X playerExits doesn't fire on teleport
+X all fallen trees save as burned, even when they weren't
+  roof textures don't scale right
+  large trigger area which activates maze mode seems to create dead zones for rendering
+  fireball shouldn't target non-flammable things
+  animals keep lunging for way too far

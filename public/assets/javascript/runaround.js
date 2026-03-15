@@ -27,9 +27,14 @@ let keysPressed = {}; // Track which keys are currently pressed
 let spacebarDownAt = null;
 let spellMenuKeyboardIndex = -1;
 let auraMenuKeyboardIndex = -1;
+let editorMenuKeyboardIndex = -1;
 let suppressNextCanvasMenuClose = false;
+let suppressNextTriggerAreaToolClick = false;
+let triggerAreaCameraDetachWasActive = false;
+const TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC = 10;
 
 if (typeof globalThis !== "undefined") {
+    globalThis.triggerAreaCameraDetachActive = false;
     globalThis.releaseSpacebarCastingState = function releaseSpacebarCastingState() {
         keysPressed[" "] = false;
         spacebarDownAt = null;
@@ -133,6 +138,53 @@ function getViewportCornerNodes() {
     };
 }
 
+function isTriggerAreaCameraDetachActive() {
+    return !!(
+        wizard &&
+        typeof wizard.currentSpell === "string" &&
+        wizard.currentSpell === "triggerarea" &&
+        wizard._triggerAreaPlacementDraft &&
+        Array.isArray(wizard._triggerAreaPlacementDraft.points) &&
+        wizard._triggerAreaPlacementDraft.points.length > 0
+    );
+}
+
+function setTriggerAreaCameraDetachFlag(active) {
+    if (typeof globalThis !== "undefined") {
+        globalThis.triggerAreaCameraDetachActive = !!active;
+    }
+}
+
+function updateTriggerAreaEdgePan(deltaSeconds) {
+    if (!isTriggerAreaCameraDetachActive()) return false;
+    if (!app || !app.screen) return false;
+    if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY)) return false;
+    const screenW = Math.max(1, Number(app.screen.width) || window.innerWidth || 1);
+    const screenH = Math.max(1, Number(app.screen.height) || window.innerHeight || 1);
+    const edgePx = 1;
+
+    let dirX = 0;
+    let dirY = 0;
+    if (mousePos.screenX <= edgePx) dirX = -1;
+    else if (mousePos.screenX >= (screenW - 1 - edgePx)) dirX = 1;
+    if (mousePos.screenY <= edgePx) dirY = -1;
+    else if (mousePos.screenY >= (screenH - 1 - edgePx)) dirY = 1;
+    if (dirX === 0 && dirY === 0) return false;
+
+    const dt = Math.max(0, Number(deltaSeconds) || 0);
+    if (dt <= 0) return false;
+    const moveDist = TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC * dt;
+    const shiftX = dirX * moveDist;
+    const shiftY = dirY * moveDist;
+    if (typeof applyViewportWrapShift === "function") {
+        applyViewportWrapShift(shiftX, shiftY);
+    } else {
+        viewport.x += shiftX;
+        viewport.y += shiftY;
+    }
+    return true;
+}
+
 // Pixi.js setup
 const app = new PIXI.Application({
     width: window.innerWidth,
@@ -179,7 +231,12 @@ let wizardFrames = []; // Array of frame textures for wizard animation
 let wizard = null;
 let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
+let spellCursorGlow = null; // Glow effect shown when spacebar is held
 let animalPreviewSprite = null; // Semi-transparent preview for SpawnAnimal spell
+let treeGrowPreviewSprite = null; // Semi-transparent preview for TreeGrow spell
+const ANIMAL_PREVIEW_METADATA_CATEGORY = "animals";
+const animalPreviewMetricsByType = new Map();
+const animalPreviewMetricsFetchByType = new Map();
 let onscreenObjects = new Set(); // Track visible staticObjects each frame
 let activeSimObjects = new Set(); // Static objects needing per-tick simulation (on fire, growing, falling)
 const roadWidth = 3;
@@ -275,6 +332,60 @@ if (typeof globalThis !== "undefined") {
     };
 }
 
+function updateTreeGrowPreview() {
+    if (!treeGrowPreviewSprite) return;
+    const showPreview = !!(
+        wizard &&
+        wizard.currentSpell === "treegrow" &&
+        keysPressed[" "] &&
+        Number.isFinite(mousePos.worldX) &&
+        Number.isFinite(mousePos.worldY)
+    );
+    if (!showPreview) {
+        treeGrowPreviewSprite.visible = false;
+        return;
+    }
+
+    // Snap mouse world position to the nearest hex node (same as cast)
+    const snapNode = wizard.map && typeof wizard.map.worldToNode === "function"
+        ? wizard.map.worldToNode(mousePos.worldX, mousePos.worldY)
+        : null;
+    if (!snapNode) {
+        treeGrowPreviewSprite.visible = false;
+        return;
+    }
+
+    // Convert snapped node world position to canvas pixel coordinates
+    const mapRef = wizard.map;
+    const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+        ? mapRef.shortestDeltaX(viewport.x, snapNode.x)
+        : (snapNode.x - viewport.x);
+    const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+        ? mapRef.shortestDeltaY(viewport.y, snapNode.y)
+        : (snapNode.y - viewport.y);
+    const snapScreenX = dx * viewscale;
+    const snapScreenY = dy * viewscale * xyratio;
+
+    // Pick texture based on selected variant
+    const variantIndex = Number.isInteger(wizard.selectedTreeTextureVariant) ? wizard.selectedTreeTextureVariant : 0;
+    const treeTextures = (wizard.map.scenery && wizard.map.scenery.tree && wizard.map.scenery.tree.textures)
+        ? wizard.map.scenery.tree.textures
+        : null;
+    const tex = (treeTextures && treeTextures[variantIndex])
+        ? treeTextures[variantIndex]
+        : PIXI.Texture.from(`/assets/images/trees/tree${variantIndex}.png`);
+    if (tex && treeGrowPreviewSprite.texture !== tex) {
+        treeGrowPreviewSprite.texture = tex;
+    }
+
+    const placementSize = Number.isFinite(wizard.treeGrowPlacementSize) ? wizard.treeGrowPlacementSize : 4;
+    treeGrowPreviewSprite.width = placementSize * viewscale;
+    treeGrowPreviewSprite.height = placementSize * viewscale;
+    treeGrowPreviewSprite.x = snapScreenX;
+    treeGrowPreviewSprite.y = snapScreenY;
+    treeGrowPreviewSprite.visible = true;
+}
+
 function updateAnimalPreview() {
     if (!animalPreviewSprite) return;
     const showPreview = !!(
@@ -310,26 +421,78 @@ function updateAnimalPreview() {
         animalPreviewSprite.texture = frameTex;
     }
 
-    // Size: use average default size for that animal type, scaled by selected size scale
+    // Size and anchor are driven by animals/items.json when available.
     const sizeScale = (wizard && Number.isFinite(wizard.selectedAnimalSizeScale))
         ? wizard.selectedAnimalSizeScale
         : 1;
-    // Typical default sizes and width/height ratios per type
-    const animalMetrics = {
-        squirrel: { size: 0.5, wRatio: 1.0, hRatio: 1.0 },
-        goat:     { size: 0.85, wRatio: 1.2, hRatio: 1.0 },
-        deer:     { size: 1.0, wRatio: 1.0, hRatio: 1.0 },
-        bear:     { size: 1.45, wRatio: 1.4, hRatio: 1.0 },
-        yeti:     { size: 1.75, wRatio: 1.2, hRatio: 1.0 }
-    };
-    const metrics = animalMetrics[selectedType] || { size: 1, wRatio: 1, hRatio: 1 };
-    const previewSize = metrics.size * sizeScale;
+    const metrics = getAnimalPreviewMetrics(selectedType);
+    queueAnimalPreviewMetricsLoad(selectedType);
 
-    animalPreviewSprite.width = previewSize * metrics.wRatio * viewscale;
-    animalPreviewSprite.height = previewSize * metrics.hRatio * viewscale;
+    animalPreviewSprite.anchor.set(metrics.anchorX, metrics.anchorY);
+    animalPreviewSprite.width = metrics.baseWidth * sizeScale * viewscale;
+    animalPreviewSprite.height = metrics.baseHeight * sizeScale * viewscale;
     animalPreviewSprite.x = mousePos.screenX;
     animalPreviewSprite.y = mousePos.screenY;
     animalPreviewSprite.visible = true;
+}
+
+function getAnimalPreviewFallbackMetrics(typeName) {
+    switch ((typeName || "").toLowerCase()) {
+        case "squirrel": return { baseWidth: 0.5, baseHeight: 0.5, anchorX: 0.5, anchorY: 1 };
+        case "goat": return { baseWidth: 0.99, baseHeight: 0.825, anchorX: 0.5, anchorY: 1 };
+        case "deer": return { baseWidth: 1, baseHeight: 1, anchorX: 0.5, anchorY: 1 };
+        case "bear": return { baseWidth: 2.03, baseHeight: 1.45, anchorX: 0.5, anchorY: 1 };
+        case "yeti": return { baseWidth: 2.1, baseHeight: 1.75, anchorX: 0.5, anchorY: 1 };
+        case "blodia": return { baseWidth: 1.3125, baseHeight: 2.8, anchorX: 0.5, anchorY: 1 };
+        default: return { baseWidth: 1, baseHeight: 1, anchorX: 0.5, anchorY: 1 };
+    }
+}
+
+function getAnimalPreviewTexturePath(typeName) {
+    const typeDef = (typeof SpawnAnimal !== "undefined" && Array.isArray(SpawnAnimal.ANIMAL_TYPES))
+        ? SpawnAnimal.ANIMAL_TYPES.find(t => t.name === typeName)
+        : null;
+    return (typeDef && typeof typeDef.icon === "string" && typeDef.icon.length > 0)
+        ? typeDef.icon
+        : `/assets/images/animals/${encodeURIComponent(typeName || "squirrel")}.png`;
+}
+
+function getAnimalPreviewMetrics(typeName) {
+    const key = (typeName || "squirrel").toLowerCase();
+    if (animalPreviewMetricsByType.has(key)) return animalPreviewMetricsByType.get(key);
+    return getAnimalPreviewFallbackMetrics(key);
+}
+
+function queueAnimalPreviewMetricsLoad(typeName) {
+    const key = (typeName || "squirrel").toLowerCase();
+    if (animalPreviewMetricsByType.has(key) || animalPreviewMetricsFetchByType.has(key)) return;
+    if (!(typeof globalThis !== "undefined" && typeof globalThis.getResolvedPlaceableMetadata === "function")) return;
+    const texturePath = getAnimalPreviewTexturePath(key);
+    const fallback = getAnimalPreviewFallbackMetrics(key);
+    const request = globalThis.getResolvedPlaceableMetadata(ANIMAL_PREVIEW_METADATA_CATEGORY, texturePath)
+        .then(meta => {
+            if (!meta || typeof meta !== "object") return fallback;
+            const width = Number.isFinite(meta.width) ? Number(meta.width) : fallback.baseWidth;
+            const height = Number.isFinite(meta.height) ? Number(meta.height) : fallback.baseHeight;
+            const anchorObj = (meta.anchor && typeof meta.anchor === "object") ? meta.anchor : null;
+            const anchorX = Number.isFinite(anchorObj && anchorObj.x) ? Number(anchorObj.x) : fallback.anchorX;
+            const anchorY = Number.isFinite(anchorObj && anchorObj.y) ? Number(anchorObj.y) : fallback.anchorY;
+            return {
+                baseWidth: Math.max(0.01, width),
+                baseHeight: Math.max(0.01, height),
+                anchorX: Math.max(0, Math.min(1, anchorX)),
+                anchorY: Math.max(0, Math.min(1, anchorY))
+            };
+        })
+        .catch(() => fallback)
+        .then(metrics => {
+            animalPreviewMetricsByType.set(key, metrics);
+            return metrics;
+        })
+        .finally(() => {
+            animalPreviewMetricsFetchByType.delete(key);
+        });
+    animalPreviewMetricsFetchByType.set(key, request);
 }
 
 let renderingUnavailableWarningShown = false;
@@ -400,6 +563,7 @@ PIXI.Loader.shared
     .add('/assets/spritesheet/squirrel.json')
     .add('/assets/spritesheet/goat.json')
     .add('/assets/spritesheet/yeti.json')
+    .add('/assets/images/animals/blodia.png')
     .add('/assets/images/runningman.png')
     .add('/assets/images/magic/hi%20fi%20fireball.png')
     .add('/assets/images/arrow.png')
@@ -408,6 +572,26 @@ PIXI.Loader.shared
 function onAssetsLoaded() {
     // create an array to store the textures
     let spriteNames = ["walk_left", "walk_right", "attack_left", "attack_right"];
+    const blodiaBaseTexture = PIXI.Loader.shared.resources['/assets/images/animals/blodia.png'] &&
+        PIXI.Loader.shared.resources['/assets/images/animals/blodia.png'].texture;
+    if (blodiaBaseTexture) {
+        const bw = blodiaBaseTexture.width;
+        const bh = blodiaBaseTexture.height;
+        const halfW = Math.floor(bw / 2);
+        const bt = blodiaBaseTexture.baseTexture;
+        const walkTex   = new PIXI.Texture(bt, new PIXI.Rectangle(0,      0, halfW, bh));
+        const attackTex = new PIXI.Texture(bt, new PIXI.Rectangle(halfW,  0, bw - halfW, bh));
+        textures['blodia'] = {
+            list: [walkTex, attackTex],
+            byKey: {
+                walk_left:    walkTex,
+                walk_right:   walkTex,
+                attack_left:  attackTex,
+                attack_right: attackTex
+            }
+        };
+    }
+
     let animalNames = ["bear", "deer", "squirrel", "goat", "yeti"]
     animalNames.forEach(animal => {
         let sheet = PIXI.Loader.shared.resources[`/assets/spritesheet/${animal}.json`].spritesheet;
@@ -479,12 +663,31 @@ function onAssetsLoaded() {
         spellCursor.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
     }
 
+    // Initialize spacebar glow behind the spell cursor
+    spellCursorGlow = new PIXI.Graphics();
+    cursorLayer.addChildAt(spellCursorGlow, cursorLayer.getChildIndex(spellCursor));
+    spellCursorGlow.visible = false;
+    spellCursorGlow.lineStyle(8, 0x44aaff, 0.5);
+    for (let i = 0; i < 5; i++) {
+        spellCursorGlow.moveTo(tenpoints[i*2].x, tenpoints[i*2].y);
+        spellCursorGlow.lineTo(fivepoints[i].x, fivepoints[i].y);
+        spellCursorGlow.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
+    }
+    spellCursorGlow.filters = [new PIXI.filters.BlurFilter(4)];
+
     // Initialize animal preview sprite (hidden by default)
     animalPreviewSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-    animalPreviewSprite.anchor.set(0.5, 0.5);
+    animalPreviewSprite.anchor.set(0.5, 1);
     animalPreviewSprite.visible = false;
     animalPreviewSprite.alpha = 0.45;
     cursorLayer.addChild(animalPreviewSprite);
+
+    // Initialize tree grow preview sprite (hidden by default)
+    treeGrowPreviewSprite = new PIXI.Sprite(PIXI.Texture.from('/assets/images/trees/tree0.png'));
+    treeGrowPreviewSprite.anchor.set(0.5, 1);
+    treeGrowPreviewSprite.visible = false;
+    treeGrowPreviewSprite.alpha = 0.5;
+    cursorLayer.addChild(treeGrowPreviewSprite);
 
     if (typeof SpellSystem !== "undefined" && typeof SpellSystem.primeSpellAssets === "function") {
         SpellSystem.primeSpellAssets();
@@ -1011,6 +1214,82 @@ jQuery(() => {
         return { activated: true, shouldCloseMenu: false };
     }
 
+    function getEditorMenuIconElements() {
+        const grid = document.getElementById("editorGrid");
+        if (!grid) return [];
+        return Array.from(grid.querySelectorAll(".spellIcon, .editorToolIcon, button"));
+    }
+
+    function clearEditorMenuKeyboardFocus() {
+        getEditorMenuIconElements().forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        editorMenuKeyboardIndex = -1;
+    }
+
+    function setEditorMenuKeyboardFocus(index) {
+        const icons = getEditorMenuIconElements();
+        if (!icons.length) {
+            editorMenuKeyboardIndex = -1;
+            return false;
+        }
+        const clamped = Math.max(0, Math.min(icons.length - 1, index));
+        icons.forEach(icon => icon.classList.remove("keyboard-nav-focus"));
+        icons[clamped].classList.add("keyboard-nav-focus");
+        editorMenuKeyboardIndex = clamped;
+        return true;
+    }
+
+    function initEditorMenuKeyboardFocus() {
+        const icons = getEditorMenuIconElements();
+        if (!icons.length) {
+            editorMenuKeyboardIndex = -1;
+            return false;
+        }
+        const selectedIndex = icons.findIndex(icon => icon.classList.contains("selected"));
+        return setEditorMenuKeyboardFocus(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+
+    function moveEditorMenuKeyboardFocus(dx, dy) {
+        const icons = getEditorMenuIconElements();
+        if (!icons.length) return false;
+        if (!Number.isInteger(editorMenuKeyboardIndex) || editorMenuKeyboardIndex < 0 || editorMenuKeyboardIndex >= icons.length) {
+            initEditorMenuKeyboardFocus();
+        }
+        const grid = document.getElementById("editorGrid");
+        const computed = grid ? window.getComputedStyle(grid) : null;
+        const cols = (() => {
+            if (!computed) return 4;
+            const template = computed.gridTemplateColumns || "";
+            if (!template || template === "none") return 4;
+            const count = template.split(" ").filter(token => token && token !== "/").length;
+            return Math.max(1, count);
+        })();
+        const current = Math.max(0, editorMenuKeyboardIndex);
+        const row = Math.floor(current / cols);
+        const col = current % cols;
+        const nextRow = Math.max(0, row + dy);
+        const nextCol = Math.max(0, Math.min(cols - 1, col + dx));
+        let next = nextRow * cols + nextCol;
+        if (next >= icons.length) next = icons.length - 1;
+        return setEditorMenuKeyboardFocus(next);
+    }
+
+    function activateSelectedEditorToolFromMenu() {
+        const icons = getEditorMenuIconElements();
+        if (!icons.length) return { activated: false, shouldCloseMenu: false };
+        let target = icons.find(icon => icon.classList.contains("keyboard-nav-focus"));
+        if (!target) {
+            target = icons.find(icon => icon.classList.contains("selected"));
+        }
+        if (!target) {
+            target = icons[0];
+        }
+        if (!target) return { activated: false, shouldCloseMenu: false };
+        const targetLabel = (target.textContent || "").trim().toLowerCase();
+        const isBackAction = targetLabel === "back";
+        target.click();
+        return { activated: true, shouldCloseMenu: !isBackAction };
+    }
+
     function activateSelectedSpellFromMenu() {
         const icons = getSpellMenuIconElements();
         if (!icons.length) return { activated: false, shouldCloseMenu: false };
@@ -1071,6 +1350,11 @@ jQuery(() => {
             initSpellMenuKeyboardFocus();
             return true;
         }
+        if (spellName === "triggerarea" && typeof SpellSystem.showTriggerAreaMenu === "function") {
+            SpellSystem.showTriggerAreaMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
         return false;
     }
 
@@ -1083,7 +1367,11 @@ jQuery(() => {
     }
 
     function isEditorPlacementKeyHeld() {
-        return !!keysPressed["e"];
+        if (!!keysPressed["e"]) return true;
+        // In editor mode, space also works as the editor activation key
+        const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+        if (inEditorMode && !!keysPressed[" "]) return true;
+        return false;
     }
 
     function updateEditorPlacementActiveState(active) {
@@ -1094,7 +1382,6 @@ jQuery(() => {
     console.log("Generating map...");
     initRoadLayer();
     map = new GameMap(mapHeight, mapWidth, { skipClearance: true }, () => {
-        frameRate = 30;
         const simStepMs = 1000 / frameRate;
         const animalAiOnscreenHz = 10;
         const animalAiOffscreenHz = 1.5;
@@ -1190,6 +1477,17 @@ jQuery(() => {
                     }
                 }
             }
+
+            const prioritizeAttackers = (list) => {
+                if (!Array.isArray(list) || list.length < 2) return;
+                list.sort((a, b) => {
+                    const aEngaged = !!(a && a.attackState && a.attackState !== "idle");
+                    const bEngaged = !!(b && b.attackState && b.attackState !== "idle");
+                    return Number(bEngaged) - Number(aEngaged);
+                });
+            };
+            prioritizeAttackers(dueOnscreen);
+            prioritizeAttackers(dueOffscreen);
 
             let aiBudget = animalAiMaxStepsPerSim;
             if (dueOnscreen.length > 0) {
@@ -1321,6 +1619,16 @@ jQuery(() => {
             }
             
             // Process movement every frame (with or without input)
+            const triggerAreaCameraDetachActive = isTriggerAreaCameraDetachActive();
+            setTriggerAreaCameraDetachFlag(triggerAreaCameraDetachActive);
+            if (!triggerAreaCameraDetachActive && triggerAreaCameraDetachWasActive) {
+                centerViewport(wizard, 0);
+            }
+            triggerAreaCameraDetachWasActive = triggerAreaCameraDetachActive;
+            if (triggerAreaCameraDetachActive) {
+                updateTriggerAreaEdgePan(1 / frameRate);
+            }
+
             const movementStartMs = performance.now();
             const wizardStartX = wizard.x;
             const wizardStartY = wizard.y;
@@ -1333,7 +1641,7 @@ jQuery(() => {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
             }
             if (typeof updatePowerupsForWizard === "function") {
-                updatePowerupsForWizard(wizard);
+                updatePowerupsForWizard(wizard, 1 / frameRate);
             }
             advanceAnimalsSimulation();
             // Tick static objects that need simulation (burning, growing, falling)
@@ -1473,34 +1781,12 @@ jQuery(() => {
                 perfStats.simMs = 0;
             }
 
-            // Use a scheduled present clock so frame pacing does not alias between 60/120.
-            const debugRenderCapActive = !!debugMode;
-            const effectiveRenderMaxFps = debugRenderCapActive ? debugRenderMaxFps : renderMaxFps;
-            const renderIntervalMs = effectiveRenderMaxFps > 0 ? (1000 / effectiveRenderMaxFps) : 0;
-
-            if (renderIntervalMs > 0) {
-                if (nextPresentAtMs === 0) {
-                    nextPresentAtMs = nowMs;
-                }
-
-                if ((nowMs + 0.25) < nextPresentAtMs) {
-                    requestAnimationFrame(renderFrame);
-                    return;
-                }
-
-                const latenessMs = nowMs - nextPresentAtMs;
-                if (latenessMs > renderIntervalMs * 4) {
-                    nextPresentAtMs = nowMs;
-                } else {
-                    nextPresentAtMs += renderIntervalMs;
-                }
-            } else {
-                nextPresentAtMs = nowMs;
-            }
+            // Keep render present uncapped; rely on browser vsync cadence only.
+            nextPresentAtMs = nowMs;
 
             const presentedDeltaMs = lastPresentedMs > 0
                 ? (nowMs - lastPresentedMs)
-                : (renderIntervalMs > 0 ? renderIntervalMs : 0);
+                : 0;
             lastPresentedMs = nowMs;
             perfStats.loopMs = presentedDeltaMs;
             perfStats.fps = presentedDeltaMs > 0 ? 1000 / presentedDeltaMs : 0;
@@ -1515,6 +1801,7 @@ jQuery(() => {
                 }
             }
             updateAnimalPreview();
+            updateTreeGrowPreview();
             presentGameFrame(animalVisibilitySnapshot.active);
             perfStats.drawMs = performance.now() - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
@@ -1883,6 +2170,17 @@ jQuery(() => {
             SpellSystem.showAnimalMenu(wizard);
             return;
         }
+        if (
+            wizard &&
+            wizard.currentSpell === "triggerarea" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showTriggerAreaMenu === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showTriggerAreaMenu(wizard);
+            return;
+        }
     });
 
     app.view.addEventListener("click", () => {
@@ -1962,16 +2260,25 @@ jQuery(() => {
         ) {
             SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
         }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateTriggerAreaVertexDrag === "function"
+        ) {
+            SpellSystem.updateTriggerAreaVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+        }
     })
 
     app.view.addEventListener("wheel", event => {
         if (
             !wizard ||
-            (wizard.currentSpell !== "placeobject" && wizard.currentSpell !== "blackdiamond") ||
+            (wizard.currentSpell !== "placeobject" && wizard.currentSpell !== "blackdiamond" && wizard.currentSpell !== "spawnanimal" && wizard.currentSpell !== "treegrow") ||
             typeof SpellSystem === "undefined" ||
             (
                 (wizard.currentSpell === "placeobject" && typeof SpellSystem.adjustPlaceableScale !== "function") ||
-                (wizard.currentSpell === "blackdiamond" && typeof SpellSystem.adjustPowerupPlacementScale !== "function")
+                (wizard.currentSpell === "blackdiamond" && typeof SpellSystem.adjustPowerupPlacementScale !== "function") ||
+                (wizard.currentSpell === "spawnanimal" && typeof SpellSystem.adjustAnimalSizeScale !== "function") ||
+                (wizard.currentSpell === "treegrow" && typeof SpellSystem.adjustTreeGrowSize !== "function")
             )
         ) {
             return;
@@ -2000,6 +2307,10 @@ jQuery(() => {
             SpellSystem.adjustPlaceableScale(wizard, delta);
         } else if (wizard.currentSpell === "blackdiamond") {
             SpellSystem.adjustPowerupPlacementScale(wizard, delta);
+        } else if (wizard.currentSpell === "spawnanimal") {
+            SpellSystem.adjustAnimalSizeScale(wizard, delta);
+        } else if (wizard.currentSpell === "treegrow") {
+            SpellSystem.adjustTreeGrowSize(wizard, delta);
         }
     }, { passive: false });
 
@@ -2061,6 +2372,33 @@ jQuery(() => {
             requestGameplayPointerLock(event);
         }
         if (
+            event.button === 0 &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.beginTriggerAreaVertexDrag === "function"
+        ) {
+            const rect = app.view.getBoundingClientRect();
+            const screenX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : (event.clientX - rect.left);
+            const screenY = Number.isFinite(mousePos.screenY) ? mousePos.screenY : (event.clientY - rect.top);
+            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+                ? { x: mousePos.worldX, y: mousePos.worldY }
+                : screenToWorld(screenX, screenY);
+            if (
+                event.shiftKey &&
+                typeof SpellSystem.insertTriggerAreaVertexOnEdge === "function" &&
+                SpellSystem.insertTriggerAreaVertexOnEdge(wizard, screenX, screenY, worldCoors.x, worldCoors.y)
+            ) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
+            if (SpellSystem.beginTriggerAreaVertexDrag(wizard, screenX, screenY)) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
+        }
+        if (
             wizard &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.beginDragSpell === "function" &&
@@ -2068,7 +2406,8 @@ jQuery(() => {
                 wizard.currentSpell === "wall" ||
                 wizard.currentSpell === "buildroad" ||
                 wizard.currentSpell === "firewall" ||
-                wizard.currentSpell === "vanish"
+                wizard.currentSpell === "vanish" ||
+                wizard.currentSpell === "editorvanish"
             )
         ) {
             event.preventDefault();
@@ -2101,6 +2440,16 @@ jQuery(() => {
             return;
         }
         if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.endTriggerAreaVertexDrag === "function" &&
+            SpellSystem.endTriggerAreaVertexDrag(wizard)
+        ) {
+            event.preventDefault();
+            suppressNextTriggerAreaToolClick = true;
+            return;
+        }
+        if (
             !wizard ||
             typeof SpellSystem === "undefined" ||
             typeof SpellSystem.completeDragSpell !== "function" ||
@@ -2121,14 +2470,15 @@ jQuery(() => {
     });
 
     app.view.addEventListener("click", event => {
+        if (suppressNextTriggerAreaToolClick) {
+            suppressNextTriggerAreaToolClick = false;
+            event.preventDefault();
+            return;
+        }
         const castWithSpace = !!keysPressed[" "];
         const castWithEditorKey = isEditorPlacementSpellActive() && isEditorPlacementKeyHeld();
         if (!castWithSpace && !castWithEditorKey) return;
 
-        if (castWithSpace && wizard.currentSpell === "treegrow") {
-            event.preventDefault();
-            return;
-        }
         event.preventDefault();
         const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
             ? {x: mousePos.worldX, y: mousePos.worldY}
@@ -2143,15 +2493,23 @@ jQuery(() => {
         wizard.destination = null;
         wizard.path = [];
         wizard.travelFrames = 0;
+        const isTriggerAreaCast = (wizard.currentSpell === "triggerarea");
+        const castWorldX = isTriggerAreaCast ? worldCoors.x : aim.worldX;
+        const castWorldY = isTriggerAreaCast ? worldCoors.y : aim.worldY;
         // Turn and cast at exact click coordinates.
-        wizard.turnToward(aim.x, aim.y);
+        if (!isTriggerAreaCast) {
+            wizard.turnToward(aim.x, aim.y);
+        }
         if (
             wizard.currentSpell === "wall" ||
             wizard.currentSpell === "buildroad" ||
             wizard.currentSpell === "firewall" ||
-            wizard.currentSpell === "vanish"
+            wizard.currentSpell === "vanish" ||
+            wizard.currentSpell === "editorvanish"
         ) return;
-        SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
+        SpellSystem.castWizardSpell(wizard, castWorldX, castWorldY, {
+            clickCount: Number.isFinite(event.detail) ? Number(event.detail) : 1
+        });
         // Prevent keyup quick-cast from firing a duplicate cast.
         spacebarDownAt = null;
     })
@@ -2186,6 +2544,10 @@ jQuery(() => {
 
         if (event.ctrlKey && keyLower === "e") {
             event.preventDefault();
+            // Close any open menus and clear keyboard focus when toggling mode
+            clearSpellMenuKeyboardFocus();
+            clearAuraMenuKeyboardFocus();
+            clearEditorMenuKeyboardFocus();
             if (
                 wizard &&
                 typeof SpellSystem !== "undefined" &&
@@ -2207,8 +2569,19 @@ jQuery(() => {
 
         if (event.key === "Tab") {
             event.preventDefault();
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (editorMenuVisible) {
                 $("#editorMenu").addClass("hidden");
+                clearEditorMenuKeyboardFocus();
+                return;
+            }
+            if (inEditorMode) {
+                // In editor mode, Tab opens spell menu (which includes editor options)
+                if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+                    SpellSystem.showMainSpellMenu(wizard);
+                    $("#spellMenu").removeClass("hidden");
+                    initSpellMenuKeyboardFocus();
+                }
                 return;
             }
             if (event.shiftKey) {
@@ -2252,6 +2625,30 @@ jQuery(() => {
             return;
         }
 
+        if (
+            event.key === "Escape" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.closeTriggerAreaHelpPanel === "function"
+        ) {
+            const panel = document.getElementById("triggerAreaHelpPanel");
+            if (panel && panel.style.display !== "none") {
+                event.preventDefault();
+                SpellSystem.closeTriggerAreaHelpPanel();
+                return;
+            }
+        }
+
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelTriggerAreaPlacement === "function" &&
+            SpellSystem.cancelTriggerAreaPlacement(wizard)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
         if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible || editorMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
@@ -2259,6 +2656,31 @@ jQuery(() => {
             $("#editorMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
             clearAuraMenuKeyboardFocus();
+            clearEditorMenuKeyboardFocus();
+            return;
+        }
+
+        if (
+            (event.key === "Delete" || event.key === "Backspace") &&
+            !(typeof globalThis !== "undefined" && typeof globalThis.isTextEntryElement === "function" && globalThis.isTextEntryElement(event.target)) &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.getTriggerAreaVertexSelection === "function" &&
+            SpellSystem.getTriggerAreaVertexSelection(wizard)
+        ) {
+            event.preventDefault();
+            if (typeof SpellSystem.deleteSelectedTriggerAreaVertex === "function") {
+                SpellSystem.deleteSelectedTriggerAreaVertex(wizard);
+            }
+            return;
+        }
+
+        if (editorMenuVisible && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            if (event.key === "ArrowLeft") moveEditorMenuKeyboardFocus(-1, 0);
+            if (event.key === "ArrowRight") moveEditorMenuKeyboardFocus(1, 0);
+            if (event.key === "ArrowUp") moveEditorMenuKeyboardFocus(0, -1);
+            if (event.key === "ArrowDown") moveEditorMenuKeyboardFocus(0, 1);
             return;
         }
 
@@ -2292,6 +2714,19 @@ jQuery(() => {
             return;
         }
 
+        if (editorMenuVisible && (event.key === "Enter" || event.key === " " || event.code === "Space")) {
+            event.preventDefault();
+            spacebarDownAt = null;
+            const activation = activateSelectedEditorToolFromMenu();
+            if (activation.activated && activation.shouldCloseMenu) {
+                $("#editorMenu").addClass("hidden");
+                clearEditorMenuKeyboardFocus();
+            } else if (activation.activated) {
+                initEditorMenuKeyboardFocus();
+            }
+            return;
+        }
+
         if (spellMenuVisible && (event.key === "Enter" || event.key === " " || event.code === "Space")) {
             event.preventDefault();
             spacebarDownAt = null;
@@ -2317,6 +2752,23 @@ jQuery(() => {
 
         // Track key state
         keysPressed[keyLower] = true;
+        if (
+            wizard &&
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.repeat &&
+            event.code === "KeyV"
+        ) {
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode && typeof SpellSystem !== "undefined" && typeof SpellSystem.setCurrentSpell === "function") {
+                event.preventDefault();
+                SpellSystem.setCurrentSpell(wizard, "editorvanish");
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+                return;
+            }
+        }
         if (keyLower === "e" && !event.ctrlKey) {
             if (
                 wizard &&
@@ -2330,10 +2782,13 @@ jQuery(() => {
         }
 
         // Combo binding: F+W selects Firewall spell.
+        // Only trigger when W is the newly pressed key (f already held), so that
+        // pressing F while walking (w held) still selects fireball, not firewall.
         if (
             wizard &&
             keysPressed['f'] &&
             keysPressed['w'] &&
+            keyLower === 'w' &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.setCurrentSpell === "function"
         ) {
@@ -2395,17 +2850,21 @@ jQuery(() => {
         if (event.key === " " || event.code === "Space") {
             event.preventDefault();
             if (!event.repeat) {
-                spacebarDownAt = Date.now();
-                if (
+                const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+                if (inEditorMode) {
+                    // In editor mode, space acts like holding E — activates placement of the current tool without switching it
+                    updateEditorPlacementActiveState(true);
+                } else if (
                     wizard &&
-                    wizard.currentSpell === "treegrow" &&
-                    mousePos.worldX !== undefined &&
-                    mousePos.worldY !== undefined
+                    typeof SpellSystem !== "undefined" &&
+                    typeof SpellSystem.isEditorSpellName === "function" &&
+                    typeof SpellSystem.activateSelectedSpellTool === "function" &&
+                    SpellSystem.isEditorSpellName(wizard.currentSpell)
                 ) {
-                    const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
-                    wizard.turnToward(aim.x, aim.y);
-                    SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
+                    SpellSystem.activateSelectedSpellTool(wizard);
+                    updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
                 }
+                spacebarDownAt = Date.now();
                 // SpawnAnimal: space alone just activates preview mode; click to cast
                 if (wizard && wizard.currentSpell === "spawnanimal") {
                     // no-op: preview shown in render loop, cast on click
@@ -2433,9 +2892,46 @@ jQuery(() => {
                 SpellSystem.toggleAura(wizard, "healing");
             }
             return;
+        } else if (
+            wizard &&
+            (event.key === "d" || event.key === "D") &&
+            !event.ctrlKey && !event.shiftKey && !event.repeat
+        ) {
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode && typeof SpellSystem.selectEditorCategory === "function") {
+                event.preventDefault();
+                SpellSystem.selectEditorCategory(wizard, "doors");
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+                return;
+            }
+        } else if (
+            wizard &&
+            (event.key === "W" || event.code === "KeyW") &&
+            event.shiftKey && !event.ctrlKey && !event.repeat
+        ) {
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode && typeof SpellSystem.selectEditorCategory === "function") {
+                event.preventDefault();
+                SpellSystem.selectEditorCategory(wizard, "windows");
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+                return;
+            }
         } else if (Object.keys(spellKeyBindings).includes(event.key.toUpperCase())) {
-            SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
+                // In editor mode, prefer editor key bindings for shared keys
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+            } else {
+                // Spell hotkeys always work (allows switching from editor to combat spell)
+                SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
+            }
             updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+        } else if (typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode) {
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+            }
         }
         
         // Toggle debug graphics with ctrl+d
@@ -2535,6 +3031,10 @@ jQuery(() => {
             updateEditorPlacementActiveState(false);
         }
         if (event.key === " " || event.code === "Space") {
+            const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            if (inEditorMode) {
+                updateEditorPlacementActiveState(false);
+            }
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
                 SpellSystem.cancelDragSpell(wizard, "wall");
                 SpellSystem.cancelDragSpell(wizard, "buildroad");
@@ -2563,21 +3063,11 @@ jQuery(() => {
                 wizard.currentSpell === "wall" ||
                 wizard.currentSpell === "buildroad" ||
                 wizard.currentSpell === "firewall" ||
-                wizard.currentSpell === "vanish"
+                wizard.currentSpell === "vanish" ||
+                wizard.currentSpell === "editorvanish"
             ) return;
             event.preventDefault();
-            const now = Date.now();
-            const downAt = spacebarDownAt;
             spacebarDownAt = null;
-
-            if (downAt && (now - downAt) <= 250) {
-                // Quick tap: cast immediately
-                if (wizard && mousePos.worldX !== undefined && mousePos.worldY !== undefined) {
-                    const aim = getWizardAimVectorTo(mousePos.worldX, mousePos.worldY);
-                    wizard.turnToward(aim.x, aim.y);
-                    SpellSystem.castWizardSpell(wizard, aim.worldX, aim.worldY);
-                }
-            }
         }
     })
 

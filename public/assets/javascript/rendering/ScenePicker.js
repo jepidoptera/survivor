@@ -1,7 +1,20 @@
 (function attachRenderingScenePicker(global) {
     const PICK_READBACK_HZ = 30;
     const PICK_READBACK_MIN_FRAME_DELAY = 1;
-    const PICK_RENDER_SCALE = 0.5;
+    const PICK_RENDER_BASE_SCALE = 0.5;
+    const PICK_RENDER_DEBUG_SCALE = 1;
+    const PICK_PREVIEW_BLACK_KEY_FS = `
+precision mediump float;
+varying vec2 vTextureCoord;
+uniform sampler2D uSampler;
+uniform float uBlackCutoff;
+void main(void) {
+    vec4 c = texture2D(uSampler, vTextureCoord);
+    float m = max(max(c.r, c.g), c.b);
+    float a = (m <= uBlackCutoff) ? 0.0 : c.a;
+    gl_FragColor = vec4(c.rgb, a);
+}
+`;
     const PICK_MESH_VS = `
 precision mediump float;
 attribute vec2 aVertexPosition;
@@ -137,6 +150,7 @@ void main(void) {
             this.pickContainer = new PIXI.Container();
             this.pickContainer.name = "renderingPickerContainer";
             this.pickPreviewSprite = null;
+            this.pickPreviewBlackKeyFilter = null;
             this.pickBackgroundSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
             this.pickBackgroundSprite.name = "renderingPickerBackground";
             this.pickBackgroundSprite.tint = 0x000000;
@@ -164,6 +178,7 @@ void main(void) {
             this.latestPickColor = new Uint8Array(4);
             this.pickLastCamera = null;
             this.pickLastDepthRange = null;
+            this.pickRenderScale = PICK_RENDER_BASE_SCALE;
             this.idAssignmentSalt = Math.floor(Math.random() * 0x7fffffff);
             this.activeTintStates = new Map();
             this.hoverProfiler = {
@@ -179,6 +194,20 @@ void main(void) {
                 getHoveredObject: (options = null) => this.getHoveredObject(options)
             };
             global.renderingScenePicker = this.publicApi;
+        }
+
+        isDebugModeEnabled() {
+            return !!(
+                (typeof debugMode !== "undefined" && debugMode) ||
+                global.debugMode
+            );
+        }
+
+        getPickRenderScale(showPickerScreen = false) {
+            if (showPickerScreen && this.isDebugModeEnabled()) {
+                return PICK_RENDER_DEBUG_SCALE;
+            }
+            return PICK_RENDER_BASE_SCALE;
         }
 
         ensureObjects() {
@@ -346,6 +375,14 @@ void main(void) {
 
         applyTintHighlightForTarget(target, ctx, pulse) {
             if (!target || target.gone || target.vanishing) return false;
+            if (target.type === "triggerArea" || target.isTriggerArea === true) {
+                const debugEnabled = !!(
+                    (typeof debugMode !== "undefined" && debugMode) ||
+                    global.debugMode
+                );
+                if (!debugEnabled) return false;
+                return this.drawHitboxOverlay(target, ctx, pulse);
+            }
             const display = this.getTargetDisplayObject(target, ctx);
             if (!display) return false;
             if (target.type === "roof" && typeof PIXI !== "undefined" && display instanceof PIXI.Container) {
@@ -544,6 +581,14 @@ void main(void) {
                 this.pickPreviewSprite.interactive = false;
                 this.pickPreviewSprite.visible = false;
                 this.pickPreviewSprite.alpha = 1;
+                if (typeof PIXI !== "undefined" && typeof PIXI.Filter === "function") {
+                    this.pickPreviewBlackKeyFilter = new PIXI.Filter(
+                        undefined,
+                        PICK_PREVIEW_BLACK_KEY_FS,
+                        { uBlackCutoff: 0.02 }
+                    );
+                    this.pickPreviewSprite.filters = [this.pickPreviewBlackKeyFilter];
+                }
             }
             if (!show) {
                 if (this.pickPreviewSprite.parent) {
@@ -565,8 +610,6 @@ void main(void) {
             this.pickPreviewSprite.visible = true;
             if (this.pickPreviewSprite.parent !== uiLayer) {
                 uiLayer.addChild(this.pickPreviewSprite);
-            } else {
-                uiLayer.setChildIndex(this.pickPreviewSprite, uiLayer.children.length - 1);
             }
         }
 
@@ -583,13 +626,13 @@ void main(void) {
                     : []);
             g.clear();
             g.visible = true;
-            g.lineStyle(2, 0xffffff, 1);
             let drewAny = false;
             for (let i = 0; i < items.length; i++) {
                 const obj = items[i];
                 if (!obj || obj.gone || obj.vanishing) continue;
                 const hitbox = obj.groundPlaneHitbox;
                 if (!hitbox) continue;
+                const isTriggerArea = !!(obj.type === "triggerArea" || obj.isTriggerArea === true);
                 const isCircle = (
                     hitbox.type === "circle" &&
                     Number.isFinite(hitbox.x) &&
@@ -597,6 +640,7 @@ void main(void) {
                     Number.isFinite(hitbox.radius)
                 );
                 if (isCircle) {
+                    g.lineStyle(2, isTriggerArea ? 0xffff00 : 0xffffff, 1);
                     const center = camera.worldToScreen(hitbox.x, hitbox.y, 0);
                     const rx = hitbox.radius * camera.viewscale;
                     const ry = hitbox.radius * camera.viewscale * camera.xyratio;
@@ -606,17 +650,82 @@ void main(void) {
                 }
                 const points = Array.isArray(hitbox.points) ? hitbox.points : null;
                 if (!points || points.length < 2) continue;
-                const first = points[0];
-                if (!first || !Number.isFinite(first.x) || !Number.isFinite(first.y)) continue;
-                const p0 = camera.worldToScreen(first.x, first.y, 0);
-                g.moveTo(p0.x, p0.y);
-                for (let p = 1; p < points.length; p++) {
+                const screenPoints = [];
+                for (let p = 0; p < points.length; p++) {
                     const point = points[p];
                     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
                     const screenPoint = camera.worldToScreen(point.x, point.y, 0);
-                    g.lineTo(screenPoint.x, screenPoint.y);
+                    if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
+                    screenPoints.push(screenPoint);
                 }
-                g.closePath();
+                if (screenPoints.length < 2) continue;
+                if (isTriggerArea) {
+                    const dashLengthPx = 10;
+                    const gapLengthPx = 6;
+                    g.lineStyle(3, 0xffff00, 1);
+                    for (let p = 0; p < screenPoints.length; p++) {
+                        const a = screenPoints[p];
+                        const b = screenPoints[(p + 1) % screenPoints.length];
+                        const dx = Number(b.x) - Number(a.x);
+                        const dy = Number(b.y) - Number(a.y);
+                        const len = Math.hypot(dx, dy);
+                        if (!(len > 0)) continue;
+                        const ux = dx / len;
+                        const uy = dy / len;
+                        let dist = 0;
+                        while (dist < len) {
+                            const dashStart = dist;
+                            const dashEnd = Math.min(len, dist + dashLengthPx);
+                            g.moveTo(
+                                Number(a.x) + ux * dashStart,
+                                Number(a.y) + uy * dashStart
+                            );
+                            g.lineTo(
+                                Number(a.x) + ux * dashEnd,
+                                Number(a.y) + uy * dashEnd
+                            );
+                            dist += dashLengthPx + gapLengthPx;
+                        }
+                    }
+                    const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null;
+                    const spellSystemRef = (typeof SpellSystem !== "undefined")
+                        ? SpellSystem
+                        : ((typeof globalThis !== "undefined" && globalThis.SpellSystem) ? globalThis.SpellSystem : null);
+                    const triggerEditActive = !!(
+                        wizardRef &&
+                        (
+                            wizardRef.currentSpell === "triggerarea" ||
+                            wizardRef.selectedSpellName === "triggerarea"
+                        )
+                    );
+                    const selection = (
+                        triggerEditActive &&
+                        spellSystemRef &&
+                        typeof spellSystemRef.getTriggerAreaVertexSelection === "function"
+                    )
+                        ? spellSystemRef.getTriggerAreaVertexSelection(wizardRef)
+                        : null;
+                    if (triggerEditActive) {
+                        g.lineStyle(2, 0xffffff, 1);
+                        for (let p = 0; p < screenPoints.length; p++) {
+                            const sp = screenPoints[p];
+                            const isSelected = !!(
+                                selection &&
+                                selection.area === obj &&
+                                selection.vertexIndex === p
+                            );
+                            g.drawCircle(sp.x, sp.y, isSelected ? 10 : 3);
+                        }
+                    }
+                } else {
+                    g.lineStyle(2, 0xffffff, 1);
+                    g.moveTo(screenPoints[0].x, screenPoints[0].y);
+                    for (let p = 1; p < screenPoints.length; p++) {
+                        const screenPoint = screenPoints[p];
+                        g.lineTo(screenPoint.x, screenPoint.y);
+                    }
+                    g.closePath();
+                }
                 drewAny = true;
             }
             g.visible = drewAny;
@@ -879,8 +988,11 @@ void main(void) {
             const frame = Number.isFinite(frameCount) ? Math.floor(Number(frameCount)) : -1;
             const texW = Math.max(1, Math.floor(Number(this.pickRenderTexture.width) || 1));
             const texH = Math.max(1, Math.floor(Number(this.pickRenderTexture.height) || 1));
-            const rtX = Math.max(0, Math.min(texW - 1, Math.floor(Number(screenX) * PICK_RENDER_SCALE)));
-            const rtY = Math.max(0, Math.min(texH - 1, Math.floor(Number(screenY) * PICK_RENDER_SCALE)));
+            const renderScale = (Number.isFinite(this.pickRenderScale) && this.pickRenderScale > 0)
+                ? this.pickRenderScale
+                : PICK_RENDER_BASE_SCALE;
+            const rtX = Math.max(0, Math.min(texW - 1, Math.floor(Number(screenX) * renderScale)));
+            const rtY = Math.max(0, Math.min(texH - 1, Math.floor(Number(screenY) * renderScale)));
             this.pickPendingReadback = {
                 x: rtX,
                 y: rtY,
@@ -1046,13 +1158,26 @@ void main(void) {
             return { proxy: mesh, type: "mesh", shader, useWorldPositions: (useWorldPositions || useLocalDepthPositions), useLocalDepthPositions };
         }
 
+        createPickGraphicsProxy() {
+            const graphics = new PIXI.Graphics();
+            graphics.name = "renderingPickerGraphicsProxy";
+            graphics.visible = false;
+            graphics.interactive = false;
+            graphics.blendMode = PIXI.BLEND_MODES.NORMAL;
+            return { proxy: graphics, type: "graphics" };
+        }
+
         ensurePickProxyForDisplayObject(item, displayObj) {
             if (!item || !displayObj) return null;
             // Key proxy records by display object, not logical item.
             // Roofs submit many child meshes for one item and each needs its own proxy.
             let record = this.pickProxyByObject.get(displayObj) || null;
             if (!record) {
-                if (displayObj instanceof PIXI.Sprite) {
+                if (item && item.type === "triggerArea") {
+                    const created = this.createPickGraphicsProxy();
+                    if (!created) return null;
+                    record = { ...created, sourceType: PIXI.Graphics };
+                } else if (displayObj instanceof PIXI.Sprite) {
                     const created = this.createPickSpriteProxy();
                     if (!created) return null;
                     record = { ...created, sourceType: PIXI.Sprite };
@@ -1071,6 +1196,46 @@ void main(void) {
         syncPickProxyFromDisplayObject(record, displayObj, rgbColor, item = null) {
             if (!record || !record.proxy || !displayObj) return false;
             const proxy = record.proxy;
+            if (record.type === "graphics") {
+                const camera = this.pickLastCamera || null;
+                const points = (
+                    item &&
+                    item.groundPlaneHitbox &&
+                    Array.isArray(item.groundPlaneHitbox.points)
+                ) ? item.groundPlaneHitbox.points : null;
+                if (!camera || !points || points.length < 3) {
+                    proxy.visible = false;
+                    return false;
+                }
+                proxy.clear();
+                const colorHex = ((Number(rgbColor[0]) & 255) << 16) |
+                    ((Number(rgbColor[1]) & 255) << 8) |
+                    (Number(rgbColor[2]) & 255);
+                proxy.beginFill(colorHex, 1);
+                let moved = false;
+                for (let i = 0; i < points.length; i++) {
+                    const pt = points[i];
+                    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+                    const sp = camera.worldToScreen(Number(pt.x), Number(pt.y), 0);
+                    if (!sp || !Number.isFinite(sp.x) || !Number.isFinite(sp.y)) continue;
+                    if (!moved) {
+                        proxy.moveTo(sp.x, sp.y);
+                        moved = true;
+                    } else {
+                        proxy.lineTo(sp.x, sp.y);
+                    }
+                }
+                if (!moved) {
+                    proxy.endFill();
+                    proxy.visible = false;
+                    return false;
+                }
+                proxy.closePath();
+                proxy.endFill();
+                proxy.visible = true;
+                proxy.alpha = 1;
+                return true;
+            }
             if (record.type === "spriteMesh") {
                 const texture = displayObj.texture || PIXI.Texture.WHITE;
                 const sxAbs = Math.max(1e-6, Math.abs(Number(displayObj.scale && displayObj.scale.x) || 0));
@@ -1215,7 +1380,7 @@ void main(void) {
                         record.shader.uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
                         record.shader.uniforms.uWrapAnchorWorld[0] = anchorX;
                         record.shader.uniforms.uWrapAnchorWorld[1] = anchorY;
-                        record.shader.uniforms.uViewScale = (Number(camera && camera.viewscale) || 1) * PICK_RENDER_SCALE;
+                        record.shader.uniforms.uViewScale = (Number(camera && camera.viewscale) || 1) * this.pickRenderScale;
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
                         record.shader.uniforms.uDepthRange[1] = Number(depthRange && depthRange.invSpan) || 1;
@@ -1274,15 +1439,18 @@ void main(void) {
             const setupStartMs = performance.now();
             const screenWidth = Math.max(1, Math.round(Number(app.screen && app.screen.width) || 1));
             const screenHeight = Math.max(1, Math.round(Number(app.screen && app.screen.height) || 1));
-            const scaledWidth = Math.max(1, Math.round(screenWidth * PICK_RENDER_SCALE));
-            const scaledHeight = Math.max(1, Math.round(screenHeight * PICK_RENDER_SCALE));
+            const showPickerScreen = !!global.renderingShowPickerScreen;
+            const renderScale = this.getPickRenderScale(showPickerScreen);
+            this.pickRenderScale = renderScale;
+            const scaledWidth = Math.max(1, Math.round(screenWidth * renderScale));
+            const scaledHeight = Math.max(1, Math.round(screenHeight * renderScale));
             this.ensurePickRenderTargets(scaledWidth, scaledHeight);
             this.pickRenderTexture = this.acquirePickRenderTexture();
             if (!this.pickRenderTexture) return;
             this.ensurePickRenderTextureDepthAttachment();
             this.recordHoverProfileSection("pickPass.setupRenderTarget", performance.now() - setupStartMs);
 
-            this.pickContainer.scale.set(PICK_RENDER_SCALE, PICK_RENDER_SCALE);
+            this.pickContainer.scale.set(renderScale, renderScale);
             this.pickContainer.removeChildren();
             this.pickProxiesActiveThisFrame.clear();
             this.pickEntriesThisFrame.length = 0;
@@ -1291,8 +1459,6 @@ void main(void) {
             this.pickBackgroundSprite.height = screenHeight;
             this.pickBackgroundSprite.visible = true;
             this.pickContainer.addChild(this.pickBackgroundSprite);
-            const showPickerScreen = !!global.renderingShowPickerScreen;
-
             const explicitDrawOrder = Array.isArray(ctx && ctx.pickRenderItems)
                 ? ctx.pickRenderItems
                 : null;
@@ -1631,6 +1797,7 @@ void main(void) {
                 currentSpell === "buildroad" ||
                 currentSpell === "firewall" ||
                 currentSpell === "vanish" ||
+                currentSpell === "editorvanish" ||
                 currentSpell === "fireball" ||
                 currentSpell === "placeobject" ||
                 currentSpell === "editscript"
@@ -1741,7 +1908,7 @@ void main(void) {
 
             let queuedVanish = null;
             if (
-                currentSpell === "vanish" &&
+                (currentSpell === "vanish" || currentSpell === "editorvanish") &&
                 spellSystem &&
                 typeof spellSystem.getVanishDragHighlightState === "function"
             ) {
@@ -1787,7 +1954,7 @@ void main(void) {
                 return;
             }
 
-            if (currentSpell === "vanish" && target.type === "wallSection") {
+            if ((currentSpell === "vanish" || currentSpell === "editorvanish") && target.type === "wallSection") {
                 const vanishPreview = (
                     spellSystem &&
                     typeof spellSystem.getVanishWallPreviewPolygonForHover === "function" &&

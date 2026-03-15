@@ -209,6 +209,24 @@ class Vanish extends globalThis.Spell {
     }
     
     vanishTarget(target, impactPoint = null) {
+        const isAnimalTarget = Array.isArray(animals) && animals.includes(target);
+        if (isAnimalTarget) {
+            const vanishDamage = 17;
+            if (typeof target.takeDamage === "function") {
+                target.takeDamage(vanishDamage, { isSpell: true });
+            }
+            if (target.gone || target.vanishing) {
+                if (typeof message === "function") {
+                    message(`${target.type} vanishes!`);
+                }
+                if (typeof saveGame === "function") saveGame();
+            } else if (target.fleeRadius > 0) {
+                target.flee();
+            } else if (target.chaseRadius > 0) {
+                target.attack(wizard);
+            }
+            return;
+        }
         if (
             target &&
             target.type === "wallSection" &&
@@ -266,5 +284,108 @@ class Vanish extends globalThis.Spell {
     }
 }
 
+class EditorVanish extends Vanish {
+    constructor(x, y) {
+        super(x, y);
+        this.magicCost = 0;
+    }
+
+    cast(targetX, targetY) {
+        this.visible = true;
+        this.x = wizard.x;
+        this.y = wizard.y;
+        this.z = 0;
+        const travelPlan = buildVanishTravelPlan(this.x, this.y, targetX, targetY, {
+            speed: this.speed,
+            range: this.range,
+            frameRateValue: frameRate,
+            mapRef: this.map || wizard.map || null
+        });
+        if (!travelPlan) {
+            this.visible = false;
+            return this;
+        }
+
+        this.totalDist = travelPlan.totalDist;
+        this.movement = {
+            x: travelPlan.stepX,
+            y: travelPlan.stepY,
+            z: 0,
+        };
+        this.x += this.movement.x;
+        this.y += this.movement.y;
+        this.traveledDist = 0;
+
+        this.castInterval = setInterval(() => {
+            if (paused) return;
+            const forcedAim = this.getForcedTargetAimPoint();
+            if (forcedAim) {
+                this.retargetMovementTo(forcedAim);
+            }
+            this.x += this.movement.x;
+            this.y += this.movement.y;
+            if (this.map && typeof this.map.wrapWorldX === "function") {
+                this.x = this.map.wrapWorldX(this.x);
+            }
+            if (this.map && typeof this.map.wrapWorldY === "function") {
+                this.y = this.map.wrapWorldY(this.y);
+            }
+            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
+
+            if (!this.forcedTarget) {
+                this.land();
+            }
+
+            if (this.traveledDist >= this.totalDist) {
+                if (this.forcedTarget) {
+                    const obj = this.forcedTarget;
+                    if (obj && !obj.gone && !obj.vanishing) {
+                        this.vanishTarget(obj, { x: this.x, y: this.y });
+                    }
+                }
+                this.deactivate();
+                return;
+            }
+        }, 1000 / frameRate);
+        return this;
+    }
+
+    vanishTarget(target, impactPoint = null) {
+        if (!target || target.gone || target.vanishing) return;
+        if (target.type === "wallSection" && target._vanishAsWholeSection) {
+            target._disableChunkSplitOnVanish = true;
+        }
+        target.vanishing = true;
+        target.vanishStartTime = frameCount;
+        target.vanishDuration = 0;
+        target.percentVanished = 1;
+        if (impactPoint && Number.isFinite(impactPoint.x) && Number.isFinite(impactPoint.y)) {
+            target._vanishWorldPoint = {
+                x: Number(impactPoint.x),
+                y: Number(impactPoint.y)
+            };
+        } else {
+            target._vanishWorldPoint = null;
+        }
+        if (target._vanishFinalizeTimeout) {
+            clearTimeout(target._vanishFinalizeTimeout);
+            target._vanishFinalizeTimeout = null;
+        }
+        if (typeof target.removeFromGame === "function") {
+            target.removeFromGame();
+        } else if (typeof target.remove === "function") {
+            target.remove();
+        } else if (typeof target.delete === "function") {
+            target.delete();
+        } else {
+            target.gone = true;
+        }
+        target._vanishWorldPoint = null;
+        target.vanishing = false;
+        target._vanishAsWholeSection = false;
+    }
+}
+
 
 globalThis.Vanish = Vanish;
+globalThis.EditorVanish = EditorVanish;

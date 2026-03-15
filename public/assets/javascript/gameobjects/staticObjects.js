@@ -24,6 +24,30 @@ function normalizeDoorEventScript(value) {
     return trimmed.length > 0 ? trimmed : "";
 }
 
+function cloneCompositeLayers(layers) {
+    if (!Array.isArray(layers)) return null;
+    const out = layers
+        .map(layer => ({
+            name: String((layer && layer.name) || ""),
+            uRegion: (Array.isArray(layer && layer.uRegion) && layer.uRegion.length >= 2)
+                ? [Number(layer.uRegion[0]) || 0, Number(layer.uRegion[1]) || 1]
+                : [0, 1]
+        }))
+        .filter(layer => Array.isArray(layer.uRegion) && layer.uRegion.length >= 2);
+    return out.length > 0 ? out : null;
+}
+
+function resolveDoorCompositeLayersForState(layers, options = {}) {
+    const normalized = cloneCompositeLayers(layers);
+    if (!normalized || normalized.length === 0) return null;
+    const leafOnly = !!(options && options.leafOnly);
+    if (!leafOnly) return normalized;
+    if (normalized.length >= 2) {
+        return [normalized[1]];
+    }
+    return [normalized[0]];
+}
+
 function normalizeTextureBasename(texturePath) {
     if (typeof texturePath !== "string" || texturePath.length === 0) return "";
     const rawName = texturePath.split("/").pop() || "";
@@ -104,7 +128,13 @@ async function fetchPlaceableMetadataForCategory(category) {
     if (placeableMetadataFetchPromises.has(safeCategory)) {
         return placeableMetadataFetchPromises.get(safeCategory);
     }
-    const request = fetch(`/assets/images/${encodeURIComponent(safeCategory)}/items.json`, { cache: "no-cache" })
+    const categoryDirByKey = {
+        signs: 'signs',
+        roof: 'roofs',
+        walls: 'walls'
+    };
+    const dirName = categoryDirByKey[safeCategory] || safeCategory;
+    const request = fetch(`/assets/images/${encodeURIComponent(dirName)}/items.json`, { cache: "no-cache" })
         .then(async response => {
             if (!response.ok) return null;
             const parsed = await response.json();
@@ -775,6 +805,7 @@ precision mediump float;
 attribute vec3 aWorldPosition;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
+uniform vec2 uScreenJitter;
 uniform vec2 uCameraWorld;
 uniform float uViewScale;
 uniform float uXyRatio;
@@ -782,7 +813,9 @@ uniform vec2 uDepthRange;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
+uniform float uZOffset;
 varying vec2 vUvs;
+varying float vWorldZ;
 void main(void) {
     float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
     float anchorDy = uWrapAnchorWorld.y - uCameraWorld.y;
@@ -813,18 +846,27 @@ void main(void) {
         (screenX / sx) * 2.0 - 1.0,
         1.0 - (screenY / sy) * 2.0
     );
-    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    clip += vec2(
+        (uScreenJitter.x / sx) * 2.0,
+        -(uScreenJitter.y / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0 + (uZOffset * 0.001), 1.0);
     vUvs = aUvs;
+    vWorldZ = aWorldPosition.z;
 }
 `;
     static _depthBillboardFs = `
 precision mediump float;
 varying vec2 vUvs;
+varying float vWorldZ;
+uniform float uZOffset;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
+uniform float uClipMinZ;
 void main(void) {
     vec4 tex = texture2D(uSampler, vUvs) * uTint;
+    if (vWorldZ < uClipMinZ) discard;
     if (tex.a < uAlphaCutoff) discard;
     gl_FragColor = tex;
 }
@@ -861,6 +903,7 @@ void main(void) {
         this.height = height;
         this.blocksTile = true;
         this.castsLosShadows = true;
+        this.flammable = true;
         this.groundRadius = 0.5;
         this.visualRadius = Math.max(width, height) / 2;
 
@@ -1083,6 +1126,7 @@ void main(void) {
             .addIndex(indices);
         const shader = pixi.Shader.from(StaticObject._depthBillboardVs, StaticObject._depthBillboardFs, {
             uScreenSize: new Float32Array([1, 1]),
+            uScreenJitter: new Float32Array([0, 0]),
             uCameraWorld: new Float32Array([0, 0]),
             uViewScale: 1,
             uXyRatio: 1,
@@ -1092,6 +1136,8 @@ void main(void) {
             uWrapAnchorWorld: new Float32Array([0, 0]),
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
+            uClipMinZ: -1000000,
+            uZOffset: 0.0,
             uSampler: pixi.Texture.WHITE
         });
         const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
@@ -1104,6 +1150,107 @@ void main(void) {
         this._depthBillboardLastUvSignature = "";
         this._depthBillboardMeshMode = desiredMode;
         this._depthBillboardMesh = mesh;
+        return mesh;
+    }
+
+    static _setCompositeLayerUvs(mesh, texture, uRegion, useDualWallPlanes = false) {
+        if (!mesh || !mesh.geometry || !texture || !texture.baseTexture) return false;
+        const uvBuffer = mesh.geometry.getBuffer("aUvs");
+        if (!uvBuffer) return false;
+
+        const baseW = Number(texture.baseTexture.realWidth || texture.baseTexture.width || 0);
+        const baseH = Number(texture.baseTexture.realHeight || texture.baseTexture.height || 0);
+        if (!(baseW > 0) || !(baseH > 0)) return false;
+
+        const frame = texture.frame || new PIXI.Rectangle(0, 0, baseW, baseH);
+        
+        let localU0 = 0, localU1 = 1;
+        if (Array.isArray(uRegion) && uRegion.length >= 2) {
+            localU0 = Number(uRegion[0]) || 0;
+            localU1 = Number(uRegion[1]) || 1;
+        }
+
+        const uFw = frame.width;
+        let u0 = (frame.x + localU0 * uFw) / baseW;
+        let u1 = (frame.x + localU1 * uFw) / baseW;
+
+        const v0 = Number(frame.y) / baseH;
+        const v1 = (Number(frame.y) + Number(frame.height)) / baseH;
+
+        if (useDualWallPlanes) {
+            uvBuffer.data = new Float32Array([
+                u0, v1, u1, v1, u1, v0, u0, v0,
+                u1, v1, u0, v1, u0, v0, u1, v0
+            ]);
+        } else {
+            uvBuffer.data = new Float32Array([
+                u0, v1, u1, v1, u1, v0, u0, v0
+            ]);
+        }
+        uvBuffer.update();
+        return true;
+    }
+
+    _ensureCompositeUnderlayMesh(useDualWallPlanes, forceSinglePlane, alphaCutoff = 0.08) {
+        const pixi = typeof PIXI !== "undefined" ? PIXI : null;
+        if (!pixi) return null;
+        
+        const mode = useDualWallPlanes ? "dual" : "single";
+        if (this._compositeUnderlayMesh && !this._compositeUnderlayMesh.destroyed && this._compositeUnderlayMeshMode === mode) {
+            return this._compositeUnderlayMesh;
+        }
+
+        if (this._compositeUnderlayMesh && typeof this._compositeUnderlayMesh.destroy === "function") {
+            if (this._compositeUnderlayMesh.parent) this._compositeUnderlayMesh.parent.removeChild(this._compositeUnderlayMesh);
+            this._compositeUnderlayMesh.destroy({ children: false, texture: false });
+            this._compositeUnderlayMesh = null;
+        }
+
+        const state = StaticObject.ensureDepthBillboardState(pixi);
+        if (!state) return null;
+
+        const positionsVertexCount = useDualWallPlanes ? 24 : 12;
+        const uvs = useDualWallPlanes
+            ? new Float32Array([0,1, 1,1, 1,0, 0,0, 1,1, 0,1, 0,0, 1,0])
+            : new Float32Array([0,1, 1,1, 1,0, 0,0]);
+            
+        const indices = useDualWallPlanes
+            ? new Uint16Array([0,1,2, 0,2,3, 4,5,6, 4,6,7])
+            : new Uint16Array([0,1,2, 0,2,3]);
+
+        this._compositeUnderlayPositions = new Float32Array(positionsVertexCount);
+
+        const geometry = new pixi.Geometry()
+            .addAttribute("aWorldPosition", this._compositeUnderlayPositions, 3)
+            .addAttribute("aUvs", uvs, 2)
+            .addIndex(indices);
+
+        const shader = pixi.Shader.from(StaticObject._depthBillboardVs, StaticObject._depthBillboardFs, {
+            uScreenSize: new Float32Array([1, 1]),
+            uScreenJitter: new Float32Array([0, 0]),
+            uCameraWorld: new Float32Array([0, 0]),
+            uViewScale: 1,
+            uXyRatio: 1,
+            uDepthRange: new Float32Array([0, 1]),
+            uWorldSize: new Float32Array([0, 0]),
+            uWrapEnabled: new Float32Array([0, 0]),
+            uWrapAnchorWorld: new Float32Array([0, 0]),
+            uTint: new Float32Array([1, 1, 1, 1]),
+            uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
+            uClipMinZ: -1000000,
+            uZOffset: 0.0,
+            uSampler: pixi.Texture.WHITE
+        });
+
+        const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
+        mesh.visible = false;
+        
+        if (this.map && this.map.game && this.map.game.layers && this.map.game.layers.depthLayer) {
+            this.map.game.layers.depthLayer.addChildAt(mesh, 0);
+        }
+        
+        this._compositeUnderlayMeshMode = mode;
+        this._compositeUnderlayMesh = mesh;
         return mesh;
     }
 
@@ -1198,15 +1345,25 @@ void main(void) {
             }
             if (!faceCenters) {
                 useDualWallPlanes = false;
-            } else if (mazeMode) {
-                const playerRef = (options && options.player && Number.isFinite(options.player.x) && Number.isFinite(options.player.y))
-                    ? { x: Number(options.player.x), y: Number(options.player.y) }
-                    : ((typeof globalThis !== "undefined" && globalThis.wizard && Number.isFinite(globalThis.wizard.x) && Number.isFinite(globalThis.wizard.y))
-                        ? { x: Number(globalThis.wizard.x), y: Number(globalThis.wizard.y) }
-                        : null);
-                const selectedSide = chooseMountedWallFaceCenterForViewer(faceCenters, playerRef, this.map || (ctx && ctx.map) || null);
-                if (selectedSide && faceCenters[selectedSide]) {
-                    mazeKeepSide = selectedSide;
+            } else {
+                const forcedSide = (options && typeof options.forceMountedWallSide === "string")
+                    ? options.forceMountedWallSide.trim().toLowerCase()
+                    : "";
+                if ((forcedSide === "front" || forcedSide === "back") && faceCenters[forcedSide]) {
+                    mazeKeepSide = forcedSide;
+                } else if (forcedSide === "center") {
+                    mazeKeepSide = "center";
+                }
+                if (mazeMode) {
+                    const playerRef = (options && options.player && Number.isFinite(options.player.x) && Number.isFinite(options.player.y))
+                        ? { x: Number(options.player.x), y: Number(options.player.y) }
+                        : ((typeof globalThis !== "undefined" && globalThis.wizard && Number.isFinite(globalThis.wizard.x) && Number.isFinite(globalThis.wizard.y))
+                            ? { x: Number(globalThis.wizard.x), y: Number(globalThis.wizard.y) }
+                            : null);
+                    const selectedSide = chooseMountedWallFaceCenterForViewer(faceCenters, playerRef, this.map || (ctx && ctx.map) || null);
+                    if (!mazeKeepSide && selectedSide && faceCenters[selectedSide]) {
+                        mazeKeepSide = selectedSide;
+                    }
                 }
             }
         }
@@ -1242,6 +1399,17 @@ void main(void) {
         const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
         const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
         const worldZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        const doorHitShakeOffset = (
+            !this.isOpen &&
+            !this._doorLockedOpen &&
+            !this.isFallenDoorEffect &&
+            Array.isArray(this.compositeLayers) &&
+            this.compositeLayers.length >= 2 &&
+            typeof this.getDoorHitShakeScreenOffset === "function"
+        ) ? this.getDoorHitShakeScreenOffset() : null;
+        const shakeDx = (doorHitShakeOffset && Number.isFinite(doorHitShakeOffset.x)) ? Number(doorHitShakeOffset.x) : 0;
+        const shakeDy = (doorHitShakeOffset && Number.isFinite(doorHitShakeOffset.y)) ? Number(doorHitShakeOffset.y) : 0;
+        const hasDoorHitShake = Math.abs(shakeDx) > 1e-3 || Math.abs(shakeDy) > 1e-3;
 
         let signature = "";
         if (useDualWallPlanes) {
@@ -1273,7 +1441,20 @@ void main(void) {
             let backTR = { x: backBR.x, y: backBR.y, z: zTop };
             let backTL = { x: backBL.x, y: backBL.y, z: zTop };
 
-            if (mazeKeepSide === "front") {
+            if (mazeKeepSide === "center") {
+                const centerBL = { x: (frontBL.x + backBL.x) * 0.5, y: (frontBL.y + backBL.y) * 0.5, z: zBottom };
+                const centerBR = { x: (frontBR.x + backBR.x) * 0.5, y: (frontBR.y + backBR.y) * 0.5, z: zBottom };
+                const centerTR = { x: (frontTR.x + backTR.x) * 0.5, y: (frontTR.y + backTR.y) * 0.5, z: zTop };
+                const centerTL = { x: (frontTL.x + backTL.x) * 0.5, y: (frontTL.y + backTL.y) * 0.5, z: zTop };
+                frontBL = { ...centerBL };
+                frontBR = { ...centerBR };
+                frontTR = { ...centerTR };
+                frontTL = { ...centerTL };
+                backBL = { ...centerBL };
+                backBR = { ...centerBR };
+                backTR = { ...centerTR };
+                backTL = { ...centerTL };
+            } else if (mazeKeepSide === "front") {
                 backBL = { ...frontBL };
                 backBR = { ...frontBR };
                 backTR = { ...frontTR };
@@ -1409,6 +1590,8 @@ void main(void) {
         const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
         uniforms.uScreenSize[0] = Math.max(1, screenW);
         uniforms.uScreenSize[1] = Math.max(1, screenH);
+        uniforms.uScreenJitter[0] = hasDoorHitShake ? shakeDx : 0;
+        uniforms.uScreenJitter[1] = hasDoorHitShake ? shakeDy : 0;
         uniforms.uCameraWorld[0] = Number(cam.x) || 0;
         uniforms.uCameraWorld[1] = Number(cam.y) || 0;
         const mapRef = this.map || (ctx && ctx.map) || null;
@@ -1431,7 +1614,73 @@ void main(void) {
         uniforms.uTint[2] = (tint & 255) / 255;
         uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
         uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
+        uniforms.uClipMinZ = this._scriptSinkState ? 0 : -1000000;
         uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
+        uniforms.uZOffset = 0.0;
+        this._compositeUnderlayShouldRender = false;
+
+        // --- Composite layers ---
+        if (Array.isArray(this.compositeLayers) && this.compositeLayers.length >= 1) {
+            const archLayer = this.compositeLayers[0];
+            const doorLayer = this.compositeLayers.length >= 2 ? this.compositeLayers[1] : null;
+
+            if (this.isOpen) {
+                // If open, just show arch on the main mesh (no underlay needed)
+                StaticObject._setCompositeLayerUvs(mesh, sourceTexture, archLayer.uRegion, useDualWallPlanes);
+                if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
+            } else if (doorLayer) {
+                // If closed, draw arch on underlay, and door on main mesh
+                StaticObject._setCompositeLayerUvs(mesh, sourceTexture, doorLayer.uRegion, useDualWallPlanes);
+                
+                // Keep the door leaf decisively in front of the frame to avoid z-fighting,
+                // especially while the leaf is screen-jittering from hit shake.
+                mesh.shader.uniforms.uZOffset = hasDoorHitShake ? -6.0 : -3.0;
+
+                const underlayMesh = this._ensureCompositeUnderlayMesh(useDualWallPlanes, false, options.alphaCutoff);
+                if (underlayMesh && underlayMesh.shader && underlayMesh.shader.uniforms) {
+                    if (this._depthBillboardWorldPositions && this._compositeUnderlayPositions) {
+                        const src = this._depthBillboardWorldPositions;
+                        const dst = this._compositeUnderlayPositions;
+                        if (src.length === dst.length) {
+                            for (let i = 0; i < src.length; i++) dst[i] = src[i];
+                            underlayMesh.geometry.getBuffer("aWorldPosition").update();
+                        }
+                    }
+                    StaticObject._setCompositeLayerUvs(underlayMesh, sourceTexture, archLayer.uRegion, useDualWallPlanes);
+                    const uU = underlayMesh.shader.uniforms;
+                    uU.uScreenSize[0] = uniforms.uScreenSize[0];
+                    uU.uScreenSize[1] = uniforms.uScreenSize[1];
+                    uU.uScreenJitter[0] = 0;
+                    uU.uScreenJitter[1] = 0;
+                    uU.uCameraWorld[0] = uniforms.uCameraWorld[0];
+                    uU.uCameraWorld[1] = uniforms.uCameraWorld[1];
+                    uU.uWrapEnabled[0] = uniforms.uWrapEnabled[0];
+                    uU.uWrapEnabled[1] = uniforms.uWrapEnabled[1];
+                    uU.uWrapAnchorWorld[0] = uniforms.uWrapAnchorWorld[0];
+                    uU.uWrapAnchorWorld[1] = uniforms.uWrapAnchorWorld[1];
+                    uU.uViewScale = uniforms.uViewScale;
+                    uU.uXyRatio = uniforms.uXyRatio;
+                    uU.uDepthRange[0] = uniforms.uDepthRange[0];
+                    uU.uDepthRange[1] = uniforms.uDepthRange[1];
+                    uU.uTint[0] = uniforms.uTint[0];
+                    uU.uTint[1] = uniforms.uTint[1];
+                    uU.uTint[2] = uniforms.uTint[2];
+                    uU.uTint[3] = uniforms.uTint[3];
+                    uU.uAlphaCutoff = uniforms.uAlphaCutoff;
+                    uU.uClipMinZ = uniforms.uClipMinZ;
+                    uU.uSampler = uniforms.uSampler;
+                    uU.uZOffset = 1.5;
+                    underlayMesh.visible = true;
+                    this._compositeUnderlayShouldRender = true;
+                }
+            } else {
+                StaticObject._setCompositeLayerUvs(mesh, sourceTexture, archLayer.uRegion, useDualWallPlanes);
+                if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
+            }
+        } else {
+            if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
+        }
+
         mesh.visible = true;
         return mesh;
     }
@@ -1517,6 +1766,10 @@ void main(void) {
     }
     
     ignite() {
+        if (this.flammable === false) {
+            this.isOnFire = false;
+            return;
+        }
         this.isOnFire = true;
         // Register for simulation ticking
         if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
@@ -1759,6 +2012,11 @@ void main(void) {
                         groundPlaneHitboxOverridePoints: Array.isArray(data.groundPlaneHitboxOverridePoints)
                             ? data.groundPlaneHitboxOverridePoints
                             : undefined,
+                        isOpen: !!data.isOpen,
+                        isFallenDoorEffect: !!data.isFallenDoorEffect,
+                        doorLockedOpen: !!data.doorLockedOpen,
+                        doorFallAngle: Number.isFinite(data.doorFallAngle) ? Number(data.doorFallAngle) : undefined,
+                        doorFallNormalSign: Number.isFinite(data.doorFallNormalSign) ? Number(data.doorFallNormalSign) : undefined,
                         playerEnters: normalizeDoorEventScript(data.playerEnters),
                         playerExits: normalizeDoorEventScript(data.playerExits),
                         castsLosShadows: (typeof data.castsLosShadows === "boolean")
@@ -1772,6 +2030,15 @@ void main(void) {
                 case 'playground':
                     obj = new Playground(node, textures, map);
                     break;
+                case 'triggerArea':
+                    if (typeof TriggerArea === 'function') {
+                        obj = new TriggerArea({ x: data.x, y: data.y }, map, {
+                            points: Array.isArray(data.points) ? data.points : [],
+                            playerEnters: normalizeDoorEventScript(data.playerEnters),
+                            playerExits: normalizeDoorEventScript(data.playerExits)
+                        });
+                    }
+                    break;
                 default:
                     obj = new StaticObject(data.type, node, 4, 4, textures, map);
             }
@@ -1784,6 +2051,10 @@ void main(void) {
                 obj.x = data.x;
                 obj.y = data.y;
                 if (data.hp !== undefined) obj.hp = data.hp;
+                if (data.falling) {
+                    obj.falling = true;
+                    obj.fallStart = typeof frameCount !== "undefined" ? frameCount : 0;
+                }
                 if (data.isOnFire) obj.ignite();
                 // Also register for growing/falling state restored from save
                 if (obj.isGrowing || obj.falling) {
@@ -2110,6 +2381,10 @@ class Tree extends StaticObject {
             return null;
         }
         this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
+        
+        if (Array.isArray(this.compositeLayers) && this.compositeLayers[0]) {
+            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, this.compositeLayers[0].uRegion, false);
+        }
 
         const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
         const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
@@ -2194,6 +2469,8 @@ class Tree extends StaticObject {
         const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
         uniforms.uScreenSize[0] = Math.max(1, screenW);
         uniforms.uScreenSize[1] = Math.max(1, screenH);
+        uniforms.uScreenJitter[0] = 0;
+        uniforms.uScreenJitter[1] = 0;
         uniforms.uCameraWorld[0] = Number(camera.x) || 0;
         uniforms.uCameraWorld[1] = Number(camera.y) || 0;
         const mapRef = this.map || (ctx && ctx.map) || null;
@@ -2216,6 +2493,7 @@ class Tree extends StaticObject {
         uniforms.uTint[2] = (tint & 255) / 255;
         uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
         uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
+        uniforms.uClipMinZ = this._scriptSinkState ? 0 : -1000000;
         uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
         mesh.visible = true;
         return mesh;
@@ -2314,6 +2592,21 @@ class PlacedObject extends StaticObject {
         if (this.rotationAxis === "none") {
             this.placementRotation = 0;
         }
+        
+        this.isOpen = !!options.isOpen;
+        this.isFallenDoorEffect = !!options.isFallenDoorEffect;
+        this.doorFallAngle = Number.isFinite(options.doorFallAngle)
+            ? Math.max(0, Math.min(90, Number(options.doorFallAngle)))
+            : 0;
+        this._doorFallNormalSign = Number.isFinite(options.doorFallNormalSign)
+            ? (Number(options.doorFallNormalSign) >= 0 ? 1 : -1)
+            : 1;
+        this._doorLockedOpen = !!options.doorLockedOpen;
+        this._doorHitShakeStartedAt = 0;
+        this._doorHitShakeEndsAt = 0;
+        this._doorHitShakeMaxJitterPx = 7;
+        this._doorHitShakeSeed = Math.random() * Math.PI * 2;
+
         this.mountedWallLineGroupId = Number.isInteger(options.mountedWallLineGroupId)
             ? options.mountedWallLineGroupId
             : (Number.isInteger(options.mountedSectionId) ? Number(options.mountedSectionId) : null);
@@ -2360,6 +2653,20 @@ class PlacedObject extends StaticObject {
             placementRotation: hasExplicitPlacementRotation,
             castsLosShadows: (typeof options.castsLosShadows === "boolean")
         };
+        this.compositeLayers = resolveDoorCompositeLayersForState(options.compositeLayers, {
+            leafOnly: this.isFallenDoorEffect
+        });
+        if (!this.compositeLayers && this.isDoorObject()) {
+            this.compositeLayers = resolveDoorCompositeLayersForState([
+                { name: "arch", uRegion: [0, 0.5] },
+                { name: "door", uRegion: [0.5, 1] }
+            ], {
+                leafOnly: this.isFallenDoorEffect
+            });
+        }
+        if (this.isFallenDoorEffect) {
+            this.updateFallenDoorVisibilityHitbox();
+        }
         this.snapToMountedWall();
         if (
             Number.isInteger(this.mountedWallSectionUnitId) &&
@@ -2392,6 +2699,16 @@ class PlacedObject extends StaticObject {
         data.renderDepthOffset = Number.isFinite(this.renderDepthOffset) ? this.renderDepthOffset : 0;
         data.rotationAxis = normalizePlaceableRotationAxis(this.rotationAxis, this.category);
         data.placementRotation = Number.isFinite(this.placementRotation) ? this.placementRotation : 0;
+        if (this.isOpen) data.isOpen = true;
+        if (this.isFallenDoorEffect) data.isFallenDoorEffect = true;
+        if (this._doorLockedOpen) data.doorLockedOpen = true;
+        if (this.falling) data.falling = true;
+        if (Number.isFinite(this.doorFallAngle)) {
+            data.doorFallAngle = Math.max(0, Math.min(90, Number(this.doorFallAngle)));
+        }
+        if (Number.isFinite(this._doorFallNormalSign)) {
+            data.doorFallNormalSign = Number(this._doorFallNormalSign) >= 0 ? 1 : -1;
+        }
         data.placeableAnchorX = Number.isFinite(this.placeableAnchorX) ? this.placeableAnchorX : 0.5;
         data.placeableAnchorY = Number.isFinite(this.placeableAnchorY) ? this.placeableAnchorY : 1;
         if (typeof this.castsLosShadows === "boolean") {
@@ -2710,7 +3027,18 @@ class PlacedObject extends StaticObject {
         if (!explicit.castsLosShadows && typeof metaEntry.castsLosShadows === "boolean") {
             this.castsLosShadows = resolveCastsLosShadows(metaEntry.castsLosShadows, this.castsLosShadows);
         }
+        if (this._doorLockedOpen || this.isFallenDoorEffect || this.isOpen) {
+            this.blocksTile = false;
+            this.isPassable = true;
+            this.castsLosShadows = false;
+            this.notifyMountedWallStateChanged();
+        }
         this.lodTextures = normalizeLodTextures(metaEntry.lodTextures, this.texturePath);
+        
+        this.compositeLayers = resolveDoorCompositeLayersForState(metaEntry.compositeLayers, {
+            leafOnly: this.isFallenDoorEffect
+        });
+
         const currentAnchor = resolvePlacedObjectAnchor(this);
         if (metaEntry.anchor && typeof metaEntry.anchor === 'object') {
             this.placeableAnchorX = Number.isFinite(metaEntry.anchor.x) ? Number(metaEntry.anchor.x) : currentAnchor.x;
@@ -2775,11 +3103,631 @@ class PlacedObject extends StaticObject {
         if (!merged) return;
         this.applyPlaceableMetadata(merged);
     }
+
+    isDoorObject() {
+        return (this.category === "doors" || this.type === "door");
+    }
+
+    notifyMountedWallStateChanged() {
+        const mountedSectionId = Number.isInteger(this.mountedWallSectionUnitId)
+            ? Number(this.mountedWallSectionUnitId)
+            : null;
+        if (
+            Number.isInteger(mountedSectionId) &&
+            typeof WallSectionUnit !== "undefined" &&
+            WallSectionUnit &&
+            WallSectionUnit._allSections instanceof Map
+        ) {
+            const section = WallSectionUnit._allSections.get(mountedSectionId);
+            if (section && typeof section.rebuildDirectionalBlocking === "function") {
+                section.rebuildDirectionalBlocking();
+            }
+        }
+        if (
+            Number.isInteger(this.mountedWallLineGroupId) &&
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.markWallSectionDirty === "function"
+        ) {
+            globalThis.markWallSectionDirty(this.mountedWallLineGroupId);
+        }
+    }
+
+    getDoorTraversalNormal() {
+        const angleDeg = Number.isFinite(this.placementRotation)
+            ? Number(this.placementRotation)
+            : (Number.isFinite(this.rotation) ? Number(this.rotation) : 0);
+        const radians = angleDeg * (Math.PI / 180);
+        const tx = Math.cos(radians);
+        const ty = Math.sin(radians);
+        const nx = -ty;
+        const ny = tx;
+        const mag = Math.hypot(nx, ny);
+        if (!(mag > 1e-6)) return { x: 0, y: 1 };
+        return { x: nx / mag, y: ny / mag };
+    }
+
+    setDoorFallAwayFromPoint(worldX, worldY) {
+        if (!this.isDoorObject()) return false;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        const normal = this.getDoorTraversalNormal();
+        const center = getPlacedObjectAnchorWorldPoint(this) || { x: this.x, y: this.y };
+        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(center.x, worldX)
+            : (worldX - center.x);
+        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(center.y, worldY)
+            : (worldY - center.y);
+        const dot = dx * normal.x + dy * normal.y;
+        this._doorFallNormalSign = dot >= 0 ? -1 : 1;
+        return true;
+    }
+
+    setDoorFallTowardPoint(worldX, worldY) {
+        if (!this.isDoorObject()) return false;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        const normal = this.getDoorTraversalNormal();
+        const center = getPlacedObjectAnchorWorldPoint(this) || { x: this.x, y: this.y };
+        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(center.x, worldX)
+            : (worldX - center.x);
+        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(center.y, worldY)
+            : (worldY - center.y);
+        const dot = dx * normal.x + dy * normal.y;
+        this._doorFallNormalSign = dot >= 0 ? 1 : -1;
+        return true;
+    }
+
+    triggerDoorHitShake(durationMs = 100, maxJitterPx = 7) {
+        if (!this.isDoorObject() || this.isOpen || this._doorLockedOpen || this.isFallenDoorEffect) {
+            return false;
+        }
+        const now = Date.now();
+        this._doorHitShakeStartedAt = now;
+        this._doorHitShakeEndsAt = now + Math.max(1, Number.isFinite(durationMs) ? Number(durationMs) : 100);
+        this._doorHitShakeMaxJitterPx = Math.max(0, Number.isFinite(maxJitterPx) ? Number(maxJitterPx) : 7);
+        this._doorHitShakeSeed = Math.random() * Math.PI * 2;
+        return true;
+    }
+
+    getDoorHitShakeScreenOffset(now = Date.now()) {
+        if (!this.isDoorObject() || this.isOpen || this._doorLockedOpen || this.isFallenDoorEffect) {
+            return { x: 0, y: 0 };
+        }
+        const start = Number(this._doorHitShakeStartedAt) || 0;
+        const end = Number(this._doorHitShakeEndsAt) || 0;
+        if (!(end > start) || now >= end) {
+            return { x: 0, y: 0 };
+        }
+        const duration = Math.max(1, end - start);
+        const elapsed = Math.max(0, now - start);
+        const progress = Math.max(0, Math.min(1, elapsed / duration));
+        const falloff = 1 - progress;
+        const maxJitterPx = Math.max(0, Number(this._doorHitShakeMaxJitterPx) || 0);
+        if (!(maxJitterPx > 0)) {
+            return { x: 0, y: 0 };
+        }
+        const step = Math.floor(elapsed / 16.6667);
+        const seed = Number.isFinite(this._doorHitShakeSeed) ? Number(this._doorHitShakeSeed) : 0;
+        return {
+            x: Math.sin(seed + step * 11.173) * maxJitterPx * falloff,
+            y: Math.cos(seed * 1.913 + step * 15.977) * maxJitterPx * falloff
+        };
+    }
+
+    getDoorHitShakeWorldOffset(camera = null, now = Date.now()) {
+        const screenOffset = this.getDoorHitShakeScreenOffset(now);
+        if (!camera) return { x: 0, y: 0 };
+        const viewScale = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1));
+        const xyRatio = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 1));
+        return {
+            x: screenOffset.x / viewScale,
+            y: screenOffset.y / (viewScale * xyRatio)
+        };
+    }
+
+    updateFallenDoorVisibilityHitbox() {
+        if (!this.isFallenDoorEffect) return;
+        const xyRatio = Math.max(
+            1e-6,
+            Math.abs(
+                (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
+                    ? Number(globalThis.xyratio)
+                    : 0.66
+            )
+        );
+        const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
+        const worldHeightZ = Math.max(0.01, Number.isFinite(this.height) ? (Number(this.height) / xyRatio) : (1 / xyRatio));
+        const anchorX = Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5;
+        const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.placementRotation) : 0;
+        const theta = angleDeg * (Math.PI / 180);
+        const axisX = Math.cos(theta);
+        const axisY = Math.sin(theta);
+        const normalX = -axisY;
+        const normalY = axisX;
+        const halfWidth = width * 0.5;
+        const alongOffset = (anchorX - 0.5) * width;
+        const faceCenters = (
+            this.depthBillboardFaceCenters &&
+            this.depthBillboardFaceCenters.front &&
+            this.depthBillboardFaceCenters.back &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.y) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.y)
+        ) ? this.depthBillboardFaceCenters : null;
+        const fallAngle = Math.max(0, Math.min(90, Number.isFinite(this.doorFallAngle) ? Number(this.doorFallAngle) : 0));
+        const fallRadians = fallAngle * (Math.PI / 180);
+        const fallSign = Number.isFinite(this._doorFallNormalSign) && this._doorFallNormalSign < 0 ? -1 : 1;
+        const mountedWallThickness = resolveMountedWallThickness(this);
+        const hingeOutwardOffset = Math.max(
+            0.02,
+            Number.isFinite(mountedWallThickness)
+                ? (Math.max(0.001, Number(mountedWallThickness)) * 0.5 + 0.02)
+                : 0.08
+        );
+        const hingeFace = (fallSign >= 0)
+            ? (faceCenters && faceCenters.front ? faceCenters.front : null)
+            : (faceCenters && faceCenters.back ? faceCenters.back : null);
+        const hingeCenterX = hingeFace
+            ? (Number(hingeFace.x) - axisX * alongOffset + normalX * fallSign * hingeOutwardOffset)
+            : ((Number.isFinite(this.x) ? Number(this.x) : 0) - axisX * alongOffset);
+        const hingeCenterY = hingeFace
+            ? (Number(hingeFace.y) - axisY * alongOffset + normalY * fallSign * hingeOutwardOffset)
+            : ((Number.isFinite(this.y) ? Number(this.y) : 0) - axisY * alongOffset);
+        const footprintDepth = Math.max(0.08, Math.abs(Math.sin(fallRadians) * worldHeightZ));
+        const depthOffset = footprintDepth * fallSign;
+        const bl = { x: hingeCenterX - axisX * halfWidth, y: hingeCenterY - axisY * halfWidth };
+        const br = { x: hingeCenterX + axisX * halfWidth, y: hingeCenterY + axisY * halfWidth };
+        const tr = { x: br.x + normalX * depthOffset, y: br.y + normalY * depthOffset };
+        const tl = { x: bl.x + normalX * depthOffset, y: bl.y + normalY * depthOffset };
+        const points = [bl, br, tr, tl];
+        this.groundPlaneHitbox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
+        this.visualHitbox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
+        const fallbackSamplePoint = {
+            x: (bl.x + br.x + tr.x + tl.x) * 0.25,
+            y: (bl.y + br.y + tr.y + tl.y) * 0.25
+        };
+        const initialSamplePoint = (
+            this._doorInitialVisibilitySamplePoint &&
+            Number.isFinite(this._doorInitialVisibilitySamplePoint.x) &&
+            Number.isFinite(this._doorInitialVisibilitySamplePoint.y)
+        ) ? this._doorInitialVisibilitySamplePoint : null;
+        this._losVisibilitySamplePoint = (
+            initialSamplePoint && fallAngle < 15
+        ) ? {
+            x: Number(initialSamplePoint.x),
+            y: Number(initialSamplePoint.y)
+        } : fallbackSamplePoint;
+    }
+
+    updateFallenDoorDepthBillboardMesh(ctx = null, camera = null, options = {}) {
+        if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
+        this._compositeUnderlayShouldRender = false;
+        const sprite = this.pixiSprite;
+        const fallbackTexture = (typeof this.texturePath === "string" && this.texturePath.length > 0)
+            ? PIXI.Texture.from(this.texturePath)
+            : null;
+        const sourceTexture = (sprite && sprite.texture) ? sprite.texture : (fallbackTexture || null);
+        if (!sourceTexture) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+        if (!camera) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+
+        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
+            forceSinglePlane: true
+        });
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillboardWorldPositions) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
+
+        const leafLayer = Array.isArray(this.compositeLayers) && this.compositeLayers[0]
+            ? this.compositeLayers[0]
+            : null;
+        if (leafLayer) {
+            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, leafLayer.uRegion, false);
+        } else {
+            this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
+        }
+
+        const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
+        const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const viewScale = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1));
+        const xyRatio = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 1));
+        const worldWidth = Math.max(0.01, Number.isFinite(this.width)
+            ? Number(this.width)
+            : (Math.abs(Number(sprite && sprite.width) || 0) / viewScale));
+        const worldHeightZ = Math.max(0.01, Number.isFinite(this.height)
+            ? (Number(this.height) / xyRatio)
+            : (Math.abs(Number(sprite && sprite.height) || 0) / (viewScale * xyRatio)));
+        const anchorX = Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5;
+        const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.placementRotation) : 0;
+        const theta = angleDeg * (Math.PI / 180);
+        const axisX = Math.cos(theta);
+        const axisY = Math.sin(theta);
+        const normalX = -axisY;
+        const normalY = axisX;
+        const halfWidth = worldWidth * 0.5;
+        const alongOffset = (anchorX - 0.5) * worldWidth;
+        const faceCenters = (
+            this.depthBillboardFaceCenters &&
+            this.depthBillboardFaceCenters.front &&
+            this.depthBillboardFaceCenters.back &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.y) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.y)
+        ) ? this.depthBillboardFaceCenters : null;
+        const hingeZ = 0.001;
+        const fallAngle = Math.max(0, Math.min(90, Number.isFinite(this.doorFallAngle) ? Number(this.doorFallAngle) : 0));
+        const fallRadians = fallAngle * (Math.PI / 180);
+        const fallSign = Number.isFinite(this._doorFallNormalSign) && this._doorFallNormalSign < 0 ? -1 : 1;
+        const mountedWallThickness = resolveMountedWallThickness(this);
+        const hingeOutwardOffset = Math.max(
+            0.02,
+            Number.isFinite(mountedWallThickness)
+                ? (Math.max(0.001, Number(mountedWallThickness)) * 0.5 + 0.02)
+                : 0.08
+        );
+        const hingeFace = (fallSign >= 0)
+            ? (faceCenters && faceCenters.front ? faceCenters.front : null)
+            : (faceCenters && faceCenters.back ? faceCenters.back : null);
+        const hingeCenterX = hingeFace
+            ? (Number(hingeFace.x) - axisX * alongOffset + normalX * fallSign * hingeOutwardOffset)
+            : (worldX - axisX * alongOffset);
+        const hingeCenterY = hingeFace
+            ? (Number(hingeFace.y) - axisY * alongOffset + normalY * fallSign * hingeOutwardOffset)
+            : (worldY - axisY * alongOffset);
+        const topOffset = Math.sin(fallRadians) * worldHeightZ * fallSign;
+        const topZ = Math.max(hingeZ, hingeZ + Math.cos(fallRadians) * worldHeightZ);
+
+        const bl = { x: hingeCenterX - axisX * halfWidth, y: hingeCenterY - axisY * halfWidth, z: hingeZ };
+        const br = { x: hingeCenterX + axisX * halfWidth, y: hingeCenterY + axisY * halfWidth, z: hingeZ };
+        const tr = { x: br.x + normalX * topOffset, y: br.y + normalY * topOffset, z: topZ };
+        const tl = { x: bl.x + normalX * topOffset, y: bl.y + normalY * topOffset, z: topZ };
+
+        const signature = [
+            bl.x, bl.y, bl.z,
+            br.x, br.y, br.z,
+            tr.x, tr.y, tr.z,
+            tl.x, tl.y, tl.z,
+            fallAngle, fallSign, worldWidth, worldHeightZ, angleDeg
+        ].map(v => Number(v).toFixed(4)).join("|");
+        if (signature !== this._depthBillboardLastSignature) {
+            const positions = this._depthBillboardWorldPositions;
+            positions[0] = bl.x; positions[1] = bl.y; positions[2] = bl.z;
+            positions[3] = br.x; positions[4] = br.y; positions[5] = br.z;
+            positions[6] = tr.x; positions[7] = tr.y; positions[8] = tr.z;
+            positions[9] = tl.x; positions[10] = tl.y; positions[11] = tl.z;
+            const worldBuffer = mesh.geometry.getBuffer("aWorldPosition");
+            if (worldBuffer) worldBuffer.update();
+            this._depthBillboardLastSignature = signature;
+        }
+
+        const uniforms = mesh.shader.uniforms;
+        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
+        const nearMetric = -Math.max(80, viewportHeight * 0.6);
+        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
+        const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
+            ? Number(ctx.app.screen.width)
+            : 1;
+        const screenH = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.height))
+            ? Number(ctx.app.screen.height)
+            : 1;
+        const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tint) : 0xFFFFFF;
+        uniforms.uScreenSize[0] = Math.max(1, screenW);
+        uniforms.uScreenSize[1] = Math.max(1, screenH);
+        uniforms.uCameraWorld[0] = Number(camera.x) || 0;
+        uniforms.uCameraWorld[1] = Number(camera.y) || 0;
+        const mapRef = this.map || (ctx && ctx.map) || null;
+        uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
+            ? Number(mapRef.worldWidth)
+            : 0;
+        uniforms.uWorldSize[1] = (mapRef && Number.isFinite(mapRef.worldHeight) && mapRef.worldHeight > 0)
+            ? Number(mapRef.worldHeight)
+            : 0;
+        uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
+        uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
+        uniforms.uWrapAnchorWorld[0] = worldX;
+        uniforms.uWrapAnchorWorld[1] = worldY;
+        uniforms.uViewScale = Number(camera.viewscale) || 1;
+        uniforms.uXyRatio = Number(camera.xyratio) || 1;
+        uniforms.uDepthRange[0] = farMetric;
+        uniforms.uDepthRange[1] = depthSpanInv;
+        uniforms.uTint[0] = ((tint >> 16) & 255) / 255;
+        uniforms.uTint[1] = ((tint >> 8) & 255) / 255;
+        uniforms.uTint[2] = (tint & 255) / 255;
+        uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sprite.alpha) : 1;
+        uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
+        uniforms.uClipMinZ = this._scriptSinkState ? 0 : -1000000;
+        uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
+        uniforms.uZOffset = 0.0;
+        mesh.visible = true;
+        return mesh;
+    }
+
+    updateDepthBillboardMesh(ctx = null, camera = null, options = {}) {
+        if (this.isFallenDoorEffect) {
+            return this.updateFallenDoorDepthBillboardMesh(ctx, camera, options);
+        }
+        return super.updateDepthBillboardMesh(ctx, camera, options);
+    }
+
+    update() {
+        super.update();
+
+        if ((this.isOpen || this._doorLockedOpen || this.isFallenDoorEffect) && this.pixiSprite) {
+            this.pixiSprite.tint = 0xFFFFFF;
+        }
+
+        // 1. If it's a closed door and gets destroyed, stay alive as an open door and spawn a falling dummy.
+        if (this.hp <= 0 && !this.isOpen && this.isDoorObject() && !this.isFallenDoorEffect) {
+            this.hp = 1; // It can't be destroyed again once open
+            this.isOpen = true; // Shows only the arch now
+            this._doorLockedOpen = true;
+            this.blocksTile = false;
+            this.isPassable = true;
+            this.castsLosShadows = false;
+            if (this.pixiSprite) this.pixiSprite.tint = 0xFFFFFF;
+            this.notifyMountedWallStateChanged();
+
+            const opts = Object.assign({}, this._placedObjectExplicit || {});
+            opts.texturePath = this.texturePath;
+            opts.category = this.category;
+            opts.width = this.width;
+            opts.height = this.height;
+            opts.placementRotation = this.placementRotation;
+            opts.rotationAxis = this.rotationAxis;
+            opts.renderDepthOffset = this.renderDepthOffset;
+            opts.isFallenDoorEffect = true;
+            opts.placeableAnchorX = this.placeableAnchorX;
+            opts.placeableAnchorY = this.placeableAnchorY;
+            opts.compositeLayers = this.compositeLayers;
+            opts.doorFallNormalSign = Number.isFinite(this._doorFallNormalSign) ? this._doorFallNormalSign : 1;
+            opts.doorFallAngle = 0;
+            // Spawn unmounted so it survives wall destruction!
+            opts.mountedWallLineGroupId = null;
+            opts.mountedSectionId = null;
+            opts.mountedWallSectionUnitId = null;
+
+            const dummy = new PlacedObject({ x: this.x, y: this.y }, this.map, opts);
+            dummy.depthBillboardFaceCenters = getMountedWallFaceCentersForObject(this);
+            if (dummy.depthBillboardFaceCenters) {
+                const viewerPoint = (
+                    typeof globalThis !== "undefined" &&
+                    globalThis.wizard &&
+                    Number.isFinite(globalThis.wizard.x) &&
+                    Number.isFinite(globalThis.wizard.y)
+                ) ? {
+                    x: Number(globalThis.wizard.x),
+                    y: Number(globalThis.wizard.y)
+                } : {
+                    x: Number.isFinite(this.x) ? Number(this.x) : 0,
+                    y: Number.isFinite(this.y) ? Number(this.y) : 0
+                };
+                const initialSide = chooseMountedWallFaceCenterForViewer(dummy.depthBillboardFaceCenters, viewerPoint, this.map || null);
+                const initialFace = (
+                    initialSide === "back" && dummy.depthBillboardFaceCenters.back
+                ) ? dummy.depthBillboardFaceCenters.back : dummy.depthBillboardFaceCenters.front;
+                if (initialFace && Number.isFinite(initialFace.x) && Number.isFinite(initialFace.y)) {
+                    dummy._doorInitialVisibilitySamplePoint = {
+                        x: Number(initialFace.x),
+                        y: Number(initialFace.y)
+                    };
+                    dummy._losVisibilitySamplePoint = {
+                        x: Number(initialFace.x),
+                        y: Number(initialFace.y)
+                    };
+                }
+            }
+            dummy.z = this.z;
+            dummy.rotation = this.placementRotation;
+            dummy.hp = 0;
+            dummy.falling = true;
+            dummy.fallStart = typeof frameCount !== "undefined" ? frameCount : 0;
+            dummy.doorFallAngle = 0;
+            dummy.blocksTile = false;
+            dummy.isPassable = true;
+            dummy.castsLosShadows = false;
+            if (typeof this.visible === "boolean") dummy.visible = this.visible;
+            if (Number.isFinite(this.brightness)) dummy.brightness = Number(this.brightness);
+            if (dummy.pixiSprite) dummy.pixiSprite.tint = 0xFFFFFF;
+            // Unlink scripts
+            dummy._scriptSinkState = null;
+            dummy.playerEnters = "";
+            dummy.playerExits = "";
+            
+            // Drop dummy to same tile
+            if (typeof dummy.moveNode === "function") {
+                dummy.moveNode(this.getNode());
+            } else {
+                this.map.addObject(dummy);
+            }
+            if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+                globalThis.activeSimObjects.add(dummy);
+            }
+        }
+
+        // 2. If it's the falling dummy, handle animation.
+        if (this.isFallenDoorEffect && this.falling) {
+            const currentFrame = typeof frameCount !== "undefined" ? frameCount : 0;
+            const start = this.fallStart || currentFrame;
+            const elapsed = currentFrame - start;
+            
+            // Accelerating fall logic
+            const accelFactor = Math.min(elapsed / 30, 1);
+            const rotationRate = 3.5 * accelFactor;
+            
+            this.doorFallAngle = Math.max(0, Math.min(90, (Number(this.doorFallAngle) || 0) + rotationRate));
+            if (this.doorFallAngle >= 90) {
+                this.doorFallAngle = 90;
+                this.falling = false;
+            }
+        }
+        if (this.isFallenDoorEffect) {
+            this.updateFallenDoorVisibilityHitbox();
+        }
+    }
 }
+
 
 if (typeof globalThis !== "undefined") {
     globalThis.getResolvedPlaceableMetadata = getResolvedPlaceableMetadata;
     globalThis.normalizePlaceableRotationAxis = normalizePlaceableRotationAxis;
+}
+
+class TriggerArea extends StaticObject {
+    constructor(location, map, options = {}) {
+        const seed = location || { x: 0, y: 0 };
+        super('triggerArea', seed, 1, 1, [PIXI.Texture.WHITE], map);
+        this.objectType = "triggerArea";
+        this.isTriggerArea = true;
+        this.rotationAxis = "ground";
+        this.blocksTile = false;
+        this.isPassable = true;
+        this.castsLosShadows = false;
+        this.flammable = false;
+        this.pixiSprite.alpha = 0;
+        this.pixiSprite.visible = false;
+        this.pixiSprite.renderable = false;
+        this.pixiSprite.anchor.set(0.5, 0.5);
+        this.playerEnters = normalizeDoorEventScript(options.playerEnters);
+        this.playerExits = normalizeDoorEventScript(options.playerExits);
+        this.polygonPoints = [];
+        this._triggerAreaIndexedNodes = [];
+        this.setPolygonPoints(Array.isArray(options.points) ? options.points : []);
+        if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
+            this.map.objects.push(this);
+        }
+    }
+
+    _reindexTriggerAreaNodes(points) {
+        const mapRef = this.map || null;
+        const oldNodes = Array.isArray(this._triggerAreaIndexedNodes) ? this._triggerAreaIndexedNodes : [];
+        for (let i = 0; i < oldNodes.length; i++) {
+            const node = oldNodes[i];
+            if (node && typeof node.removeObject === "function") {
+                node.removeObject(this);
+            }
+        }
+        this._triggerAreaIndexedNodes = [];
+
+        if (!mapRef || typeof mapRef.worldToNode !== "function" || !Array.isArray(points) || points.length < 3) {
+            return;
+        }
+
+        const samplePoints = [];
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            if (!a || !b) continue;
+            samplePoints.push({ x: Number(a.x), y: Number(a.y) });
+            const dx = Number(b.x) - Number(a.x);
+            const dy = Number(b.y) - Number(a.y);
+            const edgeLen = Math.hypot(dx, dy);
+            if (!(edgeLen > 0)) continue;
+            const spacing = 1.0;
+            const steps = Math.min(1024, Math.floor(edgeLen / spacing));
+            for (let s = 1; s < steps; s++) {
+                const t = s / steps;
+                samplePoints.push({
+                    x: Number(a.x) + dx * t,
+                    y: Number(a.y) + dy * t
+                });
+            }
+        }
+        samplePoints.push({ x: Number(this.x), y: Number(this.y) });
+
+        const nodes = [];
+        const nodeKeys = new Set();
+        for (let i = 0; i < samplePoints.length; i++) {
+            const pt = samplePoints[i];
+            if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+            const node = mapRef.worldToNode(pt.x, pt.y);
+            if (!node) continue;
+            const key = `${Number(node.xindex)}:${Number(node.yindex)}`;
+            if (nodeKeys.has(key)) continue;
+            nodeKeys.add(key);
+            nodes.push(node);
+        }
+
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node && typeof node.addObject === "function") {
+                node.addObject(this);
+            }
+        }
+        this._triggerAreaIndexedNodes = nodes;
+        this.node = (typeof mapRef.worldToNode === "function")
+            ? mapRef.worldToNode(this.x, this.y)
+            : (nodes[0] || null);
+    }
+
+    setPolygonPoints(rawPoints) {
+        const points = Array.isArray(rawPoints)
+            ? rawPoints
+                .map((p) => ({ x: Number(p && p.x), y: Number(p && p.y) }))
+                .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            : [];
+        if (points.length < 3) return false;
+
+        this.polygonPoints = points;
+        this.groundPlaneHitbox = new PolygonHitbox(points.map((p) => ({ x: p.x, y: p.y })));
+        this.visualHitbox = this.groundPlaneHitbox;
+
+        const bounds = this.groundPlaneHitbox.getBounds();
+        const minX = Number(bounds.x) || 0;
+        const minY = Number(bounds.y) || 0;
+        const width = Math.max(1e-4, Number(bounds.width) || 0);
+        const height = Math.max(1e-4, Number(bounds.height) || 0);
+        this.width = width;
+        this.height = height;
+        this.x = minX + width * 0.5;
+        this.y = minY + height * 0.5;
+        this.groundRadius = Math.max(width, height) * 0.5;
+        this.visualRadius = this.groundRadius;
+        this._reindexTriggerAreaNodes(points);
+        return true;
+    }
+
+    removeFromNodes() {
+        const indexedNodes = Array.isArray(this._triggerAreaIndexedNodes) ? this._triggerAreaIndexedNodes : [];
+        if (indexedNodes.length === 0) {
+            super.removeFromNodes();
+            return;
+        }
+        for (let i = 0; i < indexedNodes.length; i++) {
+            const node = indexedNodes[i];
+            if (node && typeof node.removeObject === "function") {
+                node.removeObject(this);
+            }
+        }
+        this._triggerAreaIndexedNodes = [];
+        this.node = null;
+    }
+
+    saveJson() {
+        const data = super.saveJson();
+        data.type = "triggerArea";
+        data.points = Array.isArray(this.polygonPoints)
+            ? this.polygonPoints.map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+            : [];
+        if (typeof this.playerEnters === "string" && this.playerEnters.trim().length > 0) {
+            data.playerEnters = this.playerEnters.trim();
+        }
+        if (typeof this.playerExits === "string" && this.playerExits.trim().length > 0) {
+            data.playerExits = this.playerExits.trim();
+        }
+        data.isPassable = true;
+        data.castsLosShadows = false;
+        return data;
+    }
 }
 
 class Road extends StaticObject {
@@ -3256,6 +4204,7 @@ if (typeof globalThis !== "undefined") {
     globalThis.StaticObject = StaticObject;
     globalThis.Tree = Tree;
     globalThis.Playground = Playground;
+    globalThis.TriggerArea = TriggerArea;
     globalThis.Road = Road;
     globalThis.getMountedWallFaceCentersForObject = getMountedWallFaceCentersForObject;
 }

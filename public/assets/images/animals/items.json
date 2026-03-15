@@ -1,0 +1,63 @@
+{
+  "category": "animals",
+  "version": 1,
+  "sourceDirectory": "/assets/images/animals",
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    }
+  },
+  "items": [
+    {
+      "id": "squirrel",
+      "file": "squirrel.png",
+      "texturePath": "/assets/images/animals/squirrel.png",
+      "width": 0.5,
+      "height": 0.5,
+      "frameCount": { "x": 1, "y": 2 }
+    },
+    {
+      "id": "goat",
+      "file": "goat.png",
+      "texturePath": "/assets/images/animals/goat.png",
+      "width": 0.99,
+      "height": 0.825,
+      "frameCount": { "x": 1, "y": 2 }
+    },
+    {
+      "id": "deer",
+      "file": "deer.png",
+      "texturePath": "/assets/images/animals/deer.png",
+      "width": 1.0,
+      "height": 1.0,
+      "frameCount": { "x": 1, "y": 2 }
+    },
+    {
+      "id": "bear",
+      "file": "bear.png",
+      "texturePath": "/assets/images/animals/bear.png",
+      "width": 2.03,
+      "height": 1.45,
+      "frameCount": { "x": 2, "y": 2 }
+    },
+    {
+      "id": "yeti",
+      "file": "yeti.png",
+      "texturePath": "/assets/images/animals/yeti.png",
+      "width": 2.1,
+      "height": 1.75,
+      "frameCount": { "x": 2, "y": 2 }
+    },
+    {
+      "id": "blodia",
+      "file": "blodia.png",
+      "texturePath": "/assets/images/animals/blodia.png",
+      "width": 1.3125,
+      "height": 2.8,
+      "frameCount": { "x": 2, "y": 1 }
+    }
+  ]
+}

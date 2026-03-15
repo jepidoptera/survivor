@@ -163,11 +163,13 @@
         "y": 0.5
       },
       "groundPlaneHitbox": {
-        "type": "circle",
-        "xOffset": 0.5,
-        "yOffset": 0.5,
-        "radiusFromWidthMultiplier": 0.2,
-        "minRadius": 0.12
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.33 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.33 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.33 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.33 }
+        ]
       },
       "visualHitbox": {
         "type": "circle",

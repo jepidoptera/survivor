@@ -7,8 +7,9 @@ if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
 let showHexGrid = false; // Toggle hex grid only (g key)
-let showBlockedNeighbors = false; // Toggle blocked-neighbor edge overlays
 let showAnimalClearance = false; // Toggle animal clearance hex overlay
+let showTileClearance = false; // Toggle per-tile clearance number overlay (requires hex grid on)
+let debugModePrevHexGridState = null;
 
 let perfPanel = null;
 let showPerfReadout = false;
@@ -436,6 +437,13 @@ function toggleShowPerfReadout() {
 
 function toggleDebugMode() {
     debugMode = !debugMode;
+    if (debugMode) {
+        debugModePrevHexGridState = showHexGrid;
+        showHexGrid = true;
+    } else if (debugModePrevHexGridState !== null) {
+        showHexGrid = !!debugModePrevHexGridState;
+        debugModePrevHexGridState = null;
+    }
     if (typeof globalThis !== "undefined") {
         globalThis.debugMode = debugMode;
     }
@@ -727,61 +735,6 @@ function drawHexGrid(redraw = true) {
         }
     });
 
-    if (showBlockedNeighbors) {
-        gridGraphics.lineStyle(4, 0xff0000, 0.4);
-        const drawnEdges = new Set();
-        yRanges.forEach(yRange => {
-            for (let y = yRange.start; y <= yRange.end; y++) {
-                xRanges.forEach(xRange => {
-                    for (let x = xRange.start; x <= xRange.end; x++) {
-                        if (!map.nodes[x] || !map.nodes[x][y]) continue;
-                        const node = map.nodes[x][y];
-
-                        if (!node.blockedNeighbors || node.blockedNeighbors.size === 0) continue;
-
-                        node.blockedNeighbors.forEach((blockingSet, direction) => {
-                            if (blockingSet.size === 0) return;
-
-                            const neighbor = node.neighbors[direction];
-                            if (!neighbor) return;
-                            const edgeKey = [
-                                `${node.xindex},${node.yindex}`,
-                                `${neighbor.xindex},${neighbor.yindex}`
-                            ].sort().join("|");
-                            if (drawnEdges.has(edgeKey)) return;
-                            drawnEdges.add(edgeKey);
-
-                            const midX = (node.x + neighbor.x) / 2;
-                            const midY = (node.y + neighbor.y) / 2;
-                            const dx = neighbor.x - node.x;
-                            const dy = neighbor.y - node.y;
-                            const len = Math.sqrt(dx * dx + dy * dy);
-
-                            if (len === 0) return;
-
-                            const tangentX = dx / len;
-                            const tangentY = dy / len;
-                            const perpX = -dy / len;
-                            const perpY = dx / len;
-                            const lineLength = 0.4;
-                            const offset = 0.05;
-                            const ox = tangentX * offset;
-                            const oy = tangentY * offset;
-                            const x1 = midX + ox + perpX * lineLength;
-                            const y1 = midY + oy + perpY * lineLength;
-                            const x2 = midX + ox - perpX * lineLength;
-                            const y2 = midY + oy - perpY * lineLength;
-                            const screen1 = worldToScreen({x: x1, y: y1});
-                            const screen2 = worldToScreen({x: x2, y: y2});
-
-                            gridGraphics.moveTo(screen1.x, screen1.y);
-                            gridGraphics.lineTo(screen2.x, screen2.y);
-                        });
-                    }
-                });
-            }
-        });
-    }
 }
 
 function drawGroundPlaneHitboxes(redraw = true) {
@@ -1013,6 +966,99 @@ function drawWizardBoundaries(redraw = true) {
     }
 }
 
+// --- Tile clearance number overlay (shown when hex grid is on) ---
+let _tileClearanceContainer = null;
+let _tileClearanceTexts = [];
+
+/**
+ * Draw the clearance number on every visible tile when the hex grid overlay
+ * is active.  Temporary debug aid for maze pathfinding.
+ * @param {PIXI.Container} layer  - ground layer to attach to
+ * @param {object} cam             - camera with viewscale, xyratio, worldToScreen, x, y
+ */
+function drawTileClearanceNumbers(layer, cam) {
+    if (!showTileClearance || !showHexGrid) {
+        if (_tileClearanceContainer) _tileClearanceContainer.visible = false;
+        return;
+    }
+    if (!layer || !cam) return;
+
+    const mapRef = (typeof map !== "undefined") ? map : null;
+    if (!mapRef || !mapRef.nodes) return;
+
+    const vs = cam.viewscale;
+    const vsy = cam.viewscale * cam.xyratio;
+    if (vs <= 0 || vsy <= 0) return;
+
+    // Lazy-create container
+    if (!_tileClearanceContainer) {
+        _tileClearanceContainer = new PIXI.Container();
+        _tileClearanceContainer.name = "tileClearanceOverlay";
+        _tileClearanceContainer.interactiveChildren = false;
+        _tileClearanceContainer.zIndex = Number.MAX_SAFE_INTEGER;
+        layer.addChild(_tileClearanceContainer);
+    } else if (_tileClearanceContainer.parent !== layer) {
+        layer.addChild(_tileClearanceContainer);
+    }
+    _tileClearanceContainer.visible = true;
+
+    // Hide all old text sprites
+    for (let i = 0; i < _tileClearanceTexts.length; i++) {
+        _tileClearanceTexts[i].visible = false;
+    }
+
+    // Determine visible tile range from viewport
+    const vpRef = (typeof viewport !== "undefined") ? viewport : null;
+    const vpX = vpRef ? vpRef.x : cam.x;
+    const vpY = vpRef ? vpRef.y : cam.y;
+    const vpW = vpRef ? vpRef.width : 24;
+    const vpH = vpRef ? vpRef.height : 24;
+    const pad = 2;
+    const xScale = 0.866;
+    const rawXStart = Math.floor(vpX / xScale) - pad;
+    const rawXEnd = Math.ceil((vpX + vpW) / xScale) + pad;
+    const rawYStart = Math.floor(vpY) - pad;
+    const rawYEnd = Math.ceil(vpY + vpH) + pad;
+
+    let textIdx = 0;
+    for (let x = rawXStart; x <= rawXEnd; x++) {
+        let xi = x;
+        if (mapRef.wrapX) {
+            xi = ((xi % mapRef.width) + mapRef.width) % mapRef.width;
+        } else if (xi < 0 || xi >= mapRef.width) continue;
+        for (let y = rawYStart; y <= rawYEnd; y++) {
+            let yi = y;
+            if (mapRef.wrapY) {
+                yi = ((yi % mapRef.height) + mapRef.height) % mapRef.height;
+            } else if (yi < 0 || yi >= mapRef.height) continue;
+            if (!mapRef.nodes[xi] || !mapRef.nodes[xi][yi]) continue;
+            const node = mapRef.nodes[xi][yi];
+            const cl = Number.isFinite(node.clearance) ? node.clearance : -1;
+
+            const scr = cam.worldToScreen(node.x, node.y);
+            let txt = _tileClearanceTexts[textIdx];
+            if (!txt) {
+                txt = new PIXI.Text("", {
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    fill: 0xFFFF00,
+                    stroke: 0x000000,
+                    strokeThickness: 2,
+                    align: "center"
+                });
+                txt.anchor.set(0.5, 0.5);
+                _tileClearanceContainer.addChild(txt);
+                _tileClearanceTexts.push(txt);
+            }
+            txt.text = cl === Infinity ? "\u221E" : String(cl);
+            txt.x = scr.x;
+            txt.y = scr.y;
+            txt.visible = true;
+            textIdx++;
+        }
+    }
+}
+
 // --- Animal clearance overlay (red hex tiles + clearance numbers) ---
 let _clearanceOverlayContainer = null;
 let _clearanceOverlayGfx = null;
@@ -1026,7 +1072,8 @@ let _clearanceOverlayTexts = [];
  * @param {object} cam             - camera with viewscale, xyratio, worldToScreen
  */
 function drawAnimalClearanceOverlay(layer, cam) {
-    if (!showAnimalClearance) {
+    const overlayEnabled = !!showAnimalClearance || !!debugMode;
+    if (!overlayEnabled) {
         if (_clearanceOverlayContainer) _clearanceOverlayContainer.visible = false;
         return;
     }
@@ -1064,12 +1111,9 @@ function drawAnimalClearanceOverlay(layer, cam) {
     const halfH = vsy / 2;
     const quarterW = hexPxW / 4;
 
-    // Hide all old text sprites
-    for (let i = 0; i < _clearanceOverlayTexts.length; i++) {
-        _clearanceOverlayTexts[i].visible = false;
-    }
-
-    let textIdx = 0;
+    const appRef = (typeof app !== "undefined" && app && app.renderer) ? app : null;
+    const screenW = appRef ? Math.max(1, appRef.renderer.width || 1) : Math.max(1, window.innerWidth || 1);
+    const screenH = appRef ? Math.max(1, appRef.renderer.height || 1) : Math.max(1, window.innerHeight || 1);
     const seen = new Set();
     const adjDirs = [1, 3, 5, 7, 9, 11]; // adjacent hex neighbour directions
 
@@ -1081,8 +1125,11 @@ function drawAnimalClearanceOverlay(layer, cam) {
         const scr = cam.worldToScreen(node.x, node.y);
         const sx = scr.x;
         const sy = scr.y;
+        if (sx < -halfW || sx > (screenW + halfW) || sy < -halfH || sy > (screenH + halfH)) {
+            return;
+        }
 
-        gfx.beginFill(0xFF0000, alpha);
+        gfx.beginFill(0x5a0000, alpha);
         gfx.moveTo(sx - halfW, sy);
         gfx.lineTo(sx - quarterW, sy - halfH);
         gfx.lineTo(sx + quarterW, sy - halfH);
@@ -1091,27 +1138,6 @@ function drawAnimalClearanceOverlay(layer, cam) {
         gfx.lineTo(sx - quarterW, sy + halfH);
         gfx.closePath();
         gfx.endFill();
-
-        const cl = Number.isFinite(node.clearance) ? node.clearance : -1;
-        let txt = _clearanceOverlayTexts[textIdx];
-        if (!txt) {
-            txt = new PIXI.Text("", {
-                fontFamily: "monospace",
-                fontSize: 12,
-                fill: 0xFFFFFF,
-                stroke: 0x000000,
-                strokeThickness: 2,
-                align: "center"
-            });
-            txt.anchor.set(0.5, 0.5);
-            _clearanceOverlayContainer.addChild(txt);
-            _clearanceOverlayTexts.push(txt);
-        }
-        txt.text = cl === Infinity ? "\u221E" : String(cl);
-        txt.x = sx;
-        txt.y = sy;
-        txt.visible = true;
-        textIdx++;
     };
 
     const collectRing = (center, rings) => {
@@ -1144,13 +1170,174 @@ function drawAnimalClearanceOverlay(layer, cam) {
         const node = mapRef ? mapRef.worldToNode(animal.x, animal.y) : null;
         if (!node) continue;
 
-        const req = Number.isFinite(animal.pathfindingClearance) ? animal.pathfindingClearance : 0;
+        const req = Number.isFinite(animal.pathfindingClearance)
+            ? Math.max(0, Math.ceil(animal.pathfindingClearance))
+            : 0;
         const tiles = collectRing(node, req);
         for (let t = 0; t < tiles.length; t++) {
             const tileNode = tiles[t];
-            const cl = Number.isFinite(tileNode.clearance) ? tileNode.clearance : -1;
-            const alpha = cl <= 0 ? 0.55 : cl <= 2 ? 0.35 : 0.18;
+            const alpha = 0.42;
             drawHex(tileNode, alpha);
         }
+    }
+}
+
+// ── Node / midpoint inspector overlay ────────────────────────────────────────
+// Draws the origin anchor (closest node or midpoint to the mouse cursor) and
+// labels each of its 12 directional neighbours (0–11) using
+// anchorNeighborInDirection().  Active while wizard.currentSpell === "nodeinspector".
+let _nodeInspectorContainer = null;
+let _nodeInspectorGfx = null;
+let _nodeInspectorTexts = [];
+
+function _getAnchorWorldPos(anchor) {
+    if (!anchor) return null;
+    if (Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+        return { x: anchor.x, y: anchor.y };
+    }
+    if (
+        anchor.nodeA && anchor.nodeB &&
+        Number.isFinite(anchor.nodeA.x) &&
+        Number.isFinite(anchor.nodeB.x)
+    ) {
+        return {
+            x: (anchor.nodeA.x + anchor.nodeB.x) * 0.5,
+            y: (anchor.nodeA.y + anchor.nodeB.y) * 0.5
+        };
+    }
+    return null;
+}
+
+function drawNodeInspectorOverlay(layer, cam) {
+    const wizardRef = (typeof wizard !== "undefined") ? wizard : null;
+    const active = !!(debugMode && wizardRef && wizardRef.currentSpell === "nodeinspector");
+    if (!active) {
+        if (_nodeInspectorContainer) _nodeInspectorContainer.visible = false;
+        return;
+    }
+    if (!layer || !cam) return;
+
+    const mapRef = (typeof map !== "undefined") ? map : null;
+    if (!mapRef || typeof mapRef.worldToNodeOrMidpoint !== "function") return;
+
+    const mousePosRef = (typeof mousePos !== "undefined") ? mousePos : null;
+    const mx = mousePosRef ? mousePosRef.worldX : undefined;
+    const my = mousePosRef ? mousePosRef.worldY : undefined;
+    if (!Number.isFinite(mx) || !Number.isFinite(my)) {
+        if (_nodeInspectorContainer) _nodeInspectorContainer.visible = false;
+        return;
+    }
+
+    // Lazy-create container; re-add every frame so it stays on top of other ui children
+    if (!_nodeInspectorContainer) {
+        _nodeInspectorContainer = new PIXI.Container();
+        _nodeInspectorContainer.name = "nodeInspectorOverlay";
+        _nodeInspectorContainer.interactiveChildren = false;
+    }
+    layer.addChild(_nodeInspectorContainer); // moves to top of ui layer each frame
+    _nodeInspectorContainer.visible = true;
+
+    if (!_nodeInspectorGfx) {
+        _nodeInspectorGfx = new PIXI.Graphics();
+        _nodeInspectorContainer.addChild(_nodeInspectorGfx);
+    }
+    const gfx = _nodeInspectorGfx;
+    gfx.clear();
+
+    // Hide all pooled text labels
+    for (let i = 0; i < _nodeInspectorTexts.length; i++) {
+        _nodeInspectorTexts[i].visible = false;
+    }
+
+    const rawAnchor = mapRef.worldToNodeOrMidpoint(mx, my);
+    if (!rawAnchor) return;
+
+    // worldToNodeOrMidpoint may return a NodeMidpoint instance (has .nodeA/.nodeB
+    // but no .k). anchorNeighborInDirection detects midpoints by anchor.k !== undefined,
+    // so convert it to the plain value-type descriptor makeMidpoint understands.
+    const anchor = (
+        rawAnchor.k === undefined &&
+        rawAnchor.nodeA && rawAnchor.nodeB &&
+        typeof makeMidpoint === "function"
+    ) ? makeMidpoint(rawAnchor.nodeA, rawAnchor.nodeB) || rawAnchor
+      : rawAnchor;
+
+    const originPos = _getAnchorWorldPos(anchor);
+    if (!originPos) return;
+
+    const originScr = cam.worldToScreen(originPos.x, originPos.y, 0);
+    const isMidpoint = (typeof anchor.k === "number");
+
+    // Origin dot — yellow for node, cyan for midpoint
+    gfx.lineStyle(0);
+    gfx.beginFill(isMidpoint ? 0x00ffff : 0xffff00, 0.9);
+    gfx.drawCircle(originScr.x, originScr.y, 7);
+    gfx.endFill();
+
+    const spaceHeld = !!(typeof keysPressed !== "undefined" && keysPressed[" "]);
+    let textIdx = 0;
+
+    if (spaceHeld) {
+        // Space held: show direction numbers 0–11 at each neighbour position
+        for (let d = 0; d < 12; d++) {
+            const nb = (typeof anchorNeighborInDirection === "function")
+                ? anchorNeighborInDirection(anchor, d)
+                : null;
+            if (!nb) continue;
+
+            const nbPos = _getAnchorWorldPos(nb);
+            if (!nbPos) continue;
+
+            const nbScr = cam.worldToScreen(nbPos.x, nbPos.y, 0);
+
+            // Line from origin to neighbour
+            gfx.lineStyle(1, 0xffffff, 0.35);
+            gfx.moveTo(originScr.x, originScr.y);
+            gfx.lineTo(nbScr.x, nbScr.y);
+
+            // Direction number label centered at neighbour position
+            let txt = _nodeInspectorTexts[textIdx];
+            if (!txt) {
+                txt = new PIXI.Text("", {
+                    fontFamily: "monospace",
+                    fontSize: 13,
+                    fontWeight: "bold",
+                    fill: 0xffffff,
+                    stroke: 0x000000,
+                    strokeThickness: 3,
+                    align: "center"
+                });
+                _nodeInspectorContainer.addChild(txt);
+                _nodeInspectorTexts.push(txt);
+            }
+            txt.anchor.set(0.5, 0.5);
+            txt.text = String(d);
+            txt.x = nbScr.x;
+            txt.y = nbScr.y;
+            txt.visible = true;
+            textIdx++;
+        }
+    } else {
+        // Space not held: show x,y coordinates of the anchor
+        let txt = _nodeInspectorTexts[textIdx];
+        if (!txt) {
+            txt = new PIXI.Text("", {
+                fontFamily: "monospace",
+                fontSize: 13,
+                fontWeight: "bold",
+                fill: 0xffffff,
+                stroke: 0x000000,
+                strokeThickness: 3,
+                align: "center"
+            });
+            _nodeInspectorContainer.addChild(txt);
+            _nodeInspectorTexts.push(txt);
+        }
+        txt.anchor.set(0.5, 1.5);
+        txt.text = `${originPos.x.toFixed(2)}, ${originPos.y.toFixed(2)}`;
+        txt.x = originScr.x;
+        txt.y = originScr.y;
+        txt.visible = true;
+        textIdx++;
     }
 }

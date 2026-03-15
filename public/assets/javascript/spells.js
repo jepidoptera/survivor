@@ -1,15 +1,19 @@
 let spellKeyBindings = {
     "F": "fireball",
-    "B": "wall",
-    "D": "blackdiamond",
     "M": "maze",
     "V": "vanish",
     "T": "treegrow",
+    "G": "triggerarea",
     "ET": "editscript",
     "J": "teleport",
-    "R": "buildroad",
     "FW": "firewall",
     "A": "spawnanimal"
+};
+
+let editorKeyBindings = {
+    "B": "wall",
+    "R": "buildroad",
+    "N": "nodeinspector"
 };
 
 const MAGIC_ITEMS_CATEGORY = "magic";
@@ -261,14 +265,19 @@ const SpellSystem = (() => {
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
-        { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
-        { name: "teleport", icon: "/assets/images/thumbnails/vanish.png" },
+        { name: "teleport", icon: "/assets/images/magic/teleport.png" },
         { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
-        { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+        { name: "triggerarea", icon: "/assets/images/thumbnails/wall.png" },
         { name: "editscript", icon: "/assets/images/thumbnails/edit.png" },
         { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" },
         { name: "spawnanimal", icon: "/assets/images/animals/squirrel.png" }
+    ];
+    const EDITOR_TOOL_DEFS = [
+        { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
+        { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+        { name: "editorvanish", icon: "/assets/images/thumbnails/vanish.png" },
+        { name: "nodeinspector", icon: "/assets/images/thumbnails/maze.png", debugOnly: true }
     ];
     const AURA_DEFS = [
         { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 2 },
@@ -311,15 +320,21 @@ const SpellSystem = (() => {
     const POWERUP_PLACEMENT_SCALE_MIN = 0.2;
     const POWERUP_PLACEMENT_SCALE_MAX = 5;
     const POWERUP_PLACEMENT_SCALE_DEFAULT = 1;
+    const TRIGGER_AREA_CLOSE_DISTANCE_PX = 10;
+    const TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX = 10;
+    const TRIGGER_AREA_HELP_PANEL_ID = "triggerAreaHelpPanel";
 
     const SPELL_CLASS_BY_NAME = {
         fireball: "Fireball",
         vanish: "Vanish",
-        editscript: "EditScript"
+        editorvanish: "EditorVanish",
+        editscript: "EditScript",
+        triggerarea: "TriggerAreaSpell"
     };
 
     let magicIntervalId = null;
     let lastMagicTickMs = 0;
+    let editorMode = false;
     let spellMenuMode = "main";
     let editorMenuMode = "categories";
     let flooringTexturePaths = [];
@@ -330,537 +345,6 @@ const SpellSystem = (() => {
     let placeableImageFetchPromise = null;
     let editorMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
     const textureAlphaMaskCache = new Map();
-    const SCRIPT_EDITOR_PANEL_ID = "scriptEditorPanel";
-    const SCRIPT_EDITOR_TEXTAREA_ID = "scriptEditorTextarea";
-    const SCRIPT_EDITOR_TARGET_LABEL_ID = "scriptEditorTargetLabel";
-    const SCRIPT_EDITOR_HELP_PANEL_ID = "scriptEditorHelpPanel";
-    const SCRIPT_INIT_KEY = "__init";
-    const SCRIPT_EDITOR_DEFAULT_TEMPLATE = [
-        "playerExits {",
-        "    mazeMode=true",
-        "}",
-        "",
-        "playerEnters {",
-        "    mazeMode=false",
-        "}"
-    ].join("\n");
-    let scriptEditorTargetObject = null;
-
-    function getScriptEditorHelpMarkup() {
-        return [
-            "<div style='font-weight:bold;font-size:16px;margin-bottom:8px;'>Script Help</div>",
-            "<div style='margin-bottom:10px;'>Write scripts in block format. Scripts are saved as JSON internally.</div>",
-            "<div style='font-weight:bold;margin-top:8px;'>Event Blocks</div>",
-            "<pre style='white-space:pre-wrap;margin:6px 0 10px 0;'>playerExits {\n    mazeMode=true\n}\n\nplayerEnters {\n    mazeMode=false\n}\n\nplayerTouches {\n    healPlayer(5)\n}\n\nplayerUntouches {\n    drainMagic(10)\n}</pre>",
-            "<div style='font-weight:bold;margin-top:8px;'>Statement Syntax</div>",
-            "<ul style='margin:6px 0 10px 20px;padding:0;'>",
-            "  <li>Assignments: <code>mazeMode=true</code></li>",
-            "  <li>Object assignments: <code>this.tint=\"#ff8800\"</code>, <code>this.size=2</code>, <code>this.onfire=true</code></li>",
-            "  <li>Commands: <code>transport(120, 88)</code>, <code>healPlayer(25)</code>, <code>hurtPlayer(10)</code>, <code>gainMagic(20)</code>, <code>drainMagic(15)</code>, <code>addSpell(\"fireball\")</code>, <code>this.delete()</code>, <code>spawnCreature(type=\"squirrel\", size=1, location={\"x\":0,\"y\":0})</code></li>",
-            "  <li>Semicolons are optional; newline also ends a statement.</li>",
-            "  <li>Top-level statements outside any event block run on script save and on fresh object creation (not on load).</li>",
-            "</ul>",
-            "<div style='font-weight:bold;margin-top:8px;'>Built-in Events</div>",
-            "<ul style='margin:6px 0 10px 20px;padding:0;'>",
-            "  <li><code>playerEnters</code>: fires when player crosses the door one way.</li>",
-            "  <li><code>playerExits</code>: fires when player crosses the opposite way.</li>",
-            "  <li><code>playerTouches</code>: fires once per contact (must leave and touch again to retrigger).</li>",
-            "  <li><code>playerUntouches</code>: fires when contact is broken after moving away from an object.</li>",
-            "</ul>",
-            "<div style='font-weight:bold;margin-top:8px;'>Built-in Commands</div>",
-            "<ul style='margin:6px 0 0 20px;padding:0;'>",
-            "  <li><code>mazeMode=true/false</code> (assignment)</li>",
-            "  <li><code>transport(x, y)</code></li>",
-            "  <li><code>healPlayer(hp)</code></li>",
-            "  <li><code>hurtPlayer(hp)</code></li>",
-            "  <li><code>gainMagic(amount)</code></li>",
-            "  <li><code>drainMagic(amount)</code></li>",
-            "  <li><code>addSpell(name)</code></li>",
-            "  <li><code>this.delete()</code></li>",
-            "  <li><code>spawnCreature(type, size, location)</code> where <code>location</code> is relative to the scripted object</li>",
-            "  <li><code>this.tint=#RRGGBB</code>, <code>this.size=number</code>, <code>this.onfire=true/false</code></li>",
-            "</ul>"
-        ].join("");
-    }
-
-    function getScriptEditorHelpPanel() {
-        let $panel = $(`#${SCRIPT_EDITOR_HELP_PANEL_ID}`);
-        if ($panel.length) return $panel;
-
-        $panel = $("<div>")
-            .attr("id", SCRIPT_EDITOR_HELP_PANEL_ID)
-            .css({
-                position: "fixed",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                width: "min(760px, 84vw)",
-                height: "min(560px, 74vh)",
-                display: "none",
-                "z-index": 200200,
-                background: "rgba(12,12,12,0.98)",
-                border: "1px solid #ffd700",
-                "border-radius": "8px",
-                padding: "12px",
-                "box-sizing": "border-box",
-                color: "#fff"
-            })
-            .on("mousedown click keydown keyup", event => {
-                event.stopPropagation();
-            });
-
-        const $content = $("<div>")
-            .html(getScriptEditorHelpMarkup())
-            .css({
-                height: "calc(100% - 44px)",
-                overflow: "auto",
-                "padding-right": "4px",
-                "line-height": "1.35"
-            });
-
-        const $actions = $("<div>")
-            .css({
-                display: "flex",
-                "justify-content": "flex-end",
-                gap: "8px",
-                "margin-top": "10px"
-            });
-
-        const $close = $("<button>")
-            .text("Close")
-            .css({
-                padding: "6px 12px",
-                color: "#111",
-                background: "#ffd700",
-                border: "1px solid #caa700",
-                "border-radius": "4px",
-                cursor: "pointer",
-                "font-weight": "bold"
-            })
-            .on("click", () => closeScriptEditorHelpPanel());
-
-        $actions.append($close);
-        $panel.append($content, $actions);
-        $(document.body).append($panel);
-        return $panel;
-    }
-
-    function openScriptEditorHelpPanel() {
-        getScriptEditorHelpPanel().show();
-    }
-
-    function closeScriptEditorHelpPanel() {
-        $(`#${SCRIPT_EDITOR_HELP_PANEL_ID}`).hide();
-    }
-
-    function getScriptEditorPanel() {
-        let $panel = $(`#${SCRIPT_EDITOR_PANEL_ID}`);
-        if ($panel.length) return $panel;
-
-        $panel = $("<div>")
-            .attr("id", SCRIPT_EDITOR_PANEL_ID)
-            .css({
-                position: "fixed",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                width: "min(820px, 85vw)",
-                height: "min(540px, 72vh)",
-                display: "none",
-                "z-index": 200100,
-                background: "rgba(15,15,15,0.96)",
-                border: "1px solid #ffd700",
-                "border-radius": "8px",
-                padding: "12px",
-                "box-sizing": "border-box",
-                color: "#fff"
-            })
-            .on("mousedown click keydown keyup", event => {
-                event.stopPropagation();
-            });
-
-        const $title = $("<div>")
-            .text("Object Script Editor")
-            .css({ "font-weight": "bold", "font-size": "16px" });
-
-        const $help = $("<button>")
-            .attr("type", "button")
-            .text("?")
-            .css({
-                width: "24px",
-                height: "24px",
-                padding: "0",
-                color: "#111",
-                background: "#ffd700",
-                border: "1px solid #caa700",
-                "border-radius": "50%",
-                cursor: "pointer",
-                "font-weight": "bold",
-                "line-height": "1"
-            })
-            .on("click", () => openScriptEditorHelpPanel());
-
-        const $header = $("<div>")
-            .css({
-                display: "flex",
-                "align-items": "center",
-                "justify-content": "space-between",
-                "margin-bottom": "6px"
-            })
-            .append($title, $help);
-
-        const $target = $("<div>")
-            .attr("id", SCRIPT_EDITOR_TARGET_LABEL_ID)
-            .text("No target selected")
-            .css({ "font-size": "12px", color: "#ddd", "margin-bottom": "8px" });
-
-        const $textarea = $("<textarea>")
-            .attr("id", SCRIPT_EDITOR_TEXTAREA_ID)
-            .attr("placeholder", SCRIPT_EDITOR_DEFAULT_TEMPLATE)
-            .css({
-                width: "100%",
-                height: "calc(100% - 90px)",
-                "box-sizing": "border-box",
-                resize: "none",
-                border: "1px solid #666",
-                "border-radius": "6px",
-                background: "#0b0b0b",
-                color: "#fff",
-                padding: "10px",
-                "font-family": "monospace",
-                "font-size": "13px"
-            });
-
-        const $actions = $("<div>")
-            .css({
-                display: "flex",
-                "justify-content": "flex-end",
-                gap: "8px",
-                "margin-top": "10px"
-            });
-
-        const $cancel = $("<button>")
-            .text("Cancel")
-            .css({
-                padding: "6px 12px",
-                color: "#fff",
-                background: "#444",
-                border: "1px solid #777",
-                "border-radius": "4px",
-                cursor: "pointer"
-            })
-            .on("click", () => closeScriptEditorPanel());
-
-        const $save = $("<button>")
-            .text("Save")
-            .css({
-                padding: "6px 12px",
-                color: "#111",
-                background: "#ffd700",
-                border: "1px solid #caa700",
-                "border-radius": "4px",
-                cursor: "pointer",
-                "font-weight": "bold"
-            })
-            .on("click", () => saveScriptEditorPanel());
-
-        $actions.append($cancel, $save);
-        $panel.append($header, $target, $textarea, $actions);
-        $(document.body).append($panel);
-        return $panel;
-    }
-
-    function closeScriptEditorPanel() {
-        scriptEditorTargetObject = null;
-        closeScriptEditorHelpPanel();
-        $(`#${SCRIPT_EDITOR_PANEL_ID}`).hide();
-    }
-
-    function parseScriptEditorMixedFormat(rawText) {
-        const text = String(rawText || "");
-        let index = 0;
-        const len = text.length;
-        const out = {};
-        const initStatements = [];
-        let parsedAny = false;
-
-        const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
-        const isIdentPart = (ch) => /[A-Za-z0-9_$]/.test(ch);
-
-        const skipWhitespace = () => {
-            while (index < len && /\s/.test(text[index])) {
-                index += 1;
-            }
-        };
-
-        while (index < len) {
-            skipWhitespace();
-            if (index >= len) break;
-
-            const statementStart = index;
-
-            if (isIdentStart(text[index])) {
-                const identStart = index;
-                index += 1;
-                while (index < len && isIdentPart(text[index])) {
-                    index += 1;
-                }
-                const ident = text.slice(identStart, index).trim();
-                let lookahead = index;
-                while (lookahead < len && /\s/.test(text[lookahead])) {
-                    lookahead += 1;
-                }
-                if (ident && text[lookahead] === "{") {
-                    index = lookahead + 1;
-                    const bodyStart = index;
-                    let depth = 1;
-                    let inQuote = null;
-                    let escapeNext = false;
-                    while (index < len) {
-                        const ch = text[index];
-                        if (escapeNext) {
-                            escapeNext = false;
-                            index += 1;
-                            continue;
-                        }
-                        if (ch === "\\") {
-                            if (inQuote) {
-                                escapeNext = true;
-                            }
-                            index += 1;
-                            continue;
-                        }
-                        if (inQuote) {
-                            if (ch === inQuote) inQuote = null;
-                            index += 1;
-                            continue;
-                        }
-                        if (ch === '"' || ch === "'") {
-                            inQuote = ch;
-                            index += 1;
-                            continue;
-                        }
-                        if (ch === "{") depth += 1;
-                        else if (ch === "}") {
-                            depth -= 1;
-                            if (depth === 0) break;
-                        }
-                        index += 1;
-                    }
-                    if (depth !== 0 || index >= len) return null;
-                    const body = text.slice(bodyStart, index).trim();
-                    out[ident] = body;
-                    parsedAny = true;
-                    index += 1;
-                    continue;
-                }
-                index = statementStart;
-            }
-
-            let inQuote = null;
-            let escapeNext = false;
-            let depthParen = 0;
-            let depthBrace = 0;
-            let depthBracket = 0;
-            while (index < len) {
-                const ch = text[index];
-                if (escapeNext) {
-                    escapeNext = false;
-                    index += 1;
-                    continue;
-                }
-                if (ch === "\\") {
-                    if (inQuote) escapeNext = true;
-                    index += 1;
-                    continue;
-                }
-                if (inQuote) {
-                    if (ch === inQuote) inQuote = null;
-                    index += 1;
-                    continue;
-                }
-                if (ch === '"' || ch === "'") {
-                    inQuote = ch;
-                    index += 1;
-                    continue;
-                }
-                if (ch === "(") depthParen += 1;
-                else if (ch === ")") depthParen = Math.max(0, depthParen - 1);
-                else if (ch === "{") depthBrace += 1;
-                else if (ch === "}") depthBrace = Math.max(0, depthBrace - 1);
-                else if (ch === "[") depthBracket += 1;
-                else if (ch === "]") depthBracket = Math.max(0, depthBracket - 1);
-
-                const atTopLevel = depthParen === 0 && depthBrace === 0 && depthBracket === 0;
-                if (atTopLevel && (ch === ";" || ch === "\n" || ch === "\r")) {
-                    break;
-                }
-                index += 1;
-            }
-
-            const statement = text.slice(statementStart, index).trim();
-            if (statement.length > 0) {
-                initStatements.push(statement);
-            }
-            while (index < len && (text[index] === ";" || text[index] === "\n" || text[index] === "\r")) {
-                index += 1;
-            }
-        }
-
-        if (initStatements.length > 0) {
-            out[SCRIPT_INIT_KEY] = initStatements.join(";\n");
-            parsedAny = true;
-        }
-
-        return parsedAny ? out : null;
-    }
-
-    function parseScriptEditorInput(rawText) {
-        const text = String(rawText || "").trim();
-        if (text.length === 0) {
-            return { ok: true, value: {} };
-        }
-
-        const parsedScript = parseScriptEditorMixedFormat(text);
-        if (parsedScript && typeof parsedScript === "object") {
-            return { ok: true, value: parsedScript };
-        }
-
-        return {
-            ok: false,
-            error: new Error("Invalid script format")
-        };
-    }
-
-    function formatObjectScriptForEditor(target) {
-        if (!target) return "";
-        const source = target.script;
-        if (source === undefined || source === null) return "";
-
-        const formatScriptObjectAsBlocks = (scriptObj) => {
-            if (!scriptObj || typeof scriptObj !== "object" || Array.isArray(scriptObj)) return null;
-            const eventNames = Object.keys(scriptObj).filter(eventName => eventName !== SCRIPT_INIT_KEY);
-            const sections = [];
-
-            const rawInit = scriptObj[SCRIPT_INIT_KEY];
-            const initParts = String(rawInit === undefined || rawInit === null ? "" : rawInit)
-                .split(/\r?\n/)
-                .flatMap(line => line.split(";"))
-                .map(part => part.trim())
-                .filter(Boolean);
-            if (initParts.length > 0) {
-                sections.push(initParts.map(part => `${part};`).join("\n"));
-            }
-
-            eventNames.forEach(eventName => {
-                const rawBody = scriptObj[eventName];
-                const parts = String(rawBody === undefined || rawBody === null ? "" : rawBody)
-                    .split(/\r?\n/)
-                    .flatMap(line => line.split(";"))
-                    .map(part => part.trim())
-                    .filter(Boolean);
-                const body = parts.length > 0
-                    ? `\n${parts.map(part => `    ${part};`).join("\n")}\n`
-                    : "\n";
-                sections.push(`${eventName} {${body}}`);
-            });
-            return sections.join("\n\n");
-        };
-
-        if (typeof source === "string") {
-            const text = source.trim();
-            if (!text.length) return "";
-            const blockParsed = parseScriptEditorMixedFormat(text);
-            if (blockParsed) {
-                const formattedBlocks = formatScriptObjectAsBlocks(blockParsed);
-                return formattedBlocks !== null ? formattedBlocks : text;
-            }
-            try {
-                const parsed = (text.startsWith("{") || text.startsWith("["))
-                    ? JSON.parse(text)
-                    : JSON.parse(`{${text}}`);
-                const formattedBlocks = formatScriptObjectAsBlocks(parsed);
-                return formattedBlocks !== null ? formattedBlocks : text;
-            } catch (_err) {
-                return source;
-            }
-        }
-
-        if (source && typeof source === "object" && !Array.isArray(source)) {
-            const formattedBlocks = formatScriptObjectAsBlocks(source);
-            if (formattedBlocks !== null) return formattedBlocks;
-        }
-
-        try {
-            return JSON.stringify(source, null, 2);
-        } catch (_err) {
-            return String(source);
-        }
-    }
-
-    function describeScriptTarget(target) {
-        if (!target) return "Unknown object";
-        const parts = [];
-        if (typeof target.type === "string" && target.type.length > 0) {
-            parts.push(target.type);
-        }
-        if (typeof target.category === "string" && target.category.length > 0) {
-            parts.push(`(${target.category})`);
-        }
-        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
-            parts.push(`@ ${Number(target.x).toFixed(2)}, ${Number(target.y).toFixed(2)}`);
-        }
-        return parts.join(" ");
-    }
-
-    function openScriptEditorForTarget(target) {
-        if (!target || target.gone) return false;
-        const $panel = getScriptEditorPanel();
-        if (typeof globalThis !== "undefined" && typeof globalThis.releaseSpacebarCastingState === "function") {
-            globalThis.releaseSpacebarCastingState();
-        } else if (typeof keysPressed !== "undefined" && keysPressed) {
-            keysPressed[" "] = false;
-        }
-        const textareaEl = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).get(0);
-        if (typeof globalThis !== "undefined" && typeof globalThis.armSpacebarTypingGuardForElement === "function") {
-            globalThis.armSpacebarTypingGuardForElement(textareaEl);
-        }
-        scriptEditorTargetObject = target;
-        $(`#${SCRIPT_EDITOR_TARGET_LABEL_ID}`).text(describeScriptTarget(target));
-        $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val(formatObjectScriptForEditor(target));
-        $panel.show();
-        setTimeout(() => {
-            $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).trigger("focus");
-        }, 0);
-        return true;
-    }
-
-    function saveScriptEditorPanel() {
-        if (!scriptEditorTargetObject) {
-            closeScriptEditorPanel();
-            return;
-        }
-        const text = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val();
-        const parsed = parseScriptEditorInput(text);
-        if (!parsed.ok) {
-            message("Script is not valid. Use statements and/or event blocks.");
-            return;
-        }
-        scriptEditorTargetObject.script = parsed.value;
-        if (
-            typeof globalThis !== "undefined" &&
-            globalThis.Scripting &&
-            typeof globalThis.Scripting.runObjectInitScript === "function"
-        ) {
-            globalThis.Scripting.runObjectInitScript(
-                scriptEditorTargetObject,
-                (typeof wizard !== "undefined") ? wizard : null,
-                { reason: "scriptSaved" }
-            );
-        }
-        message("Object script saved.");
-        closeScriptEditorPanel();
-    }
 
     function getTextureAlphaMask(texture) {
         if (!texture || !texture.baseTexture || !texture.frame) return null;
@@ -1430,6 +914,23 @@ const SpellSystem = (() => {
         wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = anchorX;
         wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = anchorY;
 
+        if (!wizardRef.selectedPlaceableCompositeLayersByTexture || typeof wizardRef.selectedPlaceableCompositeLayersByTexture !== "object") {
+            wizardRef.selectedPlaceableCompositeLayersByTexture = {};
+        }
+        if (meta && Array.isArray(meta.compositeLayers) && meta.compositeLayers.length >= 2) {
+            wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath] = meta.compositeLayers.map(layer => ({
+                name: String((layer && layer.name) || ""),
+                uRegion: (Array.isArray(layer && layer.uRegion) && layer.uRegion.length >= 2)
+                    ? [Number(layer.uRegion[0]) || 0, Number(layer.uRegion[1]) || 1]
+                    : [0, 1]
+            }));
+        } else {
+            wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath] = null;
+        }
+        if (wizardRef.selectedPlaceableTexturePath === texturePath) {
+            wizardRef.selectedPlaceableCompositeLayers = wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath];
+        }
+
         // Apply baseSize / minSize / maxSize from item metadata
         const metaBaseSize = (meta && Number.isFinite(meta.baseSize) && meta.baseSize > 0) ? Number(meta.baseSize) : null;
         const metaMinSize = (meta && Number.isFinite(meta.minSize) && meta.minSize > 0) ? Number(meta.minSize) : null;
@@ -1514,10 +1015,25 @@ const SpellSystem = (() => {
         return Math.round(clamped * 1000) / 1000;
     }
 
-    function getPowerupPlacementBaseData() {
+    function getSelectedPowerupFileName(wizardRef) {
+        if (wizardRef && typeof wizardRef.selectedPowerupFileName === "string" && wizardRef.selectedPowerupFileName.trim().length > 0) {
+            return wizardRef.selectedPowerupFileName.trim();
+        }
+        return POWERUP_PLACEMENT_FILE_NAME;
+    }
+
+    function setSelectedPowerupFileName(wizardRef, fileName) {
+        if (!wizardRef) return;
+        wizardRef.selectedPowerupFileName = (typeof fileName === "string" && fileName.trim().length > 0)
+            ? fileName.trim()
+            : POWERUP_PLACEMENT_FILE_NAME;
+    }
+
+    function getPowerupPlacementBaseData(wizardRef) {
+        const selectedFile = getSelectedPowerupFileName(wizardRef);
         let imageData = null;
         if (typeof getPowerupImageDataByFile === "function") {
-            imageData = getPowerupImageDataByFile(POWERUP_PLACEMENT_FILE_NAME);
+            imageData = getPowerupImageDataByFile(selectedFile);
         }
         const width = Number.isFinite(imageData && imageData.width)
             ? Math.max(0.01, Number(imageData.width))
@@ -1531,12 +1047,18 @@ const SpellSystem = (() => {
         const imagePath = (imageData && typeof imageData.imagePath === "string" && imageData.imagePath.length > 0)
             ? imageData.imagePath
             : POWERUP_PLACEMENT_IMAGE_PATH;
+        const anchorObj = (imageData && imageData.anchor && typeof imageData.anchor === "object")
+            ? imageData.anchor : null;
+        const anchorX = Number.isFinite(anchorObj && anchorObj.x) ? Number(anchorObj.x) : 0.5;
+        const anchorY = Number.isFinite(anchorObj && anchorObj.y) ? Number(anchorObj.y) : 0.5;
         return {
-            fileName: POWERUP_PLACEMENT_FILE_NAME,
+            fileName: selectedFile,
             imagePath,
             width,
             height,
-            radius
+            radius,
+            anchorX,
+            anchorY
         };
     }
 
@@ -1555,8 +1077,75 @@ const SpellSystem = (() => {
         return next;
     }
 
+    function clampAnimalSizeScale(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return 1;
+        return Math.max(0.25, Math.min(4, n));
+    }
+
+    function getSelectedAnimalSizeScale(wizardRef) {
+        if (!wizardRef) return 1;
+        const scale = clampAnimalSizeScale(wizardRef.selectedAnimalSizeScale);
+        wizardRef.selectedAnimalSizeScale = scale;
+        return scale;
+    }
+
+    function syncAnimalSizeControls(wizardRef) {
+        if (!wizardRef) return;
+        const scale = getSelectedAnimalSizeScale(wizardRef);
+        const sliderValue = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.scaleToSlider === "function")
+            ? SpawnAnimal.scaleToSlider(scale)
+            : ((scale - 0.25) / (4 - 0.25));
+        const $sizeSlider = $("#animalSizeSlider");
+        if ($sizeSlider.length > 0) {
+            $sizeSlider.val(String(sliderValue));
+        }
+        const $sizeLabel = $("#animalSizeLabel");
+        if ($sizeLabel.length > 0) {
+            $sizeLabel.text(`Size: ${Math.round(scale * 100)}%`);
+        }
+    }
+
+    function adjustAnimalSizeScale(wizardRef, delta) {
+        if (!wizardRef || !Number.isFinite(delta) || delta === 0) return null;
+        const currentScale = getSelectedAnimalSizeScale(wizardRef);
+        const currentSlider = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.scaleToSlider === "function")
+            ? SpawnAnimal.scaleToSlider(currentScale)
+            : ((currentScale - 0.25) / (4 - 0.25));
+        const nextSlider = Math.max(0, Math.min(1, currentSlider + delta));
+        const nextScale = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.sliderToScale === "function")
+            ? SpawnAnimal.sliderToScale(nextSlider)
+            : clampAnimalSizeScale(0.25 + nextSlider * (4 - 0.25));
+        wizardRef.selectedAnimalSizeScale = clampAnimalSizeScale(nextScale);
+        syncAnimalSizeControls(wizardRef);
+        return wizardRef.selectedAnimalSizeScale;
+    }
+
+    const TREE_GROW_SIZE_MIN = 0.5;
+    const TREE_GROW_SIZE_MAX = 20;
+    const TREE_GROW_SIZE_DEFAULT = 4;
+    const TREE_GROW_SIZE_SCROLL_SPEED = 10;
+
+    function getSelectedTreeGrowSize(wizardRef) {
+        if (!wizardRef) return TREE_GROW_SIZE_DEFAULT;
+        const n = Number(wizardRef.treeGrowPlacementSize);
+        if (!Number.isFinite(n) || n <= 0) {
+            wizardRef.treeGrowPlacementSize = TREE_GROW_SIZE_DEFAULT;
+            return TREE_GROW_SIZE_DEFAULT;
+        }
+        return Math.max(TREE_GROW_SIZE_MIN, Math.min(TREE_GROW_SIZE_MAX, n));
+    }
+
+    function adjustTreeGrowSize(wizardRef, delta) {
+        if (!wizardRef || !Number.isFinite(delta) || delta === 0) return null;
+        const current = getSelectedTreeGrowSize(wizardRef);
+        const next = Math.max(TREE_GROW_SIZE_MIN, Math.min(TREE_GROW_SIZE_MAX, current + delta * TREE_GROW_SIZE_SCROLL_SPEED));
+        wizardRef.treeGrowPlacementSize = Math.round(next * 100) / 100;
+        return wizardRef.treeGrowPlacementSize;
+    }
+
     function getPowerupPlacementPreviewConfig(wizardRef) {
-        const base = getPowerupPlacementBaseData();
+        const base = getPowerupPlacementBaseData(wizardRef);
         const scale = getSelectedPowerupPlacementScale(wizardRef);
         return {
             fileName: base.fileName,
@@ -1564,7 +1153,9 @@ const SpellSystem = (() => {
             width: Math.max(0.01, base.width * scale),
             height: Math.max(0.01, base.height * scale),
             radius: Math.max(0.01, base.radius * scale),
-            scale
+            scale,
+            anchorX: Number.isFinite(base.anchorX) ? base.anchorX : 0.5,
+            anchorY: Number.isFinite(base.anchorY) ? base.anchorY : 0.5
         };
     }
 
@@ -1637,8 +1228,109 @@ const SpellSystem = (() => {
         return getSelectedPlaceableTextureForCategory(wizardRef, category);
     }
 
+    function applyCompositeLayersToThumbnail($icon, category, texturePath) {
+        if (typeof globalThis.getResolvedPlaceableMetadata === "function") {
+            globalThis.getResolvedPlaceableMetadata(category, texturePath).then(meta => {
+                if (!meta) return;
+                $icon.empty(); // Clear any existing sub-layers
+                if (Array.isArray(meta.compositeLayers) && meta.compositeLayers.length >= 2) {
+                    $icon.css({ "background-image": "none", "position": "relative", "overflow": "hidden" });
+                    meta.compositeLayers.forEach(layer => {
+                        if (!layer) return;
+                        const uRegion = (Array.isArray(layer.uRegion) && layer.uRegion.length >= 2)
+                            ? [Number(layer.uRegion[0]) || 0, Number(layer.uRegion[1]) || 1]
+                            : [0, 1];
+                        const u0 = uRegion[0];
+                        const u1 = uRegion[1];
+                        const fWidth = Math.max(0.0001, u1 - u0);
+                        const subLayer = $("<div>").css({
+                            "position": "absolute",
+                            "top": "0", "left": "0", "width": "100%", "height": "100%",
+                            "overflow": "hidden",
+                            "pointer-events": "none"
+                        });
+                        const innerImg = $("<img>").attr("src", texturePath).css({
+                            "position": "absolute",
+                            "top": "0",
+                            "left": `-${(u0 / fWidth) * 100}%`,
+                            "width": `${100 / fWidth}%`,
+                            "height": "100%",
+                            "pointer-events": "none"
+                        });
+                        subLayer.append(innerImg);
+                        $icon.append(subLayer);
+                    });
+                } else {
+                    const fcX = Number.isFinite(meta.framecount_x) ? meta.framecount_x : (Number.isFinite(meta.frameCountX) ? meta.frameCountX : (meta.framecount && meta.framecount.x ? meta.framecount.x : 1));
+                    if (fcX > 1) {
+                        $icon.css({
+                            "background-size": `${fcX * 100}% 100%`,
+                            "background-position": "0 0"
+                        });
+                    }
+                }
+            });
+        }
+    }
+
     function isEditorSpellName(spellName) {
         return spellName === "placeobject" || spellName === "blackdiamond";
+    }
+
+    function isEditorToolName(spellName) {
+        return spellName === "wall" || spellName === "buildroad" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "blackdiamond" || spellName === "nodeinspector";
+    }
+
+    function isVanishToolName(spellName) {
+        return spellName === "vanish" || spellName === "editorvanish";
+    }
+
+    function isEditorMode() {
+        return !!editorMode;
+    }
+
+    function setEditorMode(active, wizardRef) {
+        const next = !!active;
+        if (editorMode === next) return next;
+        editorMode = next;
+        if (wizardRef) {
+            wizardRef.editorMode = next;
+        }
+        // Show/hide the editor mode banner
+        if (editorMode) {
+            $("#editorModeBanner").removeClass("hidden");
+        } else {
+            $("#editorModeBanner").addClass("hidden");
+        }
+        // Rebuild the spell menu to add/remove editor options
+        spellMenuMode = "main";
+        if (wizardRef) {
+            refreshSpellSelector(wizardRef);
+        }
+        return editorMode;
+    }
+
+    function toggleEditorMode(wizardRef) {
+        return setEditorMode(!editorMode, wizardRef);
+    }
+
+    function getSelectedSpellName(wizardRef) {
+        if (!wizardRef) return "fireball";
+        const spellList = (Array.isArray(wizardRef.spells) && wizardRef.spells.length > 0)
+            ? wizardRef.spells
+            : buildSpellList(wizardRef);
+        const availableSpellNames = spellList
+            .map(spell => (spell && typeof spell.name === "string") ? spell.name : null)
+            .filter(Boolean);
+        const selected = (typeof wizardRef.selectedSpellName === "string") ? wizardRef.selectedSpellName : "";
+        if (selected && availableSpellNames.includes(selected) && !isEditorSpellName(selected)) {
+            return selected;
+        }
+        const current = (typeof wizardRef.currentSpell === "string") ? wizardRef.currentSpell : "";
+        if (current && availableSpellNames.includes(current) && !isEditorSpellName(current)) {
+            return current;
+        }
+        return availableSpellNames[0] || "fireball";
     }
 
     function getSelectedEditorCategory(wizardRef) {
@@ -1662,6 +1354,16 @@ const SpellSystem = (() => {
     }
 
     function getSelectedEditorIcon(wizardRef) {
+        // If current spell is an editor tool (wall/road/vanish), show that tool's icon
+        if (wizardRef && wizardRef.currentSpell === "wall") {
+            return getWallSpellIcon(wizardRef);
+        }
+        if (wizardRef && wizardRef.currentSpell === "buildroad") {
+            return getRoadSpellIcon(wizardRef);
+        }
+        if (wizardRef && wizardRef.currentSpell === "editorvanish" && editorMode) {
+            return "/assets/images/thumbnails/vanish.png";
+        }
         const category = normalizeSelectedEditorCategory(wizardRef);
         if (category === "powerups") {
             const preview = getPowerupPlacementPreviewConfig(wizardRef);
@@ -2030,7 +1732,7 @@ const SpellSystem = (() => {
         if (spellName === "wall") return !!wizardRef.wallLayoutMode && !!wizardRef.wallStartPoint;
         if (spellName === "buildroad") return !!wizardRef.roadLayoutMode && !!wizardRef.roadStartPoint;
         if (spellName === "firewall") return !!wizardRef.firewallLayoutMode && !!wizardRef.firewallStartPoint;
-        if (spellName === "vanish") return !!wizardRef.vanishDragMode;
+        if (isVanishToolName(spellName)) return !!wizardRef.vanishDragMode;
         return false;
     }
 
@@ -2059,9 +1761,13 @@ const SpellSystem = (() => {
             clearDragPreview(wizardRef, "firewall");
             return;
         }
-        if (spellName === "vanish") {
+        if (isVanishToolName(spellName)) {
             wizardRef.vanishDragMode = false;
             resetVanishDragTargetingState(wizardRef);
+            // Note: do NOT clear _pendingVanishWallBurst here — the
+            // pending burst must survive between the two clicks of a
+            // double-click (space is released and re-pressed between
+            // them).
         }
     }
 
@@ -2166,8 +1872,42 @@ const SpellSystem = (() => {
         return setForSpell;
     }
 
+    function spellUsesTargetHistory(spellName) {
+        // Fireball and most click-cast spells should be able to target the same
+        // object repeatedly; history is only for multi-step/drag workflows.
+        return isVanishToolName(spellName) ||
+            spellName === "wall" ||
+            spellName === "buildroad" ||
+            spellName === "firewall" ||
+            spellName === "triggerarea";
+    }
+
+    function isTrackedAnimalTarget(obj) {
+        if (!obj) return false;
+        const candidateLists = [
+            (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) ? globalThis.animals : null,
+            (typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null
+        ];
+        for (let i = 0; i < candidateLists.length; i++) {
+            const list = candidateLists[i];
+            if (Array.isArray(list) && list.includes(obj)) return true;
+        }
+        return false;
+    }
+
     function hasSpellAlreadyTargetedObject(wizardRef, spellName, obj) {
+        if (!spellUsesTargetHistory(spellName)) return false;
         if (!wizardRef || !spellName || !obj) return false;
+        if (
+            isVanishToolName(spellName) &&
+            isTrackedAnimalTarget(obj) &&
+            !obj.gone &&
+            !obj.vanishing &&
+            !obj.dead &&
+            (!(Number.isFinite(obj.hp)) || Number(obj.hp) > 0)
+        ) {
+            return false;
+        }
         const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
         return !!(setForSpell && setForSpell.has(obj));
     }
@@ -2192,6 +1932,7 @@ const SpellSystem = (() => {
     }
 
     function markObjectAsTargetedBySpell(wizardRef, spellName, obj) {
+        if (!spellUsesTargetHistory(spellName)) return;
         if (!wizardRef || !spellName || !obj) return;
         const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
         if (setForSpell) {
@@ -2393,6 +2134,7 @@ const SpellSystem = (() => {
     }
 
     function getMaxSelectableVanishTargets(wizardRef) {
+        if (editorMode) return 9999;
         const magic = (wizardRef && Number.isFinite(wizardRef.magic)) ? Number(wizardRef.magic) : 0;
         const perCastCost = Math.max(1, Number(VANISH_MAGIC_COST_PER_CAST) || 1);
         return Math.max(0, Math.floor(magic / perCastCost));
@@ -2555,7 +2297,7 @@ const SpellSystem = (() => {
 
     function queueVanishDragTargetAtPoint(wizardRef, worldX, worldY) {
         if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
-        if (wizardRef.currentSpell !== "vanish") return false;
+        if (!isVanishToolName(wizardRef.currentSpell)) return false;
         if (!wizardRef.vanishDragMode) return false;
 
         const maxSelectable = getMaxSelectableVanishTargets(wizardRef);
@@ -2685,7 +2427,7 @@ const SpellSystem = (() => {
         if (Array.isArray(state.selectionTimeline)) {
             state.selectionTimeline.push({ kind: "object", object: candidate });
         }
-        markObjectAsTargetedBySpell(wizardRef, "vanish", candidate);
+        markObjectAsTargetedBySpell(wizardRef, wizardRef.currentSpell, candidate);
         return true;
     }
 
@@ -2756,8 +2498,11 @@ const SpellSystem = (() => {
         return targets.slice(0, maxSelectable);
     }
 
-    function castQueuedVanishBurst(wizardRef, queuedTargets = []) {
+    function castQueuedVanishBurst(wizardRef, queuedTargets = [], spellName = null) {
         if (!wizardRef || !Array.isArray(queuedTargets) || queuedTargets.length === 0) return false;
+        const vanishSpellName = isVanishToolName(spellName)
+            ? spellName
+            : (isVanishToolName(wizardRef.currentSpell) ? wizardRef.currentSpell : "vanish");
 
         const shots = queuedTargets.slice();
         let shotIndex = 0;
@@ -2777,8 +2522,11 @@ const SpellSystem = (() => {
 
             const target = shots[shotIndex++];
             if (target && !target.gone && !target.vanishing) {
-                const projectile = new globalThis.Vanish();
-                const requiredMagic = Math.max(15, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
+                const ProjectileClass = getSpellClassForName(vanishSpellName) || globalThis.Vanish;
+                const projectile = new ProjectileClass();
+                const requiredMagic = (vanishSpellName === "editorvanish")
+                    ? 0
+                    : Math.max(15, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
                 if (wizard.magic < requiredMagic) {
                     finishBurst();
                     return;
@@ -2787,7 +2535,7 @@ const SpellSystem = (() => {
                 const aim = getTargetAimPoint(wizardRef, target);
                 if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
                     projectile.forcedTarget = target;
-                    markObjectAsTargetedBySpell(wizardRef, "vanish", target);
+                    markObjectAsTargetedBySpell(wizardRef, vanishSpellName, target);
                     const dx = aim.x - wizardRef.x;
                     const dy = aim.y - wizardRef.y;
                     if (typeof wizardRef.turnToward === "function") {
@@ -3498,7 +3246,7 @@ const SpellSystem = (() => {
             return true;
         }
 
-        if (spellName === "vanish") {
+        if (isVanishToolName(spellName)) {
             wizardRef.vanishDragMode = true;
             ensureVanishDragTargetingState(wizardRef);
             queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
@@ -3514,7 +3262,7 @@ const SpellSystem = (() => {
             if (wizardRef.currentSpell === "wall") cancelDragSpell(wizardRef, "wall");
             if (wizardRef.currentSpell === "buildroad") cancelDragSpell(wizardRef, "buildroad");
             if (wizardRef.currentSpell === "firewall") cancelDragSpell(wizardRef, "firewall");
-            if (wizardRef.currentSpell === "vanish") cancelDragSpell(wizardRef, "vanish");
+            if (isVanishToolName(wizardRef.currentSpell)) cancelDragSpell(wizardRef, wizardRef.currentSpell);
             return false;
         }
         if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint) {
@@ -3528,7 +3276,7 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint) {
             return true;
         }
-        if (wizardRef.currentSpell === "vanish" && wizardRef.vanishDragMode) {
+        if (isVanishToolName(wizardRef.currentSpell) && wizardRef.vanishDragMode) {
             queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
             return true;
         }
@@ -3656,7 +3404,9 @@ const SpellSystem = (() => {
                     });
                 }
             });
-            wizardRef.magic -= 5;
+            if (!editorMode) {
+                wizardRef.magic -= 5;
+            }
             cancelDragSpell(wizardRef, "buildroad");
             cooldown(wizardRef, wizardRef.cooldownTime);
             return true;
@@ -3683,15 +3433,125 @@ const SpellSystem = (() => {
             return true;
         }
 
-        if (spellName === "vanish") {
-            if (!isDragSpellActive(wizardRef, "vanish")) return false;
+        if (isVanishToolName(spellName)) {
+            if (!isDragSpellActive(wizardRef, spellName)) return false;
             if (Number.isFinite(worldX) && Number.isFinite(worldY)) {
                 queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
             }
+            const state = wizardRef.vanishDragTargetingState;
+
+            // Detect whether this was a quick single-click on one wall
+            // BEFORE calling buildVanishBurstTargetsFromQueuedState,
+            // because that function destructively splits the wall into
+            // sub-sections and removes the original.
+            const isSingleWallClick = (
+                state &&
+                state.wallRanges instanceof Map &&
+                state.wallRanges.size === 1 &&
+                state.queuedObjects.length === 0
+            );
+            const singleWallEntry = isSingleWallClick
+                ? [...state.wallRanges.values()][0]
+                : null;
+            const singleWall = singleWallEntry?.wall ?? null;
+
+            const VANISH_DBLCLICK_MS = 400;
+            const now = Date.now();
+            const pending = wizardRef._pendingVanishWallBurst;
+
+            // Double-click: second click on the same wall within the
+            // timeout window.  Cancel the deferred partial vanish and
+            // fire a whole-wall vanish instead (no split needed).
+            if (
+                pending &&
+                singleWall &&
+                pending.wall === singleWall &&
+                (now - pending.time) < VANISH_DBLCLICK_MS
+            ) {
+                clearTimeout(pending.timeout);
+                wizardRef._pendingVanishWallBurst = null;
+                cancelDragSpell(wizardRef, spellName);
+                singleWall._vanishAsWholeSection = true;
+                castQueuedVanishBurst(wizardRef, [singleWall], spellName);
+                return true;
+            }
+
+            // First click on a single wall: defer to allow a potential
+            // double-click.  Do NOT build burst targets yet (that
+            // would split the wall and destroy the original object,
+            // making the second click pick a different reference).
+            if (isSingleWallClick && singleWall && !singleWall.gone && !singleWall.vanishing) {
+                const savedRange = {
+                    tStart: Number(singleWallEntry.tStart),
+                    tEnd: Number(singleWallEntry.tEnd),
+                    firstTouchT: Number(singleWallEntry.firstTouchT),
+                    lastTouchT: Number(singleWallEntry.lastTouchT)
+                };
+                cancelDragSpell(wizardRef, spellName);
+                const pendingBurst = {
+                    wall: singleWall,
+                    spellName,
+                    range: savedRange,
+                    time: now,
+                    timeout: setTimeout(() => {
+                        if (wizardRef._pendingVanishWallBurst !== pendingBurst) return;
+                        wizardRef._pendingVanishWallBurst = null;
+                        if (singleWall.gone || singleWall.vanishing) return;
+                        // NOW split and fire the partial-wall vanish.
+                        if (typeof singleWall.splitIntoTargetableVanishSegments === "function") {
+                            const split = singleWall.splitIntoTargetableVanishSegments(
+                                { tStart: savedRange.tStart, tEnd: savedRange.tEnd },
+                                { targetSegmentLengthWorld: VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD }
+                            );
+                            if (split && Array.isArray(split.targetSegments) && split.targetSegments.length > 0) {
+                                const segments = split.targetSegments.slice();
+                                if (
+                                    Number.isFinite(savedRange.firstTouchT) &&
+                                    Number.isFinite(savedRange.lastTouchT) &&
+                                    savedRange.lastTouchT < savedRange.firstTouchT
+                                ) {
+                                    segments.reverse();
+                                }
+                                castQueuedVanishBurst(wizardRef, segments, pendingBurst.spellName);
+                                return;
+                            }
+                        }
+                        // Fallback: vanish the whole wall.
+                        castQueuedVanishBurst(wizardRef, [singleWall], pendingBurst.spellName);
+                    }, VANISH_DBLCLICK_MS)
+                };
+                wizardRef._pendingVanishWallBurst = pendingBurst;
+                return true;
+            }
+
+            // Non-wall target, drag selection, or empty click.
+            // Build burst targets and fire immediately.
             const burstTargets = buildVanishBurstTargetsFromQueuedState(wizardRef);
-            cancelDragSpell(wizardRef, "vanish");
-            if (burstTargets.length === 0) return true;
-            castQueuedVanishBurst(wizardRef, burstTargets);
+            cancelDragSpell(wizardRef, spellName);
+
+            // Flush any pending deferred burst first.
+            if (pending) {
+                clearTimeout(pending.timeout);
+                wizardRef._pendingVanishWallBurst = null;
+                if (pending.wall && !pending.wall.gone && !pending.wall.vanishing) {
+                    if (typeof pending.wall.splitIntoTargetableVanishSegments === "function") {
+                        const split = pending.wall.splitIntoTargetableVanishSegments(
+                            { tStart: pending.range.tStart, tEnd: pending.range.tEnd },
+                            { targetSegmentLengthWorld: VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD }
+                        );
+                        if (split && Array.isArray(split.targetSegments) && split.targetSegments.length > 0) {
+                            castQueuedVanishBurst(wizardRef, split.targetSegments, pending.spellName || spellName);
+                        } else {
+                            castQueuedVanishBurst(wizardRef, [pending.wall], pending.spellName || spellName);
+                        }
+                    } else {
+                        castQueuedVanishBurst(wizardRef, [pending.wall], pending.spellName || spellName);
+                    }
+                }
+            }
+            if (burstTargets.length > 0) {
+                castQueuedVanishBurst(wizardRef, burstTargets, spellName);
+            }
             return true;
         }
 
@@ -3822,34 +3682,137 @@ const SpellSystem = (() => {
 
     function updateCharacterObjectCollisions(wizardRef) {
         if (!wizardRef || !wizardRef.map) return;
+        if (wizardRef.gone || wizardRef.dead) return;
+        const target = wizardRef;
+        const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
         const activeFirewalls = Number(
             (typeof globalThis !== "undefined" && globalThis.activeFirewallEmitterCount)
                 ? globalThis.activeFirewallEmitterCount
                 : 0
         );
-        if (activeFirewalls <= 0) return;
-        if (wizardRef.gone || wizardRef.dead) return;
-        const target = wizardRef;
-        const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
-        if (!targetHitbox) return;
-        const nearbyObjects = getNearbyObjectsAroundWizard(
+
+        if (activeFirewalls > 0 && targetHitbox) {
+            const nearbyObjects = getNearbyObjectsAroundWizard(
+                wizardRef.map,
+                wizardRef,
+                collisionNearbyObjectsScratch,
+                { tileRadius: 2, requireCollisionHandler: true }
+            );
+            for (const obj of nearbyObjects) {
+                if (!obj) continue;
+                obj.handleCharacterCollision(target);
+            }
+        }
+
+        const scriptingApi = (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting === "object"
+        ) ? globalThis.Scripting : null;
+        if (!scriptingApi) return;
+        if (
+            typeof scriptingApi.processDoorTraversalEvents !== "function" ||
+            typeof scriptingApi.processObjectTouchEvents !== "function" ||
+            typeof scriptingApi.processTriggerAreaTraversalEvents !== "function"
+        ) {
+            return;
+        }
+
+        const fromX = Number.isFinite(wizardRef._scriptPrevX) ? Number(wizardRef._scriptPrevX) : Number(wizardRef.x);
+        const fromY = Number.isFinite(wizardRef._scriptPrevY) ? Number(wizardRef._scriptPrevY) : Number(wizardRef.y);
+        const toX = Number(wizardRef.x);
+        const toY = Number(wizardRef.y);
+        wizardRef._scriptPrevX = toX;
+        wizardRef._scriptPrevY = toY;
+
+        const nearbyAll = getNearbyObjectsAroundWizard(
             wizardRef.map,
             wizardRef,
-            collisionNearbyObjectsScratch,
-            { tileRadius: 2, requireCollisionHandler: true }
+            collisionTargetsScratch,
+            { tileRadius: 3, requireCollisionHandler: false }
         );
-        for (const obj of nearbyObjects) {
-            if (!obj) continue;
-            obj.handleCharacterCollision(target);
+        const nearbyScriptEntries = [];
+        const nearbyScriptObjects = new Set();
+        const forceTouchedObjects = (wizardRef._movementForceTouchedObjects instanceof Set)
+            ? wizardRef._movementForceTouchedObjects
+            : null;
+        for (let i = 0; i < nearbyAll.length; i++) {
+            const obj = nearbyAll[i];
+            if (!obj || obj.gone || obj.vanishing) continue;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) continue;
+            const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
+            nearbyScriptEntries.push({ obj, hitbox, forceTouch });
+            nearbyScriptObjects.add(obj);
         }
+
+        const mapPowerups = (
+            typeof globalThis !== "undefined" &&
+            Array.isArray(globalThis.powerups)
+        ) ? globalThis.powerups : [];
+        for (let i = 0; i < mapPowerups.length; i++) {
+            const obj = mapPowerups[i];
+            if (!obj || obj.gone || obj.vanishing || obj.collected) continue;
+            if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
+            if (nearbyScriptObjects.has(obj)) continue;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) continue;
+            nearbyScriptEntries.push({ obj, hitbox, forceTouch: false });
+            nearbyScriptObjects.add(obj);
+        }
+
+        // Trigger areas are polygonal and can be much larger than a local node query.
+        // They are currently indexed by a single node, so side-dependent misses can
+        // occur when crossing far from the trigger's center. Include all trigger
+        // areas in script traversal checks to make enter/exit detection reliable.
+        const allMapObjects = Array.isArray(wizardRef.map.objects) ? wizardRef.map.objects : [];
+        for (let i = 0; i < allMapObjects.length; i++) {
+            const obj = allMapObjects[i];
+            if (!obj || obj.gone || obj.vanishing) continue;
+            if (!(obj.type === "triggerArea" || obj.isTriggerArea === true)) continue;
+            if (nearbyScriptObjects.has(obj)) continue;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) continue;
+            nearbyScriptEntries.push({ obj, hitbox });
+            nearbyScriptObjects.add(obj);
+        }
+
+        scriptingApi.processDoorTraversalEvents(
+            wizardRef,
+            fromX,
+            fromY,
+            toX,
+            toY,
+            nearbyScriptEntries,
+            0
+        );
+        scriptingApi.processTriggerAreaTraversalEvents(
+            wizardRef,
+            fromX,
+            fromY,
+            toX,
+            toY,
+            nearbyScriptEntries,
+            0
+        );
+        scriptingApi.processObjectTouchEvents(
+            wizardRef,
+            nearbyScriptEntries,
+            Number(wizardRef.groundRadius) || 0
+        );
     }
 
     function getObjectTargetAt(wizardRef, worldX, worldY) {
         const activeSpell = wizardRef ? wizardRef.currentSpell : null;
+        const debugEnabled = !!(
+            (typeof debugMode !== "undefined" && debugMode) ||
+            (typeof globalThis !== "undefined" && globalThis.debugMode)
+        );
         const canTargetObject = (obj) => !!(
             obj &&
             !obj.gone &&
             !obj.vanishing &&
+            (!(obj.type === "triggerArea" || obj.isTriggerArea === true) || debugEnabled) &&
             isValidObjectTargetForSpell(activeSpell, obj, wizardRef) &&
             !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
         );
@@ -3863,11 +3826,442 @@ const SpellSystem = (() => {
         return null;
     }
 
-    function castWizardSpell(wizardRef, worldX, worldY) {
+    function clearTriggerAreaPlacementDraft(wizardRef) {
+        if (!wizardRef || !wizardRef._triggerAreaPlacementDraft) return;
+        wizardRef._triggerAreaPlacementDraft = null;
+    }
+
+    function isTriggerAreaDebugEditEnabled(wizardRef) {
+        const debugEnabled = (
+            (typeof debugMode !== "undefined" && debugMode) ||
+            (typeof globalThis !== "undefined" && globalThis.debugMode)
+        );
+        return !!(wizardRef && wizardRef.currentSpell === "triggerarea" && debugEnabled);
+    }
+
+    function clearTriggerAreaVertexSelection(wizardRef) {
+        if (!wizardRef || !wizardRef._triggerAreaVertexSelection) return;
+        wizardRef._triggerAreaVertexSelection = null;
+    }
+
+    function getTriggerAreaVertexSelection(wizardRef) {
+        if (!wizardRef) return null;
+        const selection = wizardRef._triggerAreaVertexSelection;
+        if (!selection || typeof selection !== "object") return null;
+        const area = selection.area || null;
+        const vertexIndex = Math.floor(Number(selection.vertexIndex));
+        if (
+            !area ||
+            area.gone ||
+            area.vanishing ||
+            !Number.isInteger(vertexIndex)
+        ) {
+            clearTriggerAreaVertexSelection(wizardRef);
+            return null;
+        }
+        const points = Array.isArray(area.polygonPoints) ? area.polygonPoints : null;
+        if (!points || vertexIndex < 0 || vertexIndex >= points.length) {
+            clearTriggerAreaVertexSelection(wizardRef);
+            return null;
+        }
+        selection.vertexIndex = vertexIndex;
+        selection.dragging = !!selection.dragging;
+        return selection;
+    }
+
+    function getAllTriggerAreaObjects(mapRef) {
+        const allMapObjects = Array.isArray(mapRef && mapRef.objects) ? mapRef.objects : [];
+        const results = [];
+        for (let i = 0; i < allMapObjects.length; i++) {
+            const obj = allMapObjects[i];
+            if (!obj || obj.gone || obj.vanishing) continue;
+            if (!(obj.type === "triggerArea" || obj.isTriggerArea === true)) continue;
+            if (!Array.isArray(obj.polygonPoints) || obj.polygonPoints.length < 3) continue;
+            results.push(obj);
+        }
+        return results;
+    }
+
+    function findTriggerAreaVertexAtScreenPoint(wizardRef, screenX, screenY) {
+        if (!isTriggerAreaDebugEditEnabled(wizardRef)) return null;
+        if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
+        if (!worldToScreenFn) return null;
+        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map);
+        if (triggerAreas.length === 0) return null;
+
+        let best = null;
+        let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
+        for (let i = 0; i < triggerAreas.length; i++) {
+            const area = triggerAreas[i];
+            const points = area.polygonPoints;
+            for (let j = 0; j < points.length; j++) {
+                const point = points[j];
+                if (!point) continue;
+                const screenPoint = worldToScreenFn({ x: Number(point.x), y: Number(point.y) });
+                if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
+                const dx = Number(screenPoint.x) - Number(screenX);
+                const dy = Number(screenPoint.y) - Number(screenY);
+                const distanceSq = (dx * dx) + (dy * dy);
+                if (distanceSq > bestDistanceSq) continue;
+                bestDistanceSq = distanceSq;
+                best = { area, vertexIndex: j };
+            }
+        }
+        return best;
+    }
+
+    function getDistanceSqToScreenSegment(screenX, screenY, ax, ay, bx, by) {
+        const abx = bx - ax;
+        const aby = by - ay;
+        const abLenSq = (abx * abx) + (aby * aby);
+        if (!(abLenSq > 0)) {
+            const dx = screenX - ax;
+            const dy = screenY - ay;
+            return dx * dx + dy * dy;
+        }
+        const apx = screenX - ax;
+        const apy = screenY - ay;
+        const t = Math.max(0, Math.min(1, ((apx * abx) + (apy * aby)) / abLenSq));
+        const closestX = ax + (abx * t);
+        const closestY = ay + (aby * t);
+        const dx = screenX - closestX;
+        const dy = screenY - closestY;
+        return dx * dx + dy * dy;
+    }
+
+    function findTriggerAreaEdgeAtScreenPoint(wizardRef, screenX, screenY) {
+        if (!isTriggerAreaDebugEditEnabled(wizardRef)) return null;
+        if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
+        if (!worldToScreenFn) return null;
+        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map);
+        if (triggerAreas.length === 0) return null;
+
+        let best = null;
+        let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
+        for (let i = 0; i < triggerAreas.length; i++) {
+            const area = triggerAreas[i];
+            const points = area.polygonPoints;
+            for (let j = 0; j < points.length; j++) {
+                const a = points[j];
+                const b = points[(j + 1) % points.length];
+                const screenA = worldToScreenFn({ x: Number(a.x), y: Number(a.y) });
+                const screenB = worldToScreenFn({ x: Number(b.x), y: Number(b.y) });
+                if (
+                    !screenA || !screenB ||
+                    !Number.isFinite(screenA.x) || !Number.isFinite(screenA.y) ||
+                    !Number.isFinite(screenB.x) || !Number.isFinite(screenB.y)
+                ) {
+                    continue;
+                }
+                const distanceSq = getDistanceSqToScreenSegment(
+                    Number(screenX),
+                    Number(screenY),
+                    Number(screenA.x),
+                    Number(screenA.y),
+                    Number(screenB.x),
+                    Number(screenB.y)
+                );
+                if (distanceSq > bestDistanceSq) continue;
+                bestDistanceSq = distanceSq;
+                best = { area, insertAfterIndex: j };
+            }
+        }
+        return best;
+    }
+
+    function insertTriggerAreaVertexOnEdge(wizardRef, screenX, screenY, worldX, worldY) {
+        const hit = findTriggerAreaEdgeAtScreenPoint(wizardRef, screenX, screenY);
+        if (!hit) return false;
+        const area = hit.area;
+        const points = Array.isArray(area.polygonPoints) ? area.polygonPoints : null;
+        if (!points || points.length < 3) return false;
+        const mapRef = area.map || wizardRef.map || null;
+        const wrappedX = (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
+        const wrappedY = (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
+        if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return false;
+        const insertIndex = Math.max(0, Math.min(points.length, hit.insertAfterIndex + 1));
+        const nextPoints = points.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+        nextPoints.splice(insertIndex, 0, { x: wrappedX, y: wrappedY });
+        const updated = area.setPolygonPoints(nextPoints);
+        if (!updated) return false;
+        wizardRef._triggerAreaVertexSelection = {
+            area,
+            vertexIndex: insertIndex,
+            dragging: true
+        };
+        return true;
+    }
+
+    function beginTriggerAreaVertexDrag(wizardRef, screenX, screenY) {
+        const hit = findTriggerAreaVertexAtScreenPoint(wizardRef, screenX, screenY);
+        if (!hit) {
+            clearTriggerAreaVertexSelection(wizardRef);
+            return false;
+        }
+        wizardRef._triggerAreaVertexSelection = {
+            area: hit.area,
+            vertexIndex: hit.vertexIndex,
+            dragging: true
+        };
+        return true;
+    }
+
+    function updateTriggerAreaVertexDrag(wizardRef, worldX, worldY) {
+        if (!isTriggerAreaDebugEditEnabled(wizardRef)) return false;
+        const selection = getTriggerAreaVertexSelection(wizardRef);
+        if (!selection || !selection.dragging) return false;
+        const area = selection.area;
+        const mapRef = area.map || wizardRef.map || null;
+        const wrappedX = (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
+        const wrappedY = (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
+        if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return false;
+        const nextPoints = area.polygonPoints.map((point, index) => (
+            index === selection.vertexIndex
+                ? { x: wrappedX, y: wrappedY }
+                : { x: Number(point.x), y: Number(point.y) }
+        ));
+        return area.setPolygonPoints(nextPoints);
+    }
+
+    function endTriggerAreaVertexDrag(wizardRef) {
+        const selection = getTriggerAreaVertexSelection(wizardRef);
+        if (!selection || !selection.dragging) return false;
+        selection.dragging = false;
+        return true;
+    }
+
+    function deleteSelectedTriggerAreaVertex(wizardRef) {
+        if (!isTriggerAreaDebugEditEnabled(wizardRef)) return false;
+        const selection = getTriggerAreaVertexSelection(wizardRef);
+        if (!selection) return false;
+        const area = selection.area;
+        const points = Array.isArray(area.polygonPoints) ? area.polygonPoints : null;
+        if (!points || points.length <= 3) return false;
+        const nextPoints = points
+            .filter((_point, index) => index !== selection.vertexIndex)
+            .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+        const updated = area.setPolygonPoints(nextPoints);
+        clearTriggerAreaVertexSelection(wizardRef);
+        return updated;
+    }
+
+    function cancelTriggerAreaPlacement(wizardRef) {
+        if (!wizardRef || wizardRef.currentSpell !== "triggerarea") return false;
+        const draft = wizardRef._triggerAreaPlacementDraft;
+        if (!draft || !Array.isArray(draft.points) || draft.points.length === 0) return false;
+        clearTriggerAreaPlacementDraft(wizardRef);
+        return true;
+    }
+
+    function getTriggerAreaHelpMarkup() {
+        return [
+            "<h2 style=\"margin:0 0 10px 0;color:#ffd700;\">Trigger Areas</h2>",
+            "<p>A trigger area is an invisible polygon on the map. When the player enters or exits it, its script can run.</p>",
+            "<h3 style=\"margin:12px 0 6px 0;color:#ffd700;\">How To Build One</h3>",
+            "<ul style=\"margin:0 0 10px 18px;padding:0;line-height:1.4;\">",
+            "<li>Select the trigger constructor spell.</li>",
+            "<li>Hold space and click to place vertices.</li>",
+            "<li>Double-click, or click back on the first point, to finish the polygon.</li>",
+            "<li>Press Escape to cancel an unfinished polygon.</li>",
+            "</ul>",
+            "<h3 style=\"margin:12px 0 6px 0;color:#ffd700;\">How To See And Edit Them</h3>",
+            "<ul style=\"margin:0 0 10px 18px;padding:0;line-height:1.4;\">",
+            "<li>Press <code>Ctrl+D</code> to turn on debug mode so trigger outlines become visible.</li>",
+            "<li>With debug mode on and the trigger constructor selected, click and drag an existing vertex to move it.</li>",
+            "<li>Click a vertex to select it. The selected vertex gets a small white circle.</li>",
+            "<li>Press <code>Delete</code> or <code>Backspace</code> to remove the selected vertex.</li>",
+            "<li><code>Shift</code>+click along an edge to insert a new vertex there.</li>",
+            "</ul>",
+            "<h3 style=\"margin:12px 0 6px 0;color:#ffd700;\">How To Script A Trigger</h3>",
+            "<ul style=\"margin:0 0 10px 18px;padding:0;line-height:1.4;\">",
+            "<li>After you create a trigger, the script editor opens automatically.</li>",
+            "<li>You can also select the edit-script spell and click an existing trigger to edit it later.</li>",
+            "<li>Useful trigger events are <code>playerEnters:</code> and <code>playerExits:</code>.</li>",
+            "<li>Example:</li>",
+            "</ul>",
+            "<pre style=\"margin:0 0 10px 0;padding:10px;background:#090909;border:1px solid #444;border-radius:6px;overflow:auto;line-height:1.35;\">playerEnters{\n  message(text=\"Entered the grove\")\n  spawnCreature(type=\"bear\", size=1)\n}\nplayerExits{\n  message(text=\"Left the grove\")\n}</pre>",
+            "<p style=\"margin:0;\">Inside trigger scripts, <code>\"this\"</code> refers to the trigger itself. You can use the normal scripting commands shown in the script editor help for messages, spawning creatures, visibility, activation, and more.</p>"
+        ].join("");
+    }
+
+    function getTriggerAreaHelpPanel() {
+        let $panel = $(`#${TRIGGER_AREA_HELP_PANEL_ID}`);
+        if ($panel.length) return $panel;
+
+        $panel = $("<div>")
+            .attr("id", TRIGGER_AREA_HELP_PANEL_ID)
+            .css({
+                position: "fixed",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                width: "min(760px, 84vw)",
+                height: "min(560px, 74vh)",
+                display: "none",
+                "z-index": 200220,
+                background: "rgba(12,12,12,0.98)",
+                border: "1px solid #ffd700",
+                "border-radius": "8px",
+                padding: "12px",
+                "box-sizing": "border-box",
+                color: "#fff"
+            })
+            .on("mousedown click keydown keyup", event => {
+                event.stopPropagation();
+            });
+
+        const $content = $("<div>")
+            .html(getTriggerAreaHelpMarkup())
+            .css({
+                height: "calc(100% - 44px)",
+                overflow: "auto",
+                "padding-right": "4px",
+                "line-height": "1.35"
+            });
+
+        const $actions = $("<div>")
+            .css({
+                display: "flex",
+                "justify-content": "flex-end",
+                gap: "8px",
+                "margin-top": "10px"
+            });
+
+        const $close = $("<button>")
+            .text("Close")
+            .css({
+                padding: "6px 12px",
+                color: "#111",
+                background: "#ffd700",
+                border: "1px solid #caa700",
+                "border-radius": "4px",
+                cursor: "pointer",
+                "font-weight": "bold"
+            })
+            .on("click", () => closeTriggerAreaHelpPanel());
+
+        $actions.append($close);
+        $panel.append($content, $actions);
+        $(document.body).append($panel);
+        return $panel;
+    }
+
+    function openTriggerAreaHelpPanel() {
+        getTriggerAreaHelpPanel().show();
+    }
+
+    function closeTriggerAreaHelpPanel() {
+        $(`#${TRIGGER_AREA_HELP_PANEL_ID}`).hide();
+    }
+
+    function getTriggerAreaPlacementPreview(wizardRef) {
+        if (!wizardRef || wizardRef.currentSpell !== "triggerarea") return null;
+        const draft = wizardRef._triggerAreaPlacementDraft;
+        if (!draft || !Array.isArray(draft.points) || draft.points.length === 0) return null;
+        return {
+            points: draft.points
+        };
+    }
+
+    function getScreenDistancePxBetweenWorldPoints(a, b) {
+        if (
+            !a || !b ||
+            !Number.isFinite(a.x) || !Number.isFinite(a.y) ||
+            !Number.isFinite(b.x) || !Number.isFinite(b.y)
+        ) {
+            return Infinity;
+        }
+        const toScreen = (typeof worldToScreen === "function")
+            ? worldToScreen
+            : null;
+        if (!toScreen) return Infinity;
+        const as = toScreen({ x: Number(a.x), y: Number(a.y) });
+        const bs = toScreen({ x: Number(b.x), y: Number(b.y) });
+        if (
+            !as || !bs ||
+            !Number.isFinite(as.x) || !Number.isFinite(as.y) ||
+            !Number.isFinite(bs.x) || !Number.isFinite(bs.y)
+        ) {
+            return Infinity;
+        }
+        return Math.hypot(Number(as.x) - Number(bs.x), Number(as.y) - Number(bs.y));
+    }
+
+    function finalizeTriggerAreaPlacement(wizardRef) {
+        if (!wizardRef || !wizardRef.map) return false;
+        const draft = wizardRef._triggerAreaPlacementDraft;
+        if (!draft || !Array.isArray(draft.points) || draft.points.length < 3) return false;
+        const points = draft.points.map((p) => ({ x: Number(p.x), y: Number(p.y) }));
+        const TriggerAreaCtor = (typeof globalThis !== "undefined" && typeof globalThis.TriggerArea === "function")
+            ? globalThis.TriggerArea
+            : null;
+        if (!TriggerAreaCtor) {
+            message("Trigger area object is unavailable.");
+            return false;
+        }
+        const created = new TriggerAreaCtor({ x: points[0].x, y: points[0].y }, wizardRef.map, { points });
+        if (Array.isArray(wizardRef.map.objects) && !wizardRef.map.objects.includes(created)) {
+            wizardRef.map.objects.push(created);
+        }
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.runObjectInitScript === "function"
+        ) {
+            globalThis.Scripting.runObjectInitScript(created, wizardRef, { reason: "objectCreated" });
+        }
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.openScriptEditorForTarget === "function"
+        ) {
+            globalThis.Scripting.openScriptEditorForTarget(created);
+        }
+        wizardRef._triggerAreaPlacementDraft = null;
+        return true;
+    }
+
+    function placeTriggerAreaVertex(wizardRef, worldX, worldY, options = {}) {
+        if (!wizardRef || !wizardRef.map) return;
+        const mapRef = wizardRef.map;
+        const wrappedX = (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
+        const wrappedY = (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
+        if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return;
+        const clickCount = Number.isFinite(options.clickCount) ? Math.max(1, Math.floor(Number(options.clickCount))) : 1;
+
+        const draft = (
+            wizardRef._triggerAreaPlacementDraft &&
+            Array.isArray(wizardRef._triggerAreaPlacementDraft.points)
+        )
+            ? wizardRef._triggerAreaPlacementDraft
+            : { points: [] };
+        wizardRef._triggerAreaPlacementDraft = draft;
+
+        if (clickCount >= 2 && draft.points.length >= 3) {
+            finalizeTriggerAreaPlacement(wizardRef);
+            return;
+        }
+
+        if (draft.points.length >= 3) {
+            const start = draft.points[0];
+            const click = { x: wrappedX, y: wrappedY };
+            const closeDistancePx = getScreenDistancePxBetweenWorldPoints(start, click);
+            if (closeDistancePx <= TRIGGER_AREA_CLOSE_DISTANCE_PX) {
+                finalizeTriggerAreaPlacement(wizardRef);
+                return;
+            }
+        }
+
+        draft.points.push({ x: wrappedX, y: wrappedY });
+    }
+
+    function castWizardSpell(wizardRef, worldX, worldY, options = null) {
         if (!wizardRef || wizardRef.castDelay) return;
 
-        if (wizardRef.currentSpell === "vanish" && isDragSpellActive(wizardRef, "vanish")) {
-            completeDragSpell(wizardRef, "vanish", worldX, worldY);
+        if (isVanishToolName(wizardRef.currentSpell) && isDragSpellActive(wizardRef, wizardRef.currentSpell)) {
+            completeDragSpell(wizardRef, wizardRef.currentSpell, worldX, worldY);
             return;
         }
 
@@ -3911,6 +4305,11 @@ const SpellSystem = (() => {
             return;
         }
 
+        if (wizardRef.currentSpell === "triggerarea") {
+            placeTriggerAreaVertex(wizardRef, worldX, worldY, options || {});
+            return;
+        }
+
         if (wizardRef.currentSpell === "blackdiamond") {
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
             const placeX = mapRef && typeof mapRef.wrapWorldX === "function"
@@ -3942,6 +4341,15 @@ const SpellSystem = (() => {
         }
 
         if (wizardRef.currentSpell === "maze") {
+            // Set castDelay immediately to prevent double-fire from
+            // spacebar-up quick-cast arriving while pathfinding runs.
+            wizardRef.castDelay = true;
+
+            const blinkNoPathCursor = () => {
+                if (typeof globalThis !== "undefined" && typeof globalThis.blinkCursorNoPath === "function") {
+                    globalThis.blinkCursorNoPath(500);
+                }
+            };
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
             if (
                 !mapRef ||
@@ -3949,38 +4357,77 @@ const SpellSystem = (() => {
                 typeof mapRef.findPathAStar !== "function"
             ) {
                 message("Pathfinding is unavailable.");
+                wizardRef.castDelay = false;
                 return;
             }
 
             const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(worldX) : worldX;
             const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(worldY) : worldY;
-            const startNode = mapRef.worldToNode(wizardRef.x, wizardRef.y);
-            const destinationNode = mapRef.worldToNode(wrappedX, wrappedY);
+
+            // worldToNode may snap to a wall tile when the wizard is
+            // standing right against a wall.  If that happens, search
+            // the 12 neighbours for the closest free tile instead.
+            const nearestFreeNode = (candidate, wx, wy) => {
+                if (!candidate) return null;
+                if (!candidate.blocked && !candidate.hasBlockingObject()) return candidate;
+                let best = null;
+                let bestDist = Infinity;
+                for (let d = 0; d < 12; d++) {
+                    const nb = candidate.neighbors[d];
+                    if (!nb || nb.blocked || nb.hasBlockingObject()) continue;
+                    const dx = typeof mapRef.shortestDeltaX === "function"
+                        ? mapRef.shortestDeltaX(nb.x, wx) : (nb.x - wx);
+                    const dy = typeof mapRef.shortestDeltaY === "function"
+                        ? mapRef.shortestDeltaY(nb.y, wy) : (nb.y - wy);
+                    const dist = dx * dx + dy * dy;
+                    if (dist < bestDist) { bestDist = dist; best = nb; }
+                }
+                return best;
+            };
+
+            const startNode = nearestFreeNode(
+                mapRef.worldToNode(wizardRef.x, wizardRef.y),
+                wizardRef.x, wizardRef.y
+            );
+            const destinationNode = nearestFreeNode(
+                mapRef.worldToNode(wrappedX, wrappedY),
+                wrappedX, wrappedY
+            );
 
             if (!startNode || !destinationNode) {
                 message("Cannot find a path there.");
+                blinkNoPathCursor();
+                wizardRef.castDelay = false;
                 return;
             }
 
-            const directDx = (typeof mapRef.shortestDeltaX === "function")
-                ? mapRef.shortestDeltaX(startNode.x, destinationNode.x)
-                : (destinationNode.x - startNode.x);
-            const directDy = (typeof mapRef.shortestDeltaY === "function")
-                ? mapRef.shortestDeltaY(startNode.y, destinationNode.y)
-                : (destinationNode.y - startNode.y);
-            const directDistance = Math.hypot(directDx, directDy);
-            const maxIterations = Math.max(
-                800,
-                Math.min(12000, Math.floor((directDistance + 8) * 180))
-            );
+            const mapNodeCount = Math.max(1, Math.floor((Number(mapRef.width) || 0) * (Number(mapRef.height) || 0)));
+            const exhaustiveMaxIterations = Math.max(1000, mapNodeCount * 20);
 
             const astarPath = mapRef.findPathAStar(startNode, destinationNode, {
-                maxIterations
+                maxIterations: exhaustiveMaxIterations,
+                wallAvoidance: 3
             });
 
             if (!Array.isArray(astarPath)) {
                 message("No path found.");
+                blinkNoPathCursor();
+                wizardRef.castDelay = false;
                 return;
+            }
+
+            // Remove all existing black diamond powerups before placing new ones.
+            const pList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
+                ? globalThis.powerups : [];
+            for (let pi = pList.length - 1; pi >= 0; pi--) {
+                const p = pList[pi];
+                if (p && !p.gone && !p.collected && p.imageFileName === "black diamond.png") {
+                    p.gone = true;
+                    if (p.pixiSprite && p.pixiSprite.parent) {
+                        p.pixiSprite.parent.removeChild(p.pixiSprite);
+                    }
+                    pList.splice(pi, 1);
+                }
             }
 
             const nodesAlongPath = [startNode, ...astarPath];
@@ -4017,24 +4464,17 @@ const SpellSystem = (() => {
                 message("Hold space and click an object to edit its script.");
                 return;
             }
-            openScriptEditorForTarget(clickTarget);
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                ? globalThis.Scripting
+                : null;
+            if (!scriptingApi || typeof scriptingApi.openScriptEditorForTarget !== "function") {
+                message("Script editor is unavailable.");
+                return;
+            }
+            scriptingApi.openScriptEditorForTarget(clickTarget);
             return;
         }
         if (wizardRef.currentSpell === "treegrow") clickTarget = null;
-        if (
-            wizardRef.currentSpell === "treegrow" &&
-            keysPressed[" "] &&
-            (
-                wizardRef.treeGrowHoldLocked ||
-                (
-                    wizardRef.treeGrowthChannel &&
-                    wizardRef.treeGrowthChannel.targetTree &&
-                    !wizardRef.treeGrowthChannel.targetTree.gone
-                )
-            )
-        ) {
-            return;
-        }
         let projectile = null;
 
         if (wizardRef.currentSpell === "grenades") {
@@ -4047,6 +4487,8 @@ const SpellSystem = (() => {
             projectile = new globalThis.Fireball();
         } else if (wizardRef.currentSpell === "vanish") {
             projectile = new globalThis.Vanish();
+        } else if (wizardRef.currentSpell === "editorvanish") {
+            projectile = new globalThis.EditorVanish();
         } else if (wizardRef.currentSpell === "treegrow") {
             projectile = new globalThis.TreeGrow();
         } else if (wizardRef.currentSpell === "buildroad") {
@@ -4086,12 +4528,6 @@ const SpellSystem = (() => {
                 : spell.name === "editscript"
                     ? "E+T"
                     : Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
-            if (spell.name === "wall") {
-                return {...spell, key, icon: getWallSpellIcon(wizardRef)};
-            }
-            if (spell.name === "buildroad") {
-                return {...spell, key, icon: getRoadSpellIcon(wizardRef)};
-            }
             if (spell.name === "treegrow") {
                 return {...spell, key, icon: getTreeSpellIcon(wizardRef)};
             }
@@ -4099,6 +4535,23 @@ const SpellSystem = (() => {
                 return {...spell, key, icon: getSpawnAnimalSpellIcon(wizardRef)};
             }
             return {...spell, key};
+        });
+    }
+
+    function buildEditorToolList(wizardRef) {
+        const isDebug = (typeof debugMode !== "undefined" && debugMode) ||
+            (typeof globalThis !== "undefined" && globalThis.debugMode);
+        return EDITOR_TOOL_DEFS.filter(tool => !tool.debugOnly || isDebug).map(tool => {
+            const key = tool.name === "editorvanish"
+                ? "S+V"
+                : Object.keys(editorKeyBindings).find(k => editorKeyBindings[k] === tool.name);
+            if (tool.name === "wall") {
+                return {...tool, key, icon: getWallSpellIcon(wizardRef)};
+            }
+            if (tool.name === "buildroad") {
+                return {...tool, key, icon: getRoadSpellIcon(wizardRef)};
+            }
+            return {...tool, key};
         });
     }
 
@@ -4257,6 +4710,9 @@ const SpellSystem = (() => {
     }
 
     function openFlooringSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "buildroad") {
+            setCurrentSpell(wizardRef, "buildroad");
+        }
         spellMenuMode = "flooring";
         $("#spellMenu").removeClass("hidden");
         renderFlooringSelector(wizardRef);
@@ -4344,6 +4800,9 @@ const SpellSystem = (() => {
     }
 
     function openTreeSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "treegrow") {
+            setCurrentSpell(wizardRef, "treegrow");
+        }
         spellMenuMode = "tree";
         $("#spellMenu").removeClass("hidden");
         renderTreeSelector(wizardRef);
@@ -4358,6 +4817,62 @@ const SpellSystem = (() => {
             gap: ""
         });
 
+        // Render editor tools (wall, road, vanish) first
+        const editorTools = buildEditorToolList(wizardRef);
+        editorTools.forEach(tool => {
+            const iconCss = {
+                "background-image": `url('${tool.icon}')`,
+                "background-size": "cover",
+                "background-position": "center center",
+                "position": "relative"
+            };
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css(iconCss)
+                .attr("data-spell", tool.name)
+                .attr("title", tool.name)
+                .click(() => {
+                    setCurrentSpell(wizardRef, tool.name);
+                    refreshEditorSelector(wizardRef);
+                    $("#spellMenu").addClass("hidden");
+                });
+            if (tool.name === "buildroad") {
+                icon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openFlooringSelector(wizardRef);
+                });
+            } else if (tool.name === "wall") {
+                icon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openWallSelector(wizardRef);
+                });
+            }
+            if (tool.key) {
+                const keyLabel = $("<span>")
+                    .addClass("spellKeyBinding")
+                    .text(tool.key)
+                    .css({
+                        "position": "absolute",
+                        "top": "4px",
+                        "left": "4px",
+                        "color": "white",
+                        "font-size": "12px",
+                        "font-weight": "bold",
+                        "pointer-events": "none",
+                        "text-shadow": "1px 1px 2px rgba(0, 0, 0, 0.8)",
+                        "z-index": "10"
+                    });
+                icon.append(keyLabel);
+            }
+            if (tool.name === wizardRef.currentSpell) {
+                icon.addClass("selected");
+            }
+            $grid.append(icon);
+        });
+
+        // Render editor categories (placeable objects, powerups)
         const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
         EDITOR_CATEGORIES.forEach(category => {
             const selectedTexture = (category === "powerups")
@@ -4382,11 +4897,20 @@ const SpellSystem = (() => {
                         setCurrentSpell(wizardRef, "placeobject");
                     }
                     refreshEditorSelector(wizardRef);
-                    $("#editorMenu").addClass("hidden");
+                    $("#spellMenu").addClass("hidden");
                 })
                 .on("contextmenu", event => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (category === "powerups") {
+                        wizardRef.selectedEditorCategory = "powerups";
+                        setCurrentSpell(wizardRef, "blackdiamond");
+                    } else {
+                        setSelectedPlaceableCategory(wizardRef, category);
+                        wizardRef.selectedEditorCategory = category;
+                        refreshSelectedPlaceableMetadata(wizardRef);
+                        setCurrentSpell(wizardRef, "placeobject");
+                    }
                     editorMenuMode = "items";
                     editorMenuCategory = category;
                     renderEditorItemSelector(wizardRef, category);
@@ -4398,6 +4922,9 @@ const SpellSystem = (() => {
                         });
                     }
                 });
+            if (category !== "powerups") {
+                applyCompositeLayersToThumbnail(icon, category, selectedTexture);
+            }
             if (selectedEditorCategory === category) {
                 icon.addClass("selected");
             }
@@ -4408,7 +4935,7 @@ const SpellSystem = (() => {
     function renderEditorItemSelector(wizardRef, category) {
         const safeCategory = EDITOR_CATEGORIES.includes(category) ? category : DEFAULT_PLACEABLE_CATEGORY;
         editorMenuCategory = safeCategory;
-        const $grid = $("#editorGrid");
+        const $grid = $("#spellGrid");
         $grid.empty();
         $grid.css({
             display: "",
@@ -4428,31 +4955,55 @@ const SpellSystem = (() => {
             })
             .text("Back")
             .click(() => {
-                editorMenuMode = "categories";
-                renderEditorCategorySelector(wizardRef);
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
             });
         $grid.append(backButton);
 
         if (safeCategory === "powerups") {
-            const preview = getPowerupPlacementPreviewConfig(wizardRef);
-            const texturePath = (preview && typeof preview.imagePath === "string" && preview.imagePath.length > 0)
-                ? preview.imagePath
-                : POWERUP_PLACEMENT_IMAGE_PATH;
-            const icon = $("<div>")
-                .addClass("spellIcon")
-                .css({
-                    "background-image": `url('${texturePath}')`,
-                    "background-size": "cover",
-                    "background-position": "center center"
-                })
-                .attr("title", "blackdiamond")
-                .click(() => {
-                    wizardRef.selectedEditorCategory = "powerups";
-                    setCurrentSpell(wizardRef, "blackdiamond");
-                    refreshEditorSelector(wizardRef);
-                    $("#editorMenu").addClass("hidden");
+            const selectedFile = getSelectedPowerupFileName(wizardRef);
+            const renderPowerupItems = (items) => {
+                items.forEach(item => {
+                    if (!item || typeof item !== "object") return;
+                    const file = item.file || item.imageFileName || "";
+                    const imgPath = (item.imagePath && typeof item.imagePath === "string" && item.imagePath.length > 0)
+                        ? item.imagePath
+                        : POWERUP_PLACEMENT_IMAGE_PATH;
+                    const displayName = item.name || item.id || file;
+                    const icon = $("<div>")
+                        .addClass("spellIcon")
+                        .css({
+                            "background-image": `url('${imgPath}')`,
+                            "background-size": "cover",
+                            "background-position": "center center"
+                        })
+                        .attr("title", displayName)
+                        .click(() => {
+                            setSelectedPowerupFileName(wizardRef, file);
+                            wizardRef.selectedEditorCategory = "powerups";
+                            setCurrentSpell(wizardRef, "blackdiamond");
+                            spellMenuMode = "main";
+                            refreshSpellSelector(wizardRef);
+                            $("#spellMenu").addClass("hidden");
+                        });
+                    if (file.toLowerCase() === selectedFile.toLowerCase()) {
+                        icon.addClass("selected");
+                    }
+                    $grid.append(icon);
                 });
-            $grid.append(icon);
+            };
+            if (typeof loadPowerupItemsDoc === "function") {
+                loadPowerupItemsDoc().then(doc => {
+                    if (doc && Array.isArray(doc.items) && doc.items.length > 0) {
+                        renderPowerupItems(doc.items);
+                    } else {
+                        // Fallback: show single black diamond
+                        renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Black Diamond" }]);
+                    }
+                });
+            } else {
+                renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Black Diamond" }]);
+            }
             return;
         }
 
@@ -4464,7 +5015,8 @@ const SpellSystem = (() => {
                 .css({
                     "background-image": `url('${texturePath}')`,
                     "background-size": "cover",
-                    "background-position": "center center"
+                    "background-position": "center center",
+                    "position": "relative"
                 })
                 .attr("title", decodeURIComponent((texturePath.split("/").pop() || texturePath)))
                 .click(() => {
@@ -4476,9 +5028,13 @@ const SpellSystem = (() => {
                     normalizePlaceableSelections(wizardRef);
                     refreshSelectedPlaceableMetadata(wizardRef);
                     setCurrentSpell(wizardRef, "placeobject");
-                    refreshEditorSelector(wizardRef);
-                    $("#editorMenu").addClass("hidden");
+                    spellMenuMode = "main";
+                    refreshSpellSelector(wizardRef);
+                    $("#spellMenu").addClass("hidden");
                 });
+
+            applyCompositeLayersToThumbnail(icon, safeCategory, texturePath);
+
             if (texturePath === selectedTexture) {
                 icon.addClass("selected");
             }
@@ -4577,29 +5133,15 @@ const SpellSystem = (() => {
 
     function refreshEditorSelector(wizardRef) {
         if (!wizardRef) return;
-        const $selectedEditor = $("#selectedEditor");
-        if ($selectedEditor.length) {
-            $selectedEditor.css("background-image", `url('${getSelectedEditorIcon(wizardRef)}')`);
-        }
-        if (editorMenuMode === "items") {
-            renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
-            return;
-        }
-        renderEditorCategorySelector(wizardRef);
+        // Editor options are now merged into the spell menu
+        refreshSpellSelector(wizardRef);
     }
 
     function openEditorSelector(wizardRef) {
-        editorMenuMode = "categories";
-        $("#editorMenu").removeClass("hidden");
-        editorMenuCategory = normalizeSelectedEditorCategory(wizardRef);
-        renderEditorCategorySelector(wizardRef);
-        fetchPlaceableImages({ forceRefresh: true }).then(() => {
-            if (editorMenuMode === "items") {
-                renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
-            } else if (editorMenuMode === "categories") {
-                renderEditorCategorySelector(wizardRef);
-            }
-        });
+        // Editor options are now merged into the spell menu; show main spell menu
+        spellMenuMode = "main";
+        showMainSpellMenu(wizardRef);
+        $("#spellMenu").removeClass("hidden");
     }
 
     function renderWallSelector(wizardRef) {
@@ -4661,7 +5203,11 @@ const SpellSystem = (() => {
                 .attr("title", decodeURIComponent((texturePath.split("/").pop() || texturePath)))
                 .on("click", () => {
                     wizardRef.selectedWallTexture = texturePath;
-                    renderWallSelector(wizardRef);
+                    if (editorMode) {
+                        refreshEditorSelector(wizardRef);
+                    } else {
+                        refreshSpellSelector(wizardRef);
+                    }
                 });
             if (texturePath === selectedWallTexture) {
                 icon.addClass("selected");
@@ -4724,6 +5270,9 @@ const SpellSystem = (() => {
     }
 
     function openWallSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "wall") {
+            setCurrentSpell(wizardRef, "wall");
+        }
         spellMenuMode = "wall";
         $("#spellMenu").removeClass("hidden");
         renderWallSelector(wizardRef);
@@ -4812,7 +5361,7 @@ const SpellSystem = (() => {
                 .attr("title", typeDef.name.charAt(0).toUpperCase() + typeDef.name.slice(1))
                 .on("click", () => {
                     wizardRef.selectedAnimalType = typeDef.name;
-                    renderAnimalSelector(wizardRef);
+                    refreshSpellSelector(wizardRef);
                 });
             if (typeDef.name === selectedType) {
                 icon.addClass("selected");
@@ -4830,9 +5379,11 @@ const SpellSystem = (() => {
             : 0.5;
 
         const $sizeLabel = $("<div>")
+            .attr("id", "animalSizeLabel")
             .text(`Size: ${Math.round(currentScale * 100)}%`)
             .css({ color: "#ffffff", "font-size": "13px" });
         const $sizeSlider = $("<input>")
+            .attr("id", "animalSizeSlider")
             .attr({
                 type: "range",
                 min: 0,
@@ -4851,7 +5402,7 @@ const SpellSystem = (() => {
                     ? SpawnAnimal.sliderToScale(t)
                     : 1;
                 wizardRef.selectedAnimalSizeScale = scale;
-                $sizeLabel.text(`Size: ${Math.round(scale * 100)}%`);
+                syncAnimalSizeControls(wizardRef);
             });
 
         $grid.append($("<div>").text("Animal Size").css({ color: "#ffffff", "font-weight": "bold" }));
@@ -4859,14 +5410,154 @@ const SpellSystem = (() => {
         $grid.append($sizeLabel);
     }
 
+    function renderTriggerAreaMenu(wizardRef) {
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "flex",
+            "flex-direction": "column",
+            gap: "10px",
+            color: "#ffffff",
+            "min-width": "220px"
+        });
+
+        const $back = $("<button>")
+            .text("Back")
+            .css({
+                "align-self": "flex-start",
+                padding: "4px 8px",
+                "font-size": "12px",
+                cursor: "pointer",
+                color: "#ffffff",
+                background: "rgba(20,20,20,0.95)",
+                border: "1px solid #ffd700",
+                "border-radius": "4px"
+            })
+            .on("click", () => {
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
+            });
+        const $row = $("<div>")
+            .css({
+                display: "flex",
+                "align-items": "flex-start",
+                gap: "8px"
+            })
+            .append($back);
+
+        const $helpIcon = $("<button>")
+            .attr("type", "button")
+            .addClass("spellIcon")
+            .attr("title", "Trigger area help")
+            .text("?")
+            .css({
+                display: "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                background: "rgba(20,20,20,0.95)",
+                color: "#ffd700",
+                "font-size": "28px",
+                "font-weight": "bold",
+                "line-height": "1"
+            })
+            .on("click", () => openTriggerAreaHelpPanel());
+
+        $row.append($helpIcon);
+        $grid.append($row);
+    }
+
     function openAnimalSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "spawnanimal") {
+            setCurrentSpell(wizardRef, "spawnanimal");
+        }
         spellMenuMode = "animal";
         $("#spellMenu").removeClass("hidden");
         renderAnimalSelector(wizardRef);
     }
 
+    function openTriggerAreaMenu(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "triggerarea") {
+            setCurrentSpell(wizardRef, "triggerarea");
+        }
+        spellMenuMode = "triggerarea";
+        $("#spellMenu").removeClass("hidden");
+        renderTriggerAreaMenu(wizardRef);
+    }
+
     function refreshSpellSelector(wizardRef) {
         if (!wizardRef) return;
+        wizardRef.spells = buildSpellList(wizardRef);
+        const currentSpell = wizardRef.spells.find(s => s.name === wizardRef.currentSpell);
+        if (currentSpell) {
+            const selCss = {
+                "background-image": `url('${currentSpell.icon}')`,
+                "background-size": "",
+                "background-position": ""
+            };
+            if (currentSpell.name === "spawnanimal") {
+                const selectedType = (wizardRef && wizardRef.selectedAnimalType) || "squirrel";
+                Object.assign(selCss, getAnimalFrameCSS(selectedType));
+            }
+            $("#selectedSpell").empty().css(selCss);
+        } else if (editorMode && (isEditorToolName(wizardRef.currentSpell) || isEditorSpellName(wizardRef.currentSpell))) {
+            const iconUrl = getSelectedEditorIcon(wizardRef);
+            const $selectedSpell = $("#selectedSpell").empty().css({
+                "background-image": `url('${iconUrl}')`,
+                "background-size": "cover",
+                "background-position": "center center",
+                "position": "" // Reset position in case it was modified
+            });
+
+            if (wizardRef.currentSpell === "placeobject") {
+                const category = normalizeSelectedEditorCategory(wizardRef) || DEFAULT_PLACEABLE_CATEGORY;
+                const texturePath = getSelectedPlaceableTextureForCategory(wizardRef, category);
+                if (texturePath) {
+                    if (typeof globalThis.getResolvedPlaceableMetadata === "function") {
+                        // Dynamically load composite layers to display structured HTML if needed
+                        globalThis.getResolvedPlaceableMetadata(category, texturePath).then(meta => {
+                            if (!meta || !Array.isArray(meta.compositeLayers) || meta.compositeLayers.length < 2) return;
+                            
+                            // Prevent stale updates if user switched spells before promise resolved
+                            if (wizardRef.currentSpell !== "placeobject") return;
+                            const currentPath = getSelectedPlaceableTextureForCategory(wizardRef, normalizeSelectedEditorCategory(wizardRef));
+                            if (currentPath !== texturePath) return;
+
+                            $selectedSpell.empty().css({
+                                "background-image": "none",
+                                "position": "relative",
+                                "overflow": "hidden"
+                            });
+                            
+                            meta.compositeLayers.forEach(layer => {
+                                if (!layer) return;
+                                const uRegion = (Array.isArray(layer.uRegion) && layer.uRegion.length >= 2)
+                                    ? [Number(layer.uRegion[0]) || 0, Number(layer.uRegion[1]) || 1]
+                                    : [0, 1];
+                                const u0 = uRegion[0];
+                                const u1 = uRegion[1];
+                                const fWidth = Math.max(0.0001, u1 - u0);
+                                const subLayer = $("<div>").css({
+                                    "position": "absolute",
+                                    "top": "0", "left": "0", "width": "100%", "height": "100%",
+                                    "overflow": "hidden",
+                                    "pointer-events": "none"
+                                });
+                                const innerImg = $("<img>").attr("src", texturePath).css({
+                                    "position": "absolute",
+                                    "top": "0",
+                                    "left": `-${(u0 / fWidth) * 100}%`,
+                                    "width": `${100 / fWidth}%`,
+                                    "height": "100%",
+                                    "pointer-events": "none"
+                                });
+                                subLayer.append(innerImg);
+                                $selectedSpell.append(subLayer);
+                            });
+                        });
+                    }
+                }
+            }
+        }
         if (spellMenuMode === "flooring") {
             renderFlooringSelector(wizardRef);
             return;
@@ -4883,26 +5574,19 @@ const SpellSystem = (() => {
             renderAnimalSelector(wizardRef);
             return;
         }
+        if (spellMenuMode === "triggerarea") {
+            renderTriggerAreaMenu(wizardRef);
+            return;
+        }
+        if (spellMenuMode === "editor-items") {
+            renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
+            return;
+        }
         $("#spellGrid").css({
             display: "",
             "flex-direction": "",
             gap: ""
         });
-        wizardRef.spells = buildSpellList(wizardRef);
-        const currentSpell = wizardRef.spells.find(s => s.name === wizardRef.currentSpell);
-        if (currentSpell) {
-            const selCss = {
-                "background-image": `url('${currentSpell.icon}')`,
-                "background-size": "",
-                "background-position": ""
-            };
-            if (currentSpell.name === "spawnanimal") {
-                const selectedType = (wizardRef && wizardRef.selectedAnimalType) || "squirrel";
-                Object.assign(selCss, getAnimalFrameCSS(selectedType));
-            }
-            $("#selectedSpell").css(selCss);
-        }
-
         $("#spellGrid").empty();
         wizardRef.spells.forEach(spell => {
             const iconCss = {
@@ -4946,6 +5630,12 @@ const SpellSystem = (() => {
                     event.stopPropagation();
                     openAnimalSelector(wizardRef);
                 });
+            } else if (spell.name === "triggerarea") {
+                spellIcon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openTriggerAreaMenu(wizardRef);
+                });
             }
 
             if (spell.key) {
@@ -4971,6 +5661,134 @@ const SpellSystem = (() => {
             }
             $("#spellGrid").append(spellIcon);
         });
+
+        // If editor mode is active, append editor tools and category icons at the bottom
+        if (editorMode) {
+            // Separator
+            $("#spellGrid").append(
+                $("<div>").css({
+                    "width": "100%",
+                    "height": "1px",
+                    "background": "rgba(255,255,255,0.3)",
+                    "margin": "4px 0",
+                    "grid-column": "1 / -1"
+                })
+            );
+
+            // Editor tools (wall, road, vanish)
+            const editorTools = buildEditorToolList(wizardRef);
+            editorTools.forEach(tool => {
+                const toolCss = {
+                    "background-image": `url('${tool.icon}')`,
+                    "background-size": "cover",
+                    "background-position": "center center",
+                    "position": "relative"
+                };
+                const toolIcon = $("<div>")
+                    .addClass("spellIcon")
+                    .css(toolCss)
+                    .attr("data-spell", tool.name)
+                    .attr("title", tool.name)
+                    .click(() => {
+                        setCurrentSpell(wizardRef, tool.name);
+                        refreshSpellSelector(wizardRef);
+                        $("#spellMenu").addClass("hidden");
+                    });
+                if (tool.name === "buildroad") {
+                    toolIcon.on("contextmenu", event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openFlooringSelector(wizardRef);
+                    });
+                } else if (tool.name === "wall") {
+                    toolIcon.on("contextmenu", event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openWallSelector(wizardRef);
+                    });
+                }
+                if (tool.key) {
+                    const keyLabel = $("<span>")
+                        .addClass("spellKeyBinding")
+                        .text(tool.key)
+                        .css({
+                            "position": "absolute",
+                            "top": "4px",
+                            "left": "4px",
+                            "color": "white",
+                            "font-size": "12px",
+                            "font-weight": "bold",
+                            "pointer-events": "none",
+                            "text-shadow": "1px 1px 2px rgba(0, 0, 0, 0.8)",
+                            "z-index": "10"
+                        });
+                    toolIcon.append(keyLabel);
+                }
+                if (tool.name === wizardRef.currentSpell) {
+                    toolIcon.addClass("selected");
+                }
+                $("#spellGrid").append(toolIcon);
+            });
+
+            // Editor categories (placeable objects, powerups)
+            const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
+            EDITOR_CATEGORIES.forEach(category => {
+                const selectedTexture = (category === "powerups")
+                    ? getPowerupEditorCategoryIcon(wizardRef)
+                    : getSelectedPlaceableTextureForCategory(wizardRef, category);
+                const catIcon = $("<div>")
+                    .addClass("spellIcon")
+                    .css({
+                        "background-image": `url('${selectedTexture}')`,
+                        "background-size": "cover",
+                        "background-position": "center center"
+                    })
+                    .attr("title", category)
+                    .click(() => {
+                        if (category === "powerups") {
+                            wizardRef.selectedEditorCategory = "powerups";
+                            setCurrentSpell(wizardRef, "blackdiamond");
+                        } else {
+                            setSelectedPlaceableCategory(wizardRef, category);
+                            wizardRef.selectedEditorCategory = category;
+                            refreshSelectedPlaceableMetadata(wizardRef);
+                            setCurrentSpell(wizardRef, "placeobject");
+                        }
+                        refreshSpellSelector(wizardRef);
+                        $("#spellMenu").addClass("hidden");
+                    })
+                    .on("contextmenu", event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (category === "powerups") {
+                            wizardRef.selectedEditorCategory = "powerups";
+                            setCurrentSpell(wizardRef, "blackdiamond");
+                        } else {
+                            setSelectedPlaceableCategory(wizardRef, category);
+                            wizardRef.selectedEditorCategory = category;
+                            refreshSelectedPlaceableMetadata(wizardRef);
+                            setCurrentSpell(wizardRef, "placeobject");
+                        }
+                        spellMenuMode = "editor-items";
+                        editorMenuCategory = category;
+                        renderEditorItemSelector(wizardRef, category);
+                        if (category !== "powerups") {
+                            fetchPlaceableImages({ forceRefresh: true }).then(() => {
+                                if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
+                                    renderEditorItemSelector(wizardRef, category);
+                                }
+                            });
+                        }
+                    });
+                if (category !== "powerups") {
+                    applyCompositeLayersToThumbnail(catIcon, category, selectedTexture);
+                }
+                if (selectedEditorCategory === category) {
+                    catIcon.addClass("selected");
+                }
+                $("#spellGrid").append(catIcon);
+            });
+        }
     }
 
     function setCurrentSpell(wizardRef, spellName) {
@@ -4978,13 +5796,24 @@ const SpellSystem = (() => {
         const previousSpell = wizardRef.currentSpell;
         spellMenuMode = "main";
         if (spellName !== "editscript") {
-            closeScriptEditorPanel();
+            if (
+                typeof globalThis !== "undefined" &&
+                globalThis.Scripting &&
+                typeof globalThis.Scripting.closeScriptEditorPanel === "function"
+            ) {
+                globalThis.Scripting.closeScriptEditorPanel();
+            }
         }
         if (spellName !== "wall") cancelDragSpell(wizardRef, "wall");
         if (spellName !== "buildroad") cancelDragSpell(wizardRef, "buildroad");
         if (spellName !== "firewall") cancelDragSpell(wizardRef, "firewall");
-        if (spellName !== "vanish") cancelDragSpell(wizardRef, "vanish");
+        if (!isVanishToolName(spellName)) cancelDragSpell(wizardRef, "vanish");
+        if (spellName !== "triggerarea") clearTriggerAreaPlacementDraft(wizardRef);
+        if (spellName !== "triggerarea") clearTriggerAreaVertexSelection(wizardRef);
         wizardRef.currentSpell = spellName;
+        if (!isEditorSpellName(spellName) && !isEditorToolName(spellName)) {
+            wizardRef.selectedSpellName = spellName;
+        }
         if (previousSpell !== spellName) {
             const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
             if (setForSpell) {
@@ -4999,7 +5828,6 @@ const SpellSystem = (() => {
         }
         normalizeSelectedEditorCategory(wizardRef);
         refreshSpellSelector(wizardRef);
-        refreshEditorSelector(wizardRef);
         if (wizardRef.currentSpell !== "treegrow") {
             stopTreeGrowthChannel(wizardRef, false);
         }
@@ -5011,6 +5839,7 @@ const SpellSystem = (() => {
         getSelectedTreeTextureVariant(wizardRef);
         normalizePlaceableSelections(wizardRef);
         normalizeSelectedEditorCategory(wizardRef);
+        getSelectedPowerupFileName(wizardRef);
         getSelectedPowerupPlacementScale(wizardRef);
         getSelectedWallHeight(wizardRef);
         getSelectedWallThickness(wizardRef);
@@ -5019,12 +5848,19 @@ const SpellSystem = (() => {
         getSelectedRoofOverhang(wizardRef);
         getSelectedRoofPeakHeight(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
+        wizardRef.selectedSpellName = getSelectedSpellName(wizardRef);
         normalizeActiveAuras(wizardRef);
-        if (
-            !wizardRef.currentSpell ||
-            (!wizardRef.spells.some(s => s.name === wizardRef.currentSpell) && !isEditorSpellName(wizardRef.currentSpell))
-        ) {
+        // Determine if current spell is valid for available mode
+        const isValidSpell = wizardRef.currentSpell &&
+            (wizardRef.spells.some(s => s.name === wizardRef.currentSpell) ||
+             isEditorSpellName(wizardRef.currentSpell) ||
+             isEditorToolName(wizardRef.currentSpell));
+        if (!isValidSpell) {
             wizardRef.currentSpell = "wall";
+        }
+        // If current spell is an editor tool (wall/buildroad), start in editor mode
+        if (isEditorToolName(wizardRef.currentSpell)) {
+            wizardRef.showEditorPanel = true;
         }
         wizardRef.refreshSpellSelector = () => refreshSpellSelector(wizardRef);
         wizardRef.refreshEditorSelector = () => refreshEditorSelector(wizardRef);
@@ -5039,7 +5875,6 @@ const SpellSystem = (() => {
             refreshSelectedPlaceableMetadata(wizardRef);
             wizardRef.spells = buildSpellList(wizardRef);
             refreshSpellSelector(wizardRef);
-            refreshEditorSelector(wizardRef);
         });
     }
 
@@ -5074,6 +5909,12 @@ const SpellSystem = (() => {
         openAnimalSelector(wizardRef);
     }
 
+    function showTriggerAreaMenu(wizardRef) {
+        if (!wizardRef) return;
+        setCurrentSpell(wizardRef, "triggerarea");
+        openTriggerAreaMenu(wizardRef);
+    }
+
     function showEditorMenu(wizardRef) {
         if (!wizardRef) return;
         openEditorSelector(wizardRef);
@@ -5082,13 +5923,14 @@ const SpellSystem = (() => {
     function showEditorSubmenuForSelectedCategory(wizardRef) {
         if (!wizardRef) return;
         const category = normalizeSelectedEditorCategory(wizardRef);
-        editorMenuMode = "items";
+        activateSelectedEditorTool(wizardRef);
+        spellMenuMode = "editor-items";
         editorMenuCategory = category;
-        $("#editorMenu").removeClass("hidden");
+        $("#spellMenu").removeClass("hidden");
         renderEditorItemSelector(wizardRef, category);
         if (category !== "powerups") {
             fetchPlaceableImages({ forceRefresh: true }).then(() => {
-                if (editorMenuMode === "items" && editorMenuCategory === category) {
+                if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
                     renderEditorItemSelector(wizardRef, category);
                 }
             });
@@ -5099,17 +5941,15 @@ const SpellSystem = (() => {
         if (!wizardRef) return;
         wizardRef.showEditorPanel = !!visible;
         if (wizardRef.showEditorPanel) {
-            $("#editorSelector").removeClass("hidden");
-            refreshEditorSelector(wizardRef);
+            setEditorMode(true, wizardRef);
         } else {
-            $("#editorSelector").addClass("hidden");
-            $("#editorMenu").addClass("hidden");
+            setEditorMode(false, wizardRef);
         }
     }
 
     function toggleEditorPanelVisible(wizardRef) {
         if (!wizardRef) return false;
-        const next = !(wizardRef.showEditorPanel !== false);
+        const next = !editorMode;
         setEditorPanelVisible(wizardRef, next);
         return next;
     }
@@ -5127,8 +5967,25 @@ const SpellSystem = (() => {
         return "placeobject";
     }
 
+    function activateSelectedSpellTool(wizardRef) {
+        if (!wizardRef) return null;
+        const spellName = getSelectedSpellName(wizardRef);
+        if (!spellName) return null;
+        setCurrentSpell(wizardRef, spellName);
+        return spellName;
+    }
+
+    function selectEditorCategory(wizardRef, category) {
+        if (!wizardRef) return;
+        setSelectedPlaceableCategory(wizardRef, category);
+        wizardRef.selectedEditorCategory = category;
+        refreshSelectedPlaceableMetadata(wizardRef);
+        setCurrentSpell(wizardRef, "placeobject");
+    }
+
     function showPlaceableMenu(wizardRef) {
         if (!wizardRef) return;
+        activateSelectedEditorTool(wizardRef);
         showEditorMenu(wizardRef);
     }
 
@@ -5146,11 +6003,16 @@ const SpellSystem = (() => {
         setCurrentSpell,
         toggleAura,
         isAuraActive,
+        isEditorMode,
+        setEditorMode,
+        toggleEditorMode,
+        isEditorToolName,
         showMainSpellMenu,
         showFlooringMenu,
         showTreeMenu,
         showWallMenu,
         showAnimalMenu,
+        showTriggerAreaMenu,
         showEditorMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
@@ -5158,16 +6020,29 @@ const SpellSystem = (() => {
         setEditorPanelVisible,
         toggleEditorPanelVisible,
         activateSelectedEditorTool,
+        activateSelectedSpellTool,
+        selectEditorCategory,
         isEditorSpellName,
         adjustPlaceableRenderOffset,
         adjustPlaceableScale,
         adjustPowerupPlacementScale,
+        adjustAnimalSizeScale,
+        adjustTreeGrowSize,
         adjustPlaceableRotation,
         getPowerupPlacementPreviewConfig,
         beginDragSpell,
         updateDragPreview,
         completeDragSpell,
         cancelDragSpell,
+        cancelTriggerAreaPlacement,
+        insertTriggerAreaVertexOnEdge,
+        beginTriggerAreaVertexDrag,
+        updateTriggerAreaVertexDrag,
+        endTriggerAreaVertexDrag,
+        deleteSelectedTriggerAreaVertex,
+        getTriggerAreaVertexSelection,
+        openTriggerAreaHelpPanel,
+        closeTriggerAreaHelpPanel,
         isDragSpellActive,
         primeSpellAssets,
         startMagicInterval,
@@ -5181,6 +6056,7 @@ const SpellSystem = (() => {
         isValidHoverTargetForCurrentSpell,
         getVanishWallPreviewPolygonForHover,
         getVanishDragHighlightState,
+        getTriggerAreaPlacementPreview,
         getDragStartSnapTargetForSpell,
         getPlaceObjectPlacementCandidate,
         getAdjustedWallDragWorldPoint

@@ -767,6 +767,9 @@ void main(void) {
         roofRef.numHexRing = Number.isFinite(meshData.numHexRing) ? Number(meshData.numHexRing) : 0;
         roofRef.placed = true;
         roofRef.currentAlpha = 1;
+        roofRef.wallLoopSectionIds = candidate.wallSections
+            .map(s => (s && Number.isInteger(s.id)) ? s.id : null)
+            .filter(id => id !== null);
         roofRef.setInteriorHideHitboxFromLocalPoints(meshData.interiorLocalPoints);
         roofRef.updateGroundPlaneHitbox();
         roofRef.createPixiMesh();
@@ -1193,12 +1196,24 @@ void main(void) {
                 ? { points: this.interiorHideHitbox.points.map(p => ({ x: p.x, y: p.y })) }
                 : null
         };
+        if (typeof this.visible === "boolean") {
+            data.visible = this.visible;
+        }
+        if (Number.isFinite(this.brightness)) {
+            data.brightness = Number(this.brightness);
+        }
+        if (Number.isFinite(this.tint)) {
+            data.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(this.tint))));
+        }
         if (typeof this.script !== "undefined") {
             try {
                 data.script = JSON.parse(JSON.stringify(this.script));
             } catch (_err) {
                 data.script = this.script;
             }
+        }
+        if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
+            data.scriptingName = this.scriptingName.trim();
         }
         return data;
     }
@@ -1219,8 +1234,20 @@ void main(void) {
         if (typeof data.textureName === 'string' && data.textureName.length > 0) {
             roof.textureName = Roof.normalizeTexturePath(data.textureName);
         }
+        if (typeof data.visible === "boolean") {
+            roof.visible = data.visible;
+        }
+        if (Number.isFinite(data.brightness)) {
+            roof.brightness = Number(data.brightness);
+        }
+        if (Number.isFinite(data.tint)) {
+            roof.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.tint))));
+        }
         if (Object.prototype.hasOwnProperty.call(data, "script")) {
             roof.script = data.script;
+        }
+        if (typeof data.scriptingName === "string") {
+            roof.scriptingName = data.scriptingName.trim();
         }
         roof.placed = !!data.placed;
 

@@ -47,7 +47,7 @@ function msgBox(title, text, buttons = [{text: "ok", function: () => {}}]) {
         text = title;
         title = "-------"
     }
-    $("#msgbox").empty().show()
+    $("#msgbox").removeClass("scrollMessageBox").addClass("dialogBox").empty().show()
         .append($("<div>").addClass('msgTitle').text(title))
         .append($("<div>").attr('id', 'msgText').html(text + "<br>"))
         .append($("<div>").attr('id', 'msgbuttons'))
@@ -65,8 +65,46 @@ function msgBox(title, text, buttons = [{text: "ok", function: () => {}}]) {
     return $("#msgbox");
 }
 
+function showScrollMessage(text, buttonText = "ok") {
+    if (pause) pause();
+    msgBoxActive = true;
+    const safeText = String(text === undefined || text === null ? "" : text);
+    const $box = $("#msgbox");
+    $box
+        .removeClass("dialogBox")
+        .addClass("scrollMessageBox")
+        .empty()
+        .show()
+        .append(
+            $("<div>")
+                .addClass("scrollMessageContent")
+                .append(
+                    $("<div>")
+                        .addClass("scrollMessageText")
+                        .text(safeText)
+                )
+        )
+        .append(
+            $("<div>")
+                .attr("id", "msgbuttons")
+                .addClass("scrollMessageButtons")
+        );
+    $("#msgbuttons").append(
+        $("<button>")
+            .addClass("msgbutton scrollMessageButton")
+            .text(String(buttonText || "ok"))
+            .click(() => {
+                $box.hide().removeClass("scrollMessageBox").addClass("dialogBox");
+                unpause();
+                msgBoxActive = false;
+            })
+            .attr("type", "submit")
+    );
+    return $box;
+}
+
 function clearDialogs() {
-    $("#msgbox").hide();
+    $("#msgbox").hide().removeClass("scrollMessageBox").addClass("dialogBox");
     $("#optionsMenu").hide();
 }
 
@@ -131,3 +169,5 @@ function unpause() {
         paused = false;
     }
 }
+
+window.showScrollMessage = showScrollMessage;

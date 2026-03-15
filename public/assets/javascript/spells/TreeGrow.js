@@ -56,7 +56,13 @@ class TreeGrow extends globalThis.Spell {
                 }
             }
         }
-        newTree.applySize(this.initialSize);
+
+        // Use the placement size set via scroll wheel (default 4, clamped 0.5-20)
+        const placementSize = (wizard && Number.isFinite(wizard.treeGrowPlacementSize))
+            ? Math.max(0.5, Math.min(20, wizard.treeGrowPlacementSize))
+            : this.initialSize;
+        newTree.applySize(placementSize);
+
         if (
             typeof globalThis !== "undefined" &&
             globalThis.Scripting &&
@@ -66,17 +72,6 @@ class TreeGrow extends globalThis.Spell {
                 newTree,
                 (typeof wizard !== "undefined") ? wizard : null,
                 { reason: "objectCreated" }
-            );
-        }
-
-        // Holding space grows only the newly planted tree from this cast.
-        if (keysPressed[" "]) {
-            SpellSystem.startTreeGrowthChannel(
-                wizard,
-                newTree,
-                this.growthPerSecond,
-                this.magicPerSecond,
-                this.maxSize
             );
         }
         

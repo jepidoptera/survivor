@@ -57,7 +57,11 @@ class Grenade extends globalThis.Spell {
                         console.log('blast radius: ', dist);
                         let damage = Math.min(40 / dist / Math.max(dist - 1, 1), 40);
                         console.log('damage: ', damage);
-                        animal.hp -= damage;
+                        if (typeof animal.takeDamage === "function") {
+                            animal.takeDamage(damage);
+                        } else {
+                            animal.hp -= damage;
+                        }
                         if (animal.hp <= 0) {
                             let messageText = `You killed: ${animal.type}!` 
                             if (animal.foodValue > 0) messageText += `  You gain ${animal.foodValue} food.`;

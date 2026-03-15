@@ -28,6 +28,17 @@ function toRoadSaveRecord(data) {
         x: Number(data.x),
         y: Number(data.y)
     };
+    if (typeof data.visible === 'boolean') {
+        record.visible = data.visible;
+    }
+    if (Number.isFinite(data.brightness)) {
+        record.brightness = Number(data.brightness);
+    }
+    if (Number.isFinite(data.tint)) {
+        record.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.tint))));
+    } else if (data.pixiSprite && Number.isFinite(data.pixiSprite.tint)) {
+        record.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.pixiSprite.tint))));
+    }
     if (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0) {
         if (typeof globalThis !== "undefined" && typeof globalThis.normalizeLegacyAssetPath === "function") {
             record.fillTexturePath = globalThis.normalizeLegacyAssetPath(data.fillTexturePath);
@@ -45,8 +56,25 @@ function toTreeSaveRecord(data) {
         x: Number(data.x),
         y: Number(data.y)
     };
+    if (typeof data.visible === 'boolean') {
+        record.visible = data.visible;
+    }
+    if (Number.isFinite(data.brightness)) {
+        record.brightness = Number(data.brightness);
+    }
+    if (Number.isFinite(data.tint)) {
+        record.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.tint))));
+    } else if (data.pixiSprite && Number.isFinite(data.pixiSprite.tint)) {
+        record.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.pixiSprite.tint))));
+    }
     if (Number.isFinite(data.hp)) record.hp = Number(data.hp);
+    if (Number.isFinite(data.maxHP)) record.maxHP = Number(data.maxHP);
     if (typeof data.isOnFire === 'boolean') record.isOnFire = data.isOnFire;
+    if (data.burned) record.burned = true;
+    if (data._wasOnFire) record._wasOnFire = true;
+    if (data.falling) record.falling = true;
+    if (typeof data.fallDirection === 'string') record.fallDirection = data.fallDirection;
+    if (Number.isFinite(data.rotation) && data.rotation !== 0) record.rotation = Number(data.rotation);
     if (Number.isInteger(data.textureIndex)) record.textureIndex = data.textureIndex;
     if (Number.isFinite(data.size)) record.size = Number(data.size);
     if (Object.prototype.hasOwnProperty.call(data, "script")) {
@@ -327,7 +355,12 @@ function saveGameState() {
         clearanceMap: (typeof map.serializeClearance === "function")
             ? map.serializeClearance()
             : null,
-        roof: null
+        roof: null,
+        powerups: (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
+            ? globalThis.powerups
+                .filter(p => p && !p.gone && !p.collected && typeof p.saveJson === "function")
+                .map(p => p.saveJson())
+            : []
     };
 
     const loadedRoadRecords = [];
@@ -536,6 +569,19 @@ function loadGameState(saveData) {
         });
         animals.length = 0;
 
+        // Clear existing powerups before restoring from save.
+        if (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups)) {
+            globalThis.powerups.forEach(p => {
+                if (!p) return;
+                if (p.pixiSprite) {
+                    if (p.pixiSprite.parent) p.pixiSprite.parent.removeChild(p.pixiSprite);
+                    destroyDisplayObject(p.pixiSprite);
+                }
+                p.gone = true;
+            });
+            globalThis.powerups.length = 0;
+        }
+
         // Restore animals
         const _lt2 = performance.now();
         console.log(`[LOAD TIMING] wizard + clear animals: ${(_lt2 - _lt1).toFixed(1)}ms`);
@@ -552,6 +598,21 @@ function loadGameState(saveData) {
         // Clear existing static objects (dedupe references shared across nodes)
         const _lt3 = performance.now();
         console.log(`[LOAD TIMING] restore animals: ${(_lt3 - _lt2).toFixed(1)}ms`);
+
+        // Restore placed powerups
+        if (saveData.powerups && Array.isArray(saveData.powerups)) {
+            if (typeof globalThis !== "undefined") {
+                if (!Array.isArray(globalThis.powerups)) globalThis.powerups = [];
+                saveData.powerups.forEach(pData => {
+                    if (!pData || typeof pData !== "object") return;
+                    if (typeof Powerup !== "undefined" && typeof Powerup.loadJson === "function") {
+                        const p = Powerup.loadJson(pData);
+                        if (p) globalThis.powerups.push(p);
+                    }
+                });
+            }
+        }
+
         const existingStaticObjects = new Set();
         for (let x = 0; x < map.width; x++) {
             for (let y = 0; y < map.height; y++) {
@@ -674,17 +735,30 @@ function loadGameState(saveData) {
             const _st1 = performance.now();
             console.log(`[LOAD TIMING]   forEach restore loop: ${(_st1 - _st0).toFixed(1)}ms`);
 
-            // Batch wall setup: addToMapNodes + rebuildMesh3d in a single O(N) pass.
-            // Joinery/merge/rebuildConnections are skipped — walls are already
-            // merged correctly at save time.
+            // Batch wall setup: addToMapNodes in a single O(N) pass,
+            // then batch joinery (O(N) via endpoint index) + rebuildMesh3d.
             if (loadedWallSections.length > 0) {
                 for (let i = 0; i < loadedWallSections.length; i++) {
                     const section = loadedWallSections[i];
                     if (!section || section.gone) continue;
                     section.addToMapNodes();
-                    section.rebuildMesh3d();
                 }
-                console.log(`[LOAD TIMING]   wall batch addToMapNodes+rebuildMesh3d (${loadedWallSections.length}): ${(performance.now() - _st1).toFixed(1)}ms`);
+                const _wt0 = performance.now();
+                console.log(`[LOAD TIMING]   wall batch addToMapNodes (${loadedWallSections.length}): ${(_wt0 - _st1).toFixed(1)}ms`);
+
+                // Batch joinery: builds endpoint→walls index once, processes
+                // each shared endpoint exactly once. O(N) total.
+                if (typeof WallSectionUnit.batchHandleJoinery === "function") {
+                    WallSectionUnit.batchHandleJoinery(loadedWallSections);
+                } else {
+                    // Fallback: plain rebuildMesh3d without joinery
+                    for (let i = 0; i < loadedWallSections.length; i++) {
+                        if (loadedWallSections[i] && !loadedWallSections[i].gone) {
+                            loadedWallSections[i].rebuildMesh3d();
+                        }
+                    }
+                }
+                console.log(`[LOAD TIMING]   wall batch joinery+mesh (${loadedWallSections.length}): ${(performance.now() - _wt0).toFixed(1)}ms`);
             }
 
             if (loadedRoofs.length > 0) {
@@ -737,6 +811,27 @@ function loadGameState(saveData) {
         const _lt7 = performance.now();
         console.log(`[LOAD TIMING] clearance restore/compute: ${(_lt7 - _lt6).toFixed(1)}ms`);
         console.log(`[LOAD TIMING] TOTAL loadGameState: ${(_lt7 - _lt0).toFixed(1)}ms`);
+
+        // Run __init scripts for all loaded objects that have them.
+        if (typeof globalThis !== "undefined" && globalThis.Scripting &&
+            typeof globalThis.Scripting.runObjectInitScript === "function") {
+            const initTargets = (typeof map.getGameObjects === "function")
+                ? map.getGameObjects({ refresh: true })
+                : [];
+            let initCount = 0;
+            for (let i = 0; i < initTargets.length; i++) {
+                const obj = initTargets[i];
+                if (!obj || obj.gone) continue;
+                const scriptTag = obj.script;
+                if (!scriptTag || typeof scriptTag !== "object") continue;
+                if (typeof scriptTag.__init !== "string" || !scriptTag.__init.trim().length) continue;
+                globalThis.Scripting.runObjectInitScript(obj, wizard, { reason: "saveLoaded" });
+                initCount++;
+            }
+            if (initCount > 0) {
+                console.log(`[LOAD] Ran __init scripts for ${initCount} object(s).`);
+            }
+        }
 
         // Backward compatibility: restore legacy singleton roof when no roofs were loaded.
         const hasLoadedRoofs = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs) && globalThis.roofs.length > 0);

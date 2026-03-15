@@ -1,0 +1,885 @@
+Note: The tool simplified the command to ` git diff public/assets/javascript/gameobjects/staticObjects.js`, and this is the output of running that command instead:
+                                                                                
++        if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(px
+) || !Number.isFinite(py)) return null;                                         +        const dx = (typeof this.map.shortestDeltaX === "function") ? this.map.s
+hortestDeltaX(ox, px) : (px - ox);                                              +        const dy = (typeof this.map.shortestDeltaY === "function") ? this.map.s
+hortestDeltaY(oy, py) : (py - oy);                                              +        return { x: dx, y: dy };
++    }
++
++    _connectionCrossesTraversalLine(nodeA, nodeB, lineStart, lineEnd) {
++        const wallClass = (typeof WallSectionUnit !== "undefined") ? WallSectio
+nUnit : null;                                                                   +        if (!wallClass || typeof wallClass._segmentsIntersect2D !== "function")
+ return false;                                                                  +        const origin = lineStart;
++        const localStart = this._toTraversalLocal(origin, lineStart);
++        const localEnd = this._toTraversalLocal(origin, lineEnd);
++        const segStart = this._toTraversalLocal(origin, nodeA);
++        const segEnd = this._toTraversalLocal(origin, nodeB);
++        if (!localStart || !localEnd || !segStart || !segEnd) return false;
++
++        const wx = localEnd.x - localStart.x;
++        const wy = localEnd.y - localStart.y;
++        const wallLen = Math.hypot(wx, wy);
++        const segLen = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y)
+;                                                                               +        if (!(wallLen > 1e-6) || !(segLen > 1e-6)) return false;
++        const ux = wx / wallLen;
++        const uy = wy / wallLen;
++        const halfHexToEdge = Number.isFinite(this.map && this.map.hexHeight)
++            ? (Number(this.map.hexHeight) * 0.5)
++            : 0.5;
++        const extend = Math.max(0, halfHexToEdge) + 0.001;
++        const extendedStart = { x: localStart.x - ux * extend, y: localStart.y 
+- uy * extend };                                                                +        const extendedEnd = { x: localEnd.x + ux * extend, y: localEnd.y + uy *
+ extend };                                                                      +        return wallClass._segmentsIntersect2D(extendedStart, extendedEnd, segSt
+art, segEnd, 1e-6);                                                             +    }
++
++    _collectTraversalLineNodes(lineStart, lineEnd) {
++        if (!this.map || typeof this.map.getHexLine !== "function") return [];
++        const wallClass = (typeof WallSectionUnit !== "undefined") ? WallSectio
+nUnit : null;                                                                   +        const line = this.map.getHexLine(lineStart, lineEnd, 0);
++        if (!Array.isArray(line) || line.length === 0 || !wallClass || typeof w
+allClass._isMapNode !== "function") {                                           +            return [];
++        }
++        const out = [];
++        const seen = new Set();
++        for (let i = 0; i < line.length; i++) {
++            const node = line[i];
++            if (!wallClass._isMapNode(node)) continue;
++            const key = `${node.xindex},${node.yindex}`;
++            if (seen.has(key)) continue;
++            seen.add(key);
++            out.push(node);
++        }
++        return out;
++    }
++
++    _collectOddTraversalNeighbors(node, outMap) {
++        if (!node || !(outMap instanceof Map) || !Array.isArray(node.neighbors)
+) return;                                                                       +        const wallClass = (typeof WallSectionUnit !== "undefined") ? WallSectio
+nUnit : null;                                                                   +        if (!wallClass || typeof wallClass._isMapNode !== "function") return;
++        for (let d = 1; d < 12; d += 2) {
++            const neighbor = node.neighbors[d];
++            if (!wallClass._isMapNode(neighbor)) continue;
++            const key = `${neighbor.xindex},${neighbor.yindex}`;
++            if (outMap.has(key)) continue;
++            outMap.set(key, neighbor);
++        }
++    }
++
++    _addOwnedBlockedLink(node, direction) {
++        if (!node || !Array.isArray(node.neighbors) || !node.neighbors[directio
+n]) return false;                                                               +        if (!(this._blockedLinkKeys instanceof Set)) this._blockedLinkKeys = ne
+w Set();                                                                        +        const key = `${node.xindex},${node.yindex}|${direction}`;
++        if (this._blockedLinkKeys.has(key)) return false;
++        if (!(node.blockedNeighbors instanceof Map)) node.blockedNeighbors = ne
+w Map();                                                                        +        if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(di
+rection, new Set());                                                            +        node.blockedNeighbors.get(direction).add(this);
++        this.blockedLinks.push({ node, direction });
++        this._blockedLinkKeys.add(key);
++        if (
++            typeof globalThis !== "undefined" &&
++            globalThis.map &&
++            !globalThis.map._suppressClearanceUpdates &&
++            typeof globalThis.map.updateClearanceAround === "function"
++        ) {
++            globalThis.map.updateClearanceAround(node);
++        }
++        return true;
++    }
++
++    _blockOwnedConnectionBetween(nodeA, nodeB) {
++        if (!nodeA || !nodeB || !Array.isArray(nodeA.neighbors) || !Array.isArr
+ay(nodeB.neighbors)) return false;                                              +        const dirA = nodeA.neighbors.indexOf(nodeB);
++        const dirB = nodeB.neighbors.indexOf(nodeA);
++        let changed = false;
++        if (dirA >= 0) changed = this._addOwnedBlockedLink(nodeA, dirA) || chan
+ged;                                                                            +        if (dirB >= 0) changed = this._addOwnedBlockedLink(nodeB, dirB) || chan
+ged;                                                                            +        return changed;
++    }
++
++    _applyFreeDoorDirectionalBlocking() {
++        this._clearOwnedDirectionalBlocks();
++        if (!this.isDoorObject() || this.gone || this.falling || !Number.isFini
+te(this.hp) || this.hp <= 0) return;                                            +        if (Number.isInteger(this.mountedWallSectionUnitId)) return;
++        const line = this._getTraversalLineEndpoints();
++        const centerlineNodes = this._collectTraversalLineNodes(line.start, lin
+e.end);                                                                         +        if (centerlineNodes.length === 0) return;
++
++        const wallClass = (typeof WallSectionUnit !== "undefined") ? WallSectio
+nUnit : null;                                                                   +        const centerlineNodeKeySet = new Set(centerlineNodes.map(node => `${nod
+e.xindex},${node.yindex}`));                                                    +        const oddNeighborsAll = new Map();
++
++        for (let i = 0; i < centerlineNodes.length; i++) {
++            const node = centerlineNodes[i];
++            if (!node || !Array.isArray(node.neighbors)) continue;
++            for (let dir = 0; dir < 12; dir++) {
++                const neighbor = node.neighbors[dir];
++                if (!wallClass || typeof wallClass._isMapNode !== "function" ||
+ !wallClass._isMapNode(neighbor)) continue;                                     +                if (!this._connectionCrossesTraversalLine(node, neighbor, line.
+start, line.end)) continue;                                                     +                this._blockOwnedConnectionBetween(node, neighbor);
++            }
++            this._collectOddTraversalNeighbors(node, oddNeighborsAll);
++        }
++
++        for (let i = 0; i < centerlineNodes.length - 1; i++) {
++            const nodeA = centerlineNodes[i];
++            const nodeB = centerlineNodes[i + 1];
++            if (!nodeA || !nodeB) continue;
++            const localNeighbors = new Map();
++            this._collectOddTraversalNeighbors(nodeA, localNeighbors);
++            this._collectOddTraversalNeighbors(nodeB, localNeighbors);
++            localNeighbors.forEach((neighborNode, keyA) => {
++                if (!neighborNode || !Array.isArray(neighborNode.neighbors)) re
+turn;                                                                           +                for (let dir = 0; dir < 12; dir++) {
++                    const other = neighborNode.neighbors[dir];
++                    const keyB = other ? `${other.xindex},${other.yindex}` : ""
+;                                                                               +                    if (!keyB || !localNeighbors.has(keyB)) continue;
++                    if (keyA >= keyB) continue;
++                    if (centerlineNodeKeySet.has(keyA) || centerlineNodeKeySet.
+has(keyB)) continue;                                                            +                    if (!this._connectionCrossesTraversalLine(neighborNode, oth
+er, line.start, line.end)) continue;                                            +                    this._blockOwnedConnectionBetween(neighborNode, other);
++                }
++            });
++        }
++    }
++
++    refreshDirectionalTraversalBlocking(previousMountedSectionUnitId = null) {
++        this._clearOwnedDirectionalBlocks();
++        this._rebuildMountedWallDirectionalBlocking(previousMountedSectionUnitI
+d);                                                                             +        if (!Number.isInteger(this.mountedWallSectionUnitId)) {
++            this._applyFreeDoorDirectionalBlocking();
++        }
++    }
++
++    beginDoorFall() {
++        if (!this.isDoorObject() || this.falling) return;
++        this.falling = true;
++        this.rotation = 0;
++        this.fallStart = Number.isFinite(frameCount) ? Number(frameCount) : 0;
++        this.blocksTile = false;
++        this.isPassable = true;
++        this._scriptDoorLocked = false;
++        this.castsLosShadows = false;
++        if (this.node && typeof this.node.recountBlockingObjects === "function"
+) {                                                                             +            this.node.recountBlockingObjects();
++            if (
++                !globalThis.map?._suppressClearanceUpdates &&
++                typeof globalThis.map?.updateClearanceAround === "function"
++            ) {
++                globalThis.map.updateClearanceAround(this.node);
++            }
++        }
++        this.groundPlaneHitbox = null;
++        if (!this.isOnFire && this.pixiSprite) {
++            this.pixiSprite.tint = 0xFFFFFF;
++        }
++        this.refreshDirectionalTraversalBlocking();
++    }
++
++    setDoorFallAwayFromPoint(px, py) {
++        if (!this.isDoorObject()) return;
++        const point = {
++            x: Number(px),
++            y: Number(py)
++        };
++        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
++
++        const faceCenters = getMountedWallFaceCentersForObject(this);
++        if (faceCenters && faceCenters.front && faceCenters.back) {
++            const animalSide = chooseMountedWallFaceCenterForViewer(faceCenters
+, point, this.map || null);                                                     +            if (animalSide === "front") {
++                this._doorFallSide = "back";
++                return;
++            }
++            if (animalSide === "back") {
++                this._doorFallSide = "front";
++                return;
++            }
++        }
++
++        const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.
+placementRotation) : 0;                                                         +        const theta = angleDeg * (Math.PI / 180);
++        let normalX = -Math.sin(theta);
++        let normalY = Math.cos(theta);
++        const centerX = Number.isFinite(this.x) ? Number(this.x) : 0;
++        const centerY = Number.isFinite(this.y) ? Number(this.y) : 0;
++        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
++            ? this.map.shortestDeltaX(centerX, point.x)
++            : (point.x - centerX);
++        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
++            ? this.map.shortestDeltaY(centerY, point.y)
++            : (point.y - centerY);
++        const dot = dx * normalX + dy * normalY;
++        this._doorFallNormalSign = dot >= 0 ? -1 : 1;
++    }
++
++    setDoorFallTowardPoint(px, py) {
++        if (!this.isDoorObject()) return;
++        this.setDoorFallAwayFromPoint(px, py);
++        if (typeof this._doorFallSide === "string") {
++            this._doorFallSide = this._doorFallSide === "front" ? "back" : "fro
+nt";                                                                            +            return;
++        }
++        if (Number.isFinite(this._doorFallNormalSign)) {
++            this._doorFallNormalSign *= -1;
++        }
++    }
++
++    triggerDoorHitShake() {
++        if (!this.isDoorObject() || this.falling || this.gone) return;
++        this._doorHitShakeStartFrame = Number.isFinite(frameCount) ? Number(fra
+meCount) : 0;                                                                   +        this._doorHitShakeDurationFrames = Math.max(1, Math.round((Number(frame
+Rate) || 30) * 0.1));                                                           +    }
++
++    getDoorHitShakeWorldOffset(camera) {
++        if (!this.isDoorObject() || this.falling || !camera) return null;
++        if (!Number.isFinite(this._doorHitShakeStartFrame) || !Number.isFinite(
+this._doorHitShakeDurationFrames)) return null;                                 +        const elapsed = (Number.isFinite(frameCount) ? Number(frameCount) : 0) 
+- Number(this._doorHitShakeStartFrame);                                         +        const duration = Math.max(1, Number(this._doorHitShakeDurationFrames) |
+| 1);                                                                           +        if (elapsed < 0 || elapsed >= duration) return null;
++
++        const progress = elapsed / duration;
++        const amplitudePx = Math.max(0, 6 * (1 - progress));
++        const dirX = (elapsed % 2 === 0) ? -1 : 1;
++        const dirY = (Math.floor(elapsed / 2) % 2 === 0) ? 1 : -1;
++        const viewScale = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1
+));                                                                             +        const xyRatio = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 1));
++        return {
++            x: (dirX * amplitudePx) / viewScale,
++            y: (dirY * amplitudePx * 0.75) / (viewScale * xyRatio)
++        };
++    }
++
++    update() {
++        super.update();
++
++        if (!this.isDoorObject()) return;
++
++        if (this.hp <= 0) {
++            if (!this.falling) {
++                this.beginDoorFall();
++            }
++
++            const fallDurationFrames = Math.max(1, Number(this._doorFallDuratio
+nFrames) || 60);                                                                +            if (!Number.isFinite(this.fallStart)) {
++                const priorRotation = Math.max(0, Math.min(90, Number(this.rota
+tion) || 0));                                                                   +                const priorProgress = Math.sqrt(priorRotation / 90);
++                this.fallStart = (Number.isFinite(frameCount) ? Number(frameCou
+nt) : 0) - (priorProgress * fallDurationFrames);                                +            }
++            const elapsedFrames = (Number.isFinite(frameCount) ? Number(frameCo
+unt) : 0) - Number(this.fallStart);                                             +            const progress = Math.max(0, Math.min(1, elapsedFrames / fallDurati
+onFrames));                                                                     +            this.rotation = 90 * progress * progress;
++
++            if (progress >= 1) {
++                this.rotation = 90;
++                if (this.isOnFire) {
++                    this.isOnFire = false;
++                    if (!Number.isFinite(this.fireFadeStart)) {
++                        this.fireFadeStart = Number.isFinite(frameCount) ? Numb
+er(frameCount) : 0;                                                             +                    }
++                }
++            }
++        }
++    }
++
++    updateDepthBillboardMesh(ctx = null, camera = null, options = {}) {
++        const isFallingDoor = !!(
++            this.isDoorObject() &&
++            this.falling &&
++            Number.isFinite(this.rotation) &&
++            Number(this.rotation) > 1e-4
++        );
++        const shakeOffset = this.getDoorHitShakeWorldOffset(camera);
++        if (!isFallingDoor) {
++            if (!shakeOffset) {
++                return super.updateDepthBillboardMesh(ctx, camera, options);
++            }
++            const savedX = this.x;
++            const savedY = this.y;
++            this.x = savedX + shakeOffset.x;
++            this.y = savedY + shakeOffset.y;
++            const result = super.updateDepthBillboardMesh(ctx, camera, options)
+;                                                                               +            this.x = savedX;
++            this.y = savedY;
++            return result;
++        }
++
++        const hideDepthMesh = () => {
++            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = fa
+lse;                                                                            +        };
++        const sprite = this.pixiSprite;
++        const fallbackTexture = (typeof this.texturePath === "string" && this.t
+exturePath.length > 0)                                                          +            ? PIXI.Texture.from(this.texturePath)
++            : null;
++        const sourceTexture = (sprite && sprite.texture) ? sprite.texture : (fa
+llbackTexture || null);                                                         +        if (!sourceTexture || !camera) {
++            hideDepthMesh();
++            return null;
++        }
++
++        const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
++            forceSinglePlane: true
++        });
++        if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillb
+oardWorldPositions) {                                                           +            hideDepthMesh();
++            return null;
++        }
++        this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
++
++        const viewScale = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1
+));                                                                             +        const xyRatio = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 1));
++        const worldX = Number.isFinite(this.x) ? Number(this.x) + (shakeOffset 
+? shakeOffset.x : 0) : 0;                                                       +        const worldY = Number.isFinite(this.y) ? Number(this.y) + (shakeOffset 
+? shakeOffset.y : 0) : 0;                                                       +        const worldZ = Number.isFinite(this.z) ? Number(this.z) : 0;
++        const width = Math.max(0.01, Math.abs(Number(this.width) || ((sprite &&
+ sprite.width) ? Number(sprite.width) / viewScale : 1)));                       +        const height = Math.max(0.01, Math.abs(Number(this.height) || ((sprite 
+&& sprite.height) ? Number(sprite.height) / (viewScale * xyRatio) : 1)));       +        const anchorX = Number.isFinite(this.placeableAnchorX)
++            ? Number(this.placeableAnchorX)
++            : ((sprite && sprite.anchor && Number.isFinite(sprite.anchor.x)) ? 
+Number(sprite.anchor.x) : 0.5);                                                 +        const anchorY = Number.isFinite(this.placeableAnchorY)
++            ? Number(this.placeableAnchorY)
++            : ((sprite && sprite.anchor && Number.isFinite(sprite.anchor.y)) ? 
+Number(sprite.anchor.y) : 1);                                                   +        const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.
+placementRotation) : 0;                                                         +        const theta = angleDeg * (Math.PI / 180);
++        const axisX = Math.cos(theta);
++        const axisY = Math.sin(theta);
++        const halfWidth = width * 0.5;
++        const alongOffset = (anchorX - 0.5) * width;
++        const verticalWorldHeight = height / Math.max(1e-6, xyRatio);
++        const bottomZ = worldZ - ((1 - anchorY) * verticalWorldHeight);
++        const hingeLift = verticalWorldHeight * Math.cos((Math.max(0, Math.min(
+90, Number(this.rotation) || 0)) * Math.PI) / 180);                             +        const fallReach = verticalWorldHeight * Math.sin((Math.max(0, Math.min(
+90, Number(this.rotation) || 0)) * Math.PI) / 180);                             +
++        let baseCenterX = worldX - axisX * alongOffset;
++        let baseCenterY = worldY - axisY * alongOffset;
++        let normalX = -axisY;
++        let normalY = axisX;
++        let selectedSide = "free";
++
++        const faceCenters = getMountedWallFaceCentersForObject(this);
++        if (faceCenters && faceCenters.front && faceCenters.back) {
++            const cameraPoint = {
++                x: Number.isFinite(camera.x) ? Number(camera.x) : worldX,
++                y: Number.isFinite(camera.y) ? Number(camera.y) : worldY
++            };
++            selectedSide = (typeof this._doorFallSide === "string" && (this._do
+orFallSide === "front" || this._doorFallSide === "back"))                       +                ? this._doorFallSide
++                : (chooseMountedWallFaceCenterForViewer(faceCenters, cameraPoin
+t, this.map || (ctx && ctx.map) || null) || "front");                           +            const chosen = faceCenters[selectedSide] || faceCenters.front;
++            const opposite = selectedSide === "back" ? faceCenters.front : face
+Centers.back;                                                                   +            if (chosen && opposite) {
++                baseCenterX = Number(chosen.x) - axisX * alongOffset;
++                baseCenterY = Number(chosen.y) - axisY * alongOffset;
++                normalX = Number(chosen.x) - Number(opposite.x);
++                normalY = Number(chosen.y) - Number(opposite.y);
++            }
++        } else {
++            const desiredSign = Number.isFinite(this._doorFallNormalSign)
++                ? (Number(this._doorFallNormalSign) >= 0 ? 1 : -1)
++                : null;
++            if (desiredSign === null) {
++                const cameraDx = (this.map && typeof this.map.shortestDeltaX ==
+= "function")                                                                   +                    ? this.map.shortestDeltaX(baseCenterX, Number(camera.x) || 
+baseCenterX)                                                                    +                    : ((Number(camera.x) || baseCenterX) - baseCenterX);
++                const cameraDy = (this.map && typeof this.map.shortestDeltaY ==
+= "function")                                                                   +                    ? this.map.shortestDeltaY(baseCenterY, Number(camera.y) || 
+baseCenterY)                                                                    +                    : ((Number(camera.y) || baseCenterY) - baseCenterY);
++                const normalDot = cameraDx * normalX + cameraDy * normalY;
++                if (normalDot < 0) {
++                    normalX *= -1;
++                    normalY *= -1;
++                }
++            } else if (desiredSign < 0) {
++                normalX *= -1;
++                normalY *= -1;
++            }
++        }
++
++        const normalLen = Math.hypot(normalX, normalY);
++        if (normalLen > 1e-6) {
++            normalX /= normalLen;
++            normalY /= normalLen;
++        } else {
++            normalX = -axisY;
++            normalY = axisX;
++        }
++
++        const bl = { x: baseCenterX - axisX * halfWidth, y: baseCenterY - axisY
+ * halfWidth, z: bottomZ };                                                     +        const br = { x: baseCenterX + axisX * halfWidth, y: baseCenterY + axisY
+ * halfWidth, z: bottomZ };                                                     +        const tr = { x: br.x + normalX * fallReach, y: br.y + normalY * fallRea
+ch, z: bottomZ + hingeLift };                                                   +        const tl = { x: bl.x + normalX * fallReach, y: bl.y + normalY * fallRea
+ch, z: bottomZ + hingeLift };                                                   +
++        const signature = [
++            bl.x, bl.y, br.x, br.y, tr.x, tr.y, tl.x, tl.y,
++            bottomZ, hingeLift, fallReach, width, verticalWorldHeight, selected
+Side                                                                            +        ].map(v => Number(v).toFixed(4)).join("|");
++        if (signature !== this._depthBillboardLastSignature) {
++            const positions = this._depthBillboardWorldPositions;
++            positions[0] = bl.x; positions[1] = bl.y; positions[2] = bl.z;
++            positions[3] = br.x; positions[4] = br.y; positions[5] = br.z;
++            positions[6] = tr.x; positions[7] = tr.y; positions[8] = tr.z;
++            positions[9] = tl.x; positions[10] = tl.y; positions[11] = tl.z;
++            const worldBuffer = mesh.geometry.getBuffer("aWorldPosition");
++            if (worldBuffer) worldBuffer.update();
++            this._depthBillboardLastSignature = signature;
++        }
++
++        const uniforms = mesh.shader.uniforms;
++        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.heigh
+t) || 30;                                                                       +        const nearMetric = -Math.max(80, viewportHeight * 0.6);
++        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
++        const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
++        const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ct
+x.app.screen.width))                                                            +            ? Number(ctx.app.screen.width)
++            : 1;
++        const screenH = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ct
+x.app.screen.height))                                                           +            ? Number(ctx.app.screen.height)
++            : 1;
++        const tint = Number.isFinite(sprite && sprite.tint) ? Number(sprite.tin
+t) : 0xFFFFFF;                                                                  +        const mapRef = this.map || (ctx && ctx.map) || null;
++        uniforms.uScreenSize[0] = Math.max(1, screenW);
++        uniforms.uScreenSize[1] = Math.max(1, screenH);
++        uniforms.uCameraWorld[0] = Number(camera.x) || 0;
++        uniforms.uCameraWorld[1] = Number(camera.y) || 0;
++        uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) 
+&& mapRef.worldWidth > 0)                                                       +            ? Number(mapRef.worldWidth)
++            : 0;
++        uniforms.uWorldSize[1] = (mapRef && Number.isFinite(mapRef.worldHeight)
+ && mapRef.worldHeight > 0)                                                     +            ? Number(mapRef.worldHeight)
++            : 0;
++        uniforms.uWrapEnabled[0] = (mapRef && mapRef.wrapX !== false) ? 1 : 0;
++        uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
++        uniforms.uWrapAnchorWorld[0] = worldX;
++        uniforms.uWrapAnchorWorld[1] = worldY;
++        uniforms.uViewScale = Number(camera.viewscale) || 1;
++        uniforms.uXyRatio = Number(camera.xyratio) || 1;
++        uniforms.uDepthRange[0] = farMetric;
++        uniforms.uDepthRange[1] = depthSpanInv;
++        uniforms.uTint[0] = ((tint >> 16) & 255) / 255;
++        uniforms.uTint[1] = ((tint >> 8) & 255) / 255;
++        uniforms.uTint[2] = (tint & 255) / 255;
++        uniforms.uTint[3] = Number.isFinite(sprite && sprite.alpha) ? Number(sp
+rite.alpha) : 1;                                                                +        const brightnessPercent = Number(this.brightness);
++        uniforms.uBrightness = Number.isFinite(brightnessPercent)
++            ? Math.max(-1, Math.min(1, brightnessPercent / 100))
++            : 0;
++        uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(o
+ptions.alphaCutoff) : 0.08;                                                     +        uniforms.uClipMinZ = (this._scriptSinkState && this._scriptSinkState.ac
+tive !== false) ? 0 : -1000000;                                                 +        uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
++        uniforms.uZOffset = 0;
++
++        // --- Composite layers (arch + falling door) ---
++        if (Array.isArray(this.compositeLayers) && this.compositeLayers.length 
+>= 2) {                                                                         +            const underlayLayer = this.compositeLayers[0]; // arch
++            const overlayLayer = this.compositeLayers[1];  // door
++
++            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, overlayLaye
+r.uRegion, false);                                                              +            uniforms.uZOffset = 0.05;
++
++            const underlayMesh = this._ensureCompositeUnderlayMesh(false, true,
+ options.alphaCutoff);                                                          +            if (underlayMesh && underlayMesh.shader && underlayMesh.shader.unif
+orms) {                                                                         +                if (this._depthBillboardWorldPositions && this._compositeUnderl
+ayPositions) {                                                                  +                    const src = this._depthBillboardWorldPositions;
++                    const dst = this._compositeUnderlayPositions;
++                    if (src.length === dst.length) {
++                        const hingeLiftArch = verticalWorldHeight;
++                        const fallReachArch = 0;
++                        const trArch = { x: br.x + normalX * fallReachArch, y: 
+br.y + normalY * fallReachArch, z: bottomZ + hingeLiftArch };                   +                        const tlArch = { x: bl.x + normalX * fallReachArch, y: 
+bl.y + normalY * fallReachArch, z: bottomZ + hingeLiftArch };                   +                        
++                        const posSignatureArch = [
++                            bl.x, bl.y, br.x, br.y, trArch.x, trArch.y, tlArch.
+x, tlArch.y,                                                                    +                            bottomZ, hingeLiftArch, fallReachArch, width, verti
+calWorldHeight, selectedSide                                                    +                        ].map(v => Number(v).toFixed(4)).join("|") + "|falling-
+underlay";                                                                      +
++                        if (posSignatureArch !== this._compositeUnderlayLastSig
+nature) {                                                                       +                            dst[0] = bl.x; dst[1] = bl.y; dst[2] = bl.z;
++                            dst[3] = br.x; dst[4] = br.y; dst[5] = br.z;
++                            dst[6] = trArch.x; dst[7] = trArch.y; dst[8] = trAr
+ch.z;                                                                           +                            dst[9] = tlArch.x; dst[10] = tlArch.y; dst[11] = tl
+Arch.z;                                                                         +                            underlayMesh.geometry.getBuffer("aWorldPosition").u
+pdate();                                                                        +                            this._compositeUnderlayLastSignature = posSignature
+Arch;                                                                           +                        }
++                    }
++                }
++
++                StaticObject._setCompositeLayerUvs(underlayMesh, sourceTexture,
+ underlayLayer.uRegion, false);                                                 +
++                const uU = underlayMesh.shader.uniforms;
++                uU.uScreenSize[0] = uniforms.uScreenSize[0];
++                uU.uScreenSize[1] = uniforms.uScreenSize[1];
++                uU.uCameraWorld[0] = uniforms.uCameraWorld[0];
++                uU.uCameraWorld[1] = uniforms.uCameraWorld[1];
++                uU.uWorldSize[0] = uniforms.uWorldSize[0];
++                uU.uWorldSize[1] = uniforms.uWorldSize[1];
++                uU.uWrapEnabled[0] = uniforms.uWrapEnabled[0];
++                uU.uWrapEnabled[1] = uniforms.uWrapEnabled[1];
++                uU.uWrapAnchorWorld[0] = uniforms.uWrapAnchorWorld[0];
++                uU.uWrapAnchorWorld[1] = uniforms.uWrapAnchorWorld[1];
++                uU.uViewScale = uniforms.uViewScale;
++                uU.uXyRatio = uniforms.uXyRatio;
++                uU.uDepthRange[0] = uniforms.uDepthRange[0];
++                uU.uDepthRange[1] = uniforms.uDepthRange[1];
++                uU.uTint[0] = uniforms.uTint[0];
++                uU.uTint[1] = uniforms.uTint[1];
++                uU.uTint[2] = uniforms.uTint[2];
++                uU.uTint[3] = uniforms.uTint[3];
++                uU.uBrightness = uniforms.uBrightness;
++                uU.uAlphaCutoff = uniforms.uAlphaCutoff;
++                uU.uSampler = uniforms.uSampler;
++                uU.uZOffset = 0;
++                
++                // Keep the archway visible only if the wall it's mounted to ha
+sn't been completely blown up                                                   +                const wallExists = Number.isInteger(this.mountedWallSectionUnit
+Id);                                                                            +                underlayMesh.visible = wallExists;
++            }
++        } else {
++            if (this._compositeUnderlayMesh) {
++                this._compositeUnderlayMesh.visible = false;
++            }
++        }
++
++        mesh.visible = true;
++        return mesh;
++    }
+ }
+ 
+ if (typeof globalThis !== "undefined") {
+@@ -2782,6 +3872,329 @@ if (typeof globalThis !== "undefined") {
+     globalThis.normalizePlaceableRotationAxis = normalizePlaceableRotationAxis;
+ }
+ 
++class TriggerArea extends StaticObject {
++    constructor(location, map, options = {}) {
++        const seed = location || { x: 0, y: 0 };
++        super('triggerArea', seed, 1, 1, [PIXI.Texture.WHITE], map);
++        this.objectType = "triggerArea";
++        this.isTriggerArea = true;
++        this.rotationAxis = "ground";
++        this.blocksTile = false;
++        this.isPassable = true;
++        this.castsLosShadows = false;
++        this.pixiSprite.alpha = 0;
++        this.pixiSprite.visible = false;
++        this.pixiSprite.renderable = false;
++        this.pixiSprite.anchor.set(0.5, 0.5);
++        this.playerEnters = normalizeDoorEventScript(options.playerEnters);
++        this.playerExits = normalizeDoorEventScript(options.playerExits);
++        this._triggerPickTexture = null;
++        this._triggerPickCanvas = null;
++        this._triggerPickBounds = null;
++        this._triggerPickPixelsPerWorld = 96;
++        this._triggerOutlineGraphics = null;
++        this._triggerVertexGraphics = null;
++        this._triggerAreaIndexedNodes = [];
++        this.setPolygonPoints(Array.isArray(options.points) ? options.points : 
+[]);                                                                            +
++        // Register in the flat map.objects array so that the "include all trig
+ger                                                                             +        // areas" scan in updateCharacterObjectCollisions can find this area ev
+en                                                                              +        // after the player teleports far away from it (beyond tileRadius reach
+).                                                                              +        if (this.map && Array.isArray(this.map.objects) && !this.map.objects.in
+cludes(this)) {                                                                 +            this.map.objects.push(this);
++        }
++    }
++
++    _reindexTriggerAreaNodes(points) {
++        const mapRef = this.map || null;
++        const oldNodes = Array.isArray(this._triggerAreaIndexedNodes) ? this._t
+riggerAreaIndexedNodes : [];                                                    +        for (let i = 0; i < oldNodes.length; i++) {
++            const node = oldNodes[i];
++            if (node && typeof node.removeObject === "function") {
++                node.removeObject(this);
++            }
++        }
++        this._triggerAreaIndexedNodes = [];
++
++        if (!mapRef || typeof mapRef.worldToNode !== "function" || !Array.isArr
+ay(points) || points.length < 3) {                                              +            return;
++        }
++
++        const samplePoints = [];
++        for (let i = 0; i < points.length; i++) {
++            const a = points[i];
++            const b = points[(i + 1) % points.length];
++            if (!a || !b) continue;
++            samplePoints.push({ x: Number(a.x), y: Number(a.y) });
++            const dx = Number(b.x) - Number(a.x);
++            const dy = Number(b.y) - Number(a.y);
++            const edgeLen = Math.hypot(dx, dy);
++            if (!(edgeLen > 0)) continue;
++            const spacing = 1.0;
++            const steps = Math.min(1024, Math.floor(edgeLen / spacing));
++            for (let s = 1; s < steps; s++) {
++                const t = s / steps;
++                samplePoints.push({
++                    x: Number(a.x) + dx * t,
++                    y: Number(a.y) + dy * t
++                });
++            }
++        }
++
++        // Keep center indexing for compatibility with existing single-node ass
+umptions.                                                                       +        samplePoints.push({ x: Number(this.x), y: Number(this.y) });
++
++        const nodes = [];
++        const nodeKeys = new Set();
++        for (let i = 0; i < samplePoints.length; i++) {
++            const pt = samplePoints[i];
++            if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) contin
+ue;                                                                             +            const node = mapRef.worldToNode(pt.x, pt.y);
++            if (!node) continue;
++            const key = `${Number(node.xindex)}:${Number(node.yindex)}`;
++            if (nodeKeys.has(key)) continue;
++            nodeKeys.add(key);
++            nodes.push(node);
++        }
++
++        for (let i = 0; i < nodes.length; i++) {
++            const node = nodes[i];
++            if (node && typeof node.addObject === "function") {
++                node.addObject(this);
++            }
++        }
++        this._triggerAreaIndexedNodes = nodes;
++        this.node = (typeof mapRef.worldToNode === "function")
++            ? mapRef.worldToNode(this.x, this.y)
++            : (nodes[0] || null);
++    }
++
++    setPolygonPoints(rawPoints) {
++        const points = Array.isArray(rawPoints)
++            ? rawPoints
++                .map((p) => ({ x: Number(p && p.x), y: Number(p && p.y) }))
++                .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
++            : [];
++        if (points.length < 3) return false;
++
++        this.polygonPoints = points;
++        this.groundPlaneHitbox = new PolygonHitbox(points.map((p) => ({ x: p.x,
+ y: p.y })));                                                                   +        this.visualHitbox = this.groundPlaneHitbox;
++
++        const bounds = this.groundPlaneHitbox.getBounds();
++        const minX = Number(bounds.x) || 0;
++        const minY = Number(bounds.y) || 0;
++        const width = Math.max(1e-4, Number(bounds.width) || 0);
++        const height = Math.max(1e-4, Number(bounds.height) || 0);
++        this.width = width;
++        this.height = height;
++        this.x = minX + (width * 0.5);
++        this.y = minY + (height * 0.5);
++        this.groundRadius = Math.max(width, height) * 0.5;
++        this.visualRadius = this.groundRadius;
++        this._triggerPickBounds = { minX, minY, width, height };
++        this._rebuildPickTexture();
++        this._reindexTriggerAreaNodes(points);
++        return true;
++    }
++
++    removeFromNodes() {
++        const indexedNodes = Array.isArray(this._triggerAreaIndexedNodes) ? thi
+s._triggerAreaIndexedNodes : [];                                                +        if (indexedNodes.length === 0) {
++            super.removeFromNodes();
++            return;
++        }
++        for (let i = 0; i < indexedNodes.length; i++) {
++            const node = indexedNodes[i];
++            if (node && typeof node.removeObject === "function") {
++                node.removeObject(this);
++            }
++        }
++        this._triggerAreaIndexedNodes = [];
++        this.node = null;
++    }
++
++    _rebuildPickTexture() {
++        if (!this._triggerPickBounds || !Array.isArray(this.polygonPoints) || t
+his.polygonPoints.length < 3) return;                                           +        const bounds = this._triggerPickBounds;
++        const ppw = Math.max(16, Math.floor(Number(this._triggerPickPixelsPerWo
+rld) || 96));                                                                   +        const texW = Math.max(8, Math.round(bounds.width * ppw));
++        const texH = Math.max(8, Math.round(bounds.height * ppw));
++        const canvas = this._triggerPickCanvas || document.createElement("canva
+s");                                                                            +        canvas.width = texW;
++        canvas.height = texH;
++        const ctx = canvas.getContext("2d");
++        if (!ctx) return;
++        ctx.clearRect(0, 0, texW, texH);
++        ctx.fillStyle = "#ffffff";
++        ctx.beginPath();
++        const invW = bounds.width > 1e-8 ? (1 / bounds.width) : 0;
++        const invH = bounds.height > 1e-8 ? (1 / bounds.height) : 0;
++        for (let i = 0; i < this.polygonPoints.length; i++) {
++            const pt = this.polygonPoints[i];
++            const nx = (pt.x - bounds.minX) * invW;
++            const ny = (pt.y - bounds.minY) * invH;
++            const px = nx * (texW - 1);
++            const py = ny * (texH - 1);
++            if (i === 0) ctx.moveTo(px, py);
++            else ctx.lineTo(px, py);
++        }
++        ctx.closePath();
++        ctx.fill();
++
++        const nextTexture = PIXI.Texture.from(canvas);
++        if (this._triggerPickTexture && this._triggerPickTexture !== nextTextur
+e) {                                                                            +            this._triggerPickTexture.destroy(true);
++        }
++        this._triggerPickTexture = nextTexture;
++        this._triggerPickCanvas = canvas;
++        if (this.pixiSprite) {
++            this.pixiSprite.texture = nextTexture;
++            this.pixiSprite.anchor.set(0.5, 0.5);
++        }
++    }
++
++    removeFromGame() {
++        if (this._triggerOutlineGraphics && this._triggerOutlineGraphics.parent
+) {                                                                             +            this._triggerOutlineGraphics.parent.removeChild(this._triggerOutlin
+eGraphics);                                                                     +        }
++        if (this._triggerOutlineGraphics && typeof this._triggerOutlineGraphics
+.destroy === "function") {                                                      +            this._triggerOutlineGraphics.destroy({ children: true, texture: fal
+se, baseTexture: false });                                                      +        }
++        this._triggerOutlineGraphics = null;
++        if (this._triggerVertexGraphics && this._triggerVertexGraphics.parent) 
+{                                                                               +            this._triggerVertexGraphics.parent.removeChild(this._triggerVertexG
+raphics);                                                                       +        }
++        if (this._triggerVertexGraphics && typeof this._triggerVertexGraphics.d
+estroy === "function") {                                                        +            this._triggerVertexGraphics.destroy({ children: true, texture: fals
+e, baseTexture: false });                                                       +        }
++        this._triggerVertexGraphics = null;
++        if (this._triggerPickTexture && typeof this._triggerPickTexture.destroy
+ === "function") {                                                              +            this._triggerPickTexture.destroy(true);
++        }
++        this._triggerPickTexture = null;
++        this._triggerPickCanvas = null;
++        super.removeFromGame();
++    }
++
++    saveJson() {
++        const data = super.saveJson();
++        data.type = "triggerArea";
++        data.points = Array.isArray(this.polygonPoints)
++            ? this.polygonPoints.map((p) => ({ x: Number(p.x), y: Number(p.y) }
+))                                                                              +            : [];
++        if (typeof this.playerEnters === "string" && this.playerEnters.trim().l
+ength > 0) {                                                                    +            data.playerEnters = this.playerEnters.trim();
++        }
++        if (typeof this.playerExits === "string" && this.playerExits.trim().len
+gth > 0) {                                                                      +            data.playerExits = this.playerExits.trim();
++        }
++        return data;
++    }
++
++    // Trigger areas are intentionally non-flammable.
++    ignite() {
++        this.isOnFire = false;
++        this.fireDuration = 0;
++        if (this.fireSprite && this.fireSprite.parent) {
++            this.fireSprite.parent.removeChild(this.fireSprite);
++            this.fireSprite = null;
++        }
++    }
++}
++
++function debugDumpTriggerAreas(mapRef = null) {
++    const resolvedMap = mapRef || ((typeof globalThis !== "undefined" && global
+This.map) ? globalThis.map : null);                                             +    const triggerSet = new Set();
++    const gameObjects = (resolvedMap && typeof resolvedMap.getGameObjects === "
+function")                                                                      +        ? resolvedMap.getGameObjects({ refresh: true })
++        : null;
++    if (Array.isArray(gameObjects)) {
++        for (let i = 0; i < gameObjects.length; i++) {
++            const obj = gameObjects[i];
++            if (obj && obj.type === "triggerArea" && !obj.gone) {
++                triggerSet.add(obj);
++            }
++        }
++    }
++    if (resolvedMap && Array.isArray(resolvedMap.objects)) {
++        for (let i = 0; i < resolvedMap.objects.length; i++) {
++            const obj = resolvedMap.objects[i];
++            if (obj && obj.type === "triggerArea" && !obj.gone) {
++                triggerSet.add(obj);
++            }
++        }
++    }
++    if (resolvedMap && Array.isArray(resolvedMap.nodes)) {
++        for (let x = 0; x < resolvedMap.nodes.length; x++) {
++            const column = resolvedMap.nodes[x];
++            if (!Array.isArray(column)) continue;
++            for (let y = 0; y < column.length; y++) {
++                const node = column[y];
++                if (!node || !Array.isArray(node.objects)) continue;
++                for (let i = 0; i < node.objects.length; i++) {
++                    const obj = node.objects[i];
++                    if (obj && obj.type === "triggerArea" && !obj.gone) {
++                        triggerSet.add(obj);
++                    }
++                }
++            }
++        }
++    }
++    const triggers = Array.from(triggerSet);
++    const rows = triggers.map((trigger, index) => {
++        const bounds = (trigger.groundPlaneHitbox && typeof trigger.groundPlane
+Hitbox.getBounds === "function")                                                +            ? trigger.groundPlaneHitbox.getBounds()
++            : null;
++        const texture = trigger._triggerPickTexture || null;
++        const baseTexture = texture && texture.baseTexture ? texture.baseTextur
+e : null;                                                                       +        return {
++            index,
++            scriptingName: (typeof trigger.scriptingName === "string" && trigge
+r.scriptingName.trim().length > 0)                                              +                ? trigger.scriptingName.trim()
++                : "",
++            x: Number.isFinite(trigger.x) ? Number(trigger.x).toFixed(2) : "",
++            y: Number.isFinite(trigger.y) ? Number(trigger.y).toFixed(2) : "",
++            width: Number.isFinite(trigger.width) ? Number(trigger.width).toFix
+ed(2) : "",                                                                     +            height: Number.isFinite(trigger.height) ? Number(trigger.height).to
+Fixed(2) : "",                                                                  +            points: Array.isArray(trigger.polygonPoints) ? trigger.polygonPoint
+s.length : 0,                                                                   +            indexedNodes: Array.isArray(trigger._triggerAreaIndexedNodes) ? tri
+gger._triggerAreaIndexedNodes.length : 0,                                       +            inMapObjects: !!(resolvedMap && Array.isArray(resolvedMap.objects) 
+&& resolvedMap.objects.includes(trigger)),                                      +            bounds: bounds
++                ? `${Number(bounds.x).toFixed(2)},${Number(bounds.y).toFixed(2)
+} ${Number(bounds.width).toFixed(2)}x${Number(bounds.height).toFixed(2)}`       +                : "",
++            hasPickTexture: !!texture,
++            pickTextureSize: baseTexture ? `${baseTexture.width}x${baseTexture.
+height}` : "",                                                                  +            spriteVisible: !!(trigger.pixiSprite && trigger.pixiSprite.visible)
+,                                                                               +            spriteRenderable: !!(trigger.pixiSprite && trigger.pixiSprite.rende
+rable),                                                                         +            playerEnters: typeof trigger.playerEnters === "string" ? trigger.pl
+ayerEnters : "",                                                                +            playerExits: typeof trigger.playerExits === "string" ? trigger.play
+erExits : ""                                                                    +        };
++    });
++
++    console.group(`Trigger areas (${rows.length})`);
++    if (rows.length > 0) {
++        console.table(rows);
++        for (let i = 0; i < triggers.length; i++) {
++            const trigger = triggers[i];
++            console.log(`trigger[${i}]`, {
++                trigger,
++                points: Array.isArray(trigger.polygonPoints)
++                    ? trigger.polygonPoints.map(p => ({ x: Number(p.x), y: Numb
+er(p.y) }))                                                                     +                    : [],
++                indexedNodes: Array.isArray(trigger._triggerAreaIndexedNodes)
++                    ? trigger._triggerAreaIndexedNodes.map(node => ({
++                        xindex: Number(node && node.xindex),
++                        yindex: Number(node && node.yindex)
++                    }))
++                    : []
++            });
++        }
++    }
++    console.groupEnd();
++    return triggers;
++}
++
+ class Road extends StaticObject {
+     static _geometryCache = new Map();
+     static _textureCache = new Map();
+@@ -3256,6 +4669,8 @@ if (typeof globalThis !== "undefined") {
+     globalThis.StaticObject = StaticObject;
+     globalThis.Tree = Tree;
+     globalThis.Playground = Playground;
++    globalThis.TriggerArea = TriggerArea;
++    globalThis.debugDumpTriggerAreas = debugDumpTriggerAreas;
+     globalThis.Road = Road;
+     globalThis.getMountedWallFaceCentersForObject = getMountedWallFaceCentersFo
+rObject;                                                                         }

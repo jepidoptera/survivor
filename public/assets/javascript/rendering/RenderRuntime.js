@@ -1,9 +1,12 @@
 (function attachRenderRuntime(global) {
     const viewportNodeSampleEpsilon = 1e-4;
+    const CURSOR_NO_PATH_BLINK_TINT = 0xff3b30;
+    const CURSOR_DEFAULT_TINT = 0xffffff;
     let uiArrowCursorElement = null;
     let uiGameCursorOverlayElement = null;
     let visibilityMaskEnabled = false;
     let visibilityMaskSources = [];
+    let cursorNoPathBlinkTimeoutId = null;
 
     function normalizeLegacyAssetPath(path) {
         if (typeof path !== "string" || path.length === 0) return path;
@@ -96,33 +99,41 @@
     }
 
     function screenToWorld(screenX, screenY) {
-        const camera = viewport;
-        let worldX = screenX / viewscale + camera.x;
-        let worldY = screenY / (viewscale * xyratio) + camera.y;
-        if (map && typeof map.wrapWorldX === "function" && Number.isFinite(worldX)) {
-            worldX = map.wrapWorldX(worldX);
+        const camera = (typeof viewport !== "undefined") ? viewport : null;
+        if (!camera) return { x: screenX, y: screenY };
+        const vs = (typeof viewscale !== "undefined" && viewscale) ? viewscale : 1;
+        const xyr = (typeof xyratio !== "undefined" && xyratio) ? xyratio : 1;
+        const mapRef = (typeof map !== "undefined") ? map : null;
+        const wizardRef = (typeof wizard !== "undefined") ? wizard : null;
+        const triggerAreaDetached = !!(global && global.triggerAreaCameraDetachActive === true);
+        let worldX = screenX / vs + camera.x;
+        let worldY = screenY / (vs * xyr) + camera.y;
+        if (mapRef && typeof mapRef.wrapWorldX === "function" && Number.isFinite(worldX)) {
+            worldX = mapRef.wrapWorldX(worldX);
         }
-        if (map && typeof map.wrapWorldY === "function" && Number.isFinite(worldY)) {
-            worldY = map.wrapWorldY(worldY);
+        if (mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(worldY)) {
+            worldY = mapRef.wrapWorldY(worldY);
         }
         if (
-            wizard &&
-            map &&
-            typeof map.shortestDeltaX === "function" &&
-            typeof map.shortestDeltaY === "function" &&
-            Number.isFinite(wizard.x) &&
-            Number.isFinite(wizard.y) &&
+            !triggerAreaDetached &&
+            wizardRef &&
+            mapRef &&
+            typeof mapRef.shortestDeltaX === "function" &&
+            typeof mapRef.shortestDeltaY === "function" &&
+            Number.isFinite(wizardRef.x) &&
+            Number.isFinite(wizardRef.y) &&
             Number.isFinite(worldX) &&
             Number.isFinite(worldY)
         ) {
-            worldX = wizard.x + map.shortestDeltaX(wizard.x, worldX);
-            worldY = wizard.y + map.shortestDeltaY(wizard.y, worldY);
+            worldX = wizardRef.x + mapRef.shortestDeltaX(wizardRef.x, worldX);
+            worldY = wizardRef.y + mapRef.shortestDeltaY(wizardRef.y, worldY);
         }
         return { x: worldX, y: worldY };
     }
 
     function centerViewport(obj, margin, smoothing = null) {
         if (!obj || !viewport) return;
+        if (global && global.triggerAreaCameraDetachActive === true) return;
         const centerX = viewport.x + viewport.width / 2;
         const centerY = viewport.y + viewport.height / 2;
         const objIndexX = obj.x;
@@ -386,6 +397,27 @@
         markAnimalVisibilityCachesDirty();
     }
 
+    function syncAnimalActivationForCurrentTile(animal) {
+        if (!animal || animal.gone) return;
+        const tileKey = animal._visibilityTileKey;
+        if (!tileKey) return;
+
+        if (animalVisibilityState.activationTileKeys.has(tileKey)) {
+            if (!animalVisibilityState.activeAnimals.has(animal)) {
+                animalVisibilityState.activeAnimals.add(animal);
+                animalVisibilityState.inactiveAnimals.delete(animal);
+                markAnimalVisibilityCachesDirty();
+            }
+            return;
+        }
+
+        if (!animalVisibilityState.retentionTileKeys.has(tileKey) && animalVisibilityState.activeAnimals.has(animal)) {
+            animalVisibilityState.activeAnimals.delete(animal);
+            animalVisibilityState.inactiveAnimals.add(animal);
+            markAnimalVisibilityCachesDirty();
+        }
+    }
+
     function buildVisibleTileKeySet(mapRef, viewportRef, paddingTiles = 0) {
         const out = new Set();
         if (!mapRef || !viewportRef) return out;
@@ -418,7 +450,7 @@
             const bucket = animalVisibilityState.tileToAnimals.get(key);
             if (!bucket || bucket.size === 0) return;
             bucket.forEach(animal => {
-                if (!animal || animal.gone || animal.dead) return;
+                if (!animal || animal.gone) return;
                 if (!animalVisibilityState.activeAnimals.has(animal)) {
                     animalVisibilityState.activeAnimals.add(animal);
                     animalVisibilityState.inactiveAnimals.delete(animal);
@@ -431,7 +463,7 @@
     function sweepAnimalsOutsideRetention() {
         let changed = false;
         animalVisibilityState.activeAnimals.forEach(animal => {
-            if (!animal || animal.gone || animal.dead) {
+            if (!animal || animal.gone) {
                 animalVisibilityState.activeAnimals.delete(animal);
                 animalVisibilityState.inactiveAnimals.delete(animal);
                 changed = true;
@@ -472,14 +504,14 @@
         const seenThisSync = new Set();
         for (let i = 0; i < animalsRef.length; i++) {
             const animal = animalsRef[i];
-            if (!animal || animal.gone || animal.dead) continue;
+            if (!animal || animal.gone) continue;
             seenThisSync.add(animal);
             ensureAnimalTracked(animal, mapRef);
             updateAnimalTileIndex(animal, mapRef);
         }
 
         animalVisibilityState.knownAnimals.forEach(animal => {
-            if (!seenThisSync.has(animal) || !animal || animal.gone || animal.dead) {
+            if (!seenThisSync.has(animal) || !animal || animal.gone) {
                 unregisterAnimalFromVisibility(animal);
             }
         });
@@ -515,11 +547,12 @@
     }
 
     function noteAnimalMoved(animal, mapRef = null) {
-        if (!animal || animal.gone || animal.dead) return;
+        if (!animal || animal.gone) return;
         const effectiveMap = mapRef || animalVisibilityState.map || (typeof map !== "undefined" ? map : null);
         if (!effectiveMap) return;
         ensureAnimalTracked(animal, effectiveMap);
         updateAnimalTileIndex(animal, effectiveMap);
+        syncAnimalActivationForCurrentTile(animal);
     }
 
     function getActiveAnimals() {
@@ -655,6 +688,7 @@
         if (overMenuUi) {
             if (cursorSprite) cursorSprite.visible = false;
             if (spellCursor) spellCursor.visible = false;
+            if (spellCursorGlow) spellCursorGlow.visible = false;
             setUiGameCursorOverlayVisible(false);
             setUiArrowCursorVisible(true, hoverClientX, hoverClientY);
             return;
@@ -662,12 +696,14 @@
         setUiArrowCursorVisible(false);
 
         if (!Number.isFinite(mousePos.screenX) || !Number.isFinite(mousePos.screenY) || !wizard) {
+            if (spellCursorGlow) spellCursorGlow.visible = false;
             setUiGameCursorOverlayVisible(false);
             return;
         }
 
         const activeCursor = spellCursor || cursorSprite;
         if (!activeCursor) {
+            if (spellCursorGlow) spellCursorGlow.visible = false;
             setUiGameCursorOverlayVisible(false);
             return;
         }
@@ -683,6 +719,13 @@
         if (placingObject) {
             rotation = 0;
             activeCursor.rotation = rotation;
+            if (spellCursorGlow) {
+                const spaceHeld = !!(typeof keysPressed !== "undefined" && keysPressed[" "]);
+                spellCursorGlow.visible = spaceHeld && activeCursor.visible;
+                spellCursorGlow.x = activeCursor.x;
+                spellCursorGlow.y = activeCursor.y;
+                spellCursorGlow.rotation = rotation;
+            }
             setUiGameCursorOverlayVisible(overMinimap, hoverClientX, hoverClientY, rotation);
             return;
         }
@@ -692,7 +735,43 @@
         const dy = wizardScreenCoors.y - mousePos.screenY;
         rotation = Math.atan2(dy, dx) + Math.PI * 1.5;
         activeCursor.rotation = rotation;
+
+        // Sync glow to cursor position/rotation; show only when spacebar held
+        if (spellCursorGlow) {
+            const spaceHeld = !!(typeof keysPressed !== "undefined" && keysPressed[" "]);
+            spellCursorGlow.visible = spaceHeld && activeCursor.visible;
+            spellCursorGlow.x = activeCursor.x;
+            spellCursorGlow.y = activeCursor.y;
+            spellCursorGlow.rotation = rotation;
+        }
+
         setUiGameCursorOverlayVisible(overMinimap, hoverClientX, hoverClientY, rotation);
+    }
+
+    function blinkCursorNoPath(durationMs = 500) {
+        const blinkDurationMs = Math.max(1, Math.floor(Number(durationMs) || 500));
+
+        if (cursorNoPathBlinkTimeoutId) {
+            clearTimeout(cursorNoPathBlinkTimeoutId);
+            cursorNoPathBlinkTimeoutId = null;
+        }
+
+        if (cursorSprite && Number.isFinite(cursorSprite.tint)) {
+            cursorSprite.tint = CURSOR_NO_PATH_BLINK_TINT;
+        }
+        if (spellCursor && Number.isFinite(spellCursor.tint)) {
+            spellCursor.tint = CURSOR_NO_PATH_BLINK_TINT;
+        }
+
+        cursorNoPathBlinkTimeoutId = setTimeout(() => {
+            if (cursorSprite && Number.isFinite(cursorSprite.tint)) {
+                cursorSprite.tint = CURSOR_DEFAULT_TINT;
+            }
+            if (spellCursor && Number.isFinite(spellCursor.tint)) {
+                spellCursor.tint = CURSOR_DEFAULT_TINT;
+            }
+            cursorNoPathBlinkTimeoutId = null;
+        }, blinkDurationMs);
     }
 
     function distance(x1, y1, x2, y2) {
@@ -737,6 +816,7 @@
     global.distance = distance;
     global.withinRadius = withinRadius;
     global.message = message;
+    global.blinkCursorNoPath = blinkCursorNoPath;
     global.setVisibilityMaskEnabled = setVisibilityMaskEnabled;
     global.setVisibilityMaskSources = setVisibilityMaskSources;
     global.RenderRuntime = renderRuntimeApi;

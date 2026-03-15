@@ -18,6 +18,7 @@ class Character {
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
+        this._scriptFrozenUntilMs = 0;
 
         // Try to get node - if coords look like array indices (integers in map range), use them directly
         let node;
@@ -47,6 +48,31 @@ class Character {
         // Create hitboxes
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+    }
+
+    get onfire() {
+        return !!this.isOnFire;
+    }
+
+    set onfire(value) {
+        this.isOnFire = !!value;
+        if (this.isOnFire && !Number.isFinite(this.fireDuration)) {
+            this.fireDuration = Number.POSITIVE_INFINITY;
+        }
+        if (!this.isOnFire) {
+            this.fireDamageScale = 1;
+            if (this.fireAnimationInterval) {
+                clearInterval(this.fireAnimationInterval);
+                this.fireAnimationInterval = null;
+            }
+            if (this.fireSprite && this.fireSprite.parent) {
+                this.fireSprite.parent.removeChild(this.fireSprite);
+            }
+            if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
+                this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+            }
+            this.fireSprite = null;
+        }
     }
 
     /**
@@ -79,15 +105,53 @@ class Character {
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
-    freeze() {
+    freeze(seconds = null) {
         clearTimeout(this.moveTimeout);
         this.moveTimeout = null;
+        this.moving = false;
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        if (typeof this.resetAttackState === "function") {
+            this.resetAttackState();
+        }
+        this.attackTarget = null;
+        this.attacking = false;
+        this.spriteDirectionLock = null;
+        if (typeof this.updateHitboxes === "function") {
+            this.updateHitboxes();
+        }
+
+        const durationSec = Number(seconds);
+        if (!Number.isFinite(durationSec)) return;
+        if (durationSec <= 0) {
+            this._scriptFrozenUntilMs = 0;
+            return;
+        }
+        const nowMs = Date.now();
+        const existingUntilMs = Number(this._scriptFrozenUntilMs);
+        const nextUntilMs = nowMs + (durationSec * 1000);
+        this._scriptFrozenUntilMs = Number.isFinite(existingUntilMs)
+            ? Math.max(existingUntilMs, nextUntilMs)
+            : nextUntilMs;
+    }
+    isScriptFrozen(nowMs = null) {
+        const frozenUntilMs = Number(this._scriptFrozenUntilMs);
+        if (!Number.isFinite(frozenUntilMs) || frozenUntilMs <= 0) return false;
+        const now = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+        if (now < frozenUntilMs) return true;
+        this._scriptFrozenUntilMs = 0;
+        return false;
     }
     removeFromGame() {
         this.gone = true;
         this.destination = null;
         this.path = [];
         this.nextNode = null;
+        this._scriptFrozenUntilMs = 0;
         this.freeze();
 
         if (this.attackTimeout) {
@@ -138,6 +202,13 @@ class Character {
             this.shadowGraphics.destroy();
         }
         this.shadowGraphics = null;
+        if (this._healthBarGraphics && this._healthBarGraphics.parent) {
+            this._healthBarGraphics.parent.removeChild(this._healthBarGraphics);
+        }
+        if (this._healthBarGraphics && typeof this._healthBarGraphics.destroy === "function") {
+            this._healthBarGraphics.destroy();
+        }
+        this._healthBarGraphics = null;
         if (Array.isArray(animals)) {
             const idx = animals.indexOf(this);
             if (idx >= 0) animals.splice(idx, 1);
@@ -180,6 +251,10 @@ class Character {
         }
         
         if (paused) {
+            return;
+        }
+        if (this.isScriptFrozen()) {
+            this.moving = false;
             return;
         }
         
@@ -264,9 +339,10 @@ class Character {
         // Update hitboxes after movement
         this.updateHitboxes();
     }
-    ignite(duration, damageScale = null) {
+    ignite(duration = 8, damageScale = null) {
         this.isOnFire = true;
-        this.fireDuration = duration * frameRate; 
+        const durationSec = Number(duration);
+        this.fireDuration = (Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 8) * frameRate;
         if (Number.isFinite(damageScale)) {
             this.fireDamageScale = Math.max(0, damageScale);
         } else {
@@ -284,8 +360,8 @@ class Character {
         if (this.fireDuration <= 0) {
             this.isOnFire = false;
             this.fireDamageScale = 1;
-            if (this.fireSprite) {
-                characterLayer.removeChild(this.fireSprite);
+            if (this.fireSprite && this.fireSprite.parent) {
+                this.fireSprite.parent.removeChild(this.fireSprite);
                 this.fireSprite = null;
             }
             if (this.fireAnimationInterval) {
@@ -298,12 +374,30 @@ class Character {
             this.die();
         } else {
             const damageScale = Number.isFinite(this.fireDamageScale) ? this.fireDamageScale : 1;
-            this.hp -= 0.05 * Math.max(0, damageScale); // Fire damage over time
+            const burnDamage = 0.05 * Math.max(0, damageScale);
+            if (typeof this.takeDamage === "function") {
+                this.takeDamage(burnDamage);
+            } else {
+                this.hp -= burnDamage; // Fire damage over time
+            }
         }
+    }
+    triggerDieScriptEvent(context = null) {
+        if (this._scriptDieEventFired) return false;
+        this._scriptDieEventFired = true;
+        const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
+            ? Scripting
+            : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
+        if (!scriptingApi || typeof scriptingApi.fireObjectScriptEvent !== "function") return false;
+        const wizardRef = (typeof wizard !== "undefined" && wizard)
+            ? wizard
+            : ((typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null);
+        return !!scriptingApi.fireObjectScriptEvent(this, "die", wizardRef, context);
     }
     die() {
         this.dead = true;
         this.rotation = 180;
+        this.triggerDieScriptEvent({ cause: "die" });
     }
 
     getInterpolatedPosition(alpha = null) {
@@ -341,4 +435,3 @@ class Character {
         return this.getInterpolatedPosition().z;
     }
 }
-

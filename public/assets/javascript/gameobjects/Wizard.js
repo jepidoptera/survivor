@@ -2,7 +2,7 @@ class Wizard extends Character {
     constructor(location, map) {
         super('human', location, 1, map);
         this.useAStarPathfinding = true;
-        this.speed = 5;
+        this.speed = 2.5;
         this.roadSpeedMultiplier = 1.3;
         this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
         this.frameRate = 60;
@@ -22,7 +22,7 @@ class Wizard extends Character {
         this.groundRadius = 0.3;
         this.visualRadius = 0.5; // Hitbox radius in hex units
         this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
-        this.animationSpeedMultiplier = 0.95; // Multiplier for animation speed (lower is faster)
+        this.animationSpeedMultiplier = 0.475; // Animation speed multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
         this.maxTurnSpeedDegPerSec = 180;
         this.zeroTurnDistanceUnits = wizardMouseTurnZeroDistanceUnits;
         this.fullTurnSpeedDistanceUnits = wizardMouseTurnFullDistanceUnits;
@@ -422,14 +422,11 @@ class Wizard extends Character {
         const isDoorPlacedObjectFn = (scriptingApi && typeof scriptingApi.isDoorPlacedObject === "function")
             ? scriptingApi.isDoorPlacedObject
             : null;
+        const isDoorLockedFn = (scriptingApi && typeof scriptingApi.isDoorLocked === "function")
+            ? scriptingApi.isDoorLocked
+            : null;
         const isPointInDoorHitboxFn = (scriptingApi && typeof scriptingApi.isPointInDoorHitbox === "function")
             ? scriptingApi.isPointInDoorHitbox
-            : null;
-        const processDoorTraversalEventsFn = (scriptingApi && typeof scriptingApi.processDoorTraversalEvents === "function")
-            ? scriptingApi.processDoorTraversalEvents
-            : null;
-        const processObjectTouchEventsFn = (scriptingApi && typeof scriptingApi.processObjectTouchEvents === "function")
-            ? scriptingApi.processObjectTouchEvents
             : null;
         
         // Collect nearby objects once to avoid repeated grid traversal
@@ -439,17 +436,12 @@ class Wizard extends Character {
         const nearbyDoors = Array.isArray(this._movementNearbyDoors) ? this._movementNearbyDoors : [];
         nearbyDoors.length = 0;
         this._movementNearbyDoors = nearbyDoors;
-        const nearbyScriptTouchables = Array.isArray(this._movementNearbyScriptTouchables) ? this._movementNearbyScriptTouchables : [];
-        nearbyScriptTouchables.length = 0;
-        this._movementNearbyScriptTouchables = nearbyScriptTouchables;
-        const nearbyScriptTouchableSet = (this._movementNearbyScriptTouchableSet instanceof Set) ? this._movementNearbyScriptTouchableSet : new Set();
-        nearbyScriptTouchableSet.clear();
-        this._movementNearbyScriptTouchableSet = nearbyScriptTouchableSet;
-        const nearbyScriptTouchableEntryByObject = (this._movementNearbyScriptTouchableEntryByObject instanceof Map)
-            ? this._movementNearbyScriptTouchableEntryByObject
-            : new Map();
-        nearbyScriptTouchableEntryByObject.clear();
-        this._movementNearbyScriptTouchableEntryByObject = nearbyScriptTouchableEntryByObject;
+        // Track objects with actual physics contact this frame so spells.js can forceTouch them
+        const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
+            ? this._movementForceTouchedObjects
+            : new Set();
+        forceTouchedObjects.clear();
+        this._movementForceTouchedObjects = forceTouchedObjects;
         const minNode = this.map.worldToNode(newX - 2, newY - 2);
         const maxNode = this.map.worldToNode(newX + 2, newY + 2);
         
@@ -469,21 +461,20 @@ class Wizard extends Character {
                         if (doorCandidate) {
                             const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
                             if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
-                                nearbyDoors.push({ obj, hitbox: doorHitbox });
+                                const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
+                                nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
                             }
                         }
-                        const touchHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
-                        if (
-                            touchHitbox &&
-                            (typeof touchHitbox.containsPoint === "function" || typeof touchHitbox.intersects === "function") &&
-                            !nearbyScriptTouchableSet.has(obj)
-                        ) {
-                            nearbyScriptTouchableSet.add(obj);
-                            const entry = { obj, hitbox: touchHitbox, forceTouch: false };
-                            nearbyScriptTouchables.push(entry);
-                            nearbyScriptTouchableEntryByObject.set(obj, entry);
-                        }
                         if (obj.groundPlaneHitbox && !obj.isPassable) {
+                            // Skip objects the wizard is jumping over: wizard's z must be
+                            // strictly above the object's top z (bottomZ + height).
+                            const wizardZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+                            if (wizardZ > 0) {
+                                const objBottomZ = Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0;
+                                const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
+                                const objTopZ = objBottomZ + objHeight;
+                                if (objTopZ > 0 && wizardZ >= objTopZ) continue;
+                            }
                             nearbyObjects.push(obj);
                         }
                     }
@@ -493,7 +484,9 @@ class Wizard extends Character {
 
         const isInOrTouchingNearbyDoor = (px, py, radius = 0) => {
             for (let i = 0; i < nearbyDoors.length; i++) {
-                const hb = nearbyDoors[i] && nearbyDoors[i].hitbox;
+                const entry = nearbyDoors[i];
+                if (!entry || !entry.canTraverse) continue;
+                const hb = entry.hitbox;
                 if (isPointInDoorHitboxFn && isPointInDoorHitboxFn(hb, px, py, radius)) {
                     return true;
                 }
@@ -515,14 +508,6 @@ class Wizard extends Character {
             this.y = wrappedY;
             this.updateHitboxes();
             centerViewport(this, 0);
-            if (this === wizard) {
-                if (processDoorTraversalEventsFn) {
-                    processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
-                }
-                if (processObjectTouchEventsFn) {
-                    processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
-                }
-            }
             return true;
         }
         
@@ -554,12 +539,7 @@ class Wizard extends Character {
                     totalPushY += collision.pushY;
                     const pushLen = Math.hypot(collision.pushX, collision.pushY);
                     maxPushLen = Math.max(maxPushLen, pushLen);
-                    if (this === wizard) {
-                        const touchEntry = nearbyScriptTouchableEntryByObject.get(obj);
-                        if (touchEntry) {
-                            touchEntry.forceTouch = true;
-                        }
-                    }
+                    if (this === wizard) forceTouchedObjects.add(obj);
                 }
             }
             
@@ -574,14 +554,6 @@ class Wizard extends Character {
                 this.y = wrappedY;
                 this.updateHitboxes();
                 centerViewport(this, 0);
-                if (this === wizard) {
-                    if (processDoorTraversalEventsFn) {
-                        processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
-                    }
-                    if (processObjectTouchEventsFn) {
-                        processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
-                    }
-                }
                 return true;
             }
             
@@ -652,12 +624,7 @@ class Wizard extends Character {
                 totalPushY += collision.pushY;
                 const pushLen = Math.hypot(collision.pushX, collision.pushY);
                 maxPushLen = Math.max(maxPushLen, pushLen);
-                if (this === wizard) {
-                    const touchEntry = nearbyScriptTouchableEntryByObject.get(obj);
-                    if (touchEntry) {
-                        touchEntry.forceTouch = true;
-                    }
-                }
+                if (this === wizard) forceTouchedObjects.add(obj);
             }
         }
         
@@ -684,14 +651,6 @@ class Wizard extends Character {
             this.y = wrappedY;
             this.updateHitboxes();
             centerViewport(this, 0);
-            if (this === wizard) {
-                if (processDoorTraversalEventsFn) {
-                    processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
-                }
-                if (processObjectTouchEventsFn) {
-                    processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
-                }
-            }
             return true;
         }
         
@@ -705,14 +664,6 @@ class Wizard extends Character {
         this.y = wrappedY;
         this.updateHitboxes();
         centerViewport(this, 0);
-        if (this === wizard) {
-            if (processDoorTraversalEventsFn) {
-                processDoorTraversalEventsFn(this, moveStartX, moveStartY, this.x, this.y, nearbyDoors, wizardRadius);
-            }
-            if (processObjectTouchEventsFn) {
-                processObjectTouchEventsFn(this, nearbyScriptTouchables, wizardRadius);
-            }
-        }
         return true;
     }
     
@@ -904,6 +855,7 @@ class Wizard extends Character {
             selectedPlaceableAnchorXByTexture: this.selectedPlaceableAnchorXByTexture,
             selectedPlaceableAnchorYByTexture: this.selectedPlaceableAnchorYByTexture,
             selectedPowerupPlacementScale: this.selectedPowerupPlacementScale,
+            selectedPowerupFileName: this.selectedPowerupFileName,
             selectedEditorCategory: this.selectedEditorCategory,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
@@ -914,6 +866,9 @@ class Wizard extends Character {
             showPerfReadout: !!showPerfReadout,
             spells: this.spells,
             inventory: this.inventory,
+            scriptingName: (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0)
+                ? this.scriptingName.trim()
+                : "",
             viewport: {
                 x: viewportX,
                 y: viewportY
@@ -956,6 +911,7 @@ class Wizard extends Character {
         if (Number.isFinite(data.magicRegenPerSecond)) this.magicRegenPerSecond = Math.max(0, data.magicRegenPerSecond);
         if (data.food !== undefined) this.food = data.food;
         if (data.currentSpell !== undefined) this.currentSpell = data.currentSpell;
+        if (typeof data.scriptingName === "string") this.scriptingName = data.scriptingName.trim();
         if (Array.isArray(data.activeAuras)) {
             this.activeAuras = data.activeAuras.slice();
             this.activeAura = this.activeAuras.length > 0 ? this.activeAuras[0] : null;
@@ -981,6 +937,7 @@ class Wizard extends Character {
         if (data.selectedPlaceableAnchorXByTexture !== undefined) this.selectedPlaceableAnchorXByTexture = normalizeTextureKeyMap(data.selectedPlaceableAnchorXByTexture);
         if (data.selectedPlaceableAnchorYByTexture !== undefined) this.selectedPlaceableAnchorYByTexture = normalizeTextureKeyMap(data.selectedPlaceableAnchorYByTexture);
         if (data.selectedPowerupPlacementScale !== undefined) this.selectedPowerupPlacementScale = data.selectedPowerupPlacementScale;
+        if (data.selectedPowerupFileName !== undefined) this.selectedPowerupFileName = data.selectedPowerupFileName;
         if (data.selectedEditorCategory !== undefined) this.selectedEditorCategory = data.selectedEditorCategory;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
