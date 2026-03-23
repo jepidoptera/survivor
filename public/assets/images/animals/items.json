@@ -44,6 +44,14 @@
       "frameCount": { "x": 2, "y": 2 }
     },
     {
+      "id": "fragglegod",
+      "file": "fragglegod.png",
+      "texturePath": "/assets/images/animals/fragglegod.png",
+      "width": 2.03,
+      "height": 1.45,
+      "frameCount": { "x": 2, "y": 2 }
+    },
+    {
       "id": "yeti",
       "file": "yeti.png",
       "texturePath": "/assets/images/animals/yeti.png",
