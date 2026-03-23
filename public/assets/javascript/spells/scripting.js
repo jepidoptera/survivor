@@ -38,67 +38,143 @@
         selectedIndex: 0,
         items: []
     };
-    const SCRIPTING_API_SCHEMA = Object.freeze({
-        events: Object.freeze([
-            Object.freeze({ name: "playerEnters", description: "fires when player crosses the door one way", appliesTo: "doors, trigger areas" }),
-            Object.freeze({ name: "playerExits", description: "fires when player crosses the opposite way", appliesTo: "doors, trigger areas" }),
-            Object.freeze({ name: "playerTouches", description: "fires once per contact", appliesTo: "objects, doors, trigger areas" }),
-            Object.freeze({ name: "playerUntouches", description: "fires when contact is broken", appliesTo: "objects, doors, trigger areas" }),
-            Object.freeze({ name: "die", description: "fires once when the scripted target dies", appliesTo: "animals" })
-        ]),
-        globalAssignments: Object.freeze([
-            Object.freeze({ name: "mazeMode", syntax: "mazeMode=true", description: "toggles maze mode" })
-        ]),
-        playerAssignments: Object.freeze([
-            Object.freeze({ name: "speed", syntax: "player.speed=3", description: "set player movement speed" }),
-            Object.freeze({ name: "magicRegenPerSecond", syntax: "player.magicRegenPerSecond=12", description: "set player magic recharge per second" }),
-            Object.freeze({ name: "magicRechargeRate", syntax: "player.magicRechargeRate=12", description: "alias for magicRegenPerSecond" })
-        ]),
-        globalCommands: Object.freeze([
-            Object.freeze({ name: "transport", syntax: "transport(x, y)", description: "teleport the player" }),
-            Object.freeze({ name: "healPlayer", syntax: "healPlayer(hp)", description: "restore player HP" }),
-            Object.freeze({ name: "hurtPlayer", syntax: "hurtPlayer(hp)", description: "damage the player" }),
-            Object.freeze({ name: "gainMagic", syntax: "gainMagic(amount)", description: "restore player magic" }),
-            Object.freeze({ name: "drainMagic", syntax: "drainMagic(amount)", description: "drain player magic" }),
-            Object.freeze({ name: "addSpell", syntax: "addSpell(name)", description: "unlock a spell" }),
-            Object.freeze({ name: "spawnCreature", syntax: "spawnCreature(type=\"bear\", size=1, x=2, y=-1)", description: "spawn a creature relative to the scripted object" }),
-            Object.freeze({ name: "pause", syntax: "pause(seconds)", description: "wait before running the next script statement" }),
-            Object.freeze({ name: "scrollMessage", syntax: "scrollMessage(text)", description: "show a scroll popup with an ok button" }),
-            Object.freeze({ name: "savegame", syntax: "savegame(name)", description: "save the game to localStorage" })
-        ]),
-        targetMembers: Object.freeze({
-            common: Object.freeze([
-                Object.freeze({ name: "activate", kind: "method", syntax: "this.activate()", description: "re-enable script events" }),
-                Object.freeze({ name: "brightness", kind: "property", syntax: "this.brightness=100", description: "set brightness from -100 to 100" }),
-                Object.freeze({ name: "deactivate", kind: "method", syntax: "this.deactivate()", description: "disable further script events" }),
-                Object.freeze({ name: "delete", kind: "method", syntax: "this.delete()", description: "remove the target object" }),
-                Object.freeze({ name: "fall", kind: "method", syntax: "this.fall(direction=\"away\", targetName=\"tree1\")", description: "make a tree or door fall toward or away from a named object" }),
-                Object.freeze({ name: "height", kind: "property", syntax: "this.height=2", description: "set object or wall-section height" }),
-                Object.freeze({ name: "hp", kind: "property", syntax: "this.hp=12", description: "set current HP" }),
-                Object.freeze({ name: "isOnFire", kind: "property", syntax: "this.isOnFire=true", description: "alias for onfire" }),
-                Object.freeze({ name: "maxHp", kind: "property", syntax: "this.maxHp=20", description: "set max HP" }),
-                Object.freeze({ name: "maxHP", kind: "property", syntax: "this.maxHP=20", description: "alias for maxHp" }),
-                Object.freeze({ name: "message", kind: "method", syntax: "this.message(text=\"Hello\", x=0, y=-1)", description: "show hovering text; empty text clears messages" }),
-                Object.freeze({ name: "onfire", kind: "property", syntax: "this.onfire=true", description: "ignite or extinguish the object" }),
-                Object.freeze({ name: "sink", kind: "method", syntax: "this.sink(seconds)", description: "sink the object into the ground over time" }),
-                Object.freeze({ name: "size", kind: "property", syntax: "this.size=2", description: "resize the object" }),
-                Object.freeze({ name: "thickness", kind: "property", syntax: "this.thickness=0.5", description: "set thickness, especially for wall sections" }),
-                Object.freeze({ name: "tint", kind: "property", syntax: "this.tint=\"#ff8800\"", description: "set tint color" }),
-                Object.freeze({ name: "visible", kind: "property", syntax: "this.visible=false", description: "show or hide the object" })
-            ]),
-            animal: Object.freeze([
-                Object.freeze({ name: "chaseRadius", kind: "property", syntax: "this.chaseRadius=8", description: "set chase radius" }),
-                Object.freeze({ name: "freeze", kind: "method", syntax: "this.freeze(seconds)", description: "pause movement and AI" }),
-                Object.freeze({ name: "retreatThreshold", kind: "property", syntax: "this.retreatThreshold=0.3", description: "set retreat threshold" }),
-                Object.freeze({ name: "runSpeed", kind: "property", syntax: "this.runSpeed=4", description: "set run speed" })
-            ]),
-            door: Object.freeze([
-                Object.freeze({ name: "lock", kind: "method", syntax: "this.lock()", description: "lock the door" })
-            ]),
-            wallSection: Object.freeze([
-                Object.freeze({ name: "crumble", kind: "method", syntax: "this.crumble(x=1, y=0)", description: "break the wall section into fragments" })
-            ])
+    const PLAYER_COMMAND_REGISTRY = Object.freeze([
+        Object.freeze({
+            name: "inventory.set",
+            syntax: "wizard.inventory.set(\"spellCredits\", 3)",
+            description: "set an inventory item quantity",
+            handler(args, context) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                if (!wizardRef || typeof wizardRef.getInventory !== "function") return false;
+                const itemName = String(args[0] || "").trim();
+                if (!itemName.length) return false;
+                const quantity = Number(args[1]);
+                if (!Number.isFinite(quantity)) return false;
+                wizardRef.getInventory().set(itemName, quantity);
+                return true;
+            }
+        }),
+        Object.freeze({
+            name: "inventory.add",
+            syntax: "wizard.inventory.add(\"gold\", 10)",
+            description: "add to an inventory item quantity",
+            handler(args, context) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                if (!wizardRef || typeof wizardRef.getInventory !== "function") return false;
+                const itemName = String(args[0] || "").trim();
+                if (!itemName.length) return false;
+                const quantity = (typeof args[1] === "undefined") ? 1 : Number(args[1]);
+                if (!Number.isFinite(quantity)) return false;
+                wizardRef.getInventory().add(itemName, quantity);
+                return true;
+            }
+        }),
+        Object.freeze({
+            name: "inventory.remove",
+            syntax: "wizard.inventory.remove(\"gold\", 5)",
+            description: "remove from an inventory item quantity if enough are available",
+            handler(args, context) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                if (!wizardRef || typeof wizardRef.getInventory !== "function") return false;
+                const itemName = String(args[0] || "").trim();
+                if (!itemName.length) return false;
+                const quantity = (typeof args[1] === "undefined") ? 1 : Number(args[1]);
+                if (!Number.isFinite(quantity)) return false;
+                return wizardRef.getInventory().remove(itemName, quantity);
+            }
         })
+    ]);
+    const PLAYER_COMMAND_API_ENTRIES = Object.freeze(
+        PLAYER_COMMAND_REGISTRY.map(entry => Object.freeze({
+            name: entry.name,
+            syntax: entry.syntax,
+            description: entry.description
+        }))
+    );
+    const EVENT_API_ENTRIES = Object.freeze([
+        Object.freeze({ name: "playerEnters", description: "fires when player crosses the door one way", appliesTo: "doors, trigger areas" }),
+        Object.freeze({ name: "playerExits", description: "fires when player crosses the opposite way", appliesTo: "doors, trigger areas" }),
+        Object.freeze({ name: "playerTouches", description: "fires once per contact", appliesTo: "objects, doors, trigger areas" }),
+        Object.freeze({ name: "playerUntouches", description: "fires when contact is broken", appliesTo: "objects, doors, trigger areas" }),
+        Object.freeze({ name: "seePlayer", description: "fires once when the animal gains line of sight to the player", appliesTo: "animals" }),
+        Object.freeze({ name: "die", description: "fires once when the scripted target dies", appliesTo: "animals" })
+    ]);
+    const GLOBAL_ASSIGNMENT_REGISTRY = Object.freeze([
+        Object.freeze({ name: "mazeMode", syntax: "mazeMode=true", description: "toggles maze mode" }),
+        Object.freeze({ name: "time.speed", syntax: "time.speed=0.5", description: "set non-wizard simulation speed from 0 to 6; 0 stops and 1 restores normal time" })
+    ]);
+    const PLAYER_ASSIGNMENT_REGISTRY = Object.freeze([
+        Object.freeze({ name: "speed", syntax: "player.speed=3", description: "set player movement speed" }),
+        Object.freeze({ name: "magicRegenPerSecond", syntax: "player.magicRegenPerSecond=12", description: "set player magic recharge per second" }),
+        Object.freeze({ name: "magicRechargeRate", syntax: "player.magicRechargeRate=12", description: "alias for magicRegenPerSecond" })
+    ]);
+    const GLOBAL_COMMAND_REGISTRY = Object.freeze([
+        Object.freeze({ name: "transport", syntax: "transport(x, y)", description: "teleport the player" }),
+        Object.freeze({ name: "healPlayer", syntax: "healPlayer(hp)", description: "restore player HP" }),
+        Object.freeze({ name: "hurtPlayer", syntax: "hurtPlayer(hp)", description: "damage the player" }),
+        Object.freeze({ name: "gainMagic", syntax: "gainMagic(amount)", description: "restore player magic" }),
+        Object.freeze({ name: "drainMagic", syntax: "drainMagic(amount)", description: "drain player magic" }),
+        Object.freeze({ name: "addSpell", syntax: "addSpell(name)", description: "unlock a spell" }),
+        Object.freeze({ name: "trade", syntax: "trade(title=\"merchant\", currency=\"gold\", entries=[{\"type\":\"inventoryItem\",\"id\":\"grenades\",\"buy\":5,\"sell\":3}])", description: "open a trade modal and wait for the player to close it" }),
+        Object.freeze({ name: "spawnCreature", syntax: "spawnCreature(type=\"bear\", size=1, x=2, y=-1)", description: "spawn a creature relative to the scripted object" }),
+        Object.freeze({ name: "camera.zoom", syntax: "camera.zoom(target=1.5, seconds=1)", description: "zoom the camera to a target level over time" }),
+        Object.freeze({ name: "camera.pan", syntax: "camera.pan(x=4, y=-2, target=tree1, seconds=1)", description: "pan the camera relative to the player or a named object" }),
+        Object.freeze({ name: "camera.reset", syntax: "camera.reset(seconds=1)", description: "return the camera to its normal framing" }),
+        Object.freeze({ name: "pause", syntax: "pause(seconds)", description: "wait before running the next script statement" }),
+        Object.freeze({ name: "scrollMessage", syntax: "scrollMessage(text, title=\"chapter 1\")", description: "show a scroll popup with an optional title and ok button" }),
+        Object.freeze({ name: "savegame", syntax: "savegame(name)", description: "save the game to localStorage" }),
+        Object.freeze({ name: "time.stop", syntax: "time.stop()", description: "stop non-wizard simulation time" }),
+        Object.freeze({ name: "time.restore", syntax: "time.restore()", description: "restore non-wizard simulation time to normal speed" })
+    ]);
+    const TARGET_MEMBER_REGISTRY = Object.freeze({
+        common: Object.freeze([
+            Object.freeze({ name: "activate", kind: "method", syntax: "this.activate()", description: "re-enable script events" }),
+            Object.freeze({ name: "brightness", kind: "property", syntax: "this.brightness=100", description: "set brightness from -100 to 100" }),
+            Object.freeze({ name: "deactivate", kind: "method", syntax: "this.deactivate()", description: "disable further script events" }),
+            Object.freeze({ name: "delete", kind: "method", syntax: "this.delete()", description: "remove the target object" }),
+            Object.freeze({ name: "fall", kind: "method", syntax: "this.fall(direction=\"away\", targetName=\"tree1\")", description: "make a tree or door fall toward or away from a named object" }),
+            Object.freeze({ name: "height", kind: "property", syntax: "this.height=2", description: "set object or wall-section height" }),
+            Object.freeze({ name: "hp", kind: "property", syntax: "this.hp=12", description: "set current HP; raises max HP if needed" }),
+            Object.freeze({ name: "isOnFire", kind: "property", syntax: "this.isOnFire=true", description: "alias for onfire" }),
+            Object.freeze({ name: "maxHp", kind: "property", syntax: "this.maxHp=20", description: "set max HP" }),
+            Object.freeze({ name: "maxHP", kind: "property", syntax: "this.maxHP=20", description: "alias for maxHp" }),
+            Object.freeze({ name: "message", kind: "method", syntax: "this.message(text=\"Hello\", x=0, y=-1, color=\"#ffffff\", fontsize=14)", description: "show hovering text; x/y are relative map-unit offsets; empty text clears messages" }),
+            Object.freeze({ name: "onfire", kind: "property", syntax: "this.onfire=true", description: "ignite or extinguish the object" }),
+            Object.freeze({ name: "rise", kind: "method", syntax: "this.rise(seconds)", description: "raise a previously sunk object back up over time" }),
+            Object.freeze({ name: "sink", kind: "method", syntax: "this.sink(seconds)", description: "sink the object into the ground over time" }),
+            Object.freeze({ name: "size", kind: "property", syntax: "this.size=2", description: "resize the object" }),
+            Object.freeze({ name: "thickness", kind: "property", syntax: "this.thickness=0.5", description: "set thickness, especially for wall sections" }),
+            Object.freeze({ name: "tint", kind: "property", syntax: "this.tint=\"#ff8800\"", description: "set tint color" }),
+            Object.freeze({ name: "unFreeze", kind: "method", syntax: "this.unFreeze()", description: "clear a script freeze immediately" }),
+            Object.freeze({ name: "visible", kind: "property", syntax: "this.visible=false", description: "show or hide the object" })
+        ]),
+        animal: Object.freeze([
+            Object.freeze({ name: "chaseRadius", kind: "property", syntax: "this.chaseRadius=8", description: "set chase radius" }),
+            Object.freeze({ name: "freeze", kind: "method", syntax: "this.freeze(seconds?)", description: "pause movement and AI; omit seconds to freeze indefinitely" }),
+            Object.freeze({ name: "maxMp", kind: "property", syntax: "this.maxMp=20", description: "set max MP" }),
+            Object.freeze({ name: "maxMP", kind: "property", syntax: "this.maxMP=20", description: "alias for maxMp" }),
+            Object.freeze({ name: "mp", kind: "property", syntax: "this.mp=12", description: "set current MP; raises max MP if needed" }),
+            Object.freeze({ name: "retreatDuration", kind: "property", syntax: "this.retreatDuration=2", description: "set retreat time in seconds" }),
+            Object.freeze({ name: "retreatThreshold", kind: "property", syntax: "this.retreatThreshold=0.3", description: "set retreat threshold" }),
+            Object.freeze({ name: "runSpeed", kind: "property", syntax: "this.runSpeed=4", description: "set run speed" }),
+            Object.freeze({ name: "tracePath", kind: "method", syntax: "this.tracePath(seconds)", description: "draw a purple trail along the creature's visited nodes" })
+        ]),
+        door: Object.freeze([
+            Object.freeze({ name: "lock", kind: "method", syntax: "this.lock()", description: "lock the door" }),
+            Object.freeze({ name: "unlock", kind: "method", syntax: "this.unlock()", description: "unlock the door" }),
+            Object.freeze({ name: "open", kind: "method", syntax: "this.open()", description: "open the door so all creatures can pass" })
+        ]),
+        wallSection: Object.freeze([
+            Object.freeze({ name: "crumble", kind: "method", syntax: "this.crumble(x=1, y=0)", description: "break the wall section into fragments" })
+        ])
+    });
+    const SCRIPTING_API_SCHEMA = Object.freeze({
+        events: EVENT_API_ENTRIES,
+        globalAssignments: GLOBAL_ASSIGNMENT_REGISTRY,
+        playerAssignments: PLAYER_ASSIGNMENT_REGISTRY,
+        playerCommands: PLAYER_COMMAND_API_ENTRIES,
+        globalCommands: GLOBAL_COMMAND_REGISTRY,
+        targetMembers: TARGET_MEMBER_REGISTRY
     });
     const SCRIPTING_NAME_PATTERN = /^[A-Za-z_$][\w$]*$/;
     global.SCRIPTING_API_SCHEMA = SCRIPTING_API_SCHEMA;
@@ -193,6 +269,42 @@
         if (!isDoorPlacedObject(door)) return false;
         if (door._scriptDoorLocked === true) return true;
         return door.isPassable === false;
+    }
+
+    function notifyDoorTraversalStateChanged(door) {
+        if (!isDoorPlacedObject(door)) return false;
+        if (typeof door.notifyMountedWallStateChanged === "function") {
+            door.notifyMountedWallStateChanged();
+        }
+        return true;
+    }
+
+    function setDoorLockedState(door, locked) {
+        if (!isDoorPlacedObject(door)) return false;
+        const nextLocked = !!locked;
+        door._scriptDoorLocked = nextLocked;
+        if (nextLocked) {
+            door.isPassable = false;
+        } else if (door.isOpen || door._doorLockedOpen || door.isFallenDoorEffect) {
+            door.blocksTile = false;
+            door.isPassable = true;
+            door.castsLosShadows = false;
+        } else {
+            door.isPassable = true;
+        }
+        notifyDoorTraversalStateChanged(door);
+        return true;
+    }
+
+    function openDoorForTraversal(door) {
+        if (!isDoorPlacedObject(door)) return false;
+        door._scriptDoorLocked = false;
+        door.isOpen = true;
+        door.blocksTile = false;
+        door.isPassable = true;
+        door.castsLosShadows = false;
+        notifyDoorTraversalStateChanged(door);
+        return true;
     }
 
     function getDoorRuntimeId(door) {
@@ -359,6 +471,53 @@
         return true;
     }
 
+    function getNamedObjectEntries(context = null) {
+        rebuildNamedObjectRegistry(context);
+        const out = [];
+        for (const [name, obj] of namedObjectsByName.entries()) {
+            if (!obj || obj.gone) continue;
+            out.push([name, obj]);
+        }
+        out.sort((a, b) => a[0].localeCompare(b[0]));
+        return out;
+    }
+
+    function getNamedObjectNames(context = null) {
+        return getNamedObjectEntries(context).map(entry => entry[0]);
+    }
+
+    function getConsoleGameObject(name, context = null) {
+        return getNamedObjectByName(name, context);
+    }
+
+    function getConsoleGameObjectState(name, context = null) {
+        const target = getNamedObjectByName(name, context);
+        if (!target) return null;
+        const state = {
+            scriptingName: getObjectScriptingName(target),
+            type: (typeof target.type === "string" && target.type.trim().length > 0)
+                ? target.type
+                : ((typeof target.objectType === "string" && target.objectType.trim().length > 0)
+                    ? target.objectType
+                    : ((target.constructor && target.constructor.name) ? target.constructor.name : "object")),
+            category: (typeof target.category === "string" && target.category.trim().length > 0)
+                ? target.category
+                : "",
+            x: Number.isFinite(target.x) ? target.x : null,
+            y: Number.isFinite(target.y) ? target.y : null,
+            z: Number.isFinite(target.z) ? target.z : null,
+            hp: Number.isFinite(target.hp) ? target.hp : null,
+            maxHp: Number.isFinite(target.maxHp)
+                ? target.maxHp
+                : (Number.isFinite(target.maxHP) ? target.maxHP : null),
+            visible: target.visible !== false,
+            gone: target.gone === true,
+            onfire: target.onfire === true || target.isOnFire === true,
+            object: target
+        };
+        return state;
+    }
+
     function getTargetPointRelativeToObject(source, other, mapRef = null) {
         if (!source || !other) return null;
         const sourceX = Number(source.x);
@@ -432,7 +591,14 @@
         if (!name.length || !name.includes(".")) return null;
         const parts = name.split(".").map(part => part.trim()).filter(Boolean);
         if (parts.length < 2) return null;
-        const namedTarget = getNamedObjectByName(parts[0], context);
+        let namedTarget = null;
+        if (parts[0] === "this") {
+            namedTarget = (context && context.target && typeof context.target === "object")
+                ? context.target
+                : null;
+        } else {
+            namedTarget = getNamedObjectByName(parts[0], context);
+        }
         if (!namedTarget) return null;
         return {
             target: namedTarget,
@@ -587,6 +753,18 @@
         const sign = getDoorTraversalSide(door, hitbox, centroidX, centroidY, mapRef);
         door._interiorNormalSign = sign;
         return sign;
+    }
+
+    function refreshDoorEnterExitConvention(door, mapRef = null) {
+        if (!isDoorPlacedObject(door)) return 0;
+        delete door._interiorNormalSign;
+        delete door._interiorSignMountedId;
+        const resolvedMap = mapRef || door.map || global.map || null;
+        const interiorSign = computeDoorInteriorSign(door, resolvedMap);
+        if (interiorSign === 1 || interiorSign === -1) {
+            door._learnedEnterSign = interiorSign;
+        }
+        return interiorSign;
     }
 
     /**
@@ -1029,6 +1207,12 @@
         if (methodPath === "lock") {
             return { kind: "lockTarget", name, target: namedCommand.target };
         }
+        if (methodPath === "unlock") {
+            return { kind: "unlockTarget", name, target: namedCommand.target };
+        }
+        if (methodPath === "open") {
+            return { kind: "openTarget", name, target: namedCommand.target };
+        }
         if (methodPath === "deactivate") {
             return { kind: "deactivateTarget", name, target: namedCommand.target };
         }
@@ -1069,10 +1253,13 @@
                 return removeTargetObject(resolvedCommand.target);
             }
             if (resolvedCommand.kind === "lockTarget") {
-                if (!isDoorPlacedObject(resolvedCommand.target)) return false;
-                resolvedCommand.target._scriptDoorLocked = true;
-                resolvedCommand.target.isPassable = false;
-                return true;
+                return setDoorLockedState(resolvedCommand.target, true);
+            }
+            if (resolvedCommand.kind === "unlockTarget") {
+                return setDoorLockedState(resolvedCommand.target, false);
+            }
+            if (resolvedCommand.kind === "openTarget") {
+                return openDoorForTraversal(resolvedCommand.target);
             }
             if (resolvedCommand.kind === "deactivateTarget") {
                 resolvedCommand.target._scriptDeactivated = true;
@@ -1568,6 +1755,19 @@
         };
     }
 
+    function resolveScriptCameraTarget(rawTarget, context = null) {
+        if (rawTarget && typeof rawTarget === "object") {
+            return rawTarget;
+        }
+
+        const targetName = String(rawTarget || "").trim();
+        if (!targetName.length || targetName === "player" || targetName === "wizard") {
+            return (context && context.wizard) || global.wizard || null;
+        }
+
+        return getNamedObjectByName(targetName, context);
+    }
+
     function getCreatureCtor(typeName) {
         const type = String(typeName || "").trim().toLowerCase();
         switch (type) {
@@ -1577,6 +1777,8 @@
                 return (typeof Deer === "function") ? Deer : global.Deer || null;
             case "bear":
                 return (typeof Bear === "function") ? Bear : global.Bear || null;
+            case "eagleman":
+                return (typeof Eagleman === "function") ? Eagleman : global.Eagleman || null;
             case "scorpion":
                 return (typeof Scorpion === "function") ? Scorpion : global.Scorpion || null;
             case "armadillo":
@@ -1797,10 +1999,10 @@
     function getUniqueScriptApiTargetMembers(kind) {
         const out = [];
         const seen = new Set();
-        const groups = Object.keys(SCRIPTING_API_SCHEMA.targetMembers);
+        const groups = Object.keys(TARGET_MEMBER_REGISTRY);
         for (let i = 0; i < groups.length; i++) {
             const groupName = groups[i];
-            const entries = SCRIPTING_API_SCHEMA.targetMembers[groupName] || [];
+            const entries = TARGET_MEMBER_REGISTRY[groupName] || [];
             for (let j = 0; j < entries.length; j++) {
                 const entry = entries[j];
                 if (!entry || entry.kind !== kind || seen.has(entry.name)) continue;
@@ -1848,11 +2050,17 @@
         for (let i = 0; i < kinds.length; i++) {
             const kind = kinds[i];
             const entries = (kind === "player")
-                ? SCRIPTING_API_SCHEMA.playerAssignments.map(entry => ({
-                    ...entry,
-                    kind: "property"
-                }))
-                : (SCRIPTING_API_SCHEMA.targetMembers[kind] || []);
+                ? [
+                    ...PLAYER_ASSIGNMENT_REGISTRY.map(entry => ({
+                        ...entry,
+                        kind: "property"
+                    })),
+                    ...PLAYER_COMMAND_API_ENTRIES.map(entry => ({
+                        ...entry,
+                        kind: "method"
+                    }))
+                ]
+                : (TARGET_MEMBER_REGISTRY[kind] || []);
             for (let j = 0; j < entries.length; j++) {
                 pushEntry(entries[j]);
             }
@@ -1886,6 +2094,10 @@
             ),
             "<div style='font-weight:bold;margin-top:8px;'>Player Members</div>",
             renderList(SCRIPTING_API_SCHEMA.playerAssignments, entry =>
+                `<code>${entry.syntax}</code>: ${entry.description}.`
+            ),
+            "<div style='font-weight:bold;margin-top:8px;'>Player Commands</div>",
+            renderList(SCRIPTING_API_SCHEMA.playerCommands, entry =>
                 `<code>${entry.syntax}</code>: ${entry.description}.`
             ),
             "<div style='font-weight:bold;margin-top:8px;'>Global Commands</div>",
@@ -2573,6 +2785,7 @@
             map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || null,
             wizard: global.wizard || null
         });
+        refreshDoorEnterExitConvention(scriptEditorTargetObject, (scriptEditorTargetObject && scriptEditorTargetObject.map) || null);
         runObjectInitScript(scriptEditorTargetObject, global.wizard || null, { reason: "scriptSaved" });
         showScriptEditorMessage("Object script saved.");
         closeScriptEditorPanel();
@@ -2796,7 +3009,7 @@
                         moveScriptEditorCompletionSelection(-1);
                         return;
                     }
-                    if (evt.key === "Tab") {
+                    if (evt.key === "Tab" && !evt.shiftKey) {
                         evt.preventDefault();
                         acceptScriptEditorCompletion();
                         return;
@@ -2837,12 +3050,56 @@
                 if (evt.key === "Tab") {
                     evt.preventDefault();
                     const indent = "    ";
+                    const getUnindentCount = line => {
+                        if (!line) return 0;
+                        if (line.startsWith("\t")) return 1;
+                        const spaceMatch = line.match(/^ +/);
+                        const spaceCount = spaceMatch ? spaceMatch[0].length : 0;
+                        return Math.min(indent.length, spaceCount);
+                    };
                     if (selStart !== selEnd) {
-                        ta.value = val.slice(0, selStart) + indent + val.slice(selEnd);
-                        ta.selectionStart = ta.selectionEnd = selStart + indent.length;
+                        const firstLineStart = val.lastIndexOf("\n", selStart - 1) + 1;
+                        let effectiveSelEnd = selEnd;
+                        if (effectiveSelEnd > selStart && val[effectiveSelEnd - 1] === "\n") {
+                            effectiveSelEnd -= 1;
+                        }
+                        const lastLineBreak = val.indexOf("\n", effectiveSelEnd);
+                        const blockEnd = lastLineBreak === -1 ? val.length : lastLineBreak;
+                        const selectedBlock = val.slice(firstLineStart, blockEnd);
+                        const selectedLines = selectedBlock.split("\n");
+                        if (evt.shiftKey) {
+                            let removedBeforeStart = 0;
+                            let removedTotal = 0;
+                            const unindentedBlock = selectedLines.map((line, index) => {
+                                const removeCount = getUnindentCount(line);
+                                if (index === 0) {
+                                    removedBeforeStart = removeCount;
+                                }
+                                removedTotal += removeCount;
+                                return line.slice(removeCount);
+                            }).join("\n");
+                            ta.value = val.slice(0, firstLineStart) + unindentedBlock + val.slice(blockEnd);
+                            ta.selectionStart = Math.max(firstLineStart, selStart - removedBeforeStart);
+                            ta.selectionEnd = Math.max(ta.selectionStart, selEnd - removedTotal);
+                        } else {
+                            const indentedBlock = selectedLines
+                                .map(line => indent + line)
+                                .join("\n");
+                            ta.value = val.slice(0, firstLineStart) + indentedBlock + val.slice(blockEnd);
+                            ta.selectionStart = selStart + indent.length;
+                            ta.selectionEnd = selEnd + indent.length * selectedLines.length;
+                        }
                     } else {
-                        ta.value = val.slice(0, selStart) + indent + val.slice(selStart);
-                        ta.selectionStart = ta.selectionEnd = selStart + indent.length;
+                        if (evt.shiftKey) {
+                            const lineStart = val.lastIndexOf("\n", selStart - 1) + 1;
+                            const linePrefix = val.slice(lineStart, selStart);
+                            const removeCount = getUnindentCount(linePrefix);
+                            ta.value = val.slice(0, lineStart) + linePrefix.slice(removeCount) + val.slice(selStart);
+                            ta.selectionStart = ta.selectionEnd = Math.max(lineStart, selStart - removeCount);
+                        } else {
+                            ta.value = val.slice(0, selStart) + indent + val.slice(selStart);
+                            ta.selectionStart = ta.selectionEnd = selStart + indent.length;
+                        }
                     }
                     updateScriptEditorHighlights();
                     updateScriptEditorCompletions();
@@ -2995,8 +3252,25 @@
                 ? gameContainer
                 : (appRef ? appRef.stage : null));
         const vpRef = (typeof viewport  !== "undefined") ? viewport  : null;
-        const vs    = (typeof viewscale !== "undefined" && Number.isFinite(+viewscale)) ? +viewscale : 20;
-        const xyr   = (typeof xyratio   !== "undefined" && Number.isFinite(+xyratio))   ? +xyratio   : 0.66;
+        const getViewScale = () => ((typeof viewscale !== "undefined" && Number.isFinite(+viewscale)) ? +viewscale : 20);
+        const getXyRatio = () => ((typeof xyratio !== "undefined" && Number.isFinite(+xyratio)) ? +xyratio : 0.66);
+        const projectFragmentToScreen = (worldX, worldY, worldZ = 0) => {
+            const scale = getViewScale();
+            const ratio = getXyRatio();
+            const cameraX = Number.isFinite(vpRef && vpRef.x) ? Number(vpRef.x) : 0;
+            const cameraY = Number.isFinite(vpRef && vpRef.y) ? Number(vpRef.y) : 0;
+            const dx = (global.map && typeof global.map.shortestDeltaX === "function")
+                ? global.map.shortestDeltaX(cameraX, worldX)
+                : (Number(worldX) - cameraX);
+            const dy = (global.map && typeof global.map.shortestDeltaY === "function")
+                ? global.map.shortestDeltaY(cameraY, worldY)
+                : (Number(worldY) - cameraY);
+            return {
+                x: dx * scale,
+                y: (dy - Number(worldZ || 0)) * scale * ratio
+            };
+        };
+        const xyr = getXyRatio();
         if (!appRef || !containerParent || !vpRef || typeof PIXI === "undefined") return false;
 
         if (typeof target.removeFromGame === "function") {
@@ -3016,8 +3290,8 @@
         const wallDirY = (ey - sy) / wallLength;
         const wallAngle = Math.atan2(wallDirY * xyr, wallDirX);
 
-        const cellWPx = cellLen * vs;
-        const cellHPx = cellHz  * vs * xyr;
+        const cellWPx = cellLen * getViewScale();
+        const cellHPx = cellHz  * getViewScale() * xyr;
 
         // Physics constants in world-space.
         // x/y from the script are total world-unit displacement over the lifetime.
@@ -3064,8 +3338,9 @@
                 gfx.rotation = wallAngle;
                 // Initial screen position (vpRef is a live reference so this will
                 // be recalculated from world coords every tick)
-                gfx.x = (wx0 - vpRef.x) * vs;
-                gfx.y = ((wy0 - wz0) - vpRef.y) * vs * xyr;
+                const initialScreen = projectFragmentToScreen(wx0, wy0, wz0);
+                gfx.x = initialScreen.x;
+                gfx.y = initialScreen.y;
                 container.addChild(gfx);
 
                 const jx = (Math.random() - 0.5) * 2 * jitter;
@@ -3113,8 +3388,9 @@
                 }
 
                 // Re-project from live world coords + live viewport every frame
-                frag.gfx.x = (frag.wx - vpRef.x) * vs;
-                frag.gfx.y = ((frag.wy - frag.wz) - vpRef.y) * vs * xyr;
+                const screenPos = projectFragmentToScreen(frag.wx, frag.wy, frag.wz);
+                frag.gfx.x = screenPos.x;
+                frag.gfx.y = screenPos.y;
 
                 // Fade out after FADE_START
                 if (frag.age >= FADE_START) {
@@ -3173,38 +3449,200 @@
         }
     }
 
-    function startTargetSink(target, seconds) {
+    function refreshTargetSinkBlocking(target) {
+        const sinkState = (target && target._scriptSinkState && typeof target._scriptSinkState === "object")
+            ? target._scriptSinkState
+            : null;
+        if (target && sinkState) {
+            if (!Object.prototype.hasOwnProperty.call(sinkState, "originalCastsLosShadows")) {
+                sinkState.originalCastsLosShadows = (typeof target.castsLosShadows === "boolean")
+                    ? target.castsLosShadows
+                    : null;
+            }
+            if (sinkState.losTransparent) {
+                target.castsLosShadows = false;
+            } else if (sinkState.originalCastsLosShadows === null) {
+                delete target.castsLosShadows;
+            } else {
+                target.castsLosShadows = !!sinkState.originalCastsLosShadows;
+            }
+        } else if (target && target.type === "wallSection") {
+            delete target.castsLosShadows;
+        }
+        const affectedNodes = new Set();
+        if (target && target.node && typeof target.node === "object") {
+            affectedNodes.add(target.node);
+        }
+        if (target && Array.isArray(target.nodes)) {
+            for (let i = 0; i < target.nodes.length; i++) {
+                const node = target.nodes[i];
+                if (node && typeof node === "object") affectedNodes.add(node);
+            }
+        }
+        if (target && Array.isArray(target.blockedLinks)) {
+            for (let i = 0; i < target.blockedLinks.length; i++) {
+                const link = target.blockedLinks[i];
+                const node = link && link.node;
+                if (node && typeof node === "object") affectedNodes.add(node);
+            }
+        }
+        affectedNodes.forEach(node => {
+            if (typeof node.recountBlockingObjects === "function") {
+                node.recountBlockingObjects();
+            }
+            if (global.map &&
+                !global.map._suppressClearanceUpdates &&
+                typeof global.map.updateClearanceAround === "function") {
+                global.map.updateClearanceAround(node);
+            }
+        });
+        if (typeof global.invalidateMinimap === "function") {
+            global.invalidateMinimap();
+        }
+    }
+    global.refreshTargetSinkBlocking = refreshTargetSinkBlocking;
+
+    function restoreTargetSinkBlockingState(target, sinkState = null) {
+        if (!target || typeof target !== "object") return;
+        const state = (sinkState && typeof sinkState === "object")
+            ? sinkState
+            : ((target._scriptSinkState && typeof target._scriptSinkState === "object")
+                ? target._scriptSinkState
+                : null);
+        if (!state) return;
+        if (!Object.prototype.hasOwnProperty.call(state, "originalCastsLosShadows")) return;
+        if (state.originalCastsLosShadows === null) {
+            delete target.castsLosShadows;
+            return;
+        }
+        target.castsLosShadows = !!state.originalCastsLosShadows;
+    }
+    global.restoreTargetSinkBlockingState = restoreTargetSinkBlockingState;
+
+    function syncTargetSinkInteractionState(target) {
+        if (!target || !target._scriptSinkState || typeof target._scriptSinkState !== "object") return null;
+        const sinkState = target._scriptSinkState;
+        const baseProperty = (typeof sinkState.baseProperty === "string" && sinkState.baseProperty.length > 0)
+            ? sinkState.baseProperty
+            : getTargetSinkBaseProperty(target);
+        const heightProperty = (typeof sinkState.heightProperty === "string" && sinkState.heightProperty.length > 0)
+            ? sinkState.heightProperty
+            : getTargetSinkHeightProperty(target);
+        const losTransparencyHeightThreshold = (target.type === "wallSection") ? 0.75 : 1e-4;
+        const currentBase = Number.isFinite(target[baseProperty])
+            ? Number(target[baseProperty])
+            : (Number.isFinite(sinkState.currentBase) ? Number(sinkState.currentBase) : 0);
+        const currentHeight = (heightProperty && Number.isFinite(target[heightProperty]))
+            ? Math.max(0, Number(target[heightProperty]))
+            : NaN;
+        if (Number.isFinite(currentHeight)) {
+            const topZ = currentBase + currentHeight;
+            sinkState.losTransparent = topZ <= losTransparencyHeightThreshold;
+        } else {
+            const progress = Number.isFinite(sinkState.progress)
+                ? Math.max(0, Math.min(1, Number(sinkState.progress)))
+                : 0;
+            sinkState.losTransparent = progress >= (1 - 1e-4);
+        }
+        sinkState.nonBlocking = sinkState.losTransparent;
+        return sinkState;
+    }
+    global.syncTargetSinkInteractionState = syncTargetSinkInteractionState;
+
+    function startTargetSinkTransition(target, seconds, options = {}) {
         if (!target || typeof target !== "object") return false;
         const durationSeconds = Number(seconds);
         if (!Number.isFinite(durationSeconds)) return false;
         const nowMs = Date.now();
-        const baseProperty = getTargetSinkBaseProperty(target);
-        const heightProperty = getTargetSinkHeightProperty(target);
+        const existingState = (target._scriptSinkState && typeof target._scriptSinkState === "object")
+            ? target._scriptSinkState
+            : null;
+        const originalCastsLosShadows = (existingState && Object.prototype.hasOwnProperty.call(existingState, "originalCastsLosShadows"))
+            ? existingState.originalCastsLosShadows
+            : ((typeof target.castsLosShadows === "boolean") ? target.castsLosShadows : null);
+        const baseProperty = (existingState && typeof existingState.baseProperty === "string" && existingState.baseProperty.length > 0)
+            ? existingState.baseProperty
+            : getTargetSinkBaseProperty(target);
+        const heightProperty = (existingState && typeof existingState.heightProperty === "string")
+            ? existingState.heightProperty
+            : getTargetSinkHeightProperty(target);
         const currentBase = Number.isFinite(target[baseProperty]) ? Number(target[baseProperty]) : 0;
         const currentHeight = heightProperty && Number.isFinite(target[heightProperty])
             ? Math.max(0, Number(target[heightProperty]))
             : NaN;
         const sinkDistance = getTargetSinkDistance(target);
         const durationMs = Math.max(0, durationSeconds * 1000);
+        const sinking = options.direction !== "rise";
+        const restBase = (existingState && Number.isFinite(existingState.restBase))
+            ? Number(existingState.restBase)
+            : currentBase;
+        const restHeight = (existingState && Number.isFinite(existingState.restHeight))
+            ? Math.max(0, Number(existingState.restHeight))
+            : currentHeight;
+        const targetBase = sinking ? (currentBase - sinkDistance) : restBase;
+        const targetHeight = heightProperty && Number.isFinite(restHeight)
+            ? (sinking ? 0 : restHeight)
+            : NaN;
+        const currentProgress = (existingState && Number.isFinite(existingState.progress))
+            ? Math.max(0, Math.min(1, Number(existingState.progress)))
+            : (
+                Number.isFinite(restHeight) && restHeight > 0 && Number.isFinite(currentHeight)
+                    ? Math.max(0, Math.min(1, 1 - (currentHeight / restHeight)))
+                    : (Math.abs(currentBase - restBase) > 1e-6 ? 1 : 0)
+            );
+        const targetProgress = sinking ? 1 : 0;
         target._scriptSinkState = {
             active: durationMs > 0,
             startMs: nowMs,
             lastUpdateMs: nowMs,
             elapsedMs: 0,
             durationMs,
+            direction: sinking ? "sink" : "rise",
+            nonBlocking: sinking && currentProgress >= (1 - 1e-4),
             baseProperty,
             heightProperty,
             startBase: currentBase,
-            targetBase: currentBase - sinkDistance,
-            startHeight: Number.isFinite(currentHeight) ? currentHeight : NaN
+            targetBase,
+            restBase,
+            startHeight: Number.isFinite(currentHeight) ? currentHeight : NaN,
+            targetHeight,
+            restHeight: Number.isFinite(restHeight) ? restHeight : NaN,
+            progress: currentProgress,
+            startProgress: currentProgress,
+            targetProgress,
+            originalCastsLosShadows
         };
         if (durationMs <= 0) {
-            syncTargetSinkBaseValue(target, baseProperty, currentBase - sinkDistance);
-            if (heightProperty && Number.isFinite(currentHeight)) {
-                target[heightProperty] = 0;
+            syncTargetSinkBaseValue(target, baseProperty, targetBase);
+            if (heightProperty && Number.isFinite(targetHeight)) {
+                target[heightProperty] = targetHeight;
+            }
+            target._scriptSinkState.progress = targetProgress;
+            target._scriptSinkState.active = false;
+            if (!sinking) {
+                syncTargetSinkInteractionState(target);
+                refreshTargetSinkBlocking(target);
+                restoreTargetSinkBlockingState(target);
+                target._scriptSinkState = null;
+                return true;
             }
         }
+        syncTargetSinkInteractionState(target);
+        refreshTargetSinkBlocking(target);
         return true;
+    }
+
+    function startTargetSink(target, seconds) {
+        return startTargetSinkTransition(target, seconds, { direction: "sink" });
+    }
+
+    function startTargetRise(target, seconds) {
+        if (!target || typeof target !== "object") return false;
+        const existingState = (target._scriptSinkState && typeof target._scriptSinkState === "object")
+            ? target._scriptSinkState
+            : null;
+        if (!existingState) return false;
+        return startTargetSinkTransition(target, seconds, { direction: "rise" });
     }
 
     function registerBuiltinScriptHandlers() {
@@ -3220,6 +3658,16 @@
                     return true;
                 }
                 return false;
+            },
+            "time.speed"(value) {
+                const raw = Number(value);
+                if (!Number.isFinite(raw)) return false;
+                const clamped = Math.max(0, Math.min(6, raw));
+                if (typeof global.setSimulationTimeScale === "function") {
+                    return !!global.setSimulationTimeScale(clamped);
+                }
+                global.simulationTimeScale = clamped;
+                return true;
             },
             speed(value, context) {
                 const target = context && context.target;
@@ -3339,6 +3787,13 @@
                 target.retreatThreshold = Math.max(0, Math.min(1, threshold));
                 return true;
             },
+            retreatDuration(value, context) {
+                const target = context && context.target;
+                const seconds = Number(value);
+                if (!target || !Number.isFinite(seconds) || seconds < 0) return false;
+                target.retreatDuration = seconds;
+                return true;
+            },
             runSpeed(value, context) {
                 const target = context && context.target;
                 const nextRunSpeed = Number(value);
@@ -3366,6 +3821,23 @@
             },
             maxHP(value, context) {
                 return assignmentImplementations.maxHp(value, context);
+            },
+            maxMp(value, context) {
+                const target = context && context.target;
+                const nextMaxMp = Number(value);
+                if (!target || !Number.isFinite(nextMaxMp) || nextMaxMp < 0) return false;
+                const normalizedMaxMp = Math.max(0, nextMaxMp);
+                target.maxMp = normalizedMaxMp;
+                target.maxMP = normalizedMaxMp;
+                if (Number.isFinite(target.mp)) {
+                    target.mp = Math.max(0, Math.min(target.mp, normalizedMaxMp));
+                } else {
+                    target.mp = normalizedMaxMp;
+                }
+                return true;
+            },
+            maxMP(value, context) {
+                return assignmentImplementations.maxMp(value, context);
             },
             height(value, context) {
                 const target = context && context.target;
@@ -3397,13 +3869,35 @@
                     ? Number(target.maxHp)
                     : (Number.isFinite(target.maxHP) ? Number(target.maxHP) : null);
                 if (Number.isFinite(finiteMaxHp)) {
-                    target.hp = Math.max(0, Math.min(nextHp, finiteMaxHp));
-                    target.maxHp = finiteMaxHp;
-                    target.maxHP = finiteMaxHp;
+                    const normalizedHp = Math.max(0, nextHp);
+                    const normalizedMaxHp = Math.max(finiteMaxHp, normalizedHp);
+                    target.hp = normalizedHp;
+                    target.maxHp = normalizedMaxHp;
+                    target.maxHP = normalizedMaxHp;
                 } else {
                     target.hp = Math.max(0, nextHp);
                     target.maxHp = target.hp;
                     target.maxHP = target.hp;
+                }
+                return true;
+            },
+            mp(value, context) {
+                const target = context && context.target;
+                const nextMp = Number(value);
+                if (!target || !Number.isFinite(nextMp)) return false;
+                const finiteMaxMp = Number.isFinite(target.maxMp)
+                    ? Number(target.maxMp)
+                    : (Number.isFinite(target.maxMP) ? Number(target.maxMP) : null);
+                if (Number.isFinite(finiteMaxMp)) {
+                    const normalizedMp = Math.max(0, nextMp);
+                    const normalizedMaxMp = Math.max(finiteMaxMp, normalizedMp);
+                    target.mp = normalizedMp;
+                    target.maxMp = normalizedMaxMp;
+                    target.maxMP = normalizedMaxMp;
+                } else {
+                    target.mp = Math.max(0, nextMp);
+                    target.maxMp = target.mp;
+                    target.maxMP = target.mp;
                 }
                 return true;
             }
@@ -3503,16 +3997,36 @@
                 }
                 return true;
             },
+            trade(args, context, namedArgs = {}) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                if (!wizardRef || !global.TradeSystem || typeof global.TradeSystem.openTrade !== "function") {
+                    return false;
+                }
+                const configArg = (args[0] && typeof args[0] === "object" && !Array.isArray(args[0])) ? args[0] : null;
+                const config = {
+                    ...(configArg || {}),
+                    ...namedArgs
+                };
+                if (!Array.isArray(config.entries) && Array.isArray(args[1])) {
+                    config.entries = args[1];
+                }
+                if (!config.currency && args[0] !== undefined && typeof args[0] !== "object") {
+                    config.currency = args[0];
+                }
+                return global.TradeSystem.openTrade(config, wizardRef);
+            },
             delete(_args, context) {
                 const target = (context && context.target) || null;
                 return removeTargetObject(target);
             },
             lock(_args, context) {
-                const target = (context && context.target) || null;
-                if (!isDoorPlacedObject(target)) return false;
-                target._scriptDoorLocked = true;
-                target.isPassable = false;
-                return true;
+                return setDoorLockedState((context && context.target) || null, true);
+            },
+            unlock(_args, context) {
+                return setDoorLockedState((context && context.target) || null, false);
+            },
+            open(_args, context) {
+                return openDoorForTraversal((context && context.target) || null);
             },
             deactivate(_args, context) {
                 const target = (context && context.target) || null;
@@ -3532,6 +4046,14 @@
                 const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
                     ? namedArgs.seconds
                     : args[0];
+                if (!Object.prototype.hasOwnProperty.call(namedArgs, "seconds") && args.length === 0) {
+                    if (typeof target.freeze === "function") {
+                        target.freeze();
+                    } else {
+                        target._scriptFrozenUntilMs = Infinity;
+                    }
+                    return true;
+                }
                 const seconds = Number(rawSeconds);
                 if (!Number.isFinite(seconds)) return false;
                 if (typeof target.freeze === "function") {
@@ -3545,10 +4067,20 @@
                 const nowMs = Date.now();
                 const existingUntilMs = Number(target._scriptFrozenUntilMs);
                 const nextUntilMs = nowMs + (seconds * 1000);
-                target._scriptFrozenUntilMs = Number.isFinite(existingUntilMs)
+                target._scriptFrozenUntilMs = existingUntilMs > 0
                     ? Math.max(existingUntilMs, nextUntilMs)
                     : nextUntilMs;
                 return true;
+            },
+            tracePath(args, context, namedArgs = {}) {
+                const target = (context && context.target) || null;
+                if (!target || typeof target.tracePath !== "function") return false;
+                const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
+                    ? namedArgs.seconds
+                    : args[0];
+                const seconds = Number(rawSeconds);
+                if (!Number.isFinite(seconds)) return false;
+                return !!target.tracePath(seconds);
             },
             sink(args, context, namedArgs = {}) {
                 const target = (context && context.target) || null;
@@ -3557,6 +4089,14 @@
                     ? namedArgs.seconds
                     : args[0];
                 return startTargetSink(target, rawSeconds);
+            },
+            rise(args, context, namedArgs = {}) {
+                const target = (context && context.target) || null;
+                if (!target || typeof target !== "object") return false;
+                const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
+                    ? namedArgs.seconds
+                    : args[0];
+                return startTargetRise(target, rawSeconds);
             },
             fall(args, context, namedArgs = {}) {
                 const target = (context && context.target) || null;
@@ -3592,6 +4132,8 @@
                 const yOffset = Number(
                     (Object.prototype.hasOwnProperty.call(namedArgs, "y")) ? namedArgs.y : (args[2] !== undefined ? args[2] : 0)
                 );
+                const colorValue = (Object.prototype.hasOwnProperty.call(namedArgs, "color")) ? namedArgs.color : args[3];
+                const fontSizeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "fontsize")) ? namedArgs.fontsize : args[4];
                 const text = String(textValue === undefined || textValue === null ? "" : textValue);
                 if (!text.length) {
                     target._scriptMessages = [];
@@ -3600,14 +4142,15 @@
                     }
                     return true;
                 }
-                if (!Array.isArray(target._scriptMessages)) {
-                    target._scriptMessages = [];
-                }
-                target._scriptMessages.push({
+                target._scriptMessages = [{
                     text,
                     x: Number.isFinite(xOffset) ? xOffset : 0,
-                    y: Number.isFinite(yOffset) ? yOffset : 0
-                });
+                    y: Number.isFinite(yOffset) ? yOffset : 0,
+                    color: (typeof colorValue === "string" && colorValue.trim().length > 0)
+                        ? colorValue.trim()
+                        : (Number.isFinite(colorValue) ? Number(colorValue) : undefined),
+                    fontsize: Number.isFinite(Number(fontSizeValue)) ? Number(fontSizeValue) : undefined
+                }];
                 if (!(global._scriptMessageTargets instanceof Set)) {
                     global._scriptMessageTargets = new Set();
                 }
@@ -3679,21 +4222,12 @@
                 return true;
             },
             pause(args, context, namedArgs = {}) {
-                const target = (context && context.target) || null;
                 const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
                     ? namedArgs.seconds
                     : args[0];
                 const seconds = Number(rawSeconds);
                 if (!Number.isFinite(seconds)) return false;
                 const delayMs = Math.max(0, seconds * 1000);
-                if (target && typeof target === "object") {
-                    const nowMs = Date.now();
-                    const existingUntilMs = Number(target._scriptPausedUntilMs);
-                    const nextUntilMs = nowMs + delayMs;
-                    target._scriptPausedUntilMs = Number.isFinite(existingUntilMs)
-                        ? Math.max(existingUntilMs, nextUntilMs)
-                        : nextUntilMs;
-                }
                 return new Promise(resolve => {
                     setTimeout(() => resolve(true), delayMs);
                 });
@@ -3719,37 +4253,125 @@
                     return false;
                 }
             },
+            "time.stop"() {
+                if (typeof global.stopSimulationTime === "function") {
+                    return !!global.stopSimulationTime();
+                }
+                if (typeof global.setSimulationTimeScale === "function") {
+                    return !!global.setSimulationTimeScale(0);
+                }
+                global.simulationTimeScale = 0;
+                return true;
+            },
+            "time.restore"() {
+                if (typeof global.restoreSimulationTime === "function") {
+                    return !!global.restoreSimulationTime();
+                }
+                if (typeof global.setSimulationTimeScale === "function") {
+                    return !!global.setSimulationTimeScale(1);
+                }
+                global.simulationTimeScale = 1;
+                return true;
+            },
             scrollMessage(args, context, namedArgs = {}) {
                 const textValue = Object.prototype.hasOwnProperty.call(namedArgs, "text")
                     ? namedArgs.text
                     : args[0];
+                const titleValue = Object.prototype.hasOwnProperty.call(namedArgs, "title")
+                    ? namedArgs.title
+                    : args[1];
                 const text = String(textValue === undefined || textValue === null ? "" : textValue);
+                const title = String(titleValue === undefined || titleValue === null ? "" : titleValue);
                 if (typeof global.showScrollMessage === "function") {
-                    global.showScrollMessage(text);
+                    global.showScrollMessage(text, "ok", title);
                     return true;
                 }
                 if (typeof global.msgBox === "function") {
-                    global.msgBox("", text, "ok");
+                    global.msgBox(title, text, "ok");
                     return true;
                 }
                 return false;
+            },
+            "camera.zoom"(args, _context, namedArgs = {}) {
+                const rawTarget = Object.prototype.hasOwnProperty.call(namedArgs, "target")
+                    ? namedArgs.target
+                    : args[0];
+                const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
+                    ? namedArgs.seconds
+                    : (args[1] !== undefined ? args[1] : 0);
+                const targetFactor = Number(rawTarget);
+                const seconds = Number(rawSeconds);
+                if (!Number.isFinite(targetFactor) || !Number.isFinite(seconds)) return false;
+                if (typeof global.scriptCameraZoomTo !== "function") return false;
+                return !!global.scriptCameraZoomTo(targetFactor, seconds);
+            },
+            "camera.pan"(args, context, namedArgs = {}) {
+                const rawX = Object.prototype.hasOwnProperty.call(namedArgs, "x")
+                    ? namedArgs.x
+                    : (args[0] !== undefined ? args[0] : 0);
+                const rawY = Object.prototype.hasOwnProperty.call(namedArgs, "y")
+                    ? namedArgs.y
+                    : (args[1] !== undefined ? args[1] : 0);
+                const hasTargetArg = Object.prototype.hasOwnProperty.call(namedArgs, "target") || args[2] !== undefined;
+                const rawTarget = Object.prototype.hasOwnProperty.call(namedArgs, "target")
+                    ? namedArgs.target
+                    : args[2];
+                const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
+                    ? namedArgs.seconds
+                    : (args[3] !== undefined ? args[3] : 0);
+                const offsetX = Number(rawX);
+                const offsetY = Number(rawY);
+                const seconds = Number(rawSeconds);
+                if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || !Number.isFinite(seconds)) return false;
+                const targetObject = hasTargetArg ? resolveScriptCameraTarget(rawTarget, context) : null;
+                if (hasTargetArg && !targetObject) return false;
+                if (typeof global.scriptCameraPanTo !== "function") return false;
+                return !!global.scriptCameraPanTo({
+                    x: offsetX,
+                    y: offsetY,
+                    target: targetObject,
+                    seconds
+                });
+            },
+            "camera.reset"(args, _context, namedArgs = {}) {
+                const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
+                    ? namedArgs.seconds
+                    : (args[0] !== undefined ? args[0] : 0);
+                const seconds = Number(rawSeconds);
+                if (!Number.isFinite(seconds)) return false;
+                if (typeof global.scriptCameraReset !== "function") return false;
+                return !!global.scriptCameraReset(seconds);
             }
         };
+        for (let i = 0; i < PLAYER_COMMAND_REGISTRY.length; i++) {
+            const entry = PLAYER_COMMAND_REGISTRY[i];
+            if (!entry || typeof entry.name !== "string" || typeof entry.handler !== "function") continue;
+            commandImplementations[entry.name] = entry.handler;
+        }
 
-        for (let i = 0; i < SCRIPTING_API_SCHEMA.globalAssignments.length; i++) {
-            const entry = SCRIPTING_API_SCHEMA.globalAssignments[i];
+        for (let i = 0; i < GLOBAL_ASSIGNMENT_REGISTRY.length; i++) {
+            const entry = GLOBAL_ASSIGNMENT_REGISTRY[i];
             const handler = assignmentImplementations[entry.name];
             if (typeof handler === "function") {
                 registerAssignmentHandler(entry.name, handler);
             }
         }
 
-        for (let i = 0; i < SCRIPTING_API_SCHEMA.playerAssignments.length; i++) {
-            const entry = SCRIPTING_API_SCHEMA.playerAssignments[i];
+        for (let i = 0; i < PLAYER_ASSIGNMENT_REGISTRY.length; i++) {
+            const entry = PLAYER_ASSIGNMENT_REGISTRY[i];
             const handler = assignmentImplementations[entry.name];
             if (typeof handler === "function") {
                 registerAssignmentHandler(`player.${entry.name}`, handler);
                 registerAssignmentHandler(`wizard.${entry.name}`, handler);
+            }
+        }
+
+        for (let i = 0; i < PLAYER_COMMAND_REGISTRY.length; i++) {
+            const entry = PLAYER_COMMAND_REGISTRY[i];
+            const handler = commandImplementations[entry.name];
+            if (typeof handler === "function") {
+                registerCommand(`player.${entry.name}`, handler);
+                registerCommand(`wizard.${entry.name}`, handler);
             }
         }
 
@@ -3762,8 +4384,8 @@
             }
         }
 
-        for (let i = 0; i < SCRIPTING_API_SCHEMA.globalCommands.length; i++) {
-            const entry = SCRIPTING_API_SCHEMA.globalCommands[i];
+        for (let i = 0; i < GLOBAL_COMMAND_REGISTRY.length; i++) {
+            const entry = GLOBAL_COMMAND_REGISTRY[i];
             const handler = commandImplementations[entry.name];
             if (typeof handler === "function") {
                 registerCommand(entry.name, handler);
@@ -3792,6 +4414,11 @@
         const text = String(rawText || "");
         if (!text.trim().length) return [];
         const errors = [];
+        const validationContext = {
+            map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || global.map || null,
+            wizard: global.wizard || null,
+            target: scriptEditorTargetObject || null
+        };
         let index = 0;
         const len = text.length;
 
@@ -3820,14 +4447,14 @@
             var cmdMatch = stmt.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([\s\S]*)\)$/);
             if (cmdMatch) {
                 var cmdName = cmdMatch[1];
-                var resolvedCmd = resolveScriptCommand(cmdName, { map: global.map || null, wizard: global.wizard || null });
+                var resolvedCmd = resolveScriptCommand(cmdName, validationContext);
                 if (resolvedCmd && resolvedCmd.kind !== "unknownCommand" && resolvedCmd.kind !== "unknownObject" && resolvedCmd.kind !== "invalid") {
                     return;
                 }
                 var cmdRoot = cmdName.split(".")[0];
                 if (resolvedCmd && resolvedCmd.kind === "unknownObject") {
                     errors.push({ start: absStart, end: absStart + cmdRoot.length, message: "Unknown scripting object: " + cmdRoot });
-                } else if (isValidScriptingName(cmdRoot) && !getNamedObjectByName(cmdRoot, { map: global.map || null, wizard: global.wizard || null })) {
+                } else if (isValidScriptingName(cmdRoot) && !getNamedObjectByName(cmdRoot, validationContext)) {
                     errors.push({ start: absStart, end: absStart + cmdRoot.length, message: "Unknown scripting object: " + cmdRoot });
                 } else {
                     errors.push({ start: absStart, end: absStart + cmdName.length, message: "Unknown command: " + cmdName });
@@ -3967,9 +4594,15 @@
         openScriptEditorForTarget,
         closeScriptEditorPanel,
         getNamedObjectByName,
+        getNamedObjectNames,
         setObjectScriptingName,
-        rebuildNamedObjectRegistry
+        rebuildNamedObjectRegistry,
+        getConsoleGameObject,
+        getConsoleGameObjectState
     };
 
     global.Scripting = scriptingApi;
+    global.gameObject = getConsoleGameObject;
+    global.gameObjectState = getConsoleGameObjectState;
+    global.namedGameObjects = getNamedObjectNames;
 })(typeof globalThis !== "undefined" ? globalThis : window);
