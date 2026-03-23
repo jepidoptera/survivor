@@ -1,5 +1,6 @@
 let spellKeyBindings = {
     "F": "fireball",
+    "I": "freeze",
     "M": "maze",
     "V": "vanish",
     "T": "treegrow",
@@ -49,7 +50,7 @@ async function getMagicAssetMetadata(texturePath) {
         typeof texturePath !== "string" ||
         texturePath.length === 0
     ) {
-        return null;
+            return null; 
     }
     try {
         return await globalThis.getResolvedPlaceableMetadata(MAGIC_ITEMS_CATEGORY, texturePath);
@@ -264,6 +265,7 @@ const SpellSystem = (() => {
     const AURA_MENU_ICON = "/assets/images/thumbnails/aura.png";
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
+        { name: "freeze", icon: "/assets/images/magic/iceball.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/magic/teleport.png" },
@@ -280,10 +282,12 @@ const SpellSystem = (() => {
         { name: "nodeinspector", icon: "/assets/images/thumbnails/maze.png", debugOnly: true }
     ];
     const AURA_DEFS = [
-        { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 2 },
-        { name: "speed", icon: "/assets/images/thumbnails/speed.png", key: "P", magicPerSecond: 2 },
-        { name: "healing", icon: "/assets/images/thumbnails/cross.png", key: "H", magicPerSecond: 2 }
+        { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 10 },
+        { name: "speed", icon: "/assets/images/thumbnails/speed.png", key: "P", magicPerSecond: 10 },
+        { name: "healing", icon: "/assets/images/thumbnails/cross.png", key: "H", magicPerSecond: 10 },
+        { name: "invisibility", icon: "/assets/images/magic/invisible.png", key: "U", magicPerSecond: 15 }
     ];
+    const ADVENTURE_STARTING_AURAS = ["healing"];
 
     const MAGIC_TICK_MS = 50;
     let healingAuraHpMultiplier = 10;
@@ -310,7 +314,7 @@ const SpellSystem = (() => {
     const ROOF_PEAK_HEIGHT_DEFAULT = 2;
     const VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD = 1;
     const VANISH_BURST_SHOT_INTERVAL_MS = 45;
-    const VANISH_MAGIC_COST_PER_CAST = 5;
+    const VANISH_MAGIC_COST_PER_CAST = 10;
     const PLACEABLE_ROTATION_STEP_DEGREES = 5;
     const POWERUP_PLACEMENT_FILE_NAME = "black diamond.png";
     const POWERUP_PLACEMENT_IMAGE_PATH = "/assets/images/powerups/black%20diamond.png";
@@ -326,6 +330,7 @@ const SpellSystem = (() => {
 
     const SPELL_CLASS_BY_NAME = {
         fireball: "Fireball",
+        freeze: "Iceball",
         vanish: "Vanish",
         editorvanish: "EditorVanish",
         editscript: "EditScript",
@@ -602,6 +607,62 @@ const SpellSystem = (() => {
         return AURA_DEFS.find(aura => aura.name === name) || null;
     }
 
+    function normalizeUnlockedNames(source, allowedNames, requiredNames = []) {
+        const seen = new Set();
+        const out = [];
+        const append = (name) => {
+            if (typeof name !== "string") return;
+            const normalized = name.trim().toLowerCase();
+            if (!normalized || !allowedNames.includes(normalized) || seen.has(normalized)) return;
+            seen.add(normalized);
+            out.push(normalized);
+        };
+        if (Array.isArray(source)) source.forEach(append);
+        if (Array.isArray(requiredNames)) requiredNames.forEach(append);
+        return out;
+    }
+
+    function getUnlockedSpellNames(wizardRef) {
+        const allSpellNames = SPELL_DEFS.map(spell => spell.name);
+        if (!wizardRef) return allSpellNames.slice();
+        const requiredNames = [];
+        const unlocked = normalizeUnlockedNames(wizardRef.unlockedSpells, allSpellNames, requiredNames);
+        wizardRef.unlockedSpells = unlocked.slice();
+        if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
+            return allSpellNames.slice();
+        }
+        return unlocked;
+    }
+
+    function getUnlockedAuraNames(wizardRef) {
+        const allAuraNames = AURA_DEFS.map(aura => aura.name);
+        if (!wizardRef) return allAuraNames.slice();
+        const requiredNames = (typeof wizardRef.isAdventureMode === "function" && wizardRef.isAdventureMode())
+            ? ADVENTURE_STARTING_AURAS
+            : [];
+        const unlocked = normalizeUnlockedNames(wizardRef.unlockedAuras, allAuraNames, requiredNames);
+        wizardRef.unlockedAuras = unlocked.slice();
+        if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
+            return allAuraNames.slice();
+        }
+        return unlocked;
+    }
+
+    function isSpellUnlocked(wizardRef, spellName) {
+        if (typeof spellName !== "string" || spellName.length === 0) return false;
+        return getUnlockedSpellNames(wizardRef).includes(spellName);
+    }
+
+    function isAuraUnlocked(wizardRef, auraName) {
+        if (typeof auraName !== "string" || auraName.length === 0) return false;
+        return getUnlockedAuraNames(wizardRef).includes(auraName);
+    }
+
+    function getAvailableAuraDefinitions(wizardRef) {
+        const unlocked = new Set(getUnlockedAuraNames(wizardRef));
+        return AURA_DEFS.filter(aura => unlocked.has(aura.name));
+    }
+
     function normalizeActiveAuras(wizardRef) {
         if (!wizardRef) return [];
         const source = Array.isArray(wizardRef.activeAuras)
@@ -611,7 +672,7 @@ const SpellSystem = (() => {
         source.forEach(name => {
             if (typeof name !== "string") return;
             const def = getAuraDefinition(name);
-            if (!def) return;
+            if (!def || !isAuraUnlocked(wizardRef, def.name)) return;
             if (!unique.includes(def.name)) {
                 unique.push(def.name);
             }
@@ -630,6 +691,10 @@ const SpellSystem = (() => {
         return getActiveAuraNames(wizardRef).includes(auraName);
     }
 
+    function isPlayerInvisibleToEnemies(wizardRef) {
+        return isAuraActive(wizardRef, "invisibility");
+    }
+
     function setActiveAuras(wizardRef, auraNames) {
         if (!wizardRef) return false;
         const previous = normalizeActiveAuras(wizardRef);
@@ -637,7 +702,7 @@ const SpellSystem = (() => {
         const next = [];
         requested.forEach(name => {
             const def = getAuraDefinition(name);
-            if (!def) return;
+            if (!def || !isAuraUnlocked(wizardRef, def.name)) return;
             if (!next.includes(def.name)) next.push(def.name);
         });
         if (previous.length === next.length && previous.every((name, index) => name === next[index])) {
@@ -652,7 +717,7 @@ const SpellSystem = (() => {
     function toggleAura(wizardRef, auraName) {
         if (!wizardRef) return false;
         const aura = getAuraDefinition(auraName);
-        if (!aura) return false;
+        if (!aura || !isAuraUnlocked(wizardRef, aura.name)) return false;
         const active = normalizeActiveAuras(wizardRef).slice();
         const idx = active.indexOf(aura.name);
         if (idx >= 0) {
@@ -1277,6 +1342,47 @@ const SpellSystem = (() => {
         return spellName === "placeobject" || spellName === "blackdiamond";
     }
 
+    function canUseEditorFeatures(wizardRef) {
+        if (!wizardRef) return false;
+        if (typeof wizardRef.isGodMode === "function") {
+            return !!wizardRef.isGodMode();
+        }
+        return true;
+    }
+
+    function ignoresMagicCosts(wizardRef) {
+        return !!(
+            globalThis.Spell &&
+            typeof globalThis.Spell.ignoresMagicCosts === "function" &&
+            globalThis.Spell.ignoresMagicCosts(wizardRef)
+        );
+    }
+
+    function canAffordMagicCost(wizardRef, cost) {
+        if (globalThis.Spell && typeof globalThis.Spell.canAffordMagicCost === "function") {
+            return globalThis.Spell.canAffordMagicCost(cost, wizardRef);
+        }
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef?.magic) ? wizardRef.magic : 0;
+        return currentMagic >= normalizedCost;
+    }
+
+    function spendMagicCost(wizardRef, cost) {
+        if (globalThis.Spell && typeof globalThis.Spell.spendMagicCost === "function") {
+            return globalThis.Spell.spendMagicCost(cost, wizardRef);
+        }
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (!wizardRef) return false;
+        if (ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef.magic) ? wizardRef.magic : 0;
+        if (currentMagic < normalizedCost) return false;
+        wizardRef.magic = Math.max(0, currentMagic - normalizedCost);
+        return true;
+    }
+
     function isEditorToolName(spellName) {
         return spellName === "wall" || spellName === "buildroad" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "blackdiamond" || spellName === "nodeinspector";
     }
@@ -1290,17 +1396,14 @@ const SpellSystem = (() => {
     }
 
     function setEditorMode(active, wizardRef) {
-        const next = !!active;
+        const next = !!active && canUseEditorFeatures(wizardRef);
         if (editorMode === next) return next;
         editorMode = next;
         if (wizardRef) {
             wizardRef.editorMode = next;
-        }
-        // Show/hide the editor mode banner
-        if (editorMode) {
-            $("#editorModeBanner").removeClass("hidden");
-        } else {
-            $("#editorModeBanner").addClass("hidden");
+            if (!next) {
+                wizardRef.showEditorPanel = false;
+            }
         }
         // Rebuild the spell menu to add/remove editor options
         spellMenuMode = "main";
@@ -1311,6 +1414,7 @@ const SpellSystem = (() => {
     }
 
     function toggleEditorMode(wizardRef) {
+        if (!canUseEditorFeatures(wizardRef)) return false;
         return setEditorMode(!editorMode, wizardRef);
     }
 
@@ -1590,7 +1694,7 @@ const SpellSystem = (() => {
         wizardRef.treeGrowHoldLocked = !!lockUntilRelease;
     }
 
-    function startTreeGrowthChannel(wizardRef, targetTree, growthPerSecond = 1, magicPerSecond = 15, maxSize = 20) {
+    function startTreeGrowthChannel(wizardRef, targetTree, growthPerSecond = 1, magicPerSecond = 30, maxSize = 20) {
         if (!wizardRef || !targetTree || typeof targetTree.applySize !== "function") return false;
         wizardRef.treeGrowHoldLocked = false;
         wizardRef.treeGrowthChannel = {
@@ -1603,8 +1707,12 @@ const SpellSystem = (() => {
     }
 
     function tickMagic(wizardRef) {
-        if (!wizardRef || paused) return;
         const now = performance.now();
+        if (!wizardRef) return;
+        if (paused) {
+            lastMagicTickMs = now;
+            return;
+        }
         if (!lastMagicTickMs) {
             lastMagicTickMs = now;
             return;
@@ -1625,10 +1733,10 @@ const SpellSystem = (() => {
         }
         if (auraActive) {
             const auraCost = auraDrainPerSecond * dtSec;
-            if (wizardRef.magic < auraCost) {
+            if (!canAffordMagicCost(wizardRef, auraCost)) {
                 setActiveAuras(wizardRef, []);
             } else {
-                wizardRef.magic = Math.max(0, wizardRef.magic - auraCost);
+                spendMagicCost(wizardRef, auraCost);
             }
         }
 
@@ -1652,12 +1760,12 @@ const SpellSystem = (() => {
         }
 
         const magicCost = channel.magicPerSecond * dtSec;
-        if (wizardRef.magic < magicCost) {
+        if (!canAffordMagicCost(wizardRef, magicCost)) {
             stopTreeGrowthChannel(wizardRef, false);
             return;
         }
 
-        wizardRef.magic = Math.max(0, wizardRef.magic - magicCost);
+        spendMagicCost(wizardRef, magicCost);
         const nextSize = Math.min(channel.maxSize, currentSize + channel.growthPerSecond * dtSec);
         channel.targetTree.applySize(nextSize);
         if (nextSize >= channel.maxSize - 0.0001) {
@@ -2526,8 +2634,11 @@ const SpellSystem = (() => {
                 const projectile = new ProjectileClass();
                 const requiredMagic = (vanishSpellName === "editorvanish")
                     ? 0
-                    : Math.max(15, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
-                if (wizard.magic < requiredMagic) {
+                    : Math.max(VANISH_MAGIC_COST_PER_CAST, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
+                if (!canAffordMagicCost(wizardRef, requiredMagic)) {
+                    if (globalThis.Spell && typeof globalThis.Spell.indicateInsufficientMagic === "function") {
+                        globalThis.Spell.indicateInsufficientMagic();
+                    }
                     finishBurst();
                     return;
                 }
@@ -3808,11 +3919,16 @@ const SpellSystem = (() => {
             (typeof debugMode !== "undefined" && debugMode) ||
             (typeof globalThis !== "undefined" && globalThis.debugMode)
         );
+        const triggerAreaTargetingEnabled = !!(
+            debugEnabled ||
+            activeSpell === "editscript" ||
+            activeSpell === "triggerarea"
+        );
         const canTargetObject = (obj) => !!(
             obj &&
             !obj.gone &&
             !obj.vanishing &&
-            (!(obj.type === "triggerArea" || obj.isTriggerArea === true) || debugEnabled) &&
+            (!(obj.type === "triggerArea" || obj.isTriggerArea === true) || triggerAreaTargetingEnabled) &&
             isValidObjectTargetForSpell(activeSpell, obj, wizardRef) &&
             !hasSpellAlreadyTargetedObject(wizardRef, activeSpell, obj)
         );
@@ -3832,11 +3948,7 @@ const SpellSystem = (() => {
     }
 
     function isTriggerAreaDebugEditEnabled(wizardRef) {
-        const debugEnabled = (
-            (typeof debugMode !== "undefined" && debugMode) ||
-            (typeof globalThis !== "undefined" && globalThis.debugMode)
-        );
-        return !!(wizardRef && wizardRef.currentSpell === "triggerarea" && debugEnabled);
+        return !!(wizardRef && wizardRef.currentSpell === "triggerarea");
     }
 
     function clearTriggerAreaVertexSelection(wizardRef) {
@@ -4478,13 +4590,17 @@ const SpellSystem = (() => {
         let projectile = null;
 
         if (wizardRef.currentSpell === "grenades") {
-            if (!wizardRef.inventory.includes("grenades") || wizardRef.inventory.grenades <= 0) return;
-            wizardRef.inventory.grenades--;
+            const inventory = (wizardRef && typeof wizardRef.getInventory === "function")
+                ? wizardRef.getInventory()
+                : wizardRef.inventory;
+            if (!inventory || typeof inventory.remove !== "function" || !inventory.remove("grenades", 1)) return;
             projectile = new globalThis.Grenade();
         } else if (wizardRef.currentSpell === "rocks") {
             projectile = new globalThis.Rock();
         } else if (wizardRef.currentSpell === "fireball") {
             projectile = new globalThis.Fireball();
+        } else if (wizardRef.currentSpell === "freeze") {
+            projectile = new globalThis.Iceball();
         } else if (wizardRef.currentSpell === "vanish") {
             projectile = new globalThis.Vanish();
         } else if (wizardRef.currentSpell === "editorvanish") {
@@ -4522,7 +4638,7 @@ const SpellSystem = (() => {
     }
 
     function buildSpellList(wizardRef) {
-        return SPELL_DEFS.map(spell => {
+        return SPELL_DEFS.filter(spell => isSpellUnlocked(wizardRef, spell.name)).map(spell => {
             const key = spell.name === "firewall"
                 ? "F+W"
                 : spell.name === "editscript"
@@ -4536,6 +4652,37 @@ const SpellSystem = (() => {
             }
             return {...spell, key};
         });
+    }
+
+    function syncWizardUnlockState(wizardRef, options = {}) {
+        if (!wizardRef) return [];
+        const editorAllowed = canUseEditorFeatures(wizardRef);
+        wizardRef.showEditorPanel = editorAllowed;
+        if (editorMode !== editorAllowed) {
+            setEditorMode(editorAllowed, wizardRef);
+        }
+        const spells = buildSpellList(wizardRef);
+        wizardRef.spells = spells;
+        normalizeActiveAuras(wizardRef);
+
+        const availableSpellNames = spells.map(spell => spell.name);
+        const currentSpell = (typeof wizardRef.currentSpell === "string") ? wizardRef.currentSpell : "";
+        const canKeepCurrent = !!currentSpell && (
+            availableSpellNames.includes(currentSpell) ||
+            (editorAllowed && (isEditorSpellName(currentSpell) || isEditorToolName(currentSpell)))
+        );
+        if (!canKeepCurrent) {
+            wizardRef.currentSpell = availableSpellNames[0] || "fireball";
+        }
+        if (!availableSpellNames.includes(wizardRef.selectedSpellName)) {
+            wizardRef.selectedSpellName = availableSpellNames[0] || "fireball";
+        }
+
+        if (options.refreshUi !== false) {
+            refreshSpellSelector(wizardRef);
+            refreshAuraSelector(wizardRef);
+        }
+        return spells;
     }
 
     function buildEditorToolList(wizardRef) {
@@ -4584,7 +4731,7 @@ const SpellSystem = (() => {
         if (!$grid.length) return;
         $grid.empty();
 
-        AURA_DEFS.forEach(aura => {
+        getAvailableAuraDefinitions(wizardRef).forEach(aura => {
             const auraIcon = $("<div>")
                 .addClass("auraIcon")
                 .css({
@@ -5133,11 +5280,13 @@ const SpellSystem = (() => {
 
     function refreshEditorSelector(wizardRef) {
         if (!wizardRef) return;
+        $("#editorSelector").toggleClass("hidden", !canUseEditorFeatures(wizardRef));
         // Editor options are now merged into the spell menu
         refreshSpellSelector(wizardRef);
     }
 
     function openEditorSelector(wizardRef) {
+        if (!canUseEditorFeatures(wizardRef)) return;
         // Editor options are now merged into the spell menu; show main spell menu
         spellMenuMode = "main";
         showMainSpellMenu(wizardRef);
@@ -5499,7 +5648,7 @@ const SpellSystem = (() => {
                 Object.assign(selCss, getAnimalFrameCSS(selectedType));
             }
             $("#selectedSpell").empty().css(selCss);
-        } else if (editorMode && (isEditorToolName(wizardRef.currentSpell) || isEditorSpellName(wizardRef.currentSpell))) {
+        } else if (canUseEditorFeatures(wizardRef) && editorMode && (isEditorToolName(wizardRef.currentSpell) || isEditorSpellName(wizardRef.currentSpell))) {
             const iconUrl = getSelectedEditorIcon(wizardRef);
             const $selectedSpell = $("#selectedSpell").empty().css({
                 "background-image": `url('${iconUrl}')`,
@@ -5663,7 +5812,7 @@ const SpellSystem = (() => {
         });
 
         // If editor mode is active, append editor tools and category icons at the bottom
-        if (editorMode) {
+        if (canUseEditorFeatures(wizardRef) && editorMode) {
             // Separator
             $("#spellGrid").append(
                 $("<div>").css({
@@ -5793,6 +5942,12 @@ const SpellSystem = (() => {
 
     function setCurrentSpell(wizardRef, spellName) {
         if (!wizardRef) return;
+        if ((isEditorSpellName(spellName) || isEditorToolName(spellName)) && !canUseEditorFeatures(wizardRef)) {
+            return;
+        }
+        if (!isEditorSpellName(spellName) && !isEditorToolName(spellName) && !isSpellUnlocked(wizardRef, spellName)) {
+            return;
+        }
         const previousSpell = wizardRef.currentSpell;
         spellMenuMode = "main";
         if (spellName !== "editscript") {
@@ -5847,34 +6002,36 @@ const SpellSystem = (() => {
         getSelectedRoadWidth(wizardRef);
         getSelectedRoofOverhang(wizardRef);
         getSelectedRoofPeakHeight(wizardRef);
+        getUnlockedSpellNames(wizardRef);
+        getUnlockedAuraNames(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
         wizardRef.selectedSpellName = getSelectedSpellName(wizardRef);
         normalizeActiveAuras(wizardRef);
         // Determine if current spell is valid for available mode
         const isValidSpell = wizardRef.currentSpell &&
             (wizardRef.spells.some(s => s.name === wizardRef.currentSpell) ||
-             isEditorSpellName(wizardRef.currentSpell) ||
-             isEditorToolName(wizardRef.currentSpell));
+             (canUseEditorFeatures(wizardRef) && (isEditorSpellName(wizardRef.currentSpell) ||
+             isEditorToolName(wizardRef.currentSpell))));
         if (!isValidSpell) {
-            wizardRef.currentSpell = "wall";
+            wizardRef.currentSpell = wizardRef.selectedSpellName || "fireball";
         }
         // If current spell is an editor tool (wall/buildroad), start in editor mode
-        if (isEditorToolName(wizardRef.currentSpell)) {
+        if (canUseEditorFeatures(wizardRef) && isEditorToolName(wizardRef.currentSpell)) {
             wizardRef.showEditorPanel = true;
         }
         wizardRef.refreshSpellSelector = () => refreshSpellSelector(wizardRef);
         wizardRef.refreshEditorSelector = () => refreshEditorSelector(wizardRef);
+        wizardRef.syncSpellAvailability = () => syncWizardUnlockState(wizardRef);
         // Keep startup spell state consistent with manual spell re-selection.
         setCurrentSpell(wizardRef, wizardRef.currentSpell);
-        setEditorPanelVisible(wizardRef, wizardRef.showEditorPanel !== false);
+        setEditorPanelVisible(wizardRef, canUseEditorFeatures(wizardRef) && wizardRef.showEditorPanel !== false);
         refreshAuraSelector(wizardRef);
         fetchFlooringTextures();
         fetchWallTextures();
         fetchPlaceableImages().then(() => {
             normalizePlaceableSelections(wizardRef);
             refreshSelectedPlaceableMetadata(wizardRef);
-            wizardRef.spells = buildSpellList(wizardRef);
-            refreshSpellSelector(wizardRef);
+            syncWizardUnlockState(wizardRef);
         });
     }
 
@@ -5917,11 +6074,13 @@ const SpellSystem = (() => {
 
     function showEditorMenu(wizardRef) {
         if (!wizardRef) return;
+        if (!canUseEditorFeatures(wizardRef)) return;
         openEditorSelector(wizardRef);
     }
 
     function showEditorSubmenuForSelectedCategory(wizardRef) {
         if (!wizardRef) return;
+        if (!canUseEditorFeatures(wizardRef)) return;
         const category = normalizeSelectedEditorCategory(wizardRef);
         activateSelectedEditorTool(wizardRef);
         spellMenuMode = "editor-items";
@@ -5939,23 +6098,29 @@ const SpellSystem = (() => {
 
     function setEditorPanelVisible(wizardRef, visible) {
         if (!wizardRef) return;
-        wizardRef.showEditorPanel = !!visible;
+        wizardRef.showEditorPanel = canUseEditorFeatures(wizardRef);
+        $("#editorSelector").toggleClass("hidden", !wizardRef.showEditorPanel);
         if (wizardRef.showEditorPanel) {
             setEditorMode(true, wizardRef);
         } else {
+            $("#editorMenu").addClass("hidden");
             setEditorMode(false, wizardRef);
         }
     }
 
     function toggleEditorPanelVisible(wizardRef) {
         if (!wizardRef) return false;
-        const next = !editorMode;
-        setEditorPanelVisible(wizardRef, next);
-        return next;
+        if (!canUseEditorFeatures(wizardRef)) {
+            setEditorPanelVisible(wizardRef, false);
+            return false;
+        }
+        setEditorPanelVisible(wizardRef, true);
+        return true;
     }
 
     function activateSelectedEditorTool(wizardRef) {
         if (!wizardRef) return null;
+        if (!canUseEditorFeatures(wizardRef)) return null;
         const category = normalizeSelectedEditorCategory(wizardRef);
         if (category === "powerups") {
             setCurrentSpell(wizardRef, "blackdiamond");
@@ -5977,6 +6142,7 @@ const SpellSystem = (() => {
 
     function selectEditorCategory(wizardRef, category) {
         if (!wizardRef) return;
+        if (!canUseEditorFeatures(wizardRef)) return;
         setSelectedPlaceableCategory(wizardRef, category);
         wizardRef.selectedEditorCategory = category;
         refreshSelectedPlaceableMetadata(wizardRef);
@@ -5985,6 +6151,7 @@ const SpellSystem = (() => {
 
     function showPlaceableMenu(wizardRef) {
         if (!wizardRef) return;
+        if (!canUseEditorFeatures(wizardRef)) return;
         activateSelectedEditorTool(wizardRef);
         showEditorMenu(wizardRef);
     }
@@ -6000,9 +6167,11 @@ const SpellSystem = (() => {
         initWizardSpells,
         refreshSpellSelector,
         refreshAuraSelector,
+        syncWizardUnlockState,
         setCurrentSpell,
         toggleAura,
         isAuraActive,
+        isPlayerInvisibleToEnemies,
         isEditorMode,
         setEditorMode,
         toggleEditorMode,
@@ -6050,8 +6219,7 @@ const SpellSystem = (() => {
         setHealingAuraHpMultiplier,
         startTreeGrowthChannel,
         stopTreeGrowthChannel,
-        updateCharacterObjectCollisions
-        ,
+        updateCharacterObjectCollisions,
         getHoverTargetForCurrentSpell,
         isValidHoverTargetForCurrentSpell,
         getVanishWallPreviewPolygonForHover,

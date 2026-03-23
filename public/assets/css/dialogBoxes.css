@@ -24,7 +24,7 @@
     display: block;
     width: 100%;
     border: 10px solid whitesmoke;
-    margin: -10px -10px 10px;
+    margin: -10px -10px 1.2em;
     text-align: center;
     font-size: 12pt;
 }
@@ -39,26 +39,47 @@
     z-index: 999;
     top: 50%;
     left: 50%;
-    width: min(90vw, 640px);
-    min-height: min(80vh, 560px);
+    width: min(90vw, 1000px);
+    min-height: min(80vh, 875px);
     transform: translate(-50%, -50%);
     box-sizing: border-box;
-    padding: 5.5rem 4.25rem 4rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 7rem 4.25rem 8.5rem;
     color: #3d2714;
     text-align: center;
     background: center / 100% 100% no-repeat url("../images/scroll.png");
+}
+
+.scrollMessageTitle {
+    width: 100%;
+    max-width: 508px;
+    margin: 0 auto 1.5rem;
+    margin-top: 3rem;
+    font-family: "Apple Chancery", "URW Chancery L", "Palatino Linotype", "Book Antiqua", Palatino, cursive;
+    font-size: clamp(25px, 3.15vmin, 38px);
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-shadow: 0 1px 0 rgba(255, 248, 220, 0.45);
 }
 
 .scrollMessageContent {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 300px;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 432px;
 }
 
 .scrollMessageText {
     width: 100%;
-    max-width: 420px;
+    max-width: 508px;
+    font-family: "Apple Chancery", "URW Chancery L", "Palatino Linotype", "Book Antiqua", Palatino, cursive;
     font-size: clamp(18px, 2.3vmin, 28px);
     line-height: 1.45;
     white-space: pre-wrap;
@@ -67,11 +88,9 @@
 }
 
 .scrollMessageButtons {
-    position: absolute;
-    left: 50%;
-    bottom: 2.2rem;
+    position: static;
+    margin-top: 1rem;
     width: auto;
-    transform: translateX(-50%);
 }
 
 .scrollMessageButton {
@@ -80,7 +99,9 @@
     border: 1px solid #6c4b2b;
     border-radius: 999px;
     background: rgba(246, 230, 190, 0.95);
+    bottom: 0;
     color: #3d2714;
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, "Times New Roman", serif;
     font-size: clamp(16px, 2vmin, 22px);
     text-transform: lowercase;
     cursor: pointer;
@@ -220,8 +241,241 @@
     display: none;
 }
 
+.tradeModalBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(12, 8, 4, 0.58);
+    backdrop-filter: blur(4px);
+}
+
+.tradeModalBackdrop,
+.tradeModalBackdrop * {
+    cursor: auto !important;
+}
+
+.tradeModal {
+    width: min(980px, calc(100vw - 48px));
+    max-height: min(760px, calc(100vh - 48px));
+    overflow: auto;
+}
+
+.tradeModalShell {
+    border: 2px solid #7b5a2d;
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(251, 241, 217, 0.98), rgba(235, 220, 190, 0.98));
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    color: #2f2417;
+    padding: 22px;
+}
+
+.tradeModalHeader {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.tradeModalTitle {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.tradeModalDescription {
+    margin-top: 8px;
+    max-width: 60ch;
+    color: #5a4831;
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+.tradeCurrencyBadge {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    min-width: 130px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: rgba(87, 55, 17, 0.1);
+    border: 1px solid rgba(87, 55, 17, 0.18);
+}
+
+.tradeCurrencyValue {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tradeCurrencyLabel {
+    margin-top: 4px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6d5536;
+}
+
+.tradeModalColumns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.tradeColumn {
+    min-width: 0;
+    padding: 16px;
+    border-radius: 14px;
+    background: rgba(255, 251, 242, 0.62);
+    border: 1px solid rgba(122, 90, 45, 0.18);
+}
+
+.tradeColumnTitle {
+    margin-bottom: 12px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+
+.tradeEntryList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tradeEntryCard {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(105, 74, 35, 0.18);
+    background: #fffaf0;
+    color: inherit;
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.tradeEntryCard:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(58, 38, 17, 0.12);
+    border-color: rgba(105, 74, 35, 0.35);
+}
+
+.tradeEntryCard,
+.tradeEntryCard * {
+    cursor: pointer !important;
+}
+
+.tradeEntryCard.is-disabled,
+.tradeEntryCard:disabled {
+    opacity: 0.55;
+    cursor: default;
+    box-shadow: none;
+}
+
+.tradeEntryCard.is-disabled,
+.tradeEntryCard:disabled,
+.tradeEntryCard.is-disabled *,
+.tradeEntryCard:disabled * {
+    cursor: default !important;
+}
+
+.tradeEntryImage {
+    width: 72px;
+    height: 72px;
+    flex: 0 0 72px;
+    border-radius: 10px;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+    background-color: rgba(122, 90, 45, 0.08);
+}
+
+.tradeEntryLabel {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: #4f3514;
+}
+
+.tradeEmptyState {
+    padding: 16px;
+    border-radius: 12px;
+    background: rgba(255, 248, 236, 0.85);
+    color: #735c3d;
+    font-size: 14px;
+}
+
+.tradeModalFooter {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.tradeModalFooterNote {
+    margin-right: auto;
+    color: #6a5539;
+    font-size: 13px;
+}
+
+.tradeDoneButton {
+    min-width: 120px;
+    padding: 12px 18px;
+    border: 1px solid rgba(79, 53, 20, 0.18);
+    border-radius: 12px;
+    background: #4f3514;
+    color: #fff8ea;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.tradeDoneButton:hover {
+    background: #633f10;
+}
+
+.tradeDoneButton:disabled {
+    opacity: 0.5;
+    cursor: default;
+    background: #4f3514;
+}
+
 @media screen and (max-width: 400px) {
     .dialogBox {
         min-width: 100%;
+    }
+}
+
+@media (max-width: 720px) {
+    .tradeModalBackdrop {
+        padding: 12px;
+    }
+
+    .tradeModal {
+        width: calc(100vw - 24px);
+        max-height: calc(100vh - 24px);
+    }
+
+    .tradeModalHeader {
+        flex-direction: column;
+    }
+
+    .tradeCurrencyBadge {
+        align-items: flex-start;
+    }
+
+    .tradeModalColumns {
+        grid-template-columns: 1fr;
     }
 }

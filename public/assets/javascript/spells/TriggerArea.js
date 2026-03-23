@@ -1,4 +1,15 @@
 class TriggerAreaSpell extends globalThis.Spell {
+    static supportsObjectTargeting = true;
+
+    static isValidObjectTarget(target, _wizardRef = null) {
+        return !!(
+            target &&
+            !target.gone &&
+            !target.vanishing &&
+            (target.type === "triggerArea" || target.isTriggerArea === true)
+        );
+    }
+
     constructor(x, y) {
         super(x, y);
         this.gravity = 0;

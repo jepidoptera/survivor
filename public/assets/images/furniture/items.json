@@ -149,6 +149,19 @@
     {
       "file": "mat.png",
       "texturePath": "/assets/images/furniture/mat.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/mat_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/mat_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/mat.png"
+        }
+      ],
       "width": 4,
       "height": 4,
       "baseSize": 4,

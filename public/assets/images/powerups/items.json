@@ -208,6 +208,19 @@
       "name": "Gold Coin",
       "file": "goldcoin.png",
       "imagePath": "/assets/images/powerups/goldcoin.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/powerups/lod/goldcoin_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/powerups/lod/goldcoin_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/powerups/goldcoin.png"
+        }
+      ],
       "width": 1.5,
       "height": 0.8,
       "z": 0,
@@ -243,6 +256,52 @@
       },
       "gravitateRadius": 2,
       "gravitateSpeed": 5
+    },
+    {
+      "id": "fragglegod",
+      "name": "Fragglegod",
+      "file": "fragglegod.png",
+      "imagePath": "/assets/images/animals/fragglegod.png",
+      "width": 2.03,
+      "height": 1.45,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 1
+      },
+      "frameCount": {
+        "x": 2,
+        "y": 2
+      },
+      "animatedFps": 6,
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.75
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      },
+      "gravitateRadius": 0,
+      "gravitateSpeed": 0
     }
   ]
 }

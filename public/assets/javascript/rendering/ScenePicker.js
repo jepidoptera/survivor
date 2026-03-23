@@ -196,6 +196,94 @@ void main(void) {
             global.renderingScenePicker = this.publicApi;
         }
 
+        buildTriggerAreaPickGeometry(points) {
+            const polygonPoints = Array.isArray(points)
+                ? points.filter((pt) => pt && Number.isFinite(pt.x) && Number.isFinite(pt.y))
+                : [];
+            if (polygonPoints.length < 3 || typeof PIXI === "undefined" || typeof PIXI.Geometry !== "function") {
+                return null;
+            }
+
+            const flat = [];
+            const worldPositions = new Float32Array(polygonPoints.length * 3);
+            const uvs = new Float32Array(polygonPoints.length * 2);
+            for (let i = 0; i < polygonPoints.length; i++) {
+                const pt = polygonPoints[i];
+                flat.push(Number(pt.x), Number(pt.y));
+                worldPositions[i * 3] = Number(pt.x);
+                worldPositions[i * 3 + 1] = Number(pt.y);
+                worldPositions[i * 3 + 2] = 0;
+                uvs[i * 2] = 0;
+                uvs[i * 2 + 1] = 0;
+            }
+
+            let indices = null;
+            const earcut = PIXI.utils && typeof PIXI.utils.earcut === "function"
+                ? PIXI.utils.earcut
+                : null;
+            if (earcut) {
+                const triangulated = earcut(flat, null, 2);
+                if (Array.isArray(triangulated) || ArrayBuffer.isView(triangulated)) {
+                    indices = triangulated;
+                }
+            }
+            if (!indices || indices.length < 3) {
+                const fallback = [];
+                for (let i = 1; i < polygonPoints.length - 1; i++) {
+                    fallback.push(0, i, i + 1);
+                }
+                indices = fallback;
+            }
+            if (!indices || indices.length < 3) {
+                return null;
+            }
+
+            return new PIXI.Geometry()
+                .addAttribute("aWorldPosition", worldPositions, 3)
+                .addAttribute("aUvs", uvs, 2)
+                .addIndex(new Uint16Array(indices));
+        }
+
+        createPickTriggerAreaMeshProxy(item) {
+            const geometry = this.buildTriggerAreaPickGeometry(
+                item && item.groundPlaneHitbox && Array.isArray(item.groundPlaneHitbox.points)
+                    ? item.groundPlaneHitbox.points
+                    : null
+            );
+            if (!geometry || typeof PIXI === "undefined" || typeof PIXI.Mesh !== "function") {
+                return null;
+            }
+            const shader = PIXI.Shader.from(PICK_WORLD_MESH_VS, PICK_MESH_FS, {
+                uScreenSize: new Float32Array([1, 1]),
+                uCameraWorld: new Float32Array([0, 0]),
+                uViewScale: 1,
+                uXyRatio: 1,
+                uDepthRange: new Float32Array([1, 1]),
+                uWorldSize: new Float32Array([0, 0]),
+                uWrapEnabled: new Float32Array([0, 0]),
+                uWrapAnchorWorld: new Float32Array([0, 0]),
+                uSampler: PIXI.Texture.WHITE,
+                uPickColor: new Float32Array([1, 1, 1]),
+                uAlphaCutoff: 0
+            });
+            const state = PIXI.State ? new PIXI.State() : PIXI.State.for2d();
+            state.blend = false;
+            state.culling = false;
+            state.depthTest = true;
+            state.depthMask = true;
+            const mesh = new PIXI.Mesh(
+                geometry,
+                shader,
+                state,
+                PIXI.DRAW_MODES.TRIANGLES
+            );
+            mesh.name = "renderingPickerTriggerAreaMeshProxy";
+            mesh.visible = false;
+            mesh.interactive = false;
+            mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
+            return { proxy: mesh, type: "mesh", shader, useWorldPositions: true, isTriggerAreaMesh: true };
+        }
+
         isDebugModeEnabled() {
             return !!(
                 (typeof debugMode !== "undefined" && debugMode) ||
@@ -1015,11 +1103,14 @@ void main(void) {
             const gl = renderer && renderer.gl ? renderer.gl : null;
             const req = this.pickPendingReadback;
             const frame = Number.isFinite(currentFrame) ? Math.floor(Number(currentFrame)) : -1;
+            const nowMs = performance.now();
+            const minDelayMs = Math.max(4, Math.ceil(1000 / 240));
             if (
                 Number.isFinite(req.frame) &&
                 req.frame >= 0 &&
                 frame >= 0 &&
-                (frame - req.frame) < PICK_READBACK_MIN_FRAME_DELAY
+                (frame - req.frame) < PICK_READBACK_MIN_FRAME_DELAY &&
+                (nowMs - req.submittedAtMs) < minDelayMs
             ) {
                 return;
             }
@@ -1174,9 +1265,9 @@ void main(void) {
             let record = this.pickProxyByObject.get(displayObj) || null;
             if (!record) {
                 if (item && item.type === "triggerArea") {
-                    const created = this.createPickGraphicsProxy();
+                    const created = this.createPickTriggerAreaMeshProxy(item);
                     if (!created) return null;
-                    record = { ...created, sourceType: PIXI.Graphics };
+                    record = { ...created, sourceType: PIXI.Mesh };
                 } else if (displayObj instanceof PIXI.Sprite) {
                     const created = this.createPickSpriteProxy();
                     if (!created) return null;
@@ -1196,6 +1287,22 @@ void main(void) {
         syncPickProxyFromDisplayObject(record, displayObj, rgbColor, item = null) {
             if (!record || !record.proxy || !displayObj) return false;
             const proxy = record.proxy;
+            if (record.isTriggerAreaMesh) {
+                const points = (
+                    item &&
+                    item.groundPlaneHitbox &&
+                    Array.isArray(item.groundPlaneHitbox.points)
+                ) ? item.groundPlaneHitbox.points : null;
+                const geometry = this.buildTriggerAreaPickGeometry(points);
+                if (!geometry) {
+                    proxy.visible = false;
+                    return false;
+                }
+                if (proxy.geometry && proxy.geometry !== geometry && typeof proxy.geometry.destroy === "function") {
+                    proxy.geometry.destroy();
+                }
+                proxy.geometry = geometry;
+            }
             if (record.type === "graphics") {
                 const camera = this.pickLastCamera || null;
                 const points = (
@@ -1316,11 +1423,13 @@ void main(void) {
                 proxy.alpha = 1;
                 proxy.visible = true;
                 if (record.shader && record.shader.uniforms) {
-                    const sourceTexture = (displayObj.material && displayObj.material.texture)
-                        ? displayObj.material.texture
-                        : ((displayObj.shader && displayObj.shader.uniforms && displayObj.shader.uniforms.uSampler)
-                            ? displayObj.shader.uniforms.uSampler
-                            : PIXI.Texture.WHITE);
+                    const sourceTexture = record.isTriggerAreaMesh
+                        ? PIXI.Texture.WHITE
+                        : (displayObj.material && displayObj.material.texture)
+                            ? displayObj.material.texture
+                            : ((displayObj.shader && displayObj.shader.uniforms && displayObj.shader.uniforms.uSampler)
+                                ? displayObj.shader.uniforms.uSampler
+                                : PIXI.Texture.WHITE);
                     record.shader.uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
                     record.shader.uniforms.uPickColor = new Float32Array([
                         rgbColor[0] / 255,
@@ -1465,6 +1574,9 @@ void main(void) {
             const sortable = [];
             const collectStartMs = performance.now();
             if (explicitDrawOrder) {
+                const triggerAreaEntries = [];
+                const otherEntries = [];
+                const triggerAreaItems = new Set();
                 for (let i = 0; i < explicitDrawOrder.length; i++) {
                     const rec = explicitDrawOrder[i];
                     if (!rec || !rec.item || !rec.displayObj) continue;
@@ -1474,8 +1586,51 @@ void main(void) {
                     if (item.gone || item.vanishing) continue;
                     if (!displayObj.parent) continue;
                     if (!forceInclude && !displayObj.visible) continue;
-                    sortable.push({ item, displayObj, idx: i });
+                    const entry = {
+                        item,
+                        displayObj,
+                        idx: i,
+                        forceInclude,
+                        layerRank: this.getDisplayObjectPickLayerRank(displayObj),
+                        sourceOrder: this.getDisplayObjectSourceOrder(displayObj, i)
+                    };
+                    if (item.type === "triggerArea" || item.isTriggerArea === true) {
+                        triggerAreaEntries.push(entry);
+                        triggerAreaItems.add(item);
+                    } else {
+                        otherEntries.push(entry);
+                    }
                 }
+                const onscreenItems = Array.isArray(onscreenObjects)
+                    ? onscreenObjects
+                    : ((onscreenObjects && typeof onscreenObjects[Symbol.iterator] === "function")
+                        ? Array.from(onscreenObjects)
+                        : []);
+                for (let i = 0; i < onscreenItems.length; i++) {
+                    const item = onscreenItems[i];
+                    if (!item || item.gone || item.vanishing) continue;
+                    if (!(item.type === "triggerArea" || item.isTriggerArea === true)) continue;
+                    if (triggerAreaItems.has(item)) continue;
+                    const displayObj = this.getTargetDisplayObject(item, ctx);
+                    if (!displayObj || !displayObj.parent) continue;
+                    triggerAreaEntries.push({
+                        item,
+                        displayObj,
+                        idx: explicitDrawOrder.length + i,
+                        forceInclude: true,
+                        layerRank: this.getDisplayObjectPickLayerRank(displayObj),
+                        sourceOrder: this.getDisplayObjectSourceOrder(displayObj, explicitDrawOrder.length + i)
+                    });
+                    triggerAreaItems.add(item);
+                }
+                otherEntries.sort((a, b) => {
+                    if (a.layerRank !== b.layerRank) return a.layerRank - b.layerRank;
+                    if (a.displayObj.parent === b.displayObj.parent && a.sourceOrder !== b.sourceOrder) {
+                        return a.sourceOrder - b.sourceOrder;
+                    }
+                    return a.idx - b.idx;
+                });
+                sortable.push(...triggerAreaEntries, ...otherEntries);
             } else {
                 const items = Array.isArray(onscreenObjects)
                     ? onscreenObjects
@@ -1693,6 +1848,35 @@ void main(void) {
             return null;
         }
 
+        getDisplayObjectPickLayerRank(displayObj) {
+            let node = displayObj || null;
+            while (node) {
+                const name = (typeof node.name === "string") ? node.name : "";
+                if (name === "renderingGround") return 0;
+                if (name === "renderingRoadsFloor") return 1;
+                if (name === "renderingGroundObjects") return 2;
+                if (name === "renderingLosShadow") return 3;
+                if (name === "renderingDepthObjects") return 4;
+                if (name === "renderingObjects3d") return 5;
+                if (name === "renderingEntities") return 6;
+                if (name === "renderingUi") return 7;
+                if (name === "renderingScriptMessages") return 8;
+                node = node.parent || null;
+            }
+            return 999;
+        }
+
+        getDisplayObjectSourceOrder(displayObj, fallbackIndex = 0) {
+            if (!displayObj || !displayObj.parent || typeof displayObj.parent.getChildIndex !== "function") {
+                return fallbackIndex;
+            }
+            try {
+                return displayObj.parent.getChildIndex(displayObj);
+            } catch (_err) {
+                return fallbackIndex;
+            }
+        }
+
         beginHoverProfile(ctx) {
             const profiler = this.hoverProfiler;
             if (!profiler || profiler.printed) return null;
@@ -1799,10 +1983,12 @@ void main(void) {
                 currentSpell === "vanish" ||
                 currentSpell === "editorvanish" ||
                 currentSpell === "fireball" ||
+                currentSpell === "freeze" ||
                 currentSpell === "placeobject" ||
-                currentSpell === "editscript"
+                currentSpell === "editscript" ||
+                currentSpell === "triggerarea"
             );
-            const editscriptReadyForHover = currentSpell !== "editscript" || spaceHeld;
+            const spellHoverArmed = !spellNeedsHoverTarget || spaceHeld;
             let target = null;
             const canResolveTarget = !!(
                 wizard &&
@@ -1812,7 +1998,7 @@ void main(void) {
                 Number.isFinite(mousePos.screenX) &&
                 Number.isFinite(mousePos.screenY) &&
                 spellNeedsHoverTarget &&
-                editscriptReadyForHover
+                spellHoverArmed
             );
             const needsPickPass = !!(showPickerScreen || canResolveTarget);
             if (!needsPickPass) {

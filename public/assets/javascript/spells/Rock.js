@@ -26,7 +26,6 @@ class Rock extends globalThis.Spell {
                             wizard.food += animal.foodValue;
                             message(messageText);
                             animal.die();
-                            saveGame();
                         }
                         else {
                             // didn't die

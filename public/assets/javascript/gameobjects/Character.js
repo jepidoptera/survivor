@@ -18,7 +18,19 @@ class Character {
         this.frameRate = 1;
         this.moveTimeout = this.nextMove();
         this.attackTimeout = null;
+        this.acceleration = 50;
+        this.movementVector = {x: 0, y: 0};
+        this.currentMaxSpeed = 0;
+        this._closeCombatState = null;
+        this._hitboxCollisionDebug = null;
         this._scriptFrozenUntilMs = 0;
+        this.baselineTemperature = 0;
+        this.temperature = this.baselineTemperature;
+        this.nodeVisitLogLimit = 200;
+        this.nodeVisitLog = [];
+        this._tracePathState = null;
+        /** @type {Inventory} */
+        this.inventory = new Inventory();
 
         // Try to get node - if coords look like array indices (integers in map range), use them directly
         let node;
@@ -48,6 +60,7 @@ class Character {
         // Create hitboxes
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this._recordVisitedNode(this.node, "spawn");
     }
 
     get onfire() {
@@ -101,11 +114,1484 @@ class Character {
             }
         }
     }
+
+    _getHitboxDebugLabel(entity) {
+        if (!entity || typeof entity !== "object") return "unknown";
+        if (typeof entity.scriptingName === "string" && entity.scriptingName.trim()) {
+            return entity.scriptingName.trim();
+        }
+        if (typeof entity.name === "string" && entity.name.trim()) {
+            return entity.name.trim();
+        }
+        if (typeof entity.type === "string" && entity.type.trim()) {
+            return entity.type.trim();
+        }
+        if (entity.constructor && typeof entity.constructor.name === "string" && entity.constructor.name) {
+            return entity.constructor.name;
+        }
+        return "unknown";
+    }
+
+    _emitCloseCombatLifecycleLog(eventName, target = null, details = {}) {
+        if (typeof console === "undefined" || typeof console.log !== "function") return;
+        const actorLabel = this._getHitboxDebugLabel(this);
+        const targetLabel = this._getHitboxDebugLabel(target);
+        const payload = {
+            actor: actorLabel,
+            target: targetLabel,
+            phase: details.phase || null,
+            reason: details.reason || null,
+            x: Number(this.x),
+            y: Number(this.y)
+        };
+        console.log(`[CloseCombat] ${eventName}`, payload);
+    }
+
+    _buildHitboxDebugCandidateSummary(entity, sampleX, sampleY, sampleRadius, options = {}) {
+        if (!entity) return null;
+        const hitbox = entity.groundPlaneHitbox || entity.visualHitbox || entity.hitbox || null;
+        const entityRadius = Number.isFinite(entity.groundRadius)
+            ? Math.max(0, Number(entity.groundRadius))
+            : (Number.isFinite(entity.visualRadius) ? Math.max(0, Number(entity.visualRadius)) : 0);
+        const centerDistance = (this.map && typeof this.map.distanceBetweenPoints === "function")
+            ? this.map.distanceBetweenPoints(sampleX, sampleY, Number(entity.x) || 0, Number(entity.y) || 0)
+            : Math.hypot((Number(entity.x) || 0) - sampleX, (Number(entity.y) || 0) - sampleY);
+        const edgeGap = centerDistance - (sampleRadius + entityRadius);
+        const sampleHitbox = this._hitboxDebugSampleHitbox || {
+            type: "circle",
+            x: sampleX,
+            y: sampleY,
+            radius: sampleRadius
+        };
+        sampleHitbox.x = sampleX;
+        sampleHitbox.y = sampleY;
+        sampleHitbox.radius = sampleRadius;
+        this._hitboxDebugSampleHitbox = sampleHitbox;
+        const collision = (hitbox && typeof hitbox.intersects === "function")
+            ? hitbox.intersects(sampleHitbox)
+            : null;
+        const overlapMagnitude = (collision && Number.isFinite(collision.pushX) && Number.isFinite(collision.pushY))
+            ? Math.hypot(collision.pushX, collision.pushY)
+            : Math.max(0, -edgeGap);
+        return {
+            label: this._getHitboxDebugLabel(entity),
+            type: entity.type || (entity.constructor && entity.constructor.name) || "unknown",
+            x: Number(entity.x),
+            y: Number(entity.y),
+            radius: entityRadius,
+            centerDistance,
+            edgeGap,
+            overlap: overlapMagnitude,
+            intersects: !!collision,
+            pushX: collision && Number.isFinite(collision.pushX) ? Number(collision.pushX) : 0,
+            pushY: collision && Number.isFinite(collision.pushY) ? Number(collision.pushY) : 0,
+            isTarget: entity === options.target,
+            isHitboxMode: typeof entity.isUsingHitboxMovement === "function"
+                ? !!entity.isUsingHitboxMovement()
+                : !!(entity._closeCombatState && typeof entity._closeCombatState === "object")
+        };
+    }
+
+    _updateHitboxCollisionDebugSnapshot(patch = {}) {
+        const previous = (this._hitboxCollisionDebug && typeof this._hitboxCollisionDebug === "object")
+            ? this._hitboxCollisionDebug
+            : {};
+        this._hitboxCollisionDebug = {
+            ...previous,
+            ...patch,
+            updatedAt: Date.now()
+        };
+        return this._hitboxCollisionDebug;
+    }
+
+    getHitboxCollisionDebugInfo() {
+        if (!this._hitboxCollisionDebug || typeof this._hitboxCollisionDebug !== "object") {
+            return null;
+        }
+        try {
+            return JSON.parse(JSON.stringify(this._hitboxCollisionDebug));
+        } catch (_err) {
+            return { ...this._hitboxCollisionDebug };
+        }
+    }
+
+    distanceToPoint(x, y) {
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(this.x, this.y, x, y);
+        }
+        return Math.hypot((x - this.x), (y - this.y));
+    }
+
+    getStrikeDistance(target = null, baseRange = null) {
+        const baseDistance = Number.isFinite(baseRange)
+            ? Number(baseRange)
+            : (Number.isFinite(this.strikeRange) ? Number(this.strikeRange) : 0);
+        const selfRadius = Number.isFinite(this.groundRadius)
+            ? this.groundRadius
+            : (Number.isFinite(this.visualRadius) ? this.visualRadius : 0);
+        const targetRadius = (target && Number.isFinite(target.groundRadius))
+            ? target.groundRadius
+            : ((target && Number.isFinite(target.visualRadius)) ? target.visualRadius : 0);
+        return Math.max(baseDistance, selfRadius + targetRadius);
+    }
+
+    _getLocalWrappedDelta(fromX, fromY, toX, toY) {
+        return {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(fromX, toX)
+                : (toX - fromX),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(fromY, toY)
+                : (toY - fromY)
+        };
+    }
+
+    _distanceFromPointToLocalSegment(point, segStart, segEnd) {
+        const segDx = segEnd.x - segStart.x;
+        const segDy = segEnd.y - segStart.y;
+        const segLenSq = segDx * segDx + segDy * segDy;
+        if (segLenSq <= 1e-9) {
+            return Math.hypot(point.x - segStart.x, point.y - segStart.y);
+        }
+        const t = Math.max(
+            0,
+            Math.min(
+                1,
+                ((point.x - segStart.x) * segDx + (point.y - segStart.y) * segDy) / segLenSq
+            )
+        );
+        const closestX = segStart.x + segDx * t;
+        const closestY = segStart.y + segDy * t;
+        return Math.hypot(point.x - closestX, point.y - closestY);
+    }
+
+    isTargetWithinStrikeContact(target, options = {}) {
+        if (!target || target.gone || target.dead) return false;
+
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Number(options.strikeDistance)
+            : this.getStrikeDistance(target, options.strikeRange);
+        if (!Number.isFinite(strikeDistance) || strikeDistance < 0) return false;
+
+        const ownHitbox = this.groundPlaneHitbox || this.visualHitbox || null;
+        const targetHitbox = target.groundPlaneHitbox || target.visualHitbox || null;
+        if (
+            ownHitbox &&
+            targetHitbox &&
+            typeof ownHitbox.intersects === "function" &&
+            ownHitbox.intersects(targetHitbox)
+        ) {
+            return true;
+        }
+
+        const targetPositions = [{ x: target.x, y: target.y }];
+        if (
+            Number.isFinite(target.prevX) &&
+            Number.isFinite(target.prevY) &&
+            (Math.abs(target.prevX - target.x) > 1e-6 || Math.abs(target.prevY - target.y) > 1e-6)
+        ) {
+            targetPositions.push({ x: Number(target.prevX), y: Number(target.prevY) });
+        }
+
+        for (let i = 0; i < targetPositions.length; i++) {
+            const pos = targetPositions[i];
+            if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+
+            const currentDelta = this._getLocalWrappedDelta(this.x, this.y, pos.x, pos.y);
+            if (Math.hypot(currentDelta.x, currentDelta.y) <= strikeDistance) {
+                return true;
+            }
+
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                const prevLocal = this._getLocalWrappedDelta(this.x, this.y, this.prevX, this.prevY);
+                const sweptDistance = this._distanceFromPointToLocalSegment(
+                    currentDelta,
+                    prevLocal,
+                    { x: 0, y: 0 }
+                );
+                if (sweptDistance <= strikeDistance) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    cancelPathMovement() {
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+    }
+
+    getVectorMovementInputSpeedMultiplier(options = {}) {
+        return Number.isFinite(options.speedMultiplier)
+            ? Math.max(0, Number(options.speedMultiplier))
+            : 1;
+    }
+
+    getVectorMovementEnvironmentSpeedMultiplier(_options = {}) {
+        return 1;
+    }
+
+    getVectorMovementMaxSpeed(options = {}) {
+        const baseSpeed = this.getEffectiveMovementSpeed(this.speed);
+        const inputSpeedMultiplier = this.getVectorMovementInputSpeedMultiplier(options);
+        const environmentSpeedMultiplier = this.getVectorMovementEnvironmentSpeedMultiplier(options);
+        return baseSpeed * inputSpeedMultiplier * environmentSpeedMultiplier;
+    }
+
+    getVectorMovementCollisionRadius(_options = {}) {
+        return Number.isFinite(this.groundRadius)
+            ? Math.max(0, Number(this.groundRadius))
+            : 0;
+    }
+
+    getVectorMovementSearchPadding(radius, _options = {}) {
+        const resolvedRadius = Number.isFinite(radius) ? Math.max(0, Number(radius)) : 0;
+        return Math.max(2, resolvedRadius + 1.5);
+    }
+
+    doesObjectBlockVectorMovement(obj, _options = {}) {
+        if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
+            return !!globalThis.doesObjectBlockPassage(obj);
+        }
+        const sinkState = (obj && typeof obj === "object" && obj._scriptSinkState && typeof obj._scriptSinkState === "object")
+            ? obj._scriptSinkState
+            : null;
+        return !!(obj.isPassable === false && (!sinkState || sinkState.nonBlocking === false));
+    }
+
+    collectNearbyBlockingObjects(newX, newY, radius, options = {}) {
+        const nearbyObjects = [];
+        if (!this.map || typeof this.map.worldToNode !== "function") {
+            return nearbyObjects;
+        }
+        const padding = this.getVectorMovementSearchPadding(radius, options);
+        const minNode = this.map.worldToNode(newX - padding, newY - padding);
+        const maxNode = this.map.worldToNode(newX + padding, newY + padding);
+        if (!minNode || !maxNode) return nearbyObjects;
+
+        const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
+        const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
+        const xStart = Math.max(minNode.xindex - 1, 0);
+        const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, mapWidth - 1));
+        const yStart = Math.max(minNode.yindex - 1, 0);
+        const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, mapHeight - 1));
+
+        for (let x = xStart; x <= xEnd; x++) {
+            for (let y = yStart; y <= yEnd; y++) {
+                if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
+                const nodeObjects = this.map.nodes[x][y].objects;
+                for (const obj of nodeObjects) {
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                    nearbyObjects.push(obj);
+                }
+            }
+        }
+        return nearbyObjects;
+    }
+
+    doesCharacterBlockVectorMovement(otherCharacter, options = {}) {
+        if (!otherCharacter || otherCharacter === this) return false;
+        if (otherCharacter === options.target || otherCharacter === options.ignoreCharacter) return false;
+        if (otherCharacter.gone || otherCharacter.dead) return false;
+        return !!otherCharacter.groundPlaneHitbox;
+    }
+
+    isUsingHitboxMovement() {
+        return !!(this._closeCombatState && typeof this._closeCombatState === "object" && !this.gone && !this.dead);
+    }
+
+    getCharacterVectorMovementCandidates() {
+        const candidates = [];
+        const seen = new Set();
+
+        const maybeAdd = (candidate) => {
+            if (!candidate || seen.has(candidate)) return;
+            seen.add(candidate);
+            candidates.push(candidate);
+        };
+
+        const wizardCandidates = [
+            (typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null,
+            (typeof wizard !== "undefined" && wizard) ? wizard : null
+        ];
+        for (let i = 0; i < wizardCandidates.length; i++) {
+            maybeAdd(wizardCandidates[i]);
+        }
+
+        const animalCandidates = [
+            (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) ? globalThis.animals : null,
+            (typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null
+        ];
+        for (let i = 0; i < animalCandidates.length; i++) {
+            const list = animalCandidates[i];
+            if (!Array.isArray(list)) continue;
+            list.forEach(maybeAdd);
+        }
+
+        return candidates;
+    }
+
+    collectNearbyBlockingCharacters(newX, newY, radius, options = {}) {
+        const nearbyCharacters = [];
+        const candidates = this.getCharacterVectorMovementCandidates();
+        const resolvedRadius = Number.isFinite(radius) ? Math.max(0, Number(radius)) : 0;
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            if (!this.doesCharacterBlockVectorMovement(candidate, options)) continue;
+            const candidateRadius = Number.isFinite(candidate.groundRadius)
+                ? Math.max(0, Number(candidate.groundRadius))
+                : (Number.isFinite(candidate.visualRadius) ? Math.max(0, Number(candidate.visualRadius)) : 0);
+            const distance = (this.map && typeof this.map.distanceBetweenPoints === "function")
+                ? this.map.distanceBetweenPoints(newX, newY, candidate.x, candidate.y)
+                : Math.hypot(candidate.x - newX, candidate.y - newY);
+            const maxDistance = resolvedRadius + candidateRadius + this.getVectorMovementSearchPadding(radius, options);
+            if (distance <= maxDistance) {
+                nearbyCharacters.push(candidate);
+            }
+        }
+        return nearbyCharacters;
+    }
+
+    prepareVectorMovementContext(newX, newY, radius, options = {}) {
+        const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
+            ? this._movementForceTouchedObjects
+            : new Set();
+        forceTouchedObjects.clear();
+        this._movementForceTouchedObjects = forceTouchedObjects;
+        const nearbyObjects = this.collectNearbyBlockingObjects(newX, newY, radius, options);
+        const nearbyCharacters = options.includeCharacterBlockers === true
+            ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
+            : [];
+        this._updateHitboxCollisionDebugSnapshot({
+            actor: this._getHitboxDebugLabel(this),
+            actorType: this.type || (this.constructor && this.constructor.name) || "unknown",
+            currentPosition: { x: Number(this.x), y: Number(this.y) },
+            candidatePosition: { x: Number(newX), y: Number(newY) },
+            movementVector: {
+                x: Number(this.movementVector && this.movementVector.x) || 0,
+                y: Number(this.movementVector && this.movementVector.y) || 0
+            },
+            frameRate: Number(this.frameRate) || 0,
+            radius: Number(radius) || 0,
+            includeCharacterBlockers: options.includeCharacterBlockers === true,
+            closeCombatPhase: this._closeCombatState && this._closeCombatState.phase ? this._closeCombatState.phase : null,
+            nearbyObjectBlockers: nearbyObjects.map(obj => this._buildHitboxDebugCandidateSummary(obj, newX, newY, radius, options)),
+            nearbyCharacterBlockers: nearbyCharacters.map(char => this._buildHitboxDebugCandidateSummary(char, newX, newY, radius, options)),
+            staticCollisions: [],
+            dynamicCharacterInteractions: [],
+            dynamicResolutionIterations: 0
+        });
+        return {
+            nearbyObjects,
+            nearbyCharacters,
+            forceTouchedObjects
+        };
+    }
+
+    canBypassVectorMovementCollisions(_currentX, _currentY, _newX, _newY, _radius, _context, _options = {}) {
+        return false;
+    }
+
+    onVectorMovementApplied(_movementResult, _options = {}) {
+    }
+
+    _setVectorMovementPositionRaw(targetX, targetY) {
+        const wrappedX = this.map && typeof this.map.wrapWorldX === "function"
+            ? this.map.wrapWorldX(targetX)
+            : targetX;
+        const wrappedY = this.map && typeof this.map.wrapWorldY === "function"
+            ? this.map.wrapWorldY(targetY)
+            : targetY;
+        this.x = wrappedX;
+        this.y = wrappedY;
+        this.updateHitboxes();
+        return { targetX, targetY, wrappedX, wrappedY };
+    }
+
+    resolveDynamicCharacterHitboxInteractions(movementContext = {}, options = {}) {
+        const nearbyCharacters = Array.isArray(movementContext.nearbyCharacters)
+            ? movementContext.nearbyCharacters
+            : [];
+        if (nearbyCharacters.length === 0 || !this.groundPlaneHitbox) return;
+
+        let changed = false;
+        const interactionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.dynamicCharacterInteractions))
+            ? this._hitboxCollisionDebug.dynamicCharacterInteractions
+            : [];
+
+        for (let i = 0; i < nearbyCharacters.length; i++) {
+            const other = nearbyCharacters[i];
+            if (!this.doesCharacterBlockVectorMovement(other, options) || !other.groundPlaneHitbox) continue;
+
+            const collision = other.groundPlaneHitbox.intersects(this.groundPlaneHitbox);
+            if (!collision || collision.pushX === undefined || collision.pushY === undefined) continue;
+
+            const overlap = Math.hypot(collision.pushX, collision.pushY);
+            if (!(overlap > 0)) continue;
+
+            const normalX = collision.pushX / overlap;
+            const normalY = collision.pushY / overlap;
+            const otherDynamic = typeof other.isUsingHitboxMovement === "function"
+                ? other.isUsingHitboxMovement()
+                : !!(other._closeCombatState && typeof other._closeCombatState === "object");
+            const selfShare = otherDynamic ? 0.5 : 1;
+            const otherShare = otherDynamic ? 0.5 : 0;
+            const separation = overlap + 0.01;
+            changed = true;
+            const selfVector = this.movementVector && typeof this.movementVector === "object"
+                ? this.movementVector
+                : { x: 0, y: 0 };
+            const otherVector = (other.movementVector && typeof other.movementVector === "object")
+                ? other.movementVector
+                : { x: 0, y: 0 };
+            const relativeNormalSpeed = (Number(selfVector.x) - Number(otherVector.x)) * normalX
+                + (Number(selfVector.y) - Number(otherVector.y)) * normalY;
+            interactionLog.push({
+                label: this._getHitboxDebugLabel(other),
+                overlap,
+                normalX,
+                normalY,
+                relativeNormalSpeed,
+                selfShare,
+                otherShare,
+                otherDynamic
+            });
+
+            this._setVectorMovementPositionRaw(
+                this.x + normalX * separation * selfShare,
+                this.y + normalY * separation * selfShare
+            );
+
+            if (otherShare > 0 && typeof other._setVectorMovementPositionRaw === "function") {
+                other._setVectorMovementPositionRaw(
+                    other.x - normalX * separation * otherShare,
+                    other.y - normalY * separation * otherShare
+                );
+                if (
+                    typeof other.prepareVectorMovementContext === "function" &&
+                    typeof other.getVectorMovementCollisionRadius === "function" &&
+                    typeof other._resolveStaticVectorMovementCandidate === "function"
+                ) {
+                    const otherRadius = other.getVectorMovementCollisionRadius(options);
+                    const otherContext = other.prepareVectorMovementContext(other.x, other.y, otherRadius, {
+                        ...options,
+                        includeCharacterBlockers: false,
+                        ignoreCharacter: this
+                    }) || {};
+                    const otherResolved = other._resolveStaticVectorMovementCandidate(
+                        other.x,
+                        other.y,
+                        otherRadius,
+                        otherContext,
+                        {
+                            ...options,
+                            includeCharacterBlockers: false,
+                            ignoreCharacter: this
+                        }
+                    );
+                    other._setVectorMovementPositionRaw(otherResolved.x, otherResolved.y);
+                }
+            }
+
+            if (relativeNormalSpeed < 0) {
+                if (otherDynamic) {
+                    const halfImpulse = relativeNormalSpeed * 0.5;
+                    this.movementVector.x -= normalX * halfImpulse;
+                    this.movementVector.y -= normalY * halfImpulse;
+                    other.movementVector.x += normalX * halfImpulse;
+                    other.movementVector.y += normalY * halfImpulse;
+                } else {
+                    this.movementVector.x -= normalX * relativeNormalSpeed;
+                    this.movementVector.y -= normalY * relativeNormalSpeed;
+                }
+            }
+
+        }
+
+        return changed;
+    }
+
+    _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
+        let testX = candidateX;
+        let testY = candidateY;
+        let iteration = 0;
+        const maxIterations = 3;
+        const nearbyObjects = Array.isArray(movementContext.nearbyObjects) ? movementContext.nearbyObjects : [];
+        let collided = false;
+        const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
+            ? this._hitboxCollisionDebug.staticCollisions
+            : [];
+
+        while (iteration < maxIterations) {
+            iteration++;
+            const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: movementRadius };
+            testHitbox.x = testX;
+            testHitbox.y = testY;
+            testHitbox.radius = movementRadius;
+            this._movementTestHitbox = testHitbox;
+
+            let totalPushX = 0;
+            let totalPushY = 0;
+            let maxPushLen = 0;
+            let hasCollision = false;
+
+            for (const obj of nearbyObjects) {
+                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+                if (collision && collision.pushX !== undefined) {
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (movementContext.forceTouchedObjects instanceof Set) {
+                        movementContext.forceTouchedObjects.add(obj);
+                    }
+                    staticCollisionLog.push({
+                        label: this._getHitboxDebugLabel(obj),
+                        iteration,
+                        sampleX: testX,
+                        sampleY: testY,
+                        pushX: Number(collision.pushX) || 0,
+                        pushY: Number(collision.pushY) || 0,
+                        overlap: pushLen
+                    });
+                }
+            }
+
+            if (!hasCollision) {
+                return { x: testX, y: testY, collided };
+            }
+
+            collided = true;
+            let pushLen = Math.hypot(totalPushX, totalPushY);
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+                pushLen = maxPushLen;
+            }
+
+            if (pushLen <= 0) break;
+
+            const normalX = totalPushX / pushLen;
+            const normalY = totalPushY / pushLen;
+            const compressionThreshold = 0.15;
+            const compression = Math.max(0, pushLen - compressionThreshold);
+
+            if (compression > 0) {
+                const resistanceFactor = Math.min(1, compression / 0.1);
+                const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                if (normalComponent > 0) {
+                    this.movementVector.x -= normalX * normalComponent * resistanceFactor;
+                    this.movementVector.y -= normalY * normalComponent * resistanceFactor;
+                }
+            } else {
+                const dampingFactor = 1 - (pushLen / compressionThreshold) * 0.4;
+                this.movementVector.x *= dampingFactor;
+                this.movementVector.y *= dampingFactor;
+                const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                if (normalComponent > 0) {
+                    this.movementVector.x -= normalX * normalComponent * 0.2;
+                    this.movementVector.y -= normalY * normalComponent * 0.2;
+                }
+            }
+
+            const pushOutDistance = pushLen + 0.01;
+            testX = this.x + normalX * pushOutDistance + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+            testY = this.y + normalY * pushOutDistance + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        }
+
+        const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: movementRadius };
+        testHitbox.x = testX;
+        testHitbox.y = testY;
+        testHitbox.radius = movementRadius;
+        this._movementTestHitbox = testHitbox;
+
+        let totalPushX = 0;
+        let totalPushY = 0;
+        let maxPushLen = 0;
+        for (const obj of nearbyObjects) {
+            const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+            if (collision && collision.pushX !== undefined) {
+                totalPushX += collision.pushX;
+                totalPushY += collision.pushY;
+                const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                maxPushLen = Math.max(maxPushLen, pushLen);
+                if (movementContext.forceTouchedObjects instanceof Set) {
+                    movementContext.forceTouchedObjects.add(obj);
+                }
+                staticCollisionLog.push({
+                    label: this._getHitboxDebugLabel(obj),
+                    iteration: "final",
+                    sampleX: testX,
+                    sampleY: testY,
+                    pushX: Number(collision.pushX) || 0,
+                    pushY: Number(collision.pushY) || 0,
+                    overlap: pushLen
+                });
+            }
+        }
+
+        if (maxPushLen > 0) {
+            collided = true;
+            const pushLen = Math.hypot(totalPushX, totalPushY);
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+            }
+            const normalMag = Math.hypot(totalPushX, totalPushY);
+            if (normalMag > 0) {
+                const normalX = totalPushX / normalMag;
+                const normalY = totalPushY / normalMag;
+                const pushOutDistance = maxPushLen + 0.01;
+                return {
+                    x: this.x + normalX * pushOutDistance,
+                    y: this.y + normalY * pushOutDistance,
+                    collided
+                };
+            }
+        }
+
+        return { x: candidateX, y: candidateY, collided };
+    }
+
+    _resolveHitboxMovementConstraints(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
+        let resolved = this._resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext, options);
+        this._setVectorMovementPositionRaw(resolved.x, resolved.y);
+        let dynamicIterations = 0;
+
+        if (options.includeCharacterBlockers !== true) {
+            this._updateHitboxCollisionDebugSnapshot({
+                resolvedPosition: { x: Number(resolved.x), y: Number(resolved.y) },
+                dynamicResolutionIterations: dynamicIterations
+            });
+            return resolved;
+        }
+
+        const maxConstraintIterations = Number.isFinite(options.hitboxConstraintIterations)
+            ? Math.max(1, Math.floor(options.hitboxConstraintIterations))
+            : 4;
+
+        for (let i = 0; i < maxConstraintIterations; i++) {
+            dynamicIterations = i + 1;
+            const dynamicChanged = !!this.resolveDynamicCharacterHitboxInteractions(movementContext, options);
+            const staticResolved = this._resolveStaticVectorMovementCandidate(this.x, this.y, movementRadius, movementContext, options);
+            this._setVectorMovementPositionRaw(staticResolved.x, staticResolved.y);
+            resolved = {
+                x: staticResolved.x,
+                y: staticResolved.y,
+                collided: resolved.collided || staticResolved.collided || dynamicChanged
+            };
+            if (!dynamicChanged && !staticResolved.collided) {
+                break;
+            }
+        }
+
+        this._updateHitboxCollisionDebugSnapshot({
+            resolvedPosition: { x: Number(resolved.x), y: Number(resolved.y) },
+            dynamicResolutionIterations: dynamicIterations
+        });
+
+        return resolved;
+    }
+
+    _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
+        const position = this._setVectorMovementPositionRaw(targetX, targetY);
+        this.onVectorMovementApplied({
+            previousX: this.prevX,
+            previousY: this.prevY,
+            ...position
+        }, options);
+        return true;
+    }
+
+    moveDirection(vector, options = {}) {
+        const lockMovementVector = !!options.lockMovementVector;
+        const maxSpeed = this.getVectorMovementMaxSpeed(options);
+        this.currentMaxSpeed = maxSpeed;
+        this.isMovingBackward = !!options.animateBackward;
+
+        const inputLen = vector ? Math.hypot(vector.x || 0, vector.y || 0) : 0;
+        if (lockMovementVector) {
+            // Preserve momentum and ignore steering/braking input.
+        } else if (vector && inputLen > 1e-6) {
+            const nx = vector.x / inputLen;
+            const ny = vector.y / inputLen;
+
+            const desiredDot = this.movementVector.x * nx + this.movementVector.y * ny;
+            if (desiredDot < 0) {
+                this.movementVector.x -= nx * desiredDot;
+                this.movementVector.y -= ny * desiredDot;
+                this.movementVector.x *= 0.5;
+                this.movementVector.y *= 0.5;
+            }
+
+            const accelerationFactor = (Number.isFinite(this.acceleration) ? this.acceleration : 0) / Math.max(1, Number(this.frameRate) || 1);
+            this.movementVector.x += nx * accelerationFactor;
+            this.movementVector.y += ny * accelerationFactor;
+
+            const facingVector = options.facingVector;
+            if (
+                typeof this.turnToward === "function" &&
+                facingVector &&
+                Number.isFinite(facingVector.x) &&
+                Number.isFinite(facingVector.y) &&
+                Math.hypot(facingVector.x, facingVector.y) > 1e-6
+            ) {
+                const facingTurnStrength = Number.isFinite(options.facingTurnStrength)
+                    ? Math.max(0, Math.min(1, options.facingTurnStrength))
+                    : 1;
+                this.turnToward(facingVector.x, facingVector.y, facingTurnStrength);
+            } else if (typeof this.turnToward === "function") {
+                this.turnToward(nx, ny);
+            }
+        } else {
+            this.isMovingBackward = false;
+            const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+            if (currentMag > 0) {
+                const decelerationFactor = (Number.isFinite(this.acceleration) ? this.acceleration : 0) / Math.max(1, Number(this.frameRate) || 1);
+                const newMag = Math.max(0, currentMag - decelerationFactor);
+                if (newMag === 0) {
+                    this.movementVector.x = 0;
+                    this.movementVector.y = 0;
+                } else {
+                    const scale = newMag / currentMag;
+                    this.movementVector.x *= scale;
+                    this.movementVector.y *= scale;
+                }
+            }
+        }
+
+        const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+        if (currentMag > maxSpeed && currentMag > 0) {
+            const scale = maxSpeed / currentMag;
+            this.movementVector.x *= scale;
+            this.movementVector.y *= scale;
+        }
+
+        if (Math.hypot(this.movementVector.x, this.movementVector.y) < 0.001) {
+            this.moving = false;
+            return false;
+        }
+
+        this.moving = true;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+
+        const newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+        const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        const movementRadius = this.getVectorMovementCollisionRadius(options);
+        const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
+
+        if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {
+            return this._applyVectorMovementPosition(newX, newY, options, movementContext);
+        }
+
+        const resolved = this._resolveHitboxMovementConstraints(newX, newY, movementRadius, movementContext, options);
+        return this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+    }
+
+    getTargetMovementVelocity(target) {
+        if (!target) return { x: 0, y: 0 };
+        if (
+            target.movementVector &&
+            Number.isFinite(target.movementVector.x) &&
+            Number.isFinite(target.movementVector.y)
+        ) {
+            return {
+                x: Number(target.movementVector.x),
+                y: Number(target.movementVector.y)
+            };
+        }
+        if (Number.isFinite(target.prevX) && Number.isFinite(target.prevY)) {
+            const delta = this._getLocalWrappedDelta(target.prevX, target.prevY, target.x, target.y);
+            const velocityFrameRate = Number.isFinite(target.frameRate) && target.frameRate > 0
+                ? Number(target.frameRate)
+                : Math.max(1, Number(this.frameRate) || 1);
+            return {
+                x: delta.x * velocityFrameRate,
+                y: delta.y * velocityFrameRate
+            };
+        }
+        return { x: 0, y: 0 };
+    }
+
+    predictTargetPosition(target, lookaheadSeconds = 0) {
+        if (!target) return null;
+        const lookahead = Number.isFinite(lookaheadSeconds) ? Math.max(0, Number(lookaheadSeconds)) : 0;
+        const velocity = this.getTargetMovementVelocity(target);
+        let x = Number(target.x) || 0;
+        let y = Number(target.y) || 0;
+        if (lookahead > 0) {
+            x += velocity.x * lookahead;
+            y += velocity.y * lookahead;
+        }
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            x = this.map.wrapWorldX(x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            y = this.map.wrapWorldY(y);
+        }
+        return { x, y, velocityX: velocity.x, velocityY: velocity.y };
+    }
+
+    getPredictedCloseCombatTargetPoint(target, options = {}) {
+        if (!target) return null;
+        const lungeRadius = Number.isFinite(options.lungeRadius)
+            ? Math.max(0, Number(options.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        const approachSpeed = Number.isFinite(options.approachSpeed)
+            ? Math.max(1e-4, Number(options.approachSpeed))
+            : Math.max(1e-4, this.getEffectiveMovementSpeed(this.runSpeed));
+        const currentDistance = this.distanceToPoint(target.x, target.y);
+        const timeToClose = Math.max(0, currentDistance - lungeRadius) / approachSpeed;
+        const extraLeadSeconds = Number.isFinite(options.predictionLeadSeconds)
+            ? Math.max(0, Number(options.predictionLeadSeconds))
+            : 0;
+        return this.predictTargetPosition(target, timeToClose + extraLeadSeconds);
+    }
+
+    isTargetCloseEnoughToLunge(target, options = {}) {
+        if (!target) return false;
+        const lungeRadius = Number.isFinite(options.lungeRadius)
+            ? Math.max(0, Number(options.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        if (!(lungeRadius > 0)) return false;
+
+        const approachSpeed = Number.isFinite(options.approachSpeed)
+            ? Math.max(1e-4, Number(options.approachSpeed))
+            : Math.max(1e-4, this.getEffectiveMovementSpeed(this.runSpeed));
+        const currentDistance = this.distanceToPoint(target.x, target.y);
+        if (currentDistance <= lungeRadius) return true;
+
+        const predictedTarget = this.getPredictedCloseCombatTargetPoint(target, {
+            ...options,
+            lungeRadius,
+            approachSpeed
+        });
+        if (!predictedTarget) return false;
+        return this.distanceToPoint(predictedTarget.x, predictedTarget.y) <= lungeRadius;
+    }
+
+    hasDirectCloseCombatCorridor(target, options = {}) {
+        if (!target) return false;
+        const targetPoint = options.targetPoint || this.getPredictedCloseCombatTargetPoint(target, options);
+        if (!targetPoint || !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
+            return false;
+        }
+
+        const corridorRadius = Number.isFinite(options.corridorRadius)
+            ? Math.max(0.05, Number(options.corridorRadius))
+            : Math.max(0.05, this.getVectorMovementCollisionRadius(options));
+        const localDelta = this._getLocalWrappedDelta(this.x, this.y, targetPoint.x, targetPoint.y);
+        const corridorDistance = Math.hypot(localDelta.x, localDelta.y);
+        if (corridorDistance <= 1e-6) return true;
+
+        const sampleStep = Number.isFinite(options.corridorSampleStep)
+            ? Math.max(0.05, Number(options.corridorSampleStep))
+            : Math.max(0.15, corridorRadius * 0.5);
+        const sampleCount = Math.max(1, Math.ceil(corridorDistance / sampleStep));
+        const testHitbox = this._closeCombatCorridorHitbox || {
+            type: "circle",
+            x: this.x,
+            y: this.y,
+            radius: corridorRadius
+        };
+        testHitbox.radius = corridorRadius;
+        this._closeCombatCorridorHitbox = testHitbox;
+
+        for (let i = 1; i <= sampleCount; i++) {
+            const t = i / sampleCount;
+            let sampleX = this.x + localDelta.x * t;
+            let sampleY = this.y + localDelta.y * t;
+            if (this.map && typeof this.map.wrapWorldX === "function") {
+                sampleX = this.map.wrapWorldX(sampleX);
+            }
+            if (this.map && typeof this.map.wrapWorldY === "function") {
+                sampleY = this.map.wrapWorldY(sampleY);
+            }
+            testHitbox.x = sampleX;
+            testHitbox.y = sampleY;
+
+            const nearbyObjects = this.collectNearbyBlockingObjects(sampleX, sampleY, corridorRadius, {
+                ...options,
+                includeCharacterBlockers: options.includeCharacterBlockers !== false,
+                target
+            });
+            if (options.includeCharacterBlockers !== false) {
+                nearbyObjects.push(...this.collectNearbyBlockingCharacters(sampleX, sampleY, corridorRadius, {
+                    ...options,
+                    target
+                }));
+            }
+            for (let j = 0; j < nearbyObjects.length; j++) {
+                const obj = nearbyObjects[j];
+                if (!obj || !obj.groundPlaneHitbox) continue;
+                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+                if (collision && collision.pushX !== undefined) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    shouldCloseCombatCorridorIncludeCharacterBlockers(options = {}) {
+        if (Object.prototype.hasOwnProperty.call(options, "corridorIncludesCharacterBlockers")) {
+            return options.corridorIncludesCharacterBlockers === true;
+        }
+        if (Object.prototype.hasOwnProperty.call(options, "closeCombatIgnoreCharacterBlockers")) {
+            return options.closeCombatIgnoreCharacterBlockers !== true;
+        }
+        return false;
+    }
+
+    hasCloseCombatLineOfSight(target, _options = {}) {
+        if (!target || !this.map || typeof this.map.worldToNode !== "function") return true;
+        if (typeof this.map.hasLineOfSight !== "function") return true;
+        const actorNode = this.map.worldToNode(this.x, this.y);
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!actorNode || !targetNode) return true;
+        return !!this.map.hasLineOfSight(actorNode, targetNode);
+    }
+
+    evaluateCloseCombatOpportunity(target, options = {}) {
+        if (!target) {
+            return {
+                canEngage: false,
+                targetPoint: null,
+                withinLungeRange: false,
+                lineOfSightClear: false,
+                corridorClear: false,
+                includeCharacterBlockers: this.shouldCloseCombatCorridorIncludeCharacterBlockers(options),
+                failReason: "no-target"
+            };
+        }
+
+        const targetPoint = this.getPredictedCloseCombatTargetPoint(target, options);
+        if (!targetPoint) {
+            return {
+                canEngage: false,
+                targetPoint: null,
+                withinLungeRange: false,
+                lineOfSightClear: false,
+                corridorClear: false,
+                includeCharacterBlockers: this.shouldCloseCombatCorridorIncludeCharacterBlockers(options),
+                failReason: "no-target-point"
+            };
+        }
+
+        const withinLungeRange = this.isTargetCloseEnoughToLunge(target, { ...options, targetPoint });
+        const lineOfSightClear = withinLungeRange && this.hasCloseCombatLineOfSight(target, options);
+        const includeCharacterBlockers = this.shouldCloseCombatCorridorIncludeCharacterBlockers(options);
+        const corridorClear = lineOfSightClear && this.hasDirectCloseCombatCorridor(target, {
+            ...options,
+            targetPoint,
+            includeCharacterBlockers,
+            target
+        });
+
+        return {
+            canEngage: withinLungeRange && lineOfSightClear && corridorClear,
+            targetPoint,
+            withinLungeRange,
+            lineOfSightClear,
+            corridorClear,
+            includeCharacterBlockers,
+            failReason: !withinLungeRange
+                ? "out-of-lunge-range"
+                : (!lineOfSightClear
+                    ? "line-of-sight-blocked"
+                    : (corridorClear ? null : "corridor-blocked"))
+        };
+    }
+
+    canEnterCloseCombat(target, options = {}) {
+        return this.evaluateCloseCombatOpportunity(target, options).canEngage;
+    }
+
+    shouldReengageCloseCombat(target, options = {}) {
+        return this.evaluateCloseCombatOpportunity(target, options).canEngage;
+    }
+
+    shouldAbortCloseCombat(target, state = null, options = {}) {
+        if (!target) return true;
+        if (!state) return true;
+        const now = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+        const abortGraceMs = Number.isFinite(options.closeCombatAbortGraceMs)
+            ? Math.max(0, Number(options.closeCombatAbortGraceMs))
+            : 250;
+
+        if (this.isTargetWithinStrikeContact(target, {
+            strikeDistance: Number.isFinite(options.strikeDistance)
+                ? Number(options.strikeDistance)
+                : this.getStrikeDistance(target, options.strikeRange)
+        })) {
+            state.abortBlockedSinceMs = null;
+            state.abortReason = null;
+            return false;
+        }
+
+        const opportunity = this.evaluateCloseCombatOpportunity(target, options);
+        const canContinue = opportunity.canEngage;
+
+        if (canContinue) {
+            state.abortBlockedSinceMs = null;
+            state.abortReason = null;
+            return false;
+        }
+
+        if (!Number.isFinite(state.abortBlockedSinceMs)) {
+            state.abortBlockedSinceMs = now;
+            state.abortReason = opportunity.failReason || "close-combat-invalid";
+        } else if (!state.abortReason) {
+            state.abortReason = opportunity.failReason || "close-combat-invalid";
+        }
+
+        return (now - state.abortBlockedSinceMs) >= abortGraceMs;
+    }
+
+    resetCloseCombatState(reason = null) {
+        if (this._closeCombatState && this._closeCombatState.target) {
+            this._emitCloseCombatLifecycleLog("exit", this._closeCombatState.target, {
+                phase: this._closeCombatState.phase,
+                reason: reason || "reset"
+            });
+        }
+        this._closeCombatState = null;
+        return null;
+    }
+
+    onCloseCombatStateUpdated(_state, _target, _options = {}) {
+    }
+
+    getCloseCombatState() {
+        return this._closeCombatState && typeof this._closeCombatState === "object"
+            ? { ...this._closeCombatState }
+            : null;
+    }
+
+    beginCloseCombat(target, options = {}) {
+        if (!target || target.gone || target.dead) {
+            return this.resetCloseCombatState("invalid-target");
+        }
+        const now = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+        if (this._closeCombatState && this._closeCombatState.target && this._closeCombatState.target !== target) {
+            this.resetCloseCombatState("retarget");
+        }
+        if (!this._closeCombatState || this._closeCombatState.target !== target) {
+            this._closeCombatState = {
+                target,
+                phase: "approach",
+                phaseStartedMs: now,
+                abortBlockedSinceMs: null,
+                abortReason: null,
+                lungeStartedMs: null,
+                lungeOriginX: null,
+                lungeOriginY: null,
+                lastAttackResolvedMs: null,
+                lastAttackResult: null,
+                attackCount: 0,
+                lastDistance: this.distanceToPoint(target.x, target.y),
+                options: { ...options }
+            };
+            this._emitCloseCombatLifecycleLog("enter", target, {
+                phase: this._closeCombatState.phase,
+                reason: options.reason || "engage"
+            });
+        } else if (options && typeof options === "object") {
+            this._closeCombatState.options = {
+                ...(this._closeCombatState.options && typeof this._closeCombatState.options === "object"
+                    ? this._closeCombatState.options
+                    : {}),
+                ...options
+            };
+        }
+        return this._closeCombatState;
+    }
+
+    _setCloseCombatPhase(state, phase, now = Date.now()) {
+        if (!state) return null;
+        state.phase = phase;
+        state.phaseStartedMs = now;
+        state.abortBlockedSinceMs = null;
+        state.abortReason = null;
+        if (phase === "lunge") {
+            state.lungeStartedMs = now;
+            state.lungeOriginX = Number(this.x);
+            state.lungeOriginY = Number(this.y);
+        } else if (phase !== "backoff") {
+            state.lungeStartedMs = null;
+            state.lungeOriginX = null;
+            state.lungeOriginY = null;
+        }
+        return state;
+    }
+
+    _getCloseCombatLungeTravelDistance(state) {
+        if (!state || !Number.isFinite(state.lungeOriginX) || !Number.isFinite(state.lungeOriginY)) {
+            return 0;
+        }
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(state.lungeOriginX, state.lungeOriginY, this.x, this.y);
+        }
+        const delta = this._getLocalWrappedDelta(state.lungeOriginX, state.lungeOriginY, this.x, this.y);
+        return Math.hypot(delta.x, delta.y);
+    }
+
+    _resolveCloseCombatStrike(target, state, options = {}) {
+        const resolver = typeof options.resolveStrike === "function"
+            ? options.resolveStrike
+            : null;
+        const rawResult = resolver ? resolver(target, state, this) : { hit: true };
+        if (rawResult && typeof rawResult === "object") {
+            return {
+                ...rawResult,
+                resolved: rawResult.resolved !== false,
+                hit: rawResult.hit !== false
+            };
+        }
+        return { resolved: true, hit: rawResult !== false };
+    }
+
+    _getCloseCombatVectorToTarget(target) {
+        if (!target) return { x: 0, y: 0 };
+        return this._getLocalWrappedDelta(this.x, this.y, target.x, target.y);
+    }
+
+    _getCloseCombatBackoffVector(target) {
+        const toward = this._getCloseCombatVectorToTarget(target);
+        if (Math.hypot(toward.x, toward.y) > 1e-6) {
+            return { x: -toward.x, y: -toward.y };
+        }
+        if (Math.hypot(this.movementVector.x, this.movementVector.y) > 1e-6) {
+            return { x: -this.movementVector.x, y: -this.movementVector.y };
+        }
+        return { x: -1, y: 0 };
+    }
+
+    updateCloseCombat(target = null, options = {}) {
+        const mergedOptions = {
+            ...(this._closeCombatState && this._closeCombatState.options && typeof this._closeCombatState.options === "object"
+                ? this._closeCombatState.options
+                : {}),
+            ...(options && typeof options === "object" ? options : {})
+        };
+        const state = this.beginCloseCombat(target || this._closeCombatState?.target, mergedOptions);
+        if (!state) return null;
+
+        const targetRef = state.target;
+        if (!targetRef || targetRef.gone || targetRef.dead) {
+            return this.resetCloseCombatState("target-lost");
+        }
+
+        const now = Number.isFinite(mergedOptions.nowMs) ? Number(mergedOptions.nowMs) : Date.now();
+        const approachSpeed = Number.isFinite(mergedOptions.approachSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.approachSpeed))
+            : Math.max(1e-4, Number(this.runSpeed) || this.getEffectiveMovementSpeed(this.speed));
+        const lungeSpeed = Number.isFinite(mergedOptions.lungeSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.lungeSpeed))
+            : Math.max(approachSpeed, Number(this.lungeSpeed) || approachSpeed);
+        const lungeRadius = Number.isFinite(mergedOptions.lungeRadius)
+            ? Math.max(0, Number(mergedOptions.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        const strikeDistance = Number.isFinite(mergedOptions.strikeDistance)
+            ? Math.max(0, Number(mergedOptions.strikeDistance))
+            : this.getStrikeDistance(targetRef, mergedOptions.strikeRange);
+        const backoffRadius = Number.isFinite(mergedOptions.backoffRadius)
+            ? Math.max(0, Number(mergedOptions.backoffRadius))
+            : lungeRadius;
+        const backoffSpeed = Number.isFinite(mergedOptions.backoffSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.backoffSpeed))
+            : approachSpeed;
+        const lungeTravelLimit = Number.isFinite(mergedOptions.lungeTravelLimit)
+            ? Math.max(0, Number(mergedOptions.lungeTravelLimit))
+            : lungeRadius;
+        const lungeMaxMs = Number.isFinite(mergedOptions.lungeMaxMs)
+            ? Math.max(0, Number(mergedOptions.lungeMaxMs))
+            : ((Math.max(lungeRadius, strikeDistance) * 2 / Math.max(1e-4, lungeSpeed)) * 1000);
+        const canStartLunge = typeof mergedOptions.canStartLunge === "function"
+            ? (mergedOptions.canStartLunge(targetRef, state, this) !== false)
+            : (mergedOptions.canStartLunge !== false);
+
+        state.target = targetRef;
+        state.lastDistance = this.distanceToPoint(targetRef.x, targetRef.y);
+
+        if (this.shouldAbortCloseCombat(targetRef, state, mergedOptions)) {
+            return this.resetCloseCombatState(state.abortReason || "close-combat-invalid");
+        }
+
+        this.cancelPathMovement();
+
+        if (state.phase === "approach" && canStartLunge && this.canEnterCloseCombat(targetRef, {
+            ...mergedOptions,
+            lungeRadius,
+            approachSpeed
+        })) {
+            this._setCloseCombatPhase(state, "lunge", now);
+        }
+
+        if (state.phase === "lunge" && !Number.isFinite(state.lungeStartedMs)) {
+            state.lungeStartedMs = now;
+            state.lungeOriginX = Number(this.x);
+            state.lungeOriginY = Number(this.y);
+        }
+
+        if (state.phase === "approach") {
+            const towardVector = this._getCloseCombatVectorToTarget(targetRef);
+            this.speed = approachSpeed;
+            this.moveDirection(towardVector, {
+                ...mergedOptions,
+                target: targetRef,
+                facingVector: towardVector
+            });
+            this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+            return { ...state, strikeDistance, lungeRadius, backoffRadius };
+        }
+
+        if (state.phase === "lunge") {
+            const towardVector = this._getCloseCombatVectorToTarget(targetRef);
+            this.speed = lungeSpeed;
+            this.moveDirection(towardVector, {
+                ...mergedOptions,
+                target: targetRef,
+                facingVector: towardVector
+            });
+
+            const lungeTravelDistance = this._getCloseCombatLungeTravelDistance(state);
+            if (lungeTravelDistance >= lungeTravelLimit) {
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = "miss";
+                if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, {
+                        hit: false,
+                        reason: "range-exceeded",
+                        travelDistance: lungeTravelDistance,
+                        travelLimit: lungeTravelLimit,
+                        nowMs: now
+                    }, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+                this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                return { ...state, strikeDistance, lungeRadius, backoffRadius, lungeTravelDistance, lungeTravelLimit };
+            }
+
+            if (this.isTargetWithinStrikeContact(targetRef, { strikeDistance })) {
+                const result = this._resolveCloseCombatStrike(targetRef, state, mergedOptions);
+                if (result.resolved === false) {
+                    this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                    return { ...state, strikeDistance, lungeRadius, backoffRadius };
+                }
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = result.hit ? "hit" : "miss";
+                if (result.hit) {
+                    if (typeof mergedOptions.onHit === "function") {
+                        mergedOptions.onHit(targetRef, state, result, this);
+                    }
+                } else if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, result, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+                this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                return { ...state, strikeDistance, lungeRadius, backoffRadius };
+            }
+
+            if ((now - state.lungeStartedMs) >= lungeMaxMs) {
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = "miss";
+                if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, { hit: false, reason: "timeout" }, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+            }
+
+            this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+            return { ...state, strikeDistance, lungeRadius, backoffRadius, lungeTravelDistance, lungeTravelLimit };
+        }
+
+        const backoffVector = this._getCloseCombatBackoffVector(targetRef);
+        this.speed = backoffSpeed;
+        if (state.lastDistance >= backoffRadius) {
+            this._setCloseCombatPhase(state, "approach", now);
+        } else {
+            this.moveDirection(backoffVector, {
+                ...mergedOptions,
+                target: targetRef,
+                facingVector: this._getCloseCombatVectorToTarget(targetRef)
+            });
+        }
+
+        this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+        return { ...state, strikeDistance, lungeRadius, backoffRadius };
+    }
+
+    _recordVisitedNode(node, reason = "move") {
+        if (!node) return null;
+        if (!Array.isArray(this.nodeVisitLog)) {
+            this.nodeVisitLog = [];
+        }
+        const lastEntry = this.nodeVisitLog.length > 0
+            ? this.nodeVisitLog[this.nodeVisitLog.length - 1]
+            : null;
+        if (lastEntry && lastEntry.xindex === node.xindex && lastEntry.yindex === node.yindex) {
+            if (typeof reason === "string" && reason && !lastEntry.reason) {
+                lastEntry.reason = reason;
+            }
+            return lastEntry;
+        }
+        const entry = {
+            node,
+            xindex: node.xindex,
+            yindex: node.yindex,
+            x: node.x,
+            y: node.y,
+            reason,
+            time: Date.now(),
+        };
+        this.nodeVisitLog.push(entry);
+        const limit = Number.isFinite(this.nodeVisitLogLimit)
+            ? Math.max(1, Math.floor(this.nodeVisitLogLimit))
+            : 200;
+        if (this.nodeVisitLog.length > limit) {
+            this.nodeVisitLog.splice(0, this.nodeVisitLog.length - limit);
+        }
+        return entry;
+    }
+
+    getNodeVisitLog() {
+        return Array.isArray(this.nodeVisitLog)
+            ? this.nodeVisitLog.map(entry => ({ ...entry }))
+            : [];
+    }
+
+    clearNodeVisitLog(reason = "reset") {
+        this.nodeVisitLog = [];
+        if (this.node) {
+            this._recordVisitedNode(this.node, reason);
+        }
+        return this.getNodeVisitLog();
+    }
+
+    getInventory() {
+        if (!(this.inventory instanceof Inventory)) {
+            const existing = (this.inventory && typeof this.inventory === "object") ? this.inventory : {};
+            this.inventory = new Inventory(existing);
+        }
+        return this.inventory;
+    }
+
+    serializeInventory() {
+        const inventory = this.getInventory();
+        return inventory && typeof inventory.toJSON === "function"
+            ? inventory.toJSON()
+            : {};
+    }
+
+    loadInventory(data) {
+        const inventory = this.getInventory();
+        if (inventory && typeof inventory.load === "function") {
+            inventory.load(data);
+        }
+        return inventory;
+    }
+
+    tracePath(seconds = 0) {
+        const durationMs = Math.max(0, Number(seconds) || 0) * 1000;
+        if (!durationMs) {
+            this._tracePathState = null;
+            return false;
+        }
+        this._tracePathState = {
+            remainingMs: durationMs,
+            lastUpdateMs: null
+        };
+        return true;
+    }
+
+    getTracePathState() {
+        return (this._tracePathState && typeof this._tracePathState === "object")
+            ? { ...this._tracePathState }
+            : null;
+    }
+
+    updateTracePathLifetime(nowMs = null, isPaused = false) {
+        const traceState = (this._tracePathState && typeof this._tracePathState === "object")
+            ? this._tracePathState
+            : null;
+        if (!traceState) return null;
+        const resolvedNowMs = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+        if (!Number.isFinite(resolvedNowMs)) return traceState;
+        if (!isPaused && Number.isFinite(traceState.lastUpdateMs)) {
+            traceState.remainingMs = Math.max(0, Number(traceState.remainingMs) - Math.max(0, resolvedNowMs - traceState.lastUpdateMs));
+        }
+        traceState.lastUpdateMs = resolvedNowMs;
+        if (!(Number(traceState.remainingMs) > 0)) {
+            this._tracePathState = null;
+            return null;
+        }
+        return traceState;
+    }
     
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
-    freeze(seconds = null) {
+    getTemperatureBaseline() {
+        return Number.isFinite(this.baselineTemperature) ? Number(this.baselineTemperature) : 0;
+    }
+    getTemperature() {
+        return Number.isFinite(this.temperature) ? Number(this.temperature) : this.getTemperatureBaseline();
+    }
+    setTemperature(nextTemperature) {
+        this.temperature = Number.isFinite(nextTemperature)
+            ? Number(nextTemperature)
+            : this.getTemperatureBaseline();
+        return this.temperature;
+    }
+    changeTemperature(deltaDegrees = 0) {
+        const delta = Number(deltaDegrees);
+        if (!Number.isFinite(delta) || delta === 0) return this.getTemperature();
+        return this.setTemperature(this.getTemperature() + delta);
+    }
+    dropTemperature(deltaDegrees = 0) {
+        const delta = Number(deltaDegrees);
+        if (!Number.isFinite(delta) || delta <= 0) return this.getTemperature();
+        return this.changeTemperature(-delta);
+    }
+    getDegreesBelowBaseline() {
+        return Math.max(0, this.getTemperatureBaseline() - this.getTemperature());
+    }
+    getTemperatureSpeedMultiplier() {
+        const degreesBelow = this.getDegreesBelowBaseline();
+        if (!(degreesBelow > 0)) return 1;
+        return 1 / (2 ** (degreesBelow / 10));
+    }
+    getEffectiveMovementSpeed(baseSpeed = null) {
+        const fallbackSpeed = Number.isFinite(this.speed) ? Number(this.speed) : 0;
+        const normalizedBaseSpeed = Number.isFinite(baseSpeed) ? Number(baseSpeed) : fallbackSpeed;
+        return normalizedBaseSpeed * this.getTemperatureSpeedMultiplier();
+    }
+    recoverTemperature(deltaSeconds = 0) {
+        const dt = Number(deltaSeconds);
+        if (!Number.isFinite(dt) || dt <= 0) return this.getTemperature();
+        const baseline = this.getTemperatureBaseline();
+        const current = this.getTemperature();
+        if (current >= baseline) return current;
+        return this.setTemperature(Math.min(baseline, current + dt));
+    }
+    freeze(seconds) {
         clearTimeout(this.moveTimeout);
         this.moveTimeout = null;
         this.moving = false;
@@ -125,6 +1611,10 @@ class Character {
             this.updateHitboxes();
         }
 
+        if (arguments.length === 0 || typeof seconds === "undefined") {
+            this._scriptFrozenUntilMs = Infinity;
+            return;
+        }
         const durationSec = Number(seconds);
         if (!Number.isFinite(durationSec)) return;
         if (durationSec <= 0) {
@@ -134,13 +1624,20 @@ class Character {
         const nowMs = Date.now();
         const existingUntilMs = Number(this._scriptFrozenUntilMs);
         const nextUntilMs = nowMs + (durationSec * 1000);
-        this._scriptFrozenUntilMs = Number.isFinite(existingUntilMs)
+        this._scriptFrozenUntilMs = existingUntilMs > 0
             ? Math.max(existingUntilMs, nextUntilMs)
             : nextUntilMs;
     }
+    unFreeze() {
+        this._scriptFrozenUntilMs = 0;
+        if (!this.useExternalScheduler && !this.gone && !this.moveTimeout) {
+            this.moveTimeout = this.nextMove();
+        }
+    }
     isScriptFrozen(nowMs = null) {
         const frozenUntilMs = Number(this._scriptFrozenUntilMs);
-        if (!Number.isFinite(frozenUntilMs) || frozenUntilMs <= 0) return false;
+        if (!(frozenUntilMs > 0)) return false;
+        if (frozenUntilMs === Infinity) return true;
         const now = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
         if (now < frozenUntilMs) return true;
         this._scriptFrozenUntilMs = 0;
@@ -209,6 +1706,14 @@ class Character {
             this._healthBarGraphics.destroy();
         }
         this._healthBarGraphics = null;
+        if (this._tracePathGraphics && this._tracePathGraphics.parent) {
+            this._tracePathGraphics.parent.removeChild(this._tracePathGraphics);
+        }
+        if (this._tracePathGraphics && typeof this._tracePathGraphics.destroy === "function") {
+            this._tracePathGraphics.destroy();
+        }
+        this._tracePathGraphics = null;
+        this._tracePathState = null;
         if (Array.isArray(animals)) {
             const idx = animals.indexOf(this);
             if (idx >= 0) animals.splice(idx, 1);
@@ -253,6 +1758,7 @@ class Character {
         if (paused) {
             return;
         }
+        this.recoverTemperature(1 / Math.max(1, Number(this.frameRate) || 1));
         if (this.isScriptFrozen()) {
             this.moving = false;
             return;
@@ -278,6 +1784,11 @@ class Character {
             }
         }
 
+        if (this._closeCombatState && this._closeCombatState.target) {
+            this.updateCloseCombat();
+            return;
+        }
+
         // Check if we have a destination to move toward
         if (!this.destination) {
             this.moving = false;
@@ -299,6 +1810,7 @@ class Character {
                 this.node = this.nextNode;
                 this.x = this.node.x;
                 this.y = this.node.y;
+                this._recordVisitedNode(this.node);
             }
             
             // Get next node from path
@@ -320,7 +1832,8 @@ class Character {
                 ? this.map.shortestDeltaY(this.y, this.nextNode.y)
                 : (this.nextNode.y - this.y);
             let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
-            this.travelFrames = Math.ceil(direction_distance / this.speed * this.frameRate);
+            const effectiveSpeed = Math.max(1e-4, this.getEffectiveMovementSpeed(this.speed));
+            this.travelFrames = Math.max(1, Math.ceil(direction_distance / effectiveSpeed * this.frameRate));
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
@@ -434,4 +1947,127 @@ class Character {
     get interpolatedZ() {
         return this.getInterpolatedPosition().z;
     }
+}
+
+function getAnimalMoveLogCollection() {
+    if (typeof animals !== "undefined" && Array.isArray(animals)) {
+        return animals;
+    }
+    if (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) {
+        return globalThis.animals;
+    }
+    return [];
+}
+
+function resolveAnimalMoveLogTarget(target = 0) {
+    if (target && typeof target.getNodeVisitLog === "function") {
+        return target;
+    }
+
+    const collection = getAnimalMoveLogCollection();
+    if (typeof target === "number" && Number.isInteger(target)) {
+        return collection[target] || null;
+    }
+    if (typeof target === "string") {
+        const needle = target.trim().toLowerCase();
+        if (!needle) return null;
+        return collection.find(animal => {
+            const scriptingName = typeof animal?.scriptingName === "string"
+                ? animal.scriptingName.trim().toLowerCase()
+                : "";
+            const animalType = typeof animal?.type === "string"
+                ? animal.type.trim().toLowerCase()
+                : "";
+            return scriptingName === needle || animalType === needle;
+        }) || null;
+    }
+    return collection[0] || null;
+}
+
+function getHitboxDebugCollection() {
+    const collection = [];
+    if (typeof globalThis !== "undefined" && globalThis.wizard) {
+        collection.push(globalThis.wizard);
+    } else if (typeof wizard !== "undefined" && wizard) {
+        collection.push(wizard);
+    }
+
+    const animalCollection = getAnimalMoveLogCollection();
+    for (let i = 0; i < animalCollection.length; i++) {
+        if (animalCollection[i]) collection.push(animalCollection[i]);
+    }
+    return collection;
+}
+
+function resolveHitboxDebugTarget(target = 0) {
+    if (target && typeof target.getHitboxCollisionDebugInfo === "function") {
+        return target;
+    }
+
+    const collection = getHitboxDebugCollection();
+    if (typeof target === "number" && Number.isInteger(target)) {
+        return collection[target] || null;
+    }
+    if (typeof target === "string") {
+        const needle = target.trim().toLowerCase();
+        if (!needle) return null;
+        return collection.find(entry => {
+            const label = typeof entry?._getHitboxDebugLabel === "function"
+                ? entry._getHitboxDebugLabel(entry).toLowerCase()
+                : "";
+            const type = typeof entry?.type === "string" ? entry.type.toLowerCase() : "";
+            const name = typeof entry?.name === "string" ? entry.name.toLowerCase() : "";
+            return label === needle || type === needle || name === needle;
+        }) || null;
+    }
+    return collection[0] || null;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.dumpAnimalMoveLog = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getNodeVisitLog !== "function") {
+            console.warn("No animal move log target found.");
+            return [];
+        }
+        const log = animal.getNodeVisitLog();
+        console.table(log);
+        return log;
+    };
+
+    globalThis.clearAnimalMoveLog = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.clearNodeVisitLog !== "function") {
+            console.warn("No animal move log target found.");
+            return [];
+        }
+        return animal.clearNodeVisitLog();
+    };
+
+    globalThis.dumpHitboxCollisionDebug = function(target = 0) {
+        const character = resolveHitboxDebugTarget(target);
+        if (!character || typeof character.getHitboxCollisionDebugInfo !== "function") {
+            console.warn("No hitbox collision debug target found.");
+            return null;
+        }
+        const snapshot = character.getHitboxCollisionDebugInfo();
+        if (!snapshot) {
+            console.warn("No hitbox collision debug snapshot available.");
+            return null;
+        }
+        console.log("Hitbox collision debug snapshot:", snapshot);
+        if (Array.isArray(snapshot.nearbyCharacterBlockers) && snapshot.nearbyCharacterBlockers.length > 0) {
+            console.table(snapshot.nearbyCharacterBlockers);
+        }
+        if (Array.isArray(snapshot.nearbyObjectBlockers) && snapshot.nearbyObjectBlockers.length > 0) {
+            console.table(snapshot.nearbyObjectBlockers);
+        }
+        if (Array.isArray(snapshot.dynamicCharacterInteractions) && snapshot.dynamicCharacterInteractions.length > 0) {
+            console.table(snapshot.dynamicCharacterInteractions);
+        }
+        if (Array.isArray(snapshot.staticCollisions) && snapshot.staticCollisions.length > 0) {
+            console.table(snapshot.staticCollisions);
+        }
+        return snapshot;
+    };
 }

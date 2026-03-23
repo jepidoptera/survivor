@@ -97,7 +97,7 @@ class Vanish extends globalThis.Spell {
     static supportsObjectTargeting = true;
 
     static isValidObjectTarget(target, _wizardRef = null) {
-        if (!target || target.gone || target.vanishing || target.dead) return false;
+        if (!target || target.gone || target.vanishing) return false;
         if (target.type === "roof") return !!target.placed;
         return true;
     }
@@ -113,17 +113,18 @@ class Vanish extends globalThis.Spell {
         this.apparentSize = 40;
         this.delayTime = 0;
         this.effectRadius = 0.5;
-        this.magicCost = 5;
+        this.magicCost = 10;
         this.radius = this.effectRadius;
     }
     
     cast(targetX, targetY) {
         // Check magic
-        if (wizard.magic < 15) {
+        if (!globalThis.Spell.canAffordMagicCost(this.magicCost, wizard)) {
+            globalThis.Spell.indicateInsufficientMagic();
             message("Not enough magic to cast Vanish!");
             return this;
         }
-        wizard.magic -= this.magicCost;
+        globalThis.Spell.spendMagicCost(this.magicCost, wizard);
         
         this.visible = true;
         this.x = wizard.x;
@@ -207,44 +208,9 @@ class Vanish extends globalThis.Spell {
             }
         }
     }
-    
-    vanishTarget(target, impactPoint = null) {
-        const isAnimalTarget = Array.isArray(animals) && animals.includes(target);
-        if (isAnimalTarget) {
-            const vanishDamage = 17;
-            if (typeof target.takeDamage === "function") {
-                target.takeDamage(vanishDamage, { isSpell: true });
-            }
-            if (target.gone || target.vanishing) {
-                if (typeof message === "function") {
-                    message(`${target.type} vanishes!`);
-                }
-                if (typeof saveGame === "function") saveGame();
-            } else if (target.fleeRadius > 0) {
-                target.flee();
-            } else if (target.chaseRadius > 0) {
-                target.attack(wizard);
-            }
-            return;
-        }
-        if (
-            target &&
-            target.type === "wallSection" &&
-            !target._vanishAsWholeSection &&
-            typeof target.vanishAroundPoint === "function" &&
-            impactPoint &&
-            Number.isFinite(impactPoint.x) &&
-            Number.isFinite(impactPoint.y)
-        ) {
-            const vanishFrames = 0.25 * frameRate;
-            const handled = target.vanishAroundPoint(
-                { x: Number(impactPoint.x), y: Number(impactPoint.y) },
-                { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD, vanishDurationFrames: vanishFrames }
-            );
-            if (handled) return;
-        }
 
-        // Mark as vanishing to avoid hitting multiple times
+    beginTargetVanish(target, impactPoint = null) {
+        if (!target || target.gone || target.vanishing) return false;
         target.vanishing = true;
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
@@ -281,6 +247,52 @@ class Vanish extends globalThis.Spell {
             target._vanishAsWholeSection = false;
             target._vanishFinalizeTimeout = null;
         }, finalizeAfterMs);
+        return true;
+    }
+    
+    vanishTarget(target, impactPoint = null) {
+        const isAnimalTarget = Array.isArray(animals) && animals.includes(target);
+        if (isAnimalTarget) {
+            if (target.dead) {
+                this.beginTargetVanish(target, impactPoint);
+                if (typeof message === "function") {
+                    message(`${target.type} vanishes!`);
+                }
+                return;
+            }
+            const vanishDamage = 17;
+            if (typeof target.takeDamage === "function") {
+                target.takeDamage(vanishDamage, { isSpell: true });
+            }
+            if (target.gone || target.vanishing) {
+                if (typeof message === "function") {
+                    message(`${target.type} vanishes!`);
+                }
+            } else if (target.fleeRadius > 0) {
+                target.flee();
+            } else if (target.chaseRadius > 0) {
+                target.attack(wizard);
+            }
+            return;
+        }
+        if (
+            target &&
+            target.type === "wallSection" &&
+            !target._vanishAsWholeSection &&
+            typeof target.vanishAroundPoint === "function" &&
+            impactPoint &&
+            Number.isFinite(impactPoint.x) &&
+            Number.isFinite(impactPoint.y)
+        ) {
+            const vanishFrames = 0.25 * frameRate;
+            const handled = target.vanishAroundPoint(
+                { x: Number(impactPoint.x), y: Number(impactPoint.y) },
+                { removeWidthWorld: VANISH_REMOVE_WIDTH_WORLD, vanishDurationFrames: vanishFrames }
+            );
+            if (handled) return;
+        }
+
+        this.beginTargetVanish(target, impactPoint);
     }
 }
 

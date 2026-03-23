@@ -8,17 +8,18 @@ class BuildRoad extends globalThis.Spell {
         this.bounces = 0;
         this.apparentSize = 0;
         this.delayTime = 0;
-        this.magicCost = 5;
+        this.magicCost = 10;
         this.radius = 0;
     }
     
     cast(targetX, targetY) {
         // Check magic
-        if (wizard.magic < this.magicCost) {
+        if (!globalThis.Spell.canAffordMagicCost(this.magicCost, wizard)) {
+            globalThis.Spell.indicateInsufficientMagic();
             message("Not enough magic to cast Build Road!");
             return this;
         }
-        wizard.magic -= this.magicCost;
+        globalThis.Spell.spendMagicCost(this.magicCost, wizard);
         
         // Snap to nearest hex tile
         const targetNode = wizard.map.worldToNode(targetX, targetY);

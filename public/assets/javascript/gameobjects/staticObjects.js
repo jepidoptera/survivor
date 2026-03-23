@@ -801,7 +801,7 @@ class StaticObject {
     static _depthBillboardState = null;
     static _groundBillboardState = null;
     static _depthBillboardVs = `
-precision mediump float;
+precision highp float;
 attribute vec3 aWorldPosition;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
@@ -856,7 +856,7 @@ void main(void) {
 }
 `;
     static _depthBillboardFs = `
-precision mediump float;
+precision highp float;
 varying vec2 vUvs;
 varying float vWorldZ;
 uniform float uZOffset;
@@ -871,6 +871,9 @@ void main(void) {
     gl_FragColor = tex;
 }
 `;
+
+    static _depthMetricNear = -128;
+    static _depthMetricFar = 256;
 
     static ensureDepthBillboardState(pixiRef) {
         if (!pixiRef) return null;
@@ -942,6 +945,7 @@ void main(void) {
         this.hp = 100;
         this.isOnFire = false;
         this.burned = false;
+        this._wasOnFire = false;
     }
 
     configureSpriteAnimation(metaEntry = null) {
@@ -1101,7 +1105,8 @@ void main(void) {
             this._depthBillboardWorldPositions = null;
             this._depthBillboardLastSignature = "";
         }
-        const state = isGroundRotation
+        const useDepthTestGround = !!(isGroundRotation && this && this.forceDepthTestGround === true);
+        const state = (isGroundRotation && !useDepthTestGround)
             ? StaticObject.ensureGroundBillboardState(pixi)
             : StaticObject.ensureDepthBillboardState(pixi);
         if (!state) return null;
@@ -1143,7 +1148,7 @@ void main(void) {
         const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
         mesh.name = `${String(this.type || "staticObject")}DepthBillboard`;
         mesh.interactive = false;
-        mesh.roundPixels = true;
+        mesh.roundPixels = false;
         mesh.visible = false;
         this._depthBillboardWorldPositions = geometry.getBuffer("aWorldPosition").data;
         this._depthBillboardLastSignature = "";
@@ -1577,9 +1582,8 @@ void main(void) {
         }
 
         const uniforms = mesh.shader.uniforms;
-        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
-        const nearMetric = -Math.max(80, viewportHeight * 0.6);
-        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const nearMetric = StaticObject._depthMetricNear;
+        const farMetric = StaticObject._depthMetricFar;
         const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
         const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
             ? Number(ctx.app.screen.width)
@@ -1623,10 +1627,12 @@ void main(void) {
         if (Array.isArray(this.compositeLayers) && this.compositeLayers.length >= 1) {
             const archLayer = this.compositeLayers[0];
             const doorLayer = this.compositeLayers.length >= 2 ? this.compositeLayers[1] : null;
+            const archZOffset = -1.5;
 
             if (this.isOpen) {
                 // If open, just show arch on the main mesh (no underlay needed)
                 StaticObject._setCompositeLayerUvs(mesh, sourceTexture, archLayer.uRegion, useDualWallPlanes);
+                mesh.shader.uniforms.uZOffset = archZOffset;
                 if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
             } else if (doorLayer) {
                 // If closed, draw arch on underlay, and door on main mesh
@@ -1662,19 +1668,22 @@ void main(void) {
                     uU.uXyRatio = uniforms.uXyRatio;
                     uU.uDepthRange[0] = uniforms.uDepthRange[0];
                     uU.uDepthRange[1] = uniforms.uDepthRange[1];
-                    uU.uTint[0] = uniforms.uTint[0];
-                    uU.uTint[1] = uniforms.uTint[1];
-                    uU.uTint[2] = uniforms.uTint[2];
+                    // Doors can blacken while burning, but the arch/frame should stay neutral.
+                    uU.uTint[0] = 1;
+                    uU.uTint[1] = 1;
+                    uU.uTint[2] = 1;
                     uU.uTint[3] = uniforms.uTint[3];
                     uU.uAlphaCutoff = uniforms.uAlphaCutoff;
                     uU.uClipMinZ = uniforms.uClipMinZ;
                     uU.uSampler = uniforms.uSampler;
-                    uU.uZOffset = 1.5;
+                    // Keep the arch in front of the wall, but still behind the door leaf.
+                    uU.uZOffset = archZOffset;
                     underlayMesh.visible = true;
                     this._compositeUnderlayShouldRender = true;
                 }
             } else {
                 StaticObject._setCompositeLayerUvs(mesh, sourceTexture, archLayer.uRegion, useDualWallPlanes);
+                mesh.shader.uniforms.uZOffset = archZOffset;
                 if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
             }
         } else {
@@ -1698,9 +1707,15 @@ void main(void) {
         if (oldNode) {
             oldNode.removeObject(this);
         }
+        if (typeof this.clearVisibilityRegistration === "function") {
+            this.clearVisibilityRegistration();
+        }
         this.node = node;
         if (this.node) {
             this.node.addObject(this);
+        }
+        if (typeof this.refreshVisibilityRegistration === "function") {
+            this.refreshVisibilityRegistration();
         }
     }
 
@@ -1708,6 +1723,9 @@ void main(void) {
         const node = this.getNode();
         if (node) {
             node.removeObject(this);
+        }
+        if (typeof this.clearVisibilityRegistration === "function") {
+            this.clearVisibilityRegistration();
         }
     }
 
@@ -1771,6 +1789,7 @@ void main(void) {
             return;
         }
         this.isOnFire = true;
+        this._wasOnFire = true;
         // Register for simulation ticking
         if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
             globalThis.activeSimObjects.add(this);
@@ -1866,7 +1885,7 @@ void main(void) {
         }
         
         // Gradually turn black as item burns (start at 50% HP)
-        if (this.maxHP && this.hp !== undefined) {
+        if ((this.isOnFire || this.burned) && this.maxHP && this.hp !== undefined) {
             const hpThreshold = this.maxHP * 0.5;
             if (this.hp < hpThreshold) {
                 // Tint from white (0xffffff) to black (0x000000) as HP goes from 50% to 0%
@@ -1883,7 +1902,7 @@ void main(void) {
         }
         
         // Mark as burned when HP reaches 0
-        if (this.hp <= 0 && !this.burned) {
+        if (this.hp <= 0 && this.isOnFire && !this.burned) {
             this.burned = true;
         }
 
@@ -1912,15 +1931,31 @@ void main(void) {
         
         // Fade out fire after destruction
         if (this.fireFadeStart !== undefined) {
-            const fadeFrames = 120; // ~4 seconds at 30fps
+            const fadeDelayFrames = Math.max(
+                0,
+                Number.isFinite(this.fireFadeDelayFrames)
+                    ? Math.round(Number(this.fireFadeDelayFrames))
+                    : 0
+            );
+            const fadeFrames = Math.max(
+                1,
+                Number.isFinite(this.fireFadeDurationFrames)
+                    ? Math.round(Number(this.fireFadeDurationFrames))
+                    : 120
+            );
             const timeSinceFade = frameCount - this.fireFadeStart;
-            if (timeSinceFade > fadeFrames) {
+            if (timeSinceFade <= fadeDelayFrames) {
+                this.fireAlphaMult = 1;
+            } else if ((timeSinceFade - fadeDelayFrames) > fadeFrames) {
                 this.fireAlphaMult = 0;
                 this._removeFireSprite();
                 // Fire fade complete — no more simulation needed
                 delete this.fireFadeStart;
+                delete this.fireFadeDelayFrames;
+                delete this.fireFadeDurationFrames;
             } else {
-                this.fireAlphaMult = Math.max(0, 1 - (timeSinceFade / fadeFrames));
+                const fadeElapsed = timeSinceFade - fadeDelayFrames;
+                this.fireAlphaMult = Math.max(0, 1 - (fadeElapsed / fadeFrames));
             }
         }
     }
@@ -1943,6 +1978,15 @@ void main(void) {
             } catch (_err) {
                 data.script = this.script;
             }
+        }
+        if (Array.isArray(this._scriptMessages) && this._scriptMessages.length > 0) {
+            data._scriptMessages = this._scriptMessages.map(msg => ({
+                text: String((msg && msg.text) || ""),
+                x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+            })).filter(msg => msg.text.length > 0);
         }
         return data;
     }
@@ -2017,6 +2061,7 @@ void main(void) {
                         doorLockedOpen: !!data.doorLockedOpen,
                         doorFallAngle: Number.isFinite(data.doorFallAngle) ? Number(data.doorFallAngle) : undefined,
                         doorFallNormalSign: Number.isFinite(data.doorFallNormalSign) ? Number(data.doorFallNormalSign) : undefined,
+                        learnedEnterSign: Number.isFinite(data.learnedEnterSign) ? Number(data.learnedEnterSign) : undefined,
                         playerEnters: normalizeDoorEventScript(data.playerEnters),
                         playerExits: normalizeDoorEventScript(data.playerExits),
                         castsLosShadows: (typeof data.castsLosShadows === "boolean")
@@ -2051,6 +2096,9 @@ void main(void) {
                 obj.x = data.x;
                 obj.y = data.y;
                 if (data.hp !== undefined) obj.hp = data.hp;
+                if (typeof data.burned === "boolean") obj.burned = data.burned;
+                if (typeof data._wasOnFire === "boolean") obj._wasOnFire = data._wasOnFire;
+                if (typeof data.fallDirection === "string") obj.fallDirection = data.fallDirection;
                 if (data.falling) {
                     obj.falling = true;
                     obj.fallStart = typeof frameCount !== "undefined" ? frameCount : 0;
@@ -2064,6 +2112,23 @@ void main(void) {
                 }
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     obj.script = data.script;
+                }
+                if (Array.isArray(data._scriptMessages)) {
+                    obj._scriptMessages = data._scriptMessages
+                        .map(msg => ({
+                            text: String((msg && msg.text) || ""),
+                            x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                            y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                            color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                            fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                        }))
+                        .filter(msg => msg.text.length > 0);
+                    if (obj._scriptMessages.length > 0 && typeof globalThis !== "undefined") {
+                        if (!(globalThis._scriptMessageTargets instanceof Set)) {
+                            globalThis._scriptMessageTargets = new Set();
+                        }
+                        globalThis._scriptMessageTargets.add(obj);
+                    }
                 }
 
                 // Preserve tree sprite variant across save/load.
@@ -2122,6 +2187,7 @@ class Tree extends StaticObject {
         this.texturePath = this.resolveTreeTexturePath();
         this._treeMetadata = null;
         this._treeMetadataFetchToken = 0;
+        this._visibilityNodes = [];
         this.applySize(this.size);
         this.applyTreeMetadataFromServer();
     }
@@ -2135,6 +2201,84 @@ class Tree extends StaticObject {
         this.visualRadius = this.baseVisualRadius * radiusScale;
         this.groundRadius = this.baseGroundRadius * radiusScale;
         this.refreshStandingTreeHitboxes();
+        this.refreshVisibilityRegistration();
+    }
+
+    clearVisibilityRegistration() {
+        const nodes = Array.isArray(this._visibilityNodes) ? this._visibilityNodes : [];
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node && typeof node.removeVisibilityObject === "function") {
+                node.removeVisibilityObject(this);
+            }
+        }
+        this._visibilityNodes = [];
+    }
+
+    getVisibilityRegistrationSamplePoints() {
+        const size = Number(this.size) || 4;
+        if (!(size > 4)) return [];
+
+        const spriteAnchor = (this.pixiSprite && this.pixiSprite.anchor) ? this.pixiSprite.anchor : null;
+        const anchorX = (spriteAnchor && Number.isFinite(spriteAnchor.x)) ? Number(spriteAnchor.x) : 0.5;
+        const anchorY = (spriteAnchor && Number.isFinite(spriteAnchor.y)) ? Number(spriteAnchor.y) : 1;
+        const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : size);
+        const height = Math.max(0.01, Number.isFinite(this.height) ? Number(this.height) : size);
+        const topLift = Math.max(0.25, height * 0.2);
+
+        const left = this.x - anchorX * width;
+        const right = this.x + (1 - anchorX) * width;
+        const top = this.y - anchorY * height - topLift;
+        const bottom = this.y + (1 - anchorY) * height;
+
+        let xFractions = [0.5];
+        let yFractions = [0];
+        if (size >= 12) {
+            xFractions = [0, 0.5, 1];
+            yFractions = [0, 0.5, 1];
+        } else if (size >= 8) {
+            xFractions = [0, 1];
+            yFractions = [0, 1];
+        }
+
+        const points = [];
+        for (let yi = 0; yi < yFractions.length; yi++) {
+            const fy = yFractions[yi];
+            const worldY = top + (bottom - top) * fy;
+            for (let xi = 0; xi < xFractions.length; xi++) {
+                const fx = xFractions[xi];
+                const worldX = left + (right - left) * fx;
+                points.push({ x: worldX, y: worldY });
+            }
+        }
+        return points;
+    }
+
+    refreshVisibilityRegistration() {
+        this.clearVisibilityRegistration();
+        if (!this.map || typeof this.map.worldToNode !== "function") return;
+        if (this.fallenHitboxCreated) return;
+
+        const baseNode = this.getNode();
+        if (!baseNode) return;
+        const samplePoints = this.getVisibilityRegistrationSamplePoints();
+        if (samplePoints.length === 0) return;
+
+        const seen = new Set();
+        const registeredNodes = [];
+        for (let i = 0; i < samplePoints.length; i++) {
+            const point = samplePoints[i];
+            const node = this.map.worldToNode(point.x, point.y);
+            if (!node || node === baseNode) continue;
+            const key = `${node.xindex},${node.yindex}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (typeof node.addVisibilityObject === "function") {
+                node.addVisibilityObject(this);
+                registeredNodes.push(node);
+            }
+        }
+        this._visibilityNodes = registeredNodes;
     }
 
     resolveTreeTexturePath() {
@@ -2235,6 +2379,85 @@ class Tree extends StaticObject {
     applyScale(nextScale) {
         this.applySize(nextScale);
     }
+
+    getFallenTreeBaseCenterX() {
+        const anchorX = (this.pixiSprite && this.pixiSprite.anchor && Number.isFinite(this.pixiSprite.anchor.x))
+            ? Number(this.pixiSprite.anchor.x)
+            : 0.5;
+        const worldWidth = Math.max(0.01, Math.abs(Number(this.width) || 0));
+        return (Number.isFinite(this.x) ? Number(this.x) : 0) + (0.5 - anchorX) * worldWidth;
+    }
+
+    getFallenTreeHitboxDirectionSign() {
+        const rotation = Number(this.rotation) || 0;
+        if (Math.abs(rotation) > 1e-4) {
+            return rotation > 0 ? -1 : 1;
+        }
+        if (typeof this.fallDirection === "string") {
+            return this.fallDirection === "right" ? -1 : 1;
+        }
+        return 1;
+    }
+
+    buildFallenTreeHitboxPoints(kind = "visual") {
+        const baseX = this.getFallenTreeBaseCenterX();
+        const baseY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const direction = this.getFallenTreeHitboxDirectionSign();
+        const scale = Math.max(0.05, Math.abs(Number(this.size) || Number(this.width) || 4) / 4);
+
+        const templates = kind === "ground"
+            ? {
+                right: [
+                    [2, -0.75],
+                    [3.5, -0.6],
+                    [3.5, 1.2],
+                    [2, 1.5],
+                    [0, 0.5],
+                    [0, -0.5]
+                ],
+                left: [
+                    [-2, -0.75],
+                    [0, -0.5],
+                    [0, 0.5],
+                    [-2, 1.5],
+                    [-3.5, 1.2],
+                    [-3.5, -0.6]
+                ]
+            }
+            : {
+                right: [
+                    [2, -1.5],
+                    [4, -1.2],
+                    [4, 1.2],
+                    [2, 1.5],
+                    [0, 0.5],
+                    [0, -0.5]
+                ],
+                left: [
+                    [-2, -1.5],
+                    [0, -0.5],
+                    [0, 0.5],
+                    [-2, 1.5],
+                    [-4, 1.2],
+                    [-4, -1.2]
+                ]
+            };
+
+        const template = direction >= 0 ? templates.right : templates.left;
+        return template.map(([dx, dy]) => ({
+            x: baseX + dx * scale,
+            y: baseY + dy * scale
+        }));
+    }
+
+    createFallenTreeHitboxes() {
+        const visualPoints = this.buildFallenTreeHitboxPoints("visual");
+        const groundPoints = this.buildFallenTreeHitboxPoints("ground");
+        this.visualHitbox = new PolygonHitbox(visualPoints);
+        this.groundPlaneHitbox = new PolygonHitbox(groundPoints);
+        this.fallenHitboxCreated = true;
+        this.clearVisibilityRegistration();
+    }
     
     update() {
         // Handle growth animation if tree is growing
@@ -2266,9 +2489,13 @@ class Tree extends StaticObject {
             if (!this.falling) {
                 this.falling = true;
                 this.rotation = 0;
-                this.pixiSprite.tint = 0x222222; // Ensure fully black
-                // Set random fall direction
-                this.fallDirection = Math.random() < 0.5 ? 'left' : 'right';
+                if (this.burned && this.pixiSprite) {
+                    this.pixiSprite.tint = 0x222222;
+                }
+                // Preserve externally assigned fall direction (animals/scripts); randomize only as fallback.
+                if (this.fallDirection !== 'left' && this.fallDirection !== 'right') {
+                    this.fallDirection = Math.random() < 0.5 ? 'left' : 'right';
+                }
                 this.fallStart = frameCount; // Track when fall started
             }
             
@@ -2290,53 +2517,9 @@ class Tree extends StaticObject {
             } else {
                 this.rotation = this.fallDirection === 'right' ? 90 : -90;
                 
-                // Once tree is fully fallen, create diamond-shaped hitbox
+                // Once the tree is fully fallen, rebuild the hitbox from its actual size.
                 if (!this.fallenHitboxCreated) {
-                    // Diamond shape: 4 units wide, 2 units high
-                    // Centered 2 units to the side of the base node
-                    const offsetX = this.fallDirection === 'right' ? 2 : -2;
-                    const centerX = this.x + offsetX;
-                    const centerY = this.y;
-                    let treepoints;
-
-                    if (this.fallDirection === 'right') {
-                        this.visualHitbox = new PolygonHitbox([
-                            {x: centerX, y: centerY - 1.5},     
-                            {x: centerX + 2, y: centerY - 1.2}, 
-                            {x: centerX + 2, y: centerY + 1.2}, 
-                            {x: centerX, y: centerY + 1.5},     
-                            {x: centerX - 2, y: centerY + 0.5}, 
-                            {x: centerX - 2, y: centerY - 0.5}
-                        ]);
-                        this.groundPlaneHitbox = new PolygonHitbox([
-                            {x: centerX, y: centerY - 0.75},     
-                            {x: centerX + 1.5, y: centerY - 0.6}, 
-                            {x: centerX + 1.5, y: centerY + 1.2}, 
-                            {x: centerX, y: centerY + 1.5},     
-                            {x: centerX - 2, y: centerY + 0.5}, 
-                            {x: centerX - 2, y: centerY - 0.5}
-                        ]);
-                    } else {
-                        this.visualHitbox = new PolygonHitbox([
-                            {x: centerX, y: centerY - 1.5},     
-                            {x: centerX + 2, y: centerY - 0.5}, 
-                            {x: centerX + 2, y: centerY + 0.5}, 
-                            {x: centerX, y: centerY + 1.5},     
-                            {x: centerX - 2, y: centerY + 1.2}, 
-                            {x: centerX - 2, y: centerY - 1.2}
-                        ]);
-                        this.groundPlaneHitbox = new PolygonHitbox([
-                            {x: centerX, y: centerY - 0.75},     
-                            {x: centerX + 2, y: centerY - 0.5}, 
-                            {x: centerX + 2, y: centerY + 0.5}, 
-                            {x: centerX, y: centerY + 1.5},     
-                            {x: centerX - 1.5, y: centerY + 1.2}, 
-                            {x: centerX - 1.5, y: centerY - 0.6}
-                        ]);
-                    }
-                    this.moveNode(this.map.worldToNode(centerX, centerY));                     
-                    this.fallenHitboxCreated = true;
-
+                    this.createFallenTreeHitboxes();
                 }
                 
                 if (this.isOnFire) {
@@ -2379,6 +2562,27 @@ class Tree extends StaticObject {
         if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillboardWorldPositions) {
             if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
             return null;
+        }
+        const indexBuffer = mesh.geometry && typeof mesh.geometry.getIndex === "function"
+            ? mesh.geometry.getIndex()
+            : null;
+        if (indexBuffer && indexBuffer.data && indexBuffer.data.length >= 6) {
+            const useRightFallDiagonal = (typeof this.fallDirection === "string")
+                ? (this.fallDirection === "right")
+                : ((Number(this.rotation) || 0) > 0);
+            const desiredIndices = useRightFallDiagonal
+                ? [0, 1, 2, 0, 2, 3]
+                : [1, 2, 3, 0, 1, 3];
+            let needsIndexUpdate = false;
+            for (let i = 0; i < 6; i++) {
+                if (indexBuffer.data[i] !== desiredIndices[i]) {
+                    indexBuffer.data[i] = desiredIndices[i];
+                    needsIndexUpdate = true;
+                }
+            }
+            if (needsIndexUpdate) {
+                indexBuffer.update();
+            }
         }
         this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
         
@@ -2456,9 +2660,8 @@ class Tree extends StaticObject {
         }
 
         const uniforms = mesh.shader.uniforms;
-        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
-        const nearMetric = -Math.max(80, viewportHeight * 0.6);
-        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const nearMetric = StaticObject._depthMetricNear;
+        const farMetric = StaticObject._depthMetricFar;
         const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
         const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
             ? Number(ctx.app.screen.width)
@@ -2601,6 +2804,9 @@ class PlacedObject extends StaticObject {
         this._doorFallNormalSign = Number.isFinite(options.doorFallNormalSign)
             ? (Number(options.doorFallNormalSign) >= 0 ? 1 : -1)
             : 1;
+        this._learnedEnterSign = Number.isFinite(options.learnedEnterSign)
+            ? (Number(options.learnedEnterSign) >= 0 ? 1 : -1)
+            : 0;
         this._doorLockedOpen = !!options.doorLockedOpen;
         this._doorHitShakeStartedAt = 0;
         this._doorHitShakeEndsAt = 0;
@@ -2709,6 +2915,9 @@ class PlacedObject extends StaticObject {
         if (Number.isFinite(this._doorFallNormalSign)) {
             data.doorFallNormalSign = Number(this._doorFallNormalSign) >= 0 ? 1 : -1;
         }
+        if (this._learnedEnterSign === 1 || this._learnedEnterSign === -1) {
+            data.learnedEnterSign = Number(this._learnedEnterSign) >= 0 ? 1 : -1;
+        }
         data.placeableAnchorX = Number.isFinite(this.placeableAnchorX) ? this.placeableAnchorX : 0.5;
         data.placeableAnchorY = Number.isFinite(this.placeableAnchorY) ? this.placeableAnchorY : 1;
         if (typeof this.castsLosShadows === "boolean") {
@@ -2754,6 +2963,7 @@ class PlacedObject extends StaticObject {
                 section.detachObject(this);
             }
         }
+        this._refreshMountedWallDirectionalBlocking(mountedWallSectionUnitId);
         this.mountedWallLineGroupId = null;
         this.mountedSectionId = null;
         this.mountedWallSectionUnitId = null;
@@ -2772,6 +2982,12 @@ class PlacedObject extends StaticObject {
         if (category !== "windows" && category !== "doors") return false;
         if (this.rotationAxis !== "spatial") return false;
         if (!this.map) return false;
+        const previousMountedId = Number.isInteger(this.mountedWallLineGroupId)
+            ? Number(this.mountedWallLineGroupId)
+            : null;
+        const previousWallSectionUnitId = Number.isInteger(this.mountedWallSectionUnitId)
+            ? Number(this.mountedWallSectionUnitId)
+            : null;
         const hasExplicitMountedTarget = !!(
             Number.isInteger(this.mountedWallLineGroupId) ||
             Number.isInteger(this.mountedSectionId) ||
@@ -2779,17 +2995,30 @@ class PlacedObject extends StaticObject {
         );
         if (category === "doors" && !hasExplicitMountedTarget) {
             // Allow free-placed doors: only snap doors when they were explicitly mounted.
+            if (
+                Number.isInteger(previousWallSectionUnitId) &&
+                typeof WallSectionUnit !== "undefined" &&
+                WallSectionUnit &&
+                WallSectionUnit._allSections instanceof Map
+            ) {
+                const previousSection = WallSectionUnit._allSections.get(previousWallSectionUnitId);
+                if (previousSection && typeof previousSection.detachObject === "function") {
+                    previousSection.detachObject(this);
+                }
+            }
             this.mountedWallLineGroupId = null;
             this.mountedSectionId = null;
             this.mountedWallSectionUnitId = null;
+            this._refreshMountedWallDirectionalBlocking(previousWallSectionUnitId);
+            if (
+                Number.isInteger(previousMountedId) &&
+                typeof globalThis !== "undefined" &&
+                typeof globalThis.markWallSectionDirty === "function"
+            ) {
+                globalThis.markWallSectionDirty(previousMountedId);
+            }
             return false;
         }
-        const previousMountedId = Number.isInteger(this.mountedWallLineGroupId)
-            ? Number(this.mountedWallLineGroupId)
-            : null;
-        const previousWallSectionUnitId = Number.isInteger(this.mountedWallSectionUnitId)
-            ? Number(this.mountedWallSectionUnitId)
-            : null;
 
         const seedX = Number.isFinite(this.x) ? Number(this.x) : 0;
         const seedY = Number.isFinite(this.y) ? Number(this.y) : 0;
@@ -2961,6 +3190,7 @@ class PlacedObject extends StaticObject {
                     }
                     if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
                 }
+                this._refreshMountedWallDirectionalBlocking([previousWallSectionUnitId, nextWallSectionUnitId]);
                 return true;
             }
         }
@@ -2994,6 +3224,7 @@ class PlacedObject extends StaticObject {
             }
             if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
         }
+        this._refreshMountedWallDirectionalBlocking([previousWallSectionUnitId, nextWallSectionUnitId]);
         return true;
     }
 
@@ -3108,21 +3339,30 @@ class PlacedObject extends StaticObject {
         return (this.category === "doors" || this.type === "door");
     }
 
-    notifyMountedWallStateChanged() {
-        const mountedSectionId = Number.isInteger(this.mountedWallSectionUnitId)
-            ? Number(this.mountedWallSectionUnitId)
-            : null;
+    _refreshMountedWallDirectionalBlocking(sectionIds) {
+        const ids = Array.isArray(sectionIds) ? sectionIds : [sectionIds];
         if (
-            Number.isInteger(mountedSectionId) &&
-            typeof WallSectionUnit !== "undefined" &&
-            WallSectionUnit &&
-            WallSectionUnit._allSections instanceof Map
+            typeof WallSectionUnit === "undefined" ||
+            !WallSectionUnit ||
+            !(WallSectionUnit._allSections instanceof Map)
         ) {
-            const section = WallSectionUnit._allSections.get(mountedSectionId);
-            if (section && typeof section.rebuildDirectionalBlocking === "function") {
-                section.rebuildDirectionalBlocking();
-            }
+            return;
         }
+        const seen = new Set();
+        for (let i = 0; i < ids.length; i++) {
+            const rawId = ids[i];
+            if (!Number.isInteger(rawId)) continue;
+            const id = Number(rawId);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const section = WallSectionUnit._allSections.get(id);
+            if (!section || typeof section.rebuildDirectionalBlocking !== "function") continue;
+            section.rebuildDirectionalBlocking();
+        }
+    }
+
+    notifyMountedWallStateChanged() {
+        this._refreshMountedWallDirectionalBlocking(this.mountedWallSectionUnitId);
         if (
             Number.isInteger(this.mountedWallLineGroupId) &&
             typeof globalThis !== "undefined" &&
@@ -3301,6 +3541,91 @@ class PlacedObject extends StaticObject {
         } : fallbackSamplePoint;
     }
 
+    _getFallenDoorTransformBasis() {
+        if (!this.isFallenDoorEffect) return null;
+        const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.placementRotation) : 0;
+        const theta = angleDeg * (Math.PI / 180);
+        const axisX = Math.cos(theta);
+        const axisY = Math.sin(theta);
+        const normalX = -axisY;
+        const normalY = axisX;
+        const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
+        const anchorX = Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5;
+        const alongOffset = (anchorX - 0.5) * width;
+        const faceCenters = (
+            this.depthBillboardFaceCenters &&
+            this.depthBillboardFaceCenters.front &&
+            this.depthBillboardFaceCenters.back &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.front.y) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.x) &&
+            Number.isFinite(this.depthBillboardFaceCenters.back.y)
+        ) ? this.depthBillboardFaceCenters : null;
+        const fallAngle = Math.max(0, Math.min(90, Number.isFinite(this.doorFallAngle) ? Number(this.doorFallAngle) : 0));
+        const fallRadians = fallAngle * (Math.PI / 180);
+        const fallSign = Number.isFinite(this._doorFallNormalSign) && this._doorFallNormalSign < 0 ? -1 : 1;
+        const mountedWallThickness = resolveMountedWallThickness(this);
+        const hingeOutwardOffset = Math.max(
+            0.02,
+            Number.isFinite(mountedWallThickness)
+                ? (Math.max(0.001, Number(mountedWallThickness)) * 0.5 + 0.02)
+                : 0.08
+        );
+        const hingeFace = (fallSign >= 0)
+            ? (faceCenters && faceCenters.front ? faceCenters.front : null)
+            : (faceCenters && faceCenters.back ? faceCenters.back : null);
+        const hingeCenterX = hingeFace
+            ? (Number(hingeFace.x) - axisX * alongOffset + normalX * fallSign * hingeOutwardOffset)
+            : ((Number.isFinite(this.x) ? Number(this.x) : 0) - axisX * alongOffset);
+        const hingeCenterY = hingeFace
+            ? (Number(hingeFace.y) - axisY * alongOffset + normalY * fallSign * hingeOutwardOffset)
+            : ((Number.isFinite(this.y) ? Number(this.y) : 0) - axisY * alongOffset);
+        return {
+            axisX,
+            axisY,
+            normalX,
+            normalY,
+            hingeCenterX,
+            hingeCenterY,
+            fallAngle,
+            fallRadians,
+            fallSign
+        };
+    }
+
+    getFallenDoorLocalPointForWorldAnchor(anchorWorld) {
+        const basis = this._getFallenDoorTransformBasis();
+        if (!basis || !anchorWorld) return null;
+        const worldX = Number.isFinite(anchorWorld.x) ? Number(anchorWorld.x) : 0;
+        const worldY = Number.isFinite(anchorWorld.y) ? Number(anchorWorld.y) : 0;
+        return {
+            along: (worldX - basis.hingeCenterX) * basis.axisX + (worldY - basis.hingeCenterY) * basis.axisY,
+            normal: (worldX - basis.hingeCenterX) * basis.normalX + (worldY - basis.hingeCenterY) * basis.normalY,
+            z: Number.isFinite(anchorWorld.z) ? Number(anchorWorld.z) : 0
+        };
+    }
+
+    getFallenDoorWorldPointFromLocalAnchor(localAnchor = null) {
+        const basis = this._getFallenDoorTransformBasis();
+        if (!basis) return null;
+        const anchor = (localAnchor && typeof localAnchor === "object")
+            ? localAnchor
+            : (this._doorFireAnchorLocal || null);
+        if (!anchor) return null;
+        const along = Number.isFinite(anchor.along) ? Number(anchor.along) : 0;
+        const normal = Number.isFinite(anchor.normal) ? Number(anchor.normal) : 0;
+        const z = Number.isFinite(anchor.z) ? Number(anchor.z) : 0;
+        const sinFall = Math.sin(basis.fallRadians);
+        const cosFall = Math.cos(basis.fallRadians);
+        const rotatedNormal = normal * cosFall + basis.fallSign * z * sinFall;
+        const rotatedZ = z * cosFall - basis.fallSign * normal * sinFall;
+        return {
+            x: basis.hingeCenterX + basis.axisX * along + basis.normalX * rotatedNormal,
+            y: basis.hingeCenterY + basis.axisY * along + basis.normalY * rotatedNormal,
+            z: Math.max(0.001, rotatedZ)
+        };
+    }
+
     updateFallenDoorDepthBillboardMesh(ctx = null, camera = null, options = {}) {
         if (this._compositeUnderlayMesh) this._compositeUnderlayMesh.visible = false;
         this._compositeUnderlayShouldRender = false;
@@ -3345,44 +3670,23 @@ class PlacedObject extends StaticObject {
         const worldHeightZ = Math.max(0.01, Number.isFinite(this.height)
             ? (Number(this.height) / xyRatio)
             : (Math.abs(Number(sprite && sprite.height) || 0) / (viewScale * xyRatio)));
-        const anchorX = Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5;
+        const basis = this._getFallenDoorTransformBasis();
+        if (!basis) {
+            if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
+            return null;
+        }
         const angleDeg = Number.isFinite(this.placementRotation) ? Number(this.placementRotation) : 0;
-        const theta = angleDeg * (Math.PI / 180);
-        const axisX = Math.cos(theta);
-        const axisY = Math.sin(theta);
-        const normalX = -axisY;
-        const normalY = axisX;
+        const axisX = basis.axisX;
+        const axisY = basis.axisY;
+        const normalX = basis.normalX;
+        const normalY = basis.normalY;
         const halfWidth = worldWidth * 0.5;
-        const alongOffset = (anchorX - 0.5) * worldWidth;
-        const faceCenters = (
-            this.depthBillboardFaceCenters &&
-            this.depthBillboardFaceCenters.front &&
-            this.depthBillboardFaceCenters.back &&
-            Number.isFinite(this.depthBillboardFaceCenters.front.x) &&
-            Number.isFinite(this.depthBillboardFaceCenters.front.y) &&
-            Number.isFinite(this.depthBillboardFaceCenters.back.x) &&
-            Number.isFinite(this.depthBillboardFaceCenters.back.y)
-        ) ? this.depthBillboardFaceCenters : null;
         const hingeZ = 0.001;
-        const fallAngle = Math.max(0, Math.min(90, Number.isFinite(this.doorFallAngle) ? Number(this.doorFallAngle) : 0));
-        const fallRadians = fallAngle * (Math.PI / 180);
-        const fallSign = Number.isFinite(this._doorFallNormalSign) && this._doorFallNormalSign < 0 ? -1 : 1;
-        const mountedWallThickness = resolveMountedWallThickness(this);
-        const hingeOutwardOffset = Math.max(
-            0.02,
-            Number.isFinite(mountedWallThickness)
-                ? (Math.max(0.001, Number(mountedWallThickness)) * 0.5 + 0.02)
-                : 0.08
-        );
-        const hingeFace = (fallSign >= 0)
-            ? (faceCenters && faceCenters.front ? faceCenters.front : null)
-            : (faceCenters && faceCenters.back ? faceCenters.back : null);
-        const hingeCenterX = hingeFace
-            ? (Number(hingeFace.x) - axisX * alongOffset + normalX * fallSign * hingeOutwardOffset)
-            : (worldX - axisX * alongOffset);
-        const hingeCenterY = hingeFace
-            ? (Number(hingeFace.y) - axisY * alongOffset + normalY * fallSign * hingeOutwardOffset)
-            : (worldY - axisY * alongOffset);
+        const fallAngle = basis.fallAngle;
+        const fallRadians = basis.fallRadians;
+        const fallSign = basis.fallSign;
+        const hingeCenterX = basis.hingeCenterX;
+        const hingeCenterY = basis.hingeCenterY;
         const topOffset = Math.sin(fallRadians) * worldHeightZ * fallSign;
         const topZ = Math.max(hingeZ, hingeZ + Math.cos(fallRadians) * worldHeightZ);
 
@@ -3410,9 +3714,8 @@ class PlacedObject extends StaticObject {
         }
 
         const uniforms = mesh.shader.uniforms;
-        const viewportHeight = Number(ctx && ctx.viewport && ctx.viewport.height) || 30;
-        const nearMetric = -Math.max(80, viewportHeight * 0.6);
-        const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+        const nearMetric = StaticObject._depthMetricNear;
+        const farMetric = StaticObject._depthMetricFar;
         const depthSpanInv = 1 / Math.max(1e-6, farMetric - nearMetric);
         const screenW = (ctx && ctx.app && ctx.app.screen && Number.isFinite(ctx.app.screen.width))
             ? Number(ctx.app.screen.width)
@@ -3468,12 +3771,29 @@ class PlacedObject extends StaticObject {
 
         // 1. If it's a closed door and gets destroyed, stay alive as an open door and spawn a falling dummy.
         if (this.hp <= 0 && !this.isOpen && this.isDoorObject() && !this.isFallenDoorEffect) {
+            const transferredFireSprite = this.fireSprite || null;
+            const transferredFireFrameIndex = this._fireFrameIndex;
+            const transferredFireFrameProgress = this._fireFrameProgress;
+            const transferredFireLastFrameCount = this._fireLastFrameCount;
+            const transferredFireScale = this.fireScale;
+            const transferredFireAlphaMult = this.fireAlphaMult;
+            const shouldTransferFire = !!(
+                transferredFireSprite ||
+                this.isOnFire ||
+                this.fireFadeStart !== undefined
+            );
             this.hp = 1; // It can't be destroyed again once open
             this.isOpen = true; // Shows only the arch now
             this._doorLockedOpen = true;
             this.blocksTile = false;
             this.isPassable = true;
             this.castsLosShadows = false;
+            this.isOnFire = false;
+            this.fireAlphaMult = 1;
+            delete this.fireFadeStart;
+            delete this.fireFadeDelayFrames;
+            delete this.fireFadeDurationFrames;
+            this.fireSprite = null;
             if (this.pixiSprite) this.pixiSprite.tint = 0xFFFFFF;
             this.notifyMountedWallStateChanged();
 
@@ -3538,6 +3858,26 @@ class PlacedObject extends StaticObject {
             if (typeof this.visible === "boolean") dummy.visible = this.visible;
             if (Number.isFinite(this.brightness)) dummy.brightness = Number(this.brightness);
             if (dummy.pixiSprite) dummy.pixiSprite.tint = 0xFFFFFF;
+            const originalFireAnchorWorld = {
+                x: Number.isFinite(this.x) ? Number(this.x) : 0,
+                y: Number.isFinite(this.y) ? Number(this.y) : 0,
+                z: Math.max(0.001, (Number.isFinite(this.height) ? Number(this.height) : 0) * 0.75)
+            };
+            dummy._doorFireAnchorLocal = dummy.getFallenDoorLocalPointForWorldAnchor(originalFireAnchorWorld);
+            if (shouldTransferFire) {
+                dummy.isOnFire = false;
+                dummy.fireFadeStart = typeof frameCount !== "undefined" ? frameCount : 0;
+                dummy.fireFadeDelayFrames = Math.max(0, Math.round((Number(frameRate) || 30) * 4.5));
+                dummy.fireFadeDurationFrames = Math.max(1, Math.round((Number(frameRate) || 30) * 0.5));
+                dummy.fireAlphaMult = Number.isFinite(transferredFireAlphaMult) ? Number(transferredFireAlphaMult) : 1;
+                dummy.fireScale = Number.isFinite(transferredFireScale) ? Number(transferredFireScale) : 1;
+                if (transferredFireSprite) {
+                    dummy.fireSprite = transferredFireSprite;
+                    dummy._fireFrameIndex = transferredFireFrameIndex;
+                    dummy._fireFrameProgress = transferredFireFrameProgress;
+                    dummy._fireLastFrameCount = transferredFireLastFrameCount;
+                }
+            }
             // Unlink scripts
             dummy._scriptSinkState = null;
             dummy.playerEnters = "";

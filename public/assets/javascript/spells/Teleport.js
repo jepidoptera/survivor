@@ -9,13 +9,14 @@ class Teleport extends globalThis.Spell {
         this.bounces = 0;
         this.apparentSize = 0;
         this.delayTime = 0;
-        this.magicCost = 5;
+        this.magicCost = 10;
         this.radius = 0;
     }
 
     cast(targetX, targetY) {
         if (!wizard || !wizard.map) return this;
-        if (wizard.magic < this.magicCost) {
+        if (!globalThis.Spell.canAffordMagicCost(this.magicCost, wizard)) {
+            globalThis.Spell.indicateInsufficientMagic();
             message("Not enough magic to cast Teleport!");
             return this;
         }
@@ -29,7 +30,7 @@ class Teleport extends globalThis.Spell {
             return this;
         }
 
-        wizard.magic -= this.magicCost;
+        globalThis.Spell.spendMagicCost(this.magicCost, wizard);
         wizard.x = destinationX;
         wizard.y = destinationY;
         wizard.node = wizard.map.worldToNode(destinationX, destinationY) || wizard.node;

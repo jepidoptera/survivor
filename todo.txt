@@ -1,50 +1,3 @@
-## WALL ANCHOR REFACTOR — CONTEXT FOR NEXT SESSION ##
-#
-# Goal: walls placeable from any anchor (node or midpoint) to any adjacent anchor
-# in any direction including diagonals. Current code has heavy midpoint special-
-# casing in wallSectionUnit.js. Fix: treat the whole grid as a denser hex grid
-# where midpoints and nodes are equivalent — navigation is one uniform call.
-#
-# Key insight: midpoints + nodes form one unified hex grid at double density.
-# A midpoint is a pure value-type { nodeA, nodeB, k } where
-# nodeA.neighbors[k] === nodeB and k ∈ [0,5] (canonical: lower slot = nodeA).
-# No caching needed. Identity = (nodeA === a && nodeB === b).
-#
-# WHAT WAS BUILT: four free functions in Map.js, after NodeMidpoint (~line 335):
-#
-# makeMidpoint(nodeX, nodeY)
-#   Scans neighbors[0..5], returns { nodeA, nodeB, k } or null if not adjacent.
-#
-# midpointNeighborInDirection(nodeA, nodeB, k, d)
-#   o = (d-k+12)%12, fwd=(k+4)%12, bck=(k+10)%12
-#   o=0  nodeB                            o=6  nodeA
-#   o=1  mid(nodeB, nodeB.nb[(k+2)%12])   o=7  mid(nodeA, nodeA.nb[(k+8)%12])
-#   o=2  mid(nodeB, nodeB.nb[fwd])        o=8  mid(nodeA, nodeB.nb[bck])  <--nodeB
-#   o=3  nodeB.nb[fwd]                    o=9  nodeA.nb[bck]
-#   o=4  mid(nodeA, nodeB.nb[fwd])        o=10 mid(nodeB, nodeA.nb[bck])
-#   o=5  mid(nodeA, nodeA.nb[fwd])        o=11 mid(nodeB, nodeB.nb[bck])
-#
-# nodeNeighborInDirection(node, d)
-#   odd d  → makeMidpoint(node, node.neighbors[d])
-#   even d → makeMidpoint(node.neighbors[(d+11)%12], node.neighbors[(d+1)%12])
-#
-# anchorNeighborInDirection(anchor, dir)   ← THE UNIFIED ENTRY POINT
-#   detects midpoint vs node by presence of anchor.k
-#
-# DIRECTION CONVENTION (MapNode):
-#   0=far-left 1=up-left 2=far-up-left 3=up 4=far-up-right 5=up-right
-#   6=far-right 7=down-right 8=far-down-right 9=down 10=far-dn-left 11=dn-left
-#   Odd = immediate (1 hex step). Even = diagonal (2 hex steps).
-#
-# WHAT STILL NEEDS TO HAPPEN:
-#   1. Test via spell/console: walk from known node, verify positions & identity
-#   2. Replace wallSectionUnit.js nextForwardAnchorOnDirection with anchorNeighborInDirection
-#   3. Delete: bridgePrefixSegments, resolveArbitraryMidpointStart,
-#      midpointSupportsDirection start-anchor checks, midpoint-vs-node branching
-#   4. Allow midpoint junction for two-leg walls (currently forced to node only)
-#
-## ──────────────────────────────────────────────────────────────────── ##
-
 X inside furniture
 X dangerous monsters
 X 3d / textured walls
@@ -77,16 +30,31 @@ X animals don't go into attack mode unless they have line of sight
 X animals have health bars
 X fireballs should stop on walls
 X doors should have separate frame and door sprites
+X ice ball trails snow and explodes on impact
 
-  god mode/ adventure mod
-  treasures in the maze
+X god mode/ adventure mode
+/ treasures in the maze
+  choose spells from menu on startup
+   -fireball
+   -iceball
+   -health aura
+   -teleport
+   -vanish
+   -spikes
+   -shield
+
   mind control spells
+  invisibility aura
+  shield spell
   time-slowing aura
 X animals have magic points that protect them from spells
+X trees popping in and out of view
+  trees should be transparent when the player is behind them
   see-through windows
-  message from princess
-  dialogs in scripting
-  player dies
+/ revamp close combat - use hitboxes instead of hex tiles
+X startup message
+/ dialogs in scripting
+X player dies
   checkpoints
   undo system for editor
   refactor renderer
@@ -106,7 +74,13 @@ X wizard and animals jitter as they move
 X can't cancel trigger area
 X playerExits doesn't fire on teleport
 X all fallen trees save as burned, even when they weren't
+X fireball shouldn't target non-flammable things
+X rugs don't rotate right in preview
+X fallen trees have incorrect hitboxes
   roof textures don't scale right
-  large trigger area which activates maze mode seems to create dead zones for rendering
-  fireball shouldn't target non-flammable things
+/ large trigger area which activates maze mode seems to create dead zones for rendering
   animals keep lunging for way too far
+X roofs phasing through walls
+X item messages not showing
+  spell images don't scale with zoom
+  walls sometimes connect sideways and get totally screwy

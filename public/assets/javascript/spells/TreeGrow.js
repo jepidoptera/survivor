@@ -13,7 +13,7 @@ class TreeGrow extends globalThis.Spell {
         this.initialSize = 1;
         this.maxSize = 20;
         this.growthPerSecond = 2.5;
-        this.magicPerSecond = 10;
+        this.magicPerSecond = 20;
         this.radius = 0;
     }
     

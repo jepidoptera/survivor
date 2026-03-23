@@ -37,6 +37,40 @@
         return `${POWERUP_IMAGE_BASE_PATH}/${encodeURIComponent(file).replace(/%2F/g, "/")}`;
     }
 
+    function normalizePowerupLodTextures(spec, fallbackImagePath = null) {
+        if (!Array.isArray(spec)) return [];
+        const out = [];
+        spec.forEach(entry => {
+            if (typeof entry === "string" && entry.length > 0) {
+                out.push({ texturePath: entry, maxDistance: Infinity });
+                return;
+            }
+            if (!entry || typeof entry !== "object") return;
+            const texturePath = (typeof entry.texturePath === "string" && entry.texturePath.length > 0)
+                ? entry.texturePath
+                : null;
+            if (!texturePath) return;
+            const maxDistance = Number.isFinite(entry.maxDistance)
+                ? Math.max(0, Number(entry.maxDistance))
+                : Infinity;
+            out.push({ texturePath, maxDistance });
+        });
+        if (out.length === 0) return [];
+        out.sort((a, b) => {
+            const da = Number.isFinite(a.maxDistance) ? a.maxDistance : Infinity;
+            const db = Number.isFinite(b.maxDistance) ? b.maxDistance : Infinity;
+            return da - db;
+        });
+        if (
+            typeof fallbackImagePath === "string" &&
+            fallbackImagePath.length > 0 &&
+            !out.some(entry => entry.texturePath === fallbackImagePath)
+        ) {
+            out.push({ texturePath: fallbackImagePath, maxDistance: Infinity });
+        }
+        return out;
+    }
+
     function mergePowerupImageData(defaults, item) {
         const base = (defaults && typeof defaults === "object") ? defaults : {};
         const row = (item && typeof item === "object") ? item : {};
@@ -126,6 +160,7 @@
             this.anchorY = DEFAULT_ANCHOR_Y;
             this.billboardAlpha = 1;
             this.billboardTint = 0xffffff;
+            this.lodTextures = [];
             this.gravitateRadius = Number.isFinite(opts.gravitateRadius) ? Math.max(0, Number(opts.gravitateRadius)) : 0;
             this.gravitateSpeed = Number.isFinite(opts.gravitateSpeed) ? Math.max(0, Number(opts.gravitateSpeed)) : 5;
             this.gone = false;
@@ -246,6 +281,8 @@
                     this.imagePath = toPowerupImagePath(this.imageFileName);
                 }
             }
+            this.lodTextures = normalizePowerupLodTextures(imageData.lodTextures, this.imagePath);
+            this._activeLodTexturePath = null;
 
             const hitboxSpec = (imageData.groundPlaneHitbox && typeof imageData.groundPlaneHitbox === "object")
                 ? imageData.groundPlaneHitbox
@@ -430,6 +467,7 @@
                 x: this.x,
                 y: this.y,
                 z: this.z,
+                imagePath: this.imagePath,
                 width: this.width,
                 height: this.height,
                 radius: this.radius,
@@ -442,7 +480,16 @@
                 gravitateRadius: this.gravitateRadius,
                 gravitateSpeed: this.gravitateSpeed,
                 scriptingName: (typeof this.scriptingName === "string") ? this.scriptingName : "",
-                script: Object.prototype.hasOwnProperty.call(this, "script") ? this.script : undefined
+                script: Object.prototype.hasOwnProperty.call(this, "script") ? this.script : undefined,
+                _scriptMessages: Array.isArray(this._scriptMessages)
+                    ? this._scriptMessages.map(msg => ({
+                        text: String((msg && msg.text) || ""),
+                        x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                        y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                        color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                        fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                    })).filter(msg => msg.text.length > 0)
+                    : undefined
             };
         }
 
@@ -451,10 +498,11 @@
             const fileName = (typeof data.file === "string" && data.file.trim().length > 0)
                 ? data.file.trim()
                 : DEFAULT_IMAGE_FILE;
-            return new Powerup(fileName, {
+            const powerup = new Powerup(fileName, {
                 x: data.x,
                 y: data.y,
                 z: data.z,
+                imagePath: data.imagePath,
                 width: data.width,
                 height: data.height,
                 radius: data.radius,
@@ -469,6 +517,24 @@
                 script: data.script,
                 scriptingName: data.scriptingName
             });
+            if (powerup && Array.isArray(data._scriptMessages)) {
+                powerup._scriptMessages = data._scriptMessages
+                    .map(msg => ({
+                        text: String((msg && msg.text) || ""),
+                        x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                        y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                        color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                        fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                    }))
+                    .filter(msg => msg.text.length > 0);
+                if (powerup._scriptMessages.length > 0 && typeof globalThis !== "undefined") {
+                    if (!(globalThis._scriptMessageTargets instanceof Set)) {
+                        globalThis._scriptMessageTargets = new Set();
+                    }
+                    globalThis._scriptMessageTargets.add(powerup);
+                }
+            }
+            return powerup;
         }
     }
 

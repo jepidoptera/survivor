@@ -134,6 +134,31 @@
     function centerViewport(obj, margin, smoothing = null) {
         if (!obj || !viewport) return;
         if (global && global.triggerAreaCameraDetachActive === true) return;
+        if (global && global.scriptedCameraPanState && global.scriptedCameraPanState.active) return;
+        const minimapDetachState = (global && global.minimapCameraDetachState && typeof global.minimapCameraDetachState === "object")
+            ? global.minimapCameraDetachState
+            : null;
+        if (minimapDetachState && minimapDetachState.active) {
+            const isWizardTarget = !!(minimapDetachState.wizardRef && obj === minimapDetachState.wizardRef);
+            if (isWizardTarget) {
+                const lastWizardX = Number(minimapDetachState.wizardX);
+                const lastWizardY = Number(minimapDetachState.wizardY);
+                const movedX = Number.isFinite(lastWizardX)
+                    ? ((map && typeof map.shortestDeltaX === "function")
+                        ? map.shortestDeltaX(lastWizardX, obj.x)
+                        : (obj.x - lastWizardX))
+                    : 0;
+                const movedY = Number.isFinite(lastWizardY)
+                    ? ((map && typeof map.shortestDeltaY === "function")
+                        ? map.shortestDeltaY(lastWizardY, obj.y)
+                        : (obj.y - lastWizardY))
+                    : 0;
+                if (Math.abs(movedX) <= 1e-6 && Math.abs(movedY) <= 1e-6) {
+                    return;
+                }
+            }
+            global.minimapCameraDetachState = { active: false, wizardRef: null, wizardX: null, wizardY: null };
+        }
         const centerX = viewport.x + viewport.width / 2;
         const centerY = viewport.y + viewport.height / 2;
         const objIndexX = obj.x;
@@ -665,7 +690,7 @@
         }
         const hovered = document.elementFromPoint(clientX, clientY);
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars, #msgbox, #optionsMenu");
     }
 
     function isCursorOverMinimapAtClientPoint(clientX, clientY) {

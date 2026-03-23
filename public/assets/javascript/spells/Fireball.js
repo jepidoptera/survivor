@@ -2,6 +2,7 @@ class Fireball extends globalThis.Spell {
     static FLIGHT_Z = 1;
     static WALL_IMPACT_SPEED_MULTIPLIER = 0.1;
     static WALL_IMPACT_ANIMATION_MULTIPLIER = 10;
+    static MAGIC_COST = 20;
 
     static supportsObjectTargeting = true;
 
@@ -98,7 +99,7 @@ class Fireball extends globalThis.Spell {
         this.explosionFrame = 0;
         this.explosionFrames = null;
         this.isAnimating = true;
-        this.damageRadius = 0.75;
+        this.damageRadius = 0.25;
         this.delayTime = 0.5;
         this.radius = this.damageRadius;
         this.z = Fireball.FLIGHT_Z;
@@ -119,11 +120,12 @@ class Fireball extends globalThis.Spell {
         const fireballFrames = Fireball.getFrames();
 
         // check magic
-        if (wizard.magic < 10) {
+        if (!globalThis.Spell.canAffordMagicCost(Fireball.MAGIC_COST, wizard)) {
+            globalThis.Spell.indicateInsufficientMagic();
             message("Not enough magic to cast Fireball!");
             return this;
         }
-        wizard.magic -= 10;
+        globalThis.Spell.spendMagicCost(Fireball.MAGIC_COST, wizard);
         this.explosionFrames = fireballFrames || [];
         
         // For fireball, only use target for direction.

@@ -3,6 +3,7 @@ const mapHeight = 400;
 let frameRate = 60;
 let frameCount = 0;
 let renderNowMs = 0;
+let simulationTimeScale = 1;
 const renderMaxFps = 0; // 0 = uncapped (vsync-limited)
 const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align sprite sheet rows.
 const wizardMouseTurnZeroDistanceUnits = 1;
@@ -12,6 +13,38 @@ let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488,
 let renderAlpha = 1;
 let viewScale = 1;
 let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
+const VIEWPORT_BASE_WIDTH_LANDSCAPE = 31;
+const VIEWPORT_BASE_WIDTH_PORTRAIT = 20;
+const VIEWPORT_ZOOM_MIN = 0.5;
+const VIEWPORT_ZOOM_MAX = 4;
+const VIEWPORT_ZOOM_SMOOTHING_PER_SEC = 16;
+let viewportZoomFactor = 1;
+let viewportZoomTargetFactor = 1;
+let viewportZoomAnchorScreenX = NaN;
+let viewportZoomAnchorScreenY = NaN;
+const CAMERA_RESET_DOUBLE_TAP_MS = 300;
+const CAMERA_RESET_DOUBLE_TAP_SECONDS = 0.2;
+let lastCameraResetTapAtMs = 0;
+let cameraResetTapAwaitingRelease = false;
+const SCRIPT_CAMERA_DEFAULT_ZOOM_FACTOR = 1;
+let scriptedCameraPanState = {
+    active: false,
+    focusTarget: null,
+    targetOffsetX: 0,
+    targetOffsetY: 0,
+    startCenterX: NaN,
+    startCenterY: NaN,
+    startMs: 0,
+    durationMs: 0,
+    releaseOnSettle: false
+};
+let scriptedCameraZoomState = {
+    active: false,
+    startFactor: 1,
+    targetFactor: 1,
+    startMs: 0,
+    durationMs: 0
+};
 let projectiles = [];
 let animals = [];
 let powerups = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups)) ? globalThis.powerups : [];
@@ -32,8 +65,28 @@ let suppressNextCanvasMenuClose = false;
 let suppressNextTriggerAreaToolClick = false;
 let triggerAreaCameraDetachWasActive = false;
 const TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC = 10;
+const DETACHED_CAMERA_PAN_SPEED_UNITS_PER_SEC = 18;
 
 if (typeof globalThis !== "undefined") {
+    globalThis.getSimulationTimeScale = function getSimulationTimeScale() {
+        const scale = Number(simulationTimeScale);
+        return Number.isFinite(scale) ? Math.max(0, Math.min(6, scale)) : 1;
+    };
+    globalThis.setSimulationTimeScale = function setSimulationTimeScale(nextScale) {
+        const raw = Number(nextScale);
+        if (!Number.isFinite(raw)) return false;
+        const normalized = Math.max(0, Math.min(6, raw));
+        simulationTimeScale = normalized;
+        return true;
+    };
+    globalThis.stopSimulationTime = function stopSimulationTime() {
+        simulationTimeScale = 0;
+        return true;
+    };
+    globalThis.restoreSimulationTime = function restoreSimulationTime() {
+        simulationTimeScale = 1;
+        return true;
+    };
     globalThis.triggerAreaCameraDetachActive = false;
     globalThis.releaseSpacebarCastingState = function releaseSpacebarCastingState() {
         keysPressed[" "] = false;
@@ -149,6 +202,87 @@ function isTriggerAreaCameraDetachActive() {
     );
 }
 
+function isMinimapCameraDetached() {
+    return !!(
+        typeof globalThis !== "undefined" &&
+        globalThis.minimapCameraDetachState &&
+        globalThis.minimapCameraDetachState.active
+    );
+}
+
+function getMinimapCameraDetachState() {
+    return (
+        typeof globalThis !== "undefined" &&
+        globalThis.minimapCameraDetachState &&
+        typeof globalThis.minimapCameraDetachState === "object"
+    )
+        ? globalThis.minimapCameraDetachState
+        : null;
+}
+
+function isKeyboardCameraPanModifierHeld() {
+    return !!keysPressed["z"];
+}
+
+function ensureKeyboardDetachedCameraState() {
+    if (typeof globalThis === "undefined") return null;
+    const existingState = getMinimapCameraDetachState();
+    const nextState = existingState && existingState.active
+        ? existingState
+        : {};
+    nextState.active = true;
+    nextState.source = "keyboard";
+    nextState.wizardRef = wizard || null;
+    nextState.wizardX = wizard && Number.isFinite(wizard.x) ? Number(wizard.x) : null;
+    nextState.wizardY = wizard && Number.isFinite(wizard.y) ? Number(wizard.y) : null;
+    globalThis.minimapCameraDetachState = nextState;
+    return nextState;
+}
+
+function canPanDetachedCameraWithArrowKeys() {
+    const detachState = getMinimapCameraDetachState();
+    const keyboardModifierHeld = isKeyboardCameraPanModifierHeld();
+    if (!detachState || !detachState.active) {
+        if (!keyboardModifierHeld) return false;
+    } else if (detachState.source === "keyboard" && !keyboardModifierHeld) {
+        return false;
+    }
+    if (!!keysPressed[" "]) return false;
+    if ($("#editorMenu").is(":visible")) return false;
+    if ($("#spellMenu").is(":visible")) return false;
+    if ($("#auraMenu").is(":visible")) return false;
+    return true;
+}
+
+function updateDetachedCameraArrowPan(deltaSeconds) {
+    if (!canPanDetachedCameraWithArrowKeys()) return false;
+    if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return false;
+
+    if (!isMinimapCameraDetached() && isKeyboardCameraPanModifierHeld()) {
+        ensureKeyboardDetachedCameraState();
+    }
+
+    let dirX = 0;
+    let dirY = 0;
+    if (keysPressed["arrowleft"]) dirX -= 1;
+    if (keysPressed["arrowright"]) dirX += 1;
+    if (keysPressed["arrowup"]) dirY -= 1;
+    if (keysPressed["arrowdown"]) dirY += 1;
+    if (dirX === 0 && dirY === 0) return false;
+
+    const magnitude = Math.hypot(dirX, dirY) || 1;
+    const moveDist = DETACHED_CAMERA_PAN_SPEED_UNITS_PER_SEC * deltaSeconds;
+    const shiftX = (dirX / magnitude) * moveDist;
+    const shiftY = (dirY / magnitude) * moveDist;
+    if (typeof applyViewportWrapShift === "function") {
+        applyViewportWrapShift(shiftX, shiftY);
+    } else {
+        viewport.x += shiftX;
+        viewport.y += shiftY;
+    }
+    return true;
+}
+
 function setTriggerAreaCameraDetachFlag(active) {
     if (typeof globalThis !== "undefined") {
         globalThis.triggerAreaCameraDetachActive = !!active;
@@ -228,6 +362,7 @@ let hitboxGraphics = null;
 let groundPlaneHitboxGraphics = null;
 let wizardBoundaryGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
+/** @type {Wizard|null} */
 let wizard = null;
 let cursorSprite = null; // Cursor sprite that points away from wizard
 let spellCursor = null; // Alternate cursor for spacebar mode (line art)
@@ -442,6 +577,8 @@ function getAnimalPreviewFallbackMetrics(typeName) {
         case "goat": return { baseWidth: 0.99, baseHeight: 0.825, anchorX: 0.5, anchorY: 1 };
         case "deer": return { baseWidth: 1, baseHeight: 1, anchorX: 0.5, anchorY: 1 };
         case "bear": return { baseWidth: 2.03, baseHeight: 1.45, anchorX: 0.5, anchorY: 1 };
+        case "eagleman": return { baseWidth: 2.03, baseHeight: 1.45, anchorX: 0.5, anchorY: 0.8 };
+        case "fragglegod": return { baseWidth: 2.03, baseHeight: 1.45, anchorX: 0.5, anchorY: 1 };
         case "yeti": return { baseWidth: 2.1, baseHeight: 1.75, anchorX: 0.5, anchorY: 1 };
         case "blodia": return { baseWidth: 1.3125, baseHeight: 2.8, anchorX: 0.5, anchorY: 1 };
         default: return { baseWidth: 1, baseHeight: 1, anchorX: 0.5, anchorY: 1 };
@@ -563,15 +700,83 @@ PIXI.Loader.shared
     .add('/assets/spritesheet/squirrel.json')
     .add('/assets/spritesheet/goat.json')
     .add('/assets/spritesheet/yeti.json')
+    .add('/assets/images/animals/eagleman/eagleman_down.png')
+    .add('/assets/images/animals/eagleman/eagleman_down_attack.png')
+    .add('/assets/images/animals/eagleman/eagleman_left.png')
+    .add('/assets/images/animals/eagleman/eagleman_left_attack.png')
+    .add('/assets/images/animals/eagleman/eagleman_right.png')
+    .add('/assets/images/animals/eagleman/eagleman_right_attack.png')
+    .add('/assets/images/animals/eagleman/eagleman_up.png')
+    .add('/assets/images/animals/eagleman/eagleman_up_attack.png')
+    .add('/assets/images/animals/fragglegod.png')
     .add('/assets/images/animals/blodia.png')
     .add('/assets/images/runningman.png')
     .add('/assets/images/magic/hi%20fi%20fireball.png')
+    .add('/assets/images/magic/iceball.png')
     .add('/assets/images/arrow.png')
     .load(onAssetsLoaded);
 
 function onAssetsLoaded() {
     // create an array to store the textures
     let spriteNames = ["walk_left", "walk_right", "attack_left", "attack_right"];
+    function buildGridTextureGroup(resourcePath, cols, rows, frameKeys = null) {
+        const resource = PIXI.Loader.shared.resources[resourcePath];
+        const baseTexture = resource && resource.texture;
+        if (!baseTexture) return null;
+
+        const bt = baseTexture.baseTexture;
+        const frameWidth = Math.floor(baseTexture.width / cols);
+        const frameHeight = Math.floor(baseTexture.height / rows);
+        if (!bt || frameWidth <= 0 || frameHeight <= 0) return null;
+
+        const list = [];
+        const byKey = {};
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                const x = col * frameWidth;
+                const y = row * frameHeight;
+                const width = (col === cols - 1) ? (baseTexture.width - x) : frameWidth;
+                const height = (row === rows - 1) ? (baseTexture.height - y) : frameHeight;
+                const texture = new PIXI.Texture(bt, new PIXI.Rectangle(x, y, width, height));
+                list.push(texture);
+                const keyIndex = row * cols + col;
+                const key = Array.isArray(frameKeys) ? frameKeys[keyIndex] : null;
+                if (key) {
+                    byKey[key] = texture;
+                }
+            }
+        }
+
+        return { list, byKey };
+    }
+
+    function buildTextureGroupFromPaths(textureEntries) {
+        if (!Array.isArray(textureEntries) || textureEntries.length === 0) return null;
+        const list = [];
+        const byKey = {};
+        textureEntries.forEach(entry => {
+            if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) return;
+            const texture = PIXI.Texture.from(entry.path);
+            if (!texture) return;
+            list.push(texture);
+            if (typeof entry.key === 'string' && entry.key.length > 0) {
+                byKey[entry.key] = texture;
+            }
+        });
+        if (list.length === 0) return null;
+        return { list, byKey };
+    }
+
+    const fragglegodTextures = buildGridTextureGroup(
+        '/assets/images/animals/fragglegod.png',
+        2,
+        2,
+        ["walk_left", "attack_left", "walk_right", "attack_right"]
+    );
+    if (fragglegodTextures) {
+        textures['fragglegod'] = fragglegodTextures;
+    }
+
     const blodiaBaseTexture = PIXI.Loader.shared.resources['/assets/images/animals/blodia.png'] &&
         PIXI.Loader.shared.resources['/assets/images/animals/blodia.png'].texture;
     if (blodiaBaseTexture) {
@@ -590,6 +795,20 @@ function onAssetsLoaded() {
                 attack_right: attackTex
             }
         };
+    }
+
+    const eaglemanTextures = buildTextureGroupFromPaths([
+        { key: 'down', path: '/assets/images/animals/eagleman/eagleman_down.png' },
+        { key: 'down_attack', path: '/assets/images/animals/eagleman/eagleman_down_attack.png' },
+        { key: 'left', path: '/assets/images/animals/eagleman/eagleman_left.png' },
+        { key: 'left_attack', path: '/assets/images/animals/eagleman/eagleman_left_attack.png' },
+        { key: 'right', path: '/assets/images/animals/eagleman/eagleman_right.png' },
+        { key: 'right_attack', path: '/assets/images/animals/eagleman/eagleman_right_attack.png' },
+        { key: 'up', path: '/assets/images/animals/eagleman/eagleman_up.png' },
+        { key: 'up_attack', path: '/assets/images/animals/eagleman/eagleman_up_attack.png' }
+    ]);
+    if (eaglemanTextures) {
+        textures['eagleman'] = eaglemanTextures;
     }
 
     let animalNames = ["bear", "deer", "squirrel", "goat", "yeti"]
@@ -708,12 +927,48 @@ jQuery(() => {
     }
 
     const startupLoadDirectiveStorageKey = "survivor_startup_load_directive_v1";
+    let lastSaveReloadDirective = null;
+
+    function normalizeSaveReloadDirective(directive) {
+        if (!directive || typeof directive !== "object") return null;
+        const source = String(directive.source || "").trim().toLowerCase();
+        if (source !== "local" && source !== "server") return null;
+        const normalized = { source };
+        if (source === "server" && typeof directive.fileName === "string" && directive.fileName.trim().length > 0) {
+            normalized.fileName = directive.fileName.trim();
+        }
+        return normalized;
+    }
+
+    function setLastSaveReloadDirective(directive) {
+        const normalized = normalizeSaveReloadDirective(directive);
+        if (!normalized) return false;
+        lastSaveReloadDirective = normalized;
+        if (typeof globalThis !== "undefined") {
+            globalThis.lastSaveReloadDirective = { ...normalized };
+        }
+        return true;
+    }
+
+    function getLastSaveReloadDirective() {
+        if (lastSaveReloadDirective) {
+            return { ...lastSaveReloadDirective };
+        }
+        if (typeof getSavedGameState === "function") {
+            const parsed = getSavedGameState();
+            if (parsed && parsed.ok) {
+                return { source: "local" };
+            }
+        }
+        return null;
+    }
 
     function queueStartupLoadDirective(directive) {
         if (typeof sessionStorage === "undefined") return false;
-        if (!directive || typeof directive !== "object") return false;
+        const normalized = normalizeSaveReloadDirective(directive);
+        if (!normalized) return false;
         try {
-            sessionStorage.setItem(startupLoadDirectiveStorageKey, JSON.stringify(directive));
+            sessionStorage.setItem(startupLoadDirectiveStorageKey, JSON.stringify(normalized));
             return true;
         } catch (e) {
             console.warn("Failed to queue startup load directive:", e);
@@ -750,6 +1005,44 @@ jQuery(() => {
         return false;
     }
 
+    function reloadLastSaveFromCheckpoint() {
+        const directive = getLastSaveReloadDirective();
+        if (!directive) return false;
+        return reloadWithStartupLoadDirective(directive);
+    }
+
+    function tryActivateWizardGameModeByChord(keyLower, event) {
+        if (!wizard || typeof wizard.setGameMode !== "function") return false;
+        if (event && (event.ctrlKey || event.altKey || event.metaKey)) return false;
+
+        const pressedA = !!keysPressed["a"];
+        const pressedD = !!keysPressed["d"];
+        const pressedV = !!keysPressed["v"];
+        const pressedG = !!keysPressed["g"];
+        const pressedO = !!keysPressed["o"];
+
+        const wantsAdventure = (keyLower === "a" || keyLower === "d" || keyLower === "v") && pressedA && pressedD && pressedV;
+        const wantsGod = (keyLower === "g" || keyLower === "o" || keyLower === "d") && pressedG && pressedO && pressedD;
+        if (!wantsAdventure && !wantsGod) return false;
+
+        const nextMode = wantsAdventure ? "adventure" : "god";
+        if (typeof event?.preventDefault === "function") {
+            event.preventDefault();
+        }
+        wizard.setGameMode(nextMode);
+        if (typeof message === "function") {
+            message(
+                nextMode === "adventure"
+                    ? "Adventure mode activated. Dying reloads your last save."
+                    : "God mode activated. You cannot die."
+            );
+        }
+        if (typeof wizard.updateStatusBars === "function") {
+            wizard.updateStatusBars();
+        }
+        return true;
+    }
+
     if (typeof globalThis !== "undefined") {
         globalThis.reloadAndLoadSaveFromServerFile = (fileName = "") => {
             const trimmed = (typeof fileName === "string") ? fileName.trim() : "";
@@ -757,6 +1050,9 @@ jQuery(() => {
             if (trimmed.length > 0) directive.fileName = trimmed;
             return reloadWithStartupLoadDirective(directive);
         };
+        globalThis.reloadLastSaveFromCheckpoint = reloadLastSaveFromCheckpoint;
+        globalThis.setLastSaveReloadDirective = setLastSaveReloadDirective;
+        globalThis.getLastSaveReloadDirective = getLastSaveReloadDirective;
     }
 
     // Append Pixi canvas to display
@@ -967,6 +1263,10 @@ jQuery(() => {
         }
     }
 
+    if (typeof globalThis !== "undefined" && typeof globalThis.exitGameplayPointerLock !== "function") {
+        globalThis.exitGameplayPointerLock = exitGameplayPointerLock;
+    }
+
     if (typeof globalThis !== "undefined" && typeof globalThis.setPointerLockSensitivity !== "function") {
         globalThis.setPointerLockSensitivity = function setPointerLockSensitivity(value) {
             const n = Number(value);
@@ -1059,21 +1359,406 @@ jQuery(() => {
     // Handle window resize
     window.addEventListener('resize', sizeView);
 
+    function getBaseViewportWidth() {
+        return (window.innerWidth > window.innerHeight)
+            ? VIEWPORT_BASE_WIDTH_LANDSCAPE
+            : VIEWPORT_BASE_WIDTH_PORTRAIT;
+    }
+
+    function getViewportHeightForWidth(width) {
+        const safeWidth = Math.max(0.01, Number(width) || getBaseViewportWidth());
+        const aspectRatio = Math.max(1e-6, (Number(app.screen.height) || window.innerHeight || 1) / Math.max(1, Number(app.screen.width) || window.innerWidth || 1));
+        return safeWidth * aspectRatio / xyratio;
+    }
+
+    function getViewportScreenCenter() {
+        return {
+            x: (Number(app.screen.width) || window.innerWidth || 0) * 0.5,
+            y: (Number(app.screen.height) || window.innerHeight || 0) * 0.5
+        };
+    }
+
+    function getViewportWorldCenter() {
+        const CameraCtor = (typeof globalThis !== "undefined") ? globalThis.RenderingCamera : null;
+        if (CameraCtor && typeof CameraCtor.getViewportWorldCenter === "function") {
+            return CameraCtor.getViewportWorldCenter(viewport);
+        }
+        return {
+            x: (Number(viewport.x) || 0) + (Number(viewport.width) || 0) * 0.5,
+            y: (Number(viewport.y) || 0) + (Number(viewport.height) || 0) * 0.5
+        };
+    }
+
+    function alignWorldPointToReference(referenceX, referenceY, worldX, worldY) {
+        const CameraCtor = (typeof globalThis !== "undefined") ? globalThis.RenderingCamera : null;
+        if (CameraCtor && typeof CameraCtor.alignWorldPointToReference === "function") {
+            return CameraCtor.alignWorldPointToReference(map, referenceX, referenceY, worldX, worldY);
+        }
+        return { x: Number(worldX), y: Number(worldY) };
+    }
+
+    function getContinuousWrappedWorldX(referenceX, worldX) {
+        const CameraCtor = (typeof globalThis !== "undefined") ? globalThis.RenderingCamera : null;
+        if (CameraCtor && typeof CameraCtor.getContinuousWrappedValue === "function") {
+            return CameraCtor.getContinuousWrappedValue(map, referenceX, worldX, "x");
+        }
+        return Number(worldX);
+    }
+
+    function getContinuousWrappedWorldY(referenceY, worldY) {
+        const CameraCtor = (typeof globalThis !== "undefined") ? globalThis.RenderingCamera : null;
+        if (CameraCtor && typeof CameraCtor.getContinuousWrappedValue === "function") {
+            return CameraCtor.getContinuousWrappedValue(map, referenceY, worldY, "y");
+        }
+        return Number(worldY);
+    }
+
+    function setViewportCenterWorld(worldX, worldY) {
+        if (!viewport || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        let nextX = worldX - (Number(viewport.width) || 0) * 0.5;
+        let nextY = worldY - (Number(viewport.height) || 0) * 0.5;
+        nextX = getContinuousWrappedWorldX(viewport.x, nextX);
+        nextY = getContinuousWrappedWorldY(viewport.y, nextY);
+        viewport.x = nextX;
+        viewport.y = nextY;
+        viewport.prevX = nextX;
+        viewport.prevY = nextY;
+        return true;
+    }
+
+    function refreshCameraInputState() {
+        if (pointerLockActive) {
+            syncMouseScreenFromWorldWithViewport();
+        }
+        syncMouseWorldFromScreenWithViewport();
+        if (Number.isFinite(mousePos.screenX) && Number.isFinite(mousePos.screenY)) {
+            const dest = screenToHex(mousePos.screenX, mousePos.screenY);
+            mousePos.x = dest.x;
+            mousePos.y = dest.y;
+        }
+        updateCursor();
+
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateDragPreview === "function"
+        ) {
+            SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateTriggerAreaVertexDrag === "function"
+        ) {
+            SpellSystem.updateTriggerAreaVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+        }
+    }
+
+    function getScriptCameraFocusObject(focusTarget = null) {
+        if (
+            focusTarget &&
+            typeof focusTarget === "object" &&
+            !focusTarget.gone &&
+            Number.isFinite(focusTarget.x) &&
+            Number.isFinite(focusTarget.y)
+        ) {
+            return focusTarget;
+        }
+        if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
+            return wizard;
+        }
+        return null;
+    }
+
+    function getScriptCameraDesiredCenter(focusTarget = null, offsetX = 0, offsetY = 0, referenceCenter = null) {
+        const focusObject = getScriptCameraFocusObject(focusTarget);
+        if (!focusObject) return null;
+        const desiredX = Number(focusObject.x) + (Number.isFinite(offsetX) ? Number(offsetX) : 0);
+        const desiredY = Number(focusObject.y) + (Number.isFinite(offsetY) ? Number(offsetY) : 0);
+        const fallbackCenter = getViewportWorldCenter();
+        const refX = referenceCenter && Number.isFinite(referenceCenter.x)
+            ? Number(referenceCenter.x)
+            : fallbackCenter.x;
+        const refY = referenceCenter && Number.isFinite(referenceCenter.y)
+            ? Number(referenceCenter.y)
+            : fallbackCenter.y;
+        return alignWorldPointToReference(refX, refY, desiredX, desiredY);
+    }
+
+    function clearMinimapCameraDetachState() {
+        if (typeof globalThis === "undefined") return;
+        globalThis.minimapCameraDetachState = {
+            active: false,
+            source: null,
+            wizardRef: null,
+            wizardX: null,
+            wizardY: null
+        };
+    }
+
+    function updateScriptedCameraPan(nowMs = performance.now()) {
+        if (!scriptedCameraPanState.active) return false;
+
+        const startCenter = {
+            x: Number.isFinite(scriptedCameraPanState.startCenterX)
+                ? Number(scriptedCameraPanState.startCenterX)
+                : getViewportWorldCenter().x,
+            y: Number.isFinite(scriptedCameraPanState.startCenterY)
+                ? Number(scriptedCameraPanState.startCenterY)
+                : getViewportWorldCenter().y
+        };
+        const durationMs = Math.max(0, Number(scriptedCameraPanState.durationMs) || 0);
+        const elapsedMs = Math.max(0, nowMs - (Number(scriptedCameraPanState.startMs) || 0));
+        const progress = durationMs > 0 ? Math.max(0, Math.min(1, elapsedMs / durationMs)) : 1;
+        const referenceCenter = progress < 1 ? startCenter : getViewportWorldCenter();
+        const desiredCenter = getScriptCameraDesiredCenter(
+            scriptedCameraPanState.focusTarget,
+            scriptedCameraPanState.targetOffsetX,
+            scriptedCameraPanState.targetOffsetY,
+            referenceCenter
+        );
+        if (!desiredCenter) {
+            scriptedCameraPanState.active = false;
+            scriptedCameraPanState.focusTarget = null;
+            return false;
+        }
+
+        let nextCenterX = desiredCenter.x;
+        let nextCenterY = desiredCenter.y;
+        if (progress < 1) {
+            const deltaX = (map && typeof map.shortestDeltaX === "function")
+                ? map.shortestDeltaX(startCenter.x, desiredCenter.x)
+                : (desiredCenter.x - startCenter.x);
+            const deltaY = (map && typeof map.shortestDeltaY === "function")
+                ? map.shortestDeltaY(startCenter.y, desiredCenter.y)
+                : (desiredCenter.y - startCenter.y);
+            nextCenterX = startCenter.x + deltaX * progress;
+            nextCenterY = startCenter.y + deltaY * progress;
+        }
+
+        const didMove = setViewportCenterWorld(nextCenterX, nextCenterY);
+        if (didMove) {
+            refreshCameraInputState();
+        }
+
+        if (progress >= 1 && scriptedCameraPanState.releaseOnSettle) {
+            scriptedCameraPanState.active = false;
+            scriptedCameraPanState.focusTarget = null;
+            scriptedCameraPanState.targetOffsetX = 0;
+            scriptedCameraPanState.targetOffsetY = 0;
+        }
+
+        return didMove;
+    }
+
+    function updateScriptedCameraZoom(nowMs = performance.now()) {
+        if (!scriptedCameraZoomState.active) return false;
+        const durationMs = Math.max(0, Number(scriptedCameraZoomState.durationMs) || 0);
+        const elapsedMs = Math.max(0, nowMs - (Number(scriptedCameraZoomState.startMs) || 0));
+        const progress = durationMs > 0 ? Math.max(0, Math.min(1, elapsedMs / durationMs)) : 1;
+        const startFactor = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(scriptedCameraZoomState.startFactor) || viewportZoomFactor || 1));
+        const targetFactor = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(scriptedCameraZoomState.targetFactor) || startFactor));
+        const nextFactor = startFactor + (targetFactor - startFactor) * progress;
+        const anchor = getViewportScreenCenter();
+
+        viewportZoomTargetFactor = nextFactor;
+        applyViewportZoomFactor(nextFactor, {
+            anchorScreenX: anchor.x,
+            anchorScreenY: anchor.y,
+            updateInputState: true,
+            refreshPresentation: false,
+            keepPrevInterpolated: false
+        });
+
+        if (progress >= 1) {
+            scriptedCameraZoomState.active = false;
+            viewportZoomTargetFactor = targetFactor;
+        }
+
+        return true;
+    }
+
+    function startScriptedCameraPan(options = {}) {
+        const center = getViewportWorldCenter();
+        scriptedCameraPanState.active = true;
+        scriptedCameraPanState.focusTarget = (options && typeof options === "object" && options.target) || null;
+        scriptedCameraPanState.targetOffsetX = Number.isFinite(options && options.x) ? Number(options.x) : 0;
+        scriptedCameraPanState.targetOffsetY = Number.isFinite(options && options.y) ? Number(options.y) : 0;
+        scriptedCameraPanState.startCenterX = center.x;
+        scriptedCameraPanState.startCenterY = center.y;
+        scriptedCameraPanState.startMs = performance.now();
+        scriptedCameraPanState.durationMs = Math.max(0, (Number(options && options.seconds) || 0) * 1000);
+        scriptedCameraPanState.releaseOnSettle = !!(options && options.releaseOnSettle);
+        clearMinimapCameraDetachState();
+        updateScriptedCameraPan(scriptedCameraPanState.startMs);
+        return true;
+    }
+
+    function startScriptedCameraZoom(targetFactor, seconds = 0) {
+        const nextTarget = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(targetFactor)));
+        const nextSeconds = Number(seconds);
+        if (!Number.isFinite(nextTarget) || !Number.isFinite(nextSeconds)) return false;
+        scriptedCameraZoomState.active = true;
+        scriptedCameraZoomState.startFactor = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomFactor) || 1));
+        scriptedCameraZoomState.targetFactor = nextTarget;
+        scriptedCameraZoomState.startMs = performance.now();
+        scriptedCameraZoomState.durationMs = Math.max(0, nextSeconds * 1000);
+        updateScriptedCameraZoom(scriptedCameraZoomState.startMs);
+        return true;
+    }
+
+    function resetScriptedCamera(seconds = 0) {
+        const nextSeconds = Number(seconds);
+        if (!Number.isFinite(nextSeconds)) return false;
+        const panStarted = startScriptedCameraPan({
+            x: 0,
+            y: 0,
+            seconds: nextSeconds,
+            releaseOnSettle: true
+        });
+        const zoomStarted = startScriptedCameraZoom(SCRIPT_CAMERA_DEFAULT_ZOOM_FACTOR, nextSeconds);
+        return !!(panStarted || zoomStarted);
+    }
+
+    if (typeof globalThis !== "undefined") {
+        globalThis.scriptedCameraPanState = scriptedCameraPanState;
+        globalThis.scriptedCameraZoomState = scriptedCameraZoomState;
+        globalThis.scriptCameraPanTo = function scriptCameraPanTo(options = {}) {
+            return startScriptedCameraPan(options);
+        };
+        globalThis.scriptCameraZoomTo = function scriptCameraZoomTo(targetFactor, seconds = 0) {
+            return startScriptedCameraZoom(targetFactor, seconds);
+        };
+        globalThis.scriptCameraReset = function scriptCameraReset(seconds = 0) {
+            return resetScriptedCamera(seconds);
+        };
+    }
+
+    function applyViewportZoomFactor(nextZoomFactor, options = {}) {
+        const updateInputState = options.updateInputState !== false;
+        const refreshPresentation = options.refreshPresentation !== false;
+        const keepPrevInterpolated = options.keepPrevInterpolated !== false;
+        const clampedZoom = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(nextZoomFactor) || 1));
+        const oldViewScale = (typeof viewscale !== "undefined" && Number.isFinite(viewscale) && viewscale > 1e-6)
+            ? Number(viewscale)
+            : ((Number(app.screen.width) || 1) / Math.max(0.01, Number(viewport.width) || getBaseViewportWidth()));
+        const oldViewportX = Number.isFinite(viewport.x) ? Number(viewport.x) : 0;
+        const oldViewportY = Number.isFinite(viewport.y) ? Number(viewport.y) : 0;
+        const oldViewportPrevX = Number.isFinite(viewport.prevX) ? Number(viewport.prevX) : oldViewportX;
+        const oldViewportPrevY = Number.isFinite(viewport.prevY) ? Number(viewport.prevY) : oldViewportY;
+        const defaultAnchorX = (Number(app.screen.width) || window.innerWidth || 0) * 0.5;
+        const defaultAnchorY = (Number(app.screen.height) || window.innerHeight || 0) * 0.5;
+        const anchorScreenX = Number.isFinite(options.anchorScreenX) ? Number(options.anchorScreenX) : defaultAnchorX;
+        const anchorScreenY = Number.isFinite(options.anchorScreenY) ? Number(options.anchorScreenY) : defaultAnchorY;
+        const anchorWorldX = oldViewportX + anchorScreenX / oldViewScale;
+        const anchorWorldY = oldViewportY + anchorScreenY / (oldViewScale * xyratio);
+        const anchorPrevWorldX = oldViewportPrevX + anchorScreenX / oldViewScale;
+        const anchorPrevWorldY = oldViewportPrevY + anchorScreenY / (oldViewScale * xyratio);
+
+        viewportZoomFactor = clampedZoom;
+        viewport.width = getBaseViewportWidth() / viewportZoomFactor;
+        viewport.height = getViewportHeightForWidth(viewport.width);
+        viewscale = (Number(app.screen.width) || 1) / Math.max(0.01, viewport.width);
+        viewport.x = anchorWorldX - anchorScreenX / viewscale;
+        viewport.y = anchorWorldY - anchorScreenY / (viewscale * xyratio);
+        if (keepPrevInterpolated) {
+            viewport.prevX = anchorPrevWorldX - anchorScreenX / viewscale;
+            viewport.prevY = anchorPrevWorldY - anchorScreenY / (viewscale * xyratio);
+        } else {
+            viewport.prevX = viewport.x;
+            viewport.prevY = viewport.y;
+        }
+
+        if (Number.isFinite(viewport.x)) {
+            viewport.x = getContinuousWrappedWorldX(oldViewportX, viewport.x);
+        }
+        if (Number.isFinite(viewport.prevX)) {
+            viewport.prevX = getContinuousWrappedWorldX(oldViewportPrevX, viewport.prevX);
+        }
+        if (Number.isFinite(viewport.y)) {
+            viewport.y = getContinuousWrappedWorldY(oldViewportY, viewport.y);
+        }
+        if (Number.isFinite(viewport.prevY)) {
+            viewport.prevY = getContinuousWrappedWorldY(oldViewportPrevY, viewport.prevY);
+        }
+
+        if (typeof globalThis !== "undefined") {
+            globalThis.viewscale = viewscale;
+        }
+
+        if (updateInputState) {
+            refreshCameraInputState();
+        }
+
+        if (refreshPresentation && typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+    }
+
+    function zoomViewportByWheelDelta(deltaPixels, options = {}) {
+        if (!Number.isFinite(deltaPixels) || deltaPixels === 0) return false;
+        const zoomMultiplier = Math.exp(-deltaPixels * 0.0015);
+        if (!Number.isFinite(zoomMultiplier) || zoomMultiplier <= 0) return false;
+        const previousTarget = viewportZoomTargetFactor;
+        viewportZoomTargetFactor = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, previousTarget * zoomMultiplier));
+        viewportZoomAnchorScreenX = Number.isFinite(options.anchorScreenX)
+            ? Number(options.anchorScreenX)
+            : ((Number(app.screen.width) || window.innerWidth || 0) * 0.5);
+        viewportZoomAnchorScreenY = Number.isFinite(options.anchorScreenY)
+            ? Number(options.anchorScreenY)
+            : ((Number(app.screen.height) || window.innerHeight || 0) * 0.5);
+        return Math.abs(viewportZoomTargetFactor - previousTarget) > 1e-6;
+    }
+
+    function updateSmoothViewportZoom(frameDeltaMs) {
+        const targetZoom = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomTargetFactor) || viewportZoomFactor || 1));
+        const currentZoom = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomFactor) || 1));
+        const deltaZoom = targetZoom - currentZoom;
+        if (Math.abs(deltaZoom) <= 1e-5) {
+            if (Math.abs(targetZoom - currentZoom) > 0) {
+                applyViewportZoomFactor(targetZoom, {
+                    anchorScreenX: viewportZoomAnchorScreenX,
+                    anchorScreenY: viewportZoomAnchorScreenY,
+                    updateInputState: true,
+                    refreshPresentation: false,
+                    keepPrevInterpolated: false
+                });
+            }
+            viewportZoomFactor = targetZoom;
+            return false;
+        }
+        const dt = Math.max(0, Number(frameDeltaMs) || 0);
+        const blend = 1 - Math.exp(-(dt / 1000) * VIEWPORT_ZOOM_SMOOTHING_PER_SEC);
+        const nextZoom = (blend > 0)
+            ? (currentZoom + deltaZoom * blend)
+            : targetZoom;
+        const snappedZoom = Math.abs(targetZoom - nextZoom) <= 0.0005 ? targetZoom : nextZoom;
+        applyViewportZoomFactor(snappedZoom, {
+            anchorScreenX: viewportZoomAnchorScreenX,
+            anchorScreenY: viewportZoomAnchorScreenY,
+            updateInputState: true,
+            refreshPresentation: false,
+            keepPrevInterpolated: false
+        });
+        viewportZoomFactor = snappedZoom;
+        return true;
+    }
+
     function sizeView() {
         app.renderer.resize(window.innerWidth, window.innerHeight);
-        
-        if (window.innerWidth > window.innerHeight) {
-            viewport.width = 31;
+        viewportZoomTargetFactor = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomTargetFactor) || viewportZoomFactor || 1));
+
+        applyViewportZoomFactor(viewportZoomFactor, {
+            anchorScreenX: (Number(app.screen.width) || window.innerWidth || 0) * 0.5,
+            anchorScreenY: (Number(app.screen.height) || window.innerHeight || 0) * 0.5,
+            keepPrevInterpolated: false
+        });
+
+        if (!isMinimapCameraDetached() && !isTriggerAreaCameraDetachActive()) {
+            centerViewport(wizard, 0);
+            viewport.prevX = viewport.x;
+            viewport.prevY = viewport.y;
         }
-        else {
-            viewport.width = 20;
-        }
-
-        viewport.height = Math.ceil(viewport.width * (app.screen.height / app.screen.width) / xyratio);
-
-        centerViewport(wizard, 0);
-
-        viewscale = app.screen.width / viewport.width;
 
         if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
             globalThis.presentGameFrame();
@@ -1388,6 +2073,7 @@ jQuery(() => {
         const animalAiMaxStepsPerSim = 10;
         const inactiveMovementDecimation = 6;
         let simAccumulatorMs = 0;
+        let nonWizardSimStepAccumulator = 0;
         let lastFrameMs = performance.now();
         let lastPresentedMs = 0;
         let nextPresentAtMs = 0;
@@ -1520,6 +2206,27 @@ jQuery(() => {
                 animalAiCursorOff = cursor;
             }
         }
+
+        function advanceNonWizardSimulationStep() {
+            if (!wizard) return;
+            if (typeof updatePowerupsForWizard === "function") {
+                updatePowerupsForWizard(wizard, 1 / frameRate);
+            }
+            advanceAnimalsSimulation();
+            for (const obj of activeSimObjects) {
+                if (!obj || obj.gone) {
+                    activeSimObjects.delete(obj);
+                    continue;
+                }
+                if (typeof obj.update === "function") {
+                    obj.update();
+                }
+                if (!obj.isOnFire && !obj.isGrowing && !obj.falling && obj.fireFadeStart === undefined) {
+                    activeSimObjects.delete(obj);
+                }
+            }
+            frameCount++;
+        }
         
         // Draw immediately on first frame
         refreshAnimalVisibilitySnapshot();
@@ -1627,6 +2334,8 @@ jQuery(() => {
             triggerAreaCameraDetachWasActive = triggerAreaCameraDetachActive;
             if (triggerAreaCameraDetachActive) {
                 updateTriggerAreaEdgePan(1 / frameRate);
+            } else {
+                updateDetachedCameraArrowPan(1 / frameRate);
             }
 
             const movementStartMs = performance.now();
@@ -1640,23 +2349,23 @@ jQuery(() => {
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
             }
-            if (typeof updatePowerupsForWizard === "function") {
-                updatePowerupsForWizard(wizard, 1 / frameRate);
+            const currentSimulationTimeScale = (
+                typeof globalThis !== "undefined" &&
+                typeof globalThis.getSimulationTimeScale === "function"
+            ) ? globalThis.getSimulationTimeScale() : simulationTimeScale;
+            nonWizardSimStepAccumulator += Math.max(0, Number(currentSimulationTimeScale) || 0);
+            const maxNonWizardStepsPerWizardStep = 6;
+            let nonWizardSteps = 0;
+            while (nonWizardSimStepAccumulator >= 1 && nonWizardSteps < maxNonWizardStepsPerWizardStep) {
+                advanceNonWizardSimulationStep();
+                nonWizardSimStepAccumulator -= 1;
+                nonWizardSteps++;
             }
-            advanceAnimalsSimulation();
-            // Tick static objects that need simulation (burning, growing, falling)
-            for (const obj of activeSimObjects) {
-                if (!obj || obj.gone) {
-                    activeSimObjects.delete(obj);
-                    continue;
-                }
-                if (typeof obj.update === "function") {
-                    obj.update();
-                }
-                // Deregister when no longer needs ticking
-                if (!obj.isOnFire && !obj.isGrowing && !obj.falling && obj.fireFadeStart === undefined) {
-                    activeSimObjects.delete(obj);
-                }
+            if (nonWizardSteps === maxNonWizardStepsPerWizardStep && nonWizardSimStepAccumulator >= 1) {
+                nonWizardSimStepAccumulator = Math.min(nonWizardSimStepAccumulator, 1);
+            }
+            if (wizard && typeof wizard.updateAdventureDeathState === "function") {
+                wizard.updateAdventureDeathState();
             }
             collisionMs = performance.now() - collisionStartMs;
             const pointerPostStartMs = performance.now();
@@ -1708,7 +2417,6 @@ jQuery(() => {
             simPerfBreakdown.maxMovementMs = Math.max(simPerfBreakdown.maxMovementMs, movementMs);
             simPerfBreakdown.maxCollisionMs = Math.max(simPerfBreakdown.maxCollisionMs, collisionMs);
             simPerfBreakdown.maxPointerPostMs = Math.max(simPerfBreakdown.maxPointerPostMs, pointerPostMs);
-            frameCount ++;
         }
 
         function renderFrame(nowMs) {
@@ -1792,6 +2500,9 @@ jQuery(() => {
             perfStats.fps = presentedDeltaMs > 0 ? 1000 / presentedDeltaMs : 0;
             const drawStart = performance.now();
             renderNowMs = nowMs;
+            updateSmoothViewportZoom(frameDeltaMs);
+            updateScriptedCameraZoom(nowMs);
+            updateScriptedCameraPan(nowMs);
             if (pointerLockActive) {
                 if (!isVirtualCursorOverMenuArea()) {
                     // Reproject lock-mode aim every render frame using the interpolated camera
@@ -1928,13 +2639,13 @@ jQuery(() => {
         setVisibilityMaskEnabled(false);
     }
     SpellSystem.startMagicInterval(wizard);
+    wizard.updateStatusBars();
     
     // Initialize status bar updates
     setInterval(() => {
         if (wizard) wizard.updateStatusBars();
     }, 100);
     SpellSystem.initWizardSpells(wizard);
-
     function tryAutoLoadLocalSaveOnStartup() {
         if (typeof getSavedGameState !== "function" || typeof loadGameState !== "function") {
             return false;
@@ -1948,6 +2659,7 @@ jQuery(() => {
         }
         const loaded = loadGameState(parsedSave.data);
         if (loaded) {
+            setLastSaveReloadDirective({ source: "local" });
             message("Loaded local save");
             console.log("Auto-loaded game from localStorage at startup");
             return true;
@@ -1962,6 +2674,7 @@ jQuery(() => {
         }
         const result = await loadGameStateFromServerFile();
         if (result && result.ok) {
+            setLastSaveReloadDirective({ source: "server" });
             message("Loaded /assets/saves/savefile.json");
             console.log("Auto-loaded game from server savefile.json at startup");
             return true;
@@ -1992,6 +2705,7 @@ jQuery(() => {
                 ? `/assets/saves/backups/${fileName}`
                 : "/assets/saves/savefile.json";
             if (result && result.ok) {
+                setLastSaveReloadDirective(fileName.length > 0 ? { source: "server", fileName } : { source: "server" });
                 message(`Loaded ${loadedPath}`);
                 console.log(`Startup loaded game from ${loadedPath}`);
             } else {
@@ -2021,7 +2735,6 @@ jQuery(() => {
                 }
             }
         }
-
         // Safety net: if no save was loaded (or load failed to restore
         // clearance), ensure the clearance map is populated so
         // pathfinding works on the randomly-generated map.
@@ -2270,25 +2983,13 @@ jQuery(() => {
     })
 
     app.view.addEventListener("wheel", event => {
-        if (
-            !wizard ||
-            (wizard.currentSpell !== "placeobject" && wizard.currentSpell !== "blackdiamond" && wizard.currentSpell !== "spawnanimal" && wizard.currentSpell !== "treegrow") ||
-            typeof SpellSystem === "undefined" ||
-            (
-                (wizard.currentSpell === "placeobject" && typeof SpellSystem.adjustPlaceableScale !== "function") ||
-                (wizard.currentSpell === "blackdiamond" && typeof SpellSystem.adjustPowerupPlacementScale !== "function") ||
-                (wizard.currentSpell === "spawnanimal" && typeof SpellSystem.adjustAnimalSizeScale !== "function") ||
-                (wizard.currentSpell === "treegrow" && typeof SpellSystem.adjustTreeGrowSize !== "function")
-            )
-        ) {
-            return;
-        }
         const overMenu = pointerLockActive
             ? isVirtualCursorOverMenuArea()
             : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
         if (overMenu) return;
 
-        event.preventDefault();
+        const zoomModifierHeld = !!keysPressed["z"];
+
         let deltaPixels = Number(event.deltaY) || 0;
         if (!Number.isFinite(deltaPixels) || deltaPixels === 0) return;
         if (event.deltaMode === 1) {
@@ -2298,20 +2999,43 @@ jQuery(() => {
             // Convert page-based deltas.
             deltaPixels *= Math.max(200, window.innerHeight || 800);
         }
-        // Continuous scaling from wheel input: negative scroll grows, positive shrinks.
-        const unclampedDelta = -deltaPixels * 0.0015;
-        const delta = Math.max(-0.05, Math.min(0.05, unclampedDelta));
-        if (Math.abs(delta) < 0.0005) return;
 
-        if (wizard.currentSpell === "placeobject") {
-            SpellSystem.adjustPlaceableScale(wizard, delta);
-        } else if (wizard.currentSpell === "blackdiamond") {
-            SpellSystem.adjustPowerupPlacementScale(wizard, delta);
-        } else if (wizard.currentSpell === "spawnanimal") {
-            SpellSystem.adjustAnimalSizeScale(wizard, delta);
-        } else if (wizard.currentSpell === "treegrow") {
-            SpellSystem.adjustTreeGrowSize(wizard, delta);
+        const canAdjustSpellScale = !!(
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            (
+                (wizard.currentSpell === "placeobject" && typeof SpellSystem.adjustPlaceableScale === "function") ||
+                (wizard.currentSpell === "blackdiamond" && typeof SpellSystem.adjustPowerupPlacementScale === "function") ||
+                (wizard.currentSpell === "spawnanimal" && typeof SpellSystem.adjustAnimalSizeScale === "function") ||
+                (wizard.currentSpell === "treegrow" && typeof SpellSystem.adjustTreeGrowSize === "function")
+            )
+        );
+
+        if (!zoomModifierHeld) {
+            if (!canAdjustSpellScale) return;
+            event.preventDefault();
+            const unclampedDelta = -deltaPixels * 0.0015;
+            const delta = Math.max(-0.05, Math.min(0.05, unclampedDelta));
+            if (Math.abs(delta) < 0.0005) return;
+
+            if (wizard.currentSpell === "placeobject") {
+                SpellSystem.adjustPlaceableScale(wizard, delta);
+            } else if (wizard.currentSpell === "blackdiamond") {
+                SpellSystem.adjustPowerupPlacementScale(wizard, delta);
+            } else if (wizard.currentSpell === "spawnanimal") {
+                SpellSystem.adjustAnimalSizeScale(wizard, delta);
+            } else if (wizard.currentSpell === "treegrow") {
+                SpellSystem.adjustTreeGrowSize(wizard, delta);
+            }
+            return;
         }
+
+        event.preventDefault();
+
+        zoomViewportByWheelDelta(deltaPixels, {
+            anchorScreenX: Number.isFinite(mousePos.screenX) ? mousePos.screenX : ((Number(app.screen.width) || window.innerWidth || 0) * 0.5),
+            anchorScreenY: Number.isFinite(mousePos.screenY) ? mousePos.screenY : ((Number(app.screen.height) || window.innerHeight || 0) * 0.5)
+        });
     }, { passive: false });
 
     app.view.addEventListener("mousedown", event => {
@@ -2542,27 +3266,18 @@ jQuery(() => {
             return;
         }
 
-        if (event.ctrlKey && keyLower === "e") {
+        if (event.ctrlKey && keyLower === "p") {
             event.preventDefault();
-            // Close any open menus and clear keyboard focus when toggling mode
-            clearSpellMenuKeyboardFocus();
-            clearAuraMenuKeyboardFocus();
-            clearEditorMenuKeyboardFocus();
-            if (
-                wizard &&
-                typeof SpellSystem !== "undefined" &&
-                typeof SpellSystem.toggleEditorPanelVisible === "function"
-            ) {
-                SpellSystem.toggleEditorPanelVisible(wizard);
+            if (typeof paused !== "undefined" && paused) {
+                if (typeof unpause === "function") {
+                    unpause();
+                } else {
+                    paused = false;
+                }
+            } else if (typeof pause === "function") {
+                pause();
             } else {
-                const nextVisible = $("#editorSelector").hasClass("hidden");
-                $("#editorSelector").toggleClass("hidden", !nextVisible);
-                if (!nextVisible) {
-                    $("#editorMenu").addClass("hidden");
-                }
-                if (wizard) {
-                    wizard.showEditorPanel = nextVisible;
-                }
+                paused = true;
             }
             return;
         }
@@ -2702,6 +3417,13 @@ jQuery(() => {
             return;
         }
 
+        if (
+            (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown") &&
+            canPanDetachedCameraWithArrowKeys()
+        ) {
+            event.preventDefault();
+        }
+
         if (spellMenuVisible && (
             event.key === "Shift" ||
             event.key === "Control" ||
@@ -2752,6 +3474,37 @@ jQuery(() => {
 
         // Track key state
         keysPressed[keyLower] = true;
+
+        const isTextEntryTarget = !!(
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.isTextEntryElement === "function" &&
+            globalThis.isTextEntryElement(event.target)
+        );
+        if (
+            keyLower === "z" &&
+            !event.repeat &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !cameraResetTapAwaitingRelease &&
+            !isTextEntryTarget
+        ) {
+            const nowMs = Date.now();
+            if ((nowMs - lastCameraResetTapAtMs) <= CAMERA_RESET_DOUBLE_TAP_MS) {
+                if (typeof globalThis !== "undefined" && typeof globalThis.scriptCameraReset === "function") {
+                    event.preventDefault();
+                    globalThis.scriptCameraReset(CAMERA_RESET_DOUBLE_TAP_SECONDS);
+                }
+                lastCameraResetTapAtMs = 0;
+            } else {
+                lastCameraResetTapAtMs = nowMs;
+            }
+            cameraResetTapAwaitingRelease = true;
+        }
+
+        if (!event.repeat && tryActivateWizardGameModeByChord(keyLower, event)) {
+            return;
+        }
         if (
             wizard &&
             event.shiftKey &&
@@ -2817,6 +3570,7 @@ jQuery(() => {
             wizard &&
             wizard.currentSpell === "placeobject" &&
             (isPlaceRotateLeft || isPlaceRotateRight) &&
+            !canPanDetachedCameraWithArrowKeys() &&
             !spellMenuVisible &&
             !auraMenuVisible &&
             !editorMenuVisible &&
@@ -2892,6 +3646,12 @@ jQuery(() => {
                 SpellSystem.toggleAura(wizard, "healing");
             }
             return;
+        } else if ((event.key === "u" || event.key === "U") && !event.repeat) {
+            event.preventDefault();
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                SpellSystem.toggleAura(wizard, "invisibility");
+            }
+            return;
         } else if (
             wizard &&
             (event.key === "d" || event.key === "D") &&
@@ -2916,7 +3676,14 @@ jQuery(() => {
                 updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
                 return;
             }
-        } else if (Object.keys(spellKeyBindings).includes(event.key.toUpperCase())) {
+        }
+
+        const hasNonShiftHotkeyModifier = !!(event.ctrlKey || event.altKey || event.metaKey);
+
+        if (
+            !hasNonShiftHotkeyModifier &&
+            Object.keys(spellKeyBindings).includes(event.key.toUpperCase())
+        ) {
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
                 // In editor mode, prefer editor key bindings for shared keys
@@ -2926,7 +3693,11 @@ jQuery(() => {
                 SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
             }
             updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
-        } else if (typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
+        } else if (
+            !hasNonShiftHotkeyModifier &&
+            typeof editorKeyBindings !== "undefined" &&
+            Object.keys(editorKeyBindings).includes(event.key.toUpperCase())
+        ) {
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (inEditorMode) {
                 SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
@@ -2961,8 +3732,8 @@ jQuery(() => {
             console.log("Requested one-shot wall/window render debug dump on next frame.");
         }
 
-        // Toggle hex grid only with 'g' key
-        if (event.key === 'g' || event.key === 'G') {
+        // Toggle hex grid only with Ctrl+G
+        if ((event.key === 'g' || event.key === 'G') && event.ctrlKey) {
             event.preventDefault();
             if (typeof toggleHexGrid === "function") {
                 toggleHexGrid();
@@ -2978,6 +3749,7 @@ jQuery(() => {
             if (typeof saveGameStateToServerFile === 'function') {
                 saveGameStateToServerFile().then(result => {
                     if (result && result.ok) {
+                        setLastSaveReloadDirective({ source: "server" });
                         message('Saved to /assets/saves/savefile.json');
                     } else {
                         message('Failed to save file');
@@ -3007,6 +3779,7 @@ jQuery(() => {
             const saveData = saveGameState();
             if (saveData) {
                 localStorage.setItem('survivor_save', JSON.stringify(saveData));
+                setLastSaveReloadDirective({ source: 'local' });
                 message('Game saved!');
                 console.log('Game saved to localStorage');
             }
@@ -3026,7 +3799,17 @@ jQuery(() => {
     
     $(document).keyup(event => {
         // Track key state
-        keysPressed[event.key.toLowerCase()] = false;
+        const keyLower = event.key.toLowerCase();
+        keysPressed[keyLower] = false;
+        if (keyLower === "z") {
+            cameraResetTapAwaitingRelease = false;
+        }
+        if (
+            (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown") &&
+            canPanDetachedCameraWithArrowKeys()
+        ) {
+            event.preventDefault();
+        }
         if (event.key.toLowerCase() === "e") {
             updateEditorPlacementActiveState(false);
         }

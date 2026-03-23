@@ -1,6 +1,8 @@
 class Roof {
     static _depthMeshState = null;
     static DEFAULT_TEXTURE = "/assets/images/roofs/smallshingles.png";
+    static DEPTH_NEAR_METRIC = -128;
+    static DEPTH_FAR_METRIC = 256;
     static _depthVs = `
 precision mediump float;
 attribute vec2 aVertexPosition;
@@ -1212,6 +1214,15 @@ void main(void) {
                 data.script = this.script;
             }
         }
+        if (Array.isArray(this._scriptMessages) && this._scriptMessages.length > 0) {
+            data._scriptMessages = this._scriptMessages.map(msg => ({
+                text: String((msg && msg.text) || ""),
+                x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+            })).filter(msg => msg.text.length > 0);
+        }
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
         }
@@ -1248,6 +1259,23 @@ void main(void) {
         }
         if (typeof data.scriptingName === "string") {
             roof.scriptingName = data.scriptingName.trim();
+        }
+        if (Array.isArray(data._scriptMessages)) {
+            roof._scriptMessages = data._scriptMessages
+                .map(msg => ({
+                    text: String((msg && msg.text) || ""),
+                    x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                    y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                    color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                    fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                }))
+                .filter(msg => msg.text.length > 0);
+            if (roof._scriptMessages.length > 0 && typeof globalThis !== "undefined") {
+                if (!(globalThis._scriptMessageTargets instanceof Set)) {
+                    globalThis._scriptMessageTargets = new Set();
+                }
+                globalThis._scriptMessageTargets.add(roof);
+            }
         }
         roof.placed = !!data.placed;
 

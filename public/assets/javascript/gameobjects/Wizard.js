@@ -1,3 +1,50 @@
+const WIZARD_GAME_MODE_GOD = "god";
+const WIZARD_GAME_MODE_ADVENTURE = "adventure";
+
+function normalizeWizardGameMode(mode) {
+    const normalized = String(mode || "").trim().toLowerCase();
+    return normalized === WIZARD_GAME_MODE_ADVENTURE
+        ? WIZARD_GAME_MODE_ADVENTURE
+        : WIZARD_GAME_MODE_GOD;
+}
+
+function getStoredWizardGameMode() {
+    if (typeof localStorage === "undefined") return null;
+    try {
+        const raw = localStorage.getItem("survivor_game_mode");
+        if (typeof raw !== "string" || raw.trim().length === 0) return null;
+        return normalizeWizardGameMode(raw);
+    } catch (_err) {
+        return null;
+    }
+}
+
+function persistWizardGameMode(mode) {
+    if (typeof localStorage === "undefined") return false;
+    try {
+        localStorage.setItem("survivor_game_mode", normalizeWizardGameMode(mode));
+        return true;
+    } catch (_err) {
+        return false;
+    }
+}
+
+function doesObjectBlockWizardMovement(obj) {
+    if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
+        return globalThis.doesObjectBlockPassage(obj);
+    }
+    const sinkState = (obj && typeof obj === "object" && obj._scriptSinkState && typeof obj._scriptSinkState === "object")
+        ? obj._scriptSinkState
+        : null;
+    return !!(obj && !obj.gone && obj.isPassable === false && (!sinkState || sinkState.nonBlocking === false));
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.WIZARD_GAME_MODE_GOD = WIZARD_GAME_MODE_GOD;
+    globalThis.WIZARD_GAME_MODE_ADVENTURE = WIZARD_GAME_MODE_ADVENTURE;
+    globalThis.normalizeWizardGameMode = normalizeWizardGameMode;
+}
+
 class Wizard extends Character {
     constructor(location, map) {
         super('human', location, 1, map);
@@ -10,8 +57,13 @@ class Wizard extends Character {
         this.food = 0;
         this.hp = 100;
         this.maxHp = 100;
+        this.dead = false;
         this.magic = 100;
         this.maxMagic = 100;
+        this.gameMode = getStoredWizardGameMode() || WIZARD_GAME_MODE_GOD;
+        this._adventureRespawnPending = false;
+        this.unlockedSpells = [];
+        this.unlockedAuras = ["healing"];
         this.magicRegenPerSecond = 8;
         this.activeAura = null;
         this.activeAuras = [];
@@ -78,6 +130,79 @@ class Wizard extends Character {
         this.updateHitboxes();
         this.move();
         clearTimeout(this.moveTimeout);
+    }
+    isAdventureMode() {
+        return normalizeWizardGameMode(this.gameMode) === WIZARD_GAME_MODE_ADVENTURE;
+    }
+    isGodMode() {
+        return !this.isAdventureMode();
+    }
+    setGameMode(mode, options = {}) {
+        this.gameMode = normalizeWizardGameMode(mode);
+        if (options.persist !== false) {
+            persistWizardGameMode(this.gameMode);
+        }
+        if (!this.isAdventureMode()) {
+            this._adventureRespawnPending = false;
+            this.dead = false;
+        }
+        this.updateModeToggleUi();
+        if (typeof SpellSystem !== "undefined" && SpellSystem && typeof SpellSystem.syncWizardUnlockState === "function") {
+            SpellSystem.syncWizardUnlockState(this);
+        }
+        return this.gameMode;
+    }
+    toggleGameMode() {
+        return this.setGameMode(this.isAdventureMode() ? WIZARD_GAME_MODE_GOD : WIZARD_GAME_MODE_ADVENTURE);
+    }
+    updateModeToggleUi() {
+        if (typeof globalThis !== "undefined") {
+            globalThis.currentWizardGameMode = this.gameMode;
+        }
+    }
+    queueAdventureRespawn() {
+        if (this._adventureRespawnPending) return true;
+        this._adventureRespawnPending = true;
+        this.hp = 0;
+        this.dead = true;
+        if (typeof pause === "function") {
+            pause();
+        }
+        if (typeof message === "function") {
+            message("You died. Reloading last save...");
+        }
+        setTimeout(() => {
+            const reloadLastSave = (typeof globalThis !== "undefined" && typeof globalThis.reloadLastSaveFromCheckpoint === "function")
+                ? globalThis.reloadLastSaveFromCheckpoint
+                : null;
+            const reloaded = reloadLastSave ? !!reloadLastSave() : false;
+            if (reloaded) return;
+            this._adventureRespawnPending = false;
+            this.dead = false;
+            if (typeof unpause === "function") {
+                unpause();
+            }
+            if (typeof msgBox === "function") {
+                msgBox("No save to reload", "Adventure mode could not find a previous save to reload.");
+            } else if (typeof message === "function") {
+                message("Adventure mode could not find a previous save to reload.");
+            }
+        }, 0);
+        return true;
+    }
+    updateAdventureDeathState() {
+        if (!this.isAdventureMode()) {
+            this._adventureRespawnPending = false;
+            this.dead = false;
+            return false;
+        }
+        if (!Number.isFinite(this.hp) || this.hp > 0) {
+            this._adventureRespawnPending = false;
+            this.dead = false;
+            return false;
+        }
+        this.hp = 0;
+        return this.queueAdventureRespawn();
     }
     startJump() {
         if (this.jumpCount >= this.maxJumpCount) return;
@@ -320,102 +445,34 @@ class Wizard extends Character {
 
         return false;
     }
-    
-    moveDirection(vector, options = {}) {
-        // Apply physics and collision resolution to the wizard's movement vector
-        // Called every frame to process movement, regardless of input
 
-        const lockMovementVector = !!options.lockMovementVector;
-        const inputSpeedMultiplier = Number.isFinite(options.speedMultiplier) ? Math.max(0, options.speedMultiplier) : 1;
+    getVectorMovementEnvironmentSpeedMultiplier(_options = {}) {
         const activeAuras = Array.isArray(this.activeAuras)
             ? this.activeAuras
             : (typeof this.activeAura === "string" ? [this.activeAura] : []);
         const auraSpeedMultiplier = activeAuras.includes("speed") ? 2 : 1;
-        const maxSpeed = this.speed * inputSpeedMultiplier * auraSpeedMultiplier * (this.isOnRoad() ? this.roadSpeedMultiplier : 1);
-        this.currentMaxSpeed = maxSpeed;
-        this.isMovingBackward = !!options.animateBackward;
-        
-        const inputLen = vector ? Math.hypot(vector.x || 0, vector.y || 0) : 0;
-        if (lockMovementVector) {
-            // Airborne lock: preserve momentum and ignore steering/braking input.
-        } else if (vector && inputLen > 1e-6) {
-            // Input provided: add acceleration toward desired direction
-            if (inputLen > 0) {
-                const nx = vector.x / inputLen;
-                const ny = vector.y / inputLen;
-                
-                // If current momentum is opposite of desired direction, remove that component
-                const desiredDot = this.movementVector.x * nx + this.movementVector.y * ny;
-                if (desiredDot < 0) {
-                    // Cancel the opposing component so we don't briefly move backward
-                    this.movementVector.x -= nx * desiredDot;
-                    this.movementVector.y -= ny * desiredDot;
-                    // Damp leftover tangential momentum slightly to reduce yo-yo oscillation
-                    this.movementVector.x *= 0.5;
-                    this.movementVector.y *= 0.5;
-                }
-                
-                // Add acceleration in the desired direction to movement vector
-                const accelerationFactor = this.acceleration / this.frameRate;
-                this.movementVector.x += nx * accelerationFactor;
-                this.movementVector.y += ny * accelerationFactor;
+        const roadSpeedMultiplier = this.isOnRoad() ? this.roadSpeedMultiplier : 1;
+        return auraSpeedMultiplier * roadSpeedMultiplier;
+    }
 
-                const facingVector = options.facingVector;
-                if (
-                    facingVector &&
-                    Number.isFinite(facingVector.x) &&
-                    Number.isFinite(facingVector.y) &&
-                    Math.hypot(facingVector.x, facingVector.y) > 1e-6
-                ) {
-                    const facingTurnStrength = Number.isFinite(options.facingTurnStrength)
-                        ? Math.max(0, Math.min(1, options.facingTurnStrength))
-                        : 1;
-                    this.turnToward(facingVector.x, facingVector.y, facingTurnStrength);
-                } else {
-                    this.turnToward(nx, ny);
-                }
-            }
-        } else {
-            // No input: decelerate quickly using same acceleration rate
-            this.isMovingBackward = false;
-            const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
-            if (currentMag > 0) {
-                const decelerationFactor = this.acceleration / this.frameRate;
-                const newMag = Math.max(0, currentMag - decelerationFactor);
-                if (newMag === 0) {
-                    this.movementVector.x = 0;
-                    this.movementVector.y = 0;
-                } else {
-                    const scale = newMag / currentMag;
-                    this.movementVector.x *= scale;
-                    this.movementVector.y *= scale;
-                }
+    doesObjectBlockVectorMovement(obj, options = {}) {
+        if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
+        if (!doesObjectBlockWizardMovement(obj)) return false;
+
+        const wizardZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        if (wizardZ > 0) {
+            const objBottomZ = Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0;
+            const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
+            const objTopZ = objBottomZ + objHeight;
+            if (objTopZ > 0 && wizardZ >= objTopZ) {
+                return false;
             }
         }
-        
-        // Clamp magnitude to max speed
-        const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
-        if (currentMag > maxSpeed) {
-            const scale = maxSpeed / currentMag;
-            this.movementVector.x *= scale;
-            this.movementVector.y *= scale;
-        }
-        
-        // If no movement, skip physics
-        if (currentMag < 0.001) {
-            this.moving = false;
-            return false;
-        }
-        
-        this.moving = true;
-        const moveStartX = this.x;
-        const moveStartY = this.y;
-        
-        // Use accumulated movement vector for this frame's position change
-        let newX = this.x + this.movementVector.x / this.frameRate;
-        let newY = this.y + this.movementVector.y / this.frameRate;
-        
-        const wizardRadius = this.groundRadius;
+
+        return super.doesObjectBlockVectorMovement(obj, options);
+    }
+
+    prepareVectorMovementContext(newX, newY, radius, options = {}) {
         const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
             ? Scripting
             : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
@@ -428,28 +485,29 @@ class Wizard extends Character {
         const isPointInDoorHitboxFn = (scriptingApi && typeof scriptingApi.isPointInDoorHitbox === "function")
             ? scriptingApi.isPointInDoorHitbox
             : null;
-        
-        // Collect nearby objects once to avoid repeated grid traversal
+
         const nearbyObjects = Array.isArray(this._movementNearbyObjects) ? this._movementNearbyObjects : [];
         nearbyObjects.length = 0;
         this._movementNearbyObjects = nearbyObjects;
+
         const nearbyDoors = Array.isArray(this._movementNearbyDoors) ? this._movementNearbyDoors : [];
         nearbyDoors.length = 0;
         this._movementNearbyDoors = nearbyDoors;
-        // Track objects with actual physics contact this frame so spells.js can forceTouch them
+
         const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
             ? this._movementForceTouchedObjects
             : new Set();
         forceTouchedObjects.clear();
         this._movementForceTouchedObjects = forceTouchedObjects;
-        const minNode = this.map.worldToNode(newX - 2, newY - 2);
-        const maxNode = this.map.worldToNode(newX + 2, newY + 2);
-        
+
+        const padding = this.getVectorMovementSearchPadding(radius, options);
+        const minNode = this.map.worldToNode(newX - padding, newY - padding);
+        const maxNode = this.map.worldToNode(newX + padding, newY + padding);
         if (minNode && maxNode) {
             const xStart = Math.max(minNode.xindex - 1, 0);
-            const xEnd = Math.min(maxNode.xindex + 1, mapWidth - 1);
+            const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, (this.map.width || 0) - 1));
             const yStart = Math.max(minNode.yindex - 1, 0);
-            const yEnd = Math.min(maxNode.yindex + 1, mapHeight - 1);
+            const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, (this.map.height || 0) - 1));
 
             for (let x = xStart; x <= xEnd; x++) {
                 for (let y = yStart; y <= yEnd; y++) {
@@ -465,16 +523,7 @@ class Wizard extends Character {
                                 nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
                             }
                         }
-                        if (obj.groundPlaneHitbox && !obj.isPassable) {
-                            // Skip objects the wizard is jumping over: wizard's z must be
-                            // strictly above the object's top z (bottomZ + height).
-                            const wizardZ = Number.isFinite(this.z) ? Number(this.z) : 0;
-                            if (wizardZ > 0) {
-                                const objBottomZ = Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0;
-                                const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
-                                const objTopZ = objBottomZ + objHeight;
-                                if (objTopZ > 0 && wizardZ >= objTopZ) continue;
-                            }
+                        if (this.doesObjectBlockVectorMovement(obj, options)) {
                             nearbyObjects.push(obj);
                         }
                     }
@@ -482,189 +531,51 @@ class Wizard extends Character {
             }
         }
 
-        const isInOrTouchingNearbyDoor = (px, py, radius = 0) => {
+        return {
+            nearbyObjects,
+            nearbyCharacters: options.includeCharacterBlockers === true
+                ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
+                : [],
+            nearbyDoors,
+            forceTouchedObjects,
+            isPointInDoorHitboxFn
+        };
+    }
+
+    canBypassVectorMovementCollisions(currentX, currentY, newX, newY, radius, context, _options = {}) {
+        const nearbyDoors = Array.isArray(context?.nearbyDoors) ? context.nearbyDoors : [];
+        const isPointInDoorHitboxFn = context?.isPointInDoorHitboxFn;
+        if (typeof isPointInDoorHitboxFn !== "function" || nearbyDoors.length === 0) {
+            return false;
+        }
+
+        const isInOrTouchingNearbyDoor = (px, py, doorRadius = 0) => {
             for (let i = 0; i < nearbyDoors.length; i++) {
                 const entry = nearbyDoors[i];
                 if (!entry || !entry.canTraverse) continue;
-                const hb = entry.hitbox;
-                if (isPointInDoorHitboxFn && isPointInDoorHitboxFn(hb, px, py, radius)) {
+                if (isPointInDoorHitboxFn(entry.hitbox, px, py, doorRadius)) {
                     return true;
                 }
             }
             return false;
         };
 
-        // While inside a door hitbox, bypass all blocking object collisions.
-        if (
-            isInOrTouchingNearbyDoor(this.x, this.y, wizardRadius) ||
-            isInOrTouchingNearbyDoor(newX, newY, wizardRadius)
-        ) {
-            const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(newX) : newX;
-            const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(newY) : newY;
-            if (this === wizard) {
-                applyViewportWrapShift(wrappedX - newX, wrappedY - newY);
-            }
-            this.x = wrappedX;
-            this.y = wrappedY;
-            this.updateHitboxes();
-            centerViewport(this, 0);
-            return true;
-        }
-        
-        // Iteratively resolve collisions until we find a clear position
-        let testX = newX;
-        let testY = newY;
-        let iteration = 0;
-        const maxIterations = 3; // Prevent infinite loops
-        
-        while (iteration < maxIterations) {
-            iteration++;
-            const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: wizardRadius };
-            testHitbox.x = testX;
-            testHitbox.y = testY;
-            testHitbox.radius = wizardRadius;
-            this._movementTestHitbox = testHitbox;
-            
-            // Check all nearby objects for collisions at current test position
-            let totalPushX = 0;
-            let totalPushY = 0;
-            let maxPushLen = 0;
-            let hasCollision = false;
-            
-            for (const obj of nearbyObjects) {
-                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-                if (collision && collision.pushX !== undefined) {
-                    hasCollision = true;
-                    totalPushX += collision.pushX;
-                    totalPushY += collision.pushY;
-                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
-                    maxPushLen = Math.max(maxPushLen, pushLen);
-                    if (this === wizard) forceTouchedObjects.add(obj);
-                }
-            }
-            
-            // If no collisions, we're done
-            if (!hasCollision) {
-                const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(testX) : testX;
-                const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(testY) : testY;
-                if (this === wizard) {
-                    applyViewportWrapShift(wrappedX - testX, wrappedY - testY);
-                }
-                this.x = wrappedX;
-                this.y = wrappedY;
-                this.updateHitboxes();
-                centerViewport(this, 0);
-                return true;
-            }
-            
-            // Resolve collision
-            let pushLen = Math.hypot(totalPushX, totalPushY);
-            
-            // Cap push vector to the maximum individual penetration depth
-            if (pushLen > maxPushLen && maxPushLen > 0) {
-                const scale = maxPushLen / pushLen;
-                totalPushX *= scale;
-                totalPushY *= scale;
-                pushLen = maxPushLen;
-            }
-            
-            if (pushLen > 0) {
-                const normalX = totalPushX / pushLen;
-                const normalY = totalPushY / pushLen;
-                
-                // Soft collision: allow compression up to a threshold with proportional resistance
-                const compressionThreshold = 0.15;
-                const compression = Math.max(0, pushLen - compressionThreshold);
-                
-                if (compression > 0) {
-                    // Hard push-back: reduce velocity component along normal
-                    const resistanceFactor = Math.min(1, compression / 0.1);
-                    const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
-                    
-                    if (normalComponent > 0) {
-                        this.movementVector.x -= normalX * normalComponent * resistanceFactor;
-                        this.movementVector.y -= normalY * normalComponent * resistanceFactor;
-                    }
-                } else {
-                    // Within compression threshold - apply gentle damping
-                    const dampingFactor = 1 - (pushLen / compressionThreshold) * 0.4;
-                    this.movementVector.x *= dampingFactor;
-                    this.movementVector.y *= dampingFactor;
-                    
-                    const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
-                    if (normalComponent > 0) {
-                        this.movementVector.x -= normalX * normalComponent * 0.2;
-                        this.movementVector.y -= normalY * normalComponent * 0.2;
-                    }
-                }
-                
-                // Push out minimally and apply modified movement
-                const pushOutDistance = pushLen + 0.01;
-                testX = this.x + normalX * pushOutDistance + this.movementVector.x / this.frameRate;
-                testY = this.y + normalY * pushOutDistance + this.movementVector.y / this.frameRate;
-            } else {
-                break;
-            }
-        }
-        
-        // If we exhausted iterations, at least push out to clear the collision
-        const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: wizardRadius };
-        testHitbox.x = testX;
-        testHitbox.y = testY;
-        testHitbox.radius = wizardRadius;
-        this._movementTestHitbox = testHitbox;
-        let totalPushX = 0;
-        let totalPushY = 0;
-        let maxPushLen = 0;
-        
-        for (const obj of nearbyObjects) {
-            const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-            if (collision && collision.pushX !== undefined) {
-                totalPushX += collision.pushX;
-                totalPushY += collision.pushY;
-                const pushLen = Math.hypot(collision.pushX, collision.pushY);
-                maxPushLen = Math.max(maxPushLen, pushLen);
-                if (this === wizard) forceTouchedObjects.add(obj);
-            }
-        }
-        
-        if (maxPushLen > 0) {
-            const pushLen = Math.hypot(totalPushX, totalPushY);
-            if (pushLen > maxPushLen && maxPushLen > 0) {
-                const scale = maxPushLen / pushLen;
-                totalPushX *= scale;
-                totalPushY *= scale;
-            }
-            
-            const normalX = totalPushX / Math.hypot(totalPushX, totalPushY);
-            const normalY = totalPushY / Math.hypot(totalPushX, totalPushY);
-            const pushOutDistance = maxPushLen + 0.01;
-            
-            const resolvedX = this.x + normalX * pushOutDistance;
-            const resolvedY = this.y + normalY * pushOutDistance;
-            const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(resolvedX) : resolvedX;
-            const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(resolvedY) : resolvedY;
-            if (this === wizard) {
-                applyViewportWrapShift(wrappedX - resolvedX, wrappedY - resolvedY);
-            }
-            this.x = wrappedX;
-            this.y = wrappedY;
-            this.updateHitboxes();
-            centerViewport(this, 0);
-            return true;
-        }
-        
-        // No collision - apply the movement
-        const wrappedX = this.map && typeof this.map.wrapWorldX === "function" ? this.map.wrapWorldX(newX) : newX;
-        const wrappedY = this.map && typeof this.map.wrapWorldY === "function" ? this.map.wrapWorldY(newY) : newY;
-        if (this === wizard) {
-            applyViewportWrapShift(wrappedX - newX, wrappedY - newY);
-        }
-        this.x = wrappedX;
-        this.y = wrappedY;
-        this.updateHitboxes();
+        return (
+            isInOrTouchingNearbyDoor(currentX, currentY, radius) ||
+            isInOrTouchingNearbyDoor(newX, newY, radius)
+        );
+    }
+
+    onVectorMovementApplied(movementResult, _options = {}) {
+        applyViewportWrapShift(
+            movementResult.wrappedX - movementResult.targetX,
+            movementResult.wrappedY - movementResult.targetY
+        );
         centerViewport(this, 0);
-        return true;
+    }
+    
+    moveDirection(vector, options = {}) {
+        return super.moveDirection(vector, options);
     }
     
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
@@ -741,12 +652,15 @@ class Wizard extends Character {
     
     updateStatusBars() {
         // Update health bar width
-        const healthRatio = Math.max(0, Math.min(1, this.hp / this.maxHp));
+        const safeMaxHp = Number.isFinite(this.maxHp) && this.maxHp > 0 ? this.maxHp : 1;
+        const healthRatio = Math.max(0, Math.min(1, this.hp / safeMaxHp));
         $("#healthBar").css('width', (healthRatio * 100) + '%');
         
         // Update magic bar width
-        const magicRatio = Math.max(0, Math.min(1, this.magic / this.maxMagic));
+        const safeMaxMagic = Number.isFinite(this.maxMagic) && this.maxMagic > 0 ? this.maxMagic : 1;
+        const magicRatio = Math.max(0, Math.min(1, this.magic / safeMaxMagic));
         $("#magicBar").css('width', (magicRatio * 100) + '%');
+        this.updateModeToggleUi();
     }
     
     draw() {
@@ -830,6 +744,9 @@ class Wizard extends Character {
             y: (this.map && typeof this.map.wrapWorldY === "function") ? this.map.wrapWorldY(this.y) : this.y,
             hp: this.hp,
             maxHp: this.maxHp,
+            temperature: this.getTemperature(),
+            baselineTemperature: this.getTemperatureBaseline(),
+            gameMode: this.gameMode,
             magic: this.magic,
             maxMagic: this.maxMagic,
             magicRegenPerSecond: this.magicRegenPerSecond,
@@ -837,6 +754,8 @@ class Wizard extends Character {
             currentSpell: this.currentSpell,
             activeAura: this.activeAura || null,
             activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
+            unlockedSpells: Array.isArray(this.unlockedSpells) ? this.unlockedSpells.slice() : [],
+            unlockedAuras: Array.isArray(this.unlockedAuras) ? this.unlockedAuras.slice() : [],
             selectedFlooringTexture: this.selectedFlooringTexture,
             selectedTreeTextureVariant: this.selectedTreeTextureVariant,
             selectedPlaceableCategory: this.selectedPlaceableCategory,
@@ -865,7 +784,7 @@ class Wizard extends Character {
             showEditorPanel: this.showEditorPanel !== false,
             showPerfReadout: !!showPerfReadout,
             spells: this.spells,
-            inventory: this.inventory,
+            inventory: this.serializeInventory(),
             scriptingName: (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0)
                 ? this.scriptingName.trim()
                 : "",
@@ -906,6 +825,17 @@ class Wizard extends Character {
         if (data.y !== undefined) this.y = data.y;
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
+        if (data.baselineTemperature !== undefined) {
+            this.baselineTemperature = Number.isFinite(data.baselineTemperature)
+                ? Number(data.baselineTemperature)
+                : this.getTemperatureBaseline();
+        }
+        if (data.temperature !== undefined && typeof this.setTemperature === "function") {
+            this.setTemperature(data.temperature);
+        }
+        const storedGameMode = getStoredWizardGameMode();
+        const nextGameMode = storedGameMode || ((data && data.gameMode !== undefined) ? data.gameMode : this.gameMode);
+        this.setGameMode(nextGameMode, { persist: storedGameMode === null || storedGameMode === undefined });
         if (data.magic !== undefined) this.magic = data.magic;
         if (data.maxMagic !== undefined) this.maxMagic = data.maxMagic;
         if (Number.isFinite(data.magicRegenPerSecond)) this.magicRegenPerSecond = Math.max(0, data.magicRegenPerSecond);
@@ -919,6 +849,8 @@ class Wizard extends Character {
             this.activeAura = data.activeAura;
             this.activeAuras = (typeof data.activeAura === "string" && data.activeAura.length > 0) ? [data.activeAura] : [];
         }
+        if (Array.isArray(data.unlockedSpells)) this.unlockedSpells = data.unlockedSpells.slice();
+        if (Array.isArray(data.unlockedAuras)) this.unlockedAuras = data.unlockedAuras.slice();
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
         if (data.selectedTreeTextureVariant !== undefined) this.selectedTreeTextureVariant = data.selectedTreeTextureVariant;
         if (data.selectedPlaceableCategory !== undefined) this.selectedPlaceableCategory = data.selectedPlaceableCategory;
@@ -956,7 +888,9 @@ class Wizard extends Character {
             }
         }
         if (data.spells !== undefined) this.spells = data.spells;
-        if (data.inventory !== undefined) this.inventory = data.inventory;
+        if (Object.prototype.hasOwnProperty.call(data, "inventory")) {
+            this.loadInventory(data.inventory);
+        }
         if (this.map && typeof this.map.wrapWorldX === "function" && Number.isFinite(this.x)) {
             this.x = this.map.wrapWorldX(this.x);
         }
@@ -1032,6 +966,9 @@ class Wizard extends Character {
         }
         if (typeof SpellSystem !== "undefined" && typeof SpellSystem.setEditorPanelVisible === "function") {
             SpellSystem.setEditorPanelVisible(this, this.showEditorPanel !== false);
+        }
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.syncWizardUnlockState === "function") {
+            SpellSystem.syncWizardUnlockState(this);
         }
         if (typeof SpellSystem !== "undefined" && typeof SpellSystem.refreshAuraSelector === "function") {
             SpellSystem.refreshAuraSelector(this);

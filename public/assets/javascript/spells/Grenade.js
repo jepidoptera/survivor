@@ -68,7 +68,6 @@ class Grenade extends globalThis.Spell {
                             message(messageText);
                             wizard.food += animal.foodValue;
                             animal.explode(this.x, this.y - this.z);
-                            saveGame();
                         }
                         else if (animal.chaseRadius > 0) animal.attack(wizard);
                     }

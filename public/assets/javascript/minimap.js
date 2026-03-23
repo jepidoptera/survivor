@@ -41,6 +41,72 @@
     let dragStartH  = 0;
     const HANDLE_SIZE = 18;
 
+    function isInResizeHandle(clientX, clientY) {
+        if (!wrapper || wrapper.style.display === "none") return false;
+        const rect = wrapper.getBoundingClientRect();
+        return (
+            clientX >= rect.left &&
+            clientX <= rect.left + HANDLE_SIZE &&
+            clientY >= rect.top &&
+            clientY <= rect.top + HANDLE_SIZE
+        );
+    }
+
+    function centerViewportOnWorldPoint(worldX, worldY) {
+        if (typeof viewport === "undefined" || !viewport || typeof map === "undefined" || !map) return;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return;
+
+        let focusX = worldX;
+        let focusY = worldY;
+        const currentCenterX = Number(viewport.x) + Number(viewport.width) * 0.5;
+        const currentCenterY = Number(viewport.y) + Number(viewport.height) * 0.5;
+        if (typeof map.shortestDeltaX === "function" && Number.isFinite(currentCenterX)) {
+            focusX = currentCenterX + map.shortestDeltaX(currentCenterX, worldX);
+        }
+        if (typeof map.shortestDeltaY === "function" && Number.isFinite(currentCenterY)) {
+            focusY = currentCenterY + map.shortestDeltaY(currentCenterY, worldY);
+        }
+
+        viewport.x = focusX - viewport.width * 0.5;
+        viewport.y = focusY - viewport.height * 0.5;
+        viewport.prevX = viewport.x;
+        viewport.prevY = viewport.y;
+
+        if (typeof globalThis !== "undefined") {
+            globalThis.minimapCameraDetachState = {
+                active: true,
+                wizardRef: (typeof wizard !== "undefined" && wizard) ? wizard : null,
+                wizardX: (typeof wizard !== "undefined" && wizard) ? Number(wizard.x) : null,
+                wizardY: (typeof wizard !== "undefined" && wizard) ? Number(wizard.y) : null
+            };
+            if (typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+        }
+    }
+
+    function handleMinimapClick(event) {
+        if (!canvas || typeof map === "undefined" || !map || typeof viewport === "undefined" || !viewport) return;
+        if (dragging) return;
+        if (isInResizeHandle(event.clientX, event.clientY)) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const localX = event.clientX - rect.left;
+        const localY = event.clientY - rect.top;
+        if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return;
+
+        const worldW = Number(map.worldWidth);
+        const worldH = Number(map.worldHeight);
+        if (!(worldW > 0) || !(worldH > 0)) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const worldX = (localX / rect.width) * worldW;
+        const worldY = (localY / rect.height) * worldH;
+        centerViewportOnWorldPoint(worldX, worldY);
+    }
+
     // ---- helpers ----
     function ensureCanvas() {
         if (canvas) return;
@@ -51,15 +117,16 @@
         wrapper.style.cssText =
             "position:fixed;bottom:12px;right:12px;z-index:9999;" +
             "border:2px solid rgba(255,255,255,0.5);border-radius:4px;" +
-            "background:#000;display:none;line-height:0;pointer-events:none;";
+            "background:#000;display:none;line-height:0;pointer-events:auto;";
         document.body.appendChild(wrapper);
 
         canvas = document.createElement("canvas");
         canvas.id = "minimap";
         canvas.style.cssText =
-            "display:block;image-rendering:pixelated;pointer-events:none;";
+            "display:block;image-rendering:pixelated;pointer-events:auto;";
         wrapper.appendChild(canvas);
         ctx = canvas.getContext("2d");
+        canvas.addEventListener("click", handleMinimapClick);
 
         // Resize handle — small triangle in the top-left corner (since the
         // minimap is anchored bottom-right, dragging top-left feels natural)
@@ -71,17 +138,6 @@
         wrapper.appendChild(handle);
 
         // --- drag logic ---
-        function isInResizeHandle(clientX, clientY) {
-            if (!wrapper || wrapper.style.display === "none") return false;
-            const rect = wrapper.getBoundingClientRect();
-            return (
-                clientX >= rect.left &&
-                clientX <= rect.left + HANDLE_SIZE &&
-                clientY >= rect.top &&
-                clientY <= rect.top + HANDLE_SIZE
-            );
-        }
-
         function onGlobalPointerDown(e) {
             if (e.button !== 0) return;
             if (!isInResizeHandle(e.clientX, e.clientY)) return;
@@ -151,6 +207,43 @@
         target.fillRect(Math.round(px), Math.round(py), w, h);
     }
 
+    function drawWallSegment(target, mapRef, mw, mh, ax, ay, bx, by, lineWidth) {
+        if (
+            !Number.isFinite(ax) ||
+            !Number.isFinite(ay) ||
+            !Number.isFinite(bx) ||
+            !Number.isFinite(by)
+        ) {
+            return;
+        }
+
+        const worldW = Number(mapRef && mapRef.worldWidth);
+        const worldH = Number(mapRef && mapRef.worldHeight);
+        if (!(worldW > 0) || !(worldH > 0)) return;
+
+        let endX = bx;
+        let endY = by;
+        if (mapRef && typeof mapRef.shortestDeltaX === "function") {
+            endX = ax + mapRef.shortestDeltaX(ax, bx);
+        }
+        if (mapRef && typeof mapRef.shortestDeltaY === "function") {
+            endY = ay + mapRef.shortestDeltaY(ay, by);
+        }
+
+        const startPx = (ax / worldW) * mw;
+        const startPy = (ay / worldH) * mh;
+        const endPx = (endX / worldW) * mw;
+        const endPy = (endY / worldH) * mh;
+
+        target.strokeStyle = COL_WALL;
+        target.lineWidth = Math.max(1, lineWidth);
+        target.lineCap = "round";
+        target.beginPath();
+        target.moveTo(startPx, startPy);
+        target.lineTo(endPx, endPy);
+        target.stroke();
+    }
+
     // ---- build the static layer (entire map, all nodes) ----
     function rebuildStatic() {
         if (typeof map === "undefined" || !map || !map.nodes) return;
@@ -162,18 +255,38 @@
         if (!Number.isFinite(worldW) || !Number.isFinite(worldH) || worldW <= 0 || worldH <= 0) return;
         const dotW = Math.max(1, mw / map.width);
         const dotH = Math.max(1, mh / map.height);
+        const wallLineWidth = Math.max(1, Math.min(dotW, dotH));
+        const drawnWallSections = new Set();
 
         function drawObjectType(type, x, y) {
             if (!Number.isFinite(x) || !Number.isFinite(y)) return;
             const px = (x / worldW) * mw;
             const py = (y / worldH) * mh;
-            if (type === "wallSection") {
-                drawDot(staticCtx, px, py, dotW, dotH, COL_WALL);
-            } else if (type === "tree") {
+            if (type === "tree") {
                 drawDot(staticCtx, px, py, dotW, dotH, COL_TREE);
             } else if (type === "road") {
                 drawDot(staticCtx, px, py, dotW, dotH, COL_ROAD);
             }
+        }
+
+        function drawWallSection(obj) {
+            if (!obj || obj.type !== "wallSection" || obj.gone) return;
+            if (drawnWallSections.has(obj)) return;
+            const start = obj.startPoint;
+            const end = obj.endPoint;
+            if (!start || !end) return;
+            drawWallSegment(
+                staticCtx,
+                map,
+                mw,
+                mh,
+                Number(start.x),
+                Number(start.y),
+                Number(end.x),
+                Number(end.y),
+                wallLineWidth
+            );
+            drawnWallSections.add(obj);
         }
 
         // Clear to ground colour
@@ -187,7 +300,6 @@
             for (let yi = 0; yi < map.height; yi++) {
                 const node = col[yi];
                 if (!node || !node.objects || node.objects.length === 0) continue;
-
                 const px = (node.x / worldW) * mw;
                 const py = (node.y / worldH) * mh;
 
@@ -196,7 +308,7 @@
                     if (!obj) continue;
                     const t = obj.type;
                     if (t === "wallSection") {
-                        drawDot(staticCtx, px, py, dotW, dotH, COL_WALL);
+                        drawWallSection(obj);
                     } else if (t === "tree") {
                         drawDot(staticCtx, px, py, dotW, dotH, COL_TREE);
                     } else if (t === "road") {
@@ -212,6 +324,10 @@
             for (let i = 0; i < map.objects.length; i++) {
                 const obj = map.objects[i];
                 if (!obj || !obj.type) continue;
+                if (obj.type === "wallSection") {
+                    drawWallSection(obj);
+                    continue;
+                }
                 drawObjectType(obj.type, obj.x, obj.y);
             }
         }

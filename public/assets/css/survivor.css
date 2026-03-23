@@ -55,7 +55,6 @@ body {
     cursor: default !important;
 }
 
-#editorSelector,
 #spellSelector {
     position: absolute;
     left: 248px;
@@ -64,21 +63,8 @@ body {
     cursor: default !important;
 }
 
-#editorModeBanner {
-    position: absolute;
-    left: 318px;
-    top: 24px;
-    z-index: 2;
-    color: #ffffff;
-    font-size: 13px;
-    font-family: sans-serif;
-    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8);
-    pointer-events: none;
-    white-space: nowrap;
-}
-
-#editorModeBanner.hidden {
-    display: none;
+#editorSelector {
+    display: none !important;
 }
 
 #selectedAura,
@@ -298,6 +284,36 @@ body {
     width: 100%;
     background-color: #0000FF;
     transition: width 0.1s ease;
+}
+
+.magicBarFlash {
+    animation: magicBarFlashWhite 0.24s ease-out;
+}
+
+.magicBarBackgroundFlash {
+    animation: magicBarBackgroundFlashWhite 0.24s ease-out;
+}
+
+@keyframes magicBarFlashWhite {
+    0% {
+        background-color: #ffffff;
+    }
+    100% {
+        background-color: #0000FF;
+    }
+}
+
+@keyframes magicBarBackgroundFlashWhite {
+    0% {
+        background-color: rgba(255, 255, 255, 0.95);
+        border-color: rgba(255, 255, 255, 1);
+        box-shadow: 0 0 14px rgba(255, 255, 255, 0.9);
+    }
+    100% {
+        background-color: rgba(68, 68, 68, 0.8);
+        border-color: #666;
+        box-shadow: none;
+    }
 }
 
 .msgBox {

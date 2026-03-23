@@ -75,8 +75,14 @@ class Animal extends Character {
         this.lungeRadius = 2;
         this.lungeSpeed = 5.0;
         this.attackCooldown = 1.5;
+        this.attackAnimationHoldMs = 250;
+        this.secondsPerAttack = 2;
         this.strikeRange = 0.8;
         this.retreatThreshold = 0.25;
+        this.retreatDuration = 2;
+        this.retreatDistanceCap = 2;
+        this.preferAttackAStar = true;
+        this.preferRetreatAStar = true;
         this.healthBarHoldMs = 3000;
         this._healthBarVisibleUntilMs = 0;
         this._healthBarGraphics = null;
@@ -93,12 +99,21 @@ class Animal extends Character {
         this.attacking = false;
         this._aiAccumulatorMs = Math.random() * 200;
         this.pursuitRepathMs = 250;
+        this.fleeRepathMs = 400;
         this.aggroDurationMs = 12000;
         this.disengageRadius = 40;
         this._aggroUntilMs = 0;
         this._lastPursuitPathMs = 0;
-        this._lastAStarAggroMs = 0;     // timestamp of last A* run during no-LOS pursuit
-        this._suppressGreedyRepath = false; // true while an A* no-LOS path is active
+        this._lastFleePathMs = 0;
+        this._skipNextRetreatOnce = false;
+        this._corneredAttackPending = false;
+        this._retreatOrigin = null;
+        this._retreatThreatPoint = null;
+        this._retreatDestinationPoint = null;
+        this._retreatThreatDistanceBaseline = null;
+        this._lastRetreatBudgetRefreshMs = 0;
+        this._attackAnimationHoldUntilMs = 0;
+        this._playerVisibleLastAiTick = false;
         ensureSpriteFrames(this);
 
         // --- Depth billboard support (renders animal as a depth-tested billboard like trees) ---
@@ -194,6 +209,88 @@ class Animal extends Character {
             ? target.groundRadius
             : ((target && Number.isFinite(target.visualRadius)) ? target.visualRadius : 0);
         return Math.max(baseRange, selfRadius + targetRadius);
+    }
+
+    _getLocalWrappedDelta(fromX, fromY, toX, toY) {
+        return {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(fromX, toX)
+                : (toX - fromX),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(fromY, toY)
+                : (toY - fromY)
+        };
+    }
+
+    _distanceFromPointToLocalSegment(point, segStart, segEnd) {
+        const segDx = segEnd.x - segStart.x;
+        const segDy = segEnd.y - segStart.y;
+        const segLenSq = segDx * segDx + segDy * segDy;
+        if (segLenSq <= 1e-9) {
+            return Math.hypot(point.x - segStart.x, point.y - segStart.y);
+        }
+        const t = Math.max(
+            0,
+            Math.min(
+                1,
+                ((point.x - segStart.x) * segDx + (point.y - segStart.y) * segDy) / segLenSq
+            )
+        );
+        const closestX = segStart.x + segDx * t;
+        const closestY = segStart.y + segDy * t;
+        return Math.hypot(point.x - closestX, point.y - closestY);
+    }
+
+    isTargetWithinStrikeContact(target) {
+        if (!target || target.gone || target.dead) return false;
+
+        const strikeDistance = this.getStrikeDistance(target);
+        if (!Number.isFinite(strikeDistance) || strikeDistance < 0) return false;
+
+        const ownHitbox = this.groundPlaneHitbox || this.visualHitbox || null;
+        const targetHitbox = target.groundPlaneHitbox || target.visualHitbox || null;
+        if (
+            ownHitbox &&
+            targetHitbox &&
+            typeof ownHitbox.intersects === "function" &&
+            ownHitbox.intersects(targetHitbox)
+        ) {
+            return true;
+        }
+
+        const targetPositions = [{ x: target.x, y: target.y }];
+        if (
+            Number.isFinite(target.prevX) &&
+            Number.isFinite(target.prevY) &&
+            (Math.abs(target.prevX - target.x) > 1e-6 || Math.abs(target.prevY - target.y) > 1e-6)
+        ) {
+            targetPositions.push({ x: Number(target.prevX), y: Number(target.prevY) });
+        }
+
+        for (let i = 0; i < targetPositions.length; i++) {
+            const pos = targetPositions[i];
+            if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+
+            const currentDelta = this._getLocalWrappedDelta(this.x, this.y, pos.x, pos.y);
+            if (Math.hypot(currentDelta.x, currentDelta.y) <= strikeDistance) {
+                return true;
+            }
+
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                const prevLocal = this._getLocalWrappedDelta(this.x, this.y, this.prevX, this.prevY);
+                const targetLocal = currentDelta;
+                const sweptDistance = this._distanceFromPointToLocalSegment(
+                    targetLocal,
+                    prevLocal,
+                    { x: 0, y: 0 }
+                );
+                if (sweptDistance <= strikeDistance) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     burn() {
@@ -458,14 +555,107 @@ class Animal extends Character {
         this.z = savedZ;
         return result;
     }
+    getAdditionalSpriteRotationDegrees() {
+        return 0;
+    }
+    rotateDepthBillboardQuadInScreenSpace(result, camera, rotationDeg) {
+        if (!result || !camera || !this._depthBillboardWorldPositions || this._depthBillboardWorldPositions.length < 12) {
+            return false;
+        }
+        const rotation = Number(rotationDeg);
+        if (!Number.isFinite(rotation) || Math.abs(rotation) <= 1e-4) {
+            return false;
+        }
+
+        const positions = this._depthBillboardWorldPositions;
+        const vs = Math.max(1e-6, Math.abs(Number(camera.viewscale) || 1));
+        const xyr = Math.max(1e-6, Math.abs(Number(camera.xyratio) || 0.66));
+        const camX = Number(camera.x) || 0;
+        const camY = Number(camera.y) || 0;
+        const wY = positions[1];
+
+        const sv = [];
+        for (let i = 0; i < 12; i += 3) {
+            sv.push({
+                sx: (positions[i] - camX) * vs,
+                sy: (wY - camY - positions[i + 2]) * vs * xyr
+            });
+        }
+
+        const px = (sv[0].sx + sv[1].sx) / 2;
+        const py = (sv[0].sy + sv[1].sy) / 2;
+        const rotRad = rotation * (Math.PI / 180);
+        const cosR = Math.cos(rotRad);
+        const sinR = Math.sin(rotRad);
+        for (let i = 0; i < 4; i++) {
+            const dx = sv[i].sx - px;
+            const dy = sv[i].sy - py;
+            sv[i].sx = px + dx * cosR - dy * sinR;
+            sv[i].sy = py + dx * sinR + dy * cosR;
+        }
+
+        for (let i = 0; i < 4; i++) {
+            positions[i * 3] = sv[i].sx / vs + camX;
+            positions[i * 3 + 1] = wY;
+            positions[i * 3 + 2] = wY - camY - sv[i].sy / (vs * xyr);
+        }
+
+        const worldBuffer = result.geometry && typeof result.geometry.getBuffer === "function"
+            ? result.geometry.getBuffer("aWorldPosition")
+            : null;
+        if (worldBuffer && typeof worldBuffer.update === "function") {
+            worldBuffer.update();
+        }
+        return true;
+    }
     getDirectionRow() {
         const activeDirection = this.spriteDirectionLock || this.direction;
         if (!activeDirection) return 0;
+        if ((this.spriteRows || 1) >= 4) {
+            const dx = Number(activeDirection.x) || 0;
+            const dy = Number(activeDirection.y) || 0;
+            if (Math.abs(dy) > Math.abs(dx)) {
+                return dy < 0 ? 3 : 0;
+            }
+            return dx < 0 ? 1 : 2;
+        }
         return (activeDirection.x > 0 || (activeDirection.x === 0 && activeDirection.y > 0)) ? 1 : 0;
+    }
+    getCurrentSpriteFrameKey() {
+        if (!this.spriteSheet || !Array.isArray(this.spriteSheet.frameKeys)) return null;
+        const rows = Math.max(1, Number(this.spriteRows) || Number(this.spriteSheet.rows) || 1);
+        const cols = Math.max(1, Number(this.spriteCols) || Number(this.spriteSheet.cols) || 1);
+        const rowIndex = typeof this.getDirectionRow === "function" ? this.getDirectionRow() : 0;
+        const safeRow = Math.max(0, Math.min(rowIndex, rows - 1));
+        const safeCol = Math.max(0, Math.min(Number(this.spriteCol) || 0, cols - 1));
+        const frameIndex = safeRow * cols + safeCol;
+        const frameKey = this.spriteSheet.frameKeys[frameIndex];
+        return (typeof frameKey === "string" && frameKey.length > 0) ? frameKey : null;
+    }
+    getSpriteFrameScale(frameKey = null) {
+        const key = (typeof frameKey === "string" && frameKey.length > 0)
+            ? frameKey
+            : this.getCurrentSpriteFrameKey();
+        const frameScales = (this.spriteSheet && this.spriteSheet.frameScales && typeof this.spriteSheet.frameScales === "object")
+            ? this.spriteSheet.frameScales
+            : null;
+        const scaleSpec = (frameScales && key)
+            ? frameScales[key]
+            : null;
+        if (Number.isFinite(scaleSpec) && scaleSpec > 0) {
+            return { width: Number(scaleSpec), height: Number(scaleSpec) };
+        }
+        const width = scaleSpec && Number.isFinite(scaleSpec.width) && scaleSpec.width > 0
+            ? Number(scaleSpec.width)
+            : 1;
+        const height = scaleSpec && Number.isFinite(scaleSpec.height) && scaleSpec.height > 0
+            ? Number(scaleSpec.height)
+            : 1;
+        return { width, height };
     }
     hasAttackAnimation() {
         if (this.spriteSheet && Array.isArray(this.spriteSheet.frameKeys)) {
-            return this.spriteSheet.frameKeys.some(key => typeof key === "string" && key.indexOf("attack_") === 0);
+            return this.spriteSheet.frameKeys.some(key => typeof key === "string" && key.indexOf("attack") >= 0);
         }
         return this.spriteCols > 1;
     }
@@ -480,6 +670,81 @@ class Animal extends Character {
             return this.map.distanceBetweenPoints(this.x, this.y, x, y);
         }
         return Math.hypot((x - this.x), (y - this.y));
+    }
+    getRetreatDurationMs() {
+        return Math.max(
+            0,
+            (Number.isFinite(this.secondsPerAttack) ? Number(this.secondsPerAttack) : 2) * 1000
+        );
+    }
+    getRetreatDistanceCap() {
+        return Math.max(
+            0,
+            Number.isFinite(this.retreatDistanceCap) ? Number(this.retreatDistanceCap) : 2
+        );
+    }
+    getRetreatDistanceFromOrigin() {
+        const origin = this._retreatOrigin;
+        if (!origin) return 0;
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(origin.x, origin.y, this.x, this.y);
+        }
+        return Math.hypot(this.x - origin.x, this.y - origin.y);
+    }
+    getRemainingRetreatDistanceBudget() {
+        return Math.max(0, this.getRetreatDistanceCap() - this.getRetreatDistanceFromOrigin());
+    }
+    getRetreatThreatDistance(threatPoint = null) {
+        const point = threatPoint || this._retreatThreatPoint;
+        if (!point) return Infinity;
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(this.x, this.y, point.x, point.y);
+        }
+        return Math.hypot(this.x - point.x, this.y - point.y);
+    }
+    maybeRefreshRetreatBudget(target, now = Date.now()) {
+        if (!target || this.attackState !== "retreat") return false;
+        if (!this.onScreen) return false;
+        if ((now - (this._lastRetreatBudgetRefreshMs || 0)) < 1000) return false;
+
+        this._lastRetreatBudgetRefreshMs = now;
+        const threatPoint = { x: target.x, y: target.y };
+        const currentThreatDistance = this.getRetreatThreatDistance(threatPoint);
+        if (!Number.isFinite(currentThreatDistance)) return false;
+
+        if (!Number.isFinite(this._retreatThreatDistanceBaseline)) {
+            this._retreatThreatDistanceBaseline = currentThreatDistance;
+            this._retreatThreatPoint = threatPoint;
+            return false;
+        }
+
+        if (currentThreatDistance >= (this._retreatThreatDistanceBaseline - 1e-6)) {
+            this._retreatThreatPoint = threatPoint;
+            return false;
+        }
+
+        this._retreatOrigin = { x: this.x, y: this.y };
+        this._retreatThreatPoint = threatPoint;
+        this._retreatThreatDistanceBaseline = currentThreatDistance;
+        this._retreatDestinationPoint = null;
+        return true;
+    }
+    hasRetreatMovementPlanned() {
+        return (
+            (Number.isFinite(this.travelFrames) && this.travelFrames > 0) ||
+            (Array.isArray(this.path) && this.path.length > 0) ||
+            !!this.nextNode
+        );
+    }
+    shouldEndRetreat(now = Date.now()) {
+        const elapsedMs = now - (this._retreatStartMs || now);
+        if (elapsedMs >= this.getRetreatDurationMs()) {
+            return true;
+        }
+        if (this.getRetreatDistanceFromOrigin() >= this.getRetreatDistanceCap()) {
+            return true;
+        }
+        return elapsedMs >= 100 && !this.hasRetreatMovementPlanned();
     }
     isPointWithinRadius(x, y, radius) {
         if (!Number.isFinite(radius) || radius <= 0) return false;
@@ -519,70 +784,354 @@ class Animal extends Character {
         this.travelFrames = 0;
     }
     _applyPursuitPath(path, destinationNode, preserveStep) {
-        this.path = Array.isArray(path) ? path : [];
+        const normalizedPath = Array.isArray(path) ? path.slice() : [];
+        if (preserveStep && this.nextNode) {
+            while (normalizedPath.length > 0 && normalizedPath[0] === this.nextNode) {
+                normalizedPath.shift();
+            }
+        }
+        this.path = normalizedPath;
         this.destination = destinationNode || null;
         if (!preserveStep) {
             this.travelFrames = 0;
             this.nextNode = null;
         }
     }
+    _isMidTraversalStep() {
+        return !!(
+            Number.isFinite(this.travelFrames) &&
+            this.travelFrames > 0 &&
+            this.nextNode
+        );
+    }
+    _getPathStartNode(preserveCurrentStep = false) {
+        if (this._isMidTraversalStep()) {
+            if (preserveCurrentStep && this.nextNode) {
+                return this.nextNode;
+            }
+            if (this.node) {
+                return this.node;
+            }
+        }
+        if (this.map && typeof this.map.worldToNode === "function") {
+            const worldNode = this.map.worldToNode(this.x, this.y);
+            if (worldNode) return worldNode;
+        }
+        return this.node || this.nextNode || null;
+    }
+    isTargetHiddenByInvisibilityAura(target) {
+        if (!target || target !== wizard) return false;
+        return !!(
+            typeof SpellSystem !== "undefined" &&
+            SpellSystem &&
+            typeof SpellSystem.isPlayerInvisibleToEnemies === "function" &&
+            SpellSystem.isPlayerInvisibleToEnemies(target)
+        );
+    }
+    isActivelyInteractingWithPlayer(now = Date.now()) {
+        const closeCombatTarget = this._closeCombatState && this._closeCombatState.target;
+        return !!(
+            this.attackTarget === wizard ||
+            closeCombatTarget === wizard ||
+            this._hasAggro(now) ||
+            this._committedToAttack ||
+            this._corneredAttackPending
+        );
+    }
+    hasAttackLineOfSight(target, startNode = null) {
+        if (this.isTargetHiddenByInvisibilityAura(target)) return false;
+        if (!target || !this.map || typeof this.map.worldToNode !== "function") return true;
+        if (typeof this.map.hasLineOfSight !== "function") return true;
+        const originNode = startNode || this._getPathStartNode();
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!originNode || !targetNode) return true;
+        return !!this.map.hasLineOfSight(originNode, targetNode);
+    }
+    clearCloseCombatOnLostLineOfSight(target, startNode = null, reason = "line-of-sight-lost") {
+        const hasLOS = this.hasAttackLineOfSight(target, startNode);
+        if (!hasLOS && this._closeCombatState && this._closeCombatState.target === target) {
+            this.resetCloseCombatState(reason);
+        }
+        return hasLOS;
+    }
     resetAttackState() {
+        this.resetCloseCombatState();
         this.attackState = "idle";
         this.attackTarget = null;
         this.attacking = false;
         this.spriteDirectionLock = null;
         this._committedToAttack = false;
         this._lungeStartMs = undefined;
+        this._retreatStartMs = undefined;
+        this._attackAStarDisabled = false;
+        this._retreatOrigin = null;
+        this._retreatThreatPoint = null;
+        this._retreatDestinationPoint = null;
+        this._retreatThreatDistanceBaseline = null;
+        this._lastRetreatBudgetRefreshMs = 0;
+        this._attackAnimationHoldUntilMs = 0;
+        this._skipNextRetreatOnce = false;
+        this._corneredAttackPending = false;
         if (this.spriteCols > 1) this.spriteCol = 0;
     }
-    setRetreatDestination(target) {
-        if (!target) return;
-        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
-            ? this.map.shortestDeltaX(target.x, this.x)
-            : (this.x - target.x);
-        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
-            ? this.map.shortestDeltaY(target.y, this.y)
-            : (this.y - target.y);
-        const dist = Math.hypot(dx, dy);
-        if (!Number.isFinite(dist) || dist < 1e-6) return;
+    onCloseCombatStateUpdated(state, target, _options = {}) {
+        if (!state || !target) return;
+        this.attackTarget = target;
+        this.attacking = true;
 
-        const retreatDistance = Math.max(2, this.lungeRadius);
-        let retreatX = this.x + (dx / dist) * retreatDistance;
-        let retreatY = this.y + (dy / dist) * retreatDistance;
-        if (this.map && typeof this.map.wrapWorldX === "function") {
-            retreatX = this.map.wrapWorldX(retreatX);
+        const targetVector = {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, target.x)
+                : (target.x - this.x),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, target.y)
+                : (target.y - this.y)
+        };
+        const targetVectorLen = Math.hypot(targetVector.x, targetVector.y);
+        if (targetVectorLen > 1e-6) {
+            this.direction = targetVector;
         }
-        if (this.map && typeof this.map.wrapWorldY === "function") {
-            retreatY = this.map.wrapWorldY(retreatY);
+
+        if (state.phase === "approach") {
+            this.attackState = "approach";
+            this.spriteDirectionLock = null;
+            if (this.spriteCols > 1) this.spriteCol = 0;
+            return;
         }
-        const retreatNode = this.map.worldToNode(retreatX, retreatY);
-        if (retreatNode) this.goto(retreatNode);
+
+        if (state.phase === "lunge") {
+            this.attackState = "lunge";
+            this.spriteDirectionLock = null;
+            if (this.hasAttackAnimation()) this.spriteCol = 1;
+            else if (this.spriteCols > 1) this.spriteCol = 0;
+            return;
+        }
+
+        this.attackState = "close_backoff";
+        this.spriteDirectionLock = targetVectorLen > 1e-6
+            ? { x: targetVector.x, y: targetVector.y }
+            : this.spriteDirectionLock;
+        this.updateRetreatAttackAnimation(Date.now());
     }
-    beginRetreat(target) {
+    updateRetreatAttackAnimation(now = Date.now()) {
+        if (!this.hasAttackAnimation() || this.spriteCols <= 1) return;
+        const holdUntil = Number(this._attackAnimationHoldUntilMs) || 0;
+        this.spriteCol = now < holdUntil ? 1 : 0;
+    }
+    getThreatDistanceFromNode(node, threatPoint) {
+        if (!node || !threatPoint) return Infinity;
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(node.x, node.y, threatPoint.x, threatPoint.y);
+        }
+        return Math.hypot(node.x - threatPoint.x, node.y - threatPoint.y);
+    }
+    shouldAttackInsteadOfRetreat(target, route, startNode) {
+        if (!target || this.isKnockableObstacle(target)) return false;
+        if (!route || !Array.isArray(route.path) || route.path.length === 0) return false;
+        if (!startNode || !this.map || typeof this.map.worldToNode !== "function") return false;
+
+        const firstStep = route.path[0];
+        if (!firstStep || firstStep === startNode) return false;
+
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!targetNode) return false;
+        if (typeof this.map.hasLineOfSight === "function" && !this.map.hasLineOfSight(startNode, targetNode)) {
+            return false;
+        }
+
+        const currentDistance = this.getThreatDistanceFromNode(startNode, target);
+        const firstStepDistance = this.getThreatDistanceFromNode(firstStep, target);
+        return Number.isFinite(currentDistance) &&
+            Number.isFinite(firstStepDistance) &&
+            firstStepDistance < (currentDistance - 1e-6);
+    }
+    commitCorneredAttack(target) {
+        if (!target) return false;
+
+        this._skipNextRetreatOnce = true;
+        this._corneredAttackPending = true;
+        this.attackState = "idle";
+        this.attackTarget = null;
+        this.attacking = false;
+        this.path = [];
+        this.destination = null;
+        this.nextNode = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        this._retreatOrigin = null;
+        this._retreatThreatPoint = null;
+        this._retreatDestinationPoint = null;
+        this._retreatThreatDistanceBaseline = null;
+        this._lastRetreatBudgetRefreshMs = 0;
+        this._retreatStartMs = undefined;
+        this._attackAnimationHoldUntilMs = 0;
+        this.spriteDirectionLock = null;
+        this._committedToAttack = true;
+        if (this.spriteCols > 1) this.spriteCol = 0;
+
+        this.attack(target);
+        return true;
+    }
+    getRetreatRoute(threatPoint, originPoint, retreatDistance, options = {}) {
+        if (!threatPoint || !this.map || typeof this.map.worldToNode !== "function") return null;
+
+        const startNode = options.startNode || this._getPathStartNode(options.preserveCurrentStep === true);
+        if (!startNode) return null;
+
+        const maxRetreatDistance = Number.isFinite(retreatDistance)
+            ? Math.max(0, Number(retreatDistance))
+            : 0;
+
+        const retreatOptions = this.buildAttackAStarPathOptions(maxRetreatDistance);
+        retreatOptions.threatX = threatPoint.x;
+        retreatOptions.threatY = threatPoint.y;
+        const retreatPath = (typeof this.map.findRetreatPathAStar === "function")
+            ? this.map.findRetreatPathAStar(startNode, threatPoint, retreatOptions)
+            : null;
+        if (!Array.isArray(retreatPath)) return null;
+
+        const destinationNode = retreatPath.length > 0
+            ? retreatPath[retreatPath.length - 1]
+            : startNode;
+        return {
+            path: retreatPath,
+            destinationNode,
+            destinationPoint: destinationNode
+                ? { x: destinationNode.x, y: destinationNode.y }
+                : (originPoint || { x: this.x, y: this.y }),
+            source: "retreatAStar"
+        };
+    }
+    _cancelCurrentTraversalAndSnapToNode(reason = "retreat-repath") {
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        this.nextNode = null;
+
+        let snappedNode = this.node || null;
+        if (this.map && typeof this.map.worldToNode === "function") {
+            snappedNode = this.map.worldToNode(this.x, this.y) || snappedNode;
+        }
+        if (snappedNode) {
+            this.node = snappedNode;
+            this.x = snappedNode.x;
+            this.y = snappedNode.y;
+            this.prevX = this.x;
+            this.prevY = this.y;
+            this.prevZ = this.z;
+            this._recordVisitedNode(snappedNode, reason);
+        }
+        this.updateHitboxes();
+        return snappedNode;
+    }
+    _canPreserveRetreatStep() {
+        if (
+            !this._isMidTraversalStep() ||
+            !this.node ||
+            !this.nextNode ||
+            !this.map ||
+            typeof this.map.getTraversalInfo !== "function"
+        ) {
+            return false;
+        }
+        const directionIndex = Array.isArray(this.node.neighbors)
+            ? this.node.neighbors.indexOf(this.nextNode)
+            : -1;
+        if (directionIndex < 0) return false;
+
+        const retreatOptions = this.buildAttackAStarPathOptions(this.getRemainingRetreatDistanceBudget());
+        const traversal = this.map.getTraversalInfo(this.node, directionIndex, {
+            requiredClearance: retreatOptions.clearance,
+            knockableTraversalCost: retreatOptions.knockableTraversalCost,
+            canTraverseObject: retreatOptions.canTraverseObject,
+            clearanceReferenceNode: this.node
+        });
+        return !!(traversal && traversal.allowed && traversal.neighborNode === this.nextNode);
+    }
+    setRetreatDestination(target) {
+        const origin = this._retreatOrigin || { x: this.x, y: this.y };
+        const threatPoint = target
+            ? { x: target.x, y: target.y }
+            : this._retreatThreatPoint;
+        if (!threatPoint || !this.map || typeof this.map.worldToNode !== "function") return;
+        let preserveStep = false;
+        let startNode = null;
+
+        if (this._isMidTraversalStep()) {
+            preserveStep = this._canPreserveRetreatStep();
+            if (!preserveStep) {
+                startNode = this._cancelCurrentTraversalAndSnapToNode();
+            }
+        }
+        if (!startNode) {
+            startNode = this._getPathStartNode(preserveStep);
+        }
+        if (!startNode) return;
+
+        this._retreatThreatPoint = threatPoint;
+        if (!Number.isFinite(this._retreatThreatDistanceBaseline)) {
+            this._retreatThreatDistanceBaseline = this.getRetreatThreatDistance(threatPoint);
+        }
+
+        const retreatRoute = this.getRetreatRoute(
+            threatPoint,
+            origin,
+            this.getRemainingRetreatDistanceBudget(),
+            {
+                preserveCurrentStep: preserveStep,
+                startNode
+            }
+        );
+        if (!retreatRoute) return;
+        if (this.shouldAttackInsteadOfRetreat(target, retreatRoute, startNode)) {
+            this.commitCorneredAttack(target);
+            return;
+        }
+
+        this._retreatDestinationPoint = retreatRoute.destinationPoint;
+        this._applyPursuitPath(retreatRoute.path, retreatRoute.destinationNode, preserveStep);
+    }
+    beginRetreat(target, options = null) {
+        if (this._skipNextRetreatOnce) {
+            this._skipNextRetreatOnce = false;
+            this._corneredAttackPending = false;
+            this._committedToAttack = true;
+            return false;
+        }
+        this.resetCloseCombatState();
         this.attackState = "retreat";
         this.attacking = true;
         this.speed = this.walkSpeed;
+        this._lungeStartMs = undefined;
+        this._retreatStartMs = Date.now();
+        this._retreatOrigin = { x: this.x, y: this.y };
+        this._retreatThreatPoint = target
+            ? { x: target.x, y: target.y }
+            : null;
+        this._retreatDestinationPoint = null;
+        this._retreatThreatDistanceBaseline = this.getRetreatThreatDistance(this._retreatThreatPoint);
+        this._lastRetreatBudgetRefreshMs = 0;
         this.spriteDirectionLock = this.direction
             ? { x: this.direction.x, y: this.direction.y }
             : this.spriteDirectionLock;
-        // Don't reset spriteCol here — keep the attack frame visible during retreat.
-        // resetAttackState() (called when retreat ends) will clear it.
+        const holdAttackAnimation = !!(options && options.holdAttackAnimation);
+        const holdMs = holdAttackAnimation
+            ? Math.max(0, Number.isFinite(this.attackAnimationHoldMs) ? Number(this.attackAnimationHoldMs) : 250)
+            : 0;
+        this._attackAnimationHoldUntilMs = holdMs > 0 ? (Date.now() + holdMs) : 0;
+        this.updateRetreatAttackAnimation();
         this.setRetreatDestination(target);
+        return this.attackState === "retreat";
     }
     updatePursuitDestination(target) {
         if (!target) return;
-        // While an A* no-LOS path is active, don't let the greedy repath overwrite it —
-        // but only while nodes remain. If the path is exhausted, drop suppression so the
-        // animal can immediately get a new greedy path and doesn't freeze in place.
-        if (this._suppressGreedyRepath) {
-            if (Array.isArray(this.path) && this.path.length > 0) return;
-            this._suppressGreedyRepath = false;
-        }
         const now = Date.now();
         const targetNode = this.map.worldToNode(target.x, target.y);
         if (!targetNode) return;
+        const preserveStep = this._isMidTraversalStep();
 
-        const startNode = this.map.worldToNode(this.x, this.y) || this.node;
+        const startNode = this._getPathStartNode(preserveStep);
         if (!startNode) return;
         const repathInterval = Number.isFinite(this.pursuitRepathMs) ? Math.max(0, this.pursuitRepathMs) : 0;
         const repathDue = (now - (this._lastPursuitPathMs || 0)) >= repathInterval;
@@ -592,31 +1141,93 @@ class Animal extends Character {
         if (!destinationChanged && !pathEmpty && !repathDue) return;
         if (!betweenMoves && !pathEmpty && !destinationChanged && !repathDue) return;
 
-        const pathOptions = {};
-        if (this.pathfindingClearance > 0) {
-            pathOptions.clearance = this.pathfindingClearance;
-        }
-        const path = this.map.findPath(startNode, targetNode, pathOptions);
+        const route = this.getCombatRouteToTarget(target, {
+            startNode,
+            targetNode,
+            preserveCurrentStep: preserveStep
+        });
+        const path = route ? route.path : null;
         this._lastPursuitPathMs = now;
-        this._applyPursuitPath(path, targetNode, !betweenMoves);
+        this._applyPursuitPath(path, targetNode, preserveStep);
     }
+
+    getCombatRouteToTarget(target, options = {}) {
+        if (!target || !this.map) return null;
+
+        const startNode = options.startNode || this._getPathStartNode(options.preserveCurrentStep === true);
+        const targetNode = options.targetNode || (this.map.worldToNode ? this.map.worldToNode(target.x, target.y) : null);
+        if (!startNode || !targetNode) return null;
+
+        const maxPathLength = Object.prototype.hasOwnProperty.call(options, "maxPathLength")
+            ? options.maxPathLength
+            : ((Number.isFinite(this.chaseRadius) && this.chaseRadius > 0) ? this.chaseRadius * 2 : null);
+        const allowBlockedDestination = options.allowBlockedDestination === true;
+        const straightLineTargetDist = this.distanceToPoint(target.x, target.y);
+        let path = null;
+        let source = "none";
+        let aStarPath = null;
+
+        const canUseAttackAStar = (
+            typeof this.map.findPathAStar === "function" &&
+            this.preferAttackAStar !== false &&
+            !this._attackAStarDisabled
+        );
+        if (canUseAttackAStar) {
+            const aStarOptions = this.buildAttackAStarPathOptions(maxPathLength);
+            if (allowBlockedDestination) {
+                aStarOptions.allowBlockedDestination = true;
+            }
+            aStarPath = this.map.findPathAStar(startNode, targetNode, aStarOptions);
+            if (Array.isArray(aStarPath)) {
+                path = aStarPath;
+                source = "aStar";
+            } else if (
+                Number.isFinite(maxPathLength) &&
+                Number.isFinite(straightLineTargetDist) &&
+                straightLineTargetDist > maxPathLength
+            ) {
+                this._attackAStarDisabled = true;
+            }
+        }
+
+        if (!Array.isArray(path)) {
+            const pathOptions = this.buildTraversalPathOptions();
+            if (allowBlockedDestination) {
+                pathOptions.allowBlockedDestination = true;
+            }
+            path = this.map.findPath(startNode, targetNode, pathOptions);
+            if (Array.isArray(path)) {
+                source = "findPath";
+            }
+        }
+
+        return {
+            path: Array.isArray(path) ? path : [],
+            source,
+            startNode,
+            targetNode
+        };
+    }
+
     runAiBehaviorTick() {
-        if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
-            this.moving = false;
+        if (typeof wizard === "undefined" || !wizard) {
+            this._playerVisibleLastAiTick = false;
             return;
         }
-        // Still recovering from knocking down a tree — let retreat movement continue
-        // but skip all AI decision-making until the cooldown expires.
-        if (this._pauseUntilMs && Date.now() < this._pauseUntilMs) {
+
+        const now = Date.now();
+        let playerVisibleThisTick = false;
+        if (Number.isFinite(this._pauseUntilMs) && now < this._pauseUntilMs) {
+            this._playerVisibleLastAiTick = false;
             return;
         }
-        if (this._pauseUntilMs) {
+        if (Number.isFinite(this._pauseUntilMs) && now >= this._pauseUntilMs) {
             this._pauseUntilMs = null;
             // Clean up the retreat state from the tree knock so we go straight back
             // into attack mode rather than wandering or extending the retreat.
             this.resetAttackState();
-            // Stay committed to the attack regardless of chaseRadius — the bear
-            // already decided to charge, it will keep knocking trees and pursuing.
+            // Stay committed to the attack regardless of chaseRadius — the animal
+            // already decided to charge, it will keep knocking obstacles and pursuing.
             this._committedToAttack = true;
             // Clear the retreat path so attack() immediately issues a fresh path
             // toward the wizard rather than finishing the old retreat path first.
@@ -624,11 +1235,19 @@ class Animal extends Character {
             this.destination = null;
             this.travelFrames = 0;
             this.nextNode = null;
-            if (typeof wizard !== "undefined") {
-                this.attack(wizard);
-                return;
-            }
+            this._playerVisibleLastAiTick = false;
+            this.attack(wizard);
+            return;
         }
+
+        const playerHiddenByInvisibility = this.isTargetHiddenByInvisibilityAura(wizard);
+        if (playerHiddenByInvisibility && this.isActivelyInteractingWithPlayer(now)) {
+            this._clearPursuit();
+            this._aggroUntilMs = 0;
+            this._committedToAttack = false;
+            this._corneredAttackPending = false;
+        }
+        if (playerHiddenByInvisibility) this._playerVisibleLastAiTick = false;
 
         if (this.hasReachedRetreatThreshold()) {
             this.resetAttackState();
@@ -641,119 +1260,93 @@ class Animal extends Character {
             this._retreatBaseFleeRadius = null;
         }
 
-        if (this.fleeRadius > 0 && this.isPointWithinRadius(wizard.x, wizard.y, this.fleeRadius)) {
+        if (!playerHiddenByInvisibility && this.fleeRadius > 0 && this.isPointWithinRadius(wizard.x, wizard.y, this.fleeRadius)) {
+            if (this._corneredAttackPending) {
+                this._playerVisibleLastAiTick = false;
+                this.attack(wizard);
+                return;
+            }
             this.resetAttackState();
+            this._playerVisibleLastAiTick = false;
             this.flee();
             return;
         }
 
-        const now = Date.now();
-        const inChaseRadius = this.chaseRadius > 0 && this.isPointWithinRadius(wizard.x, wizard.y, this.chaseRadius);
-        if (inChaseRadius) {
-            const alreadyAggro = this._hasAggro(now) || this.attacking || this.attackState !== "idle";
-            const animalNode = this.map && this.map.worldToNode ? this.map.worldToNode(this.x, this.y) || this.node : this.node;
-            const wizardNode = this.map && this.map.worldToNode ? this.map.worldToNode(wizard.x, wizard.y) : null;
-            const hasLOS = (animalNode && wizardNode && typeof this.map.hasLineOfSight === 'function')
-                ? this.map.hasLineOfSight(animalNode, wizardNode)
-                : true; // fallback: allow if LOS check unavailable
+        const inChaseRadius = !playerHiddenByInvisibility && this.chaseRadius > 0 && this.isPointWithinRadius(wizard.x, wizard.y, this.chaseRadius);
+        if (inChaseRadius || this._committedToAttack) {
+            const alreadyAggro = this._hasAggro(now) || this.attacking || this.attackState !== "idle" || this._committedToAttack;
+            const animalNode = this._getPathStartNode();
+            const hasLOS = this.clearCloseCombatOnLostLineOfSight(wizard, animalNode);
+            playerVisibleThisTick = !!hasLOS;
+
+            if (playerVisibleThisTick && !this._playerVisibleLastAiTick) {
+                const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null;
+                if (scriptingApi && typeof scriptingApi.fireObjectScriptEvent === "function") {
+                    scriptingApi.fireObjectScriptEvent(this, "seePlayer", wizard, {
+                        x: Number(wizard.x),
+                        y: Number(wizard.y),
+                        hasLineOfSight: true
+                    });
+                }
+            }
 
             if (hasLOS) {
-                // Direct line of sight — clear any no-LOS A* state and pursue normally.
-                this._suppressGreedyRepath = false;
-                this._lastAStarAggroMs = 0;
+                this._playerVisibleLastAiTick = playerVisibleThisTick;
                 this._refreshAggro(now);
                 this.attack(wizard);
                 return;
             }
 
             if (alreadyAggro) {
-                // Aggro'd but no LOS — try A* maze routing at most once per second.
-                const aStarIntervalMs = 1000;
-                const aStarDue = (now - (this._lastAStarAggroMs || 0)) >= aStarIntervalMs;
-
-                if (aStarDue) {
-                    this._lastAStarAggroMs = now;
-                    const maxChasePathDist = (Number.isFinite(this.chaseRadius) && this.chaseRadius > 0)
-                        ? this.chaseRadius * 2
-                        : 0;
-                    // maxIterations scales with search area to keep CPU bounded.
-                    const maxIter = Math.max(100, Math.ceil(maxChasePathDist * 10));
-                    const pathOpts = { maxIterations: maxIter };
-                    if (this.pathfindingClearance > 0) pathOpts.clearance = this.pathfindingClearance;
-
-                    const aStarPath = (animalNode && wizardNode && typeof this.map.findPathAStar === 'function')
-                        ? this.map.findPathAStar(animalNode, wizardNode, pathOpts)
-                        : null;
-
-                    // Check path exists and its world-distance is within 2x chase radius.
-                    let pathUsable = false;
-                    if (Array.isArray(aStarPath) && aStarPath.length > 0 && maxChasePathDist > 0) {
-                        let totalDist = 0;
-                        let prev = animalNode;
-                        for (const node of aStarPath) {
-                            const dx = (typeof this.map.shortestDeltaX === 'function')
-                                ? this.map.shortestDeltaX(prev.x, node.x) : (node.x - prev.x);
-                            const dy = (typeof this.map.shortestDeltaY === 'function')
-                                ? this.map.shortestDeltaY(prev.y, node.y) : (node.y - prev.y);
-                            totalDist += Math.hypot(dx, dy);
-                            if (totalDist > maxChasePathDist) break;
-                            prev = node;
-                        }
-                        pathUsable = totalDist <= maxChasePathDist;
-                    }
-
-                    if (pathUsable) {
-                        this._refreshAggro(now);
-                        this._suppressGreedyRepath = true;
-                        this._applyPursuitPath(aStarPath, wizardNode, false);
-                        this._lastPursuitPathMs = now;
-                        this.attacking = true;
-                        this.attackState = "approach";
-                        this.speed = this.runSpeed;
-                        return;
-                    }
-
-                    // A* failed or path too long — drop back to greedy pathfinding.
-                    this._suppressGreedyRepath = false;
-                }
-
-                // Between A* ticks (or after A* fallback) — proceed with normal attack().
+                this._playerVisibleLastAiTick = playerVisibleThisTick;
                 this._refreshAggro(now);
                 this.attack(wizard);
                 return;
             }
-
-            // Not yet aggro'd and no LOS — don't engage.
         }
+
         if (
+            !playerHiddenByInvisibility &&
             this.chaseRadius > 0 &&
             !this._hasAggro(now) &&
+            !this._committedToAttack &&
             (this.attackState !== "idle" || this.attacking)
         ) {
             this._clearPursuit();
             this._aggroUntilMs = 0;
+            this._playerVisibleLastAiTick = playerVisibleThisTick;
             return;
         }
 
         if (
-            this._hasAggro(now) &&
-            (this.chaseRadius > 0 || this.attacking || this.attackState !== "idle")
+            !playerHiddenByInvisibility &&
+            (this._hasAggro(now) || this._committedToAttack) &&
+            (this.chaseRadius > 0 || this.attacking || this.attackState !== "idle" || this._committedToAttack)
         ) {
+            if (!playerVisibleThisTick) {
+                this.clearCloseCombatOnLostLineOfSight(wizard, this._getPathStartNode());
+            }
+            this._playerVisibleLastAiTick = playerVisibleThisTick;
             this.attack(wizard);
             return;
         }
 
-        if (this.attackState !== "idle" || this.attacking) {
-            if (this._shouldDisengage(wizard, now)) {
-                this._clearPursuit();
-                this._aggroUntilMs = 0;
-            } else {
+        if (!playerHiddenByInvisibility && (this.attackState !== "idle" || this.attacking)) {
+            if (this._committedToAttack || !this._shouldDisengage(wizard, now)) {
+                if (!playerVisibleThisTick) {
+                    this.clearCloseCombatOnLostLineOfSight(wizard, this._getPathStartNode());
+                }
+                this._playerVisibleLastAiTick = playerVisibleThisTick;
                 this.attack(wizard);
                 return;
             }
+            this._clearPursuit();
+            this._aggroUntilMs = 0;
+            this._committedToAttack = false;
         }
 
         // Wander around when idle.
+        this._playerVisibleLastAiTick = playerVisibleThisTick;
         if (Number.isFinite(this.x) && Number.isFinite(this.y) && !this.moving) {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
@@ -761,6 +1354,40 @@ class Animal extends Character {
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
         }
+    }
+
+    updateSeePlayerState() {
+        if (typeof wizard === "undefined" || !wizard) {
+            this._playerVisibleLastAiTick = false;
+            return false;
+        }
+        if (this.isTargetHiddenByInvisibilityAura(wizard)) {
+            this._playerVisibleLastAiTick = false;
+            return false;
+        }
+        const inSenseRadius = !(this.chaseRadius > 0) || this.isPointWithinRadius(wizard.x, wizard.y, this.chaseRadius);
+        if (!inSenseRadius) {
+            this._playerVisibleLastAiTick = false;
+            return false;
+        }
+        const animalNode = this._getPathStartNode();
+        const wizardNode = this.map && this.map.worldToNode ? this.map.worldToNode(wizard.x, wizard.y) : null;
+        const hasLOS = (animalNode && wizardNode && typeof this.map.hasLineOfSight === "function")
+            ? this.map.hasLineOfSight(animalNode, wizardNode)
+            : true;
+        const playerVisibleThisTick = !!hasLOS;
+        if (playerVisibleThisTick && !this._playerVisibleLastAiTick) {
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null;
+            if (scriptingApi && typeof scriptingApi.fireObjectScriptEvent === "function") {
+                scriptingApi.fireObjectScriptEvent(this, "seePlayer", wizard, {
+                    x: Number(wizard.x),
+                    y: Number(wizard.y),
+                    hasLineOfSight: true
+                });
+            }
+        }
+        this._playerVisibleLastAiTick = playerVisibleThisTick;
+        return playerVisibleThisTick;
     }
 
 
@@ -806,6 +1433,7 @@ class Animal extends Character {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
         if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+            this.updateSeePlayerState();
             this.moving = false;
             return;
         }
@@ -821,6 +1449,7 @@ class Animal extends Character {
         } 
         super.move();
         if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+            this.updateSeePlayerState();
             this.moving = false;
             return;
         }
@@ -860,25 +1489,49 @@ class Animal extends Character {
     }
     flee() {
         // flee the player
-        let dist = this.distanceToPoint(wizard.x, wizard.y);
-        if (!Number.isFinite(dist) || dist < 1e-6) return;
+        const now = Date.now();
+        const repathInterval = Number.isFinite(this.fleeRepathMs)
+            ? Math.max(0, Number(this.fleeRepathMs))
+            : 0;
+        const repathDue = (now - (this._lastFleePathMs || 0)) >= repathInterval;
+        const hasMovementPlanned = this.hasRetreatMovementPlanned();
+        if (hasMovementPlanned && !repathDue) {
+            this.speed = this.runSpeed;
+            return;
+        }
 
-        let xdist = (this.map && typeof this.map.shortestDeltaX === "function")
-            ? this.map.shortestDeltaX(wizard.x, this.x)
-            : (this.x - wizard.x);
-        let ydist = (this.map && typeof this.map.shortestDeltaY === "function")
-            ? this.map.shortestDeltaY(wizard.y, this.y)
-            : (this.y - wizard.y);
-        let fleeX = this.x + xdist / dist * 10;
-        let fleeY = this.y + ydist / dist * 10;
-        if (this.map && typeof this.map.wrapWorldX === "function") {
-            fleeX = this.map.wrapWorldX(fleeX);
+        let preserveStep = false;
+        let startNode = null;
+        if (this._isMidTraversalStep()) {
+            preserveStep = this._canPreserveRetreatStep();
+            if (!preserveStep) {
+                if (hasMovementPlanned) {
+                    this.speed = this.runSpeed;
+                    return;
+                }
+                startNode = this._cancelCurrentTraversalAndSnapToNode("flee-repath");
+            }
         }
-        if (this.map && typeof this.map.wrapWorldY === "function") {
-            fleeY = this.map.wrapWorldY(fleeY);
+        if (!startNode) {
+            startNode = this._getPathStartNode(preserveStep);
         }
-        const fleeNode = this.map.worldToNode(fleeX, fleeY);
-        if (fleeNode) this.goto(fleeNode);
+        const fleeRoute = this.getRetreatRoute(
+            { x: wizard.x, y: wizard.y },
+            { x: this.x, y: this.y },
+            10,
+            {
+                preserveCurrentStep: preserveStep,
+                startNode
+            }
+        );
+        if (fleeRoute) {
+            if (this.shouldAttackInsteadOfRetreat(wizard, fleeRoute, startNode)) {
+                this.commitCorneredAttack(wizard);
+                return;
+            }
+            this._applyPursuitPath(fleeRoute.path, fleeRoute.destinationNode, preserveStep);
+            this._lastFleePathMs = now;
+        }
         this.speed = this.runSpeed;
     }
 
@@ -902,6 +1555,92 @@ class Animal extends Character {
         if (isDoor && (obj.isOpen || obj._doorLockedOpen || obj.isFallenDoorEffect)) return false;
         if (isDoor) return true;
         return this.size > this.getKnockableObstacleSize(obj);
+    }
+
+    isDoorObstacle(obj) {
+        return !!(
+            obj &&
+            !obj.gone &&
+            (
+                obj.type === "door" ||
+                ((typeof obj.category === "string") && obj.category.trim().toLowerCase() === "doors")
+            )
+        );
+    }
+
+    canTraverseObject(obj) {
+        if (!obj || obj.gone) return false;
+        if (obj.type !== "tree") return false;
+        const knockableBySize = this.size > this.getKnockableObstacleSize(obj);
+        if (!knockableBySize) return false;
+        const fallenOrFalling = !!obj.falling || !((Number.isFinite(obj.hp) && obj.hp > 0));
+        return fallenOrFalling;
+    }
+
+    estimateKnockableHitsToBreak(obj) {
+        if (!this.isKnockableObstacle(obj)) return Infinity;
+        if (obj.type === "tree") return 1;
+        const hp = Math.max(0, Number(obj.hp) || 0);
+        if (hp <= 0) return 0;
+        const expectedDamagePerHit = Math.max(1, (Number(this.damage) || 0) * (2 / 3));
+        return Math.max(1, Math.ceil(hp / expectedDamagePerHit));
+    }
+
+    getAStarKnockableTraversalCost(obj) {
+        const hits = this.estimateKnockableHitsToBreak(obj);
+        if (!Number.isFinite(hits)) return Infinity;
+        return hits * 2;
+    }
+
+    buildAttackAStarPathOptions(maxPathLength = null) {
+        const pathOpts = this.buildTraversalPathOptions();
+        if (Number.isFinite(maxPathLength) && maxPathLength > 0) {
+            pathOpts.maxPathLength = Number(maxPathLength);
+            pathOpts.maxIterations = Math.max(100, Math.ceil(Number(maxPathLength) * 12));
+        }
+        pathOpts.knockableTraversalCost = (obj) => this.getAStarKnockableTraversalCost(obj);
+        return pathOpts;
+    }
+
+    buildTraversalPathOptions() {
+        const pathOpts = {};
+        if (this.pathfindingClearance > 0) {
+            pathOpts.clearance = this.pathfindingClearance;
+        }
+        pathOpts.debugOwner = this;
+        pathOpts.canTraverseObject = (obj, context = null) => this.canTraverseObject(obj, context);
+        return pathOpts;
+    }
+
+    buildObstaclePathOptions(maxPathLength = null) {
+        const pathOpts = this.buildAttackAStarPathOptions(maxPathLength);
+        pathOpts.allowBlockedDestination = true;
+        return pathOpts;
+    }
+
+    getPathToObstacle(obstacle, startNode, obstacleNode) {
+        if (!this.map || !startNode || !obstacleNode || !obstacle) return [];
+        const maxPathLength = (Number.isFinite(this.chaseRadius) && this.chaseRadius > 0)
+            ? this.chaseRadius * 2
+            : null;
+        const canUseAttackAStar = (
+            typeof this.map.findPathAStar === "function" &&
+            this.preferAttackAStar !== false &&
+            !this._attackAStarDisabled
+        );
+        if (canUseAttackAStar) {
+            const aStarPath = this.map.findPathAStar(
+                startNode,
+                obstacleNode,
+                this.buildObstaclePathOptions(maxPathLength)
+            );
+            if (Array.isArray(aStarPath)) {
+                return aStarPath;
+            }
+        }
+        const pathOptions = this.buildTraversalPathOptions();
+        pathOptions.allowBlockedDestination = true;
+        return this.map.findPath(startNode, obstacleNode, pathOptions);
     }
 
     rollAttackDamage() {
@@ -983,155 +1722,240 @@ class Animal extends Character {
         return best;
     }
 
+    getNearestKnockablePathBlocker(blockers) {
+        if (!Array.isArray(blockers) || blockers.length === 0) return null;
+        let knockableObstacle = null;
+        let closestDist = Infinity;
+        for (let bi = 0; bi < blockers.length; bi++) {
+            const obj = blockers[bi];
+            if (!this.isKnockableObstacle(obj)) continue;
+            const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, obj.x) : (obj.x - this.x);
+            const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, obj.y) : (obj.y - this.y);
+            const d = Math.hypot(dx, dy);
+            if (d < closestDist) {
+                closestDist = d;
+                knockableObstacle = obj;
+            }
+        }
+        return knockableObstacle;
+    }
+
+    getPriorityBlockerFromRoute(route) {
+        const blockers = (route && Array.isArray(route.path) && Array.isArray(route.path.blockers))
+            ? route.path.blockers
+            : [];
+        return this.getNearestKnockablePathBlocker(blockers);
+    }
+
+    pursueObstacleTarget(obstacle, now = Date.now()) {
+        if (!this.isKnockableObstacle(obstacle)) return false;
+
+        this.attackTarget = obstacle;
+        this.attacking = true;
+        this.attackState = "approach";
+        this.speed = this.runSpeed;
+        this.spriteDirectionLock = null;
+        if (this.spriteCols > 1) this.spriteCol = 0;
+        this.direction = {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, obstacle.x)
+                : (obstacle.x - this.x),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, obstacle.y)
+                : (obstacle.y - this.y)
+        };
+
+        const obstacleNode = this.map && typeof this.map.worldToNode === "function"
+            ? this.map.worldToNode(obstacle.x, obstacle.y)
+            : null;
+        if (!obstacleNode) return true;
+
+        const preserveStep = this._isMidTraversalStep();
+        const startNode = this._getPathStartNode(preserveStep);
+        if (!startNode) return true;
+
+        const repathInterval = Number.isFinite(this.pursuitRepathMs) ? Math.max(0, this.pursuitRepathMs) : 0;
+        const repathDue = (now - (this._lastPursuitPathMs || 0)) >= repathInterval;
+        const destinationChanged = this.destination !== obstacleNode;
+        const pathEmpty = !Array.isArray(this.path) || this.path.length === 0;
+        const betweenMoves = this.travelFrames === 0 || !this.moving;
+        if (!destinationChanged && !pathEmpty && !repathDue) return true;
+        if (!betweenMoves && !pathEmpty && !destinationChanged && !repathDue) return true;
+
+        const obstaclePath = this.getPathToObstacle(obstacle, startNode, obstacleNode);
+        this._applyPursuitPath(obstaclePath, obstacleNode, preserveStep);
+        this._lastPursuitPathMs = now;
+        return true;
+    }
+
+    tryStrikeObstacleTarget(obstacle, now = Date.now(), cooldownMs = 0) {
+        if (!this.isKnockableObstacle(obstacle)) return false;
+
+        const distToObstacle = this.distanceToPoint(obstacle.x, obstacle.y);
+        const strikeDistance = this.getStrikeDistance(obstacle);
+        if (!Number.isFinite(distToObstacle) || distToObstacle > strikeDistance) return false;
+
+        this.attackTarget = obstacle;
+        this.attackState = "lunge";
+        this.attacking = true;
+        this.speed = this.lungeSpeed;
+        this.direction = {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, obstacle.x)
+                : (obstacle.x - this.x),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, obstacle.y)
+                : (obstacle.y - this.y)
+        };
+        this.travelFrames = 0;
+        this.path = [];
+        this.destination = null;
+        this.nextNode = null;
+        if (this.hasAttackAnimation()) this.spriteCol = 1;
+
+        if ((now - this.lastAttackTimeMs) < cooldownMs) {
+            return true;
+        }
+
+        if (this.isDoorObstacle(obstacle)) {
+            const damage = this.rollAttackDamage();
+            if (typeof obstacle.triggerDoorHitShake === "function") {
+                obstacle.triggerDoorHitShake();
+            }
+            obstacle.hp = Math.max(0, obstacle.hp - damage);
+            if (obstacle.hp <= 0) {
+                if (typeof obstacle.setDoorFallAwayFromPoint === "function") {
+                    let hitOriginX = this.x;
+                    let hitOriginY = this.y;
+                    const attackDir = this.spriteDirectionLock || this.direction;
+                    const dirX = Number(attackDir && attackDir.x);
+                    const dirY = Number(attackDir && attackDir.y);
+                    const dirLen = Math.hypot(dirX, dirY);
+                    if (dirLen > 1e-6) {
+                        const backstep = Math.max(
+                            Number.isFinite(this.strikeRange) ? Number(this.strikeRange) : 0,
+                            Number.isFinite(this.size) ? Number(this.size) * 0.5 : 0,
+                            0.75
+                        );
+                        hitOriginX = this.x - (dirX / dirLen) * backstep;
+                        hitOriginY = this.y - (dirY / dirLen) * backstep;
+                    } else if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                        hitOriginX = Number(this.prevX);
+                        hitOriginY = Number(this.prevY);
+                    }
+                    obstacle.setDoorFallAwayFromPoint(hitOriginX, hitOriginY);
+                }
+                if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+                    globalThis.activeSimObjects.add(obstacle);
+                }
+            }
+            this.lastAttackTimeMs = now;
+            this.beginRetreat(obstacle, { holdAttackAnimation: true });
+            return true;
+        }
+
+        if (obstacle.type === "tree") {
+            const knockDx = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, obstacle.x)
+                : (obstacle.x - this.x);
+            obstacle.fallDirection = knockDx >= 0 ? 'left' : 'right';
+            obstacle.hp = 0;
+            if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+                globalThis.activeSimObjects.add(obstacle);
+            }
+            const obstacleSizeRatio = (this.size > 0)
+                ? this.getKnockableObstacleSize(obstacle) / this.size
+                : 1;
+            const pauseMs = Math.max(300, this.attackCooldown * 1000 * (obstacleSizeRatio ** 2));
+            this._pauseUntilMs = Date.now() + pauseMs;
+            this.attackTarget = null;
+            this.beginRetreat(obstacle, { holdAttackAnimation: true });
+            return true;
+        }
+
+        obstacle.hp = 0;
+        if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+            globalThis.activeSimObjects.add(obstacle);
+        }
+        this.attackTarget = null;
+        this.beginRetreat(obstacle, { holdAttackAnimation: true });
+        return true;
+    }
+
     attack(target) {
         if (!target || target.gone || target.dead) {
             this.resetAttackState();
+            return;
+        }
+        if (this.isTargetHiddenByInvisibilityAura(target)) {
+            this._clearPursuit();
+            this._aggroUntilMs = 0;
+            this._playerVisibleLastAiTick = false;
             return;
         }
         const now = Date.now();
         const cooldownMs = Math.max(0, Number(this.attackCooldown) || 0) * 1000;
         this._refreshAggro(now);
 
-        // If already targeting a knockable obstacle, keep pursuing it.
-        if (this.isKnockableObstacle(this.attackTarget)) {
-            const obstacle = this.attackTarget;
-            this.attackState = "lunge";
-            this.speed = this.lungeSpeed;
-            if (this.hasAttackAnimation()) {
-                this.spriteCol = 1;
-            } else if (this.spriteCols > 1) {
-                this.spriteCol = 0;
-            }
-            this.direction = {
-                x: (this.map && typeof this.map.shortestDeltaX === "function")
-                    ? this.map.shortestDeltaX(this.x, obstacle.x)
-                    : (obstacle.x - this.x),
-                y: (this.map && typeof this.map.shortestDeltaY === "function")
-                    ? this.map.shortestDeltaY(this.y, obstacle.y)
-                    : (obstacle.y - this.y)
-            };
-            const obstacleNode = this.map.worldToNode(obstacle.x, obstacle.y);
-            const hasNoPath = !Array.isArray(this.path) || this.path.length === 0;
-            const betweenMoves = this.travelFrames === 0 || !this.moving;
-            if (obstacleNode && (this.destination !== obstacleNode) && (hasNoPath || betweenMoves)) {
-                const startNode = this.map.worldToNode(this.x, this.y) || this.node;
-                    const obstacleIsDoor = !!(
-                        obstacle.type === "door" ||
-                        ((typeof obstacle.category === "string") && obstacle.category.trim().toLowerCase() === "doors")
-                    );
-                const obstaclePath = startNode
-                    ? this.map.findPath(startNode, obstacleNode, obstacleIsDoor ? {} : { allowBlockedDestination: true })
-                    : [];
-                this._applyPursuitPath(obstaclePath, obstacleNode, !betweenMoves);
-                this._lastPursuitPathMs = now;
+        const currentObstacleTarget = this.isKnockableObstacle(this.attackTarget)
+            ? this.attackTarget
+            : null;
+        const activeCloseCombatTarget = this._closeCombatState && this._closeCombatState.target;
 
-                // If another knockable blocker is in the way, target it first.
-                const lungeBlockers = this.path.blockers || [];
-                if (lungeBlockers.length > 0) {
-                    let closerObstacle = null;
-                    let closerDist = Infinity;
-                    const currentObstacleDist = this.distanceToPoint(obstacle.x, obstacle.y);
-                    for (let bi = 0; bi < lungeBlockers.length; bi++) {
-                        const obj = lungeBlockers[bi];
-                        if (!this.isKnockableObstacle(obj)) continue;
-                        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
-                            ? this.map.shortestDeltaX(this.x, obj.x) : (obj.x - this.x);
-                        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
-                            ? this.map.shortestDeltaY(this.y, obj.y) : (obj.y - this.y);
-                        const d = Math.hypot(dx, dy);
-                        if (d < currentObstacleDist && d < closerDist) { closerDist = d; closerObstacle = obj; }
-                    }
-                    if (closerObstacle) {
-                        this.attackTarget = closerObstacle;
-                        const closerNode = this.map.worldToNode(closerObstacle.x, closerObstacle.y);
-                        if (closerNode) {
-                            const closerIsDoor = !!(
-                                closerObstacle.type === "door" ||
-                                ((typeof closerObstacle.category === "string") && closerObstacle.category.trim().toLowerCase() === "doors")
-                            );
-                            const closerPath = startNode
-                                ? this.map.findPath(startNode, closerNode, closerIsDoor ? {} : { allowBlockedDestination: true })
-                                : [];
-                            this._applyPursuitPath(closerPath, closerNode, !betweenMoves);
-                            this._lastPursuitPathMs = now;
-                        }
-                    }
+        if (activeCloseCombatTarget && activeCloseCombatTarget !== target) {
+            this.resetCloseCombatState();
+        }
+
+        if (this._closeCombatState && this._closeCombatState.target === target) {
+            this.attackTarget = target;
+            this.attacking = true;
+            this.onCloseCombatStateUpdated(this._closeCombatState, target, this._closeCombatState.options || {});
+            return;
+        }
+
+        // Retreat check must come first — before the distance check — so retreat state
+        // is never overridden by the approach block when the target drifts outside lungeRadius.
+        if (this.attackState === "retreat") {
+            this.speed = this.walkSpeed;
+            this.updateRetreatAttackAnimation(now);
+            const retreatBudgetRefreshed = this.maybeRefreshRetreatBudget(target, now);
+            if (retreatBudgetRefreshed || !this.hasRetreatMovementPlanned()) {
+                this.setRetreatDestination(target);
+                if (this.attackState !== "retreat") {
+                    return;
                 }
             }
-            const distToObstacle = this.distanceToPoint(obstacle.x, obstacle.y);
-            if (distToObstacle <= (this.strikeRange || 1.0)) {
-                if (obstacle.type === "tree") {
-                    const knockDx = (this.map && typeof this.map.shortestDeltaX === "function")
-                        ? this.map.shortestDeltaX(this.x, obstacle.x)
-                        : (obstacle.x - this.x);
-                    obstacle.fallDirection = knockDx >= 0 ? 'left' : 'right';
-                    obstacle.hp = 0;
-                    if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
-                        globalThis.activeSimObjects.add(obstacle);
-                    }
-                    const obstacleSizeRatio = (this.size > 0)
-                        ? this.getKnockableObstacleSize(obstacle) / this.size
-                        : 1;
-                    const pauseMs = Math.max(300, this.attackCooldown * 1000 * (obstacleSizeRatio ** 2));
-                    this._pauseUntilMs = Date.now() + pauseMs;
-                    this.attackTarget = null;
-                    this.beginRetreat(obstacle);
-                } else if (obstacle.type === "door") {
-                    if ((now - this.lastAttackTimeMs) < cooldownMs) {
-                        return;
-                    }
-                    const damage = this.rollAttackDamage();
-                    if (typeof obstacle.triggerDoorHitShake === "function") {
-                        obstacle.triggerDoorHitShake();
-                    }
-                    obstacle.hp = Math.max(0, obstacle.hp - damage);
-                    if (obstacle.hp <= 0) {
-                        if (typeof obstacle.setDoorFallAwayFromPoint === "function") {
-                            let hitOriginX = this.x;
-                            let hitOriginY = this.y;
-                            const attackDir = this.spriteDirectionLock || this.direction;
-                            const dirX = Number(attackDir && attackDir.x);
-                            const dirY = Number(attackDir && attackDir.y);
-                            const dirLen = Math.hypot(dirX, dirY);
-                            if (dirLen > 1e-6) {
-                                const backstep = Math.max(
-                                    Number.isFinite(this.strikeRange) ? Number(this.strikeRange) : 0,
-                                    Number.isFinite(this.size) ? Number(this.size) * 0.5 : 0,
-                                    0.75
-                                );
-                                hitOriginX = this.x - (dirX / dirLen) * backstep;
-                                hitOriginY = this.y - (dirY / dirLen) * backstep;
-                            } else if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
-                                hitOriginX = Number(this.prevX);
-                                hitOriginY = Number(this.prevY);
-                            }
-                            obstacle.setDoorFallAwayFromPoint(hitOriginX, hitOriginY);
-                        }
-                        if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
-                            globalThis.activeSimObjects.add(obstacle);
-                        }
-                    }
-                    this.lastAttackTimeMs = now;
-                    this.beginRetreat(obstacle);
-                } else {
-                    obstacle.hp = 0;
-                    if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
-                        globalThis.activeSimObjects.add(obstacle);
-                    }
-                    this.attackTarget = null;
-                    this.beginRetreat(obstacle);
-                }
+            if (this.shouldEndRetreat(now)) {
+                this._clearPursuit();
             }
             return;
         }
 
-        if (this.attackTarget && (
-            this.attackTarget.type === "tree" ||
-            this.attackTarget.type === "door" ||
-            (typeof this.attackTarget.category === "string" && this.attackTarget.category.trim().toLowerCase() === "doors")
-        )) {
-            this.attackTarget = null;
-            this.attackState = "idle";
+        if (currentObstacleTarget) {
+            this.resetCloseCombatState();
+            if (this.tryStrikeObstacleTarget(currentObstacleTarget, now, cooldownMs)) {
+                return;
+            }
+            this.pursueObstacleTarget(currentObstacleTarget, now);
+            return;
+        }
+
+        const preserveStep = this._isMidTraversalStep();
+        const route = this.getCombatRouteToTarget(target, {
+            preserveCurrentStep: preserveStep
+        });
+        const routeBlocker = this.getPriorityBlockerFromRoute(route);
+        if (routeBlocker) {
+            this.resetCloseCombatState();
+            this.attackTarget = routeBlocker;
+            this.attacking = true;
+            if (this.tryStrikeObstacleTarget(routeBlocker, now, cooldownMs)) {
+                return;
+            }
+            this.pursueObstacleTarget(routeBlocker, now);
+            return;
         }
 
         this.attackTarget = target;
@@ -1139,18 +1963,47 @@ class Animal extends Character {
 
         const dist = this.distanceToPoint(target.x, target.y);
 
-        // Retreat check must come first — before the distance check — so retreat state
-        // is never overridden by the approach block when the target drifts outside lungeRadius.
-        if (this.attackState === "retreat") {
-            this.speed = this.walkSpeed;
-            if (!this.destination || !this.moving) {
-                this.setRetreatDestination(target);
-            }
-            const hasRetreatedFarEnough = dist >= this.lungeRadius;
-            if ((now - this.lastAttackTimeMs) >= cooldownMs && hasRetreatedFarEnough) {
-                this.attackState = "approach";
-                this.spriteDirectionLock = null;
-            }
+        const closeCombatPredictionLeadSeconds = this.getStrikeDistance(target)
+            / Math.max(1e-4, Number(this.lungeSpeed) || Number(this.runSpeed) || 1);
+        const canStartLunge = (now - this.lastAttackTimeMs) >= cooldownMs;
+
+        if (this.shouldReengageCloseCombat(target, {
+            lungeRadius: this.lungeRadius,
+            approachSpeed: this.runSpeed,
+            predictionLeadSeconds: closeCombatPredictionLeadSeconds
+        })) {
+            this.beginCloseCombat(target, {
+                nowMs: now,
+                approachSpeed: this.runSpeed,
+                lungeSpeed: this.lungeSpeed,
+                lungeRadius: this.lungeRadius,
+                strikeDistance: this.getStrikeDistance(target),
+                backoffSpeed: this.walkSpeed,
+                backoffRadius: this.lungeRadius,
+                includeCharacterBlockers: true,
+                predictionLeadSeconds: closeCombatPredictionLeadSeconds,
+                canStartLunge: () => (Date.now() - this.lastAttackTimeMs) >= cooldownMs,
+                resolveStrike: (strikeTarget, _state, attacker) => {
+                    const strikeNow = Date.now();
+                    if ((strikeNow - attacker.lastAttackTimeMs) < cooldownMs) {
+                        return { resolved: false };
+                    }
+                    const damage = attacker.rollAttackDamage();
+                    strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    return { resolved: true, hit: true, damage, nowMs: strikeNow };
+                },
+                onHit: (_strikeTarget, _state, result, attacker) => {
+                    const hitNow = Number.isFinite(result?.nowMs) ? Number(result.nowMs) : Date.now();
+                    attacker.lastAttackTimeMs = hitNow;
+                    attacker._attackAnimationHoldUntilMs = hitNow + Math.max(0, Number(attacker.attackAnimationHoldMs) || 0);
+                },
+                onMiss: (_strikeTarget, _state, result, attacker) => {
+                    const missNow = Number.isFinite(result?.nowMs) ? Number(result.nowMs) : Date.now();
+                    attacker.lastAttackTimeMs = missNow;
+                    attacker._attackAnimationHoldUntilMs = missNow + Math.max(0, Number(attacker.attackAnimationHoldMs) || 0);
+                }
+            });
+            this.onCloseCombatStateUpdated(this._closeCombatState, target, this._closeCombatState.options || {});
             return;
         }
 
@@ -1160,52 +2013,12 @@ class Animal extends Character {
             this.spriteDirectionLock = null;
             if (this.spriteCols > 1) this.spriteCol = 0;
 
-            this.updatePursuitDestination(target);
-
-            // Check the currently-owned path for knockable blockers.
-            const blockers = (Array.isArray(this.path) && this.path.blockers) ? this.path.blockers : [];
-            if (blockers.length > 0) {
-                    let knockableObstacle = null;
-                    let closestDist = Infinity;
-                    for (let bi = 0; bi < blockers.length; bi++) {
-                        const obj = blockers[bi];
-                        if (!this.isKnockableObstacle(obj)) continue;
-                        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
-                            ? this.map.shortestDeltaX(this.x, obj.x) : (obj.x - this.x);
-                        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
-                            ? this.map.shortestDeltaY(this.y, obj.y) : (obj.y - this.y);
-                        const d = Math.hypot(dx, dy);
-                        if (d < closestDist) { closestDist = d; knockableObstacle = obj; }
-                    }
-                    if (knockableObstacle) {
-                        this.attackTarget = knockableObstacle;
-                        this.direction = {
-                            x: (this.map && typeof this.map.shortestDeltaX === "function")
-                                ? this.map.shortestDeltaX(this.x, knockableObstacle.x)
-                                : (knockableObstacle.x - this.x),
-                            y: (this.map && typeof this.map.shortestDeltaY === "function")
-                                ? this.map.shortestDeltaY(this.y, knockableObstacle.y)
-                                : (knockableObstacle.y - this.y)
-                        };
-                        this.attackState = "lunge";
-                        this.speed = this.lungeSpeed;
-                        if (this.hasAttackAnimation()) this.spriteCol = 1;
-                        const obstacleNode = this.map.worldToNode(knockableObstacle.x, knockableObstacle.y);
-                        if (obstacleNode) {
-                            const startNode = this.map.worldToNode(this.x, this.y) || this.node;
-                            const betweenMoves = this.travelFrames === 0 || !this.moving;
-                            const obstacleIsDoor = !!(
-                                knockableObstacle.type === "door" ||
-                                ((typeof knockableObstacle.category === "string") && knockableObstacle.category.trim().toLowerCase() === "doors")
-                            );
-                            const obstaclePath = startNode
-                                ? this.map.findPath(startNode, obstacleNode, obstacleIsDoor ? {} : { allowBlockedDestination: true })
-                                : [];
-                            this._applyPursuitPath(obstaclePath, obstacleNode, !betweenMoves);
-                            this._lastPursuitPathMs = now;
-                        }
-                    }
-                }
+            if (route && route.targetNode) {
+                this._lastPursuitPathMs = now;
+                this._applyPursuitPath(route.path, route.targetNode, preserveStep);
+            } else {
+                this.updatePursuitDestination(target);
+            }
             return;
         }
 
@@ -1237,7 +2050,12 @@ class Animal extends Character {
         } else if (this.spriteCols > 1) {
             this.spriteCol = 0;
         }
-        this.updatePursuitDestination(target);
+        if (route && route.targetNode) {
+            this._lastPursuitPathMs = now;
+            this._applyPursuitPath(route.path, route.targetNode, preserveStep);
+        } else {
+            this.updatePursuitDestination(target);
+        }
         this.direction = {
             x: (this.map && typeof this.map.shortestDeltaX === "function")
                 ? this.map.shortestDeltaX(this.x, target.x)
@@ -1247,7 +2065,7 @@ class Animal extends Character {
                 : (target.y - this.y)
         };
 
-        if (dist > this.getStrikeDistance(target) || (now - this.lastAttackTimeMs) < cooldownMs) {
+        if (!this.isTargetWithinStrikeContact(target) || (now - this.lastAttackTimeMs) < cooldownMs) {
             return;
         }
 
@@ -1255,7 +2073,7 @@ class Animal extends Character {
         const damage = this.rollAttackDamage();
         target.hp = Math.max(0, target.hp - damage);
         this.lastAttackTimeMs = now;
-        this.beginRetreat(target);
+        this.beginRetreat(target, { holdAttackAnimation: true });
     }
     catch(x, y) {
         this.dead = 1;
@@ -1320,7 +2138,10 @@ class Animal extends Character {
             maxHp: this.maxHp,
             mp: this.mp,
             maxMp: this.maxMp,
-            size: this.size
+            temperature: this.getTemperature(),
+            baselineTemperature: this.getTemperatureBaseline(),
+            size: this.size,
+            inventory: this.serializeInventory()
         };
         if (typeof this.visible === "boolean") {
             data.visible = this.visible;
@@ -1342,6 +2163,15 @@ class Animal extends Character {
             } catch (_err) {
                 data.script = this.script;
             }
+        }
+        if (Array.isArray(this._scriptMessages) && this._scriptMessages.length > 0) {
+            data._scriptMessages = this._scriptMessages.map(msg => ({
+                text: String((msg && msg.text) || ""),
+                x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+            })).filter(msg => msg.text.length > 0);
         }
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
@@ -1367,6 +2197,12 @@ class Animal extends Character {
                     break;
                 case 'bear':
                     animalInstance = new Bear(node, map);
+                    break;
+                case 'eagleman':
+                    animalInstance = new Eagleman(node, map);
+                    break;
+                case 'fragglegod':
+                    animalInstance = new Fragglegod(node, map);
                     break;
                 case 'scorpion':
                     animalInstance = new Scorpion(node, map);
@@ -1401,6 +2237,14 @@ class Animal extends Character {
                 animalInstance.ensureMagicPointsInitialized(true);
                 if (data.mp !== undefined) animalInstance.mp = data.mp;
                 if (data.maxMp !== undefined) animalInstance.maxMp = data.maxMp;
+                if (data.baselineTemperature !== undefined) {
+                    animalInstance.baselineTemperature = Number.isFinite(data.baselineTemperature)
+                        ? Number(data.baselineTemperature)
+                        : animalInstance.getTemperatureBaseline();
+                }
+                if (data.temperature !== undefined && typeof animalInstance.setTemperature === "function") {
+                    animalInstance.setTemperature(data.temperature);
+                }
                 animalInstance.ensureMagicPointsInitialized();
                 if (typeof data.visible === "boolean") {
                     animalInstance.visible = data.visible;
@@ -1418,11 +2262,31 @@ class Animal extends Character {
                 if (Number.isFinite(data.chaseRadius)) {
                     animalInstance.chaseRadius = Number(data.chaseRadius);
                 }
+                if (Object.prototype.hasOwnProperty.call(data, "inventory")) {
+                    animalInstance.loadInventory(data.inventory);
+                }
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     animalInstance.script = data.script;
                 }
                 if (typeof data.scriptingName === "string") {
                     animalInstance.scriptingName = data.scriptingName.trim();
+                }
+                if (Array.isArray(data._scriptMessages)) {
+                    animalInstance._scriptMessages = data._scriptMessages
+                        .map(msg => ({
+                            text: String((msg && msg.text) || ""),
+                            x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                            y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                            color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                            fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                        }))
+                        .filter(msg => msg.text.length > 0);
+                    if (animalInstance._scriptMessages.length > 0 && typeof globalThis !== "undefined") {
+                        if (!(globalThis._scriptMessageTargets instanceof Set)) {
+                            globalThis._scriptMessageTargets = new Set();
+                        }
+                        globalThis._scriptMessageTargets.add(animalInstance);
+                    }
                 }
 
                 // Restore saved size and rescale derived properties
@@ -1572,6 +2436,240 @@ class Bear extends Animal {
         this.ensureMagicPointsInitialized(true);
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
+    }
+}
+
+class Eagleman extends Animal {
+    constructor(location, map) {
+        const size = Math.random() * .5 + 1.2;
+        super('eagleman', location, size, map);
+        this._depthBillboardAttackTiltDeg = 0;
+        this.pixiSprite.anchor.set(0.5, 0.8);
+        this.spriteSheet = {
+            rows: 4,
+            cols: 2,
+            frameKeys: [
+                "down",
+                "down_attack",
+                "left",
+                "left_attack",
+                "right",
+                "right_attack",
+                "up",
+                "up_attack"
+            ],
+            frameScales: {
+                down_attack: 1.2,
+                down: {width: 0.95, height: 1.2},
+                up: { width: 0.95, height: 1.2 },
+                up_attack: { width: 0.95, height: 1.6 },
+                left_attack: {width: 1.25, height: 0.9},
+                right_attack: { width: 1.25, height: 0.9 },
+                left: { width: 0.9, height: 1.1 },
+                right: { width: 0.9, height: 1.1 }
+            }
+        };
+        this.radius = 1.0; // Animal hitbox radius in hex units
+        this.groundRadius *= 1.5;
+        this.visualRadius *= 1.5;
+        this.updateHitboxes();
+        this.frameCount = {x: 2, y: 4};
+        this.width = this.size * 1.4;
+        this.height = this.size;
+        this.walkSpeed = 1;
+        this.runSpeed = 3.5;
+        this.lungeRadius = 3;
+        this.lungeSpeed = 10.0;
+        this.attackCooldown = 1.5;
+        this.strikeRange = 1.25;
+        this.retreatThreshold = 0.25;
+        this.chaseRadius = this.scaledChaseRadius(9);
+        this.fleeRadius = -1;
+        this.attackVerb = "strikes";
+        this.damage = 37;
+        this.foodValue = Math.floor(240 * this.size);
+        this.hp = 75 * this.size;
+        this.maxHp = this.hp;
+        this.ensureMagicPointsInitialized(true);
+        this.maxMp = this.maxHp * 2;
+        this.mp = this.maxMp;
+        this.spriteSheetReady = false;
+        ensureSpriteFrames(this);
+    }
+
+    getAdditionalSpriteRotationDegrees() {
+        if (this.dead || this.gone) return 0;
+        if (!this.attacking || this.attackState === "idle") return 0;
+
+        const target = this.attackTarget;
+        if (!target || target.gone || target.dead) return 0;
+        if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return 0;
+
+        const selfX = Number.isFinite(this.x) ? Number(this.x) : 0;
+        const selfY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const dx = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(selfX, target.x)
+            : (target.x - selfX);
+        const dy = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(selfY, target.y)
+            : (target.y - selfY);
+        if (Math.hypot(dx, dy) <= 1e-6) return 0;
+
+        const rowIndex = this.getDirectionRow();
+        let baseAngleDeg = 0;
+        switch (rowIndex) {
+            case 0:
+                baseAngleDeg = 90;
+                break;
+            case 1:
+                baseAngleDeg = 180;
+                break;
+            case 3:
+                baseAngleDeg = -90;
+                break;
+            case 2:
+            default:
+                baseAngleDeg = 0;
+                break;
+        }
+
+        const targetAngleDeg = Math.atan2(dy, dx) * (180 / Math.PI);
+        let deltaDeg = targetAngleDeg - baseAngleDeg;
+        while (deltaDeg <= -180) deltaDeg += 360;
+        while (deltaDeg > 180) deltaDeg -= 360;
+        return Math.max(-10, Math.min(10, deltaDeg));
+    }
+
+    updateDepthBillboardMesh(ctx, camera, options) {
+        const attackTiltDeg = this.getAdditionalSpriteRotationDegrees();
+        const previousTiltDeg = Number.isFinite(this._depthBillboardAttackTiltDeg)
+            ? Number(this._depthBillboardAttackTiltDeg)
+            : 0;
+        if (Math.abs(attackTiltDeg) > 1e-4 || Math.abs(previousTiltDeg) > 1e-4) {
+            this._depthBillboardLastSignature = "";
+        }
+
+        const result = super.updateDepthBillboardMesh(ctx, camera, options);
+        this._depthBillboardAttackTiltDeg = attackTiltDeg;
+
+        if (!this.dead) {
+            this.rotateDepthBillboardQuadInScreenSpace(result, camera, attackTiltDeg);
+        }
+
+        return result;
+    }
+
+    die() {
+        if (this.dead || this.gone) return;
+
+        super.die();
+        this.attackState = "idle";
+        this.attacking = false;
+        this.spriteCol = 0;
+        this.spriteDirectionLock = { x: 0, y: 1 };
+    }
+}
+
+class Fragglegod extends Animal {
+    constructor(location, map) {
+        const size = Math.random() * .5 + 1.2;
+        super('fragglegod', location, size, map);
+        this.spriteSheet = {
+            rows: 2,
+            cols: 2,
+            frameKeys: [
+                "walk_left",
+                "attack_left",
+                "walk_right",
+                "attack_right"
+            ]
+        };
+        this.radius = 1.0; // Animal hitbox radius in hex units
+        this.groundRadius *= 1;
+        this.visualRadius *= 1.5;
+        this.updateHitboxes();
+        this.frameCount = {x: 2, y: 2};
+        this.width = this.size * 1.4;
+        this.height = this.size;
+        this.walkSpeed = 1;
+        this.runSpeed = 3.5;
+        this.lungeRadius = 2;
+        this.lungeSpeed = 5.0;
+        this.attackCooldown = 1.5;
+        this.strikeRange = 0.8;
+        this.retreatThreshold = 1;
+        this.chaseRadius = this.scaledChaseRadius(12);
+        this.fleeRadius = -1;
+        this.attackVerb = "zaps";
+        this.damage = 25 * this.size;
+        this.foodValue = Math.floor(240 * this.size);
+        this.hp = 75 * this.size;
+        this.maxHp = this.hp;
+        this.maxMp = 60 * this.size;
+        this.ensureMagicPointsInitialized(true);
+        this.spriteSheetReady = false;
+        ensureSpriteFrames(this);
+    }
+
+    die() {
+        if (this.dead || this.gone) return;
+
+        const facingRight = this.getDirectionRow() === 1;
+        Blodia.prototype.die.call(this);
+        this.attackState = "idle";
+        this.attacking = false;
+        this.spriteCol = 0;
+        this.spriteDirectionLock = facingRight ? { x: 1, y: 0 } : { x: -1, y: 0 };
+    }
+
+    tickDeathAnimation() {
+        const wasFalling = !!this._deathFalling;
+        Blodia.prototype.tickDeathAnimation.call(this);
+        if (wasFalling && !this._deathFalling) {
+            this.spawnCorpsePowerup();
+        }
+    }
+
+    updateDepthBillboardMesh(ctx, camera, options) {
+        return Blodia.prototype.updateDepthBillboardMesh.call(this, ctx, camera, options);
+    }
+
+    spawnCorpsePowerup() {
+        if (this._droppedPowerup || typeof addPowerup !== "function") return null;
+
+        const dropMap = this.map || null;
+        const dropWidth = Number.isFinite(this.width) ? this.width : 2.03;
+        const dropHeight = Number.isFinite(this.height) ? this.height : 1.45;
+        const dropRadius = Number.isFinite(this.groundRadius)
+            ? Math.max(0.35, this.groundRadius)
+            : 0.75;
+        const scriptingName = (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0)
+            ? this.scriptingName.trim()
+            : undefined;
+
+        this._droppedPowerup = addPowerup("fragglegod.png", {
+            x: this.x,
+            y: this.y,
+            map: dropMap,
+            width: dropWidth,
+            height: dropHeight,
+            radius: dropRadius,
+            anchorX: 0.5,
+            anchorY: 1,
+            billboardAlpha: 0,
+            scriptingName,
+            onCollect: () => {
+                if (!this.gone) {
+                    this.removeFromGame();
+                }
+            }
+        });
+
+        if (this._droppedPowerup && dropMap && typeof dropMap.registerGameObject === "function") {
+            dropMap.registerGameObject(this._droppedPowerup);
+        }
+
+        return this._droppedPowerup;
     }
 }
 
@@ -1730,7 +2828,9 @@ class Blodia extends Animal {
             this.moveTimeout = null;
         }
         if (paused) return;
+        this.recoverTemperature(1 / Math.max(1, Number(this.frameRate) || 1));
         if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+            this.updateSeePlayerState();
             this.moving = false;
             return;
         }
@@ -1772,6 +2872,7 @@ class Blodia extends Animal {
                 this.node = this.nextNode;
                 this.x = this.node.x;
                 this.y = this.node.y;
+                this._recordVisitedNode(this.node);
             }
             this.nextNode = this.path.shift();
             this.directionIndex = this.node.neighbors.indexOf(this.nextNode);
@@ -1788,7 +2889,8 @@ class Blodia extends Animal {
                 ? this.map.shortestDeltaY(this.y, this.nextNode.y)
                 : (this.nextNode.y - this.y);
             const d = Math.sqrt(xdist ** 2 + ydist ** 2);
-            this.travelFrames = Math.max(1, Math.ceil(d / this.speed * this.frameRate));
+            const effectiveSpeed = Math.max(1e-4, this.getEffectiveMovementSpeed(this.speed));
+            this.travelFrames = Math.max(1, Math.ceil(d / effectiveSpeed * this.frameRate));
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
@@ -1840,83 +2942,40 @@ class Blodia extends Animal {
 
         const now = Date.now();
         const dist = this.distanceToPoint(wizard.x, wizard.y);
-        // Always derive start node from actual world position — this.node is stale mid-step.
-        const startNode = this.map.worldToNode(this.x, this.y) || this.node;
+        const preserveStep = this._isMidTraversalStep();
+        const startNode = this._getPathStartNode(preserveStep);
+        const hasLOS = this.clearCloseCombatOnLostLineOfSight(wizard, startNode);
+        const activeCloseCombatTarget = this._closeCombatState && this._closeCombatState.target;
+
+        if (activeCloseCombatTarget && activeCloseCombatTarget !== wizard) {
+            this.resetCloseCombatState();
+        }
+
+        if (this._closeCombatState && this._closeCombatState.target === wizard) {
+            this.attackTarget = wizard;
+            this.attacking = true;
+            this.onCloseCombatStateUpdated(this._closeCombatState, wizard, this._closeCombatState.options || {});
+            return;
+        }
+
+        // While a movement step is in progress, queue the new path from the
+        // already-committed next node so we don't stitch a fresh path onto the
+        // wrong side of the current edge and cut through walls.
         const targetNode = this.map.worldToNode(wizard.x, wizard.y);
 
         // ── Retreat phase: briefly back off after a successful hit ──────────────────
         if (this.attackState === "retreat") {
-            // 600 ms of retreat movement, then resume approach with an immediate A* refresh.
-            if ((now - this._retreatStartMs) >= 600) {
-                this.resetAttackState();
+            this.speed = this.walkSpeed;
+            this.updateRetreatAttackAnimation(now);
+            const retreatBudgetRefreshed = this.maybeRefreshRetreatBudget(wizard, now);
+            if (retreatBudgetRefreshed || !this.hasRetreatMovementPlanned()) {
+                this.setRetreatDestination(wizard);
+            }
+            if (this.shouldEndRetreat(now)) {
+                this._clearPursuit();
                 this._lungeStartMs = 0;
                 this._lastPathDist = Infinity;
                 this._lastAStarMs = 0; // force immediate A* re-route
-            }
-            return;
-        }
-
-        // ── Lunge phase: path is short enough to close in and strike ────────────────
-        // We enter lunge only when _lastPathDist (computed in approach) confirms the
-        // actual maze route is ≤ lungeRadius. Straight-line dist alone is not enough.
-        if (this._lungeStartMs) {
-            // Hard timeout — if no hit, the player escaped; retreat and cool down.
-            const lungeMaxMs = (this.lungeRadius * 2 / this.lungeSpeed) * 1000;
-            if ((now - this._lungeStartMs) >= lungeMaxMs) {
-                this._lungeStartMs = 0;
-                this._lastPathDist = Infinity;
-                this._lastAStarMs = 0;
-                // Kill the baked-in lunge-speed movement step immediately.
-                this.travelFrames = 0;
-                this.path = [];
-                this.destination = null;
-                this.nextNode = null;
-                this.resetAttackState();
-                return;
-            }
-
-            // Set lunge state visuals.
-            this.attackTarget = wizard;
-            this.attacking = true;
-            this.attackState = "lunge";
-            this.speed = this.lungeSpeed;
-            this.spriteDirectionLock = null;
-            if (this.hasAttackAnimation()) this.spriteCol = 1;
-            else if (this.spriteCols > 1) this.spriteCol = 0;
-            if (startNode) {
-                this.direction = {
-                    x: typeof this.map.shortestDeltaX === "function"
-                        ? this.map.shortestDeltaX(this.x, wizard.x) : (wizard.x - this.x),
-                    y: typeof this.map.shortestDeltaY === "function"
-                        ? this.map.shortestDeltaY(this.y, wizard.y) : (wizard.y - this.y),
-                };
-            }
-
-            // Check for a successful hit.
-            const cooldownMs = Math.max(0, Number(this.attackCooldown) || 0) * 1000;
-            if (dist <= this.getStrikeDistance(wizard) && (now - this.lastAttackTimeMs) >= cooldownMs) {
-                const damage = Math.floor((1 - Math.random() * Math.random()) * this.damage + 1);
-                wizard.hp = Math.max(0, wizard.hp - damage);
-                this.lastAttackTimeMs = now;
-                this._lungeStartMs = 0;
-                this._lastPathDist = Infinity;
-                this._retreatStartMs = now;
-                this.beginRetreat(wizard);
-                return;
-            }
-
-            // Keep closing in — re-path via A* when queue is empty or target moved.
-            if (startNode && targetNode) {
-                const pathEmpty = !Array.isArray(this.path) || this.path.length === 0;
-                const destChanged = this.destination !== targetNode;
-                if (pathEmpty || destChanged) {
-                    const p = this.map.findPathAStar(startNode, targetNode,
-                        { clearance: 0, allowBlockedDestination: true });
-                    if (Array.isArray(p) && p.length > 0) {
-                        this._lastPathDist = this._pathTotalDist(p);
-                        this._applyPath(p, targetNode, this.travelFrames > 0);
-                    }
-                }
             }
             return;
         }
@@ -1929,9 +2988,13 @@ class Blodia extends Animal {
         this.spriteDirectionLock = null;
         if (this.spriteCols > 1) this.spriteCol = 0;
 
+        if (!hasLOS) {
+            this._lastPathDist = Infinity;
+        }
+
         if (!startNode || !targetNode) return;
 
-        const midStep = this.travelFrames > 0;
+        const midStep = preserveStep;
         const pathEmpty = !Array.isArray(this.path) || this.path.length === 0;
 
         // A* every second for an accurate wall-aware route.
@@ -1956,12 +3019,51 @@ class Blodia extends Animal {
 
         // Switch to lunge only when the A* path (not straight-line) is short enough.
         // This prevents maze false-positives where dist is small but the route is long.
-        const cooldownMs = Math.max(0, Number(this.attackCooldown) || 0) * 1000;
-        if (
-            this._lastPathDist <= this.lungeRadius &&
-            (now - this.lastAttackTimeMs) >= cooldownMs
-        ) {
-            this._lungeStartMs = now;
+        if (this._lastPathDist <= this.lungeRadius && this.shouldReengageCloseCombat(wizard, {
+            lungeRadius: this.lungeRadius,
+            approachSpeed: this.runSpeed,
+            predictionLeadSeconds: this.getStrikeDistance(wizard)
+                / Math.max(1e-4, Number(this.lungeSpeed) || Number(this.runSpeed) || 1)
+        })) {
+            const closeCombatPredictionLeadSeconds = this.getStrikeDistance(wizard)
+                / Math.max(1e-4, Number(this.lungeSpeed) || Number(this.runSpeed) || 1);
+            this.beginCloseCombat(wizard, {
+                nowMs: now,
+                approachSpeed: this.runSpeed,
+                lungeSpeed: this.lungeSpeed,
+                lungeRadius: this.lungeRadius,
+                strikeDistance: this.getStrikeDistance(wizard),
+                backoffSpeed: this.walkSpeed,
+                backoffRadius: this.lungeRadius,
+                includeCharacterBlockers: true,
+                predictionLeadSeconds: closeCombatPredictionLeadSeconds,
+                canStartLunge: () => (Date.now() - this.lastAttackTimeMs) >= Math.max(0, Number(this.attackCooldown) || 0) * 1000,
+                resolveStrike: (strikeTarget, _state, attacker) => {
+                    const strikeNow = Date.now();
+                    const cooldownMs = Math.max(0, Number(attacker.attackCooldown) || 0) * 1000;
+                    if ((strikeNow - attacker.lastAttackTimeMs) < cooldownMs) {
+                        return { resolved: false };
+                    }
+                    const damage = Math.floor((1 - Math.random() * Math.random()) * attacker.damage + 1);
+                    strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    return { resolved: true, hit: true, damage, nowMs: strikeNow };
+                },
+                onHit: (_strikeTarget, _state, result, attacker) => {
+                    const hitNow = Number.isFinite(result?.nowMs) ? Number(result.nowMs) : Date.now();
+                    attacker.lastAttackTimeMs = hitNow;
+                    attacker._attackAnimationHoldUntilMs = hitNow + Math.max(0, Number(attacker.attackAnimationHoldMs) || 0);
+                    attacker._lastPathDist = Infinity;
+                    attacker._lastAStarMs = 0;
+                },
+                onMiss: (_strikeTarget, _state, result, attacker) => {
+                    const missNow = Number.isFinite(result?.nowMs) ? Number(result.nowMs) : Date.now();
+                    attacker.lastAttackTimeMs = missNow;
+                    attacker._attackAnimationHoldUntilMs = missNow + Math.max(0, Number(attacker.attackAnimationHoldMs) || 0);
+                    attacker._lastPathDist = Infinity;
+                    attacker._lastAStarMs = 0;
+                }
+            });
+            this.onCloseCombatStateUpdated(this._closeCombatState, wizard, this._closeCombatState.options || {});
         }
     }
 
@@ -1985,7 +3087,13 @@ class Blodia extends Animal {
     // without resetting travelFrames/nextNode so the current step finishes smoothly.
     _applyPath(newPath, targetNode, preserveStep) {
         if (!Array.isArray(newPath) || newPath.length === 0) return;
-        this.path = newPath;
+        const normalizedPath = newPath.slice();
+        if (preserveStep && this.nextNode) {
+            while (normalizedPath.length > 0 && normalizedPath[0] === this.nextNode) {
+                normalizedPath.shift();
+            }
+        }
+        this.path = normalizedPath;
         this.destination = targetNode;
         if (!preserveStep) {
             this.travelFrames = 0;
@@ -1995,9 +3103,9 @@ class Blodia extends Animal {
 
     die() {
         if (this.dead) return;
-        // Snapshot pre-death fire anchor world position (top-center of the upright billboard).
-        const h = Number.isFinite(this.height) ? this.height : 0;
-        this._deathFireAnchorWorld = { x: this.x, y: this.y, z: h * 0.75 };
+        // Keep corpse fire rooted at the animal's ground pivot so it shares
+        // the host billboard's effective depth instead of the upright top edge.
+        this._deathFireAnchorWorld = { x: this.x, y: this.y, z: 0 };
         // Mark this animal as using a gradual death fall so the renderer
         // doesn't swap the sprite anchor (which would shift the billboard down).
         this._useGradualDeathFall = true;

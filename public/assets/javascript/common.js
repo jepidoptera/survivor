@@ -23,16 +23,25 @@ class Player{
         return this.messages[this.messages.length - 1]
     }
     uploadJson() {
+        const currentLocation = this.currentLocation;
+        const currentLocationName = (currentLocation && typeof currentLocation === 'object')
+            ? (currentLocation.name ?? null)
+            : (typeof currentLocation === 'string' ? currentLocation : null);
+        const posse = Array.isArray(this.posse)
+            ? this.posse
+                .filter(moke => moke && typeof moke === 'object')
+                .map(moke => ({
+                    type: moke.type ?? null,
+                    name: moke.name ?? null,
+                    health: moke.health ?? null,
+                    conditions: Array.isArray(moke.conditions) ? moke.conditions : []
+                }))
+            : [];
         return {
             ...this,
             isLoaded: false,
-            currentLocation: this.currentLocation.name,
-            posse: this.posse.map(moke => {return {
-                type: moke.type,
-                name: moke.name,
-                health: moke.health,
-                conditions: moke.conditions
-            }})
+            currentLocation: currentLocationName,
+            posse
         }
     }
 }
@@ -40,7 +49,14 @@ let player = new Player();
 let paused = false;
 let msgBoxActive = false;
 
+function prepareModalInteraction() {
+    if (typeof globalThis !== "undefined" && typeof globalThis.exitGameplayPointerLock === "function") {
+        globalThis.exitGameplayPointerLock();
+    }
+}
+
 function msgBox(title, text, buttons = [{text: "ok", function: () => {}}]) {
+    prepareModalInteraction();
     if (pause) pause();
     msgBoxActive = true;
     if (!text) {
@@ -65,16 +81,26 @@ function msgBox(title, text, buttons = [{text: "ok", function: () => {}}]) {
     return $("#msgbox");
 }
 
-function showScrollMessage(text, buttonText = "ok") {
+function showScrollMessage(text, buttonText = "ok", title = "") {
+    prepareModalInteraction();
     if (pause) pause();
     msgBoxActive = true;
     const safeText = String(text === undefined || text === null ? "" : text);
+    const safeTitle = String(title === undefined || title === null ? "" : title).trim();
     const $box = $("#msgbox");
     $box
         .removeClass("dialogBox")
         .addClass("scrollMessageBox")
         .empty()
-        .show()
+        .show();
+    if (safeTitle.length > 0) {
+        $box.append(
+            $("<div>")
+                .addClass("scrollMessageTitle")
+                .text(safeTitle)
+        );
+    }
+    $box
         .append(
             $("<div>")
                 .addClass("scrollMessageContent")
@@ -109,12 +135,21 @@ function clearDialogs() {
 }
 
 function saveGame() {
+    if (typeof saveGameStateToServerFile === "function") {
+        return saveGameStateToServerFile().catch(err => {
+            console.error('save error: ', err);
+            return { ok: false, reason: 'save-failed', error: err };
+        });
+    }
 
-    $.ajax({
+    return $.ajax({
         method: "POST",
         url: '/save',
         data: {data: JSON.stringify(player.uploadJson())}
-    })
+    }).fail(err => {
+        console.error('save error: ', err);
+        return err;
+    });
 }
 
 function loadPlayer(callback) {

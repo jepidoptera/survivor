@@ -1,5 +1,48 @@
 (function attachRenderingCamera(global) {
     class RenderingCamera {
+        static interpolateWrappedValue(mapRef, fromValue, toValue, alpha, axis = "x") {
+            const from = Number(fromValue);
+            const to = Number(toValue);
+            const t = Number.isFinite(alpha) ? Math.max(0, Math.min(1, alpha)) : 1;
+            if (!Number.isFinite(from) || !Number.isFinite(to)) {
+                return Number.isFinite(to) ? to : from;
+            }
+            const shortestDeltaName = axis === "y" ? "shortestDeltaY" : "shortestDeltaX";
+            if (mapRef && typeof mapRef[shortestDeltaName] === "function") {
+                return from + mapRef[shortestDeltaName](from, to) * t;
+            }
+            return from + (to - from) * t;
+        }
+
+        static getContinuousWrappedValue(mapRef, referenceValue, worldValue, axis = "x") {
+            const raw = Number(worldValue);
+            if (!Number.isFinite(raw)) return raw;
+            const reference = Number(referenceValue);
+            const shortestDeltaName = axis === "y" ? "shortestDeltaY" : "shortestDeltaX";
+            const wrapName = axis === "y" ? "wrapWorldY" : "wrapWorldX";
+            if (mapRef && typeof mapRef[shortestDeltaName] === "function" && Number.isFinite(reference)) {
+                return reference + mapRef[shortestDeltaName](reference, raw);
+            }
+            if (mapRef && typeof mapRef[wrapName] === "function") {
+                return mapRef[wrapName](raw);
+            }
+            return raw;
+        }
+
+        static alignWorldPointToReference(mapRef, referenceX, referenceY, worldX, worldY) {
+            return {
+                x: RenderingCamera.getContinuousWrappedValue(mapRef, referenceX, worldX, "x"),
+                y: RenderingCamera.getContinuousWrappedValue(mapRef, referenceY, worldY, "y")
+            };
+        }
+
+        static getViewportWorldCenter(viewport) {
+            return {
+                x: (Number(viewport && viewport.x) || 0) + (Number(viewport && viewport.width) || 0) * 0.5,
+                y: (Number(viewport && viewport.y) || 0) + (Number(viewport && viewport.height) || 0) * 0.5
+            };
+        }
+
         constructor() {
             this.x = 0;
             this.y = 0;
@@ -19,16 +62,8 @@
             if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.y)) {
                 const prevX = Number.isFinite(camera.prevX) ? camera.prevX : camera.x;
                 const prevY = Number.isFinite(camera.prevY) ? camera.prevY : camera.y;
-                if (this.map && typeof this.map.shortestDeltaX === "function") {
-                    this.x = prevX + this.map.shortestDeltaX(prevX, camera.x) * alpha;
-                } else {
-                    this.x = prevX + (camera.x - prevX) * alpha;
-                }
-                if (this.map && typeof this.map.shortestDeltaY === "function") {
-                    this.y = prevY + this.map.shortestDeltaY(prevY, camera.y) * alpha;
-                } else {
-                    this.y = prevY + (camera.y - prevY) * alpha;
-                }
+                this.x = RenderingCamera.interpolateWrappedValue(this.map, prevX, camera.x, alpha, "x");
+                this.y = RenderingCamera.interpolateWrappedValue(this.map, prevY, camera.y, alpha, "y");
                 this.prevX = prevX;
                 this.prevY = prevY;
                 return;

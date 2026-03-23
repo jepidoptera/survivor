@@ -1,6 +1,62 @@
 class Spell {
     static supportsObjectTargeting = false;
 
+    static flashMagicBar() {
+        if (typeof $ !== "function") return;
+        const $magicBar = $("#magicBar");
+        if ($magicBar.length === 0) return;
+        const $magicBarBackground = $magicBar.parent();
+        const restartFlash = ($element, className, dataKey) => {
+            if (!$element || $element.length === 0) return;
+            const previousTimeout = $element.data(dataKey);
+            if (previousTimeout) {
+                clearTimeout(previousTimeout);
+            }
+            $element.removeClass(className);
+            void $element[0].offsetWidth;
+            $element.addClass(className);
+            const timeoutId = setTimeout(() => {
+                $element.removeClass(className);
+                $element.removeData(dataKey);
+            }, 240);
+            $element.data(dataKey, timeoutId);
+        };
+
+        restartFlash($magicBarBackground, "magicBarBackgroundFlash", "magicBarBackgroundFlashTimeout");
+        restartFlash($magicBar, "magicBarFlash", "magicBarFlashTimeout");
+    }
+
+    static ignoresMagicCosts(wizardRef = globalThis.wizard) {
+        return !!(
+            wizardRef &&
+            typeof wizardRef.isGodMode === "function" &&
+            wizardRef.isGodMode()
+        );
+    }
+
+    static canAffordMagicCost(cost, wizardRef = globalThis.wizard) {
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (Spell.ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef?.magic) ? wizardRef.magic : 0;
+        return currentMagic >= normalizedCost;
+    }
+
+    static spendMagicCost(cost, wizardRef = globalThis.wizard) {
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (!wizardRef) return false;
+        if (Spell.ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef.magic) ? wizardRef.magic : 0;
+        if (currentMagic < normalizedCost) return false;
+        wizardRef.magic = Math.max(0, currentMagic - normalizedCost);
+        return true;
+    }
+
+    static indicateInsufficientMagic() {
+        Spell.flashMagicBar();
+    }
+
     static isValidObjectTarget(_target, _wizardRef = null) {
         return false;
     }

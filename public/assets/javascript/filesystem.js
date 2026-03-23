@@ -194,6 +194,18 @@ function getAllTreeSaveRecords(loadedTreeRecords = []) {
     return out;
 }
 
+function getLazyTreeHydrationEnvelope(record) {
+    const size = Math.max(0.05, Number(record && record.size) || 4);
+    const width = size;
+    const height = size;
+    const topLift = Math.max(0.25, height * 0.2);
+    return {
+        halfWidth: width * 0.5,
+        aboveBase: height + topLift,
+        belowBase: 0
+    };
+}
+
 function hydrateVisibleLazyRoads(options = {}) {
     if (!map || !viewport || lazyRoadStore.recordsByKey.size === 0) return 0;
     const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
@@ -236,13 +248,16 @@ function hydrateVisibleLazyTrees(options = {}) {
     let hydrated = 0;
     for (const [key, record] of lazyTreeStore.recordsByKey) {
         if (lazyTreeStore.loadedKeys.has(key)) continue;
+        const envelope = getLazyTreeHydrationEnvelope(record);
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(centerX, record.x)
             : (record.x - centerX);
         const dy = (map && typeof map.shortestDeltaY === "function")
             ? map.shortestDeltaY(centerY, record.y)
             : (record.y - centerY);
-        if (Math.abs(dx) > maxX || Math.abs(dy) > maxY) continue;
+        const withinX = Math.abs(dx) <= (maxX + envelope.halfWidth);
+        const withinY = (dy - envelope.aboveBase) <= maxY && (dy + envelope.belowBase) >= -maxY;
+        if (!withinX || !withinY) continue;
         const created = StaticObject.loadJson(record, map);
         if (created) {
             lazyTreeStore.loadedKeys.add(key);

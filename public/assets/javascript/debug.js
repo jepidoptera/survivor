@@ -6,7 +6,7 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
-let showHexGrid = false; // Toggle hex grid only (g key)
+let showHexGrid = false; // Toggle hex grid only (Ctrl+G)
 let showAnimalClearance = false; // Toggle animal clearance hex overlay
 let showTileClearance = false; // Toggle per-tile clearance number overlay (requires hex grid on)
 let debugModePrevHexGridState = null;

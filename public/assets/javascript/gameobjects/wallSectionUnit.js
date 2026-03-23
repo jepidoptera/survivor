@@ -2,8 +2,10 @@
     "use strict";
 
     const EPS = 1e-6;
+    const WALL_DEPTH_NEAR_METRIC = -128;
+    const WALL_DEPTH_FAR_METRIC = 256;
     const WALL_DEPTH_VS = `
-precision mediump float;
+precision highp float;
 attribute vec3 aWorldPosition;
 attribute vec2 aUvs;
 attribute vec4 aColor;
@@ -41,7 +43,7 @@ void main(void) {
 }
 `;
     const WALL_DEPTH_FS = `
-precision mediump float;
+precision highp float;
 varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
@@ -91,6 +93,7 @@ void main(void) {
         static _placementDebugActive = false;
         static _placementDebugFocusIds = null;
         static _showDirectionalBlockingDebug = false;
+        static _showBottomFaceOnlyDebug = false;
         static _depthMeshState = null;
         static _wallTextureConfigCache = null;
         static _wallTextureConfigPromise = null;
@@ -103,6 +106,24 @@ void main(void) {
 
         static setShowDirectionalBlockingDebug(enabled) {
             WallSectionUnit._showDirectionalBlockingDebug = !!enabled;
+        }
+
+        static setShowBottomFaceOnlyDebug(enabled) {
+            WallSectionUnit._showBottomFaceOnlyDebug = !!enabled;
+        }
+
+        static _isDoorDirectionalBlocker(blocker) {
+            if (!blocker || typeof blocker !== "object") return false;
+            if (typeof blocker.isDoorObject === "function") {
+                return !!blocker.isDoorObject();
+            }
+            const type = (typeof blocker.type === "string") ? blocker.type.trim().toLowerCase() : "";
+            const category = (typeof blocker.category === "string") ? blocker.category.trim().toLowerCase() : "";
+            return type === "door" || category === "doors";
+        }
+
+        static _getDirectionalBlockingDebugColor(blocker) {
+            return WallSectionUnit._isDoorDirectionalBlocker(blocker) ? 0x3399ff : 0xff0000;
         }
 
         static _normalizeWallTextureConfigPath(texturePath) {
@@ -203,6 +224,7 @@ void main(void) {
             }
             this.map = options.map || null;
             this.isPassable = false;
+            this.blocksTile = false;
 
             this.startPoint = null;
             this.endPoint = null;
@@ -2725,6 +2747,8 @@ void main(void) {
             const repeatY = Math.max(0.0001, Number(wallTextureCfg.repeatsPerMapUnitY) || DEFAULT_REPEAT_Y);
             const clipToLosVisibleSpan = !!options.clipToLosVisibleSpan;
             const topFaceOnly = !!(options.topFaceOnly) && !clipToLosVisibleSpan && !options.mazeMode;
+            const bottomFaceOnly = !!(options.bottomFaceOnly) && !clipToLosVisibleSpan && !options.mazeMode;
+            const horizontalFaceOnly = topFaceOnly || bottomFaceOnly;
             const clippedSpanMode = clipToLosVisibleSpan || !!options.mazeMode;
             const mazePrismFaces = clippedSpanMode ? this.getMazeModeClippedPrismFacesWorld(options) : null;
             const mazePrismKey = (clippedSpanMode && Array.isArray(mazePrismFaces) && mazePrismFaces.length > 0)
@@ -2755,7 +2779,7 @@ void main(void) {
                 Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
                 Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB).toFixed(6) : "nan",
                 wallTextureCfg.texturePath || this.wallTexturePath || DEFAULT_WALL_TEXTURE,
-                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (topFaceOnly ? "topOnly" : "full"),
+                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (horizontalFaceOnly ? (topFaceOnly ? "topOnly" : "bottomOnly") : "full"),
                 mazePrismKey
             ].join("|");
 
@@ -2969,7 +2993,7 @@ void main(void) {
 
             for (let tri = 0; tri < triCount; tri++) {
                 const isTopFaceTri = tri < topFaceTriCount;
-                if (topFaceOnly && !isTopFaceTri) continue;
+                if (horizontalFaceOnly && !isTopFaceTri) continue;
                 const colorR = isTopFaceTri ? topLighten : 1;
                 const colorG = isTopFaceTri ? topLighten : 1;
                 const colorB = isTopFaceTri ? topLighten : 1;
@@ -3015,7 +3039,7 @@ void main(void) {
                     const dstColor = dstVertex * 4;
                     expandedPositions[dstPos] = Number(vertices[srcPos]) || 0;
                     expandedPositions[dstPos + 1] = Number(vertices[srcPos + 1]) || 0;
-                    expandedPositions[dstPos + 2] = topFaceOnly ? bottomZ : (Number(vertices[srcPos + 2]) || 0);
+                    expandedPositions[dstPos + 2] = horizontalFaceOnly ? bottomZ : (Number(vertices[srcPos + 2]) || 0);
                     const along = Number(alongStablePerVertex[srcVertex]) || 0;
                     const alongWorld = Number(alongWorldPerVertex[srcVertex]) || 0;
                     const across = Number(acrossPerVertex[srcVertex]) || 0;
@@ -3102,7 +3126,7 @@ void main(void) {
             const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
             mesh.name = "wallSectionUnitDepthMesh";
             mesh.interactive = false;
-            mesh.roundPixels = true;
+            mesh.roundPixels = false;
             mesh.visible = false;
             this._depthDisplayMesh = mesh;
             return mesh;
@@ -3145,9 +3169,8 @@ void main(void) {
             const tint = Number.isFinite(options.tint) ? Number(options.tint) : 0xFFFFFF;
             const alpha = Number.isFinite(options.alpha) ? Number(options.alpha) : 1;
             const brightnessPercent = Number(options.brightness);
-            const viewportHeight = Number(camera && camera.height) || 30;
-            const nearMetric = -Math.max(80, viewportHeight * 0.6);
-            const farMetric = Math.max(180, viewportHeight * 2.0 + 80);
+            const nearMetric = WALL_DEPTH_NEAR_METRIC;
+            const farMetric = WALL_DEPTH_FAR_METRIC;
             const invSpan = 1 / Math.max(1e-6, farMetric - nearMetric);
             const screenW = (appRef && appRef.screen && Number.isFinite(appRef.screen.width))
                 ? Number(appRef.screen.width)
@@ -4785,7 +4808,6 @@ void main(void) {
 
             const centerlineNodes = Array.isArray(debugData.centerlineNodes) ? debugData.centerlineNodes : [];
             const oddNeighborNodes = Array.isArray(debugData.oddNeighborNodes) ? debugData.oddNeighborNodes : [];
-            const blockedConnections = Array.isArray(debugData.blockedConnections) ? debugData.blockedConnections : [];
             const radiusPx = Math.max(1, Math.max(0.001, this.thickness) * 0.5 * vs);
 
             if (centerlineNodes.length > 0) {
@@ -4810,15 +4832,60 @@ void main(void) {
                 g.endFill();
             }
 
-            if (blockedConnections.length > 0) {
-                g.lineStyle(2, 0xff0000, 0.95);
-                for (let i = 0; i < blockedConnections.length; i++) {
-                    const edge = blockedConnections[i];
-                    if (!edge || !edge.a || !edge.b) continue;
-                    const pa = toScreen(edge.a);
-                    const pb = toScreen(edge.b);
-                    g.moveTo(pa.x, pa.y - z * vs * xyr);
-                    g.lineTo(pb.x, pb.y - z * vs * xyr);
+            const blockedLinks = Array.isArray(this.blockedLinks) ? this.blockedLinks : [];
+            if (blockedLinks.length > 0) {
+                const drawnMarkers = new Map();
+                for (let i = 0; i < blockedLinks.length; i++) {
+                    const link = blockedLinks[i];
+                    const sourceNode = link && link.node;
+                    const dir = Number(link && link.direction);
+                    if (!sourceNode || !Array.isArray(sourceNode.neighbors) || !Number.isInteger(dir)) continue;
+                    const destinationNode = sourceNode.neighbors[dir];
+                    if (!destinationNode) continue;
+                    const incomingDir = ((dir + 6) % 12 + 12) % 12;
+                    const markerKey = `${Number(destinationNode.xindex)},${Number(destinationNode.yindex)}|${incomingDir}`;
+                    const color = WallSectionUnit._getDirectionalBlockingDebugColor(link.blocker);
+                    const existingColor = drawnMarkers.get(markerKey);
+                    if (existingColor === 0x3399ff || existingColor === color) continue;
+                    drawnMarkers.set(markerKey, {
+                        sourceNode,
+                        destinationNode,
+                        incomingDir,
+                        color
+                    });
+                }
+
+                for (const marker of drawnMarkers.values()) {
+                    if (!marker || !marker.sourceNode || !marker.destinationNode) continue;
+                    const sourceWorldX = Number(marker.sourceNode.x) || 0;
+                    const sourceWorldY = Number(marker.sourceNode.y) || 0;
+                    const destinationWorldX = Number(marker.destinationNode.x) || 0;
+                    const destinationWorldY = Number(marker.destinationNode.y) || 0;
+                    const dxWorld = sourceWorldX - destinationWorldX;
+                    const dyWorld = sourceWorldY - destinationWorldY;
+                    const worldLen = Math.hypot(dxWorld, dyWorld);
+                    if (!(worldLen > 1e-4)) continue;
+
+                    const ux = dxWorld / worldLen;
+                    const uy = dyWorld / worldLen;
+                    const px = -uy;
+                    const py = ux;
+                    const incomingDir = Number.isInteger(marker.incomingDir) ? marker.incomingDir : 0;
+                    const halfMarkerWorldLength = (incomingDir % 2 === 1) ? 0.28 : 0.22;
+                    const markerCenterWorldX = destinationWorldX + ux * worldLen * 0.56;
+                    const markerCenterWorldY = destinationWorldY + uy * worldLen * 0.56;
+                    const startScreen = toScreen({
+                        x: markerCenterWorldX - px * halfMarkerWorldLength,
+                        y: markerCenterWorldY - py * halfMarkerWorldLength
+                    });
+                    const endScreen = toScreen({
+                        x: markerCenterWorldX + px * halfMarkerWorldLength,
+                        y: markerCenterWorldY + py * halfMarkerWorldLength
+                    });
+
+                    g.lineStyle(3, marker.color, 0.95);
+                    g.moveTo(startScreen.x, startScreen.y - z * vs * xyr);
+                    g.lineTo(endScreen.x, endScreen.y - z * vs * xyr);
                 }
             }
         }
@@ -5506,15 +5573,13 @@ void main(void) {
         }
 
         _collectCenterlineMapNodes() {
-            const mapRef = this.map || null;
-            if (!mapRef || typeof mapRef.getHexLine !== "function") return [];
-            const line = mapRef.getHexLine(this.startPoint, this.endPoint, 0);
-            if (!Array.isArray(line) || line.length === 0) return [];
+            const orderedAnchors = this._collectOrderedLineAnchors();
+            if (!Array.isArray(orderedAnchors) || orderedAnchors.length === 0) return [];
 
             const out = [];
             const seen = new Set();
-            for (let i = 0; i < line.length; i++) {
-                const item = line[i];
+            for (let i = 0; i < orderedAnchors.length; i++) {
+                const item = orderedAnchors[i] && orderedAnchors[i].anchor;
                 if (!WallSectionUnit._isMapNode(item)) continue;
                 const key = this._nodeKey(item);
                 if (!key || seen.has(key)) continue;
@@ -5527,7 +5592,7 @@ void main(void) {
         _collectOddNeighborsOfNode(node, outMap) {
             if (!WallSectionUnit._isMapNode(node) || !(outMap instanceof Map)) return;
             if (!Array.isArray(node.neighbors)) return;
-            for (let d = 1; d < 12; d += 2) {
+            for (let d = 0; d < 12; d++) {
                 const neighbor = node.neighbors[d];
                 if (!WallSectionUnit._isMapNode(neighbor)) continue;
                 const key = this._nodeKey(neighbor);
@@ -5560,6 +5625,8 @@ void main(void) {
                 if (!nodeA || !nodeB) continue;
 
                 const localNeighbors = new Map();
+                localNeighbors.set(this._nodeKey(nodeA), nodeA);
+                localNeighbors.set(this._nodeKey(nodeB), nodeB);
                 this._collectOddNeighborsOfNode(nodeA, localNeighbors);
                 this._collectOddNeighborsOfNode(nodeB, localNeighbors);
 
@@ -7313,6 +7380,9 @@ void main(void) {
     globalScope.WallSectionUnit = WallSectionUnit;
     globalScope.setWallSectionDirectionalBlockingDebug = function (enabled) {
         WallSectionUnit.setShowDirectionalBlockingDebug(enabled);
+    };
+    globalScope.setWallSectionBottomFaceOnlyDebug = function (enabled) {
+        WallSectionUnit.setShowBottomFaceOnlyDebug(enabled);
     };
     globalScope.debugDumpWallDirectionalBlocking = function (options = {}) {
         const sections = (WallSectionUnit._allSections instanceof Map)

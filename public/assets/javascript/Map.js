@@ -40,7 +40,7 @@ function buildBlendedGroundTextureFromBase(baseTexture, options = {}) {
     const canvas = document.createElement("canvas");
     canvas.width = outSize;
     canvas.height = outSize;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
 
     const drawSize = outSize * scale;
@@ -117,6 +117,41 @@ function createRuntimeGroundTexture(texturePath, onReady) {
     return base;
 }
 
+function isNonBlockingSunkObject(obj) {
+    const sinkState = (obj && typeof obj === "object" && obj._scriptSinkState && typeof obj._scriptSinkState === "object")
+        ? obj._scriptSinkState
+        : null;
+    return !!(
+        sinkState &&
+        sinkState.nonBlocking !== false
+    );
+}
+
+function doesObjectBlockTile(obj) {
+    return !!(obj && !obj.gone && obj.blocksTile !== false && !isNonBlockingSunkObject(obj));
+}
+
+function doesObjectBlockPassage(obj) {
+    return !!(obj && !obj.gone && obj.isPassable === false && !isNonBlockingSunkObject(obj));
+}
+
+function hasActiveDirectionalBlockers(blockers) {
+    if (!(blockers instanceof Set) || blockers.size === 0) return false;
+    for (const blocker of blockers) {
+        if (!blocker || blocker.gone) continue;
+        if (isNonBlockingSunkObject(blocker)) continue;
+        return true;
+    }
+    return false;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.isNonBlockingSunkObject = isNonBlockingSunkObject;
+    globalThis.doesObjectBlockTile = doesObjectBlockTile;
+    globalThis.doesObjectBlockPassage = doesObjectBlockPassage;
+    globalThis.hasActiveDirectionalBlockers = hasActiveDirectionalBlockers;
+}
+
 class MapNode {
     constructor(x, y, mapWidth, mapHeight) {
         this.x = x * 0.866;
@@ -137,6 +172,7 @@ class MapNode {
 
         // Multiple static objects can occupy the same tile
         this.objects = [];
+        this.visibilityObjects = [];
         this.blockedByObjects = 0;
         this.blocked = false;
         this.clearance = Infinity; // min hex-ring distance to nearest obstacle (0 = blocked)
@@ -236,6 +272,13 @@ class MapNode {
         }
     }
 
+    addVisibilityObject(obj) {
+        if (!obj) return;
+        if (!this.visibilityObjects) this.visibilityObjects = [];
+        if (this.visibilityObjects.includes(obj)) return;
+        this.visibilityObjects.push(obj);
+    }
+
     removeObject(obj) {
         if (!this.objects) return;
         const idx = this.objects.indexOf(obj);
@@ -256,6 +299,12 @@ class MapNode {
         }
     }
 
+    removeVisibilityObject(obj) {
+        if (!this.visibilityObjects) return;
+        const idx = this.visibilityObjects.indexOf(obj);
+        if (idx !== -1) this.visibilityObjects.splice(idx, 1);
+    }
+
     recountBlockingObjects() {
         if (!this.objects || this.objects.length === 0) {
             this.blockedByObjects = 0;
@@ -264,7 +313,7 @@ class MapNode {
         let count = 0;
         for (let i = 0; i < this.objects.length; i++) {
             const obj = this.objects[i];
-            if (obj && obj.blocksTile !== false) count += 1;
+            if (doesObjectBlockTile(obj)) count += 1;
         }
         this.blockedByObjects = count;
     }
@@ -274,14 +323,19 @@ class MapNode {
     }
 
     hasBlockingObject() {
-        return this.blockedByObjects > 0;
+        if (this.blockedByObjects <= 0) return false;
+        if (!this.objects || this.objects.length === 0) return false;
+        for (let i = 0; i < this.objects.length; i++) {
+            if (doesObjectBlockTile(this.objects[i])) return true;
+        }
+        return false;
     }
 
     /**
      * Returns true when this tile is impassable (blocked flag or blocking object).
      */
     isBlocked() {
-        return this.blocked || this.blockedByObjects > 0;
+        return this.blocked || this.hasBlockingObject();
     }
 }
 
@@ -533,6 +587,9 @@ class GameMap {
                     case 'bear':
                         animalInstance = new Bear(node, this);
                         break;
+                    case 'eagleman':
+                        animalInstance = new Eagleman(node, this);
+                        break;
                     case 'squirrel':
                         animalInstance = new Squirrel(node, this);
                         break;
@@ -783,7 +840,21 @@ class GameMap {
                 if (node.blockedNeighbors && node.blockedNeighbors.size > 0) {
                     let hasAdjacentBlocker = false;
                     for (const dir of node.blockedNeighbors.keys()) {
-                        if (dir % 2 === 1) { hasAdjacentBlocker = true; break; }
+                        const blockers = node.blockedNeighbors.get(dir);
+                        if (dir % 2 === 1 && hasActiveDirectionalBlockers(blockers)) {
+                            hasAdjacentBlocker = true;
+                            break;
+                        }
+                    }
+                    if (!hasAdjacentBlocker) {
+                        let hasAnyDirectionalBlocker = false;
+                        for (const blockers of node.blockedNeighbors.values()) {
+                            if (hasActiveDirectionalBlockers(blockers)) {
+                                hasAnyDirectionalBlocker = true;
+                                break;
+                            }
+                        }
+                        if (!hasAnyDirectionalBlocker) continue;
                     }
                     const seed = hasAdjacentBlocker ? 0 : 1;
                     if (seed < node.clearance) {
@@ -859,7 +930,21 @@ class GameMap {
             if (node.blockedNeighbors && node.blockedNeighbors.size > 0) {
                 let hasAdjacentBlocker = false;
                 for (const dir of node.blockedNeighbors.keys()) {
-                    if (dir % 2 === 1) { hasAdjacentBlocker = true; break; }
+                    const blockers = node.blockedNeighbors.get(dir);
+                    if (dir % 2 === 1 && hasActiveDirectionalBlockers(blockers)) {
+                        hasAdjacentBlocker = true;
+                        break;
+                    }
+                }
+                if (!hasAdjacentBlocker) {
+                    let hasAnyDirectionalBlocker = false;
+                    for (const blockers of node.blockedNeighbors.values()) {
+                        if (hasActiveDirectionalBlockers(blockers)) {
+                            hasAnyDirectionalBlocker = true;
+                            break;
+                        }
+                    }
+                    if (!hasAnyDirectionalBlocker) continue;
                 }
                 const seed = hasAdjacentBlocker ? 0 : 1;
                 if (seed < node.clearance) {
@@ -899,9 +984,329 @@ class GameMap {
         }
     }
 
+    _isObjectBlockingForTraversal(obj, canTraverseObject = null, context = null) {
+        if (!doesObjectBlockTile(obj)) return false;
+        if (typeof canTraverseObject === "function" && canTraverseObject(obj, context) === true) return false;
+        return true;
+    }
+
+    _resolveDirectionalTraversalBlocker(blocker, nodeA = null, nodeB = null) {
+        if (!blocker || blocker.gone) return null;
+        if (
+            typeof blocker._resolveDirectionalBlockerForConnection === "function" &&
+            nodeA && nodeB
+        ) {
+            const resolved = blocker._resolveDirectionalBlockerForConnection(nodeA, nodeB);
+            return resolved || null;
+        }
+        return blocker;
+    }
+
+    _collectLikelyPathBlockers(centerNode, destinationNode, requiredClearance = 0, options = {}) {
+        if (!centerNode || !destinationNode) return [];
+        const canTraverseObject = (typeof options.canTraverseObject === "function")
+            ? options.canTraverseObject
+            : null;
+        const currentNode = options.currentNode || centerNode;
+        const neighborNode = options.neighborNode || centerNode;
+        const directionIndex = Number.isInteger(options.directionIndex) ? options.directionIndex : null;
+        const referenceNode = options.referenceNode || centerNode;
+        const blockers = [];
+        const blockersSeen = new Set();
+
+        const pushIfBlocking = (obj, context = null) => {
+            if (!obj || blockersSeen.has(obj)) return;
+            if (!this._isObjectBlockingForTraversal(obj, canTraverseObject, context)) return;
+            blockersSeen.add(obj);
+            blockers.push(obj);
+        };
+
+        if (currentNode && directionIndex !== null) {
+            const directionalBlockers = currentNode.blockedNeighbors
+                ? currentNode.blockedNeighbors.get(directionIndex)
+                : null;
+            if (directionalBlockers instanceof Set) {
+                directionalBlockers.forEach(blocker => {
+                    if (!blocker || blocker.gone || isNonBlockingSunkObject(blocker)) return;
+                    const resolvedBlocker = this._resolveDirectionalTraversalBlocker(blocker, currentNode, neighborNode);
+                    if (!resolvedBlocker || resolvedBlocker.gone || isNonBlockingSunkObject(resolvedBlocker)) return;
+                    pushIfBlocking(resolvedBlocker, {
+                        currentNode,
+                        centerNode,
+                        neighborNode,
+                        referenceNode,
+                        destinationNode,
+                        directionIndex,
+                        kind: "directional"
+                    });
+                });
+            }
+        }
+
+        const ringRadius = Math.max(0, Number.isFinite(requiredClearance) ? Math.floor(requiredClearance) + 1 : 1);
+        const scanNodes = new Set();
+        scanNodes.add(centerNode);
+        let bfsFrontier = [centerNode];
+        for (let r = 0; r < ringRadius; r++) {
+            const next = [];
+            for (let fi = 0; fi < bfsFrontier.length; fi++) {
+                const fn = bfsFrontier[fi];
+                for (let ni = 0; ni < fn.neighbors.length; ni++) {
+                    const nb = fn.neighbors[ni];
+                    if (!nb || scanNodes.has(nb)) continue;
+                    scanNodes.add(nb);
+                    next.push(nb);
+                }
+            }
+            bfsFrontier = next;
+        }
+
+        const referenceDistSq = this.shortestDeltaX(referenceNode.x, destinationNode.x) ** 2
+            + this.shortestDeltaY(referenceNode.y, destinationNode.y) ** 2;
+        scanNodes.forEach(sn => {
+            if (!Array.isArray(sn.objects)) return;
+            for (let oi = 0; oi < sn.objects.length; oi++) {
+                const obj = sn.objects[oi];
+                if (!this._isObjectBlockingForTraversal(obj, canTraverseObject, {
+                    currentNode,
+                    centerNode,
+                    referenceNode,
+                    destinationNode,
+                    directionIndex,
+                    kind: "scan"
+                })) continue;
+                const objDistSq = this.shortestDeltaX(obj.x, destinationNode.x) ** 2
+                    + this.shortestDeltaY(obj.y, destinationNode.y) ** 2;
+                if (objDistSq < referenceDistSq) {
+                    pushIfBlocking(obj, {
+                        currentNode,
+                        centerNode,
+                        referenceNode,
+                        destinationNode,
+                        directionIndex,
+                        kind: "scan"
+                    });
+                }
+            }
+        });
+
+        return blockers;
+    }
+
+    getTraversalInfo(currentNode, directionIndex, options = {}) {
+        const neighborNode = currentNode && currentNode.neighbors
+            ? currentNode.neighbors[directionIndex]
+            : null;
+        if (!neighborNode) return { allowed: false, neighborNode: null, penalty: 0, blockers: [] };
+
+        const destinationNode = options.destinationNode || null;
+        const allowBlockedDestination = options.allowBlockedDestination === true;
+        const requiredClearance = Number.isFinite(options.requiredClearance)
+            ? Math.max(0, Math.floor(options.requiredClearance))
+            : 0;
+        const knockableTraversalCost = (typeof options.knockableTraversalCost === "function")
+            ? options.knockableTraversalCost
+            : null;
+        const canTraverseObject = (typeof options.canTraverseObject === "function")
+            ? options.canTraverseObject
+            : null;
+        const clearanceReferenceNode = options.clearanceReferenceNode || destinationNode || currentNode;
+        const blockerPairs = [
+            [11, 1],
+            null,
+            [1, 3],
+            null,
+            [3, 5],
+            null,
+            [5, 7],
+            null,
+            [7, 9],
+            null,
+            [9, 11],
+            null
+        ];
+
+        const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
+        const getActiveDirectionalBlockers = (blockers, context = null) => {
+            if (!(blockers instanceof Set) || blockers.size === 0) return [];
+            const active = [];
+            for (const blocker of blockers) {
+                if (!blocker || blocker.gone) continue;
+                const resolvedBlocker = this._resolveDirectionalTraversalBlocker(
+                    blocker,
+                    context && context.currentNode,
+                    context && context.neighborNode
+                );
+                if (!resolvedBlocker || resolvedBlocker.gone) continue;
+                if (isNonBlockingSunkObject(resolvedBlocker)) continue;
+                if (typeof canTraverseObject === "function" && canTraverseObject(resolvedBlocker, context) === true) continue;
+                active.push(resolvedBlocker);
+            }
+            return active;
+        };
+        const getActiveTileBlockingObjects = (node, context = null) => {
+            if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return [];
+            const blockers = [];
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (isBlockingObjectForPath(obj, context || { node, kind: "tile" })) {
+                    blockers.push(obj);
+                }
+            }
+            return blockers;
+        };
+        const resolveKnockableTraversal = (blockers, kind) => {
+            if (!Array.isArray(blockers) || blockers.length === 0) {
+                return { allowed: true, penalty: 0, blockers: [] };
+            }
+            if (typeof knockableTraversalCost !== "function") {
+                return { allowed: false, penalty: 0, blockers: [] };
+            }
+            let penalty = 0;
+            const usedBlockers = [];
+            for (let i = 0; i < blockers.length; i++) {
+                const blocker = blockers[i];
+                const extraCost = knockableTraversalCost(blocker, {
+                    currentNode,
+                    neighborNode,
+                    destinationNode,
+                    directionIndex,
+                    kind
+                });
+                if (!Number.isFinite(extraCost) || extraCost < 0) {
+                    return { allowed: false, penalty: 0, blockers: [] };
+                }
+                penalty += Number(extraCost);
+                usedBlockers.push(blocker);
+            }
+            return { allowed: true, penalty, blockers: usedBlockers };
+        };
+
+        let penalty = 0;
+        const blockersUsed = [];
+        const directionalContext = {
+            currentNode,
+            neighborNode,
+            destinationNode,
+            directionIndex,
+            kind: "directional"
+        };
+
+        const directionalBlockers = getActiveDirectionalBlockers(
+            currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null,
+            directionalContext
+        );
+        if (directionalBlockers.length > 0) {
+            const traversal = resolveKnockableTraversal(directionalBlockers, "directional");
+            if (!traversal.allowed) {
+                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+            }
+            penalty += traversal.penalty;
+            blockersUsed.push(...traversal.blockers);
+        }
+
+        if (
+            !(allowBlockedDestination && destinationNode && neighborNode === destinationNode) &&
+            (neighborNode.blocked || neighborNode.hasBlockingObject())
+        ) {
+            const tileBlockers = getActiveTileBlockingObjects(neighborNode, {
+                currentNode,
+                neighborNode,
+                destinationNode,
+                directionIndex,
+                kind: "tile"
+            });
+            if (tileBlockers.length === 0) {
+                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+            }
+            const traversal = resolveKnockableTraversal(tileBlockers, "tile");
+            if (!traversal.allowed) {
+                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+            }
+            penalty += traversal.penalty;
+            blockersUsed.push(...traversal.blockers);
+        }
+
+        const cornerPair = blockerPairs[directionIndex];
+        if (cornerPair) {
+            const [blocker1, blocker2] = cornerPair;
+            const blockerNode1 = currentNode.neighbors[blocker1];
+            const blockerNode2 = currentNode.neighbors[blocker2];
+            if (
+                (blockerNode1 && blockerNode1.hasBlockingObject()) ||
+                (blockerNode2 && blockerNode2.hasBlockingObject())
+            ) {
+                const cornerBlockers = [];
+                if (blockerNode1) {
+                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode1, {
+                        currentNode,
+                        neighborNode,
+                        destinationNode,
+                        directionIndex: blocker1,
+                        kind: "corner"
+                    }));
+                }
+                if (blockerNode2) {
+                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode2, {
+                        currentNode,
+                        neighborNode,
+                        destinationNode,
+                        directionIndex: blocker2,
+                        kind: "corner"
+                    }));
+                }
+                if (cornerBlockers.length === 0) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                const traversal = resolveKnockableTraversal(cornerBlockers, "corner");
+                if (!traversal.allowed) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                penalty += traversal.penalty;
+                blockersUsed.push(...traversal.blockers);
+            }
+        }
+
+        if (
+            requiredClearance > 0 &&
+            !(destinationNode && neighborNode === destinationNode)
+        ) {
+            if (!Number.isFinite(neighborNode.clearance) || neighborNode.clearance < requiredClearance) {
+                const clearanceBlockers = this._collectLikelyPathBlockers(
+                    neighborNode,
+                    clearanceReferenceNode,
+                    requiredClearance,
+                    {
+                        currentNode,
+                        centerNode: neighborNode,
+                        neighborNode,
+                        referenceNode: neighborNode,
+                        directionIndex,
+                        canTraverseObject
+                    }
+                );
+                if (clearanceBlockers.length === 0) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                const traversal = resolveKnockableTraversal(clearanceBlockers, "clearance");
+                if (!traversal.allowed) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                penalty += traversal.penalty;
+                blockersUsed.push(...traversal.blockers);
+            }
+        }
+
+        return { allowed: true, neighborNode, penalty, blockers: blockersUsed };
+    }
+
     findPath(startingNode, destinationNode, options) {
         const opts = options || {};
         const allowBlockedDestination = opts.allowBlockedDestination === true;
+        const canTraverseObject = (typeof opts.canTraverseObject === "function")
+            ? opts.canTraverseObject
+            : null;
+        const debugOwner = opts.debugOwner || null;
         // Clearance: number of hex rings that must be obstacle-free around
         // each tile on the path.  0 = legacy point-entity behaviour.
         const requiredClearance = Number.isFinite(opts.clearance)
@@ -930,6 +1335,31 @@ class GameMap {
         ];
         const distFactors = [0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1, 0.577, 1];
 
+        const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
+        const hasBlockingObjectForPath = (node, context = null) => {
+            if (!node || node.blockedByObjects <= 0 || !Array.isArray(node.objects) || node.objects.length === 0) return false;
+            for (let i = 0; i < node.objects.length; i++) {
+                if (isBlockingObjectForPath(node.objects[i], context)) return true;
+            }
+            return false;
+        };
+        const hasDirectionalBlockersForPath = (blockers, context = null) => {
+            if (!(blockers instanceof Set) || blockers.size === 0) return false;
+            for (const blocker of blockers) {
+                if (!blocker || blocker.gone) continue;
+                const resolvedBlocker = this._resolveDirectionalTraversalBlocker(
+                    blocker,
+                    context && context.currentNode,
+                    context && context.neighborNode
+                );
+                if (!resolvedBlocker || resolvedBlocker.gone) continue;
+                if (isNonBlockingSunkObject(resolvedBlocker)) continue;
+                if (typeof canTraverseObject === "function" && canTraverseObject(resolvedBlocker, context) === true) continue;
+                return true;
+            }
+            return false;
+        };
+
         /**
          * Returns true when the move from currentNode in direction n is
          * passable, respecting walls, blocked tiles, far-move anti-corner-cut,
@@ -945,10 +1375,16 @@ class GameMap {
 
             // Wall blocking
             const blockingWalls = currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(n) : null;
-            if (blockingWalls && blockingWalls.size > 0) return false;
+            if (hasDirectionalBlockersForPath(blockingWalls, {
+                currentNode,
+                neighborNode,
+                directionIndex: n,
+                destinationNode,
+                kind: "directional"
+            })) return false;
 
             // Tile blocking — allow if this is the destination and caller opts in
-            if (neighborNode.hasBlockingObject() || neighborNode.blocked) {
+            if (hasBlockingObjectForPath(neighborNode, { currentNode, neighborNode, directionIndex: n, destinationNode, kind: "tile" }) || neighborNode.blocked) {
                 if (allowBlockedDestination && neighborNode === destinationNode) {
                     // fall through — let canMoveDirection return true for the destination
                 } else {
@@ -961,7 +1397,10 @@ class GameMap {
                 const [b1, b2] = blockerPairs[n];
                 const bn1 = currentNode.neighbors[b1];
                 const bn2 = currentNode.neighbors[b2];
-                if ((bn1 && bn1.hasBlockingObject()) || (bn2 && bn2.hasBlockingObject())) return false;
+                if (
+                    (bn1 && hasBlockingObjectForPath(bn1, { currentNode, neighborNode, directionIndex: b1, destinationNode, kind: "corner" })) ||
+                    (bn2 && hasBlockingObjectForPath(bn2, { currentNode, neighborNode, directionIndex: b2, destinationNode, kind: "corner" }))
+                ) return false;
             }
 
             // Clearance check for large entities
@@ -1039,53 +1478,19 @@ class GameMap {
             // canMoveDirection — not merely visited). Collect the culprit objects,
             // take one random bounce step so the animal keeps moving, then return.
             if (idealDirection !== -1 && !idealDirectionPassable) {
-                const directionalBlockers = currentNode.blockedNeighbors
-                    ? currentNode.blockedNeighbors.get(idealDirection)
-                    : null;
-                if (directionalBlockers instanceof Set) {
-                    directionalBlockers.forEach(blocker => {
-                        if (!blocker || blockersSeen.has(blocker)) return;
-                        blockersSeen.add(blocker);
-                        path.blockers.push(blocker);
-                    });
-                }
-
-                // BFS the entire clearance+1 hex area around currentNode.
-                // Collect all blocking objects that are closer to the destination
-                // than currentNode is — those are the objects in the way.
-                const ringRadius = requiredClearance + 1;
-                const scanNodes = new Set();
-                scanNodes.add(currentNode);
-                let bfsFrontier = [currentNode];
-                for (let r = 0; r < ringRadius; r++) {
-                    const next = [];
-                    for (let fi = 0; fi < bfsFrontier.length; fi++) {
-                        const fn = bfsFrontier[fi];
-                        for (let ni = 0; ni < fn.neighbors.length; ni++) {
-                            const nb = fn.neighbors[ni];
-                            if (!nb || scanNodes.has(nb)) continue;
-                            scanNodes.add(nb);
-                            next.push(nb);
-                        }
-                    }
-                    bfsFrontier = next;
-                }
-                const animalDistSq = this.shortestDeltaX(currentNode.x, destinationNode.x) ** 2
-                                   + this.shortestDeltaY(currentNode.y, destinationNode.y) ** 2;
-                scanNodes.forEach(sn => {
-                    if (!sn.objects) return;
-                    for (let oi = 0; oi < sn.objects.length; oi++) {
-                        const obj = sn.objects[oi];
-                        if (!obj || obj.blocksTile === false) continue;
-                        if (blockersSeen.has(obj)) continue;
-                        const objDistSq = this.shortestDeltaX(obj.x, destinationNode.x) ** 2
-                                        + this.shortestDeltaY(obj.y, destinationNode.y) ** 2;
-                        if (objDistSq < animalDistSq) {
-                            blockersSeen.add(obj);
-                            path.blockers.push(obj);
-                        }
-                    }
+                const likelyBlockers = this._collectLikelyPathBlockers(currentNode, destinationNode, requiredClearance, {
+                    currentNode,
+                    neighborNode: currentNode.neighbors[idealDirection] || null,
+                    directionIndex: idealDirection,
+                    referenceNode: currentNode,
+                    canTraverseObject
                 });
+                for (let i = 0; i < likelyBlockers.length; i++) {
+                    const blocker = likelyBlockers[i];
+                    if (blockersSeen.has(blocker)) continue;
+                    blockersSeen.add(blocker);
+                    path.blockers.push(blocker);
+                }
 
                 // Find a bounce step. Try valid (clearance-respecting) directions first;
                 // fall back to any unblocked direction so the animal never fully freezes.
@@ -1098,8 +1503,8 @@ class GameMap {
                         const directionalBlockers = currentNode.blockedNeighbors
                             ? currentNode.blockedNeighbors.get(n)
                             : null;
-                        if (directionalBlockers && directionalBlockers.size > 0) continue;
-                        if (!nb || nb.hasBlockingObject() || nb.blocked) continue;
+                        if (hasDirectionalBlockersForPath(directionalBlockers, { currentNode, directionIndex: n, destinationNode, kind: "directional" })) continue;
+                        if (!nb || hasBlockingObjectForPath(nb, { currentNode, neighborNode: nb, directionIndex: n, destinationNode, kind: "tile" }) || nb.blocked) continue;
                         const nKey = `${nb.xindex},${nb.yindex}`;
                         if (visited.has(nKey)) continue;
                         bounceDirections.push(n);
@@ -1121,8 +1526,8 @@ class GameMap {
                     const directionalBlockers = currentNode.blockedNeighbors
                         ? currentNode.blockedNeighbors.get(n)
                         : null;
-                    if (directionalBlockers && directionalBlockers.size > 0) continue;
-                    if (!nb || nb.hasBlockingObject() || nb.blocked) continue;
+                    if (hasDirectionalBlockersForPath(directionalBlockers, { currentNode, directionIndex: n, destinationNode, kind: "directional" })) continue;
+                    if (!nb || hasBlockingObjectForPath(nb, { currentNode, neighborNode: nb, directionIndex: n, destinationNode, kind: "tile" }) || nb.blocked) continue;
                     const nKey = `${nb.xindex},${nb.yindex}`;
                     if (visited.has(nKey)) continue;
                     validDirections.push(n);
@@ -1158,21 +1563,6 @@ class GameMap {
 
         // Keep traversal rules aligned with legacy findPath().
         // Even indices are far moves, odd indices are adjacent moves.
-        const blockerPairs = [
-            [11, 1], // 0: far left (between down-left and up-left)
-            null,    // 1: up-left (adjacent)
-            [1, 3],  // 2: far up-left (between up-left and up)
-            null,    // 3: up (adjacent)
-            [3, 5],  // 4: far up-right (between up and up-right)
-            null,    // 5: up-right (adjacent)
-            [5, 7],  // 6: far right (between up-right and down-right)
-            null,    // 7: down-right (adjacent)
-            [7, 9],  // 8: far down-right (between down-right and down)
-            null,    // 9: down (adjacent)
-            [9, 11], // 10: far down-left (between down and down-left)
-            null     // 11: down-left (adjacent)
-        ];
-
         const allowBlockedDestination = options.allowBlockedDestination === true;
         // Clearance requirement: number of hex-ring steps that must be
         // obstacle-free around every tile on the path.  0 = point-entity
@@ -1188,6 +1578,15 @@ class GameMap {
         const wallAvoidance = Number.isFinite(options.wallAvoidance)
             ? Math.max(0, options.wallAvoidance)
             : 0;
+        const maxPathLength = Number.isFinite(options.maxPathLength)
+            ? Math.max(0, Number(options.maxPathLength))
+            : Infinity;
+        const knockableTraversalCost = (typeof options.knockableTraversalCost === "function")
+            ? options.knockableTraversalCost
+            : null;
+        const canTraverseObject = (typeof options.canTraverseObject === "function")
+            ? options.canTraverseObject
+            : null;
 
         if (!allowBlockedDestination && (destinationNode.blocked || destinationNode.hasBlockingObject())) {
             return null;
@@ -1200,12 +1599,77 @@ class GameMap {
         ) {
             return null;
         }
+        if (Number.isFinite(maxPathLength)) {
+            const startHeuristic = Math.hypot(
+                this.shortestDeltaX(startingNode.x, destinationNode.x),
+                this.shortestDeltaY(startingNode.y, destinationNode.y)
+            );
+            if (startHeuristic > maxPathLength) {
+                return null;
+            }
+        }
 
         const keyFor = (node) => `${node.xindex},${node.yindex}`;
-        const movementCost = (fromNode, toNode) => {
+        const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
+        const getActiveDirectionalBlockers = (blockers, context = null) => {
+            if (!(blockers instanceof Set) || blockers.size === 0) return [];
+            const active = [];
+            for (const blocker of blockers) {
+                if (!blocker || blocker.gone) continue;
+                const resolvedBlocker = this._resolveDirectionalTraversalBlocker(
+                    blocker,
+                    context && context.currentNode,
+                    context && context.neighborNode
+                );
+                if (!resolvedBlocker || resolvedBlocker.gone) continue;
+                if (isNonBlockingSunkObject(resolvedBlocker)) continue;
+                if (typeof canTraverseObject === "function" && canTraverseObject(resolvedBlocker, context) === true) continue;
+                active.push(resolvedBlocker);
+            }
+            return active;
+        };
+        const getActiveTileBlockingObjects = (node) => {
+            if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return [];
+            const blockers = [];
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (isBlockingObjectForPath(obj, { node, kind: "tile" })) blockers.push(obj);
+            }
+            return blockers;
+        };
+        const resolveKnockableTraversal = (blockers, currentNode, neighborNode, directionIndex, kind) => {
+            if (!Array.isArray(blockers) || blockers.length === 0) {
+                return { allowed: true, penalty: 0, blockers: [] };
+            }
+            if (typeof knockableTraversalCost !== "function") {
+                return { allowed: false, penalty: 0, blockers: [] };
+            }
+            let penalty = 0;
+            const usedBlockers = [];
+            for (let i = 0; i < blockers.length; i++) {
+                const blocker = blockers[i];
+                const extraCost = knockableTraversalCost(blocker, {
+                    currentNode,
+                    neighborNode,
+                    destinationNode,
+                    directionIndex,
+                    kind
+                });
+                if (!Number.isFinite(extraCost) || extraCost < 0) {
+                    return { allowed: false, penalty: 0, blockers: [] };
+                }
+                penalty += Number(extraCost);
+                usedBlockers.push(blocker);
+            }
+            return { allowed: true, penalty, blockers: usedBlockers };
+        };
+        const stepDistance = (fromNode, toNode) => {
             const dx = this.shortestDeltaX(fromNode.x, toNode.x);
             const dy = this.shortestDeltaY(fromNode.y, toNode.y);
-            const dist = Math.hypot(dx, dy);
+            return Math.hypot(dx, dy);
+        };
+        const movementCost = (fromNode, toNode) => {
+            const dist = stepDistance(fromNode, toNode);
             // Penalise tiles close to walls so the path hugs open space.
             // The penalty is proportional to step distance so that far moves
             // (which cover more ground per step) aren't artificially cheap
@@ -1221,47 +1685,16 @@ class GameMap {
             const dy = this.shortestDeltaY(node.y, destinationNode.y);
             return Math.hypot(dx, dy);
         };
-        const canTraverseDirection = (currentNode, directionIndex) => {
-            const neighborNode = currentNode.neighbors[directionIndex];
-            if (!neighborNode) return false;
+        const getTraversalInfo = (currentNode, directionIndex) => this.getTraversalInfo(currentNode, directionIndex, {
+            destinationNode,
+            allowBlockedDestination,
+            requiredClearance,
+            knockableTraversalCost,
+            canTraverseObject,
+            clearanceReferenceNode: destinationNode
+        });
 
-            // Directional wall blocking from current -> neighbor.
-            const blockingWalls = currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null;
-            if (blockingWalls && blockingWalls.size > 0) return false;
-
-            // Destination occupancy blocking.
-            if (
-                neighborNode !== destinationNode &&
-                (neighborNode.blocked || neighborNode.hasBlockingObject())
-            ) {
-                return false;
-            }
-
-            // Preserve legacy anti-corner-cut for far moves.
-            const blockers = blockerPairs[directionIndex];
-            if (blockers) {
-                const [blocker1, blocker2] = blockers;
-                const blockerNode1 = currentNode.neighbors[blocker1];
-                const blockerNode2 = currentNode.neighbors[blocker2];
-                if (
-                    (blockerNode1 && blockerNode1.hasBlockingObject()) ||
-                    (blockerNode2 && blockerNode2.hasBlockingObject())
-                ) {
-                    return false;
-                }
-            }
-
-            // Clearance check for large entities.
-            if (requiredClearance > 0 && neighborNode !== destinationNode) {
-                if (!Number.isFinite(neighborNode.clearance) || neighborNode.clearance < requiredClearance) {
-                    return false;
-                }
-            }
-
-            return true;
-        };
-
-        const reconstructPath = (cameFrom, currentKey) => {
+        const reconstructPath = (cameFrom, currentKey, blockersByKey) => {
             const result = [];
             let walkKey = currentKey;
             while (cameFrom.has(walkKey)) {
@@ -1269,22 +1702,30 @@ class GameMap {
                 if (node) result.unshift(node);
                 walkKey = cameFrom.get(walkKey);
             }
+            const blockers = blockersByKey.get(currentKey);
+            if (blockers instanceof Set && blockers.size > 0) {
+                result.blockers = Array.from(blockers);
+            }
             return result;
         };
 
         const openSet = new Set();
         const cameFrom = new Map();
         const gScore = new Map();
+        const distanceScore = new Map();
         const fScore = new Map();
         const openOrClosedNodes = new Map();
+        const blockersByKey = new Map();
 
         const startKey = keyFor(startingNode);
         const goalKey = keyFor(destinationNode);
         openSet.add(startKey);
         gScore.set(startKey, 0);
+        distanceScore.set(startKey, 0);
         fScore.set(startKey, heuristic(startingNode));
         openOrClosedNodes.set(startKey, startingNode);
         openOrClosedNodes.set(goalKey, destinationNode);
+        blockersByKey.set(startKey, new Set());
 
         const maxIterations = Number.isFinite(options.maxIterations)
             ? Math.max(1, Math.floor(options.maxIterations))
@@ -1313,33 +1754,458 @@ class GameMap {
             }
 
             if (currentKey === goalKey) {
-                return reconstructPath(cameFrom, currentKey);
+                return reconstructPath(cameFrom, currentKey, blockersByKey);
             }
 
             openSet.delete(currentKey);
 
             for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
-                if (!canTraverseDirection(currentNode, directionIndex)) continue;
+                const traversal = getTraversalInfo(currentNode, directionIndex);
+                if (!traversal.allowed) continue;
 
-                const neighborNode = currentNode.neighbors[directionIndex];
+                const neighborNode = traversal.neighborNode;
                 if (!neighborNode) continue;
 
                 const neighborKey = keyFor(neighborNode);
                 openOrClosedNodes.set(neighborKey, neighborNode);
 
                 const currentG = gScore.has(currentKey) ? gScore.get(currentKey) : Infinity;
-                const tentativeG = currentG + movementCost(currentNode, neighborNode);
+                const currentDistance = distanceScore.has(currentKey) ? distanceScore.get(currentKey) : Infinity;
+                const tentativeDistance = currentDistance + stepDistance(currentNode, neighborNode);
+                if (tentativeDistance > maxPathLength) continue;
+                const tentativeG = currentG + movementCost(currentNode, neighborNode) + traversal.penalty;
                 const existingG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
                 if (tentativeG >= existingG) continue;
 
                 cameFrom.set(neighborKey, currentKey);
                 gScore.set(neighborKey, tentativeG);
+                distanceScore.set(neighborKey, tentativeDistance);
                 fScore.set(neighborKey, tentativeG + heuristic(neighborNode));
+                const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
+                for (let i = 0; i < traversal.blockers.length; i++) {
+                    nextBlockers.add(traversal.blockers[i]);
+                }
+                blockersByKey.set(neighborKey, nextBlockers);
                 openSet.add(neighborKey);
             }
         }
 
         return null;
+    }
+
+    findRetreatPath(startingNode, threatNodeOrPoint, options = {}) {
+        if (!startingNode || !threatNodeOrPoint) return null;
+
+        const maxPathLength = Number.isFinite(options.maxPathLength)
+            ? Math.max(0, Number(options.maxPathLength))
+            : NaN;
+        if (!Number.isFinite(maxPathLength)) return null;
+        if (maxPathLength <= 0) return [];
+
+        const requiredClearance = Number.isFinite(options.clearance)
+            ? Math.max(0, Math.floor(options.clearance))
+            : 0;
+        const threatPoint = (
+            Number.isFinite(options.threatX) && Number.isFinite(options.threatY)
+        )
+            ? { x: Number(options.threatX), y: Number(options.threatY) }
+            : (
+                Number.isFinite(threatNodeOrPoint.x) && Number.isFinite(threatNodeOrPoint.y)
+                    ? { x: Number(threatNodeOrPoint.x), y: Number(threatNodeOrPoint.y) }
+                    : null
+            );
+        if (!threatPoint) return null;
+
+        const knockableTraversalCost = (typeof options.knockableTraversalCost === "function")
+            ? options.knockableTraversalCost
+            : null;
+        const canTraverseObject = (typeof options.canTraverseObject === "function")
+            ? options.canTraverseObject
+            : null;
+        const stepDistance = (fromNode, toNode) => {
+            const dx = this.shortestDeltaX(fromNode.x, toNode.x);
+            const dy = this.shortestDeltaY(fromNode.y, toNode.y);
+            return Math.hypot(dx, dy);
+        };
+        const threatDistance = (node) => {
+            const dx = this.shortestDeltaX(threatPoint.x, node.x);
+            const dy = this.shortestDeltaY(threatPoint.y, node.y);
+            return Math.hypot(dx, dy);
+        };
+
+        const path = [];
+        path.blockers = [];
+        const blockersSeen = new Set();
+        const visited = new Set([`${startingNode.xindex},${startingNode.yindex}`]);
+        let currentNode = startingNode;
+        let totalDistance = 0;
+        let previousNode = null;
+        let currentThreatDistance = threatDistance(currentNode);
+        const epsilon = 1e-6;
+
+        while (totalDistance < (maxPathLength - epsilon)) {
+            let bestMove = null;
+
+            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
+                const traversal = this.getTraversalInfo(currentNode, directionIndex, {
+                    requiredClearance,
+                    knockableTraversalCost,
+                    canTraverseObject,
+                    clearanceReferenceNode: startingNode
+                });
+                if (!traversal.allowed || !traversal.neighborNode) continue;
+
+                const neighborNode = traversal.neighborNode;
+                const step = stepDistance(currentNode, neighborNode);
+                if ((totalDistance + step) > (maxPathLength + epsilon)) continue;
+
+                const neighborKey = `${neighborNode.xindex},${neighborNode.yindex}`;
+                const reverse = !!(previousNode && neighborNode === previousNode);
+                const revisited = visited.has(neighborKey);
+                const neighborThreatDistance = threatDistance(neighborNode);
+                const retreatGain = neighborThreatDistance - currentThreatDistance;
+                const clearanceScore = Number.isFinite(neighborNode.clearance) ? neighborNode.clearance : 0;
+                const moveScore = {
+                    traversal,
+                    neighborNode,
+                    neighborKey,
+                    step,
+                    retreatGain,
+                    threatDistance: neighborThreatDistance,
+                    clearanceScore,
+                    reverse,
+                    revisited
+                };
+
+                if (
+                    !bestMove ||
+                    moveScore.retreatGain > bestMove.retreatGain + epsilon ||
+                    (
+                        Math.abs(moveScore.retreatGain - bestMove.retreatGain) <= epsilon &&
+                        (
+                            moveScore.threatDistance > bestMove.threatDistance + epsilon ||
+                            (
+                                Math.abs(moveScore.threatDistance - bestMove.threatDistance) <= epsilon &&
+                                (
+                                    moveScore.clearanceScore > bestMove.clearanceScore ||
+                                    (
+                                        moveScore.clearanceScore === bestMove.clearanceScore &&
+                                        (
+                                            Number(moveScore.reverse) < Number(bestMove.reverse) ||
+                                            (
+                                                moveScore.reverse === bestMove.reverse &&
+                                                (
+                                                    Number(moveScore.revisited) < Number(bestMove.revisited) ||
+                                                    (
+                                                        moveScore.revisited === bestMove.revisited &&
+                                                        moveScore.step < bestMove.step - epsilon
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                ) {
+                    bestMove = moveScore;
+                }
+            }
+
+            if (!bestMove) break;
+
+            path.push(bestMove.neighborNode);
+            for (let i = 0; i < bestMove.traversal.blockers.length; i++) {
+                const blocker = bestMove.traversal.blockers[i];
+                if (blockersSeen.has(blocker)) continue;
+                blockersSeen.add(blocker);
+                path.blockers.push(blocker);
+            }
+            totalDistance += bestMove.step;
+            previousNode = currentNode;
+            currentNode = bestMove.neighborNode;
+            currentThreatDistance = bestMove.threatDistance;
+            visited.add(bestMove.neighborKey);
+        }
+
+        return path;
+    }
+
+    findRetreatPathAStar(startingNode, threatNodeOrPoint, options = {}) {
+        if (!startingNode || !threatNodeOrPoint) return null;
+
+        const requiredClearance = Number.isFinite(options.clearance)
+            ? Math.max(0, Math.floor(options.clearance))
+            : 0;
+        const wallAvoidance = Number.isFinite(options.wallAvoidance)
+            ? Math.max(0, options.wallAvoidance)
+            : 0;
+        const maxPathLength = Number.isFinite(options.maxPathLength)
+            ? Math.max(0, Number(options.maxPathLength))
+            : NaN;
+        const knockableTraversalCost = (typeof options.knockableTraversalCost === "function")
+            ? options.knockableTraversalCost
+            : null;
+        const canTraverseObject = (typeof options.canTraverseObject === "function")
+            ? options.canTraverseObject
+            : null;
+        const threatPoint = (
+            Number.isFinite(options.threatX) && Number.isFinite(options.threatY)
+        )
+            ? { x: Number(options.threatX), y: Number(options.threatY) }
+            : (
+                Number.isFinite(threatNodeOrPoint.x) && Number.isFinite(threatNodeOrPoint.y)
+                    ? { x: Number(threatNodeOrPoint.x), y: Number(threatNodeOrPoint.y) }
+                    : null
+            );
+
+        if (!threatPoint || !Number.isFinite(maxPathLength)) return null;
+        if (maxPathLength <= 0) return [];
+
+        const keyFor = (node) => `${node.xindex},${node.yindex}`;
+        const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
+        const getActiveDirectionalBlockers = (blockers, context = null) => {
+            if (!(blockers instanceof Set) || blockers.size === 0) return [];
+            const active = [];
+            for (const blocker of blockers) {
+                if (!blocker || blocker.gone) continue;
+                const resolvedBlocker = this._resolveDirectionalTraversalBlocker(
+                    blocker,
+                    context && context.currentNode,
+                    context && context.neighborNode
+                );
+                if (!resolvedBlocker || resolvedBlocker.gone) continue;
+                if (isNonBlockingSunkObject(resolvedBlocker)) continue;
+                if (typeof canTraverseObject === "function" && canTraverseObject(resolvedBlocker, context) === true) continue;
+                active.push(resolvedBlocker);
+            }
+            return active;
+        };
+        const getActiveTileBlockingObjects = (node) => {
+            if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return [];
+            const blockers = [];
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (isBlockingObjectForPath(obj, { node, kind: "tile" })) blockers.push(obj);
+            }
+            return blockers;
+        };
+        const resolveKnockableTraversal = (blockers, currentNode, neighborNode, directionIndex, kind) => {
+            if (!Array.isArray(blockers) || blockers.length === 0) {
+                return { allowed: true, penalty: 0, blockers: [] };
+            }
+            if (typeof knockableTraversalCost !== "function") {
+                return { allowed: false, penalty: 0, blockers: [] };
+            }
+            let penalty = 0;
+            const usedBlockers = [];
+            for (let i = 0; i < blockers.length; i++) {
+                const blocker = blockers[i];
+                const extraCost = knockableTraversalCost(blocker, {
+                    currentNode,
+                    neighborNode,
+                    directionIndex,
+                    kind,
+                    threatPoint
+                });
+                if (!Number.isFinite(extraCost) || extraCost < 0) {
+                    return { allowed: false, penalty: 0, blockers: [] };
+                }
+                penalty += Number(extraCost);
+                usedBlockers.push(blocker);
+            }
+            return { allowed: true, penalty, blockers: usedBlockers };
+        };
+        const stepDistance = (fromNode, toNode) => {
+            const dx = this.shortestDeltaX(fromNode.x, toNode.x);
+            const dy = this.shortestDeltaY(fromNode.y, toNode.y);
+            return Math.hypot(dx, dy);
+        };
+        const movementCost = (fromNode, toNode) => {
+            const dist = stepDistance(fromNode, toNode);
+            if (wallAvoidance > 0) {
+                const cl = Number.isFinite(toNode.clearance) ? toNode.clearance : 0;
+                return dist * (1 + wallAvoidance / (1 + cl));
+            }
+            return dist;
+        };
+        const threatDistance = (node) => {
+            const dx = this.shortestDeltaX(threatPoint.x, node.x);
+            const dy = this.shortestDeltaY(threatPoint.y, node.y);
+            return Math.hypot(dx, dy);
+        };
+        const getTraversalInfo = (currentNode, directionIndex) => this.getTraversalInfo(currentNode, directionIndex, {
+            requiredClearance,
+            knockableTraversalCost,
+            canTraverseObject,
+            clearanceReferenceNode: startingNode
+        });
+        const reconstructPath = (cameFrom, currentKey, nodesByKey, blockersByKey) => {
+            const result = [];
+            let walkKey = currentKey;
+            while (cameFrom.has(walkKey)) {
+                const node = nodesByKey.get(walkKey);
+                if (node) result.unshift(node);
+                walkKey = cameFrom.get(walkKey);
+            }
+            const blockers = blockersByKey.get(currentKey);
+            if (blockers instanceof Set && blockers.size > 0) {
+                result.blockers = Array.from(blockers);
+            }
+            return result;
+        };
+
+        const openSet = new Set();
+        const cameFrom = new Map();
+        const gScore = new Map();
+        const distanceScore = new Map();
+        const bestPossibleScore = new Map();
+        const nodesByKey = new Map();
+        const blockersByKey = new Map();
+        const epsilon = 1e-6;
+
+        const startKey = keyFor(startingNode);
+        const startThreatDistance = threatDistance(startingNode);
+        openSet.add(startKey);
+        gScore.set(startKey, 0);
+        distanceScore.set(startKey, 0);
+        bestPossibleScore.set(startKey, startThreatDistance + maxPathLength);
+        nodesByKey.set(startKey, startingNode);
+        blockersByKey.set(startKey, new Set());
+
+        let bestKey = startKey;
+        let bestThreatDistance = startThreatDistance;
+        let bestTravelDistance = 0;
+        let bestTraversalCost = 0;
+
+        const maxIterations = Number.isFinite(options.maxIterations)
+            ? Math.max(1, Math.floor(options.maxIterations))
+            : Math.max(1000, Math.ceil(maxPathLength * 64));
+
+        let iterations = 0;
+        while (openSet.size > 0 && iterations < maxIterations) {
+            iterations += 1;
+
+            let currentKey = null;
+            let currentBestPossible = -Infinity;
+            let currentBestThreat = -Infinity;
+            let currentBestTravel = Infinity;
+            for (const key of openSet) {
+                const upperBound = bestPossibleScore.has(key) ? bestPossibleScore.get(key) : -Infinity;
+                const node = nodesByKey.get(key);
+                const nodeThreatDistance = node ? threatDistance(node) : -Infinity;
+                const nodeTravelDistance = distanceScore.has(key) ? distanceScore.get(key) : Infinity;
+                if (
+                    upperBound > currentBestPossible + epsilon ||
+                    (
+                        Math.abs(upperBound - currentBestPossible) <= epsilon &&
+                        (
+                            nodeThreatDistance > currentBestThreat + epsilon ||
+                            (
+                                Math.abs(nodeThreatDistance - currentBestThreat) <= epsilon &&
+                                nodeTravelDistance < currentBestTravel - epsilon
+                            )
+                        )
+                    )
+                ) {
+                    currentBestPossible = upperBound;
+                    currentBestThreat = nodeThreatDistance;
+                    currentBestTravel = nodeTravelDistance;
+                    currentKey = key;
+                }
+            }
+            if (!currentKey) break;
+            if (currentBestPossible < bestThreatDistance - epsilon) break;
+
+            openSet.delete(currentKey);
+
+            const currentNode = nodesByKey.get(currentKey);
+            if (!currentNode) continue;
+
+            const currentThreatDistance = threatDistance(currentNode);
+            const currentTravelDistance = distanceScore.has(currentKey) ? distanceScore.get(currentKey) : Infinity;
+            const currentTraversalCost = gScore.has(currentKey) ? gScore.get(currentKey) : Infinity;
+            if (
+                currentThreatDistance > bestThreatDistance + epsilon ||
+                (
+                    Math.abs(currentThreatDistance - bestThreatDistance) <= epsilon &&
+                    (
+                        currentTravelDistance < bestTravelDistance - epsilon ||
+                        (
+                            Math.abs(currentTravelDistance - bestTravelDistance) <= epsilon &&
+                            currentTraversalCost < bestTraversalCost - epsilon
+                        )
+                    )
+                )
+            ) {
+                bestKey = currentKey;
+                bestThreatDistance = currentThreatDistance;
+                bestTravelDistance = currentTravelDistance;
+                bestTraversalCost = currentTraversalCost;
+            }
+
+            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
+                const traversal = getTraversalInfo(currentNode, directionIndex);
+                if (!traversal.allowed) continue;
+
+                const neighborNode = traversal.neighborNode;
+                if (!neighborNode) continue;
+
+                const neighborKey = keyFor(neighborNode);
+                nodesByKey.set(neighborKey, neighborNode);
+
+                const tentativeDistance = currentTravelDistance + stepDistance(currentNode, neighborNode);
+                if (tentativeDistance > maxPathLength + epsilon) continue;
+
+                const tentativeG = currentTraversalCost + movementCost(currentNode, neighborNode) + traversal.penalty;
+                const existingDistance = distanceScore.has(neighborKey) ? distanceScore.get(neighborKey) : Infinity;
+                const existingG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
+                if (tentativeDistance > existingDistance + epsilon) continue;
+                if (
+                    Math.abs(tentativeDistance - existingDistance) <= epsilon &&
+                    tentativeG >= existingG - epsilon
+                ) {
+                    continue;
+                }
+
+                cameFrom.set(neighborKey, currentKey);
+                distanceScore.set(neighborKey, tentativeDistance);
+                gScore.set(neighborKey, tentativeG);
+                const neighborThreatDistance = threatDistance(neighborNode);
+                bestPossibleScore.set(
+                    neighborKey,
+                    neighborThreatDistance + Math.max(0, maxPathLength - tentativeDistance)
+                );
+                const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
+                for (let i = 0; i < traversal.blockers.length; i++) {
+                    nextBlockers.add(traversal.blockers[i]);
+                }
+                blockersByKey.set(neighborKey, nextBlockers);
+                openSet.add(neighborKey);
+
+                if (
+                    neighborThreatDistance > bestThreatDistance + epsilon ||
+                    (
+                        Math.abs(neighborThreatDistance - bestThreatDistance) <= epsilon &&
+                        (
+                            tentativeDistance < bestTravelDistance - epsilon ||
+                            (
+                                Math.abs(tentativeDistance - bestTravelDistance) <= epsilon &&
+                                tentativeG < bestTraversalCost - epsilon
+                            )
+                        )
+                    )
+                ) {
+                    bestKey = neighborKey;
+                    bestThreatDistance = neighborThreatDistance;
+                    bestTravelDistance = tentativeDistance;
+                    bestTraversalCost = tentativeG;
+                }
+            }
+        }
+
+        return reconstructPath(cameFrom, bestKey, nodesByKey, blockersByKey);
     }
     
     // Convert world coordinates to the nearest MapNode
@@ -1778,7 +2644,7 @@ class GameMap {
             const blockingWalls = current.blockedNeighbors
                 ? current.blockedNeighbors.get(bestDir)
                 : null;
-            if (blockingWalls && blockingWalls.size > 0) return false;
+            if (hasActiveDirectionalBlockers(blockingWalls)) return false;
 
             // Blocking object / terrain on the next tile (skip endpoints).
             if (bestNext !== nodeB && bestNext.isBlocked()) return false;

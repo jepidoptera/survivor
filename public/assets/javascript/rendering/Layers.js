@@ -20,6 +20,10 @@
             this.depthObjects = new PIXI.Container();
             this.depthObjects.name = "renderingDepthObjects";
 
+            this.characters = new PIXI.Container();
+            this.characters.name = "renderingCharacters";
+            this.characters.sortableChildren = true;
+
             this.objects3d = new PIXI.Container();
             this.objects3d.name = "renderingObjects3d";
 
@@ -37,6 +41,7 @@
             this.root.addChild(this.groundObjects);
             this.root.addChild(this.losShadow);
             this.root.addChild(this.depthObjects);
+            this.root.addChild(this.characters);
             this.root.addChild(this.objects3d);
             this.root.addChild(this.entities);
             this.root.addChild(this.ui);
