@@ -1,4 +1,15 @@
 class SpawnAnimal extends globalThis.Spell {
+    static NATURAL_SIZE_RANGES = {
+        squirrel: { min: 0.4, max: 0.6 },
+        goat: { min: 0.7, max: 0.95 },
+        deer: { min: 0.75, max: 1.25 },
+        bear: { min: 1.2, max: 1.7 },
+        eagleman: { min: 1.2, max: 1.7 },
+        fragglegod: { min: 1.2, max: 1.7 },
+        yeti: { min: 1.5, max: 2.0 },
+        blodia: { min: 1.5, max: 2.0 }
+    };
+
     constructor(x, y) {
         super(x, y);
         this.image = document.createElement('img');
@@ -41,6 +52,66 @@ class SpawnAnimal extends globalThis.Spell {
         return (Math.log(clamped) - SpawnAnimal.LOG_MIN) / (SpawnAnimal.LOG_MAX - SpawnAnimal.LOG_MIN);
     }
 
+    static getNaturalSizeRange(typeName) {
+        const key = (typeof typeName === "string" && typeName.length > 0)
+            ? typeName.toLowerCase()
+            : "squirrel";
+        return SpawnAnimal.NATURAL_SIZE_RANGES[key] || { min: 1, max: 1 };
+    }
+
+    static sampleNaturalSize(typeName) {
+        const range = SpawnAnimal.getNaturalSizeRange(typeName);
+        const min = Number.isFinite(range.min) ? Number(range.min) : 1;
+        const max = Number.isFinite(range.max) ? Number(range.max) : min;
+        if (!(max > min)) return min;
+        return min + Math.random() * (max - min);
+    }
+
+    static getRepresentativeNaturalSize(typeName) {
+        const range = SpawnAnimal.getNaturalSizeRange(typeName);
+        const min = Number.isFinite(range.min) ? Number(range.min) : 1;
+        const max = Number.isFinite(range.max) ? Number(range.max) : min;
+        return (min + max) * 0.5;
+    }
+
+    static ensurePendingPlacementState(wizardRef) {
+        const selectedType = (wizardRef && typeof wizardRef.selectedAnimalType === "string")
+            ? wizardRef.selectedAnimalType
+            : "squirrel";
+        const existing = (wizardRef && wizardRef._pendingAnimalPlacementState && typeof wizardRef._pendingAnimalPlacementState === "object")
+            ? wizardRef._pendingAnimalPlacementState
+            : null;
+        if (
+            existing &&
+            existing.type === selectedType &&
+            Number.isFinite(existing.naturalSize) &&
+            existing.naturalSize > 0
+        ) {
+            return existing;
+        }
+        const nextState = {
+            type: selectedType,
+            naturalSize: SpawnAnimal.sampleNaturalSize(selectedType)
+        };
+        if (wizardRef) {
+            wizardRef._pendingAnimalPlacementState = nextState;
+        }
+        return nextState;
+    }
+
+    static getPendingPlacementNaturalSize(wizardRef) {
+        const state = SpawnAnimal.ensurePendingPlacementState(wizardRef);
+        return Number.isFinite(state && state.naturalSize) && state.naturalSize > 0
+            ? Number(state.naturalSize)
+            : 1;
+    }
+
+    static clearPendingPlacementState(wizardRef) {
+        if (wizardRef && Object.prototype.hasOwnProperty.call(wizardRef, "_pendingAnimalPlacementState")) {
+            wizardRef._pendingAnimalPlacementState = null;
+        }
+    }
+
     cast(targetX, targetY) {
         const mapRef = wizard.map;
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
@@ -73,10 +144,12 @@ class SpawnAnimal extends globalThis.Spell {
 
         const AnimalClass = typeDef.ctor();
         const animal = new AnimalClass(targetNode, mapRef);
+        const naturalSize = SpawnAnimal.getPendingPlacementNaturalSize(wizard);
+        SpawnAnimal.clearPendingPlacementState(wizard);
 
-        // Apply size scale relative to the animal's natural randomly-chosen size
+        // Apply size scale relative to the same pending natural size used by the preview.
         const baseSize = animal.size;
-        const newSize = baseSize * sizeScale;
+        const newSize = naturalSize * sizeScale;
         animal.size = newSize;
         animal.width = (animal.width / baseSize) * newSize;
         animal.height = (animal.height / baseSize) * newSize;

@@ -82,10 +82,18 @@ class PlaceObject extends globalThis.Spell {
                 10,
                 0.25
             );
+            const roofTextureRepeat = this.quantizeToStep(
+                wizard && Number.isFinite(wizard.selectedRoofTextureRepeat) ? wizard.selectedRoofTextureRepeat : 0.125,
+                0.0625,
+                1,
+                0.03125
+            );
             if (wizard) {
                 wizard.selectedRoofOverhang = roofOverhang;
                 wizard.selectedRoofPeakHeight = roofPeakHeight;
+                wizard.selectedRoofTextureRepeat = roofTextureRepeat;
             }
+            targetRoof.textureRepeat = roofTextureRepeat;
             const applied = (typeof roofCtor.applyWallLoopCandidateToRoof === "function")
                 ? roofCtor.applyWallLoopCandidateToRoof(targetRoof, candidate, wizard.map, {
                     peakOffsetZ: roofPeakHeight,

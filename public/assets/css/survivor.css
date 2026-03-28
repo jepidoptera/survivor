@@ -63,11 +63,20 @@ body {
     cursor: default !important;
 }
 
+#inventorySelector {
+    position: absolute;
+    left: 318px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
 #editorSelector {
     display: none !important;
 }
 
 #selectedAura,
+#selectedInventory,
 #selectedEditor,
 #selectedSpell {
     width: 60px;
@@ -87,6 +96,10 @@ body {
 
 #selectedEditor {
     background-image: url("/assets/images/thumbnails/edit.png");
+}
+
+#selectedInventory {
+    background-image: url("/assets/images/thumbnails/backpack.png");
 }
 
 #activeAuraIcons {
@@ -110,6 +123,7 @@ body {
 }
 
 #selectedAura:hover,
+#selectedInventory:hover,
 #selectedEditor:hover,
 #selectedSpell:hover {
     transform: scale(1.05);
@@ -193,6 +207,14 @@ body {
     display: none;
 }
 
+#spellSelector.hidden {
+    display: none;
+}
+
+#inventorySelector.hidden {
+    display: none;
+}
+
 #spellGrid {
     display: grid;
     grid-template-columns: repeat(4, 60px);
@@ -233,6 +255,11 @@ body {
 .spellIcon.selected {
     border-color: #FFD700;
     box-shadow: 0 0 10px #FFD700;
+}
+
+.inactiveAura {
+    filter: grayscale(1);
+    opacity: 0.65;
 }
 
 .spellIcon.keyboard-nav-focus {

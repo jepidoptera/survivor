@@ -1,8 +1,11 @@
 let spellKeyBindings = {
     "F": "fireball",
     "I": "freeze",
+    "L": "lightning",
+    "K": "spikes",
     "M": "maze",
     "V": "vanish",
+    "D": "shield",
     "T": "treegrow",
     "G": "triggerarea",
     "ET": "editscript",
@@ -266,9 +269,12 @@ const SpellSystem = (() => {
     const SPELL_DEFS = [
         { name: "fireball", icon: "/assets/images/thumbnails/fireball.png" },
         { name: "freeze", icon: "/assets/images/magic/iceball.png" },
+        { name: "lightning", icon: "/assets/images/magic/lightning.png" },
+        { name: "spikes", icon: "/assets/images/magic/spike.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/magic/teleport.png" },
+        { name: "shield", icon: "/assets/images/thumbnails/aura.png" },
         { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
         { name: "triggerarea", icon: "/assets/images/thumbnails/wall.png" },
         { name: "editscript", icon: "/assets/images/thumbnails/edit.png" },
@@ -285,12 +291,13 @@ const SpellSystem = (() => {
         { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 10 },
         { name: "speed", icon: "/assets/images/thumbnails/speed.png", key: "P", magicPerSecond: 10 },
         { name: "healing", icon: "/assets/images/thumbnails/cross.png", key: "H", magicPerSecond: 10 },
-        { name: "invisibility", icon: "/assets/images/magic/invisible.png", key: "U", magicPerSecond: 15 }
+        { name: "invisibility", icon: "/assets/images/magic/invisible.png", key: "U", magicPerSecond: 12 }
     ];
-    const ADVENTURE_STARTING_AURAS = ["healing"];
 
     const MAGIC_TICK_MS = 50;
     let healingAuraHpMultiplier = 10;
+    const SHIELD_SPELL_MAGIC_COST = 25;
+    const SHIELD_SPELL_HP = 100;
     const WALL_HEIGHT_MIN = 0.5;
     const WALL_HEIGHT_MAX = 7.0;
     const WALL_HEIGHT_STEP = 0.5;
@@ -312,12 +319,16 @@ const SpellSystem = (() => {
     const ROOF_PEAK_HEIGHT_MAX = 10;
     const ROOF_PEAK_HEIGHT_STEP = 0.25;
     const ROOF_PEAK_HEIGHT_DEFAULT = 2;
+    const ROOF_TEXTURE_REPEAT_MIN = 0.0625;
+    const ROOF_TEXTURE_REPEAT_MAX = 1;
+    const ROOF_TEXTURE_REPEAT_STEP = 0.03125;
+    const ROOF_TEXTURE_REPEAT_DEFAULT = 0.125;
     const VANISH_WALL_TARGET_SEGMENT_LENGTH_WORLD = 1;
     const VANISH_BURST_SHOT_INTERVAL_MS = 45;
     const VANISH_MAGIC_COST_PER_CAST = 10;
     const PLACEABLE_ROTATION_STEP_DEGREES = 5;
-    const POWERUP_PLACEMENT_FILE_NAME = "black diamond.png";
-    const POWERUP_PLACEMENT_IMAGE_PATH = "/assets/images/powerups/black%20diamond.png";
+    const POWERUP_PLACEMENT_FILE_NAME = "button.png";
+    const POWERUP_PLACEMENT_IMAGE_PATH = "/assets/images/powerups/button.png";
     const POWERUP_PLACEMENT_DEFAULT_WIDTH = 0.8;
     const POWERUP_PLACEMENT_DEFAULT_HEIGHT = 0.8;
     const POWERUP_PLACEMENT_DEFAULT_RADIUS = 0.35;
@@ -331,6 +342,8 @@ const SpellSystem = (() => {
     const SPELL_CLASS_BY_NAME = {
         fireball: "Fireball",
         freeze: "Iceball",
+        lightning: "Lightning",
+        spikes: "Spikes",
         vanish: "Vanish",
         editorvanish: "EditorVanish",
         editscript: "EditScript",
@@ -607,7 +620,19 @@ const SpellSystem = (() => {
         return AURA_DEFS.find(aura => aura.name === name) || null;
     }
 
-    function normalizeUnlockedNames(source, allowedNames, requiredNames = []) {
+    function isAuraSpellName(spellName) {
+        return !!getAuraDefinition(spellName);
+    }
+
+    function getAllMagicNames() {
+        return SPELL_DEFS.map(spell => spell.name).concat(AURA_DEFS.map(aura => aura.name));
+    }
+
+    function isKnownMagicName(magicName) {
+        return typeof magicName === "string" && getAllMagicNames().includes(magicName);
+    }
+
+    function normalizeUnlockedNames(source, allowedNames) {
         const seen = new Set();
         const out = [];
         const append = (name) => {
@@ -618,18 +643,67 @@ const SpellSystem = (() => {
             out.push(normalized);
         };
         if (Array.isArray(source)) source.forEach(append);
-        if (Array.isArray(requiredNames)) requiredNames.forEach(append);
         return out;
+    }
+
+    function migrateLegacyShieldAuraState(wizardRef) {
+        if (!wizardRef) return;
+
+        if (Array.isArray(wizardRef.activeAuras)) {
+            wizardRef.activeAuras = wizardRef.activeAuras.filter(name => name !== "shield");
+        }
+        if (wizardRef.activeAura === "shield") {
+            wizardRef.activeAura = Array.isArray(wizardRef.activeAuras) && wizardRef.activeAuras.length > 0
+                ? wizardRef.activeAuras[0]
+                : null;
+        }
+    }
+
+    function syncUnifiedMagicUnlockState(wizardRef) {
+        const allMagicNames = getAllMagicNames();
+        if (!wizardRef) return allMagicNames.slice();
+
+        migrateLegacyShieldAuraState(wizardRef);
+
+        const combined = Array.isArray(wizardRef.unlockedMagic)
+            ? wizardRef.unlockedMagic
+            : [];
+
+        const unlockedMagic = normalizeUnlockedNames(combined, allMagicNames);
+        wizardRef.unlockedMagic = unlockedMagic.slice();
+
+        return unlockedMagic;
+    }
+
+    function grantMagicUnlock(wizardRef, magicName) {
+        if (!wizardRef || typeof magicName !== "string") return false;
+        const normalizedName = magicName.trim().toLowerCase();
+        if (!isKnownMagicName(normalizedName)) return false;
+        const unlockedMagic = syncUnifiedMagicUnlockState(wizardRef);
+        if (unlockedMagic.includes(normalizedName)) return false;
+        wizardRef.unlockedMagic = unlockedMagic.concat(normalizedName);
+        syncUnifiedMagicUnlockState(wizardRef);
+        return true;
+    }
+
+    function revokeMagicUnlock(wizardRef, magicName) {
+        if (!wizardRef || typeof magicName !== "string") return false;
+        const normalizedName = magicName.trim().toLowerCase();
+        if (!isKnownMagicName(normalizedName)) return false;
+        const unlockedMagic = syncUnifiedMagicUnlockState(wizardRef);
+        if (!unlockedMagic.includes(normalizedName)) return false;
+        wizardRef.unlockedMagic = unlockedMagic.filter(name => name !== normalizedName);
+        syncUnifiedMagicUnlockState(wizardRef);
+        return true;
     }
 
     function getUnlockedSpellNames(wizardRef) {
         const allSpellNames = SPELL_DEFS.map(spell => spell.name);
         if (!wizardRef) return allSpellNames.slice();
-        const requiredNames = [];
-        const unlocked = normalizeUnlockedNames(wizardRef.unlockedSpells, allSpellNames, requiredNames);
-        wizardRef.unlockedSpells = unlocked.slice();
+        const unlockedMagic = syncUnifiedMagicUnlockState(wizardRef);
+        const unlocked = allSpellNames.filter(name => unlockedMagic.includes(name));
         if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
-            return allSpellNames.slice();
+            return allSpellNames.filter(name => name !== "vanish");
         }
         return unlocked;
     }
@@ -637,11 +711,8 @@ const SpellSystem = (() => {
     function getUnlockedAuraNames(wizardRef) {
         const allAuraNames = AURA_DEFS.map(aura => aura.name);
         if (!wizardRef) return allAuraNames.slice();
-        const requiredNames = (typeof wizardRef.isAdventureMode === "function" && wizardRef.isAdventureMode())
-            ? ADVENTURE_STARTING_AURAS
-            : [];
-        const unlocked = normalizeUnlockedNames(wizardRef.unlockedAuras, allAuraNames, requiredNames);
-        wizardRef.unlockedAuras = unlocked.slice();
+        const unlockedMagic = syncUnifiedMagicUnlockState(wizardRef);
+        const unlocked = allAuraNames.filter(name => unlockedMagic.includes(name));
         if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
             return allAuraNames.slice();
         }
@@ -650,6 +721,22 @@ const SpellSystem = (() => {
 
     function isSpellUnlocked(wizardRef, spellName) {
         if (typeof spellName !== "string" || spellName.length === 0) return false;
+        if (spellName === "lightning") {
+            const inventory = (wizardRef && typeof wizardRef.getInventory === "function")
+                ? wizardRef.getInventory()
+                : wizardRef?.inventory;
+            if (!inventory) return false;
+            if (typeof inventory.get === "function") {
+                return Number(inventory.get("lightning")) > 0;
+            }
+            if (typeof inventory.has === "function") {
+                return inventory.has("lightning", 1);
+            }
+            const raw = inventory.items && typeof inventory.items === "object"
+                ? inventory.items.lightning
+                : 0;
+            return Number(raw) > 0;
+        }
         return getUnlockedSpellNames(wizardRef).includes(spellName);
     }
 
@@ -658,13 +745,33 @@ const SpellSystem = (() => {
         return getUnlockedAuraNames(wizardRef).includes(auraName);
     }
 
+    function getMagicIconPath(magicName) {
+        if (typeof magicName !== "string") return "";
+        const normalizedName = magicName.trim().toLowerCase();
+        if (!normalizedName.length) return "";
+        const spellDef = SPELL_DEFS.find(spell => spell.name === normalizedName);
+        if (spellDef && typeof spellDef.icon === "string") return spellDef.icon;
+        const auraDef = AURA_DEFS.find(aura => aura.name === normalizedName);
+        if (auraDef && typeof auraDef.icon === "string") return auraDef.icon;
+        return "";
+    }
+
     function getAvailableAuraDefinitions(wizardRef) {
         const unlocked = new Set(getUnlockedAuraNames(wizardRef));
         return AURA_DEFS.filter(aura => unlocked.has(aura.name));
     }
 
+    function shouldFoldAurasIntoSpellList(wizardRef) {
+        return !!(
+            wizardRef &&
+            typeof wizardRef.isAdventureMode === "function" &&
+            wizardRef.isAdventureMode()
+        );
+    }
+
     function normalizeActiveAuras(wizardRef) {
         if (!wizardRef) return [];
+        syncUnifiedMagicUnlockState(wizardRef);
         const source = Array.isArray(wizardRef.activeAuras)
             ? wizardRef.activeAuras
             : (typeof wizardRef.activeAura === "string" ? [wizardRef.activeAura] : []);
@@ -691,6 +798,10 @@ const SpellSystem = (() => {
         return getActiveAuraNames(wizardRef).includes(auraName);
     }
 
+    function isAuraSpellInactive(wizardRef, auraName) {
+        return isAuraSpellName(auraName) && !isAuraActive(wizardRef, auraName);
+    }
+
     function isPlayerInvisibleToEnemies(wizardRef) {
         return isAuraActive(wizardRef, "invisibility");
     }
@@ -710,6 +821,7 @@ const SpellSystem = (() => {
         }
         wizardRef.activeAuras = next;
         wizardRef.activeAura = next.length > 0 ? next[0] : null; // backward compatibility
+        refreshSpellSelector(wizardRef);
         refreshAuraSelector(wizardRef);
         return true;
     }
@@ -726,6 +838,12 @@ const SpellSystem = (() => {
             active.push(aura.name);
         }
         return setActiveAuras(wizardRef, active);
+    }
+
+    function syncAdventureAuraSelectionState(wizardRef) {
+        if (!wizardRef || !shouldFoldAurasIntoSpellList(wizardRef)) return false;
+        normalizeActiveAuras(wizardRef);
+        return false;
     }
 
     function getActiveAuraMagicDrainPerSecond(wizardRef) {
@@ -750,6 +868,36 @@ const SpellSystem = (() => {
         if (!Number.isFinite(n)) return getHealingAuraHpMultiplier();
         healingAuraHpMultiplier = Math.max(1, n);
         return healingAuraHpMultiplier;
+    }
+
+    function castShieldSpell(wizardRef) {
+        if (!wizardRef) return false;
+        if (!canAffordMagicCost(wizardRef, SHIELD_SPELL_MAGIC_COST)) {
+            if (globalThis.Spell && typeof globalThis.Spell.indicateInsufficientMagic === "function") {
+                globalThis.Spell.indicateInsufficientMagic();
+            }
+            return false;
+        }
+
+        if (!spendMagicCost(wizardRef, SHIELD_SPELL_MAGIC_COST)) {
+            return false;
+        }
+
+        if (typeof wizardRef.applyShieldSpell === "function") {
+            wizardRef.applyShieldSpell(SHIELD_SPELL_HP);
+        } else {
+            wizardRef.shieldHp = SHIELD_SPELL_HP;
+            wizardRef.maxShieldHp = SHIELD_SPELL_HP;
+        }
+
+        const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
+        wizardRef.castDelay = true;
+        wizardRef.casting = true;
+        setTimeout(() => {
+            wizardRef.castDelay = false;
+            wizardRef.casting = false;
+        }, 1000 * delayTime);
+        return true;
     }
 
     function getRoadSpellIcon(wizardRef) {
@@ -1419,7 +1567,7 @@ const SpellSystem = (() => {
     }
 
     function getSelectedSpellName(wizardRef) {
-        if (!wizardRef) return "fireball";
+        if (!wizardRef) return "";
         const spellList = (Array.isArray(wizardRef.spells) && wizardRef.spells.length > 0)
             ? wizardRef.spells
             : buildSpellList(wizardRef);
@@ -1434,7 +1582,7 @@ const SpellSystem = (() => {
         if (current && availableSpellNames.includes(current) && !isEditorSpellName(current)) {
             return current;
         }
-        return availableSpellNames[0] || "fireball";
+        return availableSpellNames[0] || "";
     }
 
     function getSelectedEditorCategory(wizardRef) {
@@ -1649,6 +1797,17 @@ const SpellSystem = (() => {
         return wizardRef.selectedRoofPeakHeight;
     }
 
+    function getSelectedRoofTextureRepeat(wizardRef) {
+        if (!wizardRef) return ROOF_TEXTURE_REPEAT_DEFAULT;
+        wizardRef.selectedRoofTextureRepeat = quantizeToStep(
+            wizardRef.selectedRoofTextureRepeat,
+            ROOF_TEXTURE_REPEAT_MIN,
+            ROOF_TEXTURE_REPEAT_MAX,
+            ROOF_TEXTURE_REPEAT_STEP
+        );
+        return wizardRef.selectedRoofTextureRepeat;
+    }
+
     function fetchFlooringTextures() {
         if (flooringTexturePaths.length > 0) {
             return Promise.resolve(flooringTexturePaths);
@@ -1723,7 +1882,35 @@ const SpellSystem = (() => {
         const healingAuraActive = isAuraActive(wizardRef, "healing");
         const hpRegenMultiplier = healingAuraActive ? getHealingAuraHpMultiplier() : 1;
         wizardRef.healRateMultiplier = hpRegenMultiplier;
-        const auraDrainPerSecond = getActiveAuraMagicDrainPerSecond(wizardRef);
+        let auraDrainPerSecond = getActiveAuraMagicDrainPerSecond(wizardRef);
+        if (healingAuraActive) {
+            const maxHp = Number.isFinite(wizardRef.maxHp)
+                ? Number(wizardRef.maxHp)
+                : (Number.isFinite(wizardRef.maxHP) ? Number(wizardRef.maxHP) : null);
+            const currentHp = Number.isFinite(wizardRef.hp) ? Number(wizardRef.hp) : null;
+            const healingNeedsHp = Number.isFinite(maxHp) && maxHp > 0 && Number.isFinite(currentHp) && currentHp < maxHp;
+            if (!healingNeedsHp) {
+                const healingAura = getAuraDefinition("healing");
+                const healingDrainPerSecond = Number.isFinite(healingAura?.magicPerSecond)
+                    ? Math.max(0, Number(healingAura.magicPerSecond))
+                    : 0;
+                auraDrainPerSecond = Math.max(0, auraDrainPerSecond - healingDrainPerSecond);
+            }
+        }
+        if (isAuraActive(wizardRef, "speed")) {
+            const movementVector = (wizardRef.movementVector && typeof wizardRef.movementVector === "object")
+                ? wizardRef.movementVector
+                : null;
+            const movementSpeed = movementVector ? Math.hypot(Number(movementVector.x) || 0, Number(movementVector.y) || 0) : 0;
+            const isActuallyMoving = !!wizardRef.moving || movementSpeed > 0.001;
+            if (!isActuallyMoving) {
+                const speedAura = getAuraDefinition("speed");
+                const speedDrainPerSecond = Number.isFinite(speedAura?.magicPerSecond)
+                    ? Math.max(0, Number(speedAura.magicPerSecond))
+                    : 0;
+                auraDrainPerSecond = Math.max(0, auraDrainPerSecond - speedDrainPerSecond);
+            }
+        }
         const auraActive = auraDrainPerSecond > 0;
         const magicRegenPerSecond = Number.isFinite(wizardRef.magicRegenPerSecond)
             ? Math.max(0, wizardRef.magicRegenPerSecond)
@@ -4371,6 +4558,12 @@ const SpellSystem = (() => {
 
     function castWizardSpell(wizardRef, worldX, worldY, options = null) {
         if (!wizardRef || wizardRef.castDelay) return;
+        if (typeof wizardRef.isFrozen === "function" && wizardRef.isFrozen()) return;
+
+        if (wizardRef.currentSpell === "shield") {
+            castShieldSpell(wizardRef);
+            return;
+        }
 
         if (isVanishToolName(wizardRef.currentSpell) && isDragSpellActive(wizardRef, wizardRef.currentSpell)) {
             completeDragSpell(wizardRef, wizardRef.currentSpell, worldX, worldY);
@@ -4436,6 +4629,7 @@ const SpellSystem = (() => {
                     x: placeX,
                     y: placeY,
                     map: mapRef,
+                    size: powerupPlacement.scale,
                     imagePath: powerupPlacement.imagePath,
                     width: powerupPlacement.width,
                     height: powerupPlacement.height,
@@ -4456,6 +4650,16 @@ const SpellSystem = (() => {
             // Set castDelay immediately to prevent double-fire from
             // spacebar-up quick-cast arriving while pathfinding runs.
             wizardRef.castDelay = true;
+
+            const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
+                ? Scripting
+                : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
+            const isDoorPlacedObjectFn = (scriptingApi && typeof scriptingApi.isDoorPlacedObject === "function")
+                ? scriptingApi.isDoorPlacedObject
+                : null;
+            const isDoorLockedFn = (scriptingApi && typeof scriptingApi.isDoorLocked === "function")
+                ? scriptingApi.isDoorLocked
+                : null;
 
             const blinkNoPathCursor = () => {
                 if (typeof globalThis !== "undefined" && typeof globalThis.blinkCursorNoPath === "function") {
@@ -4516,9 +4720,25 @@ const SpellSystem = (() => {
             const mapNodeCount = Math.max(1, Math.floor((Number(mapRef.width) || 0) * (Number(mapRef.height) || 0)));
             const exhaustiveMaxIterations = Math.max(1000, mapNodeCount * 20);
 
+            const canTraverseMazeObject = (obj) => {
+                if (!obj || obj.gone) return false;
+                const isDoor = isDoorPlacedObjectFn
+                    ? !!isDoorPlacedObjectFn(obj)
+                    : !!(
+                        obj &&
+                        (((typeof obj.type === "string") && obj.type.trim().toLowerCase() === "door") ||
+                        ((typeof obj.category === "string") && obj.category.trim().toLowerCase() === "doors"))
+                    );
+                if (!isDoor) return false;
+                return isDoorLockedFn
+                    ? !isDoorLockedFn(obj)
+                    : obj.isPassable !== false;
+            };
+
             const astarPath = mapRef.findPathAStar(startNode, destinationNode, {
                 maxIterations: exhaustiveMaxIterations,
-                wallAvoidance: 3
+                wallAvoidance: 3,
+                canTraverseObject: canTraverseMazeObject
             });
 
             if (!Array.isArray(astarPath)) {
@@ -4528,12 +4748,12 @@ const SpellSystem = (() => {
                 return;
             }
 
-            // Remove all existing black diamond powerups before placing new ones.
+            // Remove all existing maze-marker buttons before placing new ones.
             const pList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
                 ? globalThis.powerups : [];
             for (let pi = pList.length - 1; pi >= 0; pi--) {
                 const p = pList[pi];
-                if (p && !p.gone && !p.collected && p.imageFileName === "black diamond.png") {
+                if (p && !p.gone && !p.collected && p.imageFileName === POWERUP_PLACEMENT_FILE_NAME) {
                     p.gone = true;
                     if (p.pixiSprite && p.pixiSprite.parent) {
                         p.pixiSprite.parent.removeChild(p.pixiSprite);
@@ -4543,20 +4763,51 @@ const SpellSystem = (() => {
             }
 
             const nodesAlongPath = [startNode, ...astarPath];
+            const isAdjacentMazeStep = (fromNode, toNode) => {
+                if (!fromNode || !toNode) return false;
+                if (typeof mapRef._isAdjacentHexNeighbor === "function") {
+                    return !!mapRef._isAdjacentHexNeighbor(fromNode, toNode);
+                }
+                if (!Array.isArray(fromNode.neighbors)) return false;
+                const adjacentDirs = [1, 3, 5, 7, 9, 11];
+                for (let ai = 0; ai < adjacentDirs.length; ai++) {
+                    if (fromNode.neighbors[adjacentDirs[ai]] === toNode) return true;
+                }
+                return false;
+            };
+
             const seenNodes = new Set();
+            let previousUniqueNode = null;
+            let adjacentStepCounter = 0;
             for (let i = 0; i < nodesAlongPath.length; i++) {
                 const node = nodesAlongPath[i];
                 if (!node) continue;
                 const key = `${node.xindex},${node.yindex}`;
                 if (seenNodes.has(key)) continue;
                 seenNodes.add(key);
-                if (typeof addPowerup === "function") {
-                    addPowerup("black diamond.png", {
+
+                const isFirstNode = previousUniqueNode === null;
+                const isLastNode = node === destinationNode;
+                let shouldPlacePowerup = true;
+
+                if (!isFirstNode && !isLastNode) {
+                    if (isAdjacentMazeStep(previousUniqueNode, node)) {
+                        adjacentStepCounter += 1;
+                        shouldPlacePowerup = (adjacentStepCounter % 2 === 0);
+                    } else {
+                        adjacentStepCounter = 0;
+                    }
+                }
+
+                if (shouldPlacePowerup && typeof addPowerup === "function") {
+                    addPowerup(POWERUP_PLACEMENT_FILE_NAME, {
                         x: node.x,
                         y: node.y,
                         map: mapRef
                     });
                 }
+
+                previousUniqueNode = node;
             }
 
             const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
@@ -4601,6 +4852,17 @@ const SpellSystem = (() => {
             projectile = new globalThis.Fireball();
         } else if (wizardRef.currentSpell === "freeze") {
             projectile = new globalThis.Iceball();
+        } else if (wizardRef.currentSpell === "lightning") {
+            const inventory = (wizardRef && typeof wizardRef.getInventory === "function")
+                ? wizardRef.getInventory()
+                : wizardRef.inventory;
+            if (!inventory || typeof inventory.remove !== "function" || !inventory.remove("lightning", 1)) {
+                syncWizardUnlockState(wizardRef);
+                return;
+            }
+            projectile = new globalThis.Lightning();
+        } else if (wizardRef.currentSpell === "spikes") {
+            projectile = new globalThis.Spikes();
         } else if (wizardRef.currentSpell === "vanish") {
             projectile = new globalThis.Vanish();
         } else if (wizardRef.currentSpell === "editorvanish") {
@@ -4630,6 +4892,9 @@ const SpellSystem = (() => {
         const delayTime = projectile.delayTime || wizardRef.cooldownTime;
         wizardRef.castDelay = true;
         projectiles.push(projectile.cast(worldX, worldY));
+        if (wizardRef.currentSpell === "lightning") {
+            syncWizardUnlockState(wizardRef);
+        }
         wizardRef.casting = true;
         setTimeout(() => {
             wizardRef.castDelay = false;
@@ -4638,7 +4903,7 @@ const SpellSystem = (() => {
     }
 
     function buildSpellList(wizardRef) {
-        return SPELL_DEFS.filter(spell => isSpellUnlocked(wizardRef, spell.name)).map(spell => {
+        const spells = SPELL_DEFS.filter(spell => isSpellUnlocked(wizardRef, spell.name)).map(spell => {
             const key = spell.name === "firewall"
                 ? "F+W"
                 : spell.name === "editscript"
@@ -4652,6 +4917,22 @@ const SpellSystem = (() => {
             }
             return {...spell, key};
         });
+        if (!shouldFoldAurasIntoSpellList(wizardRef)) {
+            return spells;
+        }
+        const auraSpells = getAvailableAuraDefinitions(wizardRef).map(aura => ({
+            ...aura,
+            key: aura.key
+        }));
+        return spells.concat(auraSpells);
+    }
+
+    function shouldShowSpellSelector(wizardRef) {
+        if (!wizardRef) return false;
+        const spellList = Array.isArray(wizardRef.spells)
+            ? wizardRef.spells
+            : buildSpellList(wizardRef);
+        return spellList.length > 0 || (canUseEditorFeatures(wizardRef) && editorMode);
     }
 
     function syncWizardUnlockState(wizardRef, options = {}) {
@@ -4672,11 +4953,12 @@ const SpellSystem = (() => {
             (editorAllowed && (isEditorSpellName(currentSpell) || isEditorToolName(currentSpell)))
         );
         if (!canKeepCurrent) {
-            wizardRef.currentSpell = availableSpellNames[0] || "fireball";
+            wizardRef.currentSpell = availableSpellNames[0] || "";
         }
         if (!availableSpellNames.includes(wizardRef.selectedSpellName)) {
-            wizardRef.selectedSpellName = availableSpellNames[0] || "fireball";
+            wizardRef.selectedSpellName = availableSpellNames[0] || "";
         }
+        syncAdventureAuraSelectionState(wizardRef);
 
         if (options.refreshUi !== false) {
             refreshSpellSelector(wizardRef);
@@ -4703,6 +4985,16 @@ const SpellSystem = (() => {
     }
 
     function refreshAuraSelector(wizardRef) {
+        const showAuraSelector = !!(
+            wizardRef &&
+            typeof wizardRef.isGodMode === "function" &&
+            wizardRef.isGodMode() &&
+            getAvailableAuraDefinitions(wizardRef).length > 0
+        );
+        const $auraSelector = $("#auraSelector");
+        if ($auraSelector.length) {
+            $auraSelector.toggleClass("hidden", !showAuraSelector);
+        }
         const $selectedAura = $("#selectedAura");
         if ($selectedAura.length) {
             $selectedAura.css("background-image", `url('${AURA_MENU_ICON}')`);
@@ -4710,6 +5002,17 @@ const SpellSystem = (() => {
 
         const activeAuraNames = getActiveAuraNames(wizardRef);
         const $activeAuraIcons = $("#activeAuraIcons");
+        const $grid = $("#auraGrid");
+        if (!showAuraSelector) {
+            $("#auraMenu").addClass("hidden");
+            if ($activeAuraIcons.length) {
+                $activeAuraIcons.empty().addClass("hidden");
+            }
+            if ($grid.length) {
+                $grid.empty();
+            }
+            return;
+        }
         if ($activeAuraIcons.length) {
             $activeAuraIcons.empty();
             activeAuraNames.forEach(name => {
@@ -4727,7 +5030,6 @@ const SpellSystem = (() => {
             }
         }
 
-        const $grid = $("#auraGrid");
         if (!$grid.length) return;
         $grid.empty();
 
@@ -4764,6 +5066,8 @@ const SpellSystem = (() => {
 
             if (activeAuraNames.includes(aura.name)) {
                 auraIcon.addClass("selected");
+            } else {
+                auraIcon.addClass("inactiveAura");
             }
             $grid.append(auraIcon);
         });
@@ -5144,12 +5448,11 @@ const SpellSystem = (() => {
                     if (doc && Array.isArray(doc.items) && doc.items.length > 0) {
                         renderPowerupItems(doc.items);
                     } else {
-                        // Fallback: show single black diamond
-                        renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Black Diamond" }]);
+                        renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Button" }]);
                     }
                 });
             } else {
-                renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Black Diamond" }]);
+                renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Button" }]);
             }
             return;
         }
@@ -5219,10 +5522,32 @@ const SpellSystem = (() => {
 
             const roofOverhang = getSelectedRoofOverhang(wizardRef);
             const roofPeakHeight = getSelectedRoofPeakHeight(wizardRef);
+            const roofTextureRepeat = getSelectedRoofTextureRepeat(wizardRef);
 
             const $overhangLabel = $("<div>")
                 .text(`Overhang: ${roofOverhang.toFixed(4)} map units`)
                 .css({ color: "#ffffff", "font-size": "13px" });
+            const $textureRepeatLabel = $("<div>")
+                .text(`Texture Repeat: ${roofTextureRepeat.toFixed(5)} repeats per map unit`)
+                .css({ color: "#ffffff", "font-size": "13px" });
+            const $textureRepeatSlider = $("<input>")
+                .attr({
+                    type: "range",
+                    min: ROOF_TEXTURE_REPEAT_MIN,
+                    max: ROOF_TEXTURE_REPEAT_MAX,
+                    step: ROOF_TEXTURE_REPEAT_STEP,
+                    value: roofTextureRepeat
+                })
+                .css({
+                    width: "100%",
+                    "accent-color": "#ffd700",
+                    cursor: "pointer"
+                })
+                .on("input change", event => {
+                    const value = quantizeToStep(event.target.value, ROOF_TEXTURE_REPEAT_MIN, ROOF_TEXTURE_REPEAT_MAX, ROOF_TEXTURE_REPEAT_STEP);
+                    wizardRef.selectedRoofTextureRepeat = value;
+                    $textureRepeatLabel.text(`Texture Repeat: ${value.toFixed(5)} repeats per map unit`);
+                });
             const $overhangSlider = $("<input>")
                 .attr({
                     type: "range",
@@ -5264,6 +5589,9 @@ const SpellSystem = (() => {
                     $peakHeightLabel.text(`Peak Height: ${value.toFixed(2)} map units`);
                 });
 
+            $grid.append($("<div>").text("Texture Repeat").css({ color: "#ffffff", "font-weight": "bold" }));
+            $grid.append($textureRepeatSlider);
+            $grid.append($textureRepeatLabel);
             $grid.append($("<div>").text("Overhang").css({ color: "#ffffff", "font-weight": "bold" }));
             $grid.append($overhangSlider);
             $grid.append($overhangLabel);
@@ -5636,6 +5964,33 @@ const SpellSystem = (() => {
     function refreshSpellSelector(wizardRef) {
         if (!wizardRef) return;
         wizardRef.spells = buildSpellList(wizardRef);
+        const $spellSelector = $("#spellSelector");
+        const $selectedSpell = $("#selectedSpell");
+        const $spellMenu = $("#spellMenu");
+        const $spellGrid = $("#spellGrid");
+        const showSpellSelector = shouldShowSpellSelector(wizardRef);
+        $spellSelector.toggleClass("hidden", !showSpellSelector);
+        if (!showSpellSelector) {
+            $selectedSpell.empty().css({
+                "background-image": "",
+                "background-size": "",
+                "background-position": "",
+                "position": "",
+                "overflow": ""
+            });
+            $spellMenu.addClass("hidden");
+            $spellGrid.empty();
+            return;
+        }
+
+        $selectedSpell.empty().css({
+            "background-image": "",
+            "background-size": "",
+            "background-position": "",
+            "position": "",
+            "overflow": ""
+        });
+
         const currentSpell = wizardRef.spells.find(s => s.name === wizardRef.currentSpell);
         if (currentSpell) {
             const selCss = {
@@ -5647,15 +6002,17 @@ const SpellSystem = (() => {
                 const selectedType = (wizardRef && wizardRef.selectedAnimalType) || "squirrel";
                 Object.assign(selCss, getAnimalFrameCSS(selectedType));
             }
-            $("#selectedSpell").empty().css(selCss);
+            $selectedSpell.css(selCss);
+            $selectedSpell.toggleClass("inactiveAura", isAuraSpellInactive(wizardRef, currentSpell.name));
         } else if (canUseEditorFeatures(wizardRef) && editorMode && (isEditorToolName(wizardRef.currentSpell) || isEditorSpellName(wizardRef.currentSpell))) {
             const iconUrl = getSelectedEditorIcon(wizardRef);
-            const $selectedSpell = $("#selectedSpell").empty().css({
+            $selectedSpell.css({
                 "background-image": `url('${iconUrl}')`,
                 "background-size": "cover",
                 "background-position": "center center",
                 "position": "" // Reset position in case it was modified
             });
+            $selectedSpell.removeClass("inactiveAura");
 
             if (wizardRef.currentSpell === "placeobject") {
                 const category = normalizeSelectedEditorCategory(wizardRef) || DEFAULT_PLACEABLE_CATEGORY;
@@ -5706,6 +6063,8 @@ const SpellSystem = (() => {
                     }
                 }
             }
+        } else {
+            $selectedSpell.removeClass("inactiveAura");
         }
         if (spellMenuMode === "flooring") {
             renderFlooringSelector(wizardRef);
@@ -5731,12 +6090,12 @@ const SpellSystem = (() => {
             renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
             return;
         }
-        $("#spellGrid").css({
+        $spellGrid.css({
             display: "",
             "flex-direction": "",
             gap: ""
         });
-        $("#spellGrid").empty();
+        $spellGrid.empty();
         wizardRef.spells.forEach(spell => {
             const iconCss = {
                 "background-image": `url('${spell.icon}')`,
@@ -5808,13 +6167,13 @@ const SpellSystem = (() => {
             if (spell.name === wizardRef.currentSpell) {
                 spellIcon.addClass("selected");
             }
-            $("#spellGrid").append(spellIcon);
+            $spellGrid.append(spellIcon);
         });
 
         // If editor mode is active, append editor tools and category icons at the bottom
         if (canUseEditorFeatures(wizardRef) && editorMode) {
             // Separator
-            $("#spellGrid").append(
+            $spellGrid.append(
                 $("<div>").css({
                     "width": "100%",
                     "height": "1px",
@@ -5876,7 +6235,7 @@ const SpellSystem = (() => {
                 if (tool.name === wizardRef.currentSpell) {
                     toolIcon.addClass("selected");
                 }
-                $("#spellGrid").append(toolIcon);
+                $spellGrid.append(toolIcon);
             });
 
             // Editor categories (placeable objects, powerups)
@@ -5935,7 +6294,7 @@ const SpellSystem = (() => {
                 if (selectedEditorCategory === category) {
                     catIcon.addClass("selected");
                 }
-                $("#spellGrid").append(catIcon);
+                $spellGrid.append(catIcon);
             });
         }
     }
@@ -5945,7 +6304,8 @@ const SpellSystem = (() => {
         if ((isEditorSpellName(spellName) || isEditorToolName(spellName)) && !canUseEditorFeatures(wizardRef)) {
             return;
         }
-        if (!isEditorSpellName(spellName) && !isEditorToolName(spellName) && !isSpellUnlocked(wizardRef, spellName)) {
+        const isUnifiedMagicSelection = isAuraUnlocked(wizardRef, spellName);
+        if (!isEditorSpellName(spellName) && !isEditorToolName(spellName) && !isUnifiedMagicSelection && !isSpellUnlocked(wizardRef, spellName)) {
             return;
         }
         const previousSpell = wizardRef.currentSpell;
@@ -5965,6 +6325,10 @@ const SpellSystem = (() => {
         if (!isVanishToolName(spellName)) cancelDragSpell(wizardRef, "vanish");
         if (spellName !== "triggerarea") clearTriggerAreaPlacementDraft(wizardRef);
         if (spellName !== "triggerarea") clearTriggerAreaVertexSelection(wizardRef);
+        if (previousSpell !== spellName && isAuraSpellName(previousSpell)) {
+            const remainingAuras = normalizeActiveAuras(wizardRef).filter(name => name !== previousSpell);
+            setActiveAuras(wizardRef, remainingAuras);
+        }
         wizardRef.currentSpell = spellName;
         if (!isEditorSpellName(spellName) && !isEditorToolName(spellName)) {
             wizardRef.selectedSpellName = spellName;
@@ -5982,7 +6346,9 @@ const SpellSystem = (() => {
             wizardRef.selectedEditorCategory = getSelectedPlaceableCategory(wizardRef);
         }
         normalizeSelectedEditorCategory(wizardRef);
+        syncAdventureAuraSelectionState(wizardRef);
         refreshSpellSelector(wizardRef);
+        refreshAuraSelector(wizardRef);
         if (wizardRef.currentSpell !== "treegrow") {
             stopTreeGrowthChannel(wizardRef, false);
         }
@@ -6002,6 +6368,7 @@ const SpellSystem = (() => {
         getSelectedRoadWidth(wizardRef);
         getSelectedRoofOverhang(wizardRef);
         getSelectedRoofPeakHeight(wizardRef);
+        getSelectedRoofTextureRepeat(wizardRef);
         getUnlockedSpellNames(wizardRef);
         getUnlockedAuraNames(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
@@ -6013,7 +6380,7 @@ const SpellSystem = (() => {
              (canUseEditorFeatures(wizardRef) && (isEditorSpellName(wizardRef.currentSpell) ||
              isEditorToolName(wizardRef.currentSpell))));
         if (!isValidSpell) {
-            wizardRef.currentSpell = wizardRef.selectedSpellName || "fireball";
+            wizardRef.currentSpell = wizardRef.selectedSpellName || "";
         }
         // If current spell is an editor tool (wall/buildroad), start in editor mode
         if (canUseEditorFeatures(wizardRef) && isEditorToolName(wizardRef.currentSpell)) {
@@ -6165,11 +6532,17 @@ const SpellSystem = (() => {
     return {
         castWizardSpell,
         initWizardSpells,
+        getAllMagicNames,
+        getMagicIconPath,
+        isKnownMagicName,
+        grantMagicUnlock,
+        revokeMagicUnlock,
         refreshSpellSelector,
         refreshAuraSelector,
         syncWizardUnlockState,
         setCurrentSpell,
         toggleAura,
+        isAuraSpellName,
         isAuraActive,
         isPlayerInvisibleToEnemies,
         isEditorMode,

@@ -1,3 +1,155 @@
+const CHARACTER_FREEZE_TEMPERATURE_DEGREES = -20;
+const CHARACTER_FIRE_WARM_RATE_DEGREES_PER_SECOND = 10;
+
+class FrozenDeathBurstEffect {
+    static PARTICLE_COUNT = 60;
+
+    constructor(config = {}) {
+        this.type = "frozenDeathBurst";
+        this.visible = true;
+        this.hideProjectileSprite = true;
+        this.x = Number(config.x) || 0;
+        this.y = Number(config.y) || 0;
+        this.z = Math.max(0, Number(config.z) || 0);
+        this.size = Math.max(0.5, Number(config.size) || 1);
+        this.height = Math.max(0.6, Number(config.height) || this.size);
+        this.width = Math.max(0.4, Number(config.width) || this.size);
+        this.snowParticles = [];
+        this.particleGraphics = null;
+        this.gone = false;
+        this._lastUpdateTime = 0;
+        this._pausedAt = null;
+    }
+
+    spawnParticles() {
+        const count = Math.max(8, Math.round(FrozenDeathBurstEffect.PARTICLE_COUNT * Math.max(0.6, this.size)));
+        const centerZ = this.z + (this.height * 0.5);
+        for (let i = 0; i < count; i++) {
+            const spawnHeight = Math.random() * this.height;
+            const lateralX = (Math.random() - 0.5) * this.width;
+            const lateralY = (Math.random() - 0.5) * this.width * 0.45;
+            const spawnX = this.x + lateralX;
+            const spawnY = this.y + lateralY;
+            const spawnZ = this.z + spawnHeight;
+            let burstX = lateralX;
+            let burstY = lateralY;
+            let burstZ = spawnZ - centerZ;
+            const burstLength = Math.hypot(burstX, burstY, burstZ);
+            if (!(burstLength > 1e-6)) {
+                const fallbackAngle = Math.random() * Math.PI * 2;
+                burstX = Math.cos(fallbackAngle);
+                burstY = Math.sin(fallbackAngle) * 0.45;
+                burstZ = (Math.random() - 0.5) * 0.75;
+            }
+            const burstNorm = Math.max(1e-6, Math.hypot(burstX, burstY, burstZ));
+            const burstSpeed = 0.9 + Math.random() * (1.8 * this.size);
+            this.snowParticles.push({
+                x: spawnX,
+                y: spawnY,
+                z: spawnZ,
+                vx: (burstX / burstNorm) * burstSpeed,
+                vy: (burstY / burstNorm) * burstSpeed,
+                vz: (burstZ / burstNorm) * burstSpeed,
+                lifeMs: 450 + Math.random() * 450,
+                ageMs: 0,
+                size: 1.8 + Math.random() * (3.4 * this.size),
+                color: Math.random() < 0.2 ? 0xffffff : (Math.random() < 0.65 ? 0x9fd8ff : 0x4f9dff),
+                alpha: 0.7 + Math.random() * 0.28,
+                shrink: 0.45 + Math.random() * 0.25,
+                gravity: 3.6 + Math.random() * 1.8,
+                fadeDelayMs: Math.random() * 120,
+                airDrag: 0.22 + Math.random() * 0.18,
+                groundDrag: 6 + Math.random() * 2.5,
+                grounded: false
+            });
+        }
+    }
+
+    updateParticles(deltaSec) {
+        if (!Array.isArray(this.snowParticles) || this.snowParticles.length === 0) return;
+        const deltaMs = Math.max(0, deltaSec * 1000);
+        for (let i = this.snowParticles.length - 1; i >= 0; i--) {
+            const particle = this.snowParticles[i];
+            if (!particle) {
+                this.snowParticles.splice(i, 1);
+                continue;
+            }
+            particle.ageMs += deltaMs;
+            if (particle.ageMs >= particle.lifeMs) {
+                this.snowParticles.splice(i, 1);
+                continue;
+            }
+            const gravity = Number.isFinite(particle.gravity) ? Number(particle.gravity) : 0;
+            const airDrag = Math.max(0, Math.min(0.999, (Number(particle.airDrag) || 0) * deltaSec));
+            const groundDrag = Math.max(0, Math.min(0.999, (Number(particle.groundDrag) || 0) * deltaSec));
+            if (!particle.grounded) {
+                particle.vz = (Number(particle.vz) || 0) - (gravity * deltaSec);
+            }
+            particle.x += (Number(particle.vx) || 0) * deltaSec;
+            particle.y += (Number(particle.vy) || 0) * deltaSec;
+            const nextZ = (Number(particle.z) || 0) + ((Number(particle.vz) || 0) * deltaSec);
+            if (nextZ <= 0) {
+                particle.z = 0;
+                particle.vz = 0;
+                particle.grounded = true;
+                particle.vx *= Math.max(0, 1 - groundDrag);
+                particle.vy *= Math.max(0, 1 - groundDrag);
+            } else {
+                particle.z = nextZ;
+                particle.vx *= Math.max(0, 1 - airDrag);
+                particle.vy *= Math.max(0, 1 - airDrag);
+            }
+        }
+    }
+
+    cast() {
+        this.spawnParticles();
+        this._lastUpdateTime = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        this.castInterval = setInterval(() => {
+            if (paused) {
+                if (!this._pausedAt) {
+                    this._pausedAt = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
+                }
+                return;
+            }
+            const now = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            if (this._pausedAt) {
+                this._lastUpdateTime += now - this._pausedAt;
+                this._pausedAt = null;
+            }
+            const deltaMs = Math.max(0, now - (this._lastUpdateTime || now));
+            this._lastUpdateTime = now;
+            this.updateParticles(deltaMs / 1000);
+            if (!this.snowParticles.length) {
+                this.finish();
+            }
+        }, 1000 / Math.max(1, Number(frameRate) || 60));
+        return this;
+    }
+
+    finish() {
+        this.gone = true;
+        if (this.castInterval) {
+            clearInterval(this.castInterval);
+            this.castInterval = null;
+        }
+        if (this.pixiSprite && this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        this.pixiSprite = null;
+        if (this.particleGraphics && this.particleGraphics.parent) {
+            this.particleGraphics.parent.removeChild(this.particleGraphics);
+        }
+        this.particleGraphics = null;
+    }
+}
+
 class Character {
     constructor(type, location, size, map) {
         this.type = type;
@@ -61,6 +213,11 @@ class Character {
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
         this._recordVisitedNode(this.node, "spawn");
+    }
+
+    dropPowerup(powerupType, options = {}) {
+        if (typeof globalThis.dropPowerupNearSource !== "function") return null;
+        return globalThis.dropPowerupNearSource(this, powerupType, options);
     }
 
     get onfire() {
@@ -375,6 +532,23 @@ class Character {
         const minNode = this.map.worldToNode(newX - padding, newY - padding);
         const maxNode = this.map.worldToNode(newX + padding, newY + padding);
         if (!minNode || !maxNode) return nearbyObjects;
+
+        if (typeof this.map.getNodesInIndexWindow === "function") {
+            const xStart = Math.min(minNode.xindex, maxNode.xindex) - 1;
+            const xEnd = Math.max(minNode.xindex, maxNode.xindex) + 1;
+            const yStart = Math.min(minNode.yindex, maxNode.yindex) - 1;
+            const yEnd = Math.max(minNode.yindex, maxNode.yindex) + 1;
+            const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
+            for (let i = 0; i < nearbyNodes.length; i++) {
+                const node = nearbyNodes[i];
+                if (!node || !node.objects) continue;
+                for (const obj of node.objects) {
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                    nearbyObjects.push(obj);
+                }
+            }
+            return nearbyObjects;
+        }
 
         const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
         const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
@@ -804,6 +978,17 @@ class Character {
     }
 
     _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
+        if (
+            this.map &&
+            typeof this.map.canOccupyWorldPosition === "function" &&
+            this.map.canOccupyWorldPosition(targetX, targetY, this, options) !== true
+        ) {
+            if (this.movementVector && typeof this.movementVector === "object") {
+                this.movementVector.x = 0;
+                this.movementVector.y = 0;
+            }
+            return false;
+        }
         const position = this._setVectorMovementPositionRaw(targetX, targetY);
         this.onVectorMovementApplied({
             previousX: this.prevX,
@@ -814,6 +999,10 @@ class Character {
     }
 
     moveDirection(vector, options = {}) {
+        if (this.isFrozen()) {
+            this.applyFrozenState({ clearMoveTimeout: false });
+            return false;
+        }
         const lockMovementVector = !!options.lockMovementVector;
         const maxSpeed = this.getVectorMovementMaxSpeed(options);
         this.currentMaxSpeed = maxSpeed;
@@ -1554,6 +1743,9 @@ class Character {
     getTemperature() {
         return Number.isFinite(this.temperature) ? Number(this.temperature) : this.getTemperatureBaseline();
     }
+    getFreezeTemperatureThreshold() {
+        return CHARACTER_FREEZE_TEMPERATURE_DEGREES;
+    }
     setTemperature(nextTemperature) {
         this.temperature = Number.isFinite(nextTemperature)
             ? Number(nextTemperature)
@@ -1573,7 +1765,46 @@ class Character {
     getDegreesBelowBaseline() {
         return Math.max(0, this.getTemperatureBaseline() - this.getTemperature());
     }
+    isTemperatureFrozen() {
+        return this.getTemperature() <= this.getFreezeTemperatureThreshold();
+    }
+    isFrozen(nowMs = null) {
+        return this.isTemperatureFrozen() || this.isScriptFrozen(nowMs);
+    }
+    applyFrozenState(options = {}) {
+        if (options.clearMoveTimeout && this.moveTimeout) {
+            clearTimeout(this.moveTimeout);
+            this.moveTimeout = null;
+        }
+        if (options.clearAttackTimeout !== false && this.attackTimeout) {
+            clearTimeout(this.attackTimeout);
+            this.attackTimeout = null;
+        }
+        this.moving = false;
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        this.currentMaxSpeed = 0;
+        this.isMovingBackward = false;
+        if (this.movementVector && typeof this.movementVector === "object") {
+            this.movementVector.x = 0;
+            this.movementVector.y = 0;
+        }
+        if (typeof this.resetAttackState === "function") {
+            this.resetAttackState();
+        }
+        this.attackTarget = null;
+        this.attacking = false;
+        this.spriteDirectionLock = null;
+        if (typeof this.updateHitboxes === "function") {
+            this.updateHitboxes();
+        }
+    }
     getTemperatureSpeedMultiplier() {
+        if (this.isTemperatureFrozen()) return 0;
         const degreesBelow = this.getDegreesBelowBaseline();
         if (!(degreesBelow > 0)) return 1;
         return 1 / (2 ** (degreesBelow / 10));
@@ -1592,24 +1823,7 @@ class Character {
         return this.setTemperature(Math.min(baseline, current + dt));
     }
     freeze(seconds) {
-        clearTimeout(this.moveTimeout);
-        this.moveTimeout = null;
-        this.moving = false;
-        this.destination = null;
-        this.path = [];
-        this.nextNode = null;
-        this.travelFrames = 0;
-        this.travelX = 0;
-        this.travelY = 0;
-        if (typeof this.resetAttackState === "function") {
-            this.resetAttackState();
-        }
-        this.attackTarget = null;
-        this.attacking = false;
-        this.spriteDirectionLock = null;
-        if (typeof this.updateHitboxes === "function") {
-            this.updateHitboxes();
-        }
+        this.applyFrozenState({ clearMoveTimeout: true });
 
         if (arguments.length === 0 || typeof seconds === "undefined") {
             this._scriptFrozenUntilMs = Infinity;
@@ -1630,7 +1844,7 @@ class Character {
     }
     unFreeze() {
         this._scriptFrozenUntilMs = 0;
-        if (!this.useExternalScheduler && !this.gone && !this.moveTimeout) {
+        if (!this.useExternalScheduler && !this.gone && !this.moveTimeout && !this.isTemperatureFrozen()) {
             this.moveTimeout = this.nextMove();
         }
     }
@@ -1758,11 +1972,17 @@ class Character {
         if (paused) {
             return;
         }
-        this.recoverTemperature(1 / Math.max(1, Number(this.frameRate) || 1));
-        if (this.isScriptFrozen()) {
-            this.moving = false;
+        const dtSeconds = 1 / Math.max(1, Number(this.frameRate) || 1);
+        const temperatureFrozen = this.isTemperatureFrozen();
+        const scriptFrozen = this.isScriptFrozen();
+        if (temperatureFrozen || scriptFrozen) {
+            this.applyFrozenState({ clearMoveTimeout: false });
+            if (temperatureFrozen && !scriptFrozen) {
+                this.recoverTemperature(dtSeconds);
+            }
             return;
         }
+        this.recoverTemperature(dtSeconds);
         
         if (this.isOnFire) {
             this.burn();
@@ -1832,7 +2052,11 @@ class Character {
                 ? this.map.shortestDeltaY(this.y, this.nextNode.y)
                 : (this.nextNode.y - this.y);
             let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
-            const effectiveSpeed = Math.max(1e-4, this.getEffectiveMovementSpeed(this.speed));
+            const effectiveSpeed = this.getEffectiveMovementSpeed(this.speed);
+            if (!(effectiveSpeed > 0)) {
+                this.applyFrozenState({ clearMoveTimeout: false });
+                return;
+            }
             this.travelFrames = Math.max(1, Math.ceil(direction_distance / effectiveSpeed * this.frameRate));
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
@@ -1868,24 +2092,31 @@ class Character {
             }, 1000 / frameRate);
         }
     }
+    extinguish() {
+        this.onfire = false;
+        if (Number.isFinite(this.fireDuration)) {
+            this.fireDuration = 0;
+        }
+        return true;
+    }
     burn() {
         this.fireDuration--;
         if (this.fireDuration <= 0) {
-            this.isOnFire = false;
-            this.fireDamageScale = 1;
-            if (this.fireSprite && this.fireSprite.parent) {
-                this.fireSprite.parent.removeChild(this.fireSprite);
-                this.fireSprite = null;
-            }
-            if (this.fireAnimationInterval) {
-                clearInterval(this.fireAnimationInterval);
-                this.fireAnimationInterval = null;
-            }
+            this.extinguish();
             return;
         }
         if (this.hp <= 0 && !this.dead) {
             this.die();
         } else {
+            const warmAmount = CHARACTER_FIRE_WARM_RATE_DEGREES_PER_SECOND / Math.max(1, Number(frameRate) || 1);
+            if (typeof this.setTemperature === "function" && typeof this.getTemperature === "function") {
+                this.setTemperature(Math.min(0, this.getTemperature() + warmAmount));
+            } else if (typeof this.changeTemperature === "function") {
+                this.changeTemperature(warmAmount);
+                if (Number.isFinite(this.temperature) && this.temperature > 0) {
+                    this.temperature = 0;
+                }
+            }
             const damageScale = Number.isFinite(this.fireDamageScale) ? this.fireDamageScale : 1;
             const burnDamage = 0.05 * Math.max(0, damageScale);
             if (typeof this.takeDamage === "function") {
@@ -1906,6 +2137,71 @@ class Character {
             ? wizard
             : ((typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null);
         return !!scriptingApi.fireObjectScriptEvent(this, "die", wizardRef, context);
+    }
+    triggerVanishDieEventIfAdventureMode(context = null) {
+        const wizardRef = (typeof wizard !== "undefined" && wizard)
+            ? wizard
+            : ((typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null);
+        if (!wizardRef || typeof wizardRef.isAdventureMode !== "function" || !wizardRef.isAdventureMode()) {
+            return false;
+        }
+        if (this.gone || this.dead) return false;
+
+        if (this === wizardRef) {
+            if (typeof this.die === "function") {
+                this.die();
+            } else {
+                this.dead = true;
+                this.triggerDieScriptEvent(context || { cause: "vanish" });
+            }
+            this.hp = 0;
+            if (typeof this.updateAdventureDeathState === "function") {
+                this.updateAdventureDeathState();
+            }
+            return true;
+        }
+
+        return this.triggerDieScriptEvent(context || { cause: "vanish" });
+    }
+    spawnFrozenDeathBurst() {
+        const projectileList = (typeof projectiles !== "undefined" && Array.isArray(projectiles))
+            ? projectiles
+            : ((typeof globalThis !== "undefined" && Array.isArray(globalThis.projectiles)) ? globalThis.projectiles : null);
+        if (!projectileList) return null;
+        const burst = new FrozenDeathBurstEffect({
+            x: this.x,
+            y: this.y,
+            z: Math.max(0, Number(this.z) || 0),
+            size: Math.max(0.6, Number(this.size) || 1),
+            width: Math.max(
+                0.4,
+                Number(this.width) || 0,
+                Number(this.size) || 1,
+                Number(this.visualRadius) * 2 || 0
+            ),
+            height: Math.max(
+                0.6,
+                Number(this.height) || Number(this.size) || 1,
+                Number(this.visualRadius) * 2 || 0
+            )
+        });
+        projectileList.push(burst.cast());
+        return burst;
+    }
+    shatterFrozenDeath(options = {}) {
+        if (this.gone || this._frozenSpikeShattered) return false;
+        this._frozenSpikeShattered = true;
+        this.dead = true;
+        this.rotation = 0;
+        this.triggerDieScriptEvent({
+            cause: (options && typeof options.cause === "string" && options.cause.length > 0)
+                ? options.cause
+                : "spikes-frozen-shatter",
+            source: options && options.source ? options.source : null
+        });
+        this.spawnFrozenDeathBurst();
+        this.removeFromGame();
+        return true;
     }
     die() {
         this.dead = true;
@@ -1947,6 +2243,10 @@ class Character {
     get interpolatedZ() {
         return this.getInterpolatedPosition().z;
     }
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.FrozenDeathBurstEffect = FrozenDeathBurstEffect;
 }
 
 function getAnimalMoveLogCollection() {

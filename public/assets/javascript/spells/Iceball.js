@@ -19,6 +19,7 @@ class Iceball extends globalThis.Fireball {
 
     static isValidObjectTarget(target, _wizardRef = null) {
         if (!target || target.gone || target.vanishing || target.dead) return false;
+        if (globalThis.Spell.isGroundLayerTarget(target)) return false;
         if (target.type === "wallSection" || target.type === "wall" || target.type === "tree") return false;
         return typeof target.freeze === "function";
     }
@@ -434,6 +435,7 @@ class Iceball extends globalThis.Fireball {
 
     canAffectTarget(obj) {
         if (!obj || obj.gone || obj.vanishing || obj.dead) return false;
+        if (globalThis.Spell.isGroundLayerTarget(obj)) return false;
         return typeof obj.freeze === "function";
     }
 
@@ -447,6 +449,7 @@ class Iceball extends globalThis.Fireball {
 
     shouldExplodeOnImpact(obj, directTarget = null) {
         if (!obj || obj.gone || obj.vanishing) return false;
+        if (globalThis.Spell.isGroundLayerTarget(obj)) return false;
         if (obj === directTarget) return true;
         if (obj.type === "wallSection" || obj.type === "wall" || obj.type === "tree") return true;
         if (typeof globalThis.doesObjectBlockPassage === "function" && globalThis.doesObjectBlockPassage(obj)) {
@@ -476,9 +479,34 @@ class Iceball extends globalThis.Fireball {
         return 0;
     }
 
+    extinguishBurningTarget(target) {
+        if (!target || target.isOnFire !== true) return false;
+        if (typeof target.extinguish === "function") {
+            return !!target.extinguish();
+        }
+        target.isOnFire = false;
+        if (Number.isFinite(target.fireDuration)) {
+            target.fireDuration = 0;
+        }
+        if (Number.isFinite(target.fireDamageScale)) {
+            target.fireDamageScale = 1;
+        }
+        if (target.fireAnimationInterval) {
+            clearInterval(target.fireAnimationInterval);
+            target.fireAnimationInterval = null;
+        }
+        if (target.fireSprite) {
+            target.fireSprite.visible = false;
+        }
+        return true;
+    }
+
     hitTarget(target) {
         if (!this.canAffectTarget(target)) return false;
 
+        const wasAlreadyFrozen = typeof target.isFrozen === "function" && target.isFrozen();
+        const impactDamage = this.damage * (wasAlreadyFrozen ? 1.5 : 1);
+        this.extinguishBurningTarget(target);
         const maxMp = this.getTargetMaxMp(target);
         const freezeSeconds = 1 + (maxMp > 0 ? (100 / maxMp) : 0);
         const maxHp = this.getTargetMaxHp(target);
@@ -494,9 +522,19 @@ class Iceball extends globalThis.Fireball {
         target._freezeTintColor = Iceball.FREEZE_TINT;
 
         if (typeof target.takeDamage === "function") {
-            target.takeDamage(this.damage);
+            target.takeDamage(impactDamage);
         } else if (Number.isFinite(target.hp)) {
-            target.hp -= this.damage;
+            target.hp -= impactDamage;
+        }
+
+        if (
+            Number.isFinite(target.hp) &&
+            target.hp <= 0 &&
+            !target.dead &&
+            typeof target.shatterFrozenDeath === "function"
+        ) {
+            target.shatterFrozenDeath({ source: this.caster || null, projectile: this, cause: "iceball-shatter" });
+            return true;
         }
 
         if (Number.isFinite(target.hp) && target.hp <= 0 && !target.dead && typeof target.die === "function") {
@@ -517,7 +555,9 @@ class Iceball extends globalThis.Fireball {
 
         const doesImpactHitObject = (obj) => {
             if (!obj) return false;
-            const hitboxes = [obj.visualHitbox, obj.groundPlaneHitbox, obj.hitbox];
+            const hitboxes = (obj.type === "tree")
+                ? [obj.groundPlaneHitbox, obj.hitbox]
+                : [obj.visualHitbox, obj.groundPlaneHitbox, obj.hitbox];
             for (let i = 0; i < hitboxes.length; i++) {
                 const hb = hitboxes[i];
                 if (!hb || typeof hb.intersects !== "function") continue;

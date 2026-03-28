@@ -98,6 +98,12 @@ class Vanish extends globalThis.Spell {
 
     static isValidObjectTarget(target, _wizardRef = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (
+            globalThis.Spell.isGroundLayerTarget(target) &&
+            this.allowGroundLayerDirectTargeting !== true
+        ) {
+            return false;
+        }
         if (target.type === "roof") return !!target.placed;
         return true;
     }
@@ -199,7 +205,7 @@ class Vanish extends globalThis.Spell {
         // Check all onscreen objects
         for(let obj of onscreenObjects) {
             if (!obj || obj.gone || obj.vanishing) continue;
-            if (obj.type === "road") continue;
+            if (globalThis.Spell.isGroundLayerTarget(obj)) continue;
             if (!obj.visualHitbox) continue;
             let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
             if (hit && !obj.vanishing) {
@@ -211,6 +217,9 @@ class Vanish extends globalThis.Spell {
 
     beginTargetVanish(target, impactPoint = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (typeof target.triggerVanishDieEventIfAdventureMode === "function") {
+            target.triggerVanishDieEventIfAdventureMode({ cause: "vanish" });
+        }
         target.vanishing = true;
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
@@ -297,6 +306,8 @@ class Vanish extends globalThis.Spell {
 }
 
 class EditorVanish extends Vanish {
+    static allowGroundLayerDirectTargeting = true;
+
     constructor(x, y) {
         super(x, y);
         this.magicCost = 0;

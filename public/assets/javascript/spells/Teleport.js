@@ -9,7 +9,7 @@ class Teleport extends globalThis.Spell {
         this.bounces = 0;
         this.apparentSize = 0;
         this.delayTime = 0;
-        this.magicCost = 10;
+        this.magicCost = 25;
         this.radius = 0;
     }
 
@@ -27,6 +27,16 @@ class Teleport extends globalThis.Spell {
         if (typeof wizard.map.wrapWorldY === "function") destinationY = wizard.map.wrapWorldY(destinationY);
         if (!Number.isFinite(destinationX) || !Number.isFinite(destinationY)) {
             message("Cannot teleport there!");
+            return this;
+        }
+
+        const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
+        if (
+            renderingApi &&
+            typeof renderingApi.isWorldPointTargetable === "function" &&
+            !renderingApi.isWorldPointTargetable(destinationX, destinationY, wizard, wizard.map || null)
+        ) {
+            message("You cannot teleport into darkness!");
             return this;
         }
 

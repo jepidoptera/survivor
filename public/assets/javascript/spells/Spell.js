@@ -61,6 +61,13 @@ class Spell {
         return false;
     }
 
+    static isGroundLayerTarget(target) {
+        if (!target || target.gone || target.vanishing) return false;
+        if (target.type === "road") return true;
+        if (target.type === "triggerArea" || target.isTriggerArea === true) return true;
+        return target.rotationAxis === "ground";
+    }
+
     constructor(x, y) {
         this.x = x;
         this.y = y;

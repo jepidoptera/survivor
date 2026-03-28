@@ -51,6 +51,50 @@
         }
     }
 
+    function getUnlockedMagicList(wizardRef) {
+        if (!wizardRef) return [];
+        if (
+            global.SpellSystem &&
+            typeof global.SpellSystem.getAllMagicNames === "function"
+        ) {
+            const allowed = global.SpellSystem.getAllMagicNames();
+            return ensureUniqueList(wizardRef.unlockedMagic).filter(name => allowed.includes(name));
+        }
+        return ensureUniqueList(wizardRef.unlockedMagic);
+    }
+
+    function addUnlockedMagic(wizardRef, magicName) {
+        if (!wizardRef || !magicName) return false;
+        if (
+            global.SpellSystem &&
+            typeof global.SpellSystem.grantMagicUnlock === "function"
+        ) {
+            const changed = global.SpellSystem.grantMagicUnlock(wizardRef, magicName);
+            syncSpellAndAuraState(wizardRef);
+            return changed || getUnlockedMagicList(wizardRef).includes(String(magicName).trim().toLowerCase());
+        }
+        const unlocked = getUnlockedMagicList(wizardRef);
+        const normalizedName = String(magicName).trim().toLowerCase();
+        if (!unlocked.includes(normalizedName)) unlocked.push(normalizedName);
+        wizardRef.unlockedMagic = unlocked;
+        return true;
+    }
+
+    function removeUnlockedMagic(wizardRef, magicName) {
+        if (!wizardRef || !magicName) return false;
+        if (
+            global.SpellSystem &&
+            typeof global.SpellSystem.revokeMagicUnlock === "function"
+        ) {
+            const changed = global.SpellSystem.revokeMagicUnlock(wizardRef, magicName);
+            syncSpellAndAuraState(wizardRef);
+            return changed || !getUnlockedMagicList(wizardRef).includes(String(magicName).trim().toLowerCase());
+        }
+        const normalizedName = String(magicName).trim().toLowerCase();
+        wizardRef.unlockedMagic = getUnlockedMagicList(wizardRef).filter(name => name !== normalizedName);
+        return !wizardRef.unlockedMagic.includes(normalizedName);
+    }
+
     const assetAdapters = {
         inventoryItem: {
             getQuantity(wizardRef, entry) {
@@ -76,23 +120,20 @@
         },
         spell: {
             getQuantity(wizardRef, entry) {
-                const unlocked = ensureUniqueList(wizardRef && wizardRef.unlockedSpells);
+                const unlocked = getUnlockedMagicList(wizardRef);
                 return unlocked.includes(entry.id) ? 1 : 0;
             },
             add(wizardRef, entry) {
                 if (!wizardRef) return false;
-                const unlocked = ensureUniqueList(wizardRef.unlockedSpells);
-                if (!unlocked.includes(entry.id)) unlocked.push(entry.id);
-                wizardRef.unlockedSpells = unlocked;
+                addUnlockedMagic(wizardRef, entry.id);
                 syncSpellAndAuraState(wizardRef);
                 return true;
             },
             remove(wizardRef, entry) {
                 if (!wizardRef) return false;
-                wizardRef.unlockedSpells = ensureUniqueList(wizardRef.unlockedSpells)
-                    .filter(name => name !== entry.id);
+                removeUnlockedMagic(wizardRef, entry.id);
                 syncSpellAndAuraState(wizardRef);
-                return !ensureUniqueList(wizardRef.unlockedSpells).includes(entry.id);
+                return !getUnlockedMagicList(wizardRef).includes(entry.id);
             },
             maxQuantity() {
                 return 1;
@@ -100,23 +141,41 @@
         },
         aura: {
             getQuantity(wizardRef, entry) {
-                const unlocked = ensureUniqueList(wizardRef && wizardRef.unlockedAuras);
+                const unlocked = getUnlockedMagicList(wizardRef);
                 return unlocked.includes(entry.id) ? 1 : 0;
             },
             add(wizardRef, entry) {
                 if (!wizardRef) return false;
-                const unlocked = ensureUniqueList(wizardRef.unlockedAuras);
-                if (!unlocked.includes(entry.id)) unlocked.push(entry.id);
-                wizardRef.unlockedAuras = unlocked;
+                addUnlockedMagic(wizardRef, entry.id);
                 syncSpellAndAuraState(wizardRef);
                 return true;
             },
             remove(wizardRef, entry) {
                 if (!wizardRef) return false;
-                wizardRef.unlockedAuras = ensureUniqueList(wizardRef.unlockedAuras)
-                    .filter(name => name !== entry.id);
+                removeUnlockedMagic(wizardRef, entry.id);
                 syncSpellAndAuraState(wizardRef);
-                return !ensureUniqueList(wizardRef.unlockedAuras).includes(entry.id);
+                return !getUnlockedMagicList(wizardRef).includes(entry.id);
+            },
+            maxQuantity() {
+                return 1;
+            }
+        },
+        magic: {
+            getQuantity(wizardRef, entry) {
+                const unlocked = getUnlockedMagicList(wizardRef);
+                return unlocked.includes(entry.id) ? 1 : 0;
+            },
+            add(wizardRef, entry) {
+                if (!wizardRef) return false;
+                addUnlockedMagic(wizardRef, entry.id);
+                syncSpellAndAuraState(wizardRef);
+                return true;
+            },
+            remove(wizardRef, entry) {
+                if (!wizardRef) return false;
+                removeUnlockedMagic(wizardRef, entry.id);
+                syncSpellAndAuraState(wizardRef);
+                return !getUnlockedMagicList(wizardRef).includes(entry.id);
             },
             maxQuantity() {
                 return 1;
@@ -199,6 +258,52 @@
     function canSellEntry(session, entry) {
         if (!session || !entry || !entry.canSell || entry.sellPrice === null) return false;
         return getEntryQuantity(session, entry) >= entry.quantity;
+    }
+
+    function shouldHideBuyEntry(session, entry) {
+        if (!session || !entry) return false;
+        if (!["spell", "aura", "magic"].includes(entry.type)) return false;
+        return canSellEntry(session, entry);
+    }
+
+    function attachTradeScrollbar($list) {
+        if (!$list || !$list.length) return $list;
+
+        const $shell = $("<div>").addClass("tradeEntryListShell");
+        const $rail = $("<div>").addClass("tradeEntryScrollbar");
+        const $thumb = $("<div>").addClass("tradeEntryScrollbarThumb");
+        $rail.append($thumb);
+        $shell.append($list, $rail);
+
+        const updateScrollbar = () => {
+            const element = $list.get(0);
+            if (!element) return;
+            const viewportHeight = element.clientHeight || 0;
+            const contentHeight = element.scrollHeight || 0;
+            const maxScroll = Math.max(0, contentHeight - viewportHeight);
+            const needsScrollbar = maxScroll > 1;
+
+            $shell.toggleClass("has-scroll", needsScrollbar);
+            if (!needsScrollbar) {
+                $thumb.css({ height: "0px", transform: "translateY(0px)" });
+                return;
+            }
+
+            const trackHeight = $rail.height() || viewportHeight;
+            const thumbHeight = Math.max(56, Math.min(trackHeight, (viewportHeight / contentHeight) * trackHeight));
+            const travel = Math.max(0, trackHeight - thumbHeight);
+            const top = maxScroll > 0 ? (element.scrollTop / maxScroll) * travel : 0;
+
+            $thumb.css({
+                height: `${thumbHeight}px`,
+                transform: `translateY(${top}px)`
+            });
+        };
+
+        $list.on("scroll.tradeScrollbar", updateScrollbar);
+        setTimeout(updateScrollbar, 0);
+        $(window).off("resize.tradeScrollbar").on("resize.tradeScrollbar", updateScrollbar);
+        return $shell;
     }
 
     function applyBuy(session, entry) {
@@ -286,36 +391,32 @@
         $header.append(
             $("<div>")
                 .addClass("tradeCurrencyBadge")
-                .append($("<span>").addClass("tradeCurrencyValue").text(currencyAmount))
                 .append($("<span>").addClass("tradeCurrencyLabel").text(session.currencyLabel))
+                .append($("<span>").addClass("tradeCurrencyValue").text(currencyAmount))
         );
         $shell.append($header);
 
         const $columns = $("<div>").addClass("tradeModalColumns");
-        const $buyColumn = $("<div>").addClass("tradeColumn");
-        const $sellColumn = $("<div>").addClass("tradeColumn");
-        $buyColumn.append($("<div>").addClass("tradeColumnTitle").text("Buy"));
-        $sellColumn.append($("<div>").addClass("tradeColumnTitle").text("Sell"));
+        const $buyColumn = $("<div>").addClass("tradeColumn tradeColumnBuy");
+        const $sellColumn = $("<div>").addClass("tradeColumn tradeColumnSell");
+        $buyColumn.append($("<div>").addClass("tradeColumnTitle"));
+        $sellColumn.append($("<div>").addClass("tradeColumnTitle"));
 
-        const buyEntries = session.entries.filter(entry => entry.canBuy);
-        const sellEntries = session.entries.filter(entry => entry.canSell && getEntryQuantity(session, entry) > 0);
+        const buyEntries = session.entries.filter(entry => entry.canBuy && !shouldHideBuyEntry(session, entry));
+        const sellEntries = session.entries.filter(entry => entry.canSell && canSellEntry(session, entry));
 
         const $buyList = $("<div>").addClass("tradeEntryList");
-        if (buyEntries.length === 0) {
-            $buyList.append($("<div>").addClass("tradeEmptyState").text("Nothing is for sale right now."));
-        } else {
+        if (buyEntries.length > 0) {
             buyEntries.forEach(entry => $buyList.append(buildEntryCard(session, entry, "buy")));
         }
 
         const $sellList = $("<div>").addClass("tradeEntryList");
-        if (sellEntries.length === 0) {
-            $sellList.append($("<div>").addClass("tradeEmptyState").text("You have nothing here to sell."));
-        } else {
+        if (sellEntries.length > 0) {
             sellEntries.forEach(entry => $sellList.append(buildEntryCard(session, entry, "sell")));
         }
 
-        $buyColumn.append($buyList);
-        $sellColumn.append($sellList);
+        $buyColumn.append(attachTradeScrollbar($buyList));
+        $sellColumn.append(attachTradeScrollbar($sellList));
         $columns.append($buyColumn, $sellColumn);
         $shell.append($columns);
 
@@ -349,6 +450,7 @@
 
     function teardownTradeModal() {
         $(`#${TRADE_MODAL_BACKDROP_ID}`).remove();
+        $(window).off("resize.tradeScrollbar");
         if (typeof activeTradeKeyHandler === "function") {
             document.removeEventListener("keydown", activeTradeKeyHandler);
         }

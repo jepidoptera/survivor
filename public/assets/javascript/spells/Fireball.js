@@ -9,6 +9,7 @@ class Fireball extends globalThis.Spell {
     static isValidObjectTarget(target, _wizardRef = null) {
         if (!target || target.gone || target.vanishing || target.dead) return false;
         if (target.type === "wallSection" || target.type === "wall") return false;
+        if (globalThis.Spell.isGroundLayerTarget(target)) return false;
         // Fireball can force-target trees and any other pickable object.
         return true;
     }
@@ -326,6 +327,7 @@ class Fireball extends globalThis.Spell {
 
         for (let obj of onscreenObjects) {
             if (!obj || obj.gone || obj.vanishing) continue;
+            if (globalThis.Spell.isGroundLayerTarget(obj)) continue;
             if (obj.type === "tree" && obj !== directTarget) continue;
 
             if (doesImpactHitObject(obj)) {

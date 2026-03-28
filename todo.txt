@@ -33,28 +33,36 @@ X doors should have separate frame and door sprites
 X ice ball trails snow and explodes on impact
 
 X god mode/ adventure mode
-/ treasures in the maze
-  choose spells from menu on startup
+X treasures in the maze
+X choose spells from menu on startup
    -fireball
    -iceball
-   -health aura
+   -health
    -teleport
    -vanish
    -spikes
    -shield
-
-  mind control spells
-  invisibility aura
-  shield spell
-  time-slowing aura
+   -maze
+   -invisibility
+   -omnivision
+  
+X invisibility aura
+X shield spell
+X unify spells and auras
 X animals have magic points that protect them from spells
 X trees popping in and out of view
+X startup message
+X dialogs in scripting
+X player dies
+
+  thunderbolts from fragglegod
+  shop sells magic items
+  holding the spell hotkey works to cast the spell just like spacebar
+  mind control spells
+  time-slowing aura
   trees should be transparent when the player is behind them
   see-through windows
 / revamp close combat - use hitboxes instead of hex tiles
-X startup message
-/ dialogs in scripting
-X player dies
   checkpoints
   undo system for editor
   refactor renderer
@@ -77,10 +85,11 @@ X all fallen trees save as burned, even when they weren't
 X fireball shouldn't target non-flammable things
 X rugs don't rotate right in preview
 X fallen trees have incorrect hitboxes
-  roof textures don't scale right
-/ large trigger area which activates maze mode seems to create dead zones for rendering
-  animals keep lunging for way too far
+X roof textures don't scale right
+X large trigger area which activates maze mode seems to create dead zones for rendering
+X animals keep lunging for way too far
 X roofs phasing through walls
 X item messages not showing
-  spell images don't scale with zoom
-  walls sometimes connect sideways and get totally screwy
+X spell images don't scale with zoom
+X walls sometimes connect sideways and get totally screwy
+  megabear sometimes gets stuck.

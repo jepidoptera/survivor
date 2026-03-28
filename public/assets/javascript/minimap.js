@@ -14,6 +14,7 @@
     const COL_ANIMAL   = "#8b3a2a";   // brownish red
     const COL_WIZARD   = "#ffffff";   // white dot for player
     const COL_VIEWPORT = "rgba(255,255,255,0.35)"; // viewport rectangle outline
+    const PROTOTYPE_MINIMAP_WINDOW_SIZE = 256;
 
     let visible = false;
     let canvas  = null;
@@ -95,15 +96,22 @@
         const localY = event.clientY - rect.top;
         if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return;
 
-        const worldW = Number(map.worldWidth);
-        const worldH = Number(map.worldHeight);
-        if (!(worldW > 0) || !(worldH > 0)) return;
-
         event.preventDefault();
         event.stopPropagation();
 
-        const worldX = (localX / rect.width) * worldW;
-        const worldY = (localY / rect.height) * worldH;
+        let worldX;
+        let worldY;
+        if (typeof map.getLoadedPrototypeNodes === "function" && typeof wizard !== "undefined" && wizard) {
+            const halfWindow = PROTOTYPE_MINIMAP_WINDOW_SIZE * 0.5;
+            worldX = Number(wizard.x) - halfWindow + (localX / rect.width) * PROTOTYPE_MINIMAP_WINDOW_SIZE;
+            worldY = Number(wizard.y) - halfWindow + (localY / rect.height) * PROTOTYPE_MINIMAP_WINDOW_SIZE;
+        } else {
+            const worldW = Number(map.worldWidth);
+            const worldH = Number(map.worldHeight);
+            if (!(worldW > 0) || !(worldH > 0)) return;
+            worldX = (localX / rect.width) * worldW;
+            worldY = (localY / rect.height) * worldH;
+        }
         centerViewportOnWorldPoint(worldX, worldY);
     }
 
@@ -244,6 +252,184 @@
         target.stroke();
     }
 
+    function drawObjectTypeOnMinimap(target, mapRef, mw, mh, dotW, dotH, type, x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const worldW = Number(mapRef && mapRef.worldWidth);
+        const worldH = Number(mapRef && mapRef.worldHeight);
+        if (!(worldW > 0) || !(worldH > 0)) return;
+        const px = (x / worldW) * mw;
+        const py = (y / worldH) * mh;
+        if (type === "tree") {
+            drawDot(target, px, py, dotW, dotH, COL_TREE);
+        } else if (type === "road") {
+            drawDot(target, px, py, dotW, dotH, COL_ROAD);
+        }
+    }
+
+    function drawWallSectionOnMinimap(target, mapRef, mw, mh, lineWidth, drawnWallSections, obj) {
+        if (!obj || obj.type !== "wallSection" || obj.gone) return;
+        if (drawnWallSections.has(obj)) return;
+        const start = obj.startPoint;
+        const end = obj.endPoint;
+        if (!start || !end) return;
+        drawWallSegment(
+            target,
+            mapRef,
+            mw,
+            mh,
+            Number(start.x),
+            Number(start.y),
+            Number(end.x),
+            Number(end.y),
+            lineWidth
+        );
+        drawnWallSections.add(obj);
+    }
+
+    function getPrototypeMinimapWindow() {
+        const wizardRef = (typeof wizard !== "undefined" && wizard) ? wizard : null;
+        const centerX = wizardRef ? Number(wizardRef.x) : 0;
+        const centerY = wizardRef ? Number(wizardRef.y) : 0;
+        const size = PROTOTYPE_MINIMAP_WINDOW_SIZE;
+        const halfSize = size * 0.5;
+        return {
+            centerX,
+            centerY,
+            minX: centerX - halfSize,
+            maxX: centerX + halfSize,
+            minY: centerY - halfSize,
+            maxY: centerY + halfSize,
+            width: size,
+            height: size
+        };
+    }
+
+    function projectPrototypePoint(windowRect, mw, mh, worldX, worldY) {
+        return {
+            x: ((Number(worldX) - windowRect.minX) / windowRect.width) * mw,
+            y: ((Number(worldY) - windowRect.minY) / windowRect.height) * mh
+        };
+    }
+
+    function isPointInsidePrototypeWindow(windowRect, worldX, worldY, padding = 0) {
+        return (
+            Number(worldX) >= (windowRect.minX - padding) &&
+            Number(worldX) <= (windowRect.maxX + padding) &&
+            Number(worldY) >= (windowRect.minY - padding) &&
+            Number(worldY) <= (windowRect.maxY + padding)
+        );
+    }
+
+    function drawPrototypeWallSegment(target, windowRect, mw, mh, lineWidth, ax, ay, bx, by) {
+        if (
+            !Number.isFinite(ax) ||
+            !Number.isFinite(ay) ||
+            !Number.isFinite(bx) ||
+            !Number.isFinite(by)
+        ) {
+            return;
+        }
+        const pad = Math.max(2, lineWidth * 2);
+        const overlapsWindow = !(
+            (ax < windowRect.minX - pad && bx < windowRect.minX - pad) ||
+            (ax > windowRect.maxX + pad && bx > windowRect.maxX + pad) ||
+            (ay < windowRect.minY - pad && by < windowRect.minY - pad) ||
+            (ay > windowRect.maxY + pad && by > windowRect.maxY + pad)
+        );
+        if (!overlapsWindow) return;
+
+        const startPx = projectPrototypePoint(windowRect, mw, mh, ax, ay);
+        const endPx = projectPrototypePoint(windowRect, mw, mh, bx, by);
+        target.strokeStyle = COL_WALL;
+        target.lineWidth = Math.max(1, lineWidth);
+        target.lineCap = "round";
+        target.beginPath();
+        target.moveTo(startPx.x, startPx.y);
+        target.lineTo(endPx.x, endPx.y);
+        target.stroke();
+    }
+
+    function drawPrototypeMinimap(target) {
+        if (typeof map === "undefined" || !map || typeof map.getLoadedPrototypeNodes !== "function") return;
+
+        const mw = target.canvas.width;
+        const mh = target.canvas.height;
+        const loadedNodes = map.getLoadedPrototypeNodes();
+        const windowRect = getPrototypeMinimapWindow();
+        const tileScale = mw / PROTOTYPE_MINIMAP_WINDOW_SIZE;
+        const dotW = Math.max(1, tileScale * 0.95);
+        const dotH = Math.max(1, tileScale * 0.95);
+        const lineWidth = Math.max(1, tileScale * 0.9);
+        const drawnWallSections = new Set();
+
+        target.fillStyle = "#000000";
+        target.fillRect(0, 0, mw, mh);
+
+        for (let i = 0; i < loadedNodes.length; i++) {
+            const node = loadedNodes[i];
+            if (!node || !isPointInsidePrototypeWindow(windowRect, node.x, node.y, 1.5)) continue;
+            const point = projectPrototypePoint(windowRect, mw, mh, node.x, node.y);
+            const nodeColor = (typeof map.getMinimapNodeColor === "function")
+                ? map.getMinimapNodeColor(node)
+                : COL_GROUND;
+            if (typeof nodeColor === "string" && nodeColor.length > 0) {
+                drawDot(target, point.x, point.y, dotW, dotH, nodeColor);
+            }
+            if (!node.objects || node.objects.length === 0) continue;
+            for (let oi = 0; oi < node.objects.length; oi++) {
+                const obj = node.objects[oi];
+                if (!obj) continue;
+                if (obj.type === "wallSection") {
+                    if (!drawnWallSections.has(obj) && obj.startPoint && obj.endPoint) {
+                        drawPrototypeWallSegment(
+                            target,
+                            windowRect,
+                            mw,
+                            mh,
+                            lineWidth,
+                            Number(obj.startPoint.x),
+                            Number(obj.startPoint.y),
+                            Number(obj.endPoint.x),
+                            Number(obj.endPoint.y)
+                        );
+                        drawnWallSections.add(obj);
+                    }
+                } else if (Number.isFinite(obj.x) && Number.isFinite(obj.y) && isPointInsidePrototypeWindow(windowRect, obj.x, obj.y, 2)) {
+                    const objPoint = projectPrototypePoint(windowRect, mw, mh, obj.x, obj.y);
+                    if (obj.type === "tree") {
+                        drawDot(target, objPoint.x, objPoint.y, dotW, dotH, COL_TREE);
+                    } else if (obj.type === "road") {
+                        drawDot(target, objPoint.x, objPoint.y, dotW, dotH, COL_ROAD);
+                    }
+                }
+            }
+        }
+
+        if (typeof animals !== "undefined" && Array.isArray(animals)) {
+            for (let i = 0; i < animals.length; i++) {
+                const a = animals[i];
+                if (!a || a.hp <= 0 || !isPointInsidePrototypeWindow(windowRect, a.x, a.y, 2)) continue;
+                const point = projectPrototypePoint(windowRect, mw, mh, a.x, a.y);
+                drawDot(target, point.x, point.y, Math.max(dotW, 2), Math.max(dotH, 2), COL_ANIMAL);
+            }
+        }
+
+        if (typeof wizard !== "undefined" && wizard) {
+            const point = projectPrototypePoint(windowRect, mw, mh, wizard.x, wizard.y);
+            const size = Math.max(3, tileScale * 2);
+            drawDot(target, point.x - size / 2, point.y - size / 2, size, size, COL_WIZARD);
+        }
+
+        if (typeof viewport !== "undefined" && viewport && viewport.width > 0) {
+            const topLeft = projectPrototypePoint(windowRect, mw, mh, viewport.x, viewport.y);
+            const vpW = (Number(viewport.width) / windowRect.width) * mw;
+            const vpH = (Number(viewport.height) / windowRect.height) * mh;
+            target.strokeStyle = COL_VIEWPORT;
+            target.lineWidth = 1;
+            target.strokeRect(topLeft.x, topLeft.y, vpW, vpH);
+        }
+    }
+
     // ---- build the static layer (entire map, all nodes) ----
     function rebuildStatic() {
         if (typeof map === "undefined" || !map || !map.nodes) return;
@@ -258,57 +444,50 @@
         const wallLineWidth = Math.max(1, Math.min(dotW, dotH));
         const drawnWallSections = new Set();
 
-        function drawObjectType(type, x, y) {
-            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-            const px = (x / worldW) * mw;
-            const py = (y / worldH) * mh;
-            if (type === "tree") {
-                drawDot(staticCtx, px, py, dotW, dotH, COL_TREE);
-            } else if (type === "road") {
-                drawDot(staticCtx, px, py, dotW, dotH, COL_ROAD);
-            }
-        }
-
-        function drawWallSection(obj) {
-            if (!obj || obj.type !== "wallSection" || obj.gone) return;
-            if (drawnWallSections.has(obj)) return;
-            const start = obj.startPoint;
-            const end = obj.endPoint;
-            if (!start || !end) return;
-            drawWallSegment(
-                staticCtx,
-                map,
-                mw,
-                mh,
-                Number(start.x),
-                Number(start.y),
-                Number(end.x),
-                Number(end.y),
-                wallLineWidth
-            );
-            drawnWallSections.add(obj);
-        }
-
-        // Clear to ground colour
-        staticCtx.fillStyle = COL_GROUND;
+        // Clear to black so unloaded / inactive sections are obvious.
+        staticCtx.fillStyle = "#000000";
         staticCtx.fillRect(0, 0, mw, mh);
 
-        // Walk every node on the map
-        for (let xi = 0; xi < map.width; xi++) {
-            const col = map.nodes[xi];
-            if (!col) continue;
-            for (let yi = 0; yi < map.height; yi++) {
-                const node = col[yi];
-                if (!node || !node.objects || node.objects.length === 0) continue;
+        const prototypeMap = typeof map.getLoadedPrototypeNodes === "function";
+
+        if (prototypeMap) {
+            const prototypeNodes = (typeof map.getAllPrototypeNodes === "function")
+                ? map.getAllPrototypeNodes()
+                : [];
+            for (let i = 0; i < prototypeNodes.length; i++) {
+                const node = prototypeNodes[i];
+                if (!node || node._prototypeVoid === true) continue;
                 const px = (node.x / worldW) * mw;
                 const py = (node.y / worldH) * mh;
+                drawDot(staticCtx, px, py, dotW, dotH, "#010101");
+            }
+        } else {
+            // Walk every node on the map
+            for (let xi = 0; xi < map.width; xi++) {
+                const col = map.nodes[xi];
+                if (!col) continue;
+                for (let yi = 0; yi < map.height; yi++) {
+                    const node = col[yi];
+                    if (!node) continue;
+                const px = (node.x / worldW) * mw;
+                const py = (node.y / worldH) * mh;
+                const nodeColor = (typeof map.getMinimapNodeColor === "function")
+                    ? map.getMinimapNodeColor(node)
+                    : COL_GROUND;
+                if (typeof nodeColor === "string" && nodeColor.length > 0) {
+                    drawDot(staticCtx, px, py, dotW, dotH, nodeColor);
+                }
+                const nodeIsActive = (typeof map.isPrototypeNodeActive === "function")
+                    ? map.isPrototypeNodeActive(node)
+                    : true;
+                if (!node || !nodeIsActive || !node.objects || node.objects.length === 0) continue;
 
                 for (let oi = 0; oi < node.objects.length; oi++) {
                     const obj = node.objects[oi];
                     if (!obj) continue;
                     const t = obj.type;
                     if (t === "wallSection") {
-                        drawWallSection(obj);
+                        drawWallSectionOnMinimap(staticCtx, map, mw, mh, wallLineWidth, drawnWallSections, obj);
                     } else if (t === "tree") {
                         drawDot(staticCtx, px, py, dotW, dotH, COL_TREE);
                     } else if (t === "road") {
@@ -316,37 +495,45 @@
                     }
                 }
             }
+            }
         }
 
         // Also render from map.objects so static items not currently attached to
         // node lists still appear on the minimap.
-        if (Array.isArray(map.objects)) {
+        if (!prototypeMap && Array.isArray(map.objects)) {
             for (let i = 0; i < map.objects.length; i++) {
                 const obj = map.objects[i];
                 if (!obj || !obj.type) continue;
+                if (
+                    typeof map.worldToNode === "function" &&
+                    typeof map.isPrototypeNodeActive === "function"
+                ) {
+                    const ownerNode = map.worldToNode(obj.x, obj.y);
+                    if (ownerNode && !map.isPrototypeNodeActive(ownerNode)) continue;
+                }
                 if (obj.type === "wallSection") {
-                    drawWallSection(obj);
+                    drawWallSectionOnMinimap(staticCtx, map, mw, mh, wallLineWidth, drawnWallSections, obj);
                     continue;
                 }
-                drawObjectType(obj.type, obj.x, obj.y);
+                drawObjectTypeOnMinimap(staticCtx, map, mw, mh, dotW, dotH, obj.type, obj.x, obj.y);
             }
         }
 
         // Include lazy records that may not be hydrated into map nodes yet.
-        if (typeof getLazyRoadRecordsForMinimap === "function") {
+        if (!prototypeMap && typeof getLazyRoadRecordsForMinimap === "function") {
             const lazyRoads = getLazyRoadRecordsForMinimap();
             for (let i = 0; i < lazyRoads.length; i++) {
                 const rec = lazyRoads[i];
                 if (!rec) continue;
-                drawObjectType("road", rec.x, rec.y);
+                drawObjectTypeOnMinimap(staticCtx, map, mw, mh, dotW, dotH, "road", rec.x, rec.y);
             }
         }
-        if (typeof getLazyTreeRecordsForMinimap === "function") {
+        if (!prototypeMap && typeof getLazyTreeRecordsForMinimap === "function") {
             const lazyTrees = getLazyTreeRecordsForMinimap();
             for (let i = 0; i < lazyTrees.length; i++) {
                 const rec = lazyTrees[i];
                 if (!rec) continue;
-                drawObjectType("tree", rec.x, rec.y);
+                drawObjectTypeOnMinimap(staticCtx, map, mw, mh, dotW, dotH, "tree", rec.x, rec.y);
             }
         }
 
@@ -365,6 +552,11 @@
         ensureCanvas();
         sizeCanvas();
 
+        if (typeof map.getLoadedPrototypeNodes === "function") {
+            drawPrototypeMinimap(ctx);
+            return;
+        }
+
         // Rebuild static layer if needed (first open, resize, or manual invalidation)
         if (staticDirty) rebuildStatic();
 
@@ -377,6 +569,33 @@
 
         // Blit the cached static layer
         ctx.drawImage(staticCanvas, 0, 0);
+
+        if (typeof map.getLoadedPrototypeNodes === "function") {
+            const loadedNodes = map.getLoadedPrototypeNodes();
+            const drawnWallSections = new Set();
+            for (let i = 0; i < loadedNodes.length; i++) {
+                const node = loadedNodes[i];
+                if (!node) continue;
+                const px = (node.x / worldW) * mw;
+                const py = (node.y / worldH) * mh;
+                const nodeColor = (typeof map.getMinimapNodeColor === "function")
+                    ? map.getMinimapNodeColor(node)
+                    : COL_GROUND;
+                if (typeof nodeColor === "string" && nodeColor.length > 0) {
+                    drawDot(ctx, px, py, dotW, dotH, nodeColor);
+                }
+                if (!node.objects || node.objects.length === 0) continue;
+                for (let oi = 0; oi < node.objects.length; oi++) {
+                    const obj = node.objects[oi];
+                    if (!obj) continue;
+                    if (obj.type === "wallSection") {
+                        drawWallSectionOnMinimap(ctx, map, mw, mh, Math.max(1, Math.min(dotW, dotH)), drawnWallSections, obj);
+                    } else {
+                        drawObjectTypeOnMinimap(ctx, map, mw, mh, dotW, dotH, obj.type, obj.x, obj.y);
+                    }
+                }
+            }
+        }
 
         // -- dynamic: animals --
         if (typeof animals !== "undefined" && Array.isArray(animals)) {

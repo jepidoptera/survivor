@@ -36,6 +36,7 @@
             this.mazeModeSuppressRevealAnimation = false;
             this.initialized = false;
             this.wizardSprite = null;
+            this.wizardGhostSprite = null;
             this.wizardShadowGraphics = null;
             this.wizardShadowSprite = null;
             this.wizardShadowProxy = null;
@@ -49,6 +50,7 @@
             this.powerupPlacementPreviewDisplayObject = null;
             this.powerupPlacementPreviewItem = null;
             this.wallPlacementPreviewGraphics = null;
+            this.prototypeSectionSeamGraphics = null;
             this.hexGridTexture = null;
             this.hexGridSprites = [];
             this.hexGridContainer = null;
@@ -62,6 +64,7 @@
             this.activeDepthBillboardMeshes = new Set();
             this.activeDepthBillboardItems = new Set();
             this.activeAnimalHealthBarItems = new Set();
+            this.activeTreeHealthBarItems = new Set();
             this.activePowerupDisplayObjects = new Set();
             this.activeProjectileDisplayObjects = new Set();
             this.scriptMessageTextObjects = new Map();
@@ -138,6 +141,19 @@
             ctx2d.fill();
             this._wizardShadowTexture = PIXI.Texture.from(canvas);
             return this._wizardShadowTexture;
+        }
+
+        ensureWizardGhostSprite() {
+            if (!this.wizardGhostSprite) {
+                this.wizardGhostSprite = new PIXI.Sprite(PIXI.Texture.from("/assets/images/ghost.png"));
+                this.wizardGhostSprite.name = "renderingWizardGhost";
+                this.wizardGhostSprite.anchor.set(0.5, 1);
+                this.wizardGhostSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(this.wizardGhostSprite, "renderable")) {
+                    this.wizardGhostSprite.renderable = false;
+                }
+            }
+            return this.wizardGhostSprite;
         }
 
         ensureWizardShadowProxy() {
@@ -580,6 +596,57 @@
             return distance > litDistance;
         }
 
+        isRadialItemHiddenByLos(item, wizard, mapRef = null) {
+            if (!item || !wizard) return false;
+            const worldPos = this.getLosVisibilitySamplePointForItem(item, mapRef, wizard);
+            if (!worldPos) return false;
+            if (!this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef)) return false;
+
+            const state = this.currentLosState;
+            if (!state || !state.depth || !Number.isFinite(state.bins) || state.bins < 3) return true;
+            const bins = Math.floor(state.bins);
+            const depth = state.depth;
+            if (!depth || depth.length !== bins) return true;
+
+            const effectiveMap = mapRef || (wizard && wizard.map) || (this.camera && this.camera.map) || global.map || null;
+            const dx = (effectiveMap && typeof effectiveMap.shortestDeltaX === "function")
+                ? effectiveMap.shortestDeltaX(wizard.x, worldPos.x)
+                : (worldPos.x - wizard.x);
+            const dy = (effectiveMap && typeof effectiveMap.shortestDeltaY === "function")
+                ? effectiveMap.shortestDeltaY(wizard.y, worldPos.y)
+                : (worldPos.y - wizard.y);
+            const dist = Math.hypot(dx, dy);
+            if (dist < 0.01) return false;
+
+            const visR = Math.max(
+                Number.isFinite(item.width) ? item.width / 2 : 0,
+                Number.isFinite(item.height) ? item.height / 2 : 0,
+                Number.isFinite(item.radius) ? item.radius : 0,
+                (item.groundPlaneHitbox && Number.isFinite(item.groundPlaneHitbox.radius))
+                    ? item.groundPlaneHitbox.radius : 0,
+                Number.isFinite(item.visualRadius) ? item.visualRadius : 0
+            );
+            if (visR <= 0) return true;
+
+            const halfSpan = Math.asin(Math.min(1, visR / dist));
+            const centerAngle = Math.atan2(dy, dx);
+            const twoPi = Math.PI * 2;
+            const a0 = centerAngle - halfSpan;
+            const a1 = centerAngle + halfSpan;
+            const norm0 = ((a0 + Math.PI) % twoPi + twoPi) % twoPi;
+            const norm1 = ((a1 + Math.PI) % twoPi + twoPi) % twoPi;
+            const bin0 = Math.max(0, Math.min(bins - 1, Math.floor((norm0 / twoPi) * bins)));
+            const bin1 = Math.max(0, Math.min(bins - 1, Math.floor((norm1 / twoPi) * bins)));
+            const spanBins = ((bin1 - bin0 + bins) % bins) || 1;
+
+            for (let i = 0; i <= spanBins; i++) {
+                const b = (bin0 + i) % bins;
+                const d = Number.isFinite(depth[b]) ? depth[b] : Infinity;
+                if (d >= dist) return false;
+            }
+            return true;
+        }
+
         isPlacedObjectEntity(item) {
             return !!(
                 item &&
@@ -589,6 +656,13 @@
 
         forEachWrappedNodeInViewport(mapRef, xPadding, yPadding, callback, cameraOverride = null) {
             if (!mapRef || typeof callback !== "function") return;
+            if (typeof mapRef.getVisibleNodesInViewport === "function") {
+                const nodes = mapRef.getVisibleNodesInViewport(cameraOverride || this.camera || {}, xPadding, yPadding);
+                for (let i = 0; i < nodes.length; i++) {
+                    if (nodes[i]) callback(nodes[i]);
+                }
+                return;
+            }
             const camera = cameraOverride || this.camera || {};
             const viewportRef = global.viewport || null;
             const cameraWidth = Number.isFinite(camera.width)
@@ -1518,12 +1592,16 @@
             const map = ctx.map;
             if (!map || !Array.isArray(map.nodes)) return [];
             const nodes = [];
+            const shouldRenderNode = (typeof map.shouldRenderNode === "function")
+                ? map.shouldRenderNode.bind(map)
+                : null;
 
             this.forEachWrappedNodeInViewport(
                 map,
                 xPadding,
                 yPadding,
                 (node) => {
+                    if (shouldRenderNode && !shouldRenderNode(node)) return;
                     if (node) nodes.push(node);
                 },
                 ctx.camera
@@ -1542,6 +1620,7 @@
                 if (!Array.isArray(col)) continue;
                 for (let y = minY; y <= maxY; y++) {
                     const node = col[y];
+                    if (shouldRenderNode && !shouldRenderNode(node)) continue;
                     if (node) nodes.push(node);
                 }
             }
@@ -1683,6 +1762,15 @@
                 return 0.35;
             }
             return 1;
+        }
+
+        isForceVisible(item) {
+            if (!item) return false;
+            if (item.forceVisible === true || item._forceVisible === true) return true;
+            if (item.forceVisible === 1 || item._forceVisible === 1) return true;
+            if (typeof item.forceVisible === "string" && item.forceVisible.trim().toLowerCase() === "true") return true;
+            if (typeof item._forceVisible === "string" && item._forceVisible.trim().toLowerCase() === "true") return true;
+            return false;
         }
 
         updateSinkAnimation(item, nowMs = null) {
@@ -3119,60 +3207,8 @@
             const LOS_ANIMAL_EDGE_SAMPLES = 8;
             const isAnimalHiddenByLos = (item) => {
                 if (!animalSet || !animalSet.has(item)) return false;
-                const worldPos = this.resolveInterpolatedItemWorldPosition(item, mapRef);
-                if (!worldPos) return false;
-                // Fast path: center is visible → animal is visible
-                if (!this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef)) return false;
-
-                // Center is in shadow. Check whether the occluder shadow fully
-                // covers the animal's VISUAL angular span from the wizard.
-                const state = this.currentLosState;
-                if (!state || !state.depth || !Number.isFinite(state.bins) || state.bins < 3) return true;
-                const bins = Math.floor(state.bins);
-                const depth = state.depth;
-                if (!depth || depth.length !== bins) return true;
-
-                const effectiveMap = mapRef || (wizard && wizard.map) || (this.camera && this.camera.map) || global.map || null;
-                const dx = (effectiveMap && typeof effectiveMap.shortestDeltaX === "function")
-                    ? effectiveMap.shortestDeltaX(wizard.x, worldPos.x)
-                    : (worldPos.x - wizard.x);
-                const dy = (effectiveMap && typeof effectiveMap.shortestDeltaY === "function")
-                    ? effectiveMap.shortestDeltaY(wizard.y, worldPos.y)
-                    : (worldPos.y - wizard.y);
-                const dist = Math.hypot(dx, dy);
-                if (dist < 0.01) return false; // on top of wizard
-
-                // Use the largest visual extent as the visibility radius
-                const visR = Math.max(
-                    Number.isFinite(item.width) ? item.width / 2 : 0,
-                    Number.isFinite(item.height) ? item.height / 2 : 0,
-                    (item.groundPlaneHitbox && Number.isFinite(item.groundPlaneHitbox.radius))
-                        ? item.groundPlaneHitbox.radius : 0
-                );
-                if (visR <= 0) return true;
-
-                // Angular half-span the animal subtends from the wizard's view
-                const halfSpan = Math.asin(Math.min(1, visR / dist));
-                const centerAngle = Math.atan2(dy, dx);
-                const twoPi = Math.PI * 2;
-
-                // Convert angular span to bin range and check if ANY bin is
-                // unblocked (depth >= animal distance) → animal partially visible
-                const a0 = centerAngle - halfSpan;
-                const a1 = centerAngle + halfSpan;
-                const norm0 = ((a0 + Math.PI) % twoPi + twoPi) % twoPi;
-                const norm1 = ((a1 + Math.PI) % twoPi + twoPi) % twoPi;
-                const bin0 = Math.max(0, Math.min(bins - 1, Math.floor((norm0 / twoPi) * bins)));
-                const bin1 = Math.max(0, Math.min(bins - 1, Math.floor((norm1 / twoPi) * bins)));
-
-                // Walk bins from bin0 to bin1 (handling wrap-around)
-                const spanBins = ((bin1 - bin0 + bins) % bins) || 1;
-                for (let i = 0; i <= spanBins; i++) {
-                    const b = (bin0 + i) % bins;
-                    const d = Number.isFinite(depth[b]) ? depth[b] : Infinity;
-                    if (d >= dist) return false; // this bin reaches past the animal → visible
-                }
-                return true; // fully covered by shadow → hidden
+                if (!useMazeLosClipping && this.isForceVisible(item)) return false;
+                return this.isRadialItemHiddenByLos(item, wizard, mapRef);
             };
             const isItemHiddenByMazeLos = (item) => {
                 if (!useMazeLosClipping || !wizard || !item) return false;
@@ -3422,6 +3458,22 @@
                 }
             }
             this.activeAnimalHealthBarItems = visibleAnimalItems;
+
+            const visibleTreeItems = new Set();
+            for (let i = 0; i < renderItems.length; i++) {
+                const item = renderItems[i];
+                if (!item || item.type !== "tree") continue;
+                if (typeof item.updateHealthBarOverlay !== "function") continue;
+                visibleTreeItems.add(item);
+                item.updateHealthBarOverlay(this.camera, this.layers.entities || this.getCharacterLayer());
+            }
+            for (const tree of this.activeTreeHealthBarItems) {
+                if (visibleTreeItems.has(tree)) continue;
+                if (tree && typeof tree.hideHealthBarOverlay === "function") {
+                    tree.hideHealthBarOverlay();
+                }
+            }
+            this.activeTreeHealthBarItems = visibleTreeItems;
         }
 
         renderWizard(ctx) {
@@ -3492,6 +3544,21 @@
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, 0);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
+            const wizardCenterY = pGround.y - jumpOffsetPx - (this.camera.viewscale * 0.25);
+            const renderNowMs = Number.isFinite(ctx.renderNowMs)
+                ? Number(ctx.renderNowMs)
+                : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now());
+            const deathAnimationActive = !!(
+                wizard &&
+                typeof wizard.isAdventureDeathAnimationActive === "function" &&
+                wizard.isAdventureDeathAnimationActive(renderNowMs)
+            );
+            const deathAnimationProgress = deathAnimationActive && typeof wizard.getAdventureDeathAnimationProgress === "function"
+                ? wizard.getAdventureDeathAnimationProgress(renderNowMs)
+                : 0;
+            const ghostSprite = this.ensureWizardGhostSprite();
 
             this.wizardSprite.width = this.camera.viewscale;
             this.wizardSprite.height = this.camera.viewscale;
@@ -3499,12 +3566,68 @@
             if (Object.prototype.hasOwnProperty.call(this.wizardSprite, "renderable")) {
                 this.wizardSprite.renderable = false;
             }
+            if (ghostSprite) {
+                ghostSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(ghostSprite, "renderable")) {
+                    ghostSprite.renderable = false;
+                }
+            }
+
+            if (deathAnimationActive) {
+                if (wizard._renderingDepthMesh) {
+                    wizard._renderingDepthMesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(wizard._renderingDepthMesh, "renderable")) {
+                        wizard._renderingDepthMesh.renderable = false;
+                    }
+                }
+                const shadowProxy = this.ensureWizardShadowProxy();
+                if (shadowProxy && shadowProxy._renderingDepthMesh) {
+                    shadowProxy._renderingDepthMesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(shadowProxy._renderingDepthMesh, "renderable")) {
+                        shadowProxy._renderingDepthMesh.renderable = false;
+                    }
+                }
+                if (this.wizardShadowGraphics) {
+                    this.wizardShadowGraphics.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(this.wizardShadowGraphics, "renderable")) {
+                        this.wizardShadowGraphics.renderable = false;
+                    }
+                }
+                if (this.wizardSprite.parent !== overlayContainer) {
+                    overlayContainer.addChild(this.wizardSprite);
+                }
+                this.wizardSprite.anchor.set(0.5, 0.5);
+                this.wizardSprite.x = pGround.x;
+                this.wizardSprite.y = wizardCenterY;
+                this.wizardSprite.rotation = Math.PI / 2;
+                this.wizardSprite.alpha = wizardAlpha;
+                this.wizardSprite.visible = true;
+                if (Object.prototype.hasOwnProperty.call(this.wizardSprite, "renderable")) {
+                    this.wizardSprite.renderable = true;
+                }
+
+                if (ghostSprite) {
+                    if (ghostSprite.parent !== overlayContainer) {
+                        overlayContainer.addChild(ghostSprite);
+                    }
+                    const riseDistance = this.camera.viewscale * 0.55;
+                    ghostSprite.x = pGround.x;
+                    ghostSprite.y = wizardCenterY - (this.camera.viewscale * 0.05) - (riseDistance * deathAnimationProgress);
+                    ghostSprite.width = this.camera.viewscale * 0.8;
+                    ghostSprite.height = this.camera.viewscale * 0.95;
+                    ghostSprite.alpha = Math.max(0, Math.min(1, deathAnimationProgress / 0.2));
+                    ghostSprite.visible = true;
+                    if (Object.prototype.hasOwnProperty.call(ghostSprite, "renderable")) {
+                        ghostSprite.renderable = true;
+                    }
+                }
+            }
 
             const staticProto = (typeof global.StaticObject === "function" && global.StaticObject.prototype)
                 ? global.StaticObject.prototype
                 : null;
             let wizardDepthMesh = null;
-            if (staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
+            if (!deathAnimationActive && staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
                 if (typeof staticProto.ensureDepthBillboardMesh === "function") {
                     wizard.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
                 }
@@ -3537,6 +3660,11 @@
                     wizardDepthMesh.renderable = true;
                 }
                 this.addPickRenderItem(wizard, wizardDepthMesh, { forceInclude: true });
+            } else if (wizard._renderingDepthMesh) {
+                wizard._renderingDepthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(wizard._renderingDepthMesh, "renderable")) {
+                    wizard._renderingDepthMesh.renderable = false;
+                }
             }
 
             if (this.wizardShadowGraphics) {
@@ -3547,7 +3675,7 @@
             }
 
             const shadowProxy = this.ensureWizardShadowProxy();
-            if (shadowProxy && typeof shadowProxy.updateDepthBillboardMesh === "function") {
+            if (!deathAnimationActive && shadowProxy && typeof shadowProxy.updateDepthBillboardMesh === "function") {
                 shadowProxy.map = wizard.map || global.map || null;
                 shadowProxy.x = renderPos.x;
                 shadowProxy.y = renderPos.y + 0.23;
@@ -3577,17 +3705,52 @@
                         shadowMesh.renderable = true;
                     }
                 }
+            } else if (shadowProxy && shadowProxy._renderingDepthMesh) {
+                shadowProxy._renderingDepthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(shadowProxy._renderingDepthMesh, "renderable")) {
+                    shadowProxy._renderingDepthMesh.renderable = false;
+                }
             }
 
             const hat = wizard.hatGraphics;
+            if (wizard && typeof wizard.drawShield === "function") {
+                if (deathAnimationActive) {
+                    if (wizard.shieldGraphics) {
+                        wizard.shieldGraphics.visible = false;
+                    }
+                    if (wizard.shieldWireframeMesh) {
+                        wizard.shieldWireframeMesh.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(wizard.shieldWireframeMesh, "renderable")) {
+                            wizard.shieldWireframeMesh.renderable = false;
+                        }
+                    }
+                } else {
+                    wizard.drawShield(interpolatedJumpHeight, renderPos);
+                }
+            }
             if (hat && typeof hat === "object") {
                 if (hat.parent !== overlayContainer) {
                     overlayContainer.addChild(hat);
                 }
-                hat.x = pGround.x;
-                const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
-                    * this.camera.viewscale * this.camera.xyratio;
-                hat.y = pGround.y - jumpOffsetPx - hatYOffset;
+                if (deathAnimationActive) {
+                    const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
+                        * this.camera.viewscale * this.camera.xyratio;
+                    const bodyCenterToHatOriginY = (this.camera.viewscale * 0.25) - hatYOffset;
+                    const deathRotation = Math.PI / 2;
+                    const cosTheta = Math.cos(deathRotation);
+                    const sinTheta = Math.sin(deathRotation);
+                    const rotatedHatOffsetX = 0 * cosTheta - bodyCenterToHatOriginY * sinTheta;
+                    const rotatedHatOffsetY = 0 * sinTheta + bodyCenterToHatOriginY * cosTheta;
+                    hat.x = pGround.x + rotatedHatOffsetX;
+                    hat.y = wizardCenterY + rotatedHatOffsetY;
+                    hat.rotation = deathRotation;
+                } else {
+                    hat.x = pGround.x;
+                    const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
+                        * this.camera.viewscale * this.camera.xyratio;
+                    hat.y = pGround.y - jumpOffsetPx - hatYOffset;
+                    hat.rotation = 0;
+                }
                 if (hat.scale && typeof hat.scale.set === "function") {
                     const hatRes = Number.isFinite(wizard.hatResolution) ? Math.max(1, wizard.hatResolution) : 1;
                     const hatRenderScale = Number.isFinite(wizard.hatRenderScale) ? Math.max(0.05, wizard.hatRenderScale) : 1;
@@ -3605,6 +3768,7 @@
         renderPowerups(ctx) {
             const depthContainer = this.layers.depthObjects;
             if (!depthContainer) return;
+            const maskedContainer = this.layers.groundObjects || depthContainer;
             const wizard = (ctx && ctx.wizard) ? ctx.wizard : null;
             const mapRef = (ctx && ctx.map) ? ctx.map : (this.camera && this.camera.map) || global.map || null;
             const mazeLosActive = !!(
@@ -3634,8 +3798,9 @@
                 }
 
                 if (
-                    mazeLosActive &&
-                    this.isWorldPointInLosShadow(Number(powerup.x), Number(powerup.y), wizard, mapRef)
+                    wizard &&
+                    (mazeLosActive || !this.isForceVisible(powerup)) &&
+                    this.isRadialItemHiddenByLos(powerup, wizard, mapRef)
                 ) {
                     sprite.visible = false;
                     if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
@@ -3684,8 +3849,11 @@
                     continue;
                 }
 
-                if (depthMesh.parent !== depthContainer) {
-                    depthContainer.addChild(depthMesh);
+                const targetContainer = mazeLosActive
+                    ? maskedContainer
+                    : depthContainer;
+                if (depthMesh.parent !== targetContainer) {
+                    targetContainer.addChild(depthMesh);
                 }
                 depthMesh.visible = true;
                 if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
@@ -3772,6 +3940,12 @@
                     sprite.x = p.x;
                     sprite.y = p.y - worldZ * this.camera.viewscale * this.camera.xyratio;
 
+                    const zoomFactor = Math.max(
+                        0.01,
+                        Number.isFinite(global.viewportZoomFactor)
+                            ? Number(global.viewportZoomFactor)
+                            : 1
+                    );
                     const apparentSize = Number.isFinite(projectile.apparentSize)
                         ? Number(projectile.apparentSize)
                         : NaN;
@@ -3780,16 +3954,26 @@
                             ? Number(projectile.size)
                             : 0.35
                     ) * this.camera.viewscale;
-                    const sizePx = Math.max(1, Number.isFinite(apparentSize) && apparentSize > 0 ? apparentSize : fallbackSize);
+                    const sizePx = Math.max(
+                        1,
+                        Number.isFinite(apparentSize) && apparentSize > 0
+                            ? (apparentSize * zoomFactor)
+                            : fallbackSize
+                    );
                     sprite.width = sizePx;
                     sprite.height = sizePx;
 
-                    if (projectile.type === "arrow" && projectile.movement) {
+                    if ((projectile.type === "arrow" || projectile.rotateSpriteToMovement) && projectile.movement) {
                         const moveX = Number(projectile.movement.x) || 0;
                         const moveY = Number(projectile.movement.y) || 0;
                         if (Math.hypot(moveX, moveY) > 1e-6) {
-                            sprite.rotation = Math.atan2(moveY, moveX) + Math.PI * 0.5;
+                            const rotationOffset = Number.isFinite(projectile.spriteRotationOffset)
+                                ? Number(projectile.spriteRotationOffset)
+                                : Math.PI * 0.5;
+                            sprite.rotation = Math.atan2(moveY, moveX) + rotationOffset;
                         }
+                    } else {
+                        sprite.rotation = Number(projectile.spriteRotation) || 0;
                     }
                 }
 
@@ -4213,6 +4397,53 @@
             if (!this.wallPlacementPreviewGraphics) return;
             this.wallPlacementPreviewGraphics.clear();
             this.wallPlacementPreviewGraphics.visible = false;
+        }
+
+        clearPrototypeSectionSeams() {
+            if (!this.prototypeSectionSeamGraphics) return;
+            this.prototypeSectionSeamGraphics.clear();
+            this.prototypeSectionSeamGraphics.visible = false;
+        }
+
+        renderPrototypeSectionSeams(ctx) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.prototypeSectionSeamGraphics) {
+                this.prototypeSectionSeamGraphics = new PIXI.Graphics();
+                this.prototypeSectionSeamGraphics.name = "renderingPrototypeSectionSeams";
+                this.prototypeSectionSeamGraphics.skipTransform = true;
+                this.prototypeSectionSeamGraphics.interactive = false;
+                this.prototypeSectionSeamGraphics.visible = false;
+                layer.addChild(this.prototypeSectionSeamGraphics);
+            } else if (this.prototypeSectionSeamGraphics.parent !== layer) {
+                layer.addChild(this.prototypeSectionSeamGraphics);
+            }
+
+            const g = this.prototypeSectionSeamGraphics;
+            g.clear();
+
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            if (!mapRef || typeof mapRef.getPrototypeSectionSeamSegments !== "function") {
+                g.visible = false;
+                return;
+            }
+
+            const segments = mapRef.getPrototypeSectionSeamSegments();
+            if (!Array.isArray(segments) || segments.length === 0) {
+                g.visible = false;
+                return;
+            }
+
+            g.visible = true;
+            g.lineStyle(2, 0xf4f4f4, 0.72);
+            for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                if (!segment) continue;
+                const a = this.camera.worldToScreen(Number(segment.x1), Number(segment.y1), 0);
+                const b = this.camera.worldToScreen(Number(segment.x2), Number(segment.y2), 0);
+                g.moveTo(a.x, a.y);
+                g.lineTo(b.x, b.y);
+            }
         }
 
         clearRoadPlacementPreview() {
@@ -5215,6 +5446,13 @@
                 this.clearPlaceObjectPreview();
                 return;
             }
+            const depthMesh = previewItem._depthBillboardMesh;
+            if (depthMesh && depthMesh !== displayObj) {
+                depthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
+                    depthMesh.renderable = false;
+                }
+            }
             if (displayObj.parent !== container) {
                 container.addChild(displayObj);
             }
@@ -5230,7 +5468,12 @@
             }
 
             const underlayMesh = previewItem._compositeUnderlayMesh;
-            if (underlayMesh && !underlayMesh.destroyed) {
+            const shouldShowUnderlay = !!(
+                underlayMesh &&
+                !underlayMesh.destroyed &&
+                previewItem._compositeUnderlayShouldRender
+            );
+            if (shouldShowUnderlay) {
                 if (underlayMesh.parent !== container) {
                     container.addChild(underlayMesh);
                 }
@@ -5243,6 +5486,11 @@
                 }
                 if (Number.isFinite(underlayMesh.tint)) {
                     underlayMesh.tint = 0xFFFFFF;
+                }
+            } else if (underlayMesh && !underlayMesh.destroyed) {
+                underlayMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(underlayMesh, "renderable")) {
+                    underlayMesh.renderable = false;
                 }
             }
 
@@ -5287,8 +5535,8 @@
                 spellSystemRef &&
                 typeof spellSystemRef.getPowerupPlacementPreviewConfig === "function"
             ) ? spellSystemRef.getPowerupPlacementPreviewConfig(wizard) : {
-                fileName: "black diamond.png",
-                imagePath: "/assets/images/powerups/black%20diamond.png",
+                fileName: "button.png",
+                imagePath: "/assets/images/powerups/button.png",
                 width: 0.8,
                 height: 0.8,
                 radius: 0.35,
@@ -5297,7 +5545,7 @@
 
             const texturePath = (previewConfig && typeof previewConfig.imagePath === "string" && previewConfig.imagePath.length > 0)
                 ? previewConfig.imagePath
-                : "/assets/images/powerups/black%20diamond.png";
+                : "/assets/images/powerups/button.png";
             if (!this.powerupPlacementPreviewSprite) {
                 this.powerupPlacementPreviewSprite = new PIXI.Sprite(PIXI.Texture.from(texturePath));
                 this.powerupPlacementPreviewSprite.anchor.set(0.5, 1);
@@ -5591,6 +5839,9 @@
             this.profileDrawPassSection("renderHexGridOverlay", () => {
                 this.renderHexGridOverlay(ctx);
             });
+            this.profileDrawPassSection("renderPrototypeSectionSeams", () => {
+                this.renderPrototypeSectionSeams(ctx);
+            });
             this.profileDrawPassSection("renderClearanceOverlay", () => {
                 if (typeof drawAnimalClearanceOverlay === "function") {
                     drawAnimalClearanceOverlay(this.layers.ground, this.camera);
@@ -5778,6 +6029,20 @@
             }
             if (!singleton) singleton = new RenderingImpl();
             return singleton.renderFrame(ctx || {});
+        },
+        isWorldPointTargetable(worldX, worldY, wizardOverride = null, mapOverride = null) {
+            const wizardRef = wizardOverride || global.wizard || null;
+            if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return true;
+            if (!singleton) return true;
+            const mazeModeEnabled = typeof singleton.isLosMazeModeEnabled === "function"
+                ? singleton.isLosMazeModeEnabled()
+                : false;
+            const omnivisionActive = typeof singleton.isOmnivisionActive === "function"
+                ? singleton.isOmnivisionActive(wizardRef)
+                : false;
+            if (!mazeModeEnabled || omnivisionActive) return true;
+            if (typeof singleton.isWorldPointInLosShadow !== "function") return true;
+            return !singleton.isWorldPointInLosShadow(worldX, worldY, wizardRef, mapOverride);
         },
         getLayers() {
             return singleton && singleton.layers ? singleton.layers : null;

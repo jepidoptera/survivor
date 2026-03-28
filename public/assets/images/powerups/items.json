@@ -78,6 +78,50 @@
         }
       },
       "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "script": {
+        "playerTouches": "if (this.size * 75 < 1) { player.inventory.add(\"black diamond\", 1) }\nif (this.size * 75 >= 1) { player.inventory.add(\"black diamond\", this.size * 75) }"
+      }
+    },
+    {
+      "id": "button",
+      "name": "Button",
+      "file": "button.png",
+      "imagePath": "/assets/images/powerups/button.png",
+      "width": 0.8,
+      "height": 0.8,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.35
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      },
+      "gravitateRadius": 2,
       "gravitateSpeed": 5
     },
     {
@@ -85,6 +129,19 @@
       "name": "Spellbook",
       "file": "spellbook1.png",
       "imagePath": "/assets/images/powerups/spellbook1.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/powerups/lod/spellbook1_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/powerups/lod/spellbook1_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/powerups/spellbook1.png"
+        }
+      ],
       "width": 0.8,
       "height": 0.8,
       "z": 0,
@@ -126,6 +183,19 @@
       "name": "Spellbook 2",
       "file": "spellbook2.png",
       "imagePath": "/assets/images/powerups/spellbook2.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/powerups/lod/spellbook2_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/powerups/lod/spellbook2_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/powerups/spellbook2.png"
+        }
+      ],
       "width": 0.8,
       "height": 0.8,
       "z": 0,
@@ -255,7 +325,67 @@
         }
       },
       "gravitateRadius": 2,
-      "gravitateSpeed": 5
+      "gravitateSpeed": 5,
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      }
+    },
+    {
+      "id": "chalice",
+      "name": "Chalice",
+      "file": "chalice.png",
+      "imagePath": "/assets/images/powerups/chalice.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/powerups/lod/chalice_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/powerups/lod/chalice_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/powerups/chalice.png"
+        }
+      ],
+      "width": 0.8,
+      "height": 0.8,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.35
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      },
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "script": {
+        "playerTouches": "if (this.size * 125 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 125 >= 1) { player.inventory.add(\"gold\", this.size * 125) }"
+      }
     },
     {
       "id": "fragglegod",
@@ -302,6 +432,94 @@
       },
       "gravitateRadius": 0,
       "gravitateSpeed": 0
+    },
+    {
+      "id": "lightning",
+      "name": "Lightning",
+      "file": "lightning.png",
+      "imagePath": "/assets/images/powerups/lightning.png",
+      "width": 0.8,
+      "height": 0.8,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.35
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      },
+      "gravitateRadius": 0,
+      "gravitateSpeed": 0,
+      "script": {
+        "playerTouches": "player.inventory.add(\"lightning\", 1)"
+      }
+    },
+    {
+      "id": "apple",
+      "name": "Apple",
+      "file": "apple.png",
+      "imagePath": "/assets/images/powerups/apple.png",
+      "width": 0.8,
+      "height": 0.8,
+      "z": 0,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radius": 0.35
+      },
+      "pickupCooldownMs": 0,
+      "respawnMs": null,
+      "billboard": {
+        "alpha": 1,
+        "tint": 16777215,
+        "blendMode": "normal"
+      },
+      "effects": {
+        "bobbing": {
+          "enabled": false,
+          "amplitude": 0.06,
+          "speed": 2
+        },
+        "pulse": {
+          "enabled": false,
+          "scaleMin": 0.95,
+          "scaleMax": 1.05,
+          "speed": 2
+        }
+      },
+      "gravitateRadius": 0,
+      "gravitateSpeed": 0,
+      "script": {
+        "playerTouches": "healPlayer(this.size * 10)"
+      }
     }
   ]
 }

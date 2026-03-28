@@ -690,7 +690,7 @@
         }
         const hovered = document.elementFromPoint(clientX, clientY);
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars, #msgbox, #optionsMenu");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #statusBars, #msgbox, #optionsMenu");
     }
 
     function isCursorOverMinimapAtClientPoint(clientX, clientY) {

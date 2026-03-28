@@ -86,6 +86,17 @@ function resolveCastsLosShadows(value, fallback = true) {
     return !!fallback;
 }
 
+function getTreeDebugNow() {
+    return (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now();
+}
+
+function recordTreePrototypeLoadDebug(metric, delta = 0) {
+    if (typeof Tree === "undefined" || !Tree || typeof Tree.recordPrototypeLoadDebug !== "function") return;
+    Tree.recordPrototypeLoadDebug(metric, delta);
+}
+
 function normalizeLodTextures(spec, fallbackTexturePath = null) {
     if (!Array.isArray(spec)) return [];
     const out = [];
@@ -900,6 +911,7 @@ void main(void) {
     }
 
     constructor(type, location, width, height, textures, map) {
+        const isTree = type === "tree";
         this.type = type;
         this.map = map;
         this.width = width;
@@ -913,20 +925,40 @@ void main(void) {
         const loc = location || {x: 0, y: 0};
         this.x = loc.x;
         this.y = loc.y;
+        const nodeResolveStart = isTree ? getTreeDebugNow() : 0;
         this.node = this.map && typeof this.map.worldToNode === "function"
             ? this.map.worldToNode(this.x, this.y)
             : null;
+        if (isTree) {
+            recordTreePrototypeLoadDebug("staticCtorNodeResolveMs", getTreeDebugNow() - nodeResolveStart);
+        }
         if (this.node) {
+            const nodeAttachStart = isTree ? getTreeDebugNow() : 0;
             this.node.addObject(this);
+            if (isTree) {
+                recordTreePrototypeLoadDebug("staticCtorNodeAttachMs", getTreeDebugNow() - nodeAttachStart);
+            }
         }
         
         // Create Pixi sprite with random texture variant and persist that variant index.
         const textureCount = Array.isArray(textures) ? textures.length : 0;
+        const texturePickStart = isTree ? getTreeDebugNow() : 0;
         this.textureIndex = textureCount > 0 ? Math.floor(Math.random() * textureCount) : -1;
         const texture = this.textureIndex >= 0 ? textures[this.textureIndex] : PIXI.Texture.WHITE;
+        if (isTree) {
+            recordTreePrototypeLoadDebug("staticCtorTexturePickMs", getTreeDebugNow() - texturePickStart);
+        }
+        const spriteCreateStart = isTree ? getTreeDebugNow() : 0;
         this.pixiSprite = new PIXI.Sprite(texture);
         this.pixiSprite.anchor.set(0.5, 1);
+        if (isTree) {
+            recordTreePrototypeLoadDebug("staticCtorSpriteCreateMs", getTreeDebugNow() - spriteCreateStart);
+        }
+        const spriteAttachStart = isTree ? getTreeDebugNow() : 0;
         objectLayer.addChild(this.pixiSprite);
+        if (isTree) {
+            recordTreePrototypeLoadDebug("staticCtorSpriteAttachMs", getTreeDebugNow() - spriteAttachStart);
+        }
 
         this.animatedFrameCountX = 1;
         this.animatedFrameCountY = 1;
@@ -937,8 +969,12 @@ void main(void) {
         this._animatedLastFrameCount = null;
         this._animatedFrameSignature = "";
 
+        const hitboxCreateStart = isTree ? getTreeDebugNow() : 0;
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        if (isTree) {
+            recordTreePrototypeLoadDebug("staticCtorHitboxCreateMs", getTreeDebugNow() - hitboxCreateStart);
+        }
 
         
         // Default properties (can be overridden in subclasses)
@@ -1988,10 +2024,16 @@ void main(void) {
                 fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
             })).filter(msg => msg.text.length > 0);
         }
+        if (this._scriptDeactivated === true) {
+            data._scriptDeactivated = true;
+        }
+        if (this._scriptDoorLocked === true) {
+            data._scriptDoorLocked = true;
+        }
         return data;
     }
 
-    static loadJson(data, map) {
+    static loadJson(data, map, options = {}) {
         if (!data || !data.type || !map) return null;
 
         try {
@@ -2010,13 +2052,20 @@ void main(void) {
             // Create appropriate object type
             switch (data.type) {
                 case 'tree':
-                    obj = new Tree(node, textures, map);
+                    {
+                        const treeCreateStart = getTreeDebugNow();
+                    obj = new Tree(node, textures, map, {
+                        deferPostLoad: !!options.deferTreePostLoad
+                    });
+                        Tree.recordPrototypeLoadDebug("loadJsonTreeCreateMs", getTreeDebugNow() - treeCreateStart);
+                    }
                     break;
                 case 'road':
                     obj = new Road(node, textures, map, {
                         fillTexturePath: (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0)
                             ? data.fillTexturePath
-                            : undefined
+                            : undefined,
+                        deferTextureRefresh: !!options.deferRoadTextureRefresh
                     });
                     break;
                 case 'firewall':
@@ -2059,6 +2108,7 @@ void main(void) {
                         isOpen: !!data.isOpen,
                         isFallenDoorEffect: !!data.isFallenDoorEffect,
                         doorLockedOpen: !!data.doorLockedOpen,
+                        isPassable: (typeof data.isPassable === 'boolean') ? data.isPassable : undefined,
                         doorFallAngle: Number.isFinite(data.doorFallAngle) ? Number(data.doorFallAngle) : undefined,
                         doorFallNormalSign: Number.isFinite(data.doorFallNormalSign) ? Number(data.doorFallNormalSign) : undefined,
                         learnedEnterSign: Number.isFinite(data.learnedEnterSign) ? Number(data.learnedEnterSign) : undefined,
@@ -2130,6 +2180,18 @@ void main(void) {
                         globalThis._scriptMessageTargets.add(obj);
                     }
                 }
+                if (data._scriptDeactivated === true) {
+                    obj._scriptDeactivated = true;
+                }
+                if (data._scriptDoorLocked === true) {
+                    obj._scriptDoorLocked = true;
+                    obj.isPassable = false;
+                    if (typeof obj.notifyMountedWallStateChanged === "function") {
+                        obj.notifyMountedWallStateChanged();
+                    }
+                } else if (typeof data.isPassable === "boolean") {
+                    obj.isPassable = data.isPassable;
+                }
 
                 // Preserve tree sprite variant across save/load.
                 if (
@@ -2137,6 +2199,7 @@ void main(void) {
                     Number.isInteger(data.textureIndex) &&
                     obj.pixiSprite
                 ) {
+                    const treeTextureRestoreStart = getTreeDebugNow();
                     if (typeof obj.setTreeTextureIndex === "function") {
                         obj.setTreeTextureIndex(data.textureIndex, textures);
                     } else {
@@ -2146,17 +2209,23 @@ void main(void) {
                             obj.textureIndex = data.textureIndex;
                         }
                     }
+                    Tree.recordPrototypeLoadDebug("textureRestoreMs", getTreeDebugNow() - treeTextureRestoreStart);
                 }
 
                 if (data.type === 'tree' && obj && typeof obj.applySize === 'function') {
+                    const treeSizeRestoreStart = getTreeDebugNow();
+                    const treeLoadOptions = {
+                        deferVisibilityRefresh: !!options.deferTreePostLoad
+                    };
                     if (Number.isFinite(data.size)) {
-                        obj.applySize(data.size);
+                        obj.applySize(data.size, treeLoadOptions);
                     } else if (Number.isFinite(data.scale)) {
                         // Backward compatibility: legacy scale used 1 -> default 4-unit tree.
-                        obj.applySize(data.scale * 4);
+                        obj.applySize(data.scale * 4, treeLoadOptions);
                     } else {
-                        obj.applySize(4);
+                        obj.applySize(4, treeLoadOptions);
                     }
+                    Tree.recordPrototypeLoadDebug("sizeRestoreMs", getTreeDebugNow() - treeSizeRestoreStart);
                 }
             }
 
@@ -2169,17 +2238,88 @@ void main(void) {
 }
 
 class Tree extends StaticObject {
-    constructor(location, textures, map) {
+    static createPrototypeLoadDebugStats() {
+        return {
+            treeCount: 0,
+            constructorMs: 0,
+            superMs: 0,
+            constructorApplySizeMs: 0,
+            constructorMetadataKickoffMs: 0,
+            loadJsonTreeCreateMs: 0,
+            textureRestoreMs: 0,
+            sizeRestoreMs: 0,
+            applySizeMs: 0,
+            refreshHitboxesMs: 0,
+            refreshVisibilityMs: 0,
+            finalizeTotalMs: 0,
+            finalizeVisibilityMs: 0,
+            finalizeMetadataKickoffMs: 0,
+            metadataKickoffMs: 0,
+            metadataApplyMs: 0,
+            staticCtorNodeResolveMs: 0,
+            staticCtorNodeAttachMs: 0,
+            staticCtorTexturePickMs: 0,
+            staticCtorSpriteCreateMs: 0,
+            staticCtorSpriteAttachMs: 0,
+            staticCtorHitboxCreateMs: 0,
+            visibilitySamplePointCount: 0,
+            visibilityRegisteredNodeCount: 0
+        };
+    }
+
+    static _ensurePrototypeLoadDebugState() {
+        if (!Tree._prototypeLoadDebugState || typeof Tree._prototypeLoadDebugState !== "object") {
+            Tree._prototypeLoadDebugState = {
+                enabled: false,
+                stats: Tree.createPrototypeLoadDebugStats()
+            };
+        }
+        return Tree._prototypeLoadDebugState;
+    }
+
+    static beginPrototypeLoadDebugSession() {
+        const state = Tree._ensurePrototypeLoadDebugState();
+        state.enabled = true;
+        state.stats = Tree.createPrototypeLoadDebugStats();
+    }
+
+    static endPrototypeLoadDebugSession() {
+        const state = Tree._ensurePrototypeLoadDebugState();
+        state.enabled = false;
+        return { ...state.stats };
+    }
+
+    static recordPrototypeLoadDebug(metric, delta = 0) {
+        const state = Tree._ensurePrototypeLoadDebugState();
+        if (!state.enabled) return;
+        if (!Object.prototype.hasOwnProperty.call(state.stats, metric)) {
+            state.stats[metric] = 0;
+        }
+        state.stats[metric] += Number(delta) || 0;
+    }
+
+    static getMaxHpForSize(size) {
+        const normalizedSize = Math.max(0.05, Number(size) || 4);
+        return 25 * normalizedSize;
+    }
+
+    constructor(location, textures, map, options = {}) {
+        const constructorStart = getTreeDebugNow();
+        const superStart = getTreeDebugNow();
         super('tree', location, 4, 4, textures, map);
+        Tree.recordPrototypeLoadDebug("superMs", getTreeDebugNow() - superStart);
+        Tree.recordPrototypeLoadDebug("treeCount", 1);
         this.y += (this.x % 12) * 1 / 2**8; // so they don't flicker
+        this.isPassable = false;
         this.baseWidth = 4;
         this.baseHeight = 4;
         this.baseVisualRadius = 1.75;
         this.baseGroundRadius = 0.5;
         this.size = 4;
         this.height = this.baseHeight;
-        this.hp = 100;
-        this.maxHP = 100;
+        this.hp = Tree.getMaxHpForSize(this.size);
+        this.maxHP = this.hp;
+        this.maxHp = this.hp;
         this.visualRadius = this.baseVisualRadius;
         this.visualHitbox = new CircleHitbox(this.x, this.y - this.height, this.visualRadius);
         this.groundRadius = this.baseGroundRadius;
@@ -2188,20 +2328,167 @@ class Tree extends StaticObject {
         this._treeMetadata = null;
         this._treeMetadataFetchToken = 0;
         this._visibilityNodes = [];
-        this.applySize(this.size);
-        this.applyTreeMetadataFromServer();
+        this.healthBarHoldMs = 3000;
+        this._healthBarVisibleUntilMs = 0;
+        this._healthBarGraphics = null;
+        this._deferTreePostLoad = !!(options && options.deferPostLoad);
+        const applySizeStart = getTreeDebugNow();
+        this.applySize(this.size, {
+            deferVisibilityRefresh: this._deferTreePostLoad
+        });
+        Tree.recordPrototypeLoadDebug("constructorApplySizeMs", getTreeDebugNow() - applySizeStart);
+        if (!this._deferTreePostLoad) {
+            const metadataKickoffStart = getTreeDebugNow();
+            this.applyTreeMetadataFromServer();
+            Tree.recordPrototypeLoadDebug("constructorMetadataKickoffMs", getTreeDebugNow() - metadataKickoffStart);
+        }
+        Tree.recordPrototypeLoadDebug("constructorMs", getTreeDebugNow() - constructorStart);
     }
 
-    applySize(nextSize) {
+    showHealthBar(durationMs = null) {
+        const holdMs = Number.isFinite(durationMs)
+            ? Math.max(0, Number(durationMs))
+            : (Number.isFinite(this.healthBarHoldMs) ? Math.max(0, Number(this.healthBarHoldMs)) : 3000);
+        const now = Date.now();
+        this._healthBarVisibleUntilMs = Math.max(this._healthBarVisibleUntilMs || 0, now + holdMs);
+    }
+
+    takeDamage(amount, options = null) {
+        const rawDamage = Number(amount);
+        if (!Number.isFinite(rawDamage) || rawDamage <= 0) return 0;
+        if (!Number.isFinite(this.hp)) this.hp = 0;
+        const prevHp = this.hp;
+        this.hp = Math.max(0, this.hp - rawDamage);
+        const applied = Math.max(0, prevHp - this.hp);
+        if (applied > 0) {
+            const holdMs = (options && Number.isFinite(options.healthBarDurationMs))
+                ? Number(options.healthBarDurationMs)
+                : null;
+            this.showHealthBar(holdMs);
+        }
+        if (
+            this.hp <= 0 &&
+            !this.falling &&
+            !this.fallenHitboxCreated &&
+            typeof globalThis !== "undefined" &&
+            globalThis.activeSimObjects instanceof Set
+        ) {
+            globalThis.activeSimObjects.add(this);
+        }
+        return applied;
+    }
+
+    hideHealthBarOverlay() {
+        if (this._healthBarGraphics) {
+            this._healthBarGraphics.visible = false;
+        }
+    }
+
+    updateHealthBarOverlay(camera, container) {
+        if (!camera || !container) return;
+        if (
+            this.gone ||
+            this.fallenHitboxCreated ||
+            this.falling ||
+            !Number.isFinite(this.maxHP) ||
+            this.maxHP <= 0 ||
+            !Number.isFinite(this.hp) ||
+            this.hp <= 0
+        ) {
+            this.hideHealthBarOverlay();
+            return;
+        }
+        const now = Date.now();
+        if (now > (this._healthBarVisibleUntilMs || 0)) {
+            this.hideHealthBarOverlay();
+            return;
+        }
+        if (!this._healthBarGraphics) {
+            this._healthBarGraphics = new PIXI.Graphics();
+            this._healthBarGraphics.name = "treeHealthBar";
+            this._healthBarGraphics.visible = false;
+            this._healthBarGraphics.interactive = false;
+        }
+        const g = this._healthBarGraphics;
+        if (g.parent !== container) {
+            container.addChild(g);
+        }
+
+        const pos = camera.worldToScreen(
+            Number.isFinite(this.x) ? this.x : 0,
+            Number.isFinite(this.y) ? this.y : 0,
+            0
+        );
+        if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
+            g.visible = false;
+            return;
+        }
+
+        const widthPx = Math.max(28, Math.min(90, (Number(this.width) || Number(this.size) || 4) * camera.viewscale * 0.9));
+        const heightPx = 5;
+        const pad = 1;
+        const healthRatio = Math.max(0, Math.min(1, this.hp / this.maxHP));
+        const healthFillColor = (healthRatio > 0.6) ? 0x3ed36a : ((healthRatio > 0.3) ? 0xf2bf3b : 0xde4a4a);
+
+        g.clear();
+        g.beginFill(0x000000, 0.75);
+        g.drawRoundedRect(0, 0, widthPx, heightPx, 2);
+        g.endFill();
+        if (healthRatio > 0) {
+            g.beginFill(healthFillColor, 0.95);
+            g.drawRoundedRect(pad, pad, (widthPx - pad * 2) * healthRatio, Math.max(1, heightPx - pad * 2), 1);
+            g.endFill();
+        }
+        g.x = pos.x - widthPx / 2;
+        g.y = pos.y - (Number(this.height) || Number(this.size) || 4) * camera.viewscale - heightPx - 10;
+        g.visible = true;
+    }
+
+    applySize(nextSize, options = {}) {
+        const applySizeStart = getTreeDebugNow();
         const clamped = Math.max(0.05, Number(nextSize) || 4);
+        const prevHp = Number.isFinite(this.hp) ? Number(this.hp) : null;
+        const prevMaxHp = Number.isFinite(this.maxHP)
+            ? Number(this.maxHP)
+            : (Number.isFinite(this.maxHp) ? Number(this.maxHp) : null);
+        const nextMaxHp = Tree.getMaxHpForSize(clamped);
         this.size = clamped;
         this.width = clamped;
         this.height = clamped;
+        this.maxHP = nextMaxHp;
+        this.maxHp = nextMaxHp;
+        if (prevHp === null) {
+            this.hp = nextMaxHp;
+        } else if (prevMaxHp !== null && prevHp >= (prevMaxHp - 1e-6)) {
+            this.hp = nextMaxHp;
+        } else {
+            this.hp = Math.max(0, Math.min(nextMaxHp, prevHp));
+        }
         const radiusScale = clamped / 4;
         this.visualRadius = this.baseVisualRadius * radiusScale;
         this.groundRadius = this.baseGroundRadius * radiusScale;
+        const refreshHitboxesStart = getTreeDebugNow();
         this.refreshStandingTreeHitboxes();
+        Tree.recordPrototypeLoadDebug("refreshHitboxesMs", getTreeDebugNow() - refreshHitboxesStart);
+        if (!(options && options.deferVisibilityRefresh === true)) {
+            const visibilityStart = getTreeDebugNow();
+            this.refreshVisibilityRegistration();
+            Tree.recordPrototypeLoadDebug("refreshVisibilityMs", getTreeDebugNow() - visibilityStart);
+        }
+        Tree.recordPrototypeLoadDebug("applySizeMs", getTreeDebugNow() - applySizeStart);
+    }
+
+    finalizeDeferredLoad() {
+        if (!this._deferTreePostLoad) return;
+        const finalizeStart = getTreeDebugNow();
+        this._deferTreePostLoad = false;
+        const visibilityStart = getTreeDebugNow();
         this.refreshVisibilityRegistration();
+        Tree.recordPrototypeLoadDebug("finalizeVisibilityMs", getTreeDebugNow() - visibilityStart);
+        const metadataKickoffStart = getTreeDebugNow();
+        this.applyTreeMetadataFromServer();
+        Tree.recordPrototypeLoadDebug("finalizeMetadataKickoffMs", getTreeDebugNow() - metadataKickoffStart);
+        Tree.recordPrototypeLoadDebug("finalizeTotalMs", getTreeDebugNow() - finalizeStart);
     }
 
     clearVisibilityRegistration() {
@@ -2263,6 +2550,7 @@ class Tree extends StaticObject {
         if (!baseNode) return;
         const samplePoints = this.getVisibilityRegistrationSamplePoints();
         if (samplePoints.length === 0) return;
+        Tree.recordPrototypeLoadDebug("visibilitySamplePointCount", samplePoints.length);
 
         const seen = new Set();
         const registeredNodes = [];
@@ -2279,6 +2567,7 @@ class Tree extends StaticObject {
             }
         }
         this._visibilityNodes = registeredNodes;
+        Tree.recordPrototypeLoadDebug("visibilityRegisteredNodeCount", registeredNodes.length);
     }
 
     resolveTreeTexturePath() {
@@ -2307,6 +2596,9 @@ class Tree extends StaticObject {
         }
         this.textureIndex = index;
         this.texturePath = normalizeTexturePathForMetadata(`/assets/images/trees/tree${index}.png`);
+        if (this._deferTreePostLoad) {
+            return;
+        }
         this.applyTreeMetadataFromServer();
     }
 
@@ -2347,6 +2639,7 @@ class Tree extends StaticObject {
     }
 
     applyTreeMetadata(metaEntry) {
+        const applyStart = getTreeDebugNow();
         if (this.gone) return;
         if (!metaEntry || typeof metaEntry !== "object") return;
         this._treeMetadata = metaEntry;
@@ -2361,9 +2654,11 @@ class Tree extends StaticObject {
             this.castsLosShadows = resolveCastsLosShadows(metaEntry.castsLosShadows, this.castsLosShadows);
         }
         this.refreshStandingTreeHitboxes();
+        Tree.recordPrototypeLoadDebug("metadataApplyMs", getTreeDebugNow() - applyStart);
     }
 
     async applyTreeMetadataFromServer() {
+        const metadataStart = getTreeDebugNow();
         const texturePath = this.resolveTreeTexturePath();
         if (!texturePath) return;
         this.texturePath = texturePath;
@@ -2373,6 +2668,7 @@ class Tree extends StaticObject {
         if (this.gone) return;
         if (!merged) return;
         this.applyTreeMetadata(merged);
+        Tree.recordPrototypeLoadDebug("metadataKickoffMs", getTreeDebugNow() - metadataStart);
     }
 
     // Backward-compatible alias for older callsites.
@@ -2483,7 +2779,7 @@ class Tree extends StaticObject {
         
         // Call parent update for burning logic
         super.update();
-        
+
         // Start falling when HP reaches 0
         if (this.hp <= 0 || this.burned) {
             if (!this.falling) {
@@ -2908,6 +3204,8 @@ class PlacedObject extends StaticObject {
         if (this.isOpen) data.isOpen = true;
         if (this.isFallenDoorEffect) data.isFallenDoorEffect = true;
         if (this._doorLockedOpen) data.doorLockedOpen = true;
+        if (this._scriptDoorLocked === true) data._scriptDoorLocked = true;
+        if (this.isPassable === false) data.isPassable = false;
         if (this.falling) data.falling = true;
         if (Number.isFinite(this.doorFallAngle)) {
             data.doorFallAngle = Math.max(0, Math.min(90, Number(this.doorFallAngle)));
@@ -3920,6 +4218,9 @@ class PlacedObject extends StaticObject {
 if (typeof globalThis !== "undefined") {
     globalThis.getResolvedPlaceableMetadata = getResolvedPlaceableMetadata;
     globalThis.normalizePlaceableRotationAxis = normalizePlaceableRotationAxis;
+    globalThis.normalizeTexturePathForMetadata = normalizeTexturePathForMetadata;
+    globalThis.resolveHitboxScaleContext = resolveHitboxScaleContext;
+    globalThis.buildHitboxFromSpec = buildHitboxFromSpec;
 }
 
 class TriggerArea extends StaticObject {
@@ -4427,6 +4728,31 @@ class Road extends StaticObject {
             Road._geometryCache.clear();
         }
     }
+    static collectRefreshNodesFromNode(node, outSet) {
+        if (!node || !(outSet instanceof Set)) return;
+        outSet.add(node);
+        const dirs = [1, 3, 5, 7, 9, 11];
+        for (let i = 0; i < dirs.length; i++) {
+            const neighbor = node.neighbors && node.neighbors[dirs[i]];
+            if (neighbor) outSet.add(neighbor);
+        }
+    }
+
+    static refreshTexturesAroundNodes(nodes) {
+        const nodeSet = nodes instanceof Set ? nodes : new Set(Array.isArray(nodes) ? nodes : []);
+        const seenRoads = new Set();
+        nodeSet.forEach((node) => {
+            if (!node || !Array.isArray(node.objects)) return;
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (!obj || obj.type !== 'road' || typeof obj.updateTexture !== 'function' || seenRoads.has(obj)) continue;
+                seenRoads.add(obj);
+                obj.updateTexture();
+            }
+        });
+        return seenRoads.size;
+    }
+
     constructor(location, textures, map, options = {}) {
         // Create initial textures array (will be populated by updateTexture)
         const dynamicTextures = [PIXI.Texture.WHITE];
@@ -4452,19 +4778,22 @@ class Road extends StaticObject {
             this.node.recountBlockingObjects();
         }
         
-        // Generate the initial texture
-        this.updateTexture();
-        // Adjacent roads also need to update
-        [1, 3, 5, 7, 9, 11].forEach(direction => {
-            const neighbor = this.node.neighbors[direction];
-            if (neighbor && neighbor.objects) {
-                neighbor.objects.forEach(obj => {
-                    if (obj.type === 'road' && typeof obj.updateTexture === 'function') {
-                        obj.updateTexture();
-                    }
-                });
-            }
-        });
+        const deferTextureRefresh = !!(options && options.deferTextureRefresh);
+        if (!deferTextureRefresh) {
+            // Generate the initial texture
+            this.updateTexture();
+            // Adjacent roads also need to update
+            [1, 3, 5, 7, 9, 11].forEach(direction => {
+                const neighbor = this.node.neighbors[direction];
+                if (neighbor && neighbor.objects) {
+                    neighbor.objects.forEach(obj => {
+                        if (obj.type === 'road' && typeof obj.updateTexture === 'function') {
+                            obj.updateTexture();
+                        }
+                    });
+                }
+            });
+        }
         if (location instanceof MapNode) {
             this.node = location;
         }
@@ -4481,23 +4810,26 @@ class Road extends StaticObject {
     }
 
     removeFromNodes() {
+        const deferNeighborRefresh = !!this._deferRoadNeighborRefresh;
+        const node = this.getNode();
         super.removeFromNodes();
 
-        const node = this.getNode();
-        const neighborNodes = node ? [1, 3, 5, 7, 9, 11]
-            .map(direction => node.neighbors[direction])
-            .filter(Boolean)
-            : [];
+        if (!deferNeighborRefresh) {
+            const neighborNodes = node ? [1, 3, 5, 7, 9, 11]
+                .map(direction => node.neighbors[direction])
+                .filter(Boolean)
+                : [];
 
-        neighborNodes.forEach(neighbor => {
-            if (neighbor && neighbor.objects) {
-                neighbor.objects.forEach(obj => {
-                    if (obj.type === 'road' && typeof obj.updateTexture === 'function') {
-                        obj.updateTexture();
-                    }
-                });
-            }
-        });
+            neighborNodes.forEach(neighbor => {
+                if (neighbor && neighbor.objects) {
+                    neighbor.objects.forEach(obj => {
+                        if (obj.type === 'road' && typeof obj.updateTexture === 'function') {
+                            obj.updateTexture();
+                        }
+                    });
+                }
+            });
+        }
     }
     
     updateTexture(neighborDirectionsOverride = null) {

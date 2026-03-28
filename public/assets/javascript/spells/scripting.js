@@ -14,13 +14,14 @@
     const SCRIPT_EDITOR_HELP_PANEL_ID = "scriptEditorHelpPanel";
     const SCRIPT_EDITOR_BACKDROP_ID = "scriptEditorBackdrop";
     const SCRIPT_EDITOR_COMPLETION_PANEL_ID = "scriptEditorCompletionPanel";
+    const SCRIPT_EDITOR_INDENT = "   ";
     const SCRIPT_EDITOR_DEFAULT_TEMPLATE = [
         "playerExits {",
-        "    mazeMode=true",
+        `${SCRIPT_EDITOR_INDENT}mazeMode=true`,
         "}",
         "",
         "playerEnters {",
-        "    mazeMode=false",
+        `${SCRIPT_EDITOR_INDENT}mazeMode=false`,
         "}"
     ].join("\n");
     const eventListenersByName = new Map();
@@ -92,6 +93,7 @@
         }))
     );
     const EVENT_API_ENTRIES = Object.freeze([
+        Object.freeze({ name: "newGame", description: "fires once when a new game starts from a template", appliesTo: "scripted objects" }),
         Object.freeze({ name: "playerEnters", description: "fires when player crosses the door one way", appliesTo: "doors, trigger areas" }),
         Object.freeze({ name: "playerExits", description: "fires when player crosses the opposite way", appliesTo: "doors, trigger areas" }),
         Object.freeze({ name: "playerTouches", description: "fires once per contact", appliesTo: "objects, doors, trigger areas" }),
@@ -104,6 +106,7 @@
         Object.freeze({ name: "time.speed", syntax: "time.speed=0.5", description: "set non-wizard simulation speed from 0 to 6; 0 stops and 1 restores normal time" })
     ]);
     const PLAYER_ASSIGNMENT_REGISTRY = Object.freeze([
+        Object.freeze({ name: "difficulty", syntax: "player.difficulty=3", description: "set player difficulty from 1 to 3" }),
         Object.freeze({ name: "speed", syntax: "player.speed=3", description: "set player movement speed" }),
         Object.freeze({ name: "magicRegenPerSecond", syntax: "player.magicRegenPerSecond=12", description: "set player magic recharge per second" }),
         Object.freeze({ name: "magicRechargeRate", syntax: "player.magicRechargeRate=12", description: "alias for magicRegenPerSecond" })
@@ -114,9 +117,13 @@
         Object.freeze({ name: "hurtPlayer", syntax: "hurtPlayer(hp)", description: "damage the player" }),
         Object.freeze({ name: "gainMagic", syntax: "gainMagic(amount)", description: "restore player magic" }),
         Object.freeze({ name: "drainMagic", syntax: "drainMagic(amount)", description: "drain player magic" }),
-        Object.freeze({ name: "addSpell", syntax: "addSpell(name)", description: "unlock a spell" }),
+        Object.freeze({ name: "addSpell", syntax: "addSpell(name)", description: "unlock magic by name" }),
+        Object.freeze({ name: "addMagic", syntax: "addMagic(name)", description: "unlock magic by name" }),
+        Object.freeze({ name: "unlockMagic", syntax: "unlockMagic(name)", description: "unlock magic by name" }),
+        Object.freeze({ name: "unlockSpell", syntax: "unlockSpell(name)", description: "unlock magic by name" }),
         Object.freeze({ name: "trade", syntax: "trade(title=\"merchant\", currency=\"gold\", entries=[{\"type\":\"inventoryItem\",\"id\":\"grenades\",\"buy\":5,\"sell\":3}])", description: "open a trade modal and wait for the player to close it" }),
         Object.freeze({ name: "spawnCreature", syntax: "spawnCreature(type=\"bear\", size=1, x=2, y=-1)", description: "spawn a creature relative to the scripted object" }),
+        Object.freeze({ name: "drop", syntax: "drop(type=\"gold_coin\", size=1, distance=3, height=0, x=0, y=0, count=1)", description: "drop a powerup relative to the scripted object or player; distance sets the drop radius in map units and height sets spawn z" }),
         Object.freeze({ name: "camera.zoom", syntax: "camera.zoom(target=1.5, seconds=1)", description: "zoom the camera to a target level over time" }),
         Object.freeze({ name: "camera.pan", syntax: "camera.pan(x=4, y=-2, target=tree1, seconds=1)", description: "pan the camera relative to the player or a named object" }),
         Object.freeze({ name: "camera.reset", syntax: "camera.reset(seconds=1)", description: "return the camera to its normal framing" }),
@@ -133,6 +140,7 @@
             Object.freeze({ name: "deactivate", kind: "method", syntax: "this.deactivate()", description: "disable further script events" }),
             Object.freeze({ name: "delete", kind: "method", syntax: "this.delete()", description: "remove the target object" }),
             Object.freeze({ name: "fall", kind: "method", syntax: "this.fall(direction=\"away\", targetName=\"tree1\")", description: "make a tree or door fall toward or away from a named object" }),
+            Object.freeze({ name: "drop", kind: "method", syntax: "this.drop(type=\"gold_coin\", size=1, distance=3, height=0, count=1)", description: "drop a powerup relative to this object; distance sets the drop radius in map units and height sets spawn z" }),
             Object.freeze({ name: "height", kind: "property", syntax: "this.height=2", description: "set object or wall-section height" }),
             Object.freeze({ name: "hp", kind: "property", syntax: "this.hp=12", description: "set current HP; raises max HP if needed" }),
             Object.freeze({ name: "isOnFire", kind: "property", syntax: "this.isOnFire=true", description: "alias for onfire" }),
@@ -146,6 +154,7 @@
             Object.freeze({ name: "thickness", kind: "property", syntax: "this.thickness=0.5", description: "set thickness, especially for wall sections" }),
             Object.freeze({ name: "tint", kind: "property", syntax: "this.tint=\"#ff8800\"", description: "set tint color" }),
             Object.freeze({ name: "unFreeze", kind: "method", syntax: "this.unFreeze()", description: "clear a script freeze immediately" }),
+                Object.freeze({ name: "forceVisible", kind: "property", syntax: "this.forceVisible=true", description: "keep the object visible through line-of-sight occlusion" }),
             Object.freeze({ name: "visible", kind: "property", syntax: "this.visible=false", description: "show or hide the object" })
         ]),
         animal: Object.freeze([
@@ -510,6 +519,7 @@
             maxHp: Number.isFinite(target.maxHp)
                 ? target.maxHp
                 : (Number.isFinite(target.maxHP) ? target.maxHP : null),
+                forceVisible: target.forceVisible === true,
             visible: target.visible !== false,
             gone: target.gone === true,
             onfire: target.onfire === true || target.isOnFire === true,
@@ -810,28 +820,800 @@
         return false;
     }
 
-    function parseScriptValue(rawValue) {
+    function stringifyScriptInterpolationValue(value) {
+        if (value === null || typeof value === "undefined") return "";
+        if (typeof value === "string") return value;
+        if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+            return String(value);
+        }
+        try {
+            return JSON.stringify(value);
+        } catch (_) {
+            return String(value);
+        }
+    }
+
+    function interpolateScriptStringContent(content, context = null) {
+        const source = String(content || "");
+        if (!source.includes("{")) return source;
+
+        let out = "";
+        let segmentStart = 0;
+        let index = 0;
+        while (index < source.length) {
+            if (source[index] !== "{") {
+                index += 1;
+                continue;
+            }
+
+            let cursor = index + 1;
+            let depth = 1;
+            let inQuote = null;
+            let escapeNext = false;
+            while (cursor < source.length) {
+                const ch = source[cursor];
+                if (escapeNext) {
+                    escapeNext = false;
+                    cursor += 1;
+                    continue;
+                }
+                if (ch === "\\") {
+                    escapeNext = true;
+                    cursor += 1;
+                    continue;
+                }
+                if (inQuote) {
+                    if (ch === inQuote) inQuote = null;
+                    cursor += 1;
+                    continue;
+                }
+                if (ch === '"' || ch === "'") {
+                    inQuote = ch;
+                    cursor += 1;
+                    continue;
+                }
+                if (ch === "{") {
+                    depth += 1;
+                } else if (ch === "}") {
+                    depth -= 1;
+                    if (depth === 0) break;
+                }
+                cursor += 1;
+            }
+
+            if (depth !== 0 || cursor >= source.length) {
+                throw new Error("Unclosed string interpolation expression.");
+            }
+
+            out += source.slice(segmentStart, index);
+            const expressionText = source.slice(index + 1, cursor).trim();
+            if (!expressionText.length) {
+                throw new Error("Empty string interpolation expression.");
+            }
+            const expressionValue = evaluateScriptExpression(expressionText, context);
+            out += stringifyScriptInterpolationValue(expressionValue);
+            index = cursor + 1;
+            segmentStart = index;
+        }
+
+        out += source.slice(segmentStart);
+        return out;
+    }
+
+    function interpolateScriptStructuredValue(value, context = null) {
+        if (typeof value === "string") {
+            return interpolateScriptStringContent(value, context);
+        }
+        if (Array.isArray(value)) {
+            return value.map(entry => interpolateScriptStructuredValue(entry, context));
+        }
+        if (value && typeof value === "object") {
+            const out = {};
+            const entries = Object.entries(value);
+            for (let i = 0; i < entries.length; i++) {
+                const [key, entryValue] = entries[i];
+                out[key] = interpolateScriptStructuredValue(entryValue, context);
+            }
+            return out;
+        }
+        return value;
+    }
+
+    function parseScriptStructuredLiteral(text, context = null) {
+        return interpolateScriptStructuredValue(JSON.parse(text), context);
+    }
+
+    function parseScriptStringLiteral(text, context = null) {
+        const normalized = text.startsWith("'")
+            ? `\"${text.slice(1, -1).replace(/\\/g, "\\\\").replace(/\"/g, "\\\"")}\"`
+            : text;
+        try {
+            return interpolateScriptStringContent(JSON.parse(normalized), context);
+        } catch (_) {
+            return interpolateScriptStringContent(text.slice(1, -1), context);
+        }
+    }
+
+    function hasScriptLocal(context, name) {
+        const locals = context && context.locals;
+        if (!locals || (typeof locals !== "object" && typeof locals !== "function")) return false;
+        return name in locals;
+    }
+
+    function getScriptLocalValue(context, name) {
+        return hasScriptLocal(context, name)
+            ? context.locals[name]
+            : undefined;
+    }
+
+    function resolveScriptExpressionPath(path, context = null) {
+        const normalized = String(path || "").trim();
+        if (!normalized.length) {
+            return { ok: false, value: undefined };
+        }
+        const segments = normalized.split(".").map(segment => segment.trim()).filter(Boolean);
+        if (segments.length === 0) {
+            return { ok: false, value: undefined };
+        }
+
+        let cursor = null;
+        if (segments[0] === "this") {
+            cursor = (context && context.target && typeof context.target === "object")
+                ? context.target
+                : null;
+        } else if (segments[0] === "player" || segments[0] === "wizard") {
+            cursor = (context && (context.wizard || context.player)) || global.wizard || null;
+        } else if (hasScriptLocal(context, segments[0])) {
+            cursor = getScriptLocalValue(context, segments[0]);
+        } else if (isValidScriptingName(segments[0])) {
+            cursor = getNamedObjectByName(segments[0], context);
+        }
+        if (cursor === null || typeof cursor === "undefined") {
+            return { ok: false, value: undefined };
+        }
+
+        for (let i = 1; i < segments.length; i++) {
+            const key = segments[i];
+            if (!key || key.startsWith("_")) {
+                return { ok: false, value: undefined };
+            }
+            if (!cursor || (typeof cursor !== "object" && typeof cursor !== "function")) {
+                return { ok: false, value: undefined };
+            }
+            cursor = cursor[key];
+            if (typeof cursor === "undefined") {
+                return { ok: false, value: undefined };
+            }
+        }
+
+        return { ok: true, value: cursor };
+    }
+
+    function readDelimitedScriptSection(sourceText, startIndex, opener, closer) {
+        const source = String(sourceText || "");
+        if (source[startIndex] !== opener) return null;
+        let index = startIndex + 1;
+        let depth = 1;
+        let inQuote = null;
+        let escapeNext = false;
+        while (index < source.length) {
+            const ch = source[index];
+            if (escapeNext) {
+                escapeNext = false;
+                index += 1;
+                continue;
+            }
+            if (ch === "\\") {
+                if (inQuote) escapeNext = true;
+                index += 1;
+                continue;
+            }
+            if (inQuote) {
+                if (ch === inQuote) inQuote = null;
+                index += 1;
+                continue;
+            }
+            if (ch === '"' || ch === "'") {
+                inQuote = ch;
+                index += 1;
+                continue;
+            }
+            if (ch === opener) {
+                depth += 1;
+            } else if (ch === closer) {
+                depth -= 1;
+                if (depth === 0) {
+                    return {
+                        content: source.slice(startIndex + 1, index),
+                        endIndex: index
+                    };
+                }
+            }
+            index += 1;
+        }
+        return null;
+    }
+
+    function parseIfStatement(statement) {
+        const text = String(statement || "").trim();
+        if (!text.startsWith("if")) return null;
+        const nextChar = text[2];
+        if (nextChar && /[A-Za-z0-9_$]/.test(nextChar)) return null;
+
+        let index = 2;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (text[index] !== "(") return null;
+
+        const conditionSection = readDelimitedScriptSection(text, index, "(", ")");
+        if (!conditionSection) return null;
+        index = conditionSection.endIndex + 1;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (text[index] !== "{") return null;
+
+        const bodySection = readDelimitedScriptSection(text, index, "{", "}");
+        if (!bodySection) return null;
+        index = bodySection.endIndex + 1;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (index !== text.length) return null;
+
+        return {
+            type: "if",
+            condition: conditionSection.content.trim(),
+            body: bodySection.content.trim()
+        };
+    }
+
+    function parseForInStatement(statement) {
+        const text = String(statement || "").trim();
+        if (!text.startsWith("for")) return null;
+        const nextChar = text[3];
+        if (nextChar && /[A-Za-z0-9_$]/.test(nextChar)) return null;
+
+        let index = 3;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (text[index] !== "(") return null;
+
+        const headerSection = readDelimitedScriptSection(text, index, "(", ")");
+        if (!headerSection) return null;
+        const headerMatch = headerSection.content.match(/^\s*([A-Za-z_$][\w$]*)\s+in\s+([\s\S]+?)\s*$/);
+        if (!headerMatch) return null;
+        index = headerSection.endIndex + 1;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (text[index] !== "{") return null;
+
+        const bodySection = readDelimitedScriptSection(text, index, "{", "}");
+        if (!bodySection) return null;
+        index = bodySection.endIndex + 1;
+        while (index < text.length && /\s/.test(text[index])) index += 1;
+        if (index !== text.length) return null;
+
+        return {
+            type: "forIn",
+            variableName: headerMatch[1],
+            iterableExpression: headerMatch[2].trim(),
+            body: bodySection.content.trim()
+        };
+    }
+
+    function parseBreakStatement(statement) {
+        return String(statement || "").trim() === "break";
+    }
+
+    function createScriptChildContext(baseContext = null, extraLocals = null) {
+        const base = (baseContext && typeof baseContext === "object") ? baseContext : {};
+        const nextLocals = {
+            ...((base.locals && typeof base.locals === "object") ? base.locals : {})
+        };
+        if (extraLocals && typeof extraLocals === "object") {
+            Object.assign(nextLocals, extraLocals);
+        }
+        return {
+            ...base,
+            locals: nextLocals
+        };
+    }
+
+    function normalizeScriptIterable(value) {
+        if (Array.isArray(value)) return value.slice();
+        if (typeof value === "string") return Array.from(value);
+        if (value && typeof value !== "string" && typeof value[Symbol.iterator] === "function") {
+            try {
+                return Array.from(value);
+            } catch (_) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    function getScriptUnlockedMagicNames(wizardRef) {
+        if (!wizardRef) return [];
+        const normalized = Array.isArray(wizardRef.unlockedMagic)
+            ? wizardRef.unlockedMagic
+                .map(name => String(name || "").trim().toLowerCase())
+                .filter(Boolean)
+            : [];
+        return Array.from(new Set(normalized));
+    }
+
+    function scriptHasMagicUnlock(wizardRef, magicName) {
+        if (!wizardRef || typeof magicName !== "string") return false;
+        const normalizedName = magicName.trim().toLowerCase();
+        if (!normalizedName.length) return false;
+        return getScriptUnlockedMagicNames(wizardRef).includes(normalizedName);
+    }
+
+    function shuffleScriptArray(source) {
+        const out = Array.isArray(source) ? source.slice() : [];
+        for (let i = out.length - 1; i > 0; i--) {
+            const swapIndex = Math.floor(Math.random() * (i + 1));
+            const tmp = out[i];
+            out[i] = out[swapIndex];
+            out[swapIndex] = tmp;
+        }
+        return out;
+    }
+
+    function normalizeScriptMagicName(rawName) {
+        const normalized = String(rawName || "").trim().toLowerCase();
+        if (normalized === "iceball") return "freeze";
+        return normalized;
+    }
+
+    function getScriptMagicIconPath(magicName) {
+        const normalizedName = normalizeScriptMagicName(magicName);
+        if (!normalizedName.length) return "";
+        if (
+            typeof global.SpellSystem !== "undefined" &&
+            global.SpellSystem &&
+            typeof global.SpellSystem.getMagicIconPath === "function"
+        ) {
+            const iconPath = global.SpellSystem.getMagicIconPath(normalizedName);
+            if (typeof iconPath === "string" && iconPath.trim().length > 0) {
+                return iconPath.trim();
+            }
+        }
+        const fallbackIcons = {
+            fireball: "/assets/images/thumbnails/fireball.png",
+            freeze: "/assets/images/magic/iceball.png",
+            lightning: "/assets/images/magic/lightning.png",
+            spikes: "/assets/images/magic/spike.png",
+            maze: "/assets/images/thumbnails/maze.png",
+            vanish: "/assets/images/thumbnails/vanish.png",
+            teleport: "/assets/images/magic/teleport.png",
+            shield: "/assets/images/thumbnails/aura.png",
+            omnivision: "/assets/images/thumbnails/eye.png",
+            speed: "/assets/images/thumbnails/speed.png",
+            healing: "/assets/images/thumbnails/cross.png",
+            invisibility: "/assets/images/magic/invisible.png"
+        };
+        return fallbackIcons[normalizedName] || "";
+    }
+
+    function normalizeScriptImagePath(rawPath) {
+        let path = String(rawPath || "").trim();
+        if (!path.length) return "";
+        if (!/^https?:\/\//i.test(path)) {
+            if (path.startsWith("images/")) {
+                path = `/assets/${path}`;
+            } else if (path.startsWith("assets/")) {
+                path = `/${path}`;
+            } else if (!path.startsWith("/")) {
+                path = `/${path}`;
+            }
+            if (!/[./][A-Za-z0-9]+(?:[?#].*)?$/.test(path)) {
+                path += ".png";
+            }
+        }
+        return path;
+    }
+
+    function createScriptImageContent(imagePath, options = {}) {
+        const resolvedPath = normalizeScriptImagePath(imagePath);
+        if (!resolvedPath.length) return "";
+        return function buildScriptImageContent() {
+            if (typeof document === "undefined") return resolvedPath;
+            const img = document.createElement("img");
+            img.src = resolvedPath;
+            img.alt = String(options.alt || "").trim() || "image";
+            img.className = String(options.className || "").trim();
+            img.style.display = "block";
+            img.style.maxWidth = String(options.maxWidth || "96px");
+            img.style.maxHeight = String(options.maxHeight || "96px");
+            img.style.margin = String(options.margin || "10px auto 0 auto");
+            img.style.objectFit = "contain";
+            return img;
+        };
+    }
+
+    function callScriptExpressionFunction(name, args, context = null) {
+        const normalizedName = String(name || "").trim();
+        if (!normalizedName.length) {
+            throw new Error("Missing function name.");
+        }
+
+        if (normalizedName === "shuffle") {
+            if (!Array.isArray(args[0])) {
+                throw new Error("shuffle() expects an array.");
+            }
+            return shuffleScriptArray(args[0]);
+        }
+
+        if (normalizedName === "hasMagic" || normalizedName === "magicUnlocked") {
+            const wizardRef = (context && (context.wizard || context.player)) || global.wizard || null;
+            return scriptHasMagicUnlock(wizardRef, String(args[0] || ""));
+        }
+
+        if (normalizedName === "player.hasMagic" || normalizedName === "wizard.hasMagic") {
+            const wizardRef = (context && (context.wizard || context.player)) || global.wizard || null;
+            return scriptHasMagicUnlock(wizardRef, String(args[0] || ""));
+        }
+
+        if (normalizedName === "magicIcon") {
+            return getScriptMagicIconPath(args[0]);
+        }
+
+        if (normalizedName === "image") {
+            const imagePath = args[0];
+            const options = (args[1] && typeof args[1] === "object" && !Array.isArray(args[1])) ? args[1] : {};
+            return createScriptImageContent(imagePath, options);
+        }
+
+        const resolved = resolveScriptExpressionPath(normalizedName, context);
+        if (resolved.ok && typeof resolved.value === "function") {
+            return resolved.value.apply(null, args);
+        }
+
+        throw new Error(`Unknown function: ${normalizedName}`);
+    }
+
+    function evaluateScriptExpression(rawExpression, context = null) {
+        const source = String(rawExpression || "");
+        let index = 0;
+
+        const isIdentStart = ch => /[A-Za-z_$]/.test(ch);
+        const isIdentPart = ch => /[A-Za-z0-9_$]/.test(ch);
+
+        const skipWhitespace = () => {
+            while (index < source.length && /\s/.test(source[index])) index += 1;
+        };
+
+        const readNumber = () => {
+            const match = source.slice(index).match(/^0[xX][0-9A-Fa-f]+|^\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/);
+            if (!match) return null;
+            index += match[0].length;
+            return Number(match[0]);
+        };
+
+        const readIdentifierPath = () => {
+            if (!isIdentStart(source[index])) return "";
+            const start = index;
+            index += 1;
+            while (index < source.length && isIdentPart(source[index])) index += 1;
+            while (source[index] === ".") {
+                const dotIndex = index;
+                index += 1;
+                if (!isIdentStart(source[index])) {
+                    index = dotIndex;
+                    break;
+                }
+                index += 1;
+                while (index < source.length && isIdentPart(source[index])) index += 1;
+            }
+            return source.slice(start, index);
+        };
+
+        const parseCallArguments = () => {
+            const args = [];
+            skipWhitespace();
+            if (source[index] === ")") {
+                return args;
+            }
+            while (index < source.length) {
+                args.push(parseLogicalOr());
+                skipWhitespace();
+                if (source[index] === ",") {
+                    index += 1;
+                    skipWhitespace();
+                    continue;
+                }
+                break;
+            }
+            return args;
+        };
+
+        const toNumericValue = (value, operator) => {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                throw new Error(`Operator '${operator}' requires numeric operands.`);
+            }
+            return numeric;
+        };
+
+        const parsePrimary = () => {
+            skipWhitespace();
+            if (index >= source.length) {
+                throw new Error("Unexpected end of expression.");
+            }
+
+            const ch = source[index];
+            if (ch === "(") {
+                index += 1;
+                const value = parseLogicalOr();
+                skipWhitespace();
+                if (source[index] !== ")") {
+                    throw new Error("Missing closing ')'.");
+                }
+                index += 1;
+                return value;
+            }
+
+            if (ch === "[") {
+                const section = readDelimitedScriptSection(source, index, "[", "]");
+                if (!section) {
+                    throw new Error("Unterminated array literal.");
+                }
+                const literalText = source.slice(index, section.endIndex + 1);
+                index = section.endIndex + 1;
+                try {
+                    return parseScriptStructuredLiteral(literalText, context);
+                } catch (_) {
+                    throw new Error("Invalid array literal.");
+                }
+            }
+
+            if (ch === "{") {
+                const section = readDelimitedScriptSection(source, index, "{", "}");
+                if (!section) {
+                    throw new Error("Unterminated object literal.");
+                }
+                const literalText = source.slice(index, section.endIndex + 1);
+                index = section.endIndex + 1;
+                try {
+                    return parseScriptStructuredLiteral(literalText, context);
+                } catch (_) {
+                    throw new Error("Invalid object literal.");
+                }
+            }
+
+            if (ch === '"' || ch === "'") {
+                const quote = ch;
+                const start = index;
+                index += 1;
+                let escapeNext = false;
+                while (index < source.length) {
+                    const current = source[index];
+                    if (escapeNext) {
+                        escapeNext = false;
+                        index += 1;
+                        continue;
+                    }
+                    if (current === "\\") {
+                        escapeNext = true;
+                        index += 1;
+                        continue;
+                    }
+                    if (current === quote) {
+                        index += 1;
+                        return parseScriptStringLiteral(source.slice(start, index), context);
+                    }
+                    index += 1;
+                }
+                throw new Error("Unterminated string literal.");
+            }
+
+            if (/\d/.test(ch)) {
+                return readNumber();
+            }
+
+            if (isIdentStart(ch)) {
+                const identifierPath = readIdentifierPath();
+                if (identifierPath === "true") return true;
+                if (identifierPath === "false") return false;
+                if (identifierPath === "null") return null;
+                skipWhitespace();
+                if (source[index] === "(") {
+                    index += 1;
+                    const args = parseCallArguments();
+                    skipWhitespace();
+                    if (source[index] !== ")") {
+                        throw new Error("Missing closing ')' after function call.");
+                    }
+                    index += 1;
+                    return callScriptExpressionFunction(identifierPath, args, context);
+                }
+                const resolved = resolveScriptExpressionPath(identifierPath, context);
+                if (!resolved.ok) {
+                    throw new Error(`Unknown expression value: ${identifierPath}`);
+                }
+                return resolved.value;
+            }
+
+            throw new Error(`Unexpected token: ${ch}`);
+        };
+
+        const parseUnary = () => {
+            skipWhitespace();
+            const ch = source[index];
+            if (ch === "+") {
+                index += 1;
+                return toNumericValue(parseUnary(), "+");
+            }
+            if (ch === "-") {
+                index += 1;
+                return -toNumericValue(parseUnary(), "-");
+            }
+            if (ch === "!") {
+                index += 1;
+                return !parseUnary();
+            }
+            return parsePrimary();
+        };
+
+        const parseMultiplicative = () => {
+            let value = parseUnary();
+            while (true) {
+                skipWhitespace();
+                const operator = source[index];
+                if (operator !== "*" && operator !== "/" && operator !== "%") break;
+                index += 1;
+                const rhs = parseUnary();
+                const left = toNumericValue(value, operator);
+                const right = toNumericValue(rhs, operator);
+                if (operator === "*") value = left * right;
+                else if (operator === "/") value = left / right;
+                else value = left % right;
+            }
+            return value;
+        };
+
+        const parseAdditive = () => {
+            let value = parseMultiplicative();
+            while (true) {
+                skipWhitespace();
+                const operator = source[index];
+                if (operator !== "+" && operator !== "-") break;
+                index += 1;
+                const rhs = parseMultiplicative();
+                if (operator === "+") {
+                    value = (typeof value === "string" || typeof rhs === "string")
+                        ? `${value}${rhs}`
+                        : toNumericValue(value, operator) + toNumericValue(rhs, operator);
+                } else {
+                    value = toNumericValue(value, operator) - toNumericValue(rhs, operator);
+                }
+            }
+            return value;
+        };
+
+        const parseRelational = () => {
+            let value = parseAdditive();
+            while (true) {
+                skipWhitespace();
+                let operator = "";
+                if (source.startsWith("<=", index)) operator = "<=";
+                else if (source.startsWith(">=", index)) operator = ">=";
+                else if (source[index] === "<") operator = "<";
+                else if (source[index] === ">") operator = ">";
+                if (!operator) break;
+                index += operator.length;
+                const rhs = parseAdditive();
+                if (operator === "<") value = value < rhs;
+                else if (operator === ">") value = value > rhs;
+                else if (operator === "<=") value = value <= rhs;
+                else value = value >= rhs;
+            }
+            return value;
+        };
+
+        const parseEquality = () => {
+            let value = parseRelational();
+            while (true) {
+                skipWhitespace();
+                let operator = "";
+                if (source.startsWith("===", index)) operator = "===";
+                else if (source.startsWith("!==", index)) operator = "!==";
+                else if (source.startsWith("==", index)) operator = "==";
+                else if (source.startsWith("!=", index)) operator = "!=";
+                if (!operator) break;
+                index += operator.length;
+                const rhs = parseRelational();
+                if (operator === "==") value = value == rhs; // eslint-disable-line eqeqeq
+                else if (operator === "!=") value = value != rhs; // eslint-disable-line eqeqeq
+                else if (operator === "===") value = value === rhs;
+                else value = value !== rhs;
+            }
+            return value;
+        };
+
+        const parseLogicalAnd = () => {
+            let value = parseEquality();
+            while (true) {
+                skipWhitespace();
+                if (!source.startsWith("&&", index)) break;
+                index += 2;
+                value = !!value && !!parseEquality();
+            }
+            return value;
+        };
+
+        const parseLogicalOr = () => {
+            let value = parseLogicalAnd();
+            while (true) {
+                skipWhitespace();
+                if (!source.startsWith("||", index)) break;
+                index += 2;
+                value = !!value || !!parseLogicalAnd();
+            }
+            return value;
+        };
+
+        const value = parseLogicalOr();
+        skipWhitespace();
+        if (index < source.length) {
+            throw new Error(`Unexpected token: ${source[index]}`);
+        }
+        return value;
+    }
+
+    function isLegacyBareScriptWord(text) {
+        return /^[A-Za-z_$][\w$]*$/.test(String(text || "").trim());
+    }
+
+    function isLegacyBareHexColor(text) {
+        const value = String(text || "").trim();
+        return /^(?=.*[A-Fa-f])[0-9A-Fa-f]{3,8}$/.test(value);
+    }
+
+    function createScriptValidationWizardStub() {
+        return {
+            hp: 100,
+            maxHp: 100,
+            magic: 100,
+            maxMagic: 100,
+            difficulty: 1,
+            speed: 2,
+            magicRegenPerSecond: 10,
+            magicRechargeRate: 10,
+            x: 0,
+            y: 0,
+            unlockedMagic: [],
+            heal(amount) {
+                const hpDelta = Number(amount);
+                if (!Number.isFinite(hpDelta) || hpDelta <= 0) return 0;
+                const maxHp = Number.isFinite(this.maxHp) ? Number(this.maxHp) : 100;
+                const currentHp = Number.isFinite(this.hp) ? Number(this.hp) : maxHp;
+                const nextHp = Math.max(0, Math.min(maxHp, currentHp + hpDelta));
+                this.hp = nextHp;
+                return Math.max(0, nextHp - currentHp);
+            }
+        };
+    }
+
+    function parseScriptValue(rawValue, context = null) {
         const text = String(rawValue || "").trim();
         if (!text.length) return "";
         if (text === "true") return true;
         if (text === "false") return false;
         if (text === "null") return null;
-        if (/^[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(text)) return Number(text);
+        if (/^[-+]?(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)$/.test(text)) return Number(text);
         if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
-            const normalized = text.startsWith("'")
-                ? `\"${text.slice(1, -1).replace(/\\/g, "\\\\").replace(/\"/g, "\\\"")}\"`
-                : text;
-            try {
-                return JSON.parse(normalized);
-            } catch (_) {
-                return text.slice(1, -1);
-            }
+            return parseScriptStringLiteral(text, context);
         }
         if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
             try {
-                return JSON.parse(text);
+                return parseScriptStructuredLiteral(text, context);
             } catch (_) {
                 return text;
+            }
+        }
+        try {
+            return evaluateScriptExpression(text, context);
+        } catch (error) {
+            // Preserve legacy behavior for bare words like fireball or tree1.
+            // Preserve legacy unquoted hex colors like 4488ff used in existing save data.
+            if (!isLegacyBareScriptWord(text) && !isLegacyBareHexColor(text)) {
+                throw error;
             }
         }
         return text;
@@ -891,7 +1673,7 @@
         return out.map(part => part.trim()).filter(Boolean);
     }
 
-    function parseCommandStatement(statement) {
+    function parseCommandStatement(statement, context = null) {
         const text = String(statement || "").trim();
         if (!text.length) return null;
         const match = text.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([\s\S]*)\)$/);
@@ -908,14 +1690,18 @@
                 if (!rawArg.length) continue;
                 const namedMatch = rawArg.match(/^([A-Za-z_$][\w$]*)\s*=\s*([\s\S]+)$/);
                 if (namedMatch) {
-                    namedArgs[namedMatch[1]] = parseScriptValue(namedMatch[2]);
+                    namedArgs[namedMatch[1]] = parseScriptValue(namedMatch[2], context);
                 } else {
-                    positionalArgs.push(parseScriptValue(rawArg));
+                    positionalArgs.push(parseScriptValue(rawArg, context));
                 }
             }
         }
 
         return { commandName, args: positionalArgs, namedArgs };
+    }
+
+    function evaluateScriptCondition(rawCondition, context = null) {
+        return !!evaluateScriptExpression(rawCondition, context);
     }
 
     function registerCommand(commandName, handler) {
@@ -1052,7 +1838,7 @@
     }
 
     function resolveAssignmentValue(path, operator, rhsRaw, context = null) {
-        const rhs = parseScriptValue(rhsRaw);
+        const rhs = parseScriptValue(rhsRaw, context);
         if (operator !== "+=") return { ok: true, value: rhs };
 
         const wizardRef = context && context.wizard ? context.wizard : null;
@@ -1092,7 +1878,13 @@
     function executeAssignmentStatement(lhs, rhsRaw, context = null, operator = "=") {
         const path = String(lhs || "").trim();
         if (!path.length) return false;
-        const resolvedValue = resolveAssignmentValue(path, operator, rhsRaw, context);
+        let resolvedValue = null;
+        try {
+            resolvedValue = resolveAssignmentValue(path, operator, rhsRaw, context);
+        } catch (error) {
+            console.error(`Scripting assignment '${path}' failed to parse value:`, error);
+            return false;
+        }
         if (!resolvedValue.ok) return false;
         const rhs = resolvedValue.value;
         const wizardRef = context && context.wizard ? context.wizard : null;
@@ -1287,10 +2079,11 @@
         return !!value && (typeof value === "object" || typeof value === "function") && typeof value.then === "function";
     }
 
-    function createScriptRunResult(changed, promise = null) {
+    function createScriptRunResult(changed, promise = null, control = null) {
         return {
             changed: !!changed,
-            promise: isPromiseLike(promise) ? promise : null
+            promise: isPromiseLike(promise) ? promise : null,
+            control: control || null
         };
     }
 
@@ -1301,12 +2094,175 @@
 
         let changed = false;
         let pending = null;
+        let control = null;
         for (let i = 0; i < statements.length; i++) {
+            if (control) break;
             const statement = statements[i];
+            if (parseBreakStatement(statement)) {
+                control = "break";
+                if (pending) {
+                    pending = pending.then(() => {
+                        control = "break";
+                    });
+                }
+                break;
+            }
+            const forStatement = parseForInStatement(statement);
+            if (forStatement) {
+                const runForStatement = () => {
+                    let iterableValue = null;
+                    try {
+                        iterableValue = parseScriptValue(forStatement.iterableExpression, context);
+                    } catch (error) {
+                        console.error("Scripting for-loop iterable failed:", error);
+                        return createScriptRunResult(false);
+                    }
+                    const iterableEntries = normalizeScriptIterable(iterableValue);
+                    if (!iterableEntries) {
+                        console.error("Scripting for-loop iterable is not iterable:", iterableValue);
+                        return createScriptRunResult(false);
+                    }
+
+                    let loopChanged = false;
+                    let loopControl = null;
+
+                    const applyLoopRunResult = (loopRun) => {
+                        loopChanged = !!(loopRun && loopRun.changed) || loopChanged;
+                        if (loopRun && loopRun.control === "break") {
+                            loopControl = "break";
+                        }
+                    };
+
+                    const runLoopEntry = (entryIndex) => {
+                        if (entryIndex >= iterableEntries.length || loopControl === "break") {
+                            return createScriptRunResult(loopChanged, null, null);
+                        }
+
+                        const loopValue = iterableEntries[entryIndex];
+                        const loopContext = createScriptChildContext(context, {
+                            [forStatement.variableName]: loopValue
+                        });
+                        const loopRun = runScript(forStatement.body, loopContext);
+                        if (loopRun && isPromiseLike(loopRun.promise)) {
+                            loopChanged = !!loopRun.changed || loopChanged;
+                            return createScriptRunResult(
+                                loopChanged,
+                                Promise.resolve(loopRun.promise).then(() => {
+                                    applyLoopRunResult(loopRun);
+                                    const nextRun = runLoopEntry(entryIndex + 1);
+                                    if (nextRun && isPromiseLike(nextRun.promise)) {
+                                        return nextRun.promise;
+                                    }
+                                }),
+                                null
+                            );
+                        }
+                        applyLoopRunResult(loopRun);
+                        return runLoopEntry(entryIndex + 1);
+                    };
+
+                    return runLoopEntry(0);
+                };
+
+                if (pending) {
+                    pending = pending.then(() => {
+                        if (control) return;
+                        const forRun = runForStatement();
+                        if (forRun && isPromiseLike(forRun.promise)) {
+                            changed = !!forRun.changed || changed;
+                            return Promise.resolve(forRun.promise).then(() => {
+                                changed = !!forRun.changed || changed;
+                                if (forRun.control) {
+                                    control = forRun.control;
+                                }
+                            });
+                        }
+                        changed = !!(forRun && forRun.changed) || changed;
+                        if (forRun && forRun.control) {
+                            control = forRun.control;
+                        }
+                    });
+                } else {
+                    const forRun = runForStatement();
+                    if (forRun && isPromiseLike(forRun.promise)) {
+                        changed = !!forRun.changed || changed;
+                        if (forRun.control) {
+                            control = forRun.control;
+                        }
+                        pending = Promise.resolve(forRun.promise).then(() => {
+                            changed = !!forRun.changed || changed;
+                            if (forRun.control) {
+                                control = forRun.control;
+                            }
+                        });
+                    } else {
+                        changed = !!(forRun && forRun.changed) || changed;
+                        if (forRun && forRun.control) {
+                            control = forRun.control;
+                        }
+                    }
+                }
+                continue;
+            }
+            const ifStatement = parseIfStatement(statement);
+            if (ifStatement) {
+                const runIfStatement = () => {
+                    try {
+                        if (!evaluateScriptCondition(ifStatement.condition, context)) {
+                            return createScriptRunResult(false);
+                        }
+                    } catch (error) {
+                        console.error(`Scripting if-condition failed:`, error);
+                        return createScriptRunResult(false);
+                    }
+                    return runScript(ifStatement.body, context);
+                };
+
+                if (pending) {
+                    pending = pending.then(() => {
+                        if (control) return;
+                        const ifRun = runIfStatement();
+                        if (ifRun && isPromiseLike(ifRun.promise)) {
+                            changed = !!ifRun.changed || changed;
+                            return Promise.resolve(ifRun.promise).then(() => {
+                                changed = !!ifRun.changed || changed;
+                                if (ifRun.control) {
+                                    control = ifRun.control;
+                                }
+                            });
+                        }
+                        changed = !!(ifRun && ifRun.changed) || changed;
+                        if (ifRun && ifRun.control) {
+                            control = ifRun.control;
+                        }
+                    });
+                } else {
+                    const ifRun = runIfStatement();
+                    if (ifRun && isPromiseLike(ifRun.promise)) {
+                        changed = !!ifRun.changed || changed;
+                        if (ifRun.control) {
+                            control = ifRun.control;
+                        }
+                        pending = Promise.resolve(ifRun.promise).then(() => {
+                            changed = !!ifRun.changed || changed;
+                            if (ifRun.control) {
+                                control = ifRun.control;
+                            }
+                        });
+                    } else {
+                        changed = !!(ifRun && ifRun.changed) || changed;
+                        if (ifRun && ifRun.control) {
+                            control = ifRun.control;
+                        }
+                    }
+                }
+                continue;
+            }
             const assignmentMatch = statement.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*(\+=|=)\s*(.+)$/);
             if (assignmentMatch) {
                 if (pending) {
                     pending = pending.then(() => {
+                        if (control) return;
                         const didAssign = executeAssignmentStatement(assignmentMatch[1], assignmentMatch[3], context, assignmentMatch[2]);
                         changed = didAssign || changed;
                     });
@@ -1316,10 +2272,17 @@
                 }
                 continue;
             }
-            const command = parseCommandStatement(statement);
+            let command = null;
+            try {
+                command = parseCommandStatement(statement, context);
+            } catch (error) {
+                console.error("Scripting command parse failed:", error);
+                continue;
+            }
             if (command) {
                 if (pending) {
                     pending = pending.then(() => {
+                        if (control) return;
                         const didRun = executeCommandStatement(command.commandName, command.args, command.namedArgs, context);
                         if (isPromiseLike(didRun)) {
                             return Promise.resolve(didRun).then(result => {
@@ -1341,7 +2304,7 @@
                 }
             }
         }
-        return pending ? createScriptRunResult(changed, pending) : createScriptRunResult(changed);
+        return pending ? createScriptRunResult(changed, pending, control) : createScriptRunResult(changed, null, control);
     }
 
     function runAssignmentScript(script, wizardRef = null) {
@@ -1468,12 +2431,13 @@
         return !!(scriptRun && (scriptRun.changed || scriptRun.promise));
     }
 
-    function processObjectTouchEvents(wizardRef, nearbyEntries, radius = 0) {
+    function processObjectTouchEvents(wizardRef, nearbyEntries, radius = 0, options = null) {
         if (!wizardRef) return;
         const touchedByObjectId = (wizardRef._scriptTouchedObjectsById instanceof Map)
             ? wizardRef._scriptTouchedObjectsById
             : new Map();
         wizardRef._scriptTouchedObjectsById = touchedByObjectId;
+        const suppressTouchEvents = !!(options && options.suppressTouchEvents === true);
 
         const wizardX = Number(wizardRef.x);
         const wizardY = Number(wizardRef.y);
@@ -1501,6 +2465,7 @@
 
                 currentlyTouchingIds.add(objectId);
                 if (!touchedByObjectId.has(objectId) &&
+                    !suppressTouchEvents &&
                     hasEventScriptForTarget(obj, PLAYER_TOUCH_EVENT_NAME)) {
                     fireObjectScriptEvent(obj, PLAYER_TOUCH_EVENT_NAME, wizardRef, {
                         objectId,
@@ -1647,12 +2612,13 @@
         }
     }
 
-    function processTriggerAreaTraversalEvents(wizardRef, fromX, fromY, toX, toY, nearbyEntries, radius = 0) {
+    function processTriggerAreaTraversalEvents(wizardRef, fromX, fromY, toX, toY, nearbyEntries, radius = 0, options = null) {
         if (!wizardRef) return;
         const stateById = (wizardRef._triggerAreaTraversalStateById instanceof Map)
             ? wizardRef._triggerAreaTraversalStateById
             : new Map();
         wizardRef._triggerAreaTraversalStateById = stateById;
+        const treatInitialOverlapAsEnter = !!(options && options.treatInitialOverlapAsEnter === true);
 
         // Match object-touch behavior: a tiny probe radius avoids missing enter/exit
         // transitions when the sampled position lands exactly on a polygon edge.
@@ -1680,6 +2646,28 @@
                     ? priorState.inside
                     : sampledPrevInside;
                 const nextInside = isPointInDoorHitbox(hitbox, toX, toY, touchRadius);
+                const shouldTreatInitialOverlapAsEnter = (
+                    treatInitialOverlapAsEnter &&
+                    !priorState &&
+                    nextInside
+                );
+                if (shouldTreatInitialOverlapAsEnter) {
+                    const preferredEventName = hasEventScriptForTarget(area, "playerEnters")
+                        ? "playerEnters"
+                        : "playerTouches";
+                    fireObjectScriptEvent(area, preferredEventName, wizardRef, {
+                        areaId,
+                        fromX,
+                        fromY,
+                        toX,
+                        toY,
+                        insideFrom: false,
+                        insideTo: true,
+                        reason: "load-enter"
+                    });
+                    stateById.set(areaId, { inside: true });
+                    continue;
+                }
                 if (prevInside === nextInside) {
                     stateById.set(areaId, { inside: nextInside });
                     continue;
@@ -2079,14 +3067,15 @@
             "<div style='font-weight:bold;font-size:16px;margin-bottom:8px;'>Script Help</div>",
             "<div style='margin-bottom:10px;'>Write scripts in block format. Scripts are saved as JSON internally.</div>",
             "<div style='font-weight:bold;margin-top:8px;'>Event Blocks</div>",
-            "<pre style='white-space:pre-wrap;margin:6px 0 10px 0;'>playerExits {\n    mazeMode=true\n}\n\nplayerEnters {\n    mazeMode=false\n}\n\nplayerTouches {\n    healPlayer(5)\n}\n\nplayerUntouches {\n    drainMagic(10)\n}\n\ndie {\n    spawnCreature(type=\"squirrel\", size=1)\n}</pre>",
+            `<pre style='white-space:pre-wrap;margin:6px 0 10px 0;'>newGame {\n${SCRIPT_EDITOR_INDENT}this.lock()\n}\n\nplayerExits {\n${SCRIPT_EDITOR_INDENT}mazeMode=true\n}\n\nplayerEnters {\n${SCRIPT_EDITOR_INDENT}mazeMode=false\n}\n\nplayerTouches {\n${SCRIPT_EDITOR_INDENT}healPlayer(5)\n}\n\nplayerUntouches {\n${SCRIPT_EDITOR_INDENT}drainMagic(10)\n}\n\ndie {\n${SCRIPT_EDITOR_INDENT}spawnCreature(type="squirrel", size=1)\n}</pre>`,
             "<div style='font-weight:bold;margin-top:8px;'>Statement Syntax</div>",
             renderList([
                 { html: "Assignments: <code>mazeMode=true</code>" },
                 { html: "Numeric properties also support <code>+=</code>, for example <code>player.speed += 1</code>." },
                 { html: "Use <code>player.</code>, <code>wizard.</code>, <code>this.</code>, or a named object like <code>bear1.</code> for members." },
                 { html: "Semicolons are optional; newline also ends a statement." },
-                { html: "Top-level statements outside any event block run on script save and on fresh object creation (not on load)." }
+                { html: "Top-level statements outside any event block run on script save and on fresh object creation (not on load)." },
+                { html: "Use <code>newGame { ... }</code> for one-time template setup that should only happen when starting a brand new game." }
             ], entry => entry.html),
             "<div style='font-weight:bold;margin-top:8px;'>Built-in Events</div>",
             renderList(SCRIPTING_API_SCHEMA.events, entry =>
@@ -2196,6 +3185,89 @@
 
     function scriptEditorEscapeHtml(text) {
         return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function lineEndsWithScriptBlockStarter(text) {
+        const trimmed = String(text || "").replace(/[ \t]+$/, "");
+        if (!trimmed.length) return false;
+        const trailingIndex = trimmed.length - 1;
+        const delimiterErrors = collectUnterminatedDelimiterErrors(trimmed, 0);
+        return delimiterErrors.some(error => error.start === trailingIndex && error.end === trailingIndex + 1);
+    }
+
+    function lineStartsWithScriptBlockCloser(text) {
+        const trimmed = String(text || "").replace(/^[ \t]+/, "");
+        return !!trimmed && (trimmed[0] === "}" || trimmed[0] === "]" || trimmed[0] === ")");
+    }
+
+    function collectUnterminatedDelimiterErrors(text, startOffset = 0) {
+        const source = String(text || "");
+        const errors = [];
+        const openers = [];
+        let inQuote = null;
+        let quoteStart = -1;
+        let escapeNext = false;
+        const matchingOpeners = {
+            "}": "{",
+            "]": "[",
+            ")": "("
+        };
+
+        for (let i = 0; i < source.length; i++) {
+            const ch = source[i];
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            if (ch === "\\") {
+                if (inQuote) {
+                    escapeNext = true;
+                }
+                continue;
+            }
+            if (inQuote) {
+                if (ch === inQuote) {
+                    inQuote = null;
+                    quoteStart = -1;
+                }
+                continue;
+            }
+            if (ch === "\"" || ch === "'") {
+                inQuote = ch;
+                quoteStart = i;
+                continue;
+            }
+            if (ch === "{" || ch === "[" || ch === "(") {
+                openers.push({ char: ch, index: i });
+                continue;
+            }
+            if (matchingOpeners[ch]) {
+                const expected = matchingOpeners[ch];
+                if (openers.length > 0 && openers[openers.length - 1].char === expected) {
+                    openers.pop();
+                }
+            }
+        }
+
+        for (let i = 0; i < openers.length; i++) {
+            const opener = openers[i];
+            const label = opener.char === "{"
+                ? "brace"
+                : (opener.char === "[" ? "bracket" : "parenthesis");
+            errors.push({
+                start: startOffset + opener.index,
+                end: startOffset + opener.index + 1,
+                message: `Unclosed ${label}`
+            });
+        }
+        if (inQuote === "\"") {
+            errors.push({
+                start: startOffset + quoteStart,
+                end: startOffset + quoteStart + 1,
+                message: "Unclosed double quote"
+            });
+        }
+        return errors;
     }
 
     function updateScriptEditorHighlights() {
@@ -2374,13 +3446,22 @@
                 const trimmed = stmt.trim();
                 if (!trimmed) return "";
                 if (!trimmed.includes("\n")) return baseIndent + trimmed + ";";
-                // Multi-line statement: re-indent each line
-                const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+                const lines = trimmed.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+                let relativeIndentLevel = 0;
+                let previousLine = "";
                 return lines.map((line, idx) => {
-                    if (idx === 0) return baseIndent + line;
-                    // Closing paren/bracket at same indent as opening line
-                    if (/^[)\]}]/.test(line)) return baseIndent + line;
-                    return baseIndent + "    " + line;
+                    if (idx === 0) {
+                        previousLine = line;
+                        return baseIndent + line;
+                    }
+                    if (lineStartsWithScriptBlockCloser(line)) {
+                        relativeIndentLevel = Math.max(0, relativeIndentLevel - 1);
+                    } else if (lineEndsWithScriptBlockStarter(previousLine)) {
+                        relativeIndentLevel += 1;
+                    }
+                    const formattedLine = baseIndent + SCRIPT_EDITOR_INDENT.repeat(relativeIndentLevel) + line;
+                    previousLine = line;
+                    return formattedLine;
                 }).join("\n") + ";";
             };
 
@@ -2400,7 +3481,7 @@
                     [";", "\n", "\r"]
                 );
                 const body = parts.length > 0
-                    ? `\n${parts.map(part => formatStmt(part, "    ")).join("\n")}\n`
+                    ? `\n${parts.map(part => formatStmt(part, SCRIPT_EDITOR_INDENT)).join("\n")}\n`
                     : "\n";
                 sections.push(`${eventName} {${body}}`);
             });
@@ -2897,7 +3978,9 @@
             "font-size": "13px",
             "line-height": "1.4",
             "letter-spacing": "normal",
-            "word-spacing": "normal"
+            "word-spacing": "normal",
+            "tab-size": "3",
+            "-moz-tab-size": "3"
         };
         const $nameRow = $("<label>")
             .attr("id", SCRIPT_EDITOR_NAME_LABEL_ID)
@@ -3020,7 +4103,7 @@
                         return;
                     }
                 }
-                const closingBrackets = { "{": "}", "(": ")" };
+                const closingBrackets = { "{": "}", "(": ")", "[": "]", "\"": "\"" };
                 if (closingBrackets[evt.key] && selStart === selEnd) {
                     evt.preventDefault();
                     const close = closingBrackets[evt.key];
@@ -3030,7 +4113,7 @@
                     updateScriptEditorCompletions();
                     return;
                 }
-                if ((evt.key === "}" || evt.key === ")") && selStart === selEnd && val[selStart] === evt.key) {
+                if ((evt.key === "}" || evt.key === ")" || evt.key === "]" || evt.key === "\"") && selStart === selEnd && val[selStart] === evt.key) {
                     evt.preventDefault();
                     ta.selectionStart = ta.selectionEnd = selStart + 1;
                     return;
@@ -3049,7 +4132,7 @@
                 }
                 if (evt.key === "Tab") {
                     evt.preventDefault();
-                    const indent = "    ";
+                    const indent = SCRIPT_EDITOR_INDENT;
                     const getUnindentCount = line => {
                         if (!line) return 0;
                         if (line.startsWith("\t")) return 1;
@@ -3111,16 +4194,9 @@
                 let lineText = val.slice(lineStart, selStart);
                 const indentMatch = lineText.match(/^(\s*)/);
                 const currentIndent = indentMatch ? indentMatch[1] : "";
-                if (/\S\{$/.test(lineText)) {
-                    const insertPos = selStart - 1;
-                    val = val.slice(0, insertPos) + " " + val.slice(insertPos);
-                    selStart += 1;
-                    selEnd += 1;
-                    lineText = val.slice(lineStart, selStart);
-                }
                 let newIndent = currentIndent;
-                if (lineText.trimEnd().endsWith("{")) {
-                    newIndent = currentIndent + "    ";
+                if (lineEndsWithScriptBlockStarter(lineText)) {
+                    newIndent = currentIndent + SCRIPT_EDITOR_INDENT;
                 }
                 const afterTrimmed = val.slice(selEnd).replace(/^[ \t]*/, "");
                 const needClosingLine = lineText.trimEnd().endsWith("{") && afterTrimmed.startsWith("}");
@@ -3669,6 +4745,21 @@
                 global.simulationTimeScale = clamped;
                 return true;
             },
+            difficulty(value, context) {
+                const target = context && context.target;
+                const parsedDifficulty = Number(value);
+                if (!target || !Number.isFinite(parsedDifficulty)) return false;
+                const nextDifficulty = Math.max(1, Math.min(3, Math.round(parsedDifficulty)));
+                if (typeof target.setDifficulty === "function") {
+                    target.setDifficulty(nextDifficulty);
+                } else {
+                    target.difficulty = nextDifficulty;
+                    if (Number.isFinite(target.magicRegenPerSecond)) {
+                        target.magicRegenPerSecond = Math.max(0, 8 - nextDifficulty);
+                    }
+                }
+                return true;
+            },
             speed(value, context) {
                 const target = context && context.target;
                 const nextSpeed = Number(value);
@@ -3765,6 +4856,13 @@
                 if (target.fireSprite) target.fireSprite.visible = visible;
                 return true;
             },
+                forceVisible(value, context) {
+                    const target = context && context.target;
+                    if (!target) return false;
+                    target.forceVisible = !!value;
+                        target._forceVisible = target.forceVisible;
+                    return true;
+                },
             brightness(value, context) {
                 const target = context && context.target;
                 const brightness = Number(value);
@@ -3940,11 +5038,19 @@
                 if (!wizardRef) return false;
                 const hpDelta = Number(args[0]);
                 if (!Number.isFinite(hpDelta)) return false;
-                if (!Number.isFinite(wizardRef.maxHP)) {
-                    wizardRef.maxHP = Number.isFinite(wizardRef.hp) ? wizardRef.hp : 100;
+                if (typeof wizardRef.heal === "function") {
+                    wizardRef.heal(hpDelta);
+                    return true;
                 }
-                const currentHp = Number.isFinite(wizardRef.hp) ? wizardRef.hp : wizardRef.maxHP;
-                wizardRef.hp = Math.max(0, Math.min(wizardRef.maxHP, currentHp + hpDelta));
+                const maxHp = Number.isFinite(wizardRef.maxHp) ? Number(wizardRef.maxHp)
+                    : (Number.isFinite(wizardRef.maxHP) ? Number(wizardRef.maxHP) : null);
+                const normalizedMaxHp = Number.isFinite(maxHp)
+                    ? Math.max(0, maxHp)
+                    : Math.max(0, Number.isFinite(wizardRef.hp) ? Number(wizardRef.hp) : 100);
+                wizardRef.maxHp = normalizedMaxHp;
+                wizardRef.maxHP = normalizedMaxHp;
+                const currentHp = Number.isFinite(wizardRef.hp) ? Number(wizardRef.hp) : normalizedMaxHp;
+                wizardRef.hp = Math.max(0, Math.min(normalizedMaxHp, currentHp + hpDelta));
                 return true;
             },
             hurtPlayer(args, context) {
@@ -3952,6 +5058,10 @@
                 if (!wizardRef) return false;
                 const damage = Number(args[0]);
                 if (!Number.isFinite(damage)) return false;
+                if (typeof wizardRef.takeDamage === "function") {
+                    wizardRef.takeDamage(damage, { source: "script" });
+                    return true;
+                }
                 const maxHp = Number.isFinite(wizardRef.maxHP) ? wizardRef.maxHP
                     : (Number.isFinite(wizardRef.maxHp) ? wizardRef.maxHp : 100);
                 const currentHp = Number.isFinite(wizardRef.hp) ? wizardRef.hp : maxHp;
@@ -3983,19 +5093,36 @@
                 if (!wizardRef) return false;
                 const spellName = normalizeScriptSpellName(args[0]);
                 if (!spellName) return false;
-                const granted = Array.isArray(wizardRef.unlockedSpells) ? wizardRef.unlockedSpells : [];
-                if (!Array.isArray(wizardRef.unlockedSpells)) {
-                    wizardRef.unlockedSpells = granted;
-                }
-                if (!granted.includes(spellName)) {
-                    granted.push(spellName);
+                if (
+                    typeof global.SpellSystem !== "undefined" &&
+                    global.SpellSystem &&
+                    typeof global.SpellSystem.grantMagicUnlock === "function"
+                ) {
+                    global.SpellSystem.grantMagicUnlock(wizardRef, spellName);
+                } else {
+                    const granted = Array.isArray(wizardRef.unlockedMagic) ? wizardRef.unlockedMagic : [];
+                    if (!Array.isArray(wizardRef.unlockedMagic)) {
+                        wizardRef.unlockedMagic = granted;
+                    }
+                    if (!granted.includes(spellName)) {
+                        granted.push(spellName);
+                    }
                 }
                 if (typeof global.SpellSystem !== "undefined" && global.SpellSystem) {
-                    if (typeof global.SpellSystem.refreshSpellSelector === "function") {
-                        global.SpellSystem.refreshSpellSelector(wizardRef);
+                    if (typeof global.SpellSystem.syncWizardUnlockState === "function") {
+                        global.SpellSystem.syncWizardUnlockState(wizardRef);
                     }
                 }
                 return true;
+            },
+            addMagic(args, context) {
+                return this.addSpell(args, context);
+            },
+            unlockMagic(args, context) {
+                return commandImplementations.addSpell(args, context);
+            },
+            unlockSpell(args, context) {
+                return commandImplementations.addSpell(args, context);
             },
             trade(args, context, namedArgs = {}) {
                 const wizardRef = (context && context.wizard) || global.wizard || null;
@@ -4221,6 +5348,46 @@
                 }
                 return true;
             },
+            drop(args, context, namedArgs = {}) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                const target = (context && context.target) || null;
+                const source = target || wizardRef;
+                if (!source || typeof global.dropPowerupNearSource !== "function") return false;
+
+                const typeValue = Object.prototype.hasOwnProperty.call(namedArgs, "type") ? namedArgs.type : args[0];
+                const sizeValue = Object.prototype.hasOwnProperty.call(namedArgs, "size") ? namedArgs.size : args[1];
+                const countValue = Object.prototype.hasOwnProperty.call(namedArgs, "count") ? namedArgs.count : args[2];
+                const locationValue = Object.prototype.hasOwnProperty.call(namedArgs, "location") ? namedArgs.location : args[3];
+                const distanceValue = Object.prototype.hasOwnProperty.call(namedArgs, "distance") ? namedArgs.distance : undefined;
+                const heightValue = Object.prototype.hasOwnProperty.call(namedArgs, "height") ? namedArgs.height : undefined;
+                const relativeOffset = parseRelativeOffset(locationValue);
+
+                if (Object.prototype.hasOwnProperty.call(namedArgs, "x")) {
+                    const namedX = Number(namedArgs.x);
+                    if (Number.isFinite(namedX)) relativeOffset.x = namedX;
+                }
+                if (Object.prototype.hasOwnProperty.call(namedArgs, "y")) {
+                    const namedY = Number(namedArgs.y);
+                    if (Number.isFinite(namedY)) relativeOffset.y = namedY;
+                }
+
+                const powerupType = String(typeValue || "").trim();
+                if (!powerupType.length) return false;
+                const size = Number.isFinite(Number(sizeValue)) ? Number(sizeValue) : 1;
+                const count = Number.isFinite(Number(countValue)) ? Number(countValue) : 1;
+                const distance = Number.isFinite(Number(distanceValue)) ? Number(distanceValue) : undefined;
+                const height = Number.isFinite(Number(heightValue)) ? Number(heightValue) : 0;
+                const dropped = global.dropPowerupNearSource(source, powerupType, {
+                    size,
+                    count,
+                    preferredDistance: distance,
+                    z: height,
+                    offsetX: relativeOffset.x,
+                    offsetY: relativeOffset.y
+                });
+                if (Array.isArray(dropped)) return dropped.length > 0;
+                return !!dropped;
+            },
             pause(args, context, namedArgs = {}) {
                 const rawSeconds = Object.prototype.hasOwnProperty.call(namedArgs, "seconds")
                     ? namedArgs.seconds
@@ -4238,6 +5405,18 @@
             savegame(args) {
                 const name = String(args[0] || "").trim();
                 if (!name.length) return false;
+                if (typeof saveGameStateToLocalStorage === "function") {
+                    const result = saveGameStateToLocalStorage(name);
+                    if (!result || !result.ok) {
+                        console.error("Scripting savegame failed:", result);
+                        return false;
+                    }
+                    if (typeof message === "function") {
+                        message("Game saved to '" + name + "'");
+                    }
+                    console.log("Scripting: game saved to localStorage key '" + name + "'");
+                    return true;
+                }
                 if (typeof saveGameState !== "function") return false;
                 const saveData = saveGameState();
                 if (!saveData) return false;
@@ -4274,21 +5453,52 @@
                 return true;
             },
             scrollMessage(args, context, namedArgs = {}) {
-                const textValue = Object.prototype.hasOwnProperty.call(namedArgs, "text")
-                    ? namedArgs.text
-                    : args[0];
-                const titleValue = Object.prototype.hasOwnProperty.call(namedArgs, "title")
-                    ? namedArgs.title
-                    : args[1];
-                const text = String(textValue === undefined || textValue === null ? "" : textValue);
+                const hasNamedText = Object.prototype.hasOwnProperty.call(namedArgs, "text");
+                const hasNamedTitle = Object.prototype.hasOwnProperty.call(namedArgs, "title");
+                let content = hasNamedText ? namedArgs.text : args[0];
+                let titleValue = hasNamedTitle ? namedArgs.title : "";
+
+                if (!hasNamedText && args.length > 1) {
+                    if (!hasNamedTitle && args.length === 2 && typeof args[1] === "string") {
+                        titleValue = args[1];
+                    } else if (args.length === 2 && typeof args[1] !== "string") {
+                        content = [args[0], args[1]];
+                    } else if (args.length > 2) {
+                        content = hasNamedTitle ? args.slice() : args.slice(0, args.length - 1);
+                        if (!hasNamedTitle && typeof args[args.length - 1] === "string") {
+                            titleValue = args[args.length - 1];
+                        } else if (!hasNamedTitle) {
+                            content = args.slice();
+                        }
+                    }
+                }
+
                 const title = String(titleValue === undefined || titleValue === null ? "" : titleValue);
-                if (typeof global.showScrollMessage === "function") {
-                    global.showScrollMessage(text, "ok", title);
-                    return true;
+                if (typeof global.showScrollDialog === "function") {
+                    return global.showScrollDialog({
+                        title,
+                        bodyClass: "scrollMessageText",
+                        content,
+                        buttons: [{
+                            text: "ok",
+                            type: "submit",
+                            value: true
+                        }]
+                    });
+                }
+                if (typeof global.showScrollMessage === "function" && (typeof content === "string" || typeof content === "number" || typeof content === "boolean")) {
+                    return global.showScrollMessage(String(content), "ok", title);
                 }
                 if (typeof global.msgBox === "function") {
-                    global.msgBox(title, text, "ok");
-                    return true;
+                    const fallbackText = Array.isArray(content)
+                        ? content.map(entry => (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") ? String(entry) : "").join(" ")
+                        : String(content === undefined || content === null ? "" : content);
+                    return new Promise(resolve => {
+                        global.msgBox(title, fallbackText, [{
+                            text: "ok",
+                            function: () => resolve(true)
+                        }]);
+                    });
                 }
                 return false;
             },
@@ -4414,9 +5624,11 @@
         const text = String(rawText || "");
         if (!text.trim().length) return [];
         const errors = [];
+        const validationWizard = global.wizard || createScriptValidationWizardStub();
         const validationContext = {
             map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || global.map || null,
-            wizard: global.wizard || null,
+            wizard: validationWizard,
+            player: validationWizard,
             target: scriptEditorTargetObject || null
         };
         let index = 0;
@@ -4432,29 +5644,101 @@
         function checkAssignmentPath(path, absStart) {
             if (path.indexOf(".") === -1) return; // bare name — always ok
             if (assignmentHandlersByPath.has(path)) return; // registered handler
+                const objectAssignment = resolveScriptAssignmentTarget(path, validationContext);
+                if (objectAssignment && assignmentHandlersByPath.has(objectAssignment.assignmentHandlerPath)) return;
             errors.push({ start: absStart, end: absStart + path.length, message: "Unknown property: " + path });
         }
 
-        function checkStatement(stmt, absStart) {
+        function checkStatement(stmt, absStart, localContext = validationContext, options = {}) {
+            var allowBreak = !!options.allowBreak;
             if (!stmt.length) return;
+            if (parseBreakStatement(stmt)) {
+                if (!allowBreak) {
+                    errors.push({ start: absStart, end: absStart + stmt.length, message: "'break' can only be used inside a loop" });
+                }
+                return;
+            }
+            var forStatement = parseForInStatement(stmt);
+            if (forStatement) {
+                try {
+                    parseScriptValue(forStatement.iterableExpression, localContext);
+                } catch (error) {
+                    errors.push({
+                        start: absStart,
+                        end: absStart + stmt.length,
+                        message: "Invalid for-loop iterable: " + error.message
+                    });
+                    return;
+                }
+                var forBodyStartInStmt = stmt.indexOf("{");
+                if (forBodyStartInStmt >= 0) {
+                    checkBody(
+                        forStatement.body,
+                        absStart + forBodyStartInStmt + 1,
+                        createScriptChildContext(localContext, { [forStatement.variableName]: "" }),
+                        { allowBreak: true }
+                    );
+                }
+                return;
+            }
+            var ifStatement = parseIfStatement(stmt);
+            if (ifStatement) {
+                if (!ifStatement.condition.length) {
+                    errors.push({ start: absStart, end: absStart + 2, message: "Missing if condition" });
+                    return;
+                }
+                try {
+                    evaluateScriptExpression(ifStatement.condition, localContext);
+                } catch (error) {
+                    errors.push({
+                        start: absStart,
+                        end: absStart + stmt.length,
+                        message: "Invalid if condition: " + error.message
+                    });
+                }
+                var bodyStartInStmt = stmt.indexOf("{");
+                if (bodyStartInStmt >= 0) {
+                    checkBody(ifStatement.body, absStart + bodyStartInStmt + 1, localContext, options);
+                }
+                return;
+            }
             // Assignment: path = value or path += value
             var assignMatch = stmt.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*(\+=|=)\s*([\s\S]+)$/);
             if (assignMatch) {
                 checkAssignmentPath(assignMatch[1], absStart);
+                try {
+                    resolveAssignmentValue(assignMatch[1], assignMatch[2], assignMatch[3], localContext);
+                } catch (error) {
+                    errors.push({
+                        start: absStart,
+                        end: absStart + stmt.length,
+                        message: "Invalid assignment value: " + error.message
+                    });
+                }
                 return;
             }
             // Command: name(...)
             var cmdMatch = stmt.match(/^([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([\s\S]*)\)$/);
             if (cmdMatch) {
                 var cmdName = cmdMatch[1];
-                var resolvedCmd = resolveScriptCommand(cmdName, validationContext);
+                try {
+                    parseCommandStatement(stmt, localContext);
+                } catch (error) {
+                    errors.push({
+                        start: absStart,
+                        end: absStart + stmt.length,
+                        message: "Invalid command arguments: " + error.message
+                    });
+                    return;
+                }
+                var resolvedCmd = resolveScriptCommand(cmdName, localContext);
                 if (resolvedCmd && resolvedCmd.kind !== "unknownCommand" && resolvedCmd.kind !== "unknownObject" && resolvedCmd.kind !== "invalid") {
                     return;
                 }
                 var cmdRoot = cmdName.split(".")[0];
                 if (resolvedCmd && resolvedCmd.kind === "unknownObject") {
                     errors.push({ start: absStart, end: absStart + cmdRoot.length, message: "Unknown scripting object: " + cmdRoot });
-                } else if (isValidScriptingName(cmdRoot) && !getNamedObjectByName(cmdRoot, validationContext)) {
+                } else if (cmdName.includes(".") && isValidScriptingName(cmdRoot) && !getNamedObjectByName(cmdRoot, localContext) && !hasScriptLocal(localContext, cmdRoot)) {
                     errors.push({ start: absStart, end: absStart + cmdRoot.length, message: "Unknown scripting object: " + cmdRoot });
                 } else {
                     errors.push({ start: absStart, end: absStart + cmdName.length, message: "Unknown command: " + cmdName });
@@ -4465,7 +5749,7 @@
             errors.push({ start: absStart, end: absStart + stmt.length, message: "Unrecognized statement" });
         }
 
-        function checkBody(bodyText, bodyOffset) {
+        function checkBody(bodyText, bodyOffset, localContext = validationContext, options = {}) {
             var bi = 0, bLen = bodyText.length;
             while (bi < bLen) {
                 while (bi < bLen && /\s/.test(bodyText[bi])) bi++;
@@ -4491,7 +5775,12 @@
                 var trimmed = raw.trim();
                 if (trimmed.length > 0) {
                     var leadWs = raw.length - raw.trimStart().length;
-                    checkStatement(trimmed, bodyOffset + stStart + leadWs);
+                    var delimiterErrors = collectUnterminatedDelimiterErrors(raw, bodyOffset + stStart);
+                    if (delimiterErrors.length > 0) {
+                        errors.push.apply(errors, delimiterErrors);
+                    } else {
+                        checkStatement(trimmed, bodyOffset + stStart + leadWs, localContext, options);
+                    }
                 }
                 while (bi < bLen && (bodyText[bi] === ";" || bodyText[bi] === "\n" || bodyText[bi] === "\r")) bi++;
             }
@@ -4526,7 +5815,7 @@
                         index++;
                     }
                     if (depth !== 0) {
-                        errors.push({ start: look, end: look + 1, message: "Unclosed brace" });
+                        errors.push.apply(errors, collectUnterminatedDelimiterErrors(text.slice(look, len), look));
                         break;
                     }
                     var body = text.slice(bodyStart, index);
@@ -4562,7 +5851,12 @@
                 var trimmed2 = raw2.trim();
                 if (trimmed2.length > 0) {
                     var leadWs2 = raw2.length - raw2.trimStart().length;
-                    checkStatement(trimmed2, stmtStart + leadWs2);
+                    var delimiterErrors2 = collectUnterminatedDelimiterErrors(raw2, stmtStart);
+                    if (delimiterErrors2.length > 0) {
+                        errors.push.apply(errors, delimiterErrors2);
+                    } else {
+                        checkStatement(trimmed2, stmtStart + leadWs2);
+                    }
                 }
                 while (index < len && (text[index] === ";" || text[index] === "\n" || text[index] === "\r")) index++;
             }

@@ -1,6 +1,8 @@
 class Roof {
     static _depthMeshState = null;
+    static _depthShaderDisabled = false;
     static DEFAULT_TEXTURE = "/assets/images/roofs/smallshingles.png";
+    static DEFAULT_TEXTURE_REPEAT = 0.125;
     static DEPTH_NEAR_METRIC = -128;
     static DEPTH_FAR_METRIC = 256;
     static _depthVs = `
@@ -96,6 +98,12 @@ void main(void) {
         // Backward compatibility for older saves that used the pre-roofs location.
         if (path === "/assets/images/smallshingles.png") return Roof.DEFAULT_TEXTURE;
         return path;
+    }
+
+    static normalizeTextureRepeat(textureRepeat) {
+        const value = Number(textureRepeat);
+        if (!Number.isFinite(value)) return Roof.DEFAULT_TEXTURE_REPEAT;
+        return Math.max(0.0625, Math.min(1, value));
     }
 
     static _barycentricAtPoint(px, py, ax, ay, bx, by, cx, cy) {
@@ -821,6 +829,7 @@ void main(void) {
         this.midHeight = heightFromGround + 4; // Midpoint for hex ring
         this.pixiMesh = null;
         this.textureName = Roof.DEFAULT_TEXTURE;
+        this.textureRepeat = Roof.DEFAULT_TEXTURE_REPEAT;
         this.placed = false;
         this.interiorHideHitbox = null;
         this.interiorHidePolygonPoints = null;
@@ -1005,7 +1014,7 @@ void main(void) {
         // Create a container to hold all face meshes
         this.pixiMesh = new PIXI.Container();
         this.pixiMesh.visible = false;
-        const depthState = Roof._ensureDepthMeshState();
+        const depthState = Roof._depthShaderDisabled ? null : Roof._ensureDepthMeshState();
         this.pixiMesh._roofDepthUniforms = [];
         this.pixiMesh._usesRoofDepthShader = !!(depthState && PIXI.Shader);
 
@@ -1013,9 +1022,82 @@ void main(void) {
         const texturePath = Roof.normalizeTexturePath(this.textureName);
         this.textureName = texturePath;
         const shinglesTexture = PIXI.Texture.from(texturePath);
+        const textureRepeat = Roof.normalizeTextureRepeat(this.textureRepeat);
+        this.textureRepeat = textureRepeat;
+        if (shinglesTexture && shinglesTexture.baseTexture && PIXI.WRAP_MODES) {
+            shinglesTexture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+        }
         
         // Neutral base color so texture color stays true after normalization.
         const baseColor = { r: 0xff, g: 0xff, b: 0xff };
+
+        const computeFaceUvs = (faceVertices, repeatsPerUnit) => {
+            if (!Array.isArray(faceVertices) || faceVertices.length !== 3) {
+                return new Float32Array([0, 0, repeatsPerUnit, 0, 0, repeatsPerUnit]);
+            }
+
+            const v0 = faceVertices[0];
+            const v1 = faceVertices[1];
+            const v2 = faceVertices[2];
+            const edge1 = {
+                x: (Number(v1.x) || 0) - (Number(v0.x) || 0),
+                y: (Number(v1.y) || 0) - (Number(v0.y) || 0),
+                z: (Number(v1.z) || 0) - (Number(v0.z) || 0)
+            };
+            const edge2 = {
+                x: (Number(v2.x) || 0) - (Number(v0.x) || 0),
+                y: (Number(v2.y) || 0) - (Number(v0.y) || 0),
+                z: (Number(v2.z) || 0) - (Number(v0.z) || 0)
+            };
+            const normal = {
+                x: edge1.y * edge2.z - edge1.z * edge2.y,
+                y: edge1.z * edge2.x - edge1.x * edge2.z,
+                z: edge1.x * edge2.y - edge1.y * edge2.x
+            };
+            const normalLen = Math.hypot(normal.x, normal.y, normal.z);
+            const normalizedNormal = normalLen > 1e-6
+                ? { x: normal.x / normalLen, y: normal.y / normalLen, z: normal.z / normalLen }
+                : { x: 0, y: 0, z: 1 };
+
+            let uAxis = {
+                x: -normalizedNormal.y,
+                y: normalizedNormal.x,
+                z: 0
+            };
+            let uAxisLen = Math.hypot(uAxis.x, uAxis.y, uAxis.z);
+            if (uAxisLen <= 1e-6) {
+                uAxis = { x: 1, y: 0, z: 0 };
+                uAxisLen = 1;
+            }
+            uAxis.x /= uAxisLen;
+            uAxis.y /= uAxisLen;
+            uAxis.z /= uAxisLen;
+
+            let vAxis = {
+                x: normalizedNormal.y * uAxis.z - normalizedNormal.z * uAxis.y,
+                y: normalizedNormal.z * uAxis.x - normalizedNormal.x * uAxis.z,
+                z: normalizedNormal.x * uAxis.y - normalizedNormal.y * uAxis.x
+            };
+            let vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
+            if (vAxisLen <= 1e-6) {
+                vAxis = { x: 0, y: 1, z: 0 };
+                vAxisLen = 1;
+            }
+            vAxis.x /= vAxisLen;
+            vAxis.y /= vAxisLen;
+            vAxis.z /= vAxisLen;
+
+            const faceUvData = new Float32Array(6);
+            for (let i = 0; i < 3; i++) {
+                const vertex = faceVertices[i];
+                const vx = Number(vertex.x) || 0;
+                const vy = Number(vertex.y) || 0;
+                const vz = Number(vertex.z) || 0;
+                faceUvData[i * 2] = (vx * uAxis.x + vy * uAxis.y + vz * uAxis.z) * repeatsPerUnit;
+                faceUvData[i * 2 + 1] = -(vx * vAxis.x + vy * vAxis.y + vz * vAxis.z) * repeatsPerUnit;
+            }
+            return faceUvData;
+        };
 
         // Create a separate mesh for each face with its own lighting
         for (let f = 0; f < this.faces.length; f++) {
@@ -1025,11 +1107,13 @@ void main(void) {
             // Create vertex data for this face
             const faceVertexData = new Float32Array(6); // 3 vertices * 2 projected coords
             const faceDepthData = new Float32Array(9);  // 3 vertices * 3 world-local coords
+            const faceVertices = new Array(3);
             for (let i = 0; i < 3; i++) {
                 const vertexIndex = face[i];
                 faceVertexData[i * 2] = vertexData[vertexIndex * 2];
                 faceVertexData[i * 2 + 1] = vertexData[vertexIndex * 2 + 1];
                 const v = this.vertices[vertexIndex];
+                faceVertices[i] = v;
                 faceDepthData[i * 3] = Number(v.x) || 0;
                 faceDepthData[i * 3 + 1] = Number(v.y) || 0;
                 faceDepthData[i * 3 + 2] = Number(v.z) || 0;
@@ -1038,26 +1122,7 @@ void main(void) {
             // Simple index data for single triangle
             const faceIndexData = new Uint16Array([0, 1, 2]);
 
-            const faceUvData = new Float32Array(6);
-            const isRoofSideFace = f < this.numHexRing * 3;
-            const faceInSection = f % 3;
-
-            if (isRoofSideFace && faceInSection === 1) {
-                // Triangle 2: part of rectangular face (eave2, eave3, hex1)
-                faceUvData[0] = 0; faceUvData[1] = 1;
-                faceUvData[2] = 1; faceUvData[3] = 1;
-                faceUvData[4] = 0; faceUvData[5] = 0;
-            } else if (isRoofSideFace && faceInSection === 2) {
-                // Triangle 3: completes rectangular face (eave3, hex2, hex1)
-                faceUvData[0] = 1; faceUvData[1] = 1;
-                faceUvData[2] = 1; faceUvData[3] = 0;
-                faceUvData[4] = 0; faceUvData[5] = 0;
-            } else {
-                // Triangle-only faces (eave triangle + peak cone)
-                faceUvData[0] = 0; faceUvData[1] = 1;
-                faceUvData[2] = 1; faceUvData[3] = 1;
-                faceUvData[4] = 0.5; faceUvData[5] = 0;
-            }
+            const faceUvData = computeFaceUvs(faceVertices, textureRepeat);
 
             let faceMesh = null;
             if (depthState && PIXI.Shader) {
@@ -1083,10 +1148,30 @@ void main(void) {
                     uAlphaCutoff: 0.02,
                     uSampler: shinglesTexture || PIXI.Texture.WHITE
                 };
-                const faceShader = PIXI.Shader.from(Roof._depthVs, Roof._depthFs, uniforms);
-                faceMesh = new PIXI.Mesh(faceGeometry, faceShader, depthState, PIXI.DRAW_MODES.TRIANGLES);
-                this.pixiMesh._roofDepthUniforms.push(uniforms);
+                try {
+                    const faceShader = PIXI.Shader.from(Roof._depthVs, Roof._depthFs, uniforms);
+                    faceMesh = new PIXI.Mesh(faceGeometry, faceShader, depthState, PIXI.DRAW_MODES.TRIANGLES);
+                    this.pixiMesh._roofDepthUniforms.push(uniforms);
+                } catch (error) {
+                    Roof._depthShaderDisabled = true;
+                    this.pixiMesh._usesRoofDepthShader = false;
+                    console.warn("Roof depth shader disabled after initialization failure; falling back to simple roof meshes.", error);
+                }
             } else {
+                this.pixiMesh._usesRoofDepthShader = false;
+                const faceGeometry = new PIXI.Geometry()
+                    .addAttribute('aVertexPosition', faceVertexData, 2)
+                    .addAttribute('aUvs', faceUvData, 2)
+                    .addIndex(faceIndexData);
+                const faceMaterial = new PIXI.MeshMaterial(shinglesTexture);
+                faceMesh = new PIXI.Mesh(faceGeometry, faceMaterial);
+                const r = Math.floor(baseColor.r * brightness);
+                const g = Math.floor(baseColor.g * brightness);
+                const b = Math.floor(baseColor.b * brightness);
+                faceMesh.tint = (r << 16) | (g << 8) | b;
+            }
+
+            if (!faceMesh) {
                 const faceGeometry = new PIXI.Geometry()
                     .addAttribute('aVertexPosition', faceVertexData, 2)
                     .addAttribute('aUvs', faceUvData, 2)
@@ -1182,6 +1267,7 @@ void main(void) {
             peakHeight: this.peakHeight,
             midHeight: this.midHeight,
             textureName: this.textureName,
+            textureRepeat: this.textureRepeat,
             placed: !!this.placed,
             numEaves: this.numEaves,
             numHexRing: this.numHexRing,
@@ -1245,6 +1331,7 @@ void main(void) {
         if (typeof data.textureName === 'string' && data.textureName.length > 0) {
             roof.textureName = Roof.normalizeTexturePath(data.textureName);
         }
+        roof.textureRepeat = Roof.normalizeTextureRepeat(data.textureRepeat);
         if (typeof data.visible === "boolean") {
             roof.visible = data.visible;
         }

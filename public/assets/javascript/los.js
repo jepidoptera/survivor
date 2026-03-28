@@ -13,7 +13,7 @@ const LOSVisualSettings = (typeof globalThis !== "undefined" && globalThis.LOSVi
         objectLitMaskDebugOnly: false,
         objectLitMaskPreview: false,
         maxDarken: 0.5,
-        forwardFovDegrees: 200
+        forwardFovDegrees: 360
     };
 if (typeof globalThis !== "undefined") {
     globalThis.LOSVisualSettings = LOSVisualSettings;

@@ -255,10 +255,13 @@ class MapNode {
 
     addObject(obj) {
         if (!this.objects) this.objects = [];
+        const wasBlocked = !!(this.blocked || this.blockedByObjects > 0);
         this.objects.push(obj);
-        const wasClear = !this.isBlocked();
-        this.recountBlockingObjects();
-        if (wasClear && this.isBlocked()) {
+        if (doesObjectBlockTile(obj)) {
+            this.blockedByObjects = Math.max(0, Number(this.blockedByObjects) || 0) + 1;
+        }
+        const isBlockedNow = !!(this.blocked || this.blockedByObjects > 0);
+        if (!wasBlocked && isBlockedNow) {
             // Tile just became blocked — propagate clearance update
             // (skipped when bulk-loading a save with cached clearance).
             if (typeof globalThis !== "undefined" && globalThis.map &&
@@ -267,7 +270,12 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+        const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        if (
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.invalidateMinimap === "function" &&
+            !(mapRef && mapRef._suppressClearanceUpdates)
+        ) {
             globalThis.invalidateMinimap();
         }
     }
@@ -281,11 +289,16 @@ class MapNode {
 
     removeObject(obj) {
         if (!this.objects) return;
+        const wasBlocked = !!(this.blocked || this.blockedByObjects > 0);
         const idx = this.objects.indexOf(obj);
-        if (idx !== -1) this.objects.splice(idx, 1);
-        const wasBlocked = this.isBlocked();
-        this.recountBlockingObjects();
-        if (wasBlocked && !this.isBlocked()) {
+        if (idx === -1) return;
+        const removed = this.objects[idx];
+        this.objects.splice(idx, 1);
+        if (doesObjectBlockTile(removed)) {
+            this.blockedByObjects = Math.max(0, (Number(this.blockedByObjects) || 0) - 1);
+        }
+        const isBlockedNow = !!(this.blocked || this.blockedByObjects > 0);
+        if (wasBlocked && !isBlockedNow) {
             // Tile just became passable — recompute clearance in neighbourhood
             // (skipped when bulk-loading a save with cached clearance).
             if (typeof globalThis !== "undefined" && globalThis.map &&
@@ -294,7 +307,12 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+        const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        if (
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.invalidateMinimap === "function" &&
+            !(mapRef && mapRef._suppressClearanceUpdates)
+        ) {
             globalThis.invalidateMinimap();
         }
     }
@@ -460,15 +478,15 @@ class GameMap {
             });
         });
 
-        const scenery = [
+        const scenery = (opts.skipScenery === true) ? [] : [
             {type: "tree", frequency: 4},
             {type: "playground", frequency: 0}
-        ]
-        const animal_types = [
+        ];
+        const animal_types = (opts.skipAnimals === true) ? [] : [
             {type: "squirrel", frequency: 180, isMokemon: false},
             {type: "deer", frequency: 75, isMokemon: false},
             {type: "bear", frequency: 14, isMokemon: false},
-        ]
+        ];
         const terrain = {type: "forest"};
         scenery.forEach((item, i) => {
             this.scenery[item.type] = [];
@@ -664,6 +682,12 @@ class GameMap {
             this.gameObjects.push(obj);
         };
 
+        if (Array.isArray(this.objects)) {
+            for (let i = 0; i < this.objects.length; i++) {
+                addObject(this.objects[i]);
+            }
+        }
+
         // Objects attached to map nodes (static objects, walls, placed objects, etc).
         for (let x = 0; x < this.width; x++) {
             const column = this.nodes[x];
@@ -673,6 +697,19 @@ class GameMap {
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let i = 0; i < node.objects.length; i++) {
                     addObject(node.objects[i]);
+                }
+            }
+        }
+
+        if (typeof this.getAllPrototypeNodes === "function") {
+            const prototypeNodes = this.getAllPrototypeNodes();
+            if (Array.isArray(prototypeNodes)) {
+                for (let i = 0; i < prototypeNodes.length; i++) {
+                    const node = prototypeNodes[i];
+                    if (!node || !Array.isArray(node.objects)) continue;
+                    for (let j = 0; j < node.objects.length; j++) {
+                        addObject(node.objects[j]);
+                    }
                 }
             }
         }

@@ -11,6 +11,7 @@
     let powerupItemsDocCache = null;
     let powerupItemsDocPromise = null;
     const powerupItemsByFileName = new Map();
+    const powerupItemsByTypeKey = new Map();
 
     function decodeUriSafe(value) {
         if (typeof value !== "string") return "";
@@ -27,6 +28,14 @@
         if (!trimmed) return "";
         const basename = trimmed.split("/").pop() || trimmed;
         return decodeUriSafe(basename).toLowerCase();
+    }
+
+    function normalizePowerupTypeKey(value) {
+        if (typeof value !== "string") return "";
+        const trimmed = decodeUriSafe(value.trim()).toLowerCase();
+        if (!trimmed) return "";
+        const basename = trimmed.split("/").pop() || trimmed;
+        return basename;
     }
 
     function toPowerupImagePath(imageFileName) {
@@ -96,13 +105,28 @@
 
     function buildPowerupItemsIndex(doc) {
         powerupItemsByFileName.clear();
+        powerupItemsByTypeKey.clear();
         if (!doc || !Array.isArray(doc.items)) return;
         for (let i = 0; i < doc.items.length; i++) {
             const item = doc.items[i];
             if (!item || typeof item !== "object") continue;
-            const key = normalizeImageFileName(item.file || item.imageFileName || item.imagePath || "");
-            if (!key) continue;
-            powerupItemsByFileName.set(key, mergePowerupImageData(doc.defaults, item));
+            const merged = mergePowerupImageData(doc.defaults, item);
+            const fileKey = normalizeImageFileName(item.file || item.imageFileName || item.imagePath || "");
+            const typeKeys = [
+                fileKey,
+                normalizePowerupTypeKey(item.id || ""),
+                normalizePowerupTypeKey(item.name || ""),
+                normalizePowerupTypeKey(item.imagePath || "")
+            ].filter(Boolean);
+            if (fileKey) {
+                powerupItemsByFileName.set(fileKey, merged);
+            }
+            for (let j = 0; j < typeKeys.length; j++) {
+                const typeKey = typeKeys[j];
+                if (!powerupItemsByTypeKey.has(typeKey)) {
+                    powerupItemsByTypeKey.set(typeKey, merged);
+                }
+            }
         }
     }
 
@@ -135,6 +159,53 @@
         return null;
     }
 
+    function getPowerupImageData(powerupType) {
+        const typeKey = normalizePowerupTypeKey(powerupType);
+        if (typeKey && powerupItemsByTypeKey.has(typeKey)) {
+            return powerupItemsByTypeKey.get(typeKey);
+        }
+        return getPowerupImageDataByFile(powerupType);
+    }
+
+    function resolvePowerupFileName(powerupType, imageData = null) {
+        if (imageData && typeof imageData.file === "string" && imageData.file.trim().length > 0) {
+            return imageData.file.trim();
+        }
+        if (typeof powerupType === "string" && powerupType.trim().length > 0) {
+            const fileName = powerupType.trim().split("/").pop() || powerupType.trim();
+            const decoded = decodeUriSafe(fileName);
+            if (/\.[A-Za-z0-9]+$/.test(decoded)) {
+                return decoded;
+            }
+            if (decoded.includes("_")) {
+                return `${decoded.replace(/_/g, "")}.png`;
+            }
+            return `${decoded}.png`;
+        }
+        return DEFAULT_IMAGE_FILE;
+    }
+
+    function getScaledPowerupOptions(powerupType, options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const imageData = getPowerupImageData(powerupType);
+        const sizeScale = Number.isFinite(opts.size) && Number(opts.size) > 0 ? Number(opts.size) : 1;
+        const hitboxSpec = (imageData && imageData.groundPlaneHitbox && typeof imageData.groundPlaneHitbox === "object")
+            ? imageData.groundPlaneHitbox
+            : null;
+        const baseWidth = Number.isFinite(imageData && imageData.width) ? Number(imageData.width) : 0.8;
+        const baseHeight = Number.isFinite(imageData && imageData.height) ? Number(imageData.height) : 0.8;
+        const baseRadius = Number.isFinite(hitboxSpec && hitboxSpec.radius) ? Number(hitboxSpec.radius) : DEFAULT_RADIUS;
+
+        return {
+            fileName: resolvePowerupFileName(powerupType, imageData),
+            imageData,
+            size: sizeScale,
+            width: Number.isFinite(opts.width) ? Math.max(0.01, Number(opts.width)) : Math.max(0.01, baseWidth * sizeScale),
+            height: Number.isFinite(opts.height) ? Math.max(0.01, Number(opts.height)) : Math.max(0.01, baseHeight * sizeScale),
+            radius: Number.isFinite(opts.radius) ? Math.max(0.01, Number(opts.radius)) : Math.max(0.01, baseRadius * sizeScale)
+        };
+    }
+
     class Powerup {
         constructor(imageFileName, options = {}) {
             const opts = (options && typeof options === "object") ? options : {};
@@ -146,7 +217,10 @@
             this.map = opts.map || global.map || null;
             this.x = Number.isFinite(opts.x) ? Number(opts.x) : 0;
             this.y = Number.isFinite(opts.y) ? Number(opts.y) : 0;
-            this.z = 0;
+            this.z = Number.isFinite(opts.z) ? Number(opts.z) : 0;
+            this.vz = Number.isFinite(opts.vz) ? Number(opts.vz) : 0;
+            this.gravity = Number.isFinite(opts.gravity) ? Number(opts.gravity) : 10;
+            this.size = Number.isFinite(opts.size) && Number(opts.size) > 0 ? Number(opts.size) : 1;
             this.width = Number.isFinite(opts.width) ? Math.max(0.01, Number(opts.width)) : 0.8;
             this.height = Number.isFinite(opts.height) ? Math.max(0.01, Number(opts.height)) : 0.8;
             this.imageFileName = requestedFileName;
@@ -187,6 +261,8 @@
                 anchorY: Number.isFinite(opts.anchorY) || Number.isFinite(opts.anchor?.y),
                 hitboxOffsetX: Number.isFinite(opts.hitboxOffsetX),
                 hitboxOffsetY: Number.isFinite(opts.hitboxOffsetY),
+                vz: Number.isFinite(opts.vz),
+                gravity: Number.isFinite(opts.gravity),
                 billboardAlpha: Number.isFinite(opts.billboardAlpha),
                 billboardTint: Number.isFinite(opts.billboardTint),
                 gravitateRadius: Number.isFinite(opts.gravitateRadius),
@@ -210,6 +286,12 @@
             }
             if (this._explicitOverrides.hitboxOffsetY) {
                 this.hitboxOffsetY = Number(opts.hitboxOffsetY);
+            }
+            if (this._explicitOverrides.vz) {
+                this.vz = Number(opts.vz);
+            }
+            if (this._explicitOverrides.gravity) {
+                this.gravity = Number(opts.gravity);
             }
             if (this._explicitOverrides.billboardAlpha) {
                 this.billboardAlpha = Number(opts.billboardAlpha);
@@ -324,6 +406,15 @@
                 this.gravitateSpeed = Math.max(0, Number(imageData.gravitateSpeed));
             }
 
+            if (!Object.prototype.hasOwnProperty.call(this, "script") &&
+                Object.prototype.hasOwnProperty.call(imageData, "script")) {
+                try {
+                    this.script = JSON.parse(JSON.stringify(imageData.script));
+                } catch (_err) {
+                    this.script = imageData.script;
+                }
+            }
+
             if (typeof this.configureSpriteAnimation === "function") {
                 this.configureSpriteAnimation(imageData);
             }
@@ -415,8 +506,35 @@
             this.updateHitbox();
         }
 
+        updateVerticalMotion(dt) {
+            if (this.gone || this.collected) return false;
+            const delta = Number.isFinite(dt) && dt > 0 ? Number(dt) : 0;
+            if (!(delta > 0)) return false;
+            const currentZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+            const currentVz = Number.isFinite(this.vz) ? Number(this.vz) : 0;
+            if (currentZ <= 0 && Math.abs(currentVz) <= 1e-6) {
+                this.z = 0;
+                this.vz = 0;
+                return false;
+            }
+
+            const gravity = Number.isFinite(this.gravity) ? Math.max(0, Number(this.gravity)) : 0;
+            const nextVz = currentVz - gravity * delta;
+            const nextZ = currentZ + nextVz * delta;
+            if (nextZ <= 0) {
+                this.z = 0;
+                this.vz = 0;
+                return true;
+            }
+
+            this.z = nextZ;
+            this.vz = nextVz;
+            return true;
+        }
+
         collect(wizard) {
             if (this.gone || this.collected) return false;
+            if (Number.isFinite(this.z) && Number(this.z) > 0.01) return false;
             const scriptingApi = (typeof global.Scripting === "object" && global.Scripting)
                 ? global.Scripting
                 : null;
@@ -467,6 +585,9 @@
                 x: this.x,
                 y: this.y,
                 z: this.z,
+                vz: this.vz,
+                gravity: this.gravity,
+                size: this.size,
                 imagePath: this.imagePath,
                 width: this.width,
                 height: this.height,
@@ -481,6 +602,7 @@
                 gravitateSpeed: this.gravitateSpeed,
                 scriptingName: (typeof this.scriptingName === "string") ? this.scriptingName : "",
                 script: Object.prototype.hasOwnProperty.call(this, "script") ? this.script : undefined,
+                _scriptDeactivated: this._scriptDeactivated === true ? true : undefined,
                 _scriptMessages: Array.isArray(this._scriptMessages)
                     ? this._scriptMessages.map(msg => ({
                         text: String((msg && msg.text) || ""),
@@ -502,6 +624,9 @@
                 x: data.x,
                 y: data.y,
                 z: data.z,
+                vz: data.vz,
+                gravity: data.gravity,
+                size: data.size,
                 imagePath: data.imagePath,
                 width: data.width,
                 height: data.height,
@@ -533,6 +658,9 @@
                     }
                     globalThis._scriptMessageTargets.add(powerup);
                 }
+            }
+            if (powerup && data._scriptDeactivated === true) {
+                powerup._scriptDeactivated = true;
             }
             return powerup;
         }
@@ -620,6 +748,158 @@
         return false;
     }
 
+    function isDropHitboxBlockedByWalls(hitbox) {
+        const WallCtor = global.WallSectionUnit;
+        if (!WallCtor || !(WallCtor._allSections instanceof Map) || !hitbox) return false;
+
+        for (const wall of WallCtor._allSections.values()) {
+            if (!wall || wall.gone || wall.vanishing) continue;
+            const wallHitbox = wall.groundPlaneHitbox || wall.visualHitbox || wall.hitbox || null;
+            if (!wallHitbox) continue;
+            if (typeof wallHitbox.intersects === "function" && wallHitbox.intersects(hitbox)) {
+                return true;
+            }
+            if (typeof wallHitbox.containsPoint === "function" && wallHitbox.containsPoint(hitbox.x, hitbox.y)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    function isValidDropPosition(mapRef, originX, originY, targetX, targetY, radius, acceptedDrops = []) {
+        const sampleHitbox = new CircleHitbox(targetX, targetY, radius);
+        if (isDropHitboxBlockedByWalls(sampleHitbox)) return false;
+
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(originX, targetX)
+            : (targetX - originX);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(originY, targetY)
+            : (targetY - originY);
+        const distance = Math.hypot(dx, dy);
+        const sampleCount = Math.max(1, Math.ceil(distance / Math.max(radius * 0.75, 0.08)));
+        for (let i = 1; i <= sampleCount; i++) {
+            const t = i / sampleCount;
+            const pathXRaw = originX + dx * t;
+            const pathYRaw = originY + dy * t;
+            const pathHitbox = new CircleHitbox(
+                mapRef && typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(pathXRaw) : pathXRaw,
+                mapRef && typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(pathYRaw) : pathYRaw,
+                radius
+            );
+            if (isDropHitboxBlockedByWalls(pathHitbox)) {
+                return false;
+            }
+        }
+
+        for (let i = 0; i < acceptedDrops.length; i++) {
+            const drop = acceptedDrops[i];
+            if (!drop) continue;
+            const dropHitbox = new CircleHitbox(drop.x, drop.y, radius);
+            if (sampleHitbox.intersects(dropHitbox)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function findValidDropPosition(mapRef, originX, originY, options = {}) {
+        const preferredDistance = Number.isFinite(options.preferredDistance)
+            ? Math.max(0, Number(options.preferredDistance))
+            : 0;
+        const radius = Number.isFinite(options.radius) ? Math.max(0.01, Number(options.radius)) : DEFAULT_RADIUS;
+        const acceptedDrops = Array.isArray(options.acceptedDrops) ? options.acceptedDrops : [];
+        const baseAngle = Number.isFinite(options.baseAngle) ? Number(options.baseAngle) : 0;
+
+        if (preferredDistance <= 1e-6) {
+            if (isValidDropPosition(mapRef, originX, originY, originX, originY, radius, acceptedDrops)) {
+                return { x: originX, y: originY };
+            }
+        }
+
+        for (let ring = 0; ring < 4; ring++) {
+            const distance = Math.max(radius * 2.5, preferredDistance - ring * 0.12);
+            for (let step = 0; step < 12; step++) {
+                const angle = baseAngle + (step * Math.PI / 6);
+                const rawX = originX + Math.cos(angle) * distance;
+                const rawY = originY + Math.sin(angle) * distance;
+                const x = mapRef && typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(rawX) : rawX;
+                const y = mapRef && typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(rawY) : rawY;
+                if (!isValidDropPosition(mapRef, originX, originY, x, y, radius, acceptedDrops)) continue;
+                return { x, y };
+            }
+        }
+
+        return isValidDropPosition(mapRef, originX, originY, originX, originY, radius, acceptedDrops)
+            ? { x: originX, y: originY }
+            : null;
+    }
+
+    function dropPowerupNearSource(source, powerupType, options = {}) {
+        if (typeof addPowerup !== "function") return null;
+        const opts = (options && typeof options === "object") ? options : {};
+        const scaled = getScaledPowerupOptions(powerupType, opts);
+        const mapRef = opts.map || (source && source.map) || global.map || null;
+        const sourceX = Number.isFinite(opts.originX)
+            ? Number(opts.originX)
+            : (Number.isFinite(source && source.x) ? Number(source.x) : 0);
+        const sourceY = Number.isFinite(opts.originY)
+            ? Number(opts.originY)
+            : (Number.isFinite(source && source.y) ? Number(source.y) : 0);
+        const offsetX = Number.isFinite(opts.offsetX) ? Number(opts.offsetX) : 0;
+        const offsetY = Number.isFinite(opts.offsetY) ? Number(opts.offsetY) : 0;
+        const originXRaw = sourceX + offsetX;
+        const originYRaw = sourceY + offsetY;
+        const originX = mapRef && typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(originXRaw) : originXRaw;
+        const originY = mapRef && typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(originYRaw) : originYRaw;
+        const count = Number.isFinite(opts.count) ? Math.max(1, Math.floor(Number(opts.count))) : 1;
+        const acceptedDrops = [];
+        const dropped = [];
+        const sourceRadius = Number.isFinite(source && source.groundRadius)
+            ? Number(source.groundRadius)
+            : (Number.isFinite(source && source.radius) ? Number(source.radius) : 0);
+        const defaultDistance = (count > 1)
+            ? Math.max(scaled.radius * 2.5, sourceRadius + scaled.radius + 0.15)
+            : 0;
+        const preferredDistance = Number.isFinite(opts.preferredDistance)
+            ? Math.max(0, Number(opts.preferredDistance))
+            : defaultDistance;
+        const baseAngle = Number.isFinite(opts.baseAngle) ? Number(opts.baseAngle) : (Math.random() * Math.PI * 2);
+
+        for (let i = 0; i < count; i++) {
+            const angle = baseAngle + ((count > 1) ? (i * Math.PI * 2 / count) : 0);
+            const position = findValidDropPosition(mapRef, originX, originY, {
+                baseAngle: angle,
+                preferredDistance,
+                radius: scaled.radius,
+                acceptedDrops
+            });
+            if (!position) continue;
+
+            acceptedDrops.push(position);
+            const powerup = addPowerup(scaled.fileName, {
+                ...opts,
+                x: position.x,
+                y: position.y,
+                map: mapRef,
+                size: scaled.size,
+                width: scaled.width,
+                height: scaled.height,
+                radius: scaled.radius
+            });
+            if (powerup && opts.registerWithMap === true && mapRef && typeof mapRef.registerGameObject === "function") {
+                mapRef.registerGameObject(powerup);
+            }
+            if (powerup) {
+                dropped.push(powerup);
+            }
+        }
+
+        return count === 1 ? (dropped[0] || null) : dropped;
+    }
+
     function updatePowerupsForWizard(wizard, dt) {
         const list = getPowerupArray();
         if (!wizard) return;
@@ -629,6 +909,9 @@
             if (!powerup || powerup.gone || powerup.collected) {
                 list.splice(i, 1);
                 continue;
+            }
+            if (typeof powerup.updateVerticalMotion === "function") {
+                powerup.updateVerticalMotion(safeDt);
             }
             powerup.updateHitbox();
             if (powerup.intersectsWizard(wizard)) {
@@ -652,8 +935,11 @@
 
     global.Powerup = Powerup;
     global.loadPowerupItemsDoc = loadPowerupItemsDoc;
+    global.getPowerupImageData = getPowerupImageData;
     global.getPowerupImageDataByFile = getPowerupImageDataByFile;
+    global.getScaledPowerupOptions = getScaledPowerupOptions;
     global.addPowerup = addPowerup;
+    global.dropPowerupNearSource = dropPowerupNearSource;
     global.updatePowerupsForWizard = updatePowerupsForWizard;
 
     // Warm shared metadata cache as early as possible.

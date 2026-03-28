@@ -364,10 +364,14 @@ void main(void) {
         }
 
         static _lookupMapNodeByIndex(mapRef, xindex, yindex) {
-            if (!mapRef || !mapRef.nodes) return null;
             if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
             const xi = Number(xindex);
             const yi = Number(yindex);
+            if (mapRef && typeof mapRef.getNodeByIndex === "function") {
+                const resolvedNode = mapRef.getNodeByIndex(xi, yi);
+                if (resolvedNode) return resolvedNode;
+            }
+            if (!mapRef || !mapRef.nodes) return null;
             const col = mapRef.nodes[xi];
             if (!col) return null;
             return col[yi] || null;
@@ -3300,7 +3304,7 @@ void main(void) {
             const centerPoint = isStart ? this.startPoint : this.endPoint;
             const center = { x: Number(centerPoint && centerPoint.x), y: Number(centerPoint && centerPoint.y) };
             if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return null;
-            const endpointPoint = (endpointKey === "a") ? this.startPoint : this.endPoint;
+            const endpointPoint = centerPoint;
 
             const wallById = new Map([[Number(this.id), this]]);
             if (this.connections instanceof Map) {
@@ -3415,7 +3419,8 @@ void main(void) {
             const endKey = WallSectionUnit.endpointKey(this.endPoint) || "end";
             const endpointVisibleIdSig = endpointKey => {
                 const ids = [];
-                const endpointPoint = (endpointKey === "a") ? this.startPoint : this.endPoint;
+                const endpointPoint = this._getEndpointPointByKey(endpointKey);
+                if (!endpointPoint) return "";
                 if (Number.isInteger(this.id) && visibleWallIdSet.has(Number(this.id))) ids.push(Number(this.id));
                 if (this.connections instanceof Map) {
                     for (const payload of this.connections.values()) {
@@ -4925,13 +4930,6 @@ void main(void) {
             // 2. Process each endpoint with ≥ 2 walls.  Total work across all
             //    endpoints is O(N) since each wall appears at most twice.
             for (const [endpointKey, group] of endpointIndex) {
-                if (group.length < 2) continue;
-
-                const center = { x: Number(group[0].endpoint.x), y: Number(group[0].endpoint.y) };
-                if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) continue;
-
-                // Build entries (identical to handleJoineryOnPlacement inner loop
-                // but iterating only the indexed group instead of all sections).
                 const entries = [];
                 for (let g = 0; g < group.length; g++) {
                     const { wall, sharedEnd } = group[g];
@@ -4967,9 +4965,6 @@ void main(void) {
                     });
                 }
 
-                if (entries.length < 2) continue;
-
-                // Connectivity
                 const endpointWallById = new Map();
                 for (let i = 0; i < entries.length; i++) {
                     const wall = entries[i].wall;
@@ -4977,12 +4972,23 @@ void main(void) {
                 }
                 const endpointWallIds = new Set(endpointWallById.keys());
                 for (const wall of endpointWallById.values()) {
+                    if (wall._joineryCorners && wall._joineryCorners[endpointKey]) {
+                        delete wall._joineryCorners[endpointKey];
+                    }
+                    wall._visibleNeighborMiterProfileCache = null;
                     if (!(wall.connections instanceof Map)) continue;
                     for (const [otherIdRaw, payload] of wall.connections.entries()) {
                         if ((payload && payload.sharedEndpointKey) !== endpointKey) continue;
                         if (!endpointWallIds.has(Number(otherIdRaw))) wall.connections.delete(otherIdRaw);
                     }
                 }
+
+                if (entries.length < 2) continue;
+
+                const center = { x: Number(group[0].endpoint.x), y: Number(group[0].endpoint.y) };
+                if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) continue;
+
+                // Connectivity
                 const ewalls = Array.from(endpointWallById.values());
                 for (let i = 0; i < ewalls.length; i++) {
                     for (let j = i + 1; j < ewalls.length; j++) {
@@ -5136,10 +5142,6 @@ void main(void) {
                     });
                 }
 
-                if (entries.length < 2) continue;
-
-                // Keep runtime connection graph in sync with endpoint topology:
-                // every wall sharing this endpoint should be connected to every other.
                 const endpointWallById = new Map();
                 for (let i = 0; i < entries.length; i++) {
                     const wall = entries[i] && entries[i].wall;
@@ -5148,8 +5150,11 @@ void main(void) {
                 }
                 const endpointWallIds = new Set(endpointWallById.keys());
 
-                // Prune stale connections at this endpoint.
                 for (const wall of endpointWallById.values()) {
+                    if (wall._joineryCorners && wall._joineryCorners[endpointKey]) {
+                        delete wall._joineryCorners[endpointKey];
+                    }
+                    wall._visibleNeighborMiterProfileCache = null;
                     if (!(wall.connections instanceof Map)) continue;
                     for (const [otherIdRaw, payload] of wall.connections.entries()) {
                         const otherId = Number(otherIdRaw);
@@ -5161,6 +5166,10 @@ void main(void) {
                     }
                 }
 
+                if (entries.length < 2) continue;
+
+                // Keep runtime connection graph in sync with endpoint topology:
+                // every wall sharing this endpoint should be connected to every other.
                 // Ensure pairwise bidirectional connectivity at this endpoint.
                 const endpointWalls = Array.from(endpointWallById.values());
                 for (let i = 0; i < endpointWalls.length; i++) {
@@ -5261,8 +5270,16 @@ void main(void) {
          * so the renderer's visibility collection picks it up.
          */
         addToMapNodes(options = {}) {
+            const timerNow = () => (
+                (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now()
+            );
+            const addStart = timerNow();
             const applyDirectionalBlocking = options.applyDirectionalBlocking !== false;
+            const removeStart = timerNow();
             this.removeFromMapNodes();
+            const removeMs = timerNow() - removeStart;
             this.nodes = [];
             const sp = this.startPoint;
             const ep = this.endPoint;
@@ -5281,7 +5298,9 @@ void main(void) {
             // Register every map node touched by the wall centerline.
             // This ensures long walls are still discovered by local
             // collision queries near their midpoint.
+            const centerlineStart = timerNow();
             const centerlineNodes = this._collectCenterlineMapNodes();
+            const centerlineMs = timerNow() - centerlineStart;
             for (let i = 0; i < centerlineNodes.length; i++) {
                 registerNode(centerlineNodes[i]);
             }
@@ -5300,9 +5319,20 @@ void main(void) {
                 registerNode(ep.nodeB);
             }
 
+            let directionalMs = 0;
             if (applyDirectionalBlocking) {
+                const directionalStart = timerNow();
                 this._applyDirectionalBlocking();
+                directionalMs = timerNow() - directionalStart;
             }
+            this._lastAddToMapNodesStats = {
+                ms: Number((timerNow() - addStart).toFixed(2)),
+                removeMs: Number(removeMs.toFixed(2)),
+                centerlineMs: Number(centerlineMs.toFixed(2)),
+                directionalMs: Number(directionalMs.toFixed(2)),
+                nodeCount: Array.isArray(this.nodes) ? this.nodes.length : 0,
+                centerlineCount: Array.isArray(centerlineNodes) ? centerlineNodes.length : 0
+            };
         }
 
         _nodeKey(node) {
@@ -5589,6 +5619,49 @@ void main(void) {
             return out;
         }
 
+        _collectDirectionalBlockingTouchedNodes() {
+            const orderedAnchors = this._collectOrderedLineAnchors();
+            const out = [];
+            const seen = new Set();
+            const pushNode = (node) => {
+                if (!WallSectionUnit._isMapNode(node)) return;
+                const key = this._nodeKey(node);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                out.push(node);
+            };
+            const pushAnchorNodes = (anchor) => {
+                if (WallSectionUnit._isMapNode(anchor)) {
+                    pushNode(anchor);
+                    return;
+                }
+                if (!WallSectionUnit._isNodeMidpoint(anchor)) return;
+                pushNode(anchor.nodeA);
+                pushNode(anchor.nodeB);
+            };
+
+            for (let i = 0; i < orderedAnchors.length; i++) {
+                const anchor = orderedAnchors[i] && orderedAnchors[i].anchor;
+                if (!anchor) continue;
+                pushAnchorNodes(anchor);
+            }
+
+            if (out.length === 0) {
+                pushAnchorNodes(this.startPoint);
+                pushAnchorNodes(this.endPoint);
+            }
+
+            return out;
+        }
+
+        _isOddAdjacentHexPair(nodeA, nodeB) {
+            if (!WallSectionUnit._isMapNode(nodeA) || !WallSectionUnit._isMapNode(nodeB)) return false;
+            if (!Array.isArray(nodeA.neighbors) || !Array.isArray(nodeB.neighbors)) return false;
+            const dirA = nodeA.neighbors.indexOf(nodeB);
+            const dirB = nodeB.neighbors.indexOf(nodeA);
+            return dirA >= 0 && dirB >= 0 && (dirA % 2 === 1) && (dirB % 2 === 1);
+        }
+
         _collectOddNeighborsOfNode(node, outMap) {
             if (!WallSectionUnit._isMapNode(node) || !(outMap instanceof Map)) return;
             if (!Array.isArray(node.neighbors)) return;
@@ -5602,52 +5675,68 @@ void main(void) {
         }
 
         _applyDirectionalBlocking() {
+            const timerNow = () => (
+                (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now()
+            );
+            const applyStart = timerNow();
             this._clearDirectionalBlocks();
+            const clearMs = timerNow() - applyStart;
 
+            const collectStart = timerNow();
             const centerlineNodes = this._collectCenterlineMapNodes();
-            if (centerlineNodes.length === 0) return;
+            const touchedNodes = this._collectDirectionalBlockingTouchedNodes();
+            const collectMs = timerNow() - collectStart;
+            if (touchedNodes.length === 0) return;
 
             const centerlineNodeKeySet = new Set(centerlineNodes.map(node => this._nodeKey(node)));
             const oddNeighborsAll = new Map();
             const blockedConnectionKeys = new Set();
             const blockedConnections = [];
             const doorSpans = this._collectMountedDoorTraversalSpans();
+            const blockStart = timerNow();
 
-            // Single pass: for each consecutive pair of centerline nodes, gather their
-            // odd (adjacent-hex) neighbours and block any connection between those
-            // neighbours that crosses either physical face of the wall
-            // (centerline ± halfThickness in the perpendicular direction).
-            // This avoids blocking movement that runs *along* the wall while still
-            // blocking movement that cuts *through* the wall body.
-            for (let i = 0; i < centerlineNodes.length - 1; i++) {
-                const nodeA = centerlineNodes[i];
-                const nodeB = centerlineNodes[i + 1];
-                if (!nodeA || !nodeB) continue;
+            // Traverse every odd-adjacent pair among the map nodes touched by the
+            // wall centerline (including midpoint support nodes). For each such
+            // pair, gather the pair plus their odd neighbours and block any local
+            // connection that crosses either physical face of the wall body,
+            // including diagonal links between those local nodes. This covers
+            // midpoint-to-midpoint walls that collapse to a single interior
+            // centerline node after midpoint anchors are filtered out.
+            for (let i = 0; i < touchedNodes.length; i++) {
+                const nodeA = touchedNodes[i];
+                if (!nodeA) continue;
+                for (let j = i + 1; j < touchedNodes.length; j++) {
+                    const nodeB = touchedNodes[j];
+                    if (!nodeB || !this._isOddAdjacentHexPair(nodeA, nodeB)) continue;
 
-                const localNeighbors = new Map();
-                localNeighbors.set(this._nodeKey(nodeA), nodeA);
-                localNeighbors.set(this._nodeKey(nodeB), nodeB);
-                this._collectOddNeighborsOfNode(nodeA, localNeighbors);
-                this._collectOddNeighborsOfNode(nodeB, localNeighbors);
+                    const localNeighbors = new Map();
+                    localNeighbors.set(this._nodeKey(nodeA), nodeA);
+                    localNeighbors.set(this._nodeKey(nodeB), nodeB);
+                    this._collectOddNeighborsOfNode(nodeA, localNeighbors);
+                    this._collectOddNeighborsOfNode(nodeB, localNeighbors);
 
-                localNeighbors.forEach((neighborNode, keyA) => {
-                    if (!neighborNode || !Array.isArray(neighborNode.neighbors)) return;
-                    for (let dir = 0; dir < 12; dir++) {
-                        const other = neighborNode.neighbors[dir];
-                        if (!WallSectionUnit._isMapNode(other)) continue;
-                        const keyB = this._nodeKey(other);
-                        if (!keyB || !localNeighbors.has(keyB)) continue;
-                        if (keyA >= keyB) continue;
-                        if (!this._connectionCrossesEitherFace(neighborNode, other)) continue;
-                        const blocker = this._resolveDirectionalBlockerForConnection(neighborNode, other, doorSpans);
-                        if (!blocker) continue;
-                        this._blockConnectionBetween(neighborNode, other, blockedConnectionKeys, blockedConnections, blocker);
-                    }
-                });
+                    localNeighbors.forEach((neighborNode, keyA) => {
+                        if (!neighborNode || !Array.isArray(neighborNode.neighbors)) return;
+                        for (let dir = 0; dir < 12; dir++) {
+                            const other = neighborNode.neighbors[dir];
+                            if (!WallSectionUnit._isMapNode(other)) continue;
+                            const keyB = this._nodeKey(other);
+                            if (!keyB || !localNeighbors.has(keyB)) continue;
+                            if (keyA >= keyB) continue;
+                            if (!this._connectionCrossesEitherFace(neighborNode, other)) continue;
+                            const blocker = this._resolveDirectionalBlockerForConnection(neighborNode, other, doorSpans);
+                            if (!blocker) continue;
+                            this._blockConnectionBetween(neighborNode, other, blockedConnectionKeys, blockedConnections, blocker);
+                        }
+                    });
 
-                this._collectOddNeighborsOfNode(nodeA, oddNeighborsAll);
-                this._collectOddNeighborsOfNode(nodeB, oddNeighborsAll);
+                    this._collectOddNeighborsOfNode(nodeA, oddNeighborsAll);
+                    this._collectOddNeighborsOfNode(nodeB, oddNeighborsAll);
+                }
             }
+            const blockMs = timerNow() - blockStart;
 
             const oddNeighborNodes = [];
             oddNeighborsAll.forEach((node, key) => {
@@ -5660,6 +5749,17 @@ void main(void) {
                 centerlineNodes,
                 oddNeighborNodes,
                 blockedConnections
+            };
+            this._lastDirectionalBlockingStats = {
+                ms: Number((timerNow() - applyStart).toFixed(2)),
+                clearMs: Number(clearMs.toFixed(2)),
+                collectMs: Number(collectMs.toFixed(2)),
+                blockMs: Number(blockMs.toFixed(2)),
+                centerlineNodeCount: centerlineNodes.length,
+                touchedNodeCount: touchedNodes.length,
+                oddNeighborCount: oddNeighborNodes.length,
+                blockedConnectionCount: blockedConnections.length,
+                blockedLinkCount: Array.isArray(this.blockedLinks) ? this.blockedLinks.length : 0
             };
         }
 
@@ -6287,6 +6387,65 @@ void main(void) {
             const start = this.startPoint;
             const end = this.endPoint;
             if (!mapRef || !start || !end || typeof mapRef.getHexLine !== "function") return [];
+
+            const tryCollectByCanonicalStepping = () => {
+                if (typeof anchorNeighborInDirection !== "function") return null;
+
+                const direction = WallSectionUnit._normalizeDirection(
+                    Number.isFinite(this.direction)
+                        ? Number(this.direction)
+                        : WallSectionUnit._directionBetweenEndpoints(start, end, mapRef)
+                );
+                const endKey = WallSectionUnit.endpointKey(end);
+                if (!endKey) return null;
+
+                const anchors = [];
+                const seen = new Set();
+                const pushAnchor = (anchor) => {
+                    if (!(WallSectionUnit._isMapNode(anchor) || WallSectionUnit._isNodeMidpoint(anchor))) return null;
+                    const key = WallSectionUnit.endpointKey(anchor);
+                    if (!key || seen.has(key)) return null;
+                    const tRaw = this._parameterForWorldPointOnSection(anchor);
+                    if (!Number.isFinite(tRaw)) return null;
+                    const entry = {
+                        anchor,
+                        t: Math.max(0, Math.min(1, Number(tRaw))),
+                        key,
+                        isEndpoint: (key === WallSectionUnit.endpointKey(start)) || (key === endKey)
+                    };
+                    seen.add(key);
+                    anchors.push(entry);
+                    return entry;
+                };
+
+                let lastEntry = pushAnchor(start);
+                if (!lastEntry) return null;
+                if (lastEntry.key === endKey) return anchors;
+
+                const estimatedSteps = Number.isFinite(this.length)
+                    ? Math.max(16, Math.min(512, Math.ceil(Number(this.length) / 0.25) + 16))
+                    : 128;
+                let current = start;
+                for (let i = 0; i < estimatedSteps; i++) {
+                    const next = anchorNeighborInDirection(current, direction);
+                    if (!next) return null;
+                    const nextEntry = pushAnchor(next);
+                    if (!nextEntry) return null;
+                    if (nextEntry.t < (lastEntry.t - 1e-6)) return null;
+                    current = next;
+                    lastEntry = nextEntry;
+                    if (nextEntry.key === endKey) {
+                        return anchors;
+                    }
+                }
+
+                return null;
+            };
+
+            const steppedAnchors = tryCollectByCanonicalStepping();
+            if (Array.isArray(steppedAnchors) && steppedAnchors.length >= 2) {
+                return steppedAnchors;
+            }
 
             // Precompute wall centerline for projecting anchor positions on-line.
             // getHexLine returns "bridge nodes" for midpoint endpoints — those nodes

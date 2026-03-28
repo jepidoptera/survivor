@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "slice:realmap": "node scripts/slice-real-map.js"
   },
   "repository": {
     "type": "git",
@@ -20,7 +21,8 @@
   "dependencies": {
     "body-parser": "^1.19.0",
     "dotenv": "^8.2.0",
+    "ejs": "^4.0.1",
     "express": "^4.17.1",
-    "ejs": "^4.0.1"
+    "lz-string": "^1.5.0"
   }
 }

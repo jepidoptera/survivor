@@ -1,0 +1,14 @@
+{
+  "source": {
+    "input": "public/assets/saves/savefile.json",
+    "width": 400,
+    "height": 400
+  },
+  "wizard": {
+    "x": 250.87272800316885,
+    "y": 159.42170560525267
+  },
+  "activeCenterKey": "1,0",
+  "sectionRadius": 50,
+  "sectionCount": 38
+}

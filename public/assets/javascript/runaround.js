@@ -1,5 +1,8 @@
-const mapWidth = 400;
-const mapHeight = 400;
+const startupConfig = (typeof globalThis !== "undefined" && globalThis.RUNAROUND_STARTUP_CONFIG && typeof globalThis.RUNAROUND_STARTUP_CONFIG === "object")
+    ? globalThis.RUNAROUND_STARTUP_CONFIG
+    : {};
+const mapWidth = Number.isFinite(startupConfig.mapWidth) ? Math.max(8, Math.floor(startupConfig.mapWidth)) : 400;
+const mapHeight = Number.isFinite(startupConfig.mapHeight) ? Math.max(8, Math.floor(startupConfig.mapHeight)) : 400;
 let frameRate = 60;
 let frameCount = 0;
 let renderNowMs = 0;
@@ -12,6 +15,7 @@ const wizardMouseTurnFullDistanceUnits = 3;
 let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494, prevX: 488, prevY: 494}
 let renderAlpha = 1;
 let viewScale = 1;
+let viewscale = 1;
 let xyratio = 0.66; // Adjust for isometric scaling (height/width ratio)
 const VIEWPORT_BASE_WIDTH_LANDSCAPE = 31;
 const VIEWPORT_BASE_WIDTH_PORTRAIT = 20;
@@ -456,6 +460,7 @@ function formatWindowWallLinkDebugSummary() {
 }
 
 if (typeof globalThis !== "undefined") {
+    globalThis.animals = animals;
     globalThis.powerups = powerups;
     globalThis.onscreenObjects = onscreenObjects;
     globalThis.activeSimObjects = activeSimObjects;
@@ -562,13 +567,47 @@ function updateAnimalPreview() {
         : 1;
     const metrics = getAnimalPreviewMetrics(selectedType);
     queueAnimalPreviewMetricsLoad(selectedType);
+    const naturalSize = (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.getPendingPlacementNaturalSize === "function")
+        ? SpawnAnimal.getPendingPlacementNaturalSize(wizard)
+        : (
+            (typeof SpawnAnimal !== "undefined" && typeof SpawnAnimal.getRepresentativeNaturalSize === "function")
+                ? SpawnAnimal.getRepresentativeNaturalSize(selectedType)
+                : 1
+        );
+    const previewSize = resolveAnimalPreviewSize(selectedType, metrics, naturalSize, sizeScale);
 
     animalPreviewSprite.anchor.set(metrics.anchorX, metrics.anchorY);
-    animalPreviewSprite.width = metrics.baseWidth * sizeScale * viewscale;
-    animalPreviewSprite.height = metrics.baseHeight * sizeScale * viewscale;
+    animalPreviewSprite.width = previewSize.width * viewscale;
+    animalPreviewSprite.height = previewSize.height * viewscale;
     animalPreviewSprite.x = mousePos.screenX;
     animalPreviewSprite.y = mousePos.screenY;
     animalPreviewSprite.visible = true;
+}
+
+function resolveAnimalPreviewSize(typeName, metrics, naturalSize, sizeScale) {
+    const resolvedNaturalSize = Number.isFinite(naturalSize) && naturalSize > 0 ? Number(naturalSize) : 1;
+    const resolvedScale = Number.isFinite(sizeScale) && sizeScale > 0 ? Number(sizeScale) : 1;
+    const metaWidth = Number.isFinite(metrics && metrics.baseWidth) ? Number(metrics.baseWidth) : 1;
+    const metaHeight = Number.isFinite(metrics && metrics.baseHeight) ? Number(metrics.baseHeight) : 1;
+
+    if (metaWidth > 0 && metaHeight > 0) {
+        return {
+            width: Math.max(0.01, resolvedNaturalSize * resolvedScale * (metaWidth / metaHeight)),
+            height: Math.max(0.01, resolvedNaturalSize * resolvedScale)
+        };
+    }
+
+    const representativeNaturalSize = (
+        typeof SpawnAnimal !== "undefined" &&
+        typeof SpawnAnimal.getRepresentativeNaturalSize === "function"
+    )
+        ? SpawnAnimal.getRepresentativeNaturalSize(typeName)
+        : 1;
+    const sizeRatio = representativeNaturalSize > 0 ? (resolvedNaturalSize / representativeNaturalSize) : 1;
+    return {
+        width: Math.max(0.01, metaWidth * sizeRatio * resolvedScale),
+        height: Math.max(0.01, metaHeight * sizeRatio * resolvedScale)
+    };
 }
 
 function getAnimalPreviewFallbackMetrics(typeName) {
@@ -713,6 +752,7 @@ PIXI.Loader.shared
     .add('/assets/images/runningman.png')
     .add('/assets/images/magic/hi%20fi%20fireball.png')
     .add('/assets/images/magic/iceball.png')
+    .add('/assets/images/magic/lightning.png')
     .add('/assets/images/arrow.png')
     .load(onAssetsLoaded);
 
@@ -1011,6 +1051,584 @@ jQuery(() => {
         return reloadWithStartupLoadDirective(directive);
     }
 
+    function formatStartupDifficultyLabel(difficulty) {
+        if (typeof formatWizardDifficultyLabel === "function") {
+            return formatWizardDifficultyLabel(difficulty);
+        }
+        const normalized = Math.max(1, Math.min(3, Math.round(Number(difficulty) || 2)));
+        return normalized === 1 ? "Easy" : (normalized === 2 ? "Medium" : "Hard");
+    }
+
+    function formatStartupSaveTimestamp(timestamp) {
+        if (typeof timestamp !== "string" || !timestamp.trim().length) return "—";
+        const parsed = new Date(timestamp);
+        if (Number.isNaN(parsed.getTime())) return timestamp;
+        return parsed.toLocaleString();
+    }
+
+    function buildStartupMenuContent() {
+        return $("<div>")
+            .addClass("startupDialogIntro")
+            .append(
+                $("<p>")
+                    .addClass("startupDialogLead")
+                    .text("Choose whether to begin a fresh journey or continue an earlier one.")
+            );
+    }
+
+    function showOpeningModeDialog() {
+        return showScrollDialog({
+            title: "Wizard 4000",
+            dialogClass: "startupScrollDialog",
+            bodyClass: "startupDialogBody",
+            content: buildStartupMenuContent(),
+            buttons: [
+                { text: "New Game", value: { action: "new" }, unpause: false },
+                { text: "Load Game", value: { action: "load" }, unpause: false }
+            ]
+        });
+    }
+
+    function showNewGameDialog(initialState = {}) {
+        const initialName = (typeof initialState.name === "string" && initialState.name.trim().length > 0)
+            ? initialState.name.trim()
+            : "";
+        const initialDifficulty = Math.max(1, Math.min(3, Math.round(Number(initialState.difficulty) || 2)));
+        return new Promise(resolve => {
+            let resolved = false;
+            let $nameInput = null;
+            let $validation = null;
+            const finish = (result) => {
+                if (resolved) return;
+                resolved = true;
+                resolve(result);
+            };
+            showScrollDialog({
+                title: "New Game",
+                dialogClass: "startupScrollDialog",
+                bodyClass: "startupDialogBody",
+                content: () => {
+                    const $body = $("<div>").addClass("startupForm");
+                    $validation = $("<div>")
+                        .addClass("startupValidation hidden")
+                        .text("Please enter a save name.");
+                    $nameInput = $("<input>")
+                        .attr({ type: "text", maxlength: 40, autocomplete: "off", spellcheck: "false" })
+                        .addClass("startupTextInput")
+                        .val(initialName)
+                        .on("input", () => {
+                            if ($validation) {
+                                $validation.addClass("hidden");
+                            }
+                        })
+                        .on("keydown", event => {
+                            if (event.key === "Enter") {
+                                event.preventDefault();
+                                $(".scrollDialogButtons .startupPrimaryButton").first().trigger("click");
+                            }
+                        });
+
+                    const difficultyOptions = [
+                        { value: 1, label: "Easy" },
+                        { value: 2, label: "Medium" },
+                        { value: 3, label: "Hard" }
+                    ];
+
+                    $body
+                        .append($("<label>").addClass("startupFieldLabel").text("Name"))
+                        .append($nameInput)
+                        .append($validation)
+                        .append($("<div>").addClass("startupFieldLabel").text("Difficulty"))
+                        .append(
+                            $("<div>")
+                                .addClass("startupDifficultyOptions")
+                                .append(
+                                    difficultyOptions.map(option => (
+                                        $("<label>")
+                                            .addClass("startupDifficultyOption")
+                                            .append(
+                                                $("<input>")
+                                                    .attr({ type: "radio", name: "startupDifficulty", value: String(option.value) })
+                                                    .prop("checked", option.value === initialDifficulty)
+                                            )
+                                            .append($("<span>").text(option.label))
+                                    ))
+                                )
+                        )
+                        .append(
+                            $("<div>")
+                                .addClass("startupHint")
+                                .text("Easy restores magic fastest, hard restores it slowest.")
+                        );
+                    return $body;
+                },
+                buttons: [
+                    {
+                        text: "Back",
+                        value: { action: "back" },
+                        unpause: false,
+                        onClick: () => {
+                            const result = { action: "back" };
+                            finish(result);
+                            return result;
+                        }
+                    },
+                    {
+                        text: "Start",
+                        className: "startupPrimaryButton",
+                        unpause: false,
+                        onClick: () => {
+                            const name = $nameInput ? String($nameInput.val() || "").trim() : "";
+                            const checkedDifficulty = Number($("input[name='startupDifficulty']:checked").val() || initialDifficulty);
+                            if (!name.length) {
+                                if ($validation) {
+                                    $validation.removeClass("hidden").text("Please enter a save name.");
+                                }
+                                if ($nameInput) {
+                                    $nameInput.trigger("focus");
+                                    $nameInput.select();
+                                }
+                                return false;
+                            }
+                            if (typeof isReservedLocalSaveSlotKey === "function" && isReservedLocalSaveSlotKey(name)) {
+                                if ($validation) {
+                                    $validation.removeClass("hidden").text("That save name is reserved. Pick another one.");
+                                }
+                                if ($nameInput) {
+                                    $nameInput.trigger("focus");
+                                    $nameInput.select();
+                                }
+                                return false;
+                            }
+                            const existingSave = (typeof getSavedGameState === "function")
+                                ? getSavedGameState(name)
+                                : { ok: false };
+                            if (existingSave && existingSave.ok) {
+                                const shouldOverwrite = typeof window !== "undefined" && typeof window.confirm === "function"
+                                    ? window.confirm(`A save named '${name}' already exists. Overwrite it?`)
+                                    : true;
+                                if (!shouldOverwrite) {
+                                    return false;
+                                }
+                                if ($validation) {
+                                    $validation.addClass("hidden");
+                                }
+                            }
+                            const result = {
+                                action: "start",
+                                name,
+                                difficulty: Math.max(1, Math.min(3, Math.round(checkedDifficulty || 2)))
+                            };
+                            finish(result);
+                            return result;
+                        },
+                        type: "button"
+                    }
+                ],
+                onShow: () => {
+                    if ($nameInput) {
+                        $nameInput.trigger("focus");
+                        $nameInput.select();
+                    }
+                }
+            }).then(result => {
+                if (!resolved) {
+                    finish(result && result.action ? result : { action: "back" });
+                }
+            });
+        });
+    }
+
+    function showLoadGameDialog() {
+        return new Promise(resolve => {
+            let saveEntries = (typeof getSavedGameEntries === "function") ? getSavedGameEntries() : [];
+            let resolved = false;
+            let $body = null;
+            let $table = null;
+            let $validation = null;
+            let $tableMount = null;
+            let $emptyState = null;
+            let $confirmBackdrop = null;
+            let $confirmMessage = null;
+            let $confirmNoButton = null;
+            let pendingDeleteEntry = null;
+            let selectedKey = saveEntries.length > 0 ? saveEntries[0].key : "";
+            const finish = (result) => {
+                if (resolved) return;
+                resolved = true;
+                resolve(result);
+            };
+
+            const closeDeleteConfirm = () => {
+                pendingDeleteEntry = null;
+                if ($confirmBackdrop) {
+                    $confirmBackdrop.addClass("hidden");
+                }
+            };
+
+            const openDeleteConfirm = (entry) => {
+                pendingDeleteEntry = entry || null;
+                if (!$confirmBackdrop || !$confirmMessage || !pendingDeleteEntry) return;
+                $confirmMessage.text(`Delete this save file? This cannot be undone.\n\n${pendingDeleteEntry.key}`);
+                $confirmBackdrop.removeClass("hidden");
+                if ($confirmNoButton && $confirmNoButton.length) {
+                    setTimeout(() => $confirmNoButton.trigger("focus"), 0);
+                }
+            };
+
+            const refreshSaveTable = () => {
+                if (!$tableMount) return;
+                saveEntries = (typeof getSavedGameEntries === "function") ? getSavedGameEntries() : [];
+                if (!saveEntries.some(entry => entry.key === selectedKey)) {
+                    selectedKey = saveEntries.length > 0 ? saveEntries[0].key : "";
+                }
+
+                if ($confirmBackdrop && $confirmBackdrop.parent().length) {
+                    $confirmBackdrop.detach();
+                }
+                $tableMount.empty();
+                if ($confirmBackdrop) {
+                    $tableMount.append($confirmBackdrop);
+                }
+                if ($emptyState) {
+                    $emptyState.toggleClass("hidden", saveEntries.length > 0);
+                }
+                if (!saveEntries.length) {
+                    return;
+                }
+
+                $table = $("<table>").addClass("startupSaveTable");
+                const $thead = $("<thead>").append(
+                    $("<tr>")
+                        .append($("<th>").text(""))
+                        .append($("<th>").text("Save"))
+                        .append($("<th>").text("Difficulty"))
+                        .append($("<th>").text("Last Saved"))
+                        .append($("<th>").addClass("startupSaveActionHeader").text(""))
+                );
+                const $tbody = $("<tbody>");
+
+                saveEntries.forEach((entry, index) => {
+                    const inputId = `startup-save-${index}`;
+                    const isSelected = entry.key === selectedKey || (index === 0 && !selectedKey);
+                    const $row = $("<tr>")
+                        .toggleClass("isSelected", isSelected)
+                        .data("saveKey", entry.key)
+                        .click(() => {
+                            selectedKey = entry.key;
+                            $table.find("tbody tr").removeClass("isSelected");
+                            $row.addClass("isSelected");
+                            $(`#${inputId}`).prop("checked", true);
+                        });
+                    const $radio = $("<input>")
+                        .attr({ type: "radio", name: "startupSaveKey", id: inputId })
+                        .val(entry.key)
+                        .prop("checked", isSelected)
+                        .on("change", () => {
+                            selectedKey = entry.key;
+                            $table.find("tbody tr").removeClass("isSelected");
+                            $row.addClass("isSelected");
+                        });
+                    const $deleteButton = $("<button>")
+                        .addClass("startupSaveDeleteButton")
+                        .attr({
+                            type: "button",
+                            title: `Delete ${entry.key}`,
+                            "aria-label": `Delete ${entry.key}`
+                        })
+                        .text("🗑")
+                        .click(event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openDeleteConfirm(entry);
+                        });
+                    $row
+                        .append($("<td>").append($radio))
+                        .append($("<td>").text(entry.key))
+                        .append($("<td>").text(formatStartupDifficultyLabel(entry.difficulty)))
+                        .append($("<td>").text(formatStartupSaveTimestamp(entry.timestamp)))
+                        .append($("<td>").addClass("startupSaveActionCell").append($deleteButton));
+                    $tbody.append($row);
+                });
+
+                $table.append($thead, $tbody);
+                if ($confirmBackdrop && $confirmBackdrop.parent().length) {
+                    $confirmBackdrop.before($table);
+                } else {
+                    $tableMount.append($table);
+                }
+            };
+
+            showScrollDialog({
+                title: "Load Game",
+                dialogClass: "startupScrollDialog",
+                bodyClass: "startupDialogBody startupLoadDialogBody",
+                content: () => {
+                    $body = $("<div>").addClass("startupLoadPanel");
+                    $validation = $("<div>").addClass("startupValidation hidden");
+                    $emptyState = $("<p>")
+                        .addClass("startupDialogLead")
+                        .text("No saved games were found in local storage.")
+                        .toggleClass("hidden", saveEntries.length > 0);
+                    $tableMount = $("<div>").addClass("startupSaveTableMount");
+                    $confirmMessage = $("<p>").addClass("startupDeleteConfirmMessage");
+                    $confirmNoButton = $("<button>")
+                        .addClass("scrollMessageButton")
+                        .attr("type", "button")
+                        .text("no")
+                        .click(event => {
+                            event.preventDefault();
+                            closeDeleteConfirm();
+                        });
+                    const $confirmYesButton = $("<button>")
+                        .addClass("scrollMessageButton startupDeleteConfirmYes")
+                        .attr("type", "button")
+                        .text("yes")
+                        .click(event => {
+                            event.preventDefault();
+                            if (!pendingDeleteEntry || typeof deleteLocalSaveSlot !== "function") {
+                                closeDeleteConfirm();
+                                return;
+                            }
+                            const deletedKey = pendingDeleteEntry.key;
+                            const deleteResult = deleteLocalSaveSlot(deletedKey);
+                            closeDeleteConfirm();
+                            if (!deleteResult || !deleteResult.ok) {
+                                if ($validation) {
+                                    $validation.removeClass("hidden").text("Failed to delete the selected save.");
+                                }
+                                return;
+                            }
+                            if ($validation) {
+                                $validation.removeClass("hidden").text(`Deleted '${deletedKey}'.`);
+                            }
+                            refreshSaveTable();
+                        });
+                    $confirmBackdrop = $("<div>")
+                        .addClass("startupDeleteConfirmBackdrop hidden")
+                        .append(
+                            $("<div>")
+                                .addClass("startupDeleteConfirmPopup")
+                                .append($("<h3>").addClass("startupDeleteConfirmTitle").text("Delete Save"))
+                                .append($confirmMessage)
+                                .append(
+                                    $("<div>")
+                                        .addClass("startupDeleteConfirmButtons")
+                                        .append($confirmNoButton, $confirmYesButton)
+                                )
+                        );
+
+                    $body
+                        .append(
+                            $("<p>")
+                                .addClass("startupDialogLead")
+                                .text("Choose a previously saved game to continue.")
+                        )
+                        .append($emptyState)
+                        .append($tableMount)
+                        .append($validation);
+                    refreshSaveTable();
+                    return $body;
+                },
+                buttons: [
+                    {
+                        text: "Back",
+                        value: { action: "back" },
+                        unpause: false,
+                        onClick: () => {
+                            const result = { action: "back" };
+                            finish(result);
+                            return result;
+                        }
+                    },
+                    {
+                        text: "Load",
+                        className: "startupPrimaryButton",
+                        unpause: false,
+                        onClick: () => {
+                            if (!saveEntries.length) {
+                                const result = { action: "back" };
+                                finish(result);
+                                return result;
+                            }
+                            if (pendingDeleteEntry) {
+                                return false;
+                            }
+                            const chosenKey = String(selectedKey || $("input[name='startupSaveKey']:checked").val() || "").trim();
+                            if (!chosenKey.length) {
+                                if ($validation) {
+                                    $validation.removeClass("hidden").text("Please select a save to load.");
+                                }
+                                return false;
+                            }
+                            const result = { action: "load", key: chosenKey };
+                            finish(result);
+                            return result;
+                        }
+                    }
+                ]
+            }).then(result => {
+                if (!resolved) {
+                    finish(result && result.action ? result : { action: "back" });
+                }
+            });
+        });
+    }
+
+    async function startNewGameFromServerTemplate(config) {
+        if (typeof loadGameStateFromServerFile !== "function") {
+            return { ok: false, reason: "server-load-unavailable" };
+        }
+        const loadResult = await loadGameStateFromServerFile();
+        if (!loadResult || !loadResult.ok) {
+            return loadResult || { ok: false, reason: "server-load-failed" };
+        }
+        const nextName = String(config && config.name ? config.name : "").trim();
+        const nextDifficulty = Math.max(1, Math.min(3, Math.round(Number(config && config.difficulty) || 2)));
+        wizard.name = nextName || wizard.name;
+        if (typeof wizard.setDifficulty === "function") {
+            wizard.setDifficulty(nextDifficulty);
+        } else {
+            wizard.difficulty = nextDifficulty;
+            wizard.magicRegenPerSecond = Math.max(0, 8 - nextDifficulty);
+        }
+        if (typeof wizard.updateStatusBars === "function") {
+            wizard.updateStatusBars();
+        }
+        const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting === "object")
+            ? globalThis.Scripting
+            : null;
+        if (scriptingApi && typeof scriptingApi.fireObjectScriptEvent === "function") {
+            const initTargets = (map && typeof map.getGameObjects === "function")
+                ? map.getGameObjects({ refresh: true })
+                : [];
+            let bootstrapCount = 0;
+            for (let i = 0; i < initTargets.length; i++) {
+                const obj = initTargets[i];
+                if (!obj || obj.gone) continue;
+                const scriptTag = obj.script;
+                if (!scriptTag || typeof scriptTag !== "object") continue;
+
+                const hasNewGameScript = typeof scriptTag.newGame === "string" && scriptTag.newGame.trim().length > 0;
+                if (hasNewGameScript) {
+                    scriptingApi.fireObjectScriptEvent(obj, "newGame", wizard, { reason: "newGame" });
+                    bootstrapCount += 1;
+                }
+            }
+            if (bootstrapCount > 0) {
+                console.log(`[NEW GAME] Ran startup scripts for ${bootstrapCount} object(s).`);
+            }
+        }
+        const saveResult = (typeof saveGameStateToLocalStorage === "function")
+            ? saveGameStateToLocalStorage(wizard.name)
+            : { ok: false, reason: "local-save-unavailable" };
+        if (saveResult && saveResult.ok) {
+            setLastSaveReloadDirective({ source: "local" });
+            return { ok: true, key: saveResult.key };
+        }
+        const shouldFallbackToServerSave = !!(
+            !saveResult ||
+            saveResult.reason === "quota-exceeded" ||
+            saveResult.reason === "local-storage-unavailable" ||
+            saveResult.reason === "write-failed"
+        );
+        if (shouldFallbackToServerSave && typeof saveGameStateToServerFile === "function") {
+            const serverSaveResult = await saveGameStateToServerFile();
+            if (serverSaveResult && serverSaveResult.ok) {
+                setLastSaveReloadDirective({ source: "server" });
+                console.warn("New game could not be cached locally; using server save instead.", saveResult && saveResult.error ? saveResult.error : saveResult);
+                return {
+                    ok: true,
+                    key: null,
+                    saveSource: "server",
+                    warning: saveResult && saveResult.reason ? saveResult.reason : "local-save-failed"
+                };
+            }
+        }
+        return saveResult || { ok: false, reason: "local-save-failed" };
+    }
+
+    function loadNamedLocalSave(saveKey) {
+        if (typeof loadGameStateFromLocalStorageKey !== "function") {
+            return { ok: false, reason: "local-load-unavailable" };
+        }
+        const result = loadGameStateFromLocalStorageKey(saveKey);
+        if (result && result.ok) {
+            setLastSaveReloadDirective({ source: "local" });
+            if (wizard && typeof wizard.updateStatusBars === "function") {
+                wizard.updateStatusBars();
+            }
+        }
+        return result;
+    }
+
+    async function runOpeningGameDialogFlow() {
+        let cachedNewGameState = {
+            name: wizard && typeof wizard.name === "string" ? wizard.name : "",
+            difficulty: 2
+        };
+        while (true) {
+            const modeChoice = await showOpeningModeDialog();
+            if (modeChoice && modeChoice.action === "new") {
+                const newGameChoice = await showNewGameDialog(cachedNewGameState);
+                if (!newGameChoice || newGameChoice.action === "back") {
+                    continue;
+                }
+                cachedNewGameState = {
+                    name: newGameChoice.name,
+                    difficulty: newGameChoice.difficulty
+                };
+                const startResult = await startNewGameFromServerTemplate(newGameChoice);
+                if (startResult && startResult.ok) {
+                    clearDialogs();
+                    return true;
+                }
+                const reason = (startResult && startResult.reason) ? String(startResult.reason) : "unknown error";
+                await showScrollMessage(`Unable to start a new game (${reason}).`, "ok", "New Game Failed");
+                continue;
+            }
+
+            if (!modeChoice || modeChoice.action !== "load") {
+                continue;
+            }
+
+            const loadChoice = await showLoadGameDialog();
+            if (!loadChoice || loadChoice.action === "back") {
+                continue;
+            }
+            const loadResult = loadNamedLocalSave(loadChoice.key);
+            if (loadResult && loadResult.ok) {
+                clearDialogs();
+                return true;
+            }
+            await showScrollMessage(`Unable to load '${loadChoice.key}'.`, "ok", "Load Failed");
+        }
+    }
+
+    function ensureStartupClearanceReady() {
+        if (map && typeof map.ensurePrototypeSectionClearance === "function") {
+            map.ensurePrototypeSectionClearance();
+            return;
+        }
+        if (map && typeof map.computeClearance === "function") {
+            let needsCompute = false;
+            outer:
+            for (let x = 0; x < Math.min(map.width, 4); x++) {
+                for (let y = 0; y < Math.min(map.height, 4); y++) {
+                    const node = map.nodes[x] && map.nodes[x][y];
+                    if (node && node.clearance === Infinity && !node.isBlocked()) {
+                        needsCompute = true;
+                        break outer;
+                    }
+                }
+            }
+            if (needsCompute) {
+                console.log("No clearance data after startup; running full computeClearance()…");
+                map.computeClearance();
+            }
+        }
+    }
+
     function tryActivateWizardGameModeByChord(keyLower, event) {
         if (!wizard || typeof wizard.setGameMode !== "function") return false;
         if (event && (event.ctrlKey || event.altKey || event.metaKey)) return false;
@@ -1294,7 +1912,7 @@ jQuery(() => {
     function isVirtualCursorOverMenuArea() {
         const hovered = getVirtualCursorHoveredElement();
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
     }
 
     function updateRangeInputFromClientX(rangeInput, clientX, emitChange = false) {
@@ -1659,6 +2277,7 @@ jQuery(() => {
         viewport.width = getBaseViewportWidth() / viewportZoomFactor;
         viewport.height = getViewportHeightForWidth(viewport.width);
         viewscale = (Number(app.screen.width) || 1) / Math.max(0.01, viewport.width);
+        viewScale = viewscale;
         viewport.x = anchorWorldX - anchorScreenX / viewscale;
         viewport.y = anchorWorldY - anchorScreenY / (viewscale * xyratio);
         if (keepPrevInterpolated) {
@@ -1684,6 +2303,8 @@ jQuery(() => {
 
         if (typeof globalThis !== "undefined") {
             globalThis.viewscale = viewscale;
+            globalThis.viewScale = viewscale;
+            globalThis.viewportZoomFactor = viewportZoomFactor;
         }
 
         if (updateInputState) {
@@ -2066,7 +2687,29 @@ jQuery(() => {
 
     console.log("Generating map...");
     initRoadLayer();
-    map = new GameMap(mapHeight, mapWidth, { skipClearance: true }, () => {
+    let resolveMapReady = null;
+    const mapReadyPromise = new Promise((resolve) => {
+        resolveMapReady = resolve;
+    });
+    map = new GameMap(mapHeight, mapWidth, {
+        skipClearance: true,
+        skipScenery: !!startupConfig.prototypeBuilder,
+        skipAnimals: !!startupConfig.prototypeBuilder,
+        wrapX: startupConfig.wrapX !== false,
+        wrapY: startupConfig.wrapY !== false
+    }, async () => {
+        if (typeof startupConfig.prototypeBuilder === "string" && startupConfig.prototypeBuilder.length > 0) {
+            const builderFn = (typeof globalThis !== "undefined")
+                ? globalThis[startupConfig.prototypeBuilder]
+                : null;
+            if (typeof builderFn === "function") {
+                try {
+                    await builderFn(map);
+                } catch (error) {
+                    console.error(`Startup prototype builder '${startupConfig.prototypeBuilder}' failed:`, error);
+                }
+            }
+        }
         const simStepMs = 1000 / frameRate;
         const animalAiOnscreenHz = 10;
         const animalAiOffscreenHz = 1.5;
@@ -2344,6 +2987,9 @@ jQuery(() => {
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             wizard.moveDirection(moveVector, moveOptions);
             wizard.updateJump(1 / frameRate);
+            if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                map.updatePrototypeSectionBubble(wizard);
+            }
             movementMs = performance.now() - movementStartMs;
             const collisionStartMs = performance.now();
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
@@ -2622,9 +3268,40 @@ jQuery(() => {
         }
 
         requestAnimationFrame(renderFrame);
+        if (typeof resolveMapReady === "function") {
+            resolveMapReady();
+            resolveMapReady = null;
+        }
     });
 
-    wizard = new Wizard({x: mapWidth/2, y: mapHeight/2}, map);
+    void (async () => {
+    await mapReadyPromise;
+
+    const startupSpawn = (typeof globalThis !== "undefined" && globalThis.RUNAROUND_PROTOTYPE_SPAWN && typeof globalThis.RUNAROUND_PROTOTYPE_SPAWN === "object")
+        ? globalThis.RUNAROUND_PROTOTYPE_SPAWN
+        : null;
+    const prototypeWizardState = (typeof globalThis !== "undefined" && globalThis.RUNAROUND_PROTOTYPE_WIZARD_STATE && typeof globalThis.RUNAROUND_PROTOTYPE_WIZARD_STATE === "object")
+        ? globalThis.RUNAROUND_PROTOTYPE_WIZARD_STATE
+        : null;
+    const initialWizardX = prototypeWizardState && Number.isFinite(prototypeWizardState.x)
+        ? Number(prototypeWizardState.x)
+        : (startupSpawn && Number.isFinite(startupSpawn.x) ? Number(startupSpawn.x) : (mapWidth / 2));
+    const initialWizardY = prototypeWizardState && Number.isFinite(prototypeWizardState.y)
+        ? Number(prototypeWizardState.y)
+        : (startupSpawn && Number.isFinite(startupSpawn.y) ? Number(startupSpawn.y) : (mapHeight / 2));
+    wizard = new Wizard({
+        x: initialWizardX,
+        y: initialWizardY
+    }, map);
+    if (typeof globalThis !== "undefined") {
+        globalThis.wizard = wizard;
+    }
+    if (prototypeWizardState && typeof wizard.loadJson === "function") {
+        wizard.loadJson(prototypeWizardState);
+    }
+    if (map && typeof map.updatePrototypeSectionBubble === "function") {
+        map.updatePrototypeSectionBubble(wizard, { force: true });
+    }
     sizeView();
     centerViewport(wizard, 0, 0);
     
@@ -2646,6 +3323,14 @@ jQuery(() => {
         if (wizard) wizard.updateStatusBars();
     }, 100);
     SpellSystem.initWizardSpells(wizard);
+    if (prototypeWizardState && typeof wizard.loadJson === "function") {
+        wizard.loadJson(prototypeWizardState);
+        if (map && typeof map.updatePrototypeSectionBubble === "function") {
+            map.updatePrototypeSectionBubble(wizard, { force: true });
+        }
+        centerViewport(wizard, 0, 0);
+        wizard.updateStatusBars();
+    }
     function tryAutoLoadLocalSaveOnStartup() {
         if (typeof getSavedGameState !== "function" || typeof loadGameState !== "function") {
             return false;
@@ -2684,6 +3369,46 @@ jQuery(() => {
         return false;
     }
 
+    async function tryAutoLoadPrototypeSaveOnStartup() {
+        if (typeof startupConfig.prototypeSectionAssetUrl === "string" && startupConfig.prototypeSectionAssetUrl.length > 0) {
+            return false;
+        }
+        const localSlot = (typeof startupConfig.prototypeAutoLoadLocalSlot === "string")
+            ? startupConfig.prototypeAutoLoadLocalSlot.trim()
+            : "";
+        const serverSlot = (typeof startupConfig.prototypeAutoLoadServerSlot === "string")
+            ? startupConfig.prototypeAutoLoadServerSlot.trim()
+            : "";
+
+        if (localSlot.length > 0 && typeof loadGameStateFromLocalStorageKey === "function") {
+            const localResult = loadGameStateFromLocalStorageKey(localSlot);
+            if (localResult && localResult.ok) {
+                setLastSaveReloadDirective({ source: "local", key: localSlot });
+                message(`Loaded prototype local save '${localSlot}'`);
+                console.log(`Auto-loaded prototype local save '${localSlot}' at startup`);
+                return true;
+            }
+            if (localResult && localResult.reason && localResult.reason !== "missing") {
+                console.warn(`Prototype local auto-load failed for '${localSlot}'`, localResult);
+            }
+        }
+
+        if (serverSlot.length > 0 && typeof loadGameStateFromServerFile === "function") {
+            const serverResult = await loadGameStateFromServerFile({ slot: serverSlot });
+            if (serverResult && serverResult.ok) {
+                setLastSaveReloadDirective({ source: "server", slot: serverSlot });
+                message(`Loaded prototype server save '${serverSlot}'`);
+                console.log(`Auto-loaded prototype server save '${serverSlot}' at startup`);
+                return true;
+            }
+            if (serverResult && serverResult.reason && serverResult.reason !== "missing") {
+                console.warn(`Prototype server auto-load failed for '${serverSlot}'`, serverResult);
+            }
+        }
+
+        return false;
+    }
+
     async function tryLoadFromStartupDirective() {
         const directive = consumeStartupLoadDirective();
         if (!directive || typeof directive.source !== "string") return false;
@@ -2700,12 +3425,18 @@ jQuery(() => {
                 return true;
             }
             const fileName = (typeof directive.fileName === "string") ? directive.fileName.trim() : "";
-            const result = await loadGameStateFromServerFile(fileName ? { fileName } : {});
+            const slot = (typeof directive.slot === "string") ? directive.slot.trim() : "";
+            const loadOptions = {};
+            if (fileName.length > 0) loadOptions.fileName = fileName;
+            if (slot.length > 0) loadOptions.slot = slot;
+            const result = await loadGameStateFromServerFile(loadOptions);
             const loadedPath = fileName.length > 0
                 ? `/assets/saves/backups/${fileName}`
-                : "/assets/saves/savefile.json";
+                : (slot.length > 0 ? `/assets/saves/${slot}.json` : "/assets/saves/savefile.json");
             if (result && result.ok) {
-                setLastSaveReloadDirective(fileName.length > 0 ? { source: "server", fileName } : { source: "server" });
+                setLastSaveReloadDirective(fileName.length > 0
+                    ? { source: "server", fileName }
+                    : (slot.length > 0 ? { source: "server", slot } : { source: "server" }));
                 message(`Loaded ${loadedPath}`);
                 console.log(`Startup loaded game from ${loadedPath}`);
             } else {
@@ -2722,42 +3453,23 @@ jQuery(() => {
         return false;
     }
 
-    void tryLoadFromStartupDirective().then(async handled => {
-        if (!handled) {
-            const loadedLocal = tryAutoLoadLocalSaveOnStartup();
-            if (loadedLocal) return;
-
-            // If no local save exists yet, boot from the default server save file.
-            if (typeof getSavedGameState === "function") {
-                const parsedSave = getSavedGameState();
-                if (parsedSave && parsedSave.reason === "missing") {
-                    await tryAutoLoadServerMainSaveOnStartup();
-                }
-            }
+    void (async () => {
+        const handledDirective = await tryLoadFromStartupDirective();
+        const handledPrototypeAutoLoad = !handledDirective
+            ? await tryAutoLoadPrototypeSaveOnStartup()
+            : false;
+        if (!handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs !== true) {
+            await runOpeningGameDialogFlow();
         }
-        // Safety net: if no save was loaded (or load failed to restore
-        // clearance), ensure the clearance map is populated so
-        // pathfinding works on the randomly-generated map.
-        if (map && typeof map.computeClearance === "function") {
-            let needsCompute = false;
-            outer:
-            for (let x = 0; x < Math.min(map.width, 4); x++) {
-                for (let y = 0; y < Math.min(map.height, 4); y++) {
-                    const node = map.nodes[x] && map.nodes[x][y];
-                    if (node && node.clearance === Infinity && !node.isBlocked()) {
-                        // Still at the default Infinity from the constructor —
-                        // clearance was never computed or restored.
-                        needsCompute = true;
-                        break outer;
-                    }
-                }
-            }
-            if (needsCompute) {
-                console.log("No clearance data after startup; running full computeClearance()…");
-                map.computeClearance();
-            }
+        if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad) {
+            message("Loaded two-section prototype world");
         }
-    });
+        ensureStartupClearanceReady();
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+    })();
+    })();
 
     function closeHudMenus(options = {}) {
         const closeSpell = options.spell !== false;
@@ -2777,6 +3489,7 @@ jQuery(() => {
     }
 
     $("#selectedSpell").click(() => {
+        if (!wizard || $("#spellSelector").hasClass("hidden")) return;
         const wasHidden = $("#spellMenu").hasClass('hidden');
         if (wasHidden) {
             closeHudMenus({ spell: false, aura: true, editor: true });
@@ -2790,6 +3503,13 @@ jQuery(() => {
             clearSpellMenuKeyboardFocus();
         } else if (wasHidden) {
             initSpellMenuKeyboardFocus();
+        }
+    });
+
+    $("#selectedInventory").click(() => {
+        closeHudMenus({ spell: true, aura: true, editor: true });
+        if (typeof showInventoryDialog === "function") {
+            showInventoryDialog(wizard || null);
         }
     });
 
@@ -2839,6 +3559,17 @@ jQuery(() => {
     });
 
     $("#selectedSpell").on("contextmenu", event => {
+        if (
+            wizard &&
+            (wizard.currentSpell === "placeobject" || wizard.currentSpell === "blackdiamond") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showEditorSubmenuForSelectedCategory === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showEditorSubmenuForSelectedCategory(wizard);
+            return;
+        }
         if (
             wizard &&
             wizard.currentSpell === "wall" &&
@@ -2985,7 +3716,7 @@ jQuery(() => {
     app.view.addEventListener("wheel", event => {
         const overMenu = pointerLockActive
             ? isVirtualCursorOverMenuArea()
-            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
+            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
         if (overMenu) return;
 
         const zoomModifierHeld = !!keysPressed["z"];
@@ -3045,6 +3776,9 @@ jQuery(() => {
             const selectedSpellEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedSpell")
                 : null;
+            const selectedInventoryEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedInventory")
+                : null;
             const selectedAuraEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedAura, #activeAuraIcons")
                 : null;
@@ -3054,7 +3788,7 @@ jQuery(() => {
             const menuInteractiveEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
                 : null;
-            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedAuraEl || selectedEditorEl;
+            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedInventoryEl || selectedAuraEl || selectedEditorEl;
             const isRightClick = (event.button === 2);
             if (forwardTarget) {
                 event.preventDefault();
@@ -3231,6 +3965,13 @@ jQuery(() => {
             wizard.currentSpell === "vanish" ||
             wizard.currentSpell === "editorvanish"
         ) return;
+        if (
+            typeof SpellSystem.isAuraSpellName === "function" &&
+            SpellSystem.isAuraSpellName(wizard.currentSpell)
+        ) {
+            spacebarDownAt = null;
+            return;
+        }
         SpellSystem.castWizardSpell(wizard, castWorldX, castWorldY, {
             clickCount: Number.isFinite(event.detail) ? Number(event.detail) : 1
         });
@@ -3243,7 +3984,17 @@ jQuery(() => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
         const auraMenuVisible = !$("#auraMenu").hasClass("hidden");
+        const auraSelectorVisible = !$("#auraSelector").hasClass("hidden");
         const editorMenuVisible = !$("#editorMenu").hasClass("hidden");
+        const isTextEntryTarget = !!(
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.isTextEntryElement === "function" &&
+            globalThis.isTextEntryElement(event.target)
+        );
+
+        if (isTextEntryTarget) {
+            return;
+        }
 
         if (event.ctrlKey && keyLower === "f") {
             event.preventDefault();
@@ -3292,14 +4043,19 @@ jQuery(() => {
             }
             if (inEditorMode) {
                 // In editor mode, Tab opens spell menu (which includes editor options)
-                if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+                if (
+                    wizard &&
+                    !$("#spellSelector").hasClass("hidden") &&
+                    typeof SpellSystem !== "undefined" &&
+                    typeof SpellSystem.showMainSpellMenu === "function"
+                ) {
                     SpellSystem.showMainSpellMenu(wizard);
                     $("#spellMenu").removeClass("hidden");
                     initSpellMenuKeyboardFocus();
                 }
                 return;
             }
-            if (event.shiftKey) {
+            if (event.shiftKey && auraSelectorVisible) {
                 if (spellMenuVisible) {
                     $("#spellMenu").addClass("hidden");
                     clearSpellMenuKeyboardFocus();
@@ -3318,21 +4074,31 @@ jQuery(() => {
                     $("#auraMenu").removeClass("hidden");
                     initAuraMenuKeyboardFocus();
                 }
-            } else if (auraMenuVisible) {
+            } else if (auraMenuVisible && auraSelectorVisible) {
                 $("#auraMenu").addClass("hidden");
                 clearAuraMenuKeyboardFocus();
-                if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+                if (
+                    wizard &&
+                    !$("#spellSelector").hasClass("hidden") &&
+                    typeof SpellSystem !== "undefined" &&
+                    typeof SpellSystem.showMainSpellMenu === "function"
+                ) {
                     SpellSystem.showMainSpellMenu(wizard);
+                    $("#spellMenu").removeClass("hidden");
+                    initSpellMenuKeyboardFocus();
                 }
-                $("#spellMenu").removeClass("hidden");
-                initSpellMenuKeyboardFocus();
             } else if (spellMenuVisible) {
                 $("#spellMenu").addClass("hidden");
                 $("#auraMenu").addClass("hidden");
                 $("#editorMenu").addClass("hidden");
                 clearSpellMenuKeyboardFocus();
                 clearAuraMenuKeyboardFocus();
-            } else if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
+            } else if (
+                wizard &&
+                !$("#spellSelector").hasClass("hidden") &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.showMainSpellMenu === "function"
+            ) {
                 SpellSystem.showMainSpellMenu(wizard);
                 $("#spellMenu").removeClass("hidden");
                 initSpellMenuKeyboardFocus();
@@ -3475,11 +4241,6 @@ jQuery(() => {
         // Track key state
         keysPressed[keyLower] = true;
 
-        const isTextEntryTarget = !!(
-            typeof globalThis !== "undefined" &&
-            typeof globalThis.isTextEntryElement === "function" &&
-            globalThis.isTextEntryElement(event.target)
-        );
         if (
             keyLower === "z" &&
             !event.repeat &&
@@ -3618,6 +4379,17 @@ jQuery(() => {
                     SpellSystem.activateSelectedSpellTool(wizard);
                     updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
                 }
+                if (
+                    wizard &&
+                    typeof SpellSystem !== "undefined" &&
+                    typeof SpellSystem.isAuraSpellName === "function" &&
+                    typeof SpellSystem.toggleAura === "function" &&
+                    SpellSystem.isAuraSpellName(wizard.currentSpell)
+                ) {
+                    SpellSystem.toggleAura(wizard, wizard.currentSpell);
+                    spacebarDownAt = null;
+                    return;
+                }
                 spacebarDownAt = Date.now();
                 // SpawnAnimal: space alone just activates preview mode; click to cast
                 if (wizard && wizard.currentSpell === "spawnanimal") {
@@ -3631,24 +4403,36 @@ jQuery(() => {
         } else if ((event.key === "o" || event.key === "O") && !event.repeat) {
             event.preventDefault();
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                if (typeof wizard.isAdventureMode === "function" && wizard.isAdventureMode() && typeof SpellSystem.setCurrentSpell === "function") {
+                    SpellSystem.setCurrentSpell(wizard, "omnivision");
+                }
                 SpellSystem.toggleAura(wizard, "omnivision");
             }
             return;
         } else if ((event.key === "p" || event.key === "P") && !event.repeat) {
             event.preventDefault();
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                if (typeof wizard.isAdventureMode === "function" && wizard.isAdventureMode() && typeof SpellSystem.setCurrentSpell === "function") {
+                    SpellSystem.setCurrentSpell(wizard, "speed");
+                }
                 SpellSystem.toggleAura(wizard, "speed");
             }
             return;
         } else if ((event.key === "h" || event.key === "H") && !event.repeat) {
             event.preventDefault();
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                if (typeof wizard.isAdventureMode === "function" && wizard.isAdventureMode() && typeof SpellSystem.setCurrentSpell === "function") {
+                    SpellSystem.setCurrentSpell(wizard, "healing");
+                }
                 SpellSystem.toggleAura(wizard, "healing");
             }
             return;
         } else if ((event.key === "u" || event.key === "U") && !event.repeat) {
             event.preventDefault();
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.toggleAura === "function") {
+                if (typeof wizard.isAdventureMode === "function" && wizard.isAdventureMode() && typeof SpellSystem.setCurrentSpell === "function") {
+                    SpellSystem.setCurrentSpell(wizard, "invisibility");
+                }
                 SpellSystem.toggleAura(wizard, "invisibility");
             }
             return;
@@ -3685,9 +4469,22 @@ jQuery(() => {
             Object.keys(spellKeyBindings).includes(event.key.toUpperCase())
         ) {
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
+            const spellHotkey = event.key.toUpperCase();
+            const shouldUseEditorVanish = (
+                spellHotkey === "V" &&
+                wizard &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.setCurrentSpell === "function" &&
+                (
+                    (typeof wizard.isGodMode === "function" && wizard.isGodMode()) ||
+                    inEditorMode
+                )
+            );
             if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
                 // In editor mode, prefer editor key bindings for shared keys
                 SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+            } else if (shouldUseEditorVanish) {
+                SpellSystem.setCurrentSpell(wizard, "editorvanish");
             } else {
                 // Spell hotkeys always work (allows switching from editor to combat spell)
                 SpellSystem.setCurrentSpell(wizard, spellKeyBindings[event.key.toUpperCase()]);
@@ -3776,12 +4573,36 @@ jQuery(() => {
         // Save game with Ctrl+S
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey) {
             event.preventDefault();
-            const saveData = saveGameState();
-            if (saveData) {
-                localStorage.setItem('survivor_save', JSON.stringify(saveData));
-                setLastSaveReloadDirective({ source: 'local' });
-                message('Game saved!');
-                console.log('Game saved to localStorage');
+            const isPrototypeSectionMode = !!(map && map._prototypeSectionState);
+            if (isPrototypeSectionMode) {
+                if (typeof savePrototypeSectionWorldToServerSlot === "function") {
+                    savePrototypeSectionWorldToServerSlot("testing").then(result => {
+                        if (result && result.ok) {
+                            message(`Saved ${result.count} section file(s) to testing/`);
+                            console.log('Prototype section-world save complete:', result);
+                        } else {
+                            message('Prototype section save failed');
+                            console.error('Prototype section save failed:', result);
+                        }
+                    }).catch(err => {
+                        message('Prototype section save failed');
+                        console.error('Prototype section save failed:', err);
+                    });
+                } else {
+                    message('Prototype section save is unavailable');
+                }
+                return;
+            }
+            if (typeof saveGameStateToLocalStorage === "function") {
+                const result = saveGameStateToLocalStorage();
+                if (result && result.ok) {
+                    setLastSaveReloadDirective({ source: 'local' });
+                    message(`Game saved to ${result.key}`);
+                    console.log(`Game saved to localStorage key '${result.key}'`);
+                } else {
+                    message('Save failed');
+                    console.error('Game save failed:', result);
+                }
             }
         }
 

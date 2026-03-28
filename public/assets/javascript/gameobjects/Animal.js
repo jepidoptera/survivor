@@ -4,6 +4,7 @@ class Animal extends Character {
     static FIRE_FRAME_COUNT_Y = 5;
     static FIRE_FPS = 12;
     static _fireFramesCache = null;
+    static METADATA_CATEGORY = "animals";
 
     static getFireFrames() {
         if (Animal._fireFramesCache && Animal._fireFramesCache.length > 0) {
@@ -133,6 +134,160 @@ class Animal extends Character {
                 this.updateDepthBillboardUvsForTexture = staticProto.updateDepthBillboardUvsForTexture;
             }
         }
+
+        this._animalMetadata = null;
+        this._animalMetadataPromise = null;
+        this.texturePath = this.resolveAnimalTexturePath();
+        this.loadAnimalMetadata();
+    }
+
+    resolveAnimalTexturePath() {
+        const normalizePath = (typeof globalThis.normalizeTexturePathForMetadata === "function")
+            ? globalThis.normalizeTexturePathForMetadata
+            : (value => value);
+        const spriteTexture = this.pixiSprite && this.pixiSprite.texture;
+        const baseTexture = spriteTexture && spriteTexture.baseTexture;
+        const resource = baseTexture && baseTexture.resource;
+        const resourceUrl = resource && typeof resource.url === "string"
+            ? normalizePath(resource.url)
+            : "";
+        if (resourceUrl) return resourceUrl;
+
+        const animalTypes = (typeof globalThis.SpawnAnimal !== "undefined" && Array.isArray(globalThis.SpawnAnimal.ANIMAL_TYPES))
+            ? globalThis.SpawnAnimal.ANIMAL_TYPES
+            : [];
+        const typeDef = animalTypes.find(entry => entry && entry.name === this.type);
+        if (typeDef && typeof typeDef.icon === "string" && typeDef.icon.length > 0) {
+            return normalizePath(typeDef.icon);
+        }
+        return normalizePath(`/assets/images/animals/${encodeURIComponent(this.type || "squirrel")}.png`);
+    }
+
+    loadAnimalMetadata() {
+        if (this._animalMetadataPromise || !(typeof globalThis.getResolvedPlaceableMetadata === "function")) {
+            return this._animalMetadataPromise;
+        }
+        this._animalMetadataPromise = globalThis.getResolvedPlaceableMetadata(
+            Animal.METADATA_CATEGORY,
+            this.texturePath || this.resolveAnimalTexturePath()
+        )
+            .then(meta => {
+                if (!meta || typeof meta !== "object") return null;
+                this._animalMetadata = meta;
+                this.applyMetadataDimensions();
+                if (meta.anchor && typeof meta.anchor === "object" && this.pixiSprite && this.pixiSprite.anchor) {
+                    const ax = Number.isFinite(meta.anchor.x) ? Number(meta.anchor.x) : this.pixiSprite.anchor.x;
+                    const ay = Number.isFinite(meta.anchor.y) ? Number(meta.anchor.y) : this.pixiSprite.anchor.y;
+                    this.pixiSprite.anchor.set(ax, ay);
+                }
+                this.updateHitboxes();
+                return meta;
+            })
+            .catch(() => null);
+        return this._animalMetadataPromise;
+    }
+
+    applyMetadataDimensions() {
+        const metadata = this._animalMetadata;
+        if (!metadata || typeof metadata !== "object") return false;
+        const metaWidth = Number.isFinite(metadata.width) ? Number(metadata.width) : null;
+        const metaHeight = Number.isFinite(metadata.height) ? Number(metadata.height) : null;
+        if (!(metaWidth > 0) || !(metaHeight > 0) || !(Number.isFinite(this.size) && this.size > 0)) {
+            return false;
+        }
+
+        // Keep `size` as the creature's overall scale while letting metadata
+        // control the rendered proportions relative to that scale.
+        this.width = this.size * (metaWidth / metaHeight);
+        this.height = this.size;
+        return true;
+    }
+
+    cloneHitbox(hitbox) {
+        if (!hitbox) return null;
+        if (hitbox instanceof CircleHitbox) {
+            return new CircleHitbox(hitbox.x, hitbox.y, hitbox.radius);
+        }
+        if (hitbox instanceof PolygonHitbox && Array.isArray(hitbox.points)) {
+            return new PolygonHitbox(hitbox.points.map(point => ({ x: point.x, y: point.y })));
+        }
+        if (
+            hitbox.type === "circle" &&
+            Number.isFinite(hitbox.x) &&
+            Number.isFinite(hitbox.y) &&
+            Number.isFinite(hitbox.radius)
+        ) {
+            return new CircleHitbox(hitbox.x, hitbox.y, hitbox.radius);
+        }
+        if (Array.isArray(hitbox.points)) {
+            return new PolygonHitbox(hitbox.points.map(point => ({ x: point.x, y: point.y })));
+        }
+        return null;
+    }
+
+    inferHitboxRadius(hitbox, fallbackRadius) {
+        if (hitbox instanceof CircleHitbox || (hitbox && hitbox.type === "circle" && Number.isFinite(hitbox.radius))) {
+            return Math.max(0.01, Number(hitbox.radius));
+        }
+        const points = Array.isArray(hitbox && hitbox.points) ? hitbox.points : null;
+        if (!points || points.length === 0) return Math.max(0.01, Number(fallbackRadius) || 0.01);
+        let maxDistance = 0;
+        for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+            maxDistance = Math.max(maxDistance, Math.hypot(point.x - this.x, point.y - this.y));
+        }
+        return Math.max(0.01, maxDistance || Number(fallbackRadius) || 0.01);
+    }
+
+    updateHitboxes() {
+        const baseGroundRadius = Number.isFinite(this.groundRadius) ? Number(this.groundRadius) : (this.size / 3);
+        const baseVisualRadius = Number.isFinite(this.visualRadius) ? Number(this.visualRadius) : baseGroundRadius;
+        const metadata = this._animalMetadata;
+        const buildHitbox = (typeof globalThis.buildHitboxFromSpec === "function")
+            ? globalThis.buildHitboxFromSpec
+            : null;
+        const resolveScaleContext = (typeof globalThis.resolveHitboxScaleContext === "function")
+            ? globalThis.resolveHitboxScaleContext
+            : null;
+
+        if (metadata && buildHitbox && resolveScaleContext) {
+            const baseWidth = Number.isFinite(metadata.hitboxBaseWidth)
+                ? Number(metadata.hitboxBaseWidth)
+                : (Number.isFinite(metadata.width) ? Number(metadata.width) : (Number.isFinite(this.width) ? Number(this.width) : 1));
+            const baseHeight = Number.isFinite(metadata.hitboxBaseHeight)
+                ? Number(metadata.hitboxBaseHeight)
+                : (Number.isFinite(metadata.height) ? Number(metadata.height) : (Number.isFinite(this.height) ? Number(this.height) : 1));
+            const groundSpec = (metadata.groundPlaneHitbox && typeof metadata.groundPlaneHitbox === "object")
+                ? metadata.groundPlaneHitbox
+                : {};
+            const hasVisualSpec = Object.prototype.hasOwnProperty.call(metadata, "visualHitbox");
+            const visualSpec = hasVisualSpec ? metadata.visualHitbox : null;
+
+            const groundScaleContext = resolveScaleContext(groundSpec, this, baseWidth, baseHeight);
+            const builtGroundHitbox = buildHitbox(groundSpec, this, baseGroundRadius, groundScaleContext);
+            this.groundPlaneHitbox = builtGroundHitbox || new CircleHitbox(this.x, this.y, baseGroundRadius);
+
+            if (hasVisualSpec) {
+                const visualScaleContext = resolveScaleContext(visualSpec, this, baseWidth, baseHeight);
+                this.visualHitbox = buildHitbox(visualSpec, this, baseVisualRadius, visualScaleContext) || this.cloneHitbox(this.groundPlaneHitbox);
+            } else {
+                this.visualHitbox = this.cloneHitbox(this.groundPlaneHitbox);
+            }
+        } else {
+            if (this.groundPlaneHitbox && this.groundPlaneHitbox.type === "circle") {
+                this.groundPlaneHitbox.x = this.x;
+                this.groundPlaneHitbox.y = this.y;
+                this.groundPlaneHitbox.radius = baseGroundRadius;
+            } else {
+                this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, baseGroundRadius);
+            }
+            this.visualHitbox = this.cloneHitbox(this.groundPlaneHitbox);
+        }
+
+        this.groundRadius = this.inferHitboxRadius(this.groundPlaneHitbox, baseGroundRadius);
+        this.visualRadius = this.inferHitboxRadius(this.visualHitbox, this.groundRadius);
+        this.radius = this.groundRadius;
     }
 
     _ensureFireSprite() {
@@ -384,6 +539,9 @@ class Animal extends Character {
     }
     vanishFromMagicDepletion() {
         if (this.gone || this.vanishing || this.dead) return false;
+        if (typeof this.triggerVanishDieEventIfAdventureMode === "function") {
+            this.triggerVanishDieEventIfAdventureMode({ cause: "vanish" });
+        }
         this.vanishing = true;
         this.vanishStartTime = frameCount;
         this.vanishDuration = 0.25 * frameRate;
@@ -1432,7 +1590,10 @@ class Animal extends Character {
     tickBehaviorOnly() {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
-        if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+        if (typeof this.isFrozen === "function" && this.isFrozen()) {
+            if (typeof this.applyFrozenState === "function") {
+                this.applyFrozenState({ clearMoveTimeout: false });
+            }
             this.updateSeePlayerState();
             this.moving = false;
             return;
@@ -1448,7 +1609,10 @@ class Animal extends Character {
             return;
         } 
         super.move();
-        if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+        if (typeof this.isFrozen === "function" && this.isFrozen()) {
+            if (typeof this.applyFrozenState === "function") {
+                this.applyFrozenState({ clearMoveTimeout: false });
+            }
             this.updateSeePlayerState();
             this.moving = false;
             return;
@@ -1989,7 +2153,11 @@ class Animal extends Character {
                         return { resolved: false };
                     }
                     const damage = attacker.rollAttackDamage();
-                    strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    if (typeof strikeTarget.takeDamage === "function") {
+                        strikeTarget.takeDamage(damage, { source: attacker });
+                    } else {
+                        strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    }
                     return { resolved: true, hit: true, damage, nowMs: strikeNow };
                 },
                 onHit: (_strikeTarget, _state, result, attacker) => {
@@ -2071,7 +2239,11 @@ class Animal extends Character {
 
         if (this.hasAttackAnimation()) this.spriteCol = 1;
         const damage = this.rollAttackDamage();
-        target.hp = Math.max(0, target.hp - damage);
+        if (typeof target.takeDamage === "function") {
+            target.takeDamage(damage, { source: this });
+        } else {
+            target.hp = Math.max(0, target.hp - damage);
+        }
         this.lastAttackTimeMs = now;
         this.beginRetreat(target, { holdAttackAnimation: true });
     }
@@ -2172,6 +2344,9 @@ class Animal extends Character {
                 color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
                 fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
             })).filter(msg => msg.text.length > 0);
+        }
+        if (this._scriptDeactivated === true) {
+            data._scriptDeactivated = true;
         }
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
@@ -2288,6 +2463,9 @@ class Animal extends Character {
                         globalThis._scriptMessageTargets.add(animalInstance);
                     }
                 }
+                if (data._scriptDeactivated === true) {
+                    animalInstance._scriptDeactivated = true;
+                }
 
                 // Restore saved size and rescale derived properties
                 if (Number.isFinite(data.size) && data.size > 0) {
@@ -2343,10 +2521,7 @@ class Squirrel extends Animal {
                 "walk_right"
             ]
         };
-        this.radius = 0.25; 
         this.frameCount = {x: 1, y: 2};
-        this.width = size;
-        this.height = size;
         this.walkSpeed = 2;
         this.runSpeed = 2.5;
         this.lungeRadius = 3;
@@ -2377,10 +2552,7 @@ class Deer extends Animal {
                 "walk_right"
             ]
         };
-        this.radius = 0.55; // Animal hitbox radius in hex units
         this.frameCount = {x: 1, y: 2};
-        this.width = size;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.lungeRadius = 2.5;
@@ -2412,13 +2584,7 @@ class Bear extends Animal {
                 "attack_right"
             ]
         };
-        this.radius = 1.0; // Animal hitbox radius in hex units
-        this.groundRadius *= 1.5;
-        this.visualRadius *= 1.5;
-        this.updateHitboxes();
         this.frameCount = {x: 2, y: 2};
-        this.width = this.size * 1.4;
-        this.height = this.size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.lungeRadius = 2;
@@ -2431,7 +2597,7 @@ class Bear extends Animal {
         this.attackVerb = "mauls";
         this.damage = 20;
         this.foodValue = Math.floor(240 * this.size);
-        this.hp = 25 * this.size;
+        this.hp = 50 * this.size;
         this.maxHp = this.hp;
         this.ensureMagicPointsInitialized(true);
         this.spriteSheetReady = false;
@@ -2443,6 +2609,7 @@ class Eagleman extends Animal {
     constructor(location, map) {
         const size = Math.random() * .5 + 1.2;
         super('eagleman', location, size, map);
+        this._deathCoinsSpawned = false;
         this._depthBillboardAttackTiltDeg = 0;
         this.pixiSprite.anchor.set(0.5, 0.8);
         this.spriteSheet = {
@@ -2469,13 +2636,7 @@ class Eagleman extends Animal {
                 right: { width: 0.9, height: 1.1 }
             }
         };
-        this.radius = 1.0; // Animal hitbox radius in hex units
-        this.groundRadius *= 1.5;
-        this.visualRadius *= 1.5;
-        this.updateHitboxes();
         this.frameCount = {x: 2, y: 4};
-        this.width = this.size * 1.4;
-        this.height = this.size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.lungeRadius = 3;
@@ -2562,11 +2723,26 @@ class Eagleman extends Animal {
     die() {
         if (this.dead || this.gone) return;
 
+        this.spawnDeathCoins();
         super.die();
         this.attackState = "idle";
         this.attacking = false;
         this.spriteCol = 0;
         this.spriteDirectionLock = { x: 0, y: 1 };
+    }
+
+    spawnDeathCoins() {
+        if (this._deathCoinsSpawned || typeof this.dropPowerup !== "function") return [];
+
+        this._deathCoinsSpawned = true;
+        const dropDistance = Math.max(0.45, (Number.isFinite(this.groundRadius) ? Number(this.groundRadius) : 0.55) + 0.15);
+        return this.dropPowerup("gold_coin", {
+            // Gold coin metadata height is 0.8, so 0.625 scale preserves the
+            // earlier "size 0.5" request while keeping the normal aspect ratio.
+            size: 0.625,
+            count: 3,
+            preferredDistance: dropDistance
+        });
     }
 }
 
@@ -2584,13 +2760,7 @@ class Fragglegod extends Animal {
                 "attack_right"
             ]
         };
-        this.radius = 1.0; // Animal hitbox radius in hex units
-        this.groundRadius *= 1;
-        this.visualRadius *= 1.5;
-        this.updateHitboxes();
         this.frameCount = {x: 2, y: 2};
-        this.width = this.size * 1.4;
-        this.height = this.size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.lungeRadius = 2;
@@ -2635,39 +2805,24 @@ class Fragglegod extends Animal {
     }
 
     spawnCorpsePowerup() {
-        if (this._droppedPowerup || typeof addPowerup !== "function") return null;
+        if (this._droppedPowerup || typeof this.dropPowerup !== "function") return null;
 
-        const dropMap = this.map || null;
-        const dropWidth = Number.isFinite(this.width) ? this.width : 2.03;
-        const dropHeight = Number.isFinite(this.height) ? this.height : 1.45;
         const dropRadius = Number.isFinite(this.groundRadius)
             ? Math.max(0.35, this.groundRadius)
             : 0.75;
-        const scriptingName = (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0)
-            ? this.scriptingName.trim()
-            : undefined;
+        const dropCount = Math.max(1, Math.floor(this.size * 3));
 
-        this._droppedPowerup = addPowerup("fragglegod.png", {
-            x: this.x,
-            y: this.y,
-            map: dropMap,
-            width: dropWidth,
-            height: dropHeight,
-            radius: dropRadius,
-            anchorX: 0.5,
-            anchorY: 1,
-            billboardAlpha: 0,
-            scriptingName,
+        this._droppedPowerup = this.dropPowerup("lightning", {
+            size: 0.75,
+            count: dropCount,
+            preferredDistance: Math.max(0.45, dropRadius + 0.15),
+            registerWithMap: true,
             onCollect: () => {
                 if (!this.gone) {
                     this.removeFromGame();
                 }
             }
         });
-
-        if (this._droppedPowerup && dropMap && typeof dropMap.registerGameObject === "function") {
-            dropMap.registerGameObject(this._droppedPowerup);
-        }
 
         return this._droppedPowerup;
     }
@@ -2679,8 +2834,6 @@ class Scorpion extends Animal {
         const size = Math.random() * .1 + .4;
         super('scorpion', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.width = size;
-        this.height = size;
         this.walkSpeed = .75;
         this.runSpeed = 1.5;
         this.chaseRadius = 4;
@@ -2698,8 +2851,6 @@ class Armadillo extends Animal {
         const size = Math.random() * .2 + .5;
         super('armadillo', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.width = size;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2;
         this.fleeRadius = 7;
@@ -2715,8 +2866,6 @@ class Coyote extends Animal {
         const size = Math.random() * .25 + .7;
         super('coyote', location, size, map);
         this.frameCount = {x: 1, y: 2};
-        this.width = size * 1.75;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
         this.fleeRadius = 10;
@@ -2740,8 +2889,6 @@ class Goat extends Animal {
             ]
         };
         this.frameCount = {x: 1, y: 2};
-        this.width = size * 1.2;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2.5;
         this.fleeRadius = 8;
@@ -2759,8 +2906,6 @@ class Porcupine extends Animal {
         const size = Math.random() * .2 + .5;
         super('porcupine', location, size, map);
         this.frameCount = {x: 2, y: 2};
-        this.width = size * 1.15;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2;
         this.fleeRadius = 7;
@@ -2787,8 +2932,6 @@ class Blodia extends Animal {
             ]
         };
         this.frameCount = {x: 2, y: 1};
-        this.width = size * 0.75;
-        this.height = size * 1.6;
         this.walkSpeed = 1.2;
         this.runSpeed = 3.7;
         this.lungeSpeed = 6.0;
@@ -2828,12 +2971,21 @@ class Blodia extends Animal {
             this.moveTimeout = null;
         }
         if (paused) return;
-        this.recoverTemperature(1 / Math.max(1, Number(this.frameRate) || 1));
-        if (typeof this.isScriptFrozen === "function" && this.isScriptFrozen()) {
+        const dtSeconds = 1 / Math.max(1, Number(this.frameRate) || 1);
+        const temperatureFrozen = typeof this.isTemperatureFrozen === "function" && this.isTemperatureFrozen();
+        const scriptFrozen = typeof this.isScriptFrozen === "function" && this.isScriptFrozen();
+        if (temperatureFrozen || scriptFrozen) {
+            if (typeof this.applyFrozenState === "function") {
+                this.applyFrozenState({ clearMoveTimeout: false });
+            }
+            if (temperatureFrozen && !scriptFrozen && typeof this.recoverTemperature === "function") {
+                this.recoverTemperature(dtSeconds);
+            }
             this.updateSeePlayerState();
             this.moving = false;
             return;
         }
+        this.recoverTemperature(dtSeconds);
 
         if (this.isOnFire) this.burn();
 
@@ -2889,7 +3041,15 @@ class Blodia extends Animal {
                 ? this.map.shortestDeltaY(this.y, this.nextNode.y)
                 : (this.nextNode.y - this.y);
             const d = Math.sqrt(xdist ** 2 + ydist ** 2);
-            const effectiveSpeed = Math.max(1e-4, this.getEffectiveMovementSpeed(this.speed));
+            const effectiveSpeed = this.getEffectiveMovementSpeed(this.speed);
+            if (!(effectiveSpeed > 0)) {
+                if (typeof this.applyFrozenState === "function") {
+                    this.applyFrozenState({ clearMoveTimeout: false });
+                }
+                this.updateSeePlayerState();
+                this.moving = false;
+                return;
+            }
             this.travelFrames = Math.max(1, Math.ceil(d / effectiveSpeed * this.frameRate));
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
@@ -3045,7 +3205,11 @@ class Blodia extends Animal {
                         return { resolved: false };
                     }
                     const damage = Math.floor((1 - Math.random() * Math.random()) * attacker.damage + 1);
-                    strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    if (typeof strikeTarget.takeDamage === "function") {
+                        strikeTarget.takeDamage(damage, { source: attacker });
+                    } else {
+                        strikeTarget.hp = Math.max(0, strikeTarget.hp - damage);
+                    }
                     return { resolved: true, hit: true, damage, nowMs: strikeNow };
                 },
                 onHit: (_strikeTarget, _state, result, attacker) => {
@@ -3268,8 +3432,6 @@ class Yeti extends Animal {
             ]
         };
         this.frameCount = {x: 2, y: 2};
-        this.width = size * 1.2;
-        this.height = size;
         this.walkSpeed = 1;
         this.runSpeed = 2.75;
         this.chaseRadius = this.scaledChaseRadius(9);

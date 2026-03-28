@@ -1,0 +1,39 @@
+{
+  "id": "-4,3",
+  "key": "-4,3",
+  "coord": {
+    "q": -4,
+    "r": 3
+  },
+  "centerAxial": {
+    "q": -49,
+    "r": 446
+  },
+  "centerOffset": {
+    "x": -49,
+    "y": 422
+  },
+  "neighborKeys": [
+    "-3,3",
+    "-3,2",
+    null,
+    null,
+    null,
+    null
+  ],
+  "tileCoordKeys": [
+    "0,397",
+    "0,398",
+    "0,399"
+  ],
+  "groundTextureId": 0,
+  "groundTiles": {
+    "0,397": 5,
+    "0,398": 4,
+    "0,399": 10
+  },
+  "walls": [],
+  "objects": [],
+  "animals": [],
+  "powerups": []
+}
