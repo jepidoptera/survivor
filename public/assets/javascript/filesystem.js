@@ -1509,6 +1509,9 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
             wizard: activeWizard
                 ? activeWizard.saveJson()
                 : null,
+            los: {
+                mazeMode: getSavedLosMazeModeValue()
+            },
             activeCenterKey: (wizardNode && typeof wizardNode._prototypeSectionKey === "string" && wizardNode._prototypeSectionKey.length > 0)
                 ? wizardNode._prototypeSectionKey
                 : ((map && map._prototypeSectionState && typeof map._prototypeSectionState.activeCenterKey === "string")

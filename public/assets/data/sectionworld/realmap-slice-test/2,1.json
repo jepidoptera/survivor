@@ -233,6 +233,8 @@
     "399,301": 12
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "road",
@@ -511,23 +513,6 @@
       "size": 4
     }
   ],
-  "animals": [
-    {
-      "type": "squirrel",
-      "x": 345.18759999999986,
-      "y": 258.2000000000003,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.43950065156042745,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel80"
-    }
-  ],
+  "animals": [],
   "powerups": []
 }

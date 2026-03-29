@@ -3269,6 +3269,7 @@ const SpellSystem = (() => {
         const selectedAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
             ? Number(wizardRef.selectedPlaceableAnchorY)
             : 1;
+        const effectiveAnchorY = (category === "windows") ? 0.5 : selectedAnchorY;
         const windowWorldWidth = clampedScale;
         // Height fit is in world units; object height is clampedScale (not screen-scaled).
         const windowWorldHeight = clampedScale;
@@ -3416,12 +3417,13 @@ const SpellSystem = (() => {
         const normalBias = (category === "windows") ? 0.001 : 0;
         const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
         const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
-        const verticalOffset = (1 - selectedAnchorY) * windowWorldHeight;
+        const verticalOffset = (1 - effectiveAnchorY) * windowWorldHeight;
         let snappedX = desiredBaseX;
         let snappedY = isDoorPlacement
             ? (desiredBaseY - verticalOffset)
             : desiredBaseY;
-        const snappedZ = (category === "windows") ? (wallHeight * 0.5) : 0;
+        const wallBottomZ = Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0;
+        const snappedZ = (category === "windows") ? (wallBottomZ + wallHeight * 0.5) : 0;
         if (mapRef && typeof mapRef.wrapWorldX === "function") snappedX = mapRef.wrapWorldX(snappedX);
         if (mapRef && typeof mapRef.wrapWorldY === "function") snappedY = mapRef.wrapWorldY(snappedY);
 
@@ -3950,6 +3952,29 @@ const SpellSystem = (() => {
         }
         const queryStamp = collisionQueryStamp;
 
+        const collectFromNode = (node) => {
+            if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return;
+            for (const obj of node.objects) {
+                if (!obj || obj.gone) continue;
+                if (requireCollisionHandler && typeof obj.handleCharacterCollision !== "function") continue;
+                if (obj._collisionQueryStamp === queryStamp) continue;
+                obj._collisionQueryStamp = queryStamp;
+                nearbyObjects.push(obj);
+            }
+        };
+
+        if (typeof mapRef.getNodesInIndexWindow === "function") {
+            const xStart = centerNode.xindex - tileRadius;
+            const xEnd = centerNode.xindex + tileRadius;
+            const yStart = centerNode.yindex - tileRadius;
+            const yEnd = centerNode.yindex + tileRadius;
+            const nearbyNodes = mapRef.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
+            for (let i = 0; i < nearbyNodes.length; i++) {
+                collectFromNode(nearbyNodes[i]);
+            }
+            return nearbyObjects;
+        }
+
         for (let dx = -tileRadius; dx <= tileRadius; dx++) {
             for (let dy = -tileRadius; dy <= tileRadius; dy++) {
                 let xi = centerNode.xindex + dx;
@@ -3964,14 +3989,7 @@ const SpellSystem = (() => {
                 if (!mapRef.wrapY && (yi < 0 || yi >= mapRef.height)) continue;
 
                 const node = mapRef.nodes[xi] && mapRef.nodes[xi][yi] ? mapRef.nodes[xi][yi] : null;
-                if (!node || !Array.isArray(node.objects) || node.objects.length === 0) continue;
-                for (const obj of node.objects) {
-                    if (!obj || obj.gone) continue;
-                    if (requireCollisionHandler && typeof obj.handleCharacterCollision !== "function") continue;
-                    if (obj._collisionQueryStamp === queryStamp) continue;
-                    obj._collisionQueryStamp = queryStamp;
-                    nearbyObjects.push(obj);
-                }
+                collectFromNode(node);
             }
         }
 

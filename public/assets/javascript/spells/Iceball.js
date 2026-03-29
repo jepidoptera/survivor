@@ -509,8 +509,15 @@ class Iceball extends globalThis.Fireball {
         this.extinguishBurningTarget(target);
         const maxMp = this.getTargetMaxMp(target);
         const freezeSeconds = 1 + (maxMp > 0 ? (100 / maxMp) : 0);
-        const maxHp = this.getTargetMaxHp(target);
-        const temperatureDrop = maxHp > 0 ? (600 / maxHp) : 0;
+        const rawCasterDifficulty = (this.caster && Number.isFinite(this.caster.difficulty))
+            ? Number(this.caster.difficulty)
+            : ((typeof globalThis !== "undefined" && globalThis.wizard && Number.isFinite(globalThis.wizard.difficulty))
+                ? Number(globalThis.wizard.difficulty)
+                : 2);
+        const casterDifficulty = Math.max(1, Math.min(3, Math.round(rawCasterDifficulty || 2)));
+        const difficultyTemperatureDrop = (4 - casterDifficulty) * 2;
+        const mpTemperatureDrop = maxMp > 0 ? (200 / maxMp) : 0;
+        const temperatureDrop = difficultyTemperatureDrop + mpTemperatureDrop;
         if (typeof target.dropTemperature === "function") {
             target.dropTemperature(temperatureDrop);
         } else if (typeof target.changeTemperature === "function") {

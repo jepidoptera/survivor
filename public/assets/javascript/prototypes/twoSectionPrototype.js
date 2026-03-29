@@ -693,10 +693,10 @@
             sectionsByKey.set(section.key, section);
         }
 
-        normalizePrototypeRecordIds(orderedSectionAssets, "walls");
-        normalizePrototypeRecordIds(orderedSectionAssets, "objects");
-        normalizePrototypeRecordIds(orderedSectionAssets, "animals");
-        normalizePrototypeRecordIds(orderedSectionAssets, "powerups");
+        const nextWallRecordId = normalizePrototypeRecordIds(orderedSectionAssets, "walls");
+        const nextObjectRecordId = normalizePrototypeRecordIds(orderedSectionAssets, "objects");
+        const nextAnimalRecordId = normalizePrototypeRecordIds(orderedSectionAssets, "animals");
+        const nextPowerupRecordId = normalizePrototypeRecordIds(orderedSectionAssets, "powerups");
 
         let anchorCenter = assetBundle && assetBundle.anchorCenter && typeof assetBundle.anchorCenter === "object"
             ? {
@@ -730,6 +730,12 @@
                 ? Math.max(0, Math.floor(Number(assetBundle.sectionGraphRadius)))
                 : fallbackConfig.sectionGraphRadius,
             basis,
+            nextRecordIds: {
+                walls: nextWallRecordId,
+                objects: nextObjectRecordId,
+                animals: nextAnimalRecordId,
+                powerups: nextPowerupRecordId
+            },
             sectionCoords: orderedSections.map((section) => ({ q: section.coord.q, r: section.coord.r })),
             sectionsByKey,
             orderedSections,
@@ -1052,6 +1058,9 @@
             sectionGraphRadius: sectionStateSource.sectionGraphRadius,
             basis: sectionStateSource.basis || getSectionBasisVectors(sectionStateSource.radius),
             anchorCenter: sectionStateSource.anchorCenter || { q: 0, r: 0 },
+            nextRecordIds: (sectionStateSource && sectionStateSource.nextRecordIds && typeof sectionStateSource.nextRecordIds === "object")
+                ? { ...sectionStateSource.nextRecordIds }
+                : { walls: 1, objects: 1, animals: 1, powerups: 1 },
             sectionCoords: sectionStateSource.sectionCoords,
             sectionsByKey: sectionStateSource.sectionsByKey,
             orderedSections: sectionStateSource.orderedSections,
@@ -1390,7 +1399,13 @@
             const dirB = nodeB.neighbors.indexOf(nodeA);
             if (dirA < 0 && dirB < 0) continue;
 
-            const blocker = getPrototypeBlockedEdgeToken(map, recordId, sectionKey);
+            const wallState = map && map._prototypeWallState;
+            const runtimeWall = (wallState && wallState.activeRuntimeWallsByRecordId instanceof Map)
+                ? wallState.activeRuntimeWallsByRecordId.get(recordId)
+                : null;
+            const blocker = (runtimeWall && typeof runtimeWall === "object")
+                ? runtimeWall
+                : getPrototypeBlockedEdgeToken(map, recordId, sectionKey);
             if (dirA >= 0) {
                 if (!(nodeA.blockedNeighbors instanceof Map)) nodeA.blockedNeighbors = new Map();
                 if (!nodeA.blockedNeighbors.has(dirA)) nodeA.blockedNeighbors.set(dirA, new Set());
@@ -1592,7 +1607,9 @@
                 setActiveCenter(this, nextState.activeCenterKey);
             }
             this._prototypeWallState = {
-                nextRecordId: 1,
+                nextRecordId: Number.isInteger(nextState && nextState.nextRecordIds && nextState.nextRecordIds.walls)
+                    ? Number(nextState.nextRecordIds.walls)
+                    : 1,
                 activeRuntimeWalls: [],
                 activeRuntimeWallsByRecordId: new Map(),
                 activeRecordSignature: ""
@@ -1602,7 +1619,9 @@
                 blockerTokensByRecordId: new Map()
             };
             this._prototypeObjectState = {
-                nextRecordId: 1,
+                nextRecordId: Number.isInteger(nextState && nextState.nextRecordIds && nextState.nextRecordIds.objects)
+                    ? Number(nextState.nextRecordIds.objects)
+                    : 1,
                 activeRuntimeObjects: [],
                 activeRuntimeObjectsByRecordId: new Map(),
                 activeRecordSignature: "",
@@ -1872,7 +1891,9 @@
             return bubbleChanged;
         };
         map._prototypeWallState = {
-            nextRecordId: 1,
+            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.walls)
+                ? Number(prototypeState.nextRecordIds.walls)
+                : 1,
             activeRuntimeWalls: [],
             activeRuntimeWallsByRecordId: new Map(),
             activeRecordSignature: ""
@@ -1882,20 +1903,26 @@
             blockerTokensByRecordId: new Map()
         };
         map._prototypeObjectState = {
-            nextRecordId: 1,
+            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.objects)
+                ? Number(prototypeState.nextRecordIds.objects)
+                : 1,
             activeRuntimeObjects: [],
             activeRuntimeObjectsByRecordId: new Map(),
             activeRecordSignature: "",
             captureScanNeeded: true
         };
         map._prototypeAnimalState = {
-            nextRecordId: 1,
+            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.animals)
+                ? Number(prototypeState.nextRecordIds.animals)
+                : 1,
             activeRuntimeAnimals: [],
             activeRuntimeAnimalsByRecordId: new Map(),
             activeRecordSignature: ""
         };
         map._prototypePowerupState = {
-            nextRecordId: 1,
+            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.powerups)
+                ? Number(prototypeState.nextRecordIds.powerups)
+                : 1,
             activeRuntimePowerups: [],
             activeRuntimePowerupsByRecordId: new Map(),
             activeRecordSignature: ""
@@ -2014,6 +2041,51 @@
             runtimeObj._prototypeDirty = false;
             return true;
         };
+        const isPrototypeSavableAnimal = (animal) => {
+            if (!animal || animal.gone || animal.vanishing || animal.dead) return false;
+            if (typeof animal.saveJson !== "function") return false;
+            return true;
+        };
+        const removePrototypeAnimalRecordById = (animalState, recordId) => {
+            const state = map._prototypeSectionState;
+            if (!animalState || !state || !(state.sectionAssetsByKey instanceof Map) || !Number.isInteger(recordId)) return false;
+            let removed = false;
+            for (const asset of state.sectionAssetsByKey.values()) {
+                const records = Array.isArray(asset && asset.animals) ? asset.animals : [];
+                if (records.length === 0) continue;
+                const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                if (nextRecords.length === records.length) continue;
+                removed = true;
+                asset.animals = nextRecords;
+            }
+            return removed;
+        };
+        const upsertPrototypeAnimalRecord = (runtimeAnimal) => {
+            if (!isPrototypeSavableAnimal(runtimeAnimal)) return false;
+            const ownerSectionKey = map.getPrototypeSectionKeyForWorldPoint(runtimeAnimal.x, runtimeAnimal.y);
+            if (!ownerSectionKey) return false;
+            const asset = map.getPrototypeSectionAsset(ownerSectionKey);
+            if (!asset) return false;
+            const animalState = map._prototypeAnimalState;
+            if (!animalState) return false;
+            const recordData = runtimeAnimal.saveJson();
+            if (!recordData || typeof recordData !== "object") return false;
+
+            let recordId = Number(runtimeAnimal._prototypeRecordId);
+            if (!Number.isInteger(recordId)) {
+                recordId = animalState.nextRecordId++;
+            }
+            removePrototypeAnimalRecordById(animalState, recordId);
+            asset.animals.push({
+                ...recordData,
+                id: recordId
+            });
+
+            runtimeAnimal._prototypeRuntimeRecord = true;
+            runtimeAnimal._prototypeRecordId = recordId;
+            runtimeAnimal._prototypeOwnerSectionKey = ownerSectionKey;
+            return true;
+        };
         map.getPrototypeSectionKeyForWorldPoint = function getPrototypeSectionKeyForWorldPoint(worldX, worldY) {
             const node = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
             return node && typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : null;
@@ -2089,8 +2161,17 @@
         };
         map.capturePendingPrototypeWalls = function capturePendingPrototypeWalls() {
             const wallCtor = globalScope.WallSectionUnit;
-            if (!wallCtor || !(wallCtor._allSections instanceof Map)) return false;
+            const wallState = this._prototypeWallState;
+            if (!wallCtor || !(wallCtor._allSections instanceof Map) || !wallState) return false;
             let changed = false;
+            if (wallState.activeRuntimeWallsByRecordId instanceof Map) {
+                for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
+                    if (runtimeWall && !runtimeWall.gone && !runtimeWall.vanishing) continue;
+                    if (removePrototypeRecordById(wallState, Number(recordId))) {
+                        changed = true;
+                    }
+                }
+            }
             for (const wall of wallCtor._allSections.values()) {
                 if (!wall) continue;
                 if (wall._prototypeRuntimeRecord === true) {
@@ -2119,6 +2200,14 @@
                 return false;
             }
             let changed = false;
+            if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+                for (const [recordId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
+                    if (runtimeObj && !runtimeObj.gone && !runtimeObj.vanishing) continue;
+                    if (removePrototypeObjectRecordById(objectState, Number(recordId))) {
+                        changed = true;
+                    }
+                }
+            }
             const seen = new Set();
             state.activeSectionKeys.forEach((sectionKey) => {
                 const nodes = state.nodesBySectionKey.get(sectionKey) || [];
@@ -2146,6 +2235,25 @@
             });
             if (objectState) {
                 objectState.captureScanNeeded = false;
+            }
+            return changed;
+        };
+        map.capturePendingPrototypeAnimals = function capturePendingPrototypeAnimals() {
+            const animalState = this._prototypeAnimalState;
+            if (!animalState || !(animalState.activeRuntimeAnimalsByRecordId instanceof Map)) return false;
+            let changed = false;
+            for (const runtimeAnimal of animalState.activeRuntimeAnimalsByRecordId.values()) {
+                if (!isPrototypeSavableAnimal(runtimeAnimal)) continue;
+                const currentSectionKey = this.getPrototypeSectionKeyForWorldPoint(runtimeAnimal.x, runtimeAnimal.y);
+                const previousSectionKey = (typeof runtimeAnimal._prototypeOwnerSectionKey === "string")
+                    ? runtimeAnimal._prototypeOwnerSectionKey
+                    : "";
+                if (!currentSectionKey) continue;
+                if (currentSectionKey !== previousSectionKey || runtimeAnimal._prototypeRuntimeRecord !== true) {
+                    if (upsertPrototypeAnimalRecord(runtimeAnimal)) {
+                        changed = true;
+                    }
+                }
             }
             return changed;
         };
@@ -2404,296 +2512,306 @@
             const syncStart = prototypeNow();
             const objectState = this._prototypeObjectState;
             if (!objectState) return false;
+            const previousSuppressClearanceUpdates = !!this._suppressClearanceUpdates;
+            this._suppressClearanceUpdates = true;
             this._prototypeSuppressObjectDirtyTracking = true;
-            const captureStart = prototypeNow();
-            const capturedAny = this.capturePendingPrototypeObjects();
-            const captureMs = prototypeNow() - captureStart;
-            const collectStart = prototypeNow();
-            const activeSectionKeys = this.getPrototypeActiveSectionKeys();
-            const desiredRecords = [];
-            activeSectionKeys.forEach((sectionKey) => {
-                const asset = this.getPrototypeSectionAsset(sectionKey);
-                const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
-                if (!Array.isArray(records)) return;
-                for (let i = 0; i < records.length; i++) {
-                    desiredRecords.push({ sectionKey, record: records[i] });
-                }
-            });
-            const desiredSignature = desiredRecords
-                .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
-                .join("|");
-            const collectMs = prototypeNow() - collectStart;
+            try {
+                const captureStart = prototypeNow();
+                const capturedAny = this.capturePendingPrototypeObjects();
+                const captureMs = prototypeNow() - captureStart;
+                const collectStart = prototypeNow();
+                const activeSectionKeys = this.getPrototypeActiveSectionKeys();
+                const desiredRecords = [];
+                activeSectionKeys.forEach((sectionKey) => {
+                    const asset = this.getPrototypeSectionAsset(sectionKey);
+                    const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
+                    if (!Array.isArray(records)) return;
+                    for (let i = 0; i < records.length; i++) {
+                        desiredRecords.push({ sectionKey, record: records[i] });
+                    }
+                });
+                const desiredSignature = desiredRecords
+                    .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
+                    .join("|");
+                const collectMs = prototypeNow() - collectStart;
 
-            if (!capturedAny && desiredSignature === objectState.activeRecordSignature) {
+                if (!capturedAny && desiredSignature === objectState.activeRecordSignature) {
+                    objectState.lastSyncStats = {
+                        ms: Number((prototypeNow() - syncStart).toFixed(2)),
+                        desired: desiredRecords.length,
+                        loaded: 0,
+                        removed: 0,
+                        active: objectState.activeRuntimeObjectsByRecordId instanceof Map ? objectState.activeRuntimeObjectsByRecordId.size : 0,
+                        captureMs: Number(captureMs.toFixed(2)),
+                        collectMs: Number(collectMs.toFixed(2)),
+                        stalePruneMs: 0,
+                        unloadMs: 0,
+                        loadMs: 0,
+                        roofLoadMs: 0,
+                        staticLoadMs: 0,
+                        roofLoaded: 0,
+                        staticLoaded: 0,
+                        roofRemoved: 0,
+                        staticRemoved: 0,
+                        roadRefreshMs: 0,
+                        roadRefreshCount: 0,
+                        invalidateMs: 0
+                    };
+                    return false;
+                }
+
+                if (!(objectState.activeRuntimeObjectsByRecordId instanceof Map)) {
+                    objectState.activeRuntimeObjectsByRecordId = new Map();
+                }
+
+                const staleRecordIds = [];
+                const stalePruneStart = prototypeNow();
+                for (const [recordId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
+                    if (runtimeObj && !runtimeObj.gone) continue;
+                    staleRecordIds.push(recordId);
+                }
+                for (let i = 0; i < staleRecordIds.length; i++) {
+                    objectState.activeRuntimeObjectsByRecordId.delete(staleRecordIds[i]);
+                }
+                const stalePruneMs = prototypeNow() - stalePruneStart;
+
+                const desiredRecordIds = new Set();
+                for (let i = 0; i < desiredRecords.length; i++) {
+                    const recordId = Number(desiredRecords[i] && desiredRecords[i].record && desiredRecords[i].record.id);
+                    if (Number.isInteger(recordId)) {
+                        desiredRecordIds.add(recordId);
+                    }
+                }
+
+                let removedAny = false;
+                let removedCount = 0;
+                let roofRemoved = 0;
+                let staticRemoved = 0;
+                let roadRefreshMs = 0;
+                let roadRefreshCount = 0;
+                const roadRefreshNodes = new Set();
+                const profileByType = new Map();
+                const bumpProfile = (profileKey, field, deltaValue = 1, msValue = 0) => {
+                    const key = (typeof profileKey === "string" && profileKey.length > 0) ? profileKey : "unknown";
+                    if (!profileByType.has(key)) {
+                        profileByType.set(key, { loaded: 0, removed: 0, ms: 0 });
+                    }
+                    const stats = profileByType.get(key);
+                    stats[field] = (Number(stats[field]) || 0) + deltaValue;
+                    stats.ms = (Number(stats.ms) || 0) + (Number(msValue) || 0);
+                };
+                const unloadStart = prototypeNow();
+                for (const [recordId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
+                    if (desiredRecordIds.has(recordId)) continue;
+                    if (!runtimeObj || runtimeObj.gone) {
+                        objectState.activeRuntimeObjectsByRecordId.delete(recordId);
+                        continue;
+                    }
+                    const runtimeProfileKey = getPrototypeObjectProfileKey(runtimeObj);
+                    if (runtimeObj.type === "roof") {
+                        removePrototypeRoofRuntime(runtimeObj);
+                        roofRemoved += 1;
+                        bumpProfile(runtimeProfileKey, "removed", 1, 0);
+                    } else if (typeof runtimeObj.removeFromGame === "function") {
+                        if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
+                            globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
+                            runtimeObj._deferRoadNeighborRefresh = true;
+                        }
+                        const removeStart = prototypeNow();
+                        runtimeObj.removeFromGame();
+                        if (runtimeObj.type === "road") {
+                            runtimeObj._deferRoadNeighborRefresh = false;
+                        }
+                        bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
+                        staticRemoved += 1;
+                    } else if (typeof runtimeObj.remove === "function") {
+                        if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
+                            globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
+                            runtimeObj._deferRoadNeighborRefresh = true;
+                        }
+                        const removeStart = prototypeNow();
+                        runtimeObj.remove();
+                        if (runtimeObj.type === "road") {
+                            runtimeObj._deferRoadNeighborRefresh = false;
+                        }
+                        bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
+                        staticRemoved += 1;
+                    }
+                    objectState.activeRuntimeObjectsByRecordId.delete(recordId);
+                    removedAny = true;
+                    removedCount += 1;
+                }
+                const unloadMs = prototypeNow() - unloadStart;
+
+                let loadedAny = false;
+                let loadedCount = 0;
+                let roofLoaded = 0;
+                let staticLoaded = 0;
+                let roofLoadMs = 0;
+                let staticLoadMs = 0;
+                let treeFinalizeMs = 0;
+                let treeLoadDebug = null;
+                const loadStart = prototypeNow();
+                const treeDebugEnabled = !!(
+                    globalScope.Tree &&
+                    typeof globalScope.Tree.beginPrototypeLoadDebugSession === "function" &&
+                    typeof globalScope.Tree.endPrototypeLoadDebugSession === "function"
+                );
+                if (treeDebugEnabled) {
+                    globalScope.Tree.beginPrototypeLoadDebugSession();
+                }
+                const deferredTrees = [];
+                for (let i = 0; i < desiredRecords.length; i++) {
+                    const entry = desiredRecords[i];
+                    if (entry && entry.record && !Number.isInteger(Number(entry.record.id))) {
+                        entry.record.id = objectState.nextRecordId++;
+                    }
+                    const recordId = Number(entry && entry.record && entry.record.id);
+                    if (!Number.isInteger(recordId)) continue;
+                    if (objectState.activeRuntimeObjectsByRecordId.has(recordId)) continue;
+                    let runtimeObj = null;
+                    const profileKey = getPrototypeObjectProfileKey(entry && entry.record);
+                    if (entry && entry.record && entry.record.type === "roof") {
+                        if (globalScope.Roof && typeof globalScope.Roof.loadJson === "function") {
+                            const roofStart = prototypeNow();
+                            runtimeObj = globalScope.Roof.loadJson(entry.record);
+                            const roofMs = prototypeNow() - roofStart;
+                            roofLoadMs += roofMs;
+                            if (runtimeObj) {
+                                if (!Array.isArray(globalScope.roofs)) globalScope.roofs = [];
+                                globalScope.roofs.push(runtimeObj);
+                                globalScope.roof = runtimeObj;
+                                if (Array.isArray(this.objects) && this.objects.indexOf(runtimeObj) < 0) {
+                                    this.objects.push(runtimeObj);
+                                }
+                                roofLoaded += 1;
+                                bumpProfile(profileKey, "loaded", 1, roofMs);
+                            }
+                        }
+                    } else if (globalScope.StaticObject && typeof globalScope.StaticObject.loadJson === "function") {
+                        const staticStart = prototypeNow();
+                        runtimeObj = globalScope.StaticObject.loadJson(entry.record, this, {
+                            deferRoadTextureRefresh: true,
+                            deferTreePostLoad: true
+                        });
+                        const staticMs = prototypeNow() - staticStart;
+                        staticLoadMs += staticMs;
+                        if (runtimeObj) {
+                            staticLoaded += 1;
+                            bumpProfile(profileKey, "loaded", 1, staticMs);
+                            if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
+                                globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
+                            }
+                            if (runtimeObj.type === "tree" && typeof runtimeObj.finalizeDeferredLoad === "function") {
+                                deferredTrees.push(runtimeObj);
+                            }
+                        }
+                    }
+                    if (!runtimeObj) continue;
+                    runtimeObj._prototypeRuntimeRecord = true;
+                    runtimeObj._prototypeObjectManaged = true;
+                    runtimeObj._prototypeRecordId = recordId;
+                    runtimeObj._prototypePersistenceSignature = buildPrototypeObjectPersistenceSignature(entry.record);
+                    runtimeObj._prototypeOwnerSectionKey = entry.sectionKey;
+                    runtimeObj._prototypeDirty = false;
+                    objectState.activeRuntimeObjectsByRecordId.set(recordId, runtimeObj);
+                    loadedAny = true;
+                    loadedCount += 1;
+                }
+                if (roadRefreshNodes.size > 0 && globalScope.Road && typeof globalScope.Road.refreshTexturesAroundNodes === "function") {
+                    const roadRefreshStart = prototypeNow();
+                    roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(roadRefreshNodes);
+                    roadRefreshMs = prototypeNow() - roadRefreshStart;
+                }
+                if (deferredTrees.length > 0) {
+                    const treeFinalizeStart = prototypeNow();
+                    for (let i = 0; i < deferredTrees.length; i++) {
+                        const tree = deferredTrees[i];
+                        if (tree && typeof tree.finalizeDeferredLoad === "function") {
+                            tree.finalizeDeferredLoad();
+                        }
+                    }
+                    treeFinalizeMs = prototypeNow() - treeFinalizeStart;
+                }
+                if (treeDebugEnabled) {
+                    treeLoadDebug = globalScope.Tree.endPrototypeLoadDebugSession();
+                }
+                const loadMs = prototypeNow() - loadStart;
+
+                objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+                objectState.activeRecordSignature = desiredSignature;
+                objectState.captureScanNeeded = false;
+
+                let invalidateMs = 0;
+                if ((capturedAny || removedAny || loadedAny) && typeof globalScope.invalidateMinimap === "function") {
+                    const invalidateStart = prototypeNow();
+                    globalScope.invalidateMinimap();
+                    invalidateMs = prototypeNow() - invalidateStart;
+                }
                 objectState.lastSyncStats = {
                     ms: Number((prototypeNow() - syncStart).toFixed(2)),
                     desired: desiredRecords.length,
-                    loaded: 0,
-                    removed: 0,
-                    active: objectState.activeRuntimeObjectsByRecordId instanceof Map ? objectState.activeRuntimeObjectsByRecordId.size : 0,
+                    loaded: loadedCount,
+                    removed: removedCount,
+                    active: objectState.activeRuntimeObjectsByRecordId.size,
                     captureMs: Number(captureMs.toFixed(2)),
                     collectMs: Number(collectMs.toFixed(2)),
-                    stalePruneMs: 0,
-                    unloadMs: 0,
-                    loadMs: 0,
-                    roofLoadMs: 0,
-                    staticLoadMs: 0,
-                    roofLoaded: 0,
-                    staticLoaded: 0,
-                    roofRemoved: 0,
-                    staticRemoved: 0,
-                    roadRefreshMs: 0,
-                    roadRefreshCount: 0,
-                    invalidateMs: 0
+                    stalePruneMs: Number(stalePruneMs.toFixed(2)),
+                    unloadMs: Number(unloadMs.toFixed(2)),
+                    loadMs: Number(loadMs.toFixed(2)),
+                    roofLoadMs: Number(roofLoadMs.toFixed(2)),
+                    staticLoadMs: Number(staticLoadMs.toFixed(2)),
+                    roofLoaded,
+                    staticLoaded,
+                    roofRemoved,
+                    staticRemoved,
+                    roadRefreshMs: Number(roadRefreshMs.toFixed(2)),
+                    roadRefreshCount,
+                    treeFinalizeMs: Number(treeFinalizeMs.toFixed(2)),
+                    treeLoadDebug: treeLoadDebug ? {
+                        treeCount: Number(treeLoadDebug.treeCount) || 0,
+                        constructorMs: Number((Number(treeLoadDebug.constructorMs) || 0).toFixed(2)),
+                        superMs: Number((Number(treeLoadDebug.superMs) || 0).toFixed(2)),
+                        constructorApplySizeMs: Number((Number(treeLoadDebug.constructorApplySizeMs) || 0).toFixed(2)),
+                        constructorMetadataKickoffMs: Number((Number(treeLoadDebug.constructorMetadataKickoffMs) || 0).toFixed(2)),
+                        loadJsonTreeCreateMs: Number((Number(treeLoadDebug.loadJsonTreeCreateMs) || 0).toFixed(2)),
+                        textureRestoreMs: Number((Number(treeLoadDebug.textureRestoreMs) || 0).toFixed(2)),
+                        sizeRestoreMs: Number((Number(treeLoadDebug.sizeRestoreMs) || 0).toFixed(2)),
+                        applySizeMs: Number((Number(treeLoadDebug.applySizeMs) || 0).toFixed(2)),
+                        refreshHitboxesMs: Number((Number(treeLoadDebug.refreshHitboxesMs) || 0).toFixed(2)),
+                        refreshVisibilityMs: Number((Number(treeLoadDebug.refreshVisibilityMs) || 0).toFixed(2)),
+                        finalizeTotalMs: Number((Number(treeLoadDebug.finalizeTotalMs) || 0).toFixed(2)),
+                        finalizeVisibilityMs: Number((Number(treeLoadDebug.finalizeVisibilityMs) || 0).toFixed(2)),
+                        finalizeMetadataKickoffMs: Number((Number(treeLoadDebug.finalizeMetadataKickoffMs) || 0).toFixed(2)),
+                        metadataKickoffMs: Number((Number(treeLoadDebug.metadataKickoffMs) || 0).toFixed(2)),
+                        metadataApplyMs: Number((Number(treeLoadDebug.metadataApplyMs) || 0).toFixed(2)),
+                        staticCtorNodeResolveMs: Number((Number(treeLoadDebug.staticCtorNodeResolveMs) || 0).toFixed(2)),
+                        staticCtorNodeAttachMs: Number((Number(treeLoadDebug.staticCtorNodeAttachMs) || 0).toFixed(2)),
+                        staticCtorTexturePickMs: Number((Number(treeLoadDebug.staticCtorTexturePickMs) || 0).toFixed(2)),
+                        staticCtorSpriteCreateMs: Number((Number(treeLoadDebug.staticCtorSpriteCreateMs) || 0).toFixed(2)),
+                        staticCtorSpriteAttachMs: Number((Number(treeLoadDebug.staticCtorSpriteAttachMs) || 0).toFixed(2)),
+                        staticCtorHitboxCreateMs: Number((Number(treeLoadDebug.staticCtorHitboxCreateMs) || 0).toFixed(2)),
+                        visibilitySamplePointCount: Number(treeLoadDebug.visibilitySamplePointCount) || 0,
+                        visibilityRegisteredNodeCount: Number(treeLoadDebug.visibilityRegisteredNodeCount) || 0
+                    } : null,
+                    byType: formatPrototypeObjectProfileMap(profileByType),
+                    invalidateMs: Number(invalidateMs.toFixed(2))
                 };
+                return capturedAny || removedAny || loadedAny;
+            } finally {
                 this._prototypeSuppressObjectDirtyTracking = false;
-                return false;
+                this._suppressClearanceUpdates = previousSuppressClearanceUpdates;
             }
-
-            if (!(objectState.activeRuntimeObjectsByRecordId instanceof Map)) {
-                objectState.activeRuntimeObjectsByRecordId = new Map();
-            }
-
-            const staleRecordIds = [];
-            const stalePruneStart = prototypeNow();
-            for (const [recordId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
-                if (runtimeObj && !runtimeObj.gone) continue;
-                staleRecordIds.push(recordId);
-            }
-            for (let i = 0; i < staleRecordIds.length; i++) {
-                objectState.activeRuntimeObjectsByRecordId.delete(staleRecordIds[i]);
-            }
-            const stalePruneMs = prototypeNow() - stalePruneStart;
-
-            const desiredRecordIds = new Set();
-            for (let i = 0; i < desiredRecords.length; i++) {
-                const recordId = Number(desiredRecords[i] && desiredRecords[i].record && desiredRecords[i].record.id);
-                if (Number.isInteger(recordId)) {
-                    desiredRecordIds.add(recordId);
-                }
-            }
-
-            let removedAny = false;
-            let removedCount = 0;
-            let roofRemoved = 0;
-            let staticRemoved = 0;
-            let roadRefreshMs = 0;
-            let roadRefreshCount = 0;
-            const roadRefreshNodes = new Set();
-            const profileByType = new Map();
-            const bumpProfile = (profileKey, field, deltaValue = 1, msValue = 0) => {
-                const key = (typeof profileKey === "string" && profileKey.length > 0) ? profileKey : "unknown";
-                if (!profileByType.has(key)) {
-                    profileByType.set(key, { loaded: 0, removed: 0, ms: 0 });
-                }
-                const stats = profileByType.get(key);
-                stats[field] = (Number(stats[field]) || 0) + deltaValue;
-                stats.ms = (Number(stats.ms) || 0) + (Number(msValue) || 0);
-            };
-            const unloadStart = prototypeNow();
-            for (const [recordId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
-                if (desiredRecordIds.has(recordId)) continue;
-                if (!runtimeObj || runtimeObj.gone) {
-                    objectState.activeRuntimeObjectsByRecordId.delete(recordId);
-                    continue;
-                }
-                const runtimeProfileKey = getPrototypeObjectProfileKey(runtimeObj);
-                if (runtimeObj.type === "roof") {
-                    removePrototypeRoofRuntime(runtimeObj);
-                    roofRemoved += 1;
-                    bumpProfile(runtimeProfileKey, "removed", 1, 0);
-                } else if (typeof runtimeObj.removeFromGame === "function") {
-                    if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
-                        globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
-                        runtimeObj._deferRoadNeighborRefresh = true;
-                    }
-                    const removeStart = prototypeNow();
-                    runtimeObj.removeFromGame();
-                    if (runtimeObj.type === "road") {
-                        runtimeObj._deferRoadNeighborRefresh = false;
-                    }
-                    bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
-                    staticRemoved += 1;
-                } else if (typeof runtimeObj.remove === "function") {
-                    if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
-                        globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
-                        runtimeObj._deferRoadNeighborRefresh = true;
-                    }
-                    const removeStart = prototypeNow();
-                    runtimeObj.remove();
-                    if (runtimeObj.type === "road") {
-                        runtimeObj._deferRoadNeighborRefresh = false;
-                    }
-                    bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
-                    staticRemoved += 1;
-                }
-                objectState.activeRuntimeObjectsByRecordId.delete(recordId);
-                removedAny = true;
-                removedCount += 1;
-            }
-            const unloadMs = prototypeNow() - unloadStart;
-
-            let loadedAny = false;
-            let loadedCount = 0;
-            let roofLoaded = 0;
-            let staticLoaded = 0;
-            let roofLoadMs = 0;
-            let staticLoadMs = 0;
-            let treeFinalizeMs = 0;
-            let treeLoadDebug = null;
-            const loadStart = prototypeNow();
-            const treeDebugEnabled = !!(
-                globalScope.Tree &&
-                typeof globalScope.Tree.beginPrototypeLoadDebugSession === "function" &&
-                typeof globalScope.Tree.endPrototypeLoadDebugSession === "function"
-            );
-            if (treeDebugEnabled) {
-                globalScope.Tree.beginPrototypeLoadDebugSession();
-            }
-            const deferredTrees = [];
-            for (let i = 0; i < desiredRecords.length; i++) {
-                const entry = desiredRecords[i];
-                if (entry && entry.record && !Number.isInteger(Number(entry.record.id))) {
-                    entry.record.id = objectState.nextRecordId++;
-                }
-                const recordId = Number(entry && entry.record && entry.record.id);
-                if (!Number.isInteger(recordId)) continue;
-                if (objectState.activeRuntimeObjectsByRecordId.has(recordId)) continue;
-                let runtimeObj = null;
-                const profileKey = getPrototypeObjectProfileKey(entry && entry.record);
-                if (entry && entry.record && entry.record.type === "roof") {
-                    if (globalScope.Roof && typeof globalScope.Roof.loadJson === "function") {
-                        const roofStart = prototypeNow();
-                        runtimeObj = globalScope.Roof.loadJson(entry.record);
-                        const roofMs = prototypeNow() - roofStart;
-                        roofLoadMs += roofMs;
-                        if (runtimeObj) {
-                            if (!Array.isArray(globalScope.roofs)) globalScope.roofs = [];
-                            globalScope.roofs.push(runtimeObj);
-                            globalScope.roof = runtimeObj;
-                            if (Array.isArray(this.objects) && this.objects.indexOf(runtimeObj) < 0) {
-                                this.objects.push(runtimeObj);
-                            }
-                            roofLoaded += 1;
-                            bumpProfile(profileKey, "loaded", 1, roofMs);
-                        }
-                    }
-                } else if (globalScope.StaticObject && typeof globalScope.StaticObject.loadJson === "function") {
-                    const staticStart = prototypeNow();
-                    runtimeObj = globalScope.StaticObject.loadJson(entry.record, this, {
-                        deferRoadTextureRefresh: true,
-                        deferTreePostLoad: true
-                    });
-                    const staticMs = prototypeNow() - staticStart;
-                    staticLoadMs += staticMs;
-                    if (runtimeObj) {
-                        staticLoaded += 1;
-                        bumpProfile(profileKey, "loaded", 1, staticMs);
-                        if (runtimeObj.type === "road" && globalScope.Road && typeof globalScope.Road.collectRefreshNodesFromNode === "function") {
-                            globalScope.Road.collectRefreshNodesFromNode(typeof runtimeObj.getNode === "function" ? runtimeObj.getNode() : runtimeObj.node, roadRefreshNodes);
-                        }
-                        if (runtimeObj.type === "tree" && typeof runtimeObj.finalizeDeferredLoad === "function") {
-                            deferredTrees.push(runtimeObj);
-                        }
-                    }
-                }
-                if (!runtimeObj) continue;
-                runtimeObj._prototypeRuntimeRecord = true;
-                runtimeObj._prototypeObjectManaged = true;
-                runtimeObj._prototypeRecordId = recordId;
-                runtimeObj._prototypePersistenceSignature = buildPrototypeObjectPersistenceSignature(entry.record);
-                runtimeObj._prototypeOwnerSectionKey = entry.sectionKey;
-                runtimeObj._prototypeDirty = false;
-                objectState.activeRuntimeObjectsByRecordId.set(recordId, runtimeObj);
-                loadedAny = true;
-                loadedCount += 1;
-            }
-            if (roadRefreshNodes.size > 0 && globalScope.Road && typeof globalScope.Road.refreshTexturesAroundNodes === "function") {
-                const roadRefreshStart = prototypeNow();
-                roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(roadRefreshNodes);
-                roadRefreshMs = prototypeNow() - roadRefreshStart;
-            }
-            if (deferredTrees.length > 0) {
-                const treeFinalizeStart = prototypeNow();
-                for (let i = 0; i < deferredTrees.length; i++) {
-                    const tree = deferredTrees[i];
-                    if (tree && typeof tree.finalizeDeferredLoad === "function") {
-                        tree.finalizeDeferredLoad();
-                    }
-                }
-                treeFinalizeMs = prototypeNow() - treeFinalizeStart;
-            }
-            if (treeDebugEnabled) {
-                treeLoadDebug = globalScope.Tree.endPrototypeLoadDebugSession();
-            }
-            const loadMs = prototypeNow() - loadStart;
-
-            objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
-            objectState.activeRecordSignature = desiredSignature;
-            objectState.captureScanNeeded = false;
-            this._prototypeSuppressObjectDirtyTracking = false;
-
-            let invalidateMs = 0;
-            if ((capturedAny || removedAny || loadedAny) && typeof globalScope.invalidateMinimap === "function") {
-                const invalidateStart = prototypeNow();
-                globalScope.invalidateMinimap();
-                invalidateMs = prototypeNow() - invalidateStart;
-            }
-            objectState.lastSyncStats = {
-                ms: Number((prototypeNow() - syncStart).toFixed(2)),
-                desired: desiredRecords.length,
-                loaded: loadedCount,
-                removed: removedCount,
-                active: objectState.activeRuntimeObjectsByRecordId.size,
-                captureMs: Number(captureMs.toFixed(2)),
-                collectMs: Number(collectMs.toFixed(2)),
-                stalePruneMs: Number(stalePruneMs.toFixed(2)),
-                unloadMs: Number(unloadMs.toFixed(2)),
-                loadMs: Number(loadMs.toFixed(2)),
-                roofLoadMs: Number(roofLoadMs.toFixed(2)),
-                staticLoadMs: Number(staticLoadMs.toFixed(2)),
-                roofLoaded,
-                staticLoaded,
-                roofRemoved,
-                staticRemoved,
-                roadRefreshMs: Number(roadRefreshMs.toFixed(2)),
-                roadRefreshCount,
-                treeFinalizeMs: Number(treeFinalizeMs.toFixed(2)),
-                treeLoadDebug: treeLoadDebug ? {
-                    treeCount: Number(treeLoadDebug.treeCount) || 0,
-                    constructorMs: Number((Number(treeLoadDebug.constructorMs) || 0).toFixed(2)),
-                    superMs: Number((Number(treeLoadDebug.superMs) || 0).toFixed(2)),
-                    constructorApplySizeMs: Number((Number(treeLoadDebug.constructorApplySizeMs) || 0).toFixed(2)),
-                    constructorMetadataKickoffMs: Number((Number(treeLoadDebug.constructorMetadataKickoffMs) || 0).toFixed(2)),
-                    loadJsonTreeCreateMs: Number((Number(treeLoadDebug.loadJsonTreeCreateMs) || 0).toFixed(2)),
-                    textureRestoreMs: Number((Number(treeLoadDebug.textureRestoreMs) || 0).toFixed(2)),
-                    sizeRestoreMs: Number((Number(treeLoadDebug.sizeRestoreMs) || 0).toFixed(2)),
-                    applySizeMs: Number((Number(treeLoadDebug.applySizeMs) || 0).toFixed(2)),
-                    refreshHitboxesMs: Number((Number(treeLoadDebug.refreshHitboxesMs) || 0).toFixed(2)),
-                    refreshVisibilityMs: Number((Number(treeLoadDebug.refreshVisibilityMs) || 0).toFixed(2)),
-                    finalizeTotalMs: Number((Number(treeLoadDebug.finalizeTotalMs) || 0).toFixed(2)),
-                    finalizeVisibilityMs: Number((Number(treeLoadDebug.finalizeVisibilityMs) || 0).toFixed(2)),
-                    finalizeMetadataKickoffMs: Number((Number(treeLoadDebug.finalizeMetadataKickoffMs) || 0).toFixed(2)),
-                    metadataKickoffMs: Number((Number(treeLoadDebug.metadataKickoffMs) || 0).toFixed(2)),
-                    metadataApplyMs: Number((Number(treeLoadDebug.metadataApplyMs) || 0).toFixed(2)),
-                    staticCtorNodeResolveMs: Number((Number(treeLoadDebug.staticCtorNodeResolveMs) || 0).toFixed(2)),
-                    staticCtorNodeAttachMs: Number((Number(treeLoadDebug.staticCtorNodeAttachMs) || 0).toFixed(2)),
-                    staticCtorTexturePickMs: Number((Number(treeLoadDebug.staticCtorTexturePickMs) || 0).toFixed(2)),
-                    staticCtorSpriteCreateMs: Number((Number(treeLoadDebug.staticCtorSpriteCreateMs) || 0).toFixed(2)),
-                    staticCtorSpriteAttachMs: Number((Number(treeLoadDebug.staticCtorSpriteAttachMs) || 0).toFixed(2)),
-                    staticCtorHitboxCreateMs: Number((Number(treeLoadDebug.staticCtorHitboxCreateMs) || 0).toFixed(2)),
-                    visibilitySamplePointCount: Number(treeLoadDebug.visibilitySamplePointCount) || 0,
-                    visibilityRegisteredNodeCount: Number(treeLoadDebug.visibilityRegisteredNodeCount) || 0
-                } : null,
-                byType: formatPrototypeObjectProfileMap(profileByType),
-                invalidateMs: Number(invalidateMs.toFixed(2))
-            };
-            return capturedAny || removedAny || loadedAny;
         };
         map.syncPrototypeAnimals = function syncPrototypeAnimals() {
             const syncStart = prototypeNow();
             const animalState = this._prototypeAnimalState;
             if (!animalState) return false;
+            const captureStart = prototypeNow();
+            const capturedAny = (typeof this.capturePendingPrototypeAnimals === "function")
+                ? this.capturePendingPrototypeAnimals()
+                : false;
+            const captureMs = prototypeNow() - captureStart;
             const activeSectionKeys = this.getPrototypeActiveSectionKeys();
             const desiredRecords = [];
             activeSectionKeys.forEach((sectionKey) => {
@@ -2708,6 +2826,14 @@
                 .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
                 .join("|");
             if (desiredSignature === animalState.activeRecordSignature) {
+                animalState.lastSyncStats = {
+                    ms: Number((prototypeNow() - syncStart).toFixed(2)),
+                    desired: desiredRecords.length,
+                    loaded: 0,
+                    removed: 0,
+                    active: animalState.activeRuntimeAnimalsByRecordId instanceof Map ? animalState.activeRuntimeAnimalsByRecordId.size : 0,
+                    captureMs: Number(captureMs.toFixed(2))
+                };
                 return false;
             }
             if (!(animalState.activeRuntimeAnimalsByRecordId instanceof Map)) {
@@ -2766,9 +2892,10 @@
                 desired: desiredRecords.length,
                 loaded: loadedCount,
                 removed: removedCount,
-                active: animalState.activeRuntimeAnimalsByRecordId.size
+                active: animalState.activeRuntimeAnimalsByRecordId.size,
+                captureMs: Number(captureMs.toFixed(2))
             };
-            return removedAny || loadedAny;
+            return capturedAny || removedAny || loadedAny;
         };
         map.syncPrototypePowerups = function syncPrototypePowerups() {
             const syncStart = prototypeNow();
@@ -2930,6 +3057,16 @@
             globalScope.RUNAROUND_PROTOTYPE_WIZARD_STATE = JSON.parse(JSON.stringify(manifest.wizard));
         } else {
             globalScope.RUNAROUND_PROTOTYPE_WIZARD_STATE = null;
+        }
+
+        const savedMazeMode = (
+            manifest &&
+            manifest.los &&
+            typeof manifest.los === "object" &&
+            typeof manifest.los.mazeMode === "boolean"
+        ) ? manifest.los.mazeMode : null;
+        if (typeof globalScope.applySavedLosMazeModeValue === "function") {
+            globalScope.applySavedLosMazeModeValue(savedMazeMode);
         }
 
         if (manifest.wizard && Number.isFinite(manifest.wizard.x) && Number.isFinite(manifest.wizard.y)) {

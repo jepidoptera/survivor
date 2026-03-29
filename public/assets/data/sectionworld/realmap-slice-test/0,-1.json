@@ -17148,6 +17148,8 @@
       "scriptingName": "wallsection415"
     }
   ],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "triggerArea",
@@ -17299,6 +17301,28 @@
           "y": 116.29375000000005
         }
       ]
+    },
+    {
+      "type": "tree",
+      "x": 142.89,
+      "y": 162,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 147.22,
+      "y": 163.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
     },
     {
       "type": "tree",
@@ -17611,17 +17635,6 @@
     },
     {
       "type": "tree",
-      "x": 142.89,
-      "y": 162,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 144.62199999999999,
       "y": 154,
       "tint": 16777215,
@@ -17629,17 +17642,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 147.22,
-      "y": 163.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
       "size": 4
     },
     {
@@ -18513,24 +18515,8 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": 148.086,
-      "y": 152,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.49189387675932844,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel7"
-    },
-    {
-      "type": "squirrel",
-      "x": 143.05653846153825,
-      "y": 163.71153846153834,
+      "x": 132.498,
+      "y": 146.39999999999986,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18545,24 +18531,24 @@
     },
     {
       "type": "squirrel",
-      "x": 101.25538461538486,
-      "y": 109.8846153846153,
+      "x": 109.61561538461558,
+      "y": 129.36538461538453,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.5498504588009326,
+      "size": 0.5118425385768338,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel15"
+      "scriptingName": "squirrel46"
     },
     {
       "type": "squirrel",
-      "x": 116.91,
-      "y": 141,
+      "x": 136.828,
+      "y": 171.5,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18577,8 +18563,24 @@
     },
     {
       "type": "squirrel",
-      "x": 89.09807692307692,
-      "y": 115.8269230769231,
+      "x": 129.3804,
+      "y": 172.20000000000005,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5635060052881098,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel63"
+    },
+    {
+      "type": "squirrel",
+      "x": 101.322,
+      "y": 120,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18593,24 +18595,40 @@
     },
     {
       "type": "squirrel",
-      "x": 112.71323076923102,
-      "y": 148.5,
+      "x": 131.63199999999995,
+      "y": 174.4999999999999,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.5483360569194656,
+      "size": 0.542391967957377,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel131"
+      "scriptingName": "squirrel125"
+    },
+    {
+      "type": "squirrel",
+      "x": 125.10369230769243,
+      "y": 157.80769230769238,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5399127603443092,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel170"
     },
     {
       "type": "deer",
-      "x": 125.9163999999999,
-      "y": 166.19999999999982,
+      "x": 127.99479999999983,
+      "y": 162.39999999999964,
       "hp": 12.459465507078637,
       "maxHp": 12.459465507078637,
       "mp": 12.459465507078637,
@@ -18625,8 +18643,8 @@
     },
     {
       "type": "deer",
-      "x": 102.82084615384679,
-      "y": 108,
+      "x": 95.00020000000006,
+      "y": 118.64999999999986,
       "hp": 12.4278507323389,
       "maxHp": 12.4278507323389,
       "mp": 12.4278507323389,
@@ -18641,8 +18659,8 @@
     },
     {
       "type": "bear",
-      "x": 150.5507692307699,
-      "y": 155.5,
+      "x": 158.7278076923078,
+      "y": 158.43269230769226,
       "hp": 42.480179990187644,
       "maxHp": 42.480179990187644,
       "mp": 42.480179990187644,
@@ -18693,8 +18711,8 @@
     },
     {
       "type": "eagleman",
-      "x": 121.93280000000004,
-      "y": 109.89999999999998,
+      "x": 123.75139999999999,
+      "y": 111.05000000000001,
       "hp": 115.46961897635643,
       "maxHp": 115.46961897635643,
       "mp": 230.93923795271286,
@@ -18710,7 +18728,7 @@
     {
       "type": "blodia",
       "x": 120.374,
-      "y": 100,
+      "y": 99,
       "hp": 75.8675759716394,
       "maxHp": 75.8675759716394,
       "mp": 75.8675759716394,

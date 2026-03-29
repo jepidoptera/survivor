@@ -7677,6 +7677,8 @@
     "399,250": 2
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "road",
@@ -11206,24 +11208,8 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": 334.27599999999995,
-      "y": 215.89999999999986,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5193998296502035,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel27"
-    },
-    {
-      "type": "squirrel",
-      "x": 325.3495384615386,
-      "y": 222,
+      "x": 319.35415384615374,
+      "y": 198,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -11238,40 +11224,8 @@
     },
     {
       "type": "squirrel",
-      "x": 316.08999999999935,
-      "y": 222,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.4035040292666316,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel57"
-    },
-    {
-      "type": "squirrel",
-      "x": 341.0307999999999,
-      "y": 183.60000000000002,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.49125925523445196,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel108"
-    },
-    {
-      "type": "squirrel",
-      "x": 334.9687999999999,
-      "y": 168.9000000000001,
+      "x": 331.50480000000005,
+      "y": 179.89999999999998,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -11286,8 +11240,8 @@
     },
     {
       "type": "deer",
-      "x": 322.78484615384684,
-      "y": 237,
+      "x": 321.19939999999895,
+      "y": 237.0500000000004,
       "hp": 12.424894588810478,
       "maxHp": 12.424894588810478,
       "mp": 12.424894588810478,
@@ -11302,8 +11256,8 @@
     },
     {
       "type": "deer",
-      "x": 321.6856923076921,
-      "y": 225.30769230769238,
+      "x": 331.93780000000095,
+      "y": 232.15000000000032,
       "hp": 12.486126649968504,
       "maxHp": 12.486126649968504,
       "mp": 12.486126649968504,
@@ -11315,22 +11269,6 @@
       "tint": 16777215,
       "chaseRadius": -1,
       "scriptingName": "deer20"
-    },
-    {
-      "type": "deer",
-      "x": 333.6265000000003,
-      "y": 240.3750000000001,
-      "hp": 12.496523679389941,
-      "maxHp": 12.496523679389941,
-      "mp": 12.496523679389941,
-      "maxMp": 12.496523679389941,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.1980289957737726,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer63"
     }
   ],
   "powerups": []

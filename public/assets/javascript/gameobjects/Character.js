@@ -1737,6 +1737,36 @@ class Character {
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
+    ensureMagicPointsInitialized(resetCurrent = false) {
+        const fallbackHp = Number.isFinite(this.hp) ? Number(this.hp) : 0;
+        const fallbackMaxHp = Math.max(
+            fallbackHp,
+            Number.isFinite(this.maxHp)
+                ? Number(this.maxHp)
+                : (Number.isFinite(this.maxHP) ? Number(this.maxHP) : 0)
+        );
+        if (!Number.isFinite(this.maxHp) || this.maxHp < fallbackHp) {
+            this.maxHp = fallbackMaxHp;
+        }
+        if (!Number.isFinite(this.maxHP) || this.maxHP < this.maxHp) {
+            this.maxHP = this.maxHp;
+        }
+        if (resetCurrent || !Number.isFinite(this.mp)) {
+            this.mp = fallbackHp;
+        }
+        const existingMaxMp = Number.isFinite(this.maxMp)
+            ? Number(this.maxMp)
+            : (Number.isFinite(this.maxMP) ? Number(this.maxMP) : null);
+        const normalizedMaxMp = Number.isFinite(existingMaxMp)
+            ? Math.max(0, existingMaxMp)
+            : fallbackMaxHp;
+        this.maxMp = resetCurrent ? fallbackMaxHp : normalizedMaxMp;
+        this.maxMP = this.maxMp;
+        if (Number.isFinite(this.mp)) {
+            this.mp = Math.max(0, Math.min(Number(this.mp), this.maxMp));
+        }
+        return this.mp;
+    }
     getTemperatureBaseline() {
         return Number.isFinite(this.baselineTemperature) ? Number(this.baselineTemperature) : 0;
     }
@@ -2014,6 +2044,28 @@ class Character {
             this.moving = false;
             return;
         }
+
+        const currentNodeIsActive = (
+            this.map &&
+            typeof this.map.isPrototypeNodeActive === "function" &&
+            this.node
+        )
+            ? this.map.isPrototypeNodeActive(this.node)
+            : !!this.node;
+        if (!currentNodeIsActive) {
+            this.node = (this.map && typeof this.map.worldToNode === "function")
+                ? this.map.worldToNode(this.x, this.y)
+                : this.node;
+        }
+        if (!this.node) {
+            this._movementSuspendedByStreaming = true;
+            this.destination = null;
+            this.path = [];
+            this.nextNode = null;
+            this.travelFrames = 0;
+            this.moving = false;
+            return;
+        }
         
         this.moving = true;
         const moveStartX = this.x;
@@ -2035,14 +2087,28 @@ class Character {
             
             // Get next node from path
             this.nextNode = this.path.shift();
-            this.directionIndex = this.node.neighbors.indexOf(this.nextNode);
-
             if (!this.nextNode) {
                 // Reached destination
                 this.destination = null;
                 this.moving = false;
                 return;
             }
+            if (
+                this.map &&
+                typeof this.map.isPrototypeNodeActive === "function" &&
+                !this.map.isPrototypeNodeActive(this.nextNode)
+            ) {
+                this._movementSuspendedByStreaming = true;
+                this.destination = null;
+                this.path = [];
+                this.nextNode = null;
+                this.travelFrames = 0;
+                this.moving = false;
+                return;
+            }
+            this.directionIndex = Array.isArray(this.node.neighbors)
+                ? this.node.neighbors.indexOf(this.nextNode)
+                : -1;
             
             // Calculate travel parameters using world coordinates
             let xdist = (this.map && typeof this.map.shortestDeltaX === "function")

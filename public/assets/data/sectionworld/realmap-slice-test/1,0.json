@@ -14790,6 +14790,8 @@
       "scriptingName": "wallsection264"
     }
   ],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "placedObject",
@@ -14824,160 +14826,6 @@
     },
     {
       "type": "road",
-      "x": 217.36599999999999,
-      "y": 198,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 217.36599999999999,
-      "y": 205,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 218.232,
-      "y": 198.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 218.232,
-      "y": 203.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 218.232,
-      "y": 204.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 199,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 200,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 201,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 202,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 203,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 204,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.09799999999998,
-      "y": 205,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.964,
-      "y": 201.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.964,
-      "y": 202.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.964,
-      "y": 203.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 219.964,
-      "y": 204.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 220.82999999999998,
-      "y": 201,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 220.82999999999998,
-      "y": 202,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 220.82999999999998,
-      "y": 203,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 221.696,
-      "y": 200.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 221.696,
-      "y": 201.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 221.696,
-      "y": 202.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
       "x": 216.5,
       "y": 206.5,
       "tint": 16777215,
@@ -14994,6 +14842,20 @@
       "type": "road",
       "x": 216.5,
       "y": 208.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 217.36599999999999,
+      "y": 198,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 217.36599999999999,
+      "y": 205,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -15021,6 +14883,27 @@
     {
       "type": "road",
       "x": 218.232,
+      "y": 198.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 218.232,
+      "y": 203.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 218.232,
+      "y": 204.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 218.232,
       "y": 205.5,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
@@ -15042,7 +14925,126 @@
     {
       "type": "road",
       "x": 219.09799999999998,
+      "y": 199,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 200,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 201,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 202,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 203,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 204,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
+      "y": 205,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.09799999999998,
       "y": 206,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.964,
+      "y": 201.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.964,
+      "y": 202.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.964,
+      "y": 203.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 219.964,
+      "y": 204.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 220.82999999999998,
+      "y": 201,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 220.82999999999998,
+      "y": 202,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 220.82999999999998,
+      "y": 203,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 221.696,
+      "y": 200.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 221.696,
+      "y": 201.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 221.696,
+      "y": 202.5,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -15916,13 +15918,6 @@
     },
     {
       "type": "road",
-      "x": 262.398,
-      "y": 206,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
       "x": 263.264,
       "y": 204.5,
       "tint": 16777215,
@@ -15937,29 +15932,8 @@
     },
     {
       "type": "road",
-      "x": 263.264,
-      "y": 206.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
       "x": 264.13,
       "y": 205,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 264.13,
-      "y": 206,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 264.13,
-      "y": 207,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -15972,29 +15946,8 @@
     },
     {
       "type": "road",
-      "x": 264.996,
-      "y": 206.5,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
       "x": 265.862,
       "y": 205,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 265.862,
-      "y": 206,
-      "tint": 16777215,
-      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
-    },
-    {
-      "type": "road",
-      "x": 265.862,
-      "y": 207,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -16002,6 +15955,55 @@
       "type": "road",
       "x": 266.728,
       "y": 205.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 262.398,
+      "y": 206,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 263.264,
+      "y": 206.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 264.13,
+      "y": 206,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 264.13,
+      "y": 207,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 264.996,
+      "y": 206.5,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 265.862,
+      "y": 206,
+      "tint": 16777215,
+      "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "road",
+      "x": 265.862,
+      "y": 207,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
     },
@@ -16928,6 +16930,50 @@
       "y": 200,
       "tint": 16777215,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg"
+    },
+    {
+      "type": "tree",
+      "x": 217.36599999999999,
+      "y": 185,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 217.36599999999999,
+      "y": 193,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.09799999999998,
+      "y": 196,
+      "tint": 16777215,
+      "hp": 56.11874999990687,
+      "maxHP": 56.11874999990687,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.244749999996275
+    },
+    {
+      "type": "tree",
+      "x": 220.82999999999998,
+      "y": 199,
+      "tint": 16777215,
+      "hp": 75.01250000018625,
+      "maxHP": 75.01250000018625,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 3.00050000000745
     },
     {
       "type": "tree",
@@ -16953,6 +16999,17 @@
     },
     {
       "type": "tree",
+      "x": 221.696,
+      "y": 218.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 222.562,
       "y": 176,
       "tint": 16777215,
@@ -16960,6 +17017,17 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 222.562,
+      "y": 197,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
       "size": 4
     },
     {
@@ -16986,6 +17054,17 @@
     },
     {
       "type": "tree",
+      "x": 224.294,
+      "y": 214.0323984375,
+      "tint": 16777215,
+      "hp": 59.31874999962747,
+      "maxHP": 59.31874999962747,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.372749999985099
+    },
+    {
+      "type": "tree",
       "x": 225.16,
       "y": 185.5,
       "tint": 16777215,
@@ -16993,6 +17072,39 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 225.16,
+      "y": 198.5,
+      "tint": 16777215,
+      "hp": 121.7625000001863,
+      "maxHP": 121.7625000001863,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.870500000007452
+    },
+    {
+      "type": "tree",
+      "x": 225.16,
+      "y": 221.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 225.16,
+      "y": 230.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -17008,6 +17120,17 @@
     },
     {
       "type": "tree",
+      "x": 226.892,
+      "y": 222.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 227.758,
       "y": 172,
       "tint": 16777215,
@@ -17015,6 +17138,39 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 227.758,
+      "y": 196,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 227.758,
+      "y": 227,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 227.758,
+      "y": 229,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -17041,6 +17197,28 @@
     },
     {
       "type": "tree",
+      "x": 230.356,
+      "y": 194.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 230.356,
+      "y": 230.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 231.222,
       "y": 184,
       "tint": 16777215,
@@ -17048,6 +17226,61 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 231.222,
+      "y": 206,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 231.222,
+      "y": 224,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 231.222,
+      "y": 226,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 232.954,
+      "y": 199,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 232.954,
+      "y": 230,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -17060,6 +17293,17 @@
       "isOnFire": false,
       "textureIndex": 3,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 233.82,
+      "y": 206.522734375,
+      "tint": 16777215,
+      "hp": 40.63750000018626,
+      "maxHP": 40.63750000018626,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 1.6255000000074504
     },
     {
       "type": "tree",
@@ -17085,8 +17329,41 @@
     },
     {
       "type": "tree",
+      "x": 234.686,
+      "y": 204.0261171875,
+      "tint": 16777215,
+      "hp": 40.61874999944121,
+      "maxHP": 40.61874999944121,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 1.6247499999776482
+    },
+    {
+      "type": "tree",
       "x": 236.418,
       "y": 184,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 236.418,
+      "y": 211,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 236.418,
+      "y": 214,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17107,6 +17384,127 @@
     },
     {
       "type": "tree",
+      "x": 237.284,
+      "y": 197.536265625,
+      "tint": 16777215,
+      "hp": 146.84374999999997,
+      "maxHP": 146.84374999999997,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 5.873749999999999
+    },
+    {
+      "type": "tree",
+      "x": 237.284,
+      "y": 221.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 237.284,
+      "y": 224.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 238.15,
+      "y": 225,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 239.016,
+      "y": 215.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 239.016,
+      "y": 222.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 239.882,
+      "y": 191.0464140625,
+      "tint": 16777215,
+      "hp": 103.3125,
+      "maxHP": 103.3125,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4.1325
+    },
+    {
+      "type": "tree",
+      "x": 239.882,
+      "y": 209,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 239.882,
+      "y": 211,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 239.882,
+      "y": 239,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 240.748,
+      "y": 200.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 241.614,
       "y": 164,
       "tint": 16777215,
@@ -17118,6 +17516,39 @@
     },
     {
       "type": "tree",
+      "x": 241.614,
+      "y": 194.0063046875,
+      "tint": 16777215,
+      "hp": 159.3312500007451,
+      "maxHP": 159.3312500007451,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 6.373250000029803
+    },
+    {
+      "type": "tree",
+      "x": 241.614,
+      "y": 207.0063046875,
+      "tint": 16777215,
+      "hp": 43.768749999813735,
+      "maxHP": 43.768749999813735,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 1.7507499999925495
+    },
+    {
+      "type": "tree",
+      "x": 241.614,
+      "y": 211.0063046875,
+      "tint": 16777215,
+      "hp": 46.887500000186265,
+      "maxHP": 46.887500000186265,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 1.8755000000074507
+    },
+    {
+      "type": "tree",
       "x": 242.48,
       "y": 167.5,
       "tint": 16777215,
@@ -17125,6 +17556,17 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 242.48,
+      "y": 219.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
       "size": 4
     },
     {
@@ -17184,6 +17626,50 @@
     },
     {
       "type": "tree",
+      "x": 244.212,
+      "y": 199.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 244.212,
+      "y": 201.516453125,
+      "tint": 16777215,
+      "hp": 59.325000000186265,
+      "maxHP": 59.325000000186265,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 2.3730000000074507
+    },
+    {
+      "type": "tree",
+      "x": 244.212,
+      "y": 217.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 244.212,
+      "y": 240.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 245.078,
       "y": 188,
       "tint": 16777215,
@@ -17191,6 +17677,28 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 245.078,
+      "y": 212.0198359375,
+      "tint": 16777215,
+      "hp": 50.05624999944121,
+      "maxHP": 50.05624999944121,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 2.002249999977648
+    },
+    {
+      "type": "tree",
+      "x": 245.078,
+      "y": 226,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -17217,6 +17725,61 @@
     },
     {
       "type": "tree",
+      "x": 245.944,
+      "y": 190.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 245.944,
+      "y": 194.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 245.944,
+      "y": 202.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 245.944,
+      "y": 222.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 245.944,
+      "y": 228.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 246.81,
       "y": 168,
       "tint": 16777215,
@@ -17224,6 +17787,39 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 246.81,
+      "y": 212.0266015625,
+      "tint": 16777215,
+      "hp": 134.23749999981374,
+      "maxHP": 134.23749999981374,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 5.3694999999925495
+    },
+    {
+      "type": "tree",
+      "x": 246.81,
+      "y": 234,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 247.676,
+      "y": 193.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
       "size": 4
     },
     {
@@ -17239,6 +17835,72 @@
     },
     {
       "type": "tree",
+      "x": 248.542,
+      "y": 203.0333671875,
+      "tint": 16777215,
+      "hp": 63.04374999925494,
+      "maxHP": 63.04374999925494,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.5217499999701976
+    },
+    {
+      "type": "tree",
+      "x": 248.542,
+      "y": 231,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 248.542,
+      "y": 239,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 249.408,
+      "y": 218.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 249.408,
+      "y": 221.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 249.408,
+      "y": 225.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 250.274,
       "y": 172,
       "tint": 16777215,
@@ -17250,8 +17912,63 @@
     },
     {
       "type": "tree",
+      "x": 250.274,
+      "y": 211.0401328125,
+      "tint": 16777215,
+      "hp": 62.46875000000001,
+      "maxHP": 62.46875000000001,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 2.4987500000000002
+    },
+    {
+      "type": "tree",
+      "x": 251.14,
+      "y": 192.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 251.14,
+      "y": 224.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 251.14,
+      "y": 239.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 252.006,
       "y": 172,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 252.006,
+      "y": 218,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17302,6 +18019,17 @@
       "isOnFire": false,
       "textureIndex": 0,
       "size": 20
+    },
+    {
+      "type": "tree",
+      "x": 253.738,
+      "y": 229,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
     },
     {
       "type": "tree",
@@ -17360,6 +18088,28 @@
     },
     {
       "type": "tree",
+      "x": 255.47,
+      "y": 215.0135546875,
+      "tint": 16777215,
+      "hp": 146.53749999962747,
+      "maxHP": 146.53749999962747,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 5.8614999999850985
+    },
+    {
+      "type": "tree",
+      "x": 255.47,
+      "y": 225,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 256.336,
       "y": 157.5,
       "tint": 16777215,
@@ -17382,6 +18132,28 @@
     },
     {
       "type": "tree",
+      "x": 257.202,
+      "y": 225,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 258.068,
+      "y": 232.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 258.934,
       "y": 166,
       "tint": 16777215,
@@ -17395,6 +18167,28 @@
       "type": "tree",
       "x": 258.934,
       "y": 174,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 258.934,
+      "y": 190,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 258.934,
+      "y": 219,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17448,6 +18242,39 @@
     },
     {
       "type": "tree",
+      "x": 260.666,
+      "y": 201.0338515625,
+      "tint": 16777215,
+      "hp": 153.16249999962747,
+      "maxHP": 153.16249999962747,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 6.126499999985099
+    },
+    {
+      "type": "tree",
+      "x": 260.666,
+      "y": 214,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 261.532,
+      "y": 190.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 262.398,
       "y": 158,
       "tint": 16777215,
@@ -17470,6 +18297,17 @@
     },
     {
       "type": "tree",
+      "x": 262.398,
+      "y": 191,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 263.264,
       "y": 155.5,
       "tint": 16777215,
@@ -17478,6 +18316,39 @@
       "isOnFire": false,
       "textureIndex": 4,
       "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 263.264,
+      "y": 198.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 263.264,
+      "y": 199.544,
+      "tint": 16777215,
+      "hp": 46.90625000000001,
+      "maxHP": 46.90625000000001,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 1.8762500000000002
+    },
+    {
+      "type": "tree",
+      "x": 263.264,
+      "y": 218.544,
+      "tint": 16777215,
+      "hp": 59.337499999441214,
+      "maxHP": 59.337499999441214,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 2.3734999999776485
     },
     {
       "type": "tree",
@@ -17499,6 +18370,39 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 264.996,
+      "y": 217.503890625,
+      "tint": 16777215,
+      "hp": 137.4937499994412,
+      "maxHP": 137.4937499994412,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 5.499749999977649
+    },
+    {
+      "type": "tree",
+      "x": 265.862,
+      "y": 192,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 265.862,
+      "y": 205,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
       "size": 4
     },
     {
@@ -17547,6 +18451,28 @@
     },
     {
       "type": "tree",
+      "x": 267.594,
+      "y": 191,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 268.46,
+      "y": 198.517421875,
+      "tint": 16777215,
+      "hp": 125.03125000000001,
+      "maxHP": 125.03125000000001,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 5.001250000000001
+    },
+    {
+      "type": "tree",
       "x": 269.326,
       "y": 172,
       "tint": 16777215,
@@ -17558,8 +18484,41 @@
     },
     {
       "type": "tree",
+      "x": 269.326,
+      "y": 202,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 270.192,
+      "y": 191.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 271.058,
       "y": 174,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 271.058,
+      "y": 192,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17635,8 +18594,30 @@
     },
     {
       "type": "tree",
+      "x": 273.656,
+      "y": 201.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 274.522,
       "y": 170,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 274.522,
+      "y": 192,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17657,316 +18638,19 @@
     },
     {
       "type": "tree",
-      "x": 277.12,
-      "y": 179.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 217.36599999999999,
-      "y": 185,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 217.36599999999999,
-      "y": 193,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 219.09799999999998,
-      "y": 196,
-      "tint": 16777215,
-      "hp": 56.11874999990687,
-      "maxHP": 56.11874999990687,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.244749999996275
-    },
-    {
-      "type": "tree",
-      "x": 222.562,
-      "y": 197,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 225.16,
-      "y": 198.5,
-      "tint": 16777215,
-      "hp": 121.7625000001863,
-      "maxHP": 121.7625000001863,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.870500000007452
-    },
-    {
-      "type": "tree",
-      "x": 227.758,
-      "y": 196,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 230.356,
-      "y": 194.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 232.954,
-      "y": 199,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 237.284,
-      "y": 197.536265625,
-      "tint": 16777215,
-      "hp": 146.84374999999997,
-      "maxHP": 146.84374999999997,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 5.873749999999999
-    },
-    {
-      "type": "tree",
-      "x": 239.882,
-      "y": 191.0464140625,
-      "tint": 16777215,
-      "hp": 103.3125,
-      "maxHP": 103.3125,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4.1325
-    },
-    {
-      "type": "tree",
-      "x": 241.614,
-      "y": 194.0063046875,
-      "tint": 16777215,
-      "hp": 159.3312500007451,
-      "maxHP": 159.3312500007451,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 6.373250000029803
-    },
-    {
-      "type": "tree",
-      "x": 244.212,
-      "y": 199.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.944,
-      "y": 190.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.944,
-      "y": 194.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 247.676,
-      "y": 193.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 251.14,
-      "y": 192.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 258.934,
-      "y": 190,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 260.666,
-      "y": 201.0338515625,
-      "tint": 16777215,
-      "hp": 153.16249999962747,
-      "maxHP": 153.16249999962747,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 6.126499999985099
-    },
-    {
-      "type": "tree",
-      "x": 261.532,
-      "y": 190.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 262.398,
-      "y": 191,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 263.264,
-      "y": 198.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 265.862,
-      "y": 192,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 267.594,
-      "y": 191,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 268.46,
-      "y": 198.517421875,
-      "tint": 16777215,
-      "hp": 125.03125000000001,
-      "maxHP": 125.03125000000001,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 5.001250000000001
-    },
-    {
-      "type": "tree",
-      "x": 270.192,
-      "y": 191.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 271.058,
-      "y": 192,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 274.522,
-      "y": 192,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 275.388,
       "y": 190.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 277.12,
+      "y": 179.5,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -17984,6 +18668,17 @@
       "isOnFire": false,
       "textureIndex": 4,
       "size": 1.372749999985099
+    },
+    {
+      "type": "tree",
+      "x": 278.852,
+      "y": 202.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
     },
     {
       "type": "tree",
@@ -18251,558 +18946,8 @@
     },
     {
       "type": "tree",
-      "x": 220.82999999999998,
-      "y": 199,
-      "tint": 16777215,
-      "hp": 75.01250000018625,
-      "maxHP": 75.01250000018625,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 3.00050000000745
-    },
-    {
-      "type": "tree",
-      "x": 221.696,
-      "y": 218.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 224.294,
-      "y": 214.0323984375,
-      "tint": 16777215,
-      "hp": 59.31874999962747,
-      "maxHP": 59.31874999962747,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.372749999985099
-    },
-    {
-      "type": "tree",
-      "x": 225.16,
-      "y": 221.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 225.16,
-      "y": 230.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 226.892,
-      "y": 222.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 227.758,
-      "y": 227,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 227.758,
-      "y": 229,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 230.356,
-      "y": 230.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 231.222,
-      "y": 206,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 231.222,
-      "y": 224,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 231.222,
-      "y": 226,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 232.954,
-      "y": 230,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 233.82,
-      "y": 206.522734375,
-      "tint": 16777215,
-      "hp": 40.63750000018626,
-      "maxHP": 40.63750000018626,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 1.6255000000074504
-    },
-    {
-      "type": "tree",
-      "x": 234.686,
-      "y": 204.0261171875,
-      "tint": 16777215,
-      "hp": 40.61874999944121,
-      "maxHP": 40.61874999944121,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 1.6247499999776482
-    },
-    {
-      "type": "tree",
-      "x": 236.418,
-      "y": 211,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 236.418,
-      "y": 214,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 237.284,
-      "y": 221.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 237.284,
-      "y": 224.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 238.15,
-      "y": 225,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 239.016,
-      "y": 215.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 239.016,
-      "y": 222.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 239.882,
-      "y": 209,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 239.882,
-      "y": 211,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 239.882,
-      "y": 239,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 240.748,
-      "y": 200.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 241.614,
-      "y": 207.0063046875,
-      "tint": 16777215,
-      "hp": 43.768749999813735,
-      "maxHP": 43.768749999813735,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 1.7507499999925495
-    },
-    {
-      "type": "tree",
-      "x": 241.614,
-      "y": 211.0063046875,
-      "tint": 16777215,
-      "hp": 46.887500000186265,
-      "maxHP": 46.887500000186265,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 1.8755000000074507
-    },
-    {
-      "type": "tree",
-      "x": 242.48,
-      "y": 219.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 244.212,
-      "y": 201.516453125,
-      "tint": 16777215,
-      "hp": 59.325000000186265,
-      "maxHP": 59.325000000186265,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 2.3730000000074507
-    },
-    {
-      "type": "tree",
-      "x": 244.212,
-      "y": 217.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 244.212,
-      "y": 240.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.078,
-      "y": 212.0198359375,
-      "tint": 16777215,
-      "hp": 50.05624999944121,
-      "maxHP": 50.05624999944121,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 2.002249999977648
-    },
-    {
-      "type": "tree",
-      "x": 245.078,
-      "y": 226,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.944,
-      "y": 202.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.944,
-      "y": 222.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 245.944,
-      "y": 228.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 246.81,
-      "y": 212.0266015625,
-      "tint": 16777215,
-      "hp": 134.23749999981374,
-      "maxHP": 134.23749999981374,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 5.3694999999925495
-    },
-    {
-      "type": "tree",
-      "x": 246.81,
-      "y": 234,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 248.542,
-      "y": 203.0333671875,
-      "tint": 16777215,
-      "hp": 63.04374999925494,
-      "maxHP": 63.04374999925494,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.5217499999701976
-    },
-    {
-      "type": "tree",
-      "x": 248.542,
-      "y": 231,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 248.542,
-      "y": 239,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 249.408,
-      "y": 218.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 249.408,
-      "y": 221.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 249.408,
-      "y": 225.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 250.274,
-      "y": 211.0401328125,
-      "tint": 16777215,
-      "hp": 62.46875000000001,
-      "maxHP": 62.46875000000001,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 2.4987500000000002
-    },
-    {
-      "type": "tree",
-      "x": 251.14,
-      "y": 224.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 251.14,
-      "y": 239.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 251.14,
       "y": 244.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 252.006,
-      "y": 218,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 253.738,
-      "y": 229,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -18834,39 +18979,6 @@
     },
     {
       "type": "tree",
-      "x": 255.47,
-      "y": 215.0135546875,
-      "tint": 16777215,
-      "hp": 146.53749999962747,
-      "maxHP": 146.53749999962747,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 5.8614999999850985
-    },
-    {
-      "type": "tree",
-      "x": 255.47,
-      "y": 225,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 257.202,
-      "y": 225,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 257.202,
       "y": 237,
       "tint": 16777215,
@@ -18874,17 +18986,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 258.068,
-      "y": 232.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
       "size": 4
     },
     {
@@ -18900,30 +19001,8 @@
     },
     {
       "type": "tree",
-      "x": 258.934,
-      "y": 219,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 259.8,
       "y": 234.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 260.666,
-      "y": 214,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -18977,28 +19056,6 @@
     },
     {
       "type": "tree",
-      "x": 263.264,
-      "y": 199.544,
-      "tint": 16777215,
-      "hp": 46.90625000000001,
-      "maxHP": 46.90625000000001,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 1.8762500000000002
-    },
-    {
-      "type": "tree",
-      "x": 263.264,
-      "y": 218.544,
-      "tint": 16777215,
-      "hp": 59.337499999441214,
-      "maxHP": 59.337499999441214,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 2.3734999999776485
-    },
-    {
-      "type": "tree",
       "x": 264.13,
       "y": 210.0005078125,
       "tint": 16777215,
@@ -19012,28 +19069,6 @@
       "type": "tree",
       "x": 264.13,
       "y": 224,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 264.996,
-      "y": 217.503890625,
-      "tint": 16777215,
-      "hp": 137.4937499994412,
-      "maxHP": 137.4937499994412,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 5.499749999977649
-    },
-    {
-      "type": "tree",
-      "x": 265.862,
-      "y": 205,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -19073,17 +19108,6 @@
       "isOnFire": false,
       "textureIndex": 0,
       "size": 2.248249999992549
-    },
-    {
-      "type": "tree",
-      "x": 269.326,
-      "y": 202,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
     },
     {
       "type": "tree",
@@ -19128,17 +19152,6 @@
       "isOnFire": false,
       "textureIndex": 1,
       "size": 2
-    },
-    {
-      "type": "tree",
-      "x": 273.656,
-      "y": 201.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
     },
     {
       "type": "tree",
@@ -19204,17 +19217,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 278.852,
-      "y": 202.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
       "size": 4
     },
     {
@@ -19826,8 +19828,8 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": 246.46359999999993,
-      "y": 219.79999999999995,
+      "x": 218.3319230769231,
+      "y": 182.3269230769231,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19842,8 +19844,8 @@
     },
     {
       "type": "squirrel",
-      "x": 288.8975999999998,
-      "y": 210.30000000000007,
+      "x": 282.4892000000001,
+      "y": 232.5999999999999,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19858,24 +19860,24 @@
     },
     {
       "type": "squirrel",
-      "x": 271.46213333333344,
-      "y": 163.76666666666642,
+      "x": 236.1515384615385,
+      "y": 219.5,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.41563805512559504,
+      "size": 0.4952472194749765,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel26"
+      "scriptingName": "squirrel35"
     },
     {
       "type": "squirrel",
-      "x": 233.82,
-      "y": 206.5,
+      "x": 241.09440000000006,
+      "y": 232.29999999999995,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19890,8 +19892,8 @@
     },
     {
       "type": "squirrel",
-      "x": 278.38569230769247,
-      "y": 211.69230769230762,
+      "x": 266.1950769230765,
+      "y": 244,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19906,8 +19908,8 @@
     },
     {
       "type": "squirrel",
-      "x": 266.5281538461538,
-      "y": 193.1538461538462,
+      "x": 293.5739999999995,
+      "y": 184,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19922,8 +19924,24 @@
     },
     {
       "type": "squirrel",
-      "x": 249.94092307692347,
-      "y": 199,
+      "x": 223.25480000000005,
+      "y": 197.60000000000002,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5247371598098816,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel106"
+    },
+    {
+      "type": "squirrel",
+      "x": 252.67215384615383,
+      "y": 218.1538461538462,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19938,24 +19956,24 @@
     },
     {
       "type": "squirrel",
-      "x": 228.35753846153864,
-      "y": 197,
+      "x": 257.46846153846127,
+      "y": 239.46153846153857,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.5842541015847604,
+      "size": 0.5982523984910905,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel129"
+      "scriptingName": "squirrel155"
     },
     {
       "type": "squirrel",
-      "x": 282.3159999999999,
-      "y": 211.10000000000014,
+      "x": 299.9357692307693,
+      "y": 182.98076923076928,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19970,8 +19988,8 @@
     },
     {
       "type": "squirrel",
-      "x": 226.02599999999995,
-      "y": 220.4000000000002,
+      "x": 233.82,
+      "y": 201.5,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -19986,8 +20004,8 @@
     },
     {
       "type": "deer",
-      "x": 249.40800000000002,
-      "y": 227.89999999999986,
+      "x": 225.5097307692306,
+      "y": 219.89423076923083,
       "hp": 12.451267058590588,
       "maxHp": 12.451267058590588,
       "mp": 12.451267058590588,
@@ -20002,8 +20020,8 @@
     },
     {
       "type": "deer",
-      "x": 251.31319999999937,
-      "y": 189.39999999999964,
+      "x": 237.80360000000042,
+      "y": 193.20000000000027,
       "hp": 12.442978077517461,
       "maxHp": 12.442978077517461,
       "mp": 12.442978077517461,

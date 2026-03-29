@@ -5058,7 +5058,9 @@
             const selectedAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
                 ? Number(wizard.selectedPlaceableAnchorY)
                 : 1;
-            const effectiveAnchorY = isRoofPlacement ? 0.5 : selectedAnchorY;
+            const effectiveAnchorY = isRoofPlacement
+                ? 0.5
+                : ((useSnapPlacement && selectedCategory === "windows") ? 0.5 : selectedAnchorY);
             const yScale = Math.max(0.1, Math.abs(Number.isFinite(this.camera.xyratio) ? this.camera.xyratio : 0.66));
             const placementYOffset = (rotationAxis === "spatial" || rotationAxis === "ground" || isRoofPlacement)
                 ? 0

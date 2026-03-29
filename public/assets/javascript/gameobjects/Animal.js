@@ -70,8 +70,7 @@ class Animal extends Character {
         this.foodValue = 0;
         this.hp = 1;
         this.maxHp = this.hp;
-        this.mp = this.hp;
-        this.maxMp = this.maxHp;
+        this.ensureMagicPointsInitialized(true);
         this.randomMotion = 1;
         this.lungeRadius = 2;
         this.lungeSpeed = 5.0;
@@ -519,23 +518,7 @@ class Animal extends Character {
         this._healthBarVisibleUntilMs = Math.max(this._healthBarVisibleUntilMs || 0, now + holdMs);
     }
     ensureMagicPointsInitialized(resetCurrent = false) {
-        const fallbackHp = Number.isFinite(this.hp) ? Number(this.hp) : 0;
-        const fallbackMaxHp = Math.max(
-            fallbackHp,
-            Number.isFinite(this.maxHp) ? Number(this.maxHp) : 0
-        );
-        if (!Number.isFinite(this.maxHp) || this.maxHp < fallbackHp) {
-            this.maxHp = fallbackMaxHp;
-        }
-        if (resetCurrent || !Number.isFinite(this.mp)) {
-            this.mp = fallbackHp;
-        }
-        if (resetCurrent || !Number.isFinite(this.maxMp)) {
-            this.maxMp = fallbackMaxHp;
-        }
-        if (Number.isFinite(this.maxMp) && Number.isFinite(this.mp) && this.mp > this.maxMp) {
-            this.mp = this.maxMp;
-        }
+        return super.ensureMagicPointsInitialized(resetCurrent);
     }
     vanishFromMagicDepletion() {
         if (this.gone || this.vanishing || this.dead) return false;
@@ -1590,6 +1573,17 @@ class Animal extends Character {
     tickBehaviorOnly() {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
+        if (this._movementSuspendedByStreaming === true) {
+            const resolvedNode = (this.map && typeof this.map.worldToNode === "function")
+                ? this.map.worldToNode(this.x, this.y)
+                : null;
+            if (!resolvedNode) {
+                this.moving = false;
+                return;
+            }
+            this.node = resolvedNode;
+            this._movementSuspendedByStreaming = false;
+        }
         if (typeof this.isFrozen === "function" && this.isFrozen()) {
             if (typeof this.applyFrozenState === "function") {
                 this.applyFrozenState({ clearMoveTimeout: false });
@@ -3442,4 +3436,20 @@ class Yeti extends Animal {
         this.spriteSheetReady = false;
         ensureSpriteFrames(this);
     }
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.Animal = Animal;
+    globalThis.Squirrel = Squirrel;
+    globalThis.Deer = Deer;
+    globalThis.Bear = Bear;
+    globalThis.Eagleman = Eagleman;
+    globalThis.Fragglegod = Fragglegod;
+    globalThis.Scorpion = Scorpion;
+    globalThis.Armadillo = Armadillo;
+    globalThis.Coyote = Coyote;
+    globalThis.Goat = Goat;
+    globalThis.Porcupine = Porcupine;
+    globalThis.Blodia = Blodia;
+    globalThis.Yeti = Yeti;
 }

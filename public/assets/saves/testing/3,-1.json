@@ -127,104 +127,157 @@
     "399,152": 5
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {
+    "399,103": 63,
+    "399,104": 63,
+    "399,105": 63,
+    "399,106": 63,
+    "399,107": 63,
+    "399,108": 63,
+    "399,109": 63,
+    "399,110": 63,
+    "399,111": 63,
+    "399,112": 63,
+    "399,113": 63,
+    "399,114": 63,
+    "399,115": 63,
+    "399,116": 63,
+    "399,117": 63,
+    "399,118": 63,
+    "399,119": 63,
+    "399,120": 63,
+    "399,121": 63,
+    "399,122": 63,
+    "399,123": 63,
+    "399,124": 63,
+    "399,125": 63,
+    "399,126": 63,
+    "399,127": 63,
+    "399,128": 63,
+    "399,129": 63,
+    "399,130": 63,
+    "399,131": 63,
+    "399,132": 63,
+    "399,133": 63,
+    "399,134": 63,
+    "399,135": 63,
+    "399,136": 63,
+    "399,137": 63,
+    "399,138": 63,
+    "399,139": 63,
+    "399,140": 63,
+    "399,141": 62,
+    "399,142": 61,
+    "399,143": 60,
+    "399,144": 59,
+    "399,145": 58,
+    "399,146": 57,
+    "399,147": 56,
+    "399,148": 55,
+    "399,149": 54,
+    "399,150": 54,
+    "399,151": 54,
+    "399,152": 54
+  },
   "objects": [
     {
       "type": "road",
       "x": 345.534,
       "y": 139,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7644
+      "id": 7240
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 140,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7645
+      "id": 7241
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 141,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7646
+      "id": 7242
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 142,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7647
+      "id": 7243
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 143,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7648
+      "id": 7244
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 144,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7649
+      "id": 7245
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 145,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7650
+      "id": 7246
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 146,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7651
+      "id": 7247
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 147,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7652
+      "id": 7248
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 148,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7653
+      "id": 7249
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 149,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7654
+      "id": 7250
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 150,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7655
+      "id": 7251
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 151,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7656
+      "id": 7252
     },
     {
       "type": "road",
       "x": 345.534,
       "y": 152,
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 7657
+      "id": 7253
     },
     {
       "type": "tree",
@@ -234,7 +287,7 @@
       "isOnFire": false,
       "textureIndex": 4,
       "size": 4,
-      "id": 7658
+      "id": 7254
     },
     {
       "type": "tree",
@@ -244,7 +297,7 @@
       "isOnFire": false,
       "textureIndex": 1,
       "size": 4,
-      "id": 7659
+      "id": 7255
     }
   ],
   "animals": [],

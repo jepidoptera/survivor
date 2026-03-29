@@ -527,6 +527,7 @@ function collectMountableWallSegmentsForMountedId(mapRef, mountedId) {
             ay: Number(section.startPoint.y),
             bx: Number(section.endPoint.x),
             by: Number(section.endPoint.y),
+            bottomZ: Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0,
             height: Math.max(0, Number(section.height) || 0),
             thickness: Math.max(0.001, Number(section.thickness) || 0.001)
         });
@@ -545,6 +546,7 @@ function collectMountableWallSegmentsForMountedId(mapRef, mountedId) {
                     ay: Number(obj.startPoint && obj.startPoint.y),
                     bx: Number(obj.endPoint && obj.endPoint.x),
                     by: Number(obj.endPoint && obj.endPoint.y),
+                    bottomZ: Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0,
                     height: Math.max(0, Number(obj.height) || 0),
                     thickness: Math.max(0.001, Number(obj.thickness) || 0.001)
                 });
@@ -558,6 +560,51 @@ function collectMountableWallSegmentsForMountedId(mapRef, mountedId) {
         Number.isFinite(seg.bx) &&
         Number.isFinite(seg.by)
     );
+}
+
+function resolveMountedWallCenterZ(item) {
+    if (!item || !item.map) return null;
+    const candidateIds = [
+        item.mountedWallSectionUnitId,
+        item.mountedSectionId,
+        item.mountedWallLineGroupId
+    ];
+    if (
+        typeof WallSectionUnit !== "undefined" &&
+        WallSectionUnit &&
+        WallSectionUnit._allSections instanceof Map
+    ) {
+        for (let i = 0; i < candidateIds.length; i++) {
+            const id = Number(candidateIds[i]);
+            if (!Number.isInteger(id)) continue;
+            const section = WallSectionUnit._allSections.get(id);
+            if (!section) continue;
+            const bottomZ = Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0;
+            const height = Math.max(0, Number(section.height) || 0);
+            return bottomZ + (height * 0.5);
+        }
+    }
+    const mountedId = candidateIds.find(id => Number.isInteger(Number(id)));
+    if (!Number.isInteger(Number(mountedId))) return null;
+    const segments = collectMountableWallSegmentsForMountedId(item.map, Number(mountedId));
+    if (!Array.isArray(segments) || segments.length === 0) return null;
+    let best = segments[0];
+    const worldX = Number(item.x);
+    const worldY = Number(item.y);
+    if (Number.isFinite(worldX) && Number.isFinite(worldY)) {
+        let bestDist = Infinity;
+        for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i];
+            const cp = closestPointOnSegment2D(worldX, worldY, Number(seg.ax), Number(seg.ay), Number(seg.bx), Number(seg.by));
+            if (cp && Number.isFinite(cp.dist2) && cp.dist2 < bestDist) {
+                bestDist = cp.dist2;
+                best = seg;
+            }
+        }
+    }
+    const bottomZ = Number.isFinite(best && best.bottomZ) ? Number(best.bottomZ) : 0;
+    const height = Math.max(0, Number(best && best.height) || 0);
+    return bottomZ + (height * 0.5);
 }
 
 function resolveMountedWallThickness(item) {
@@ -2005,6 +2052,9 @@ void main(void) {
             isOnFire: this.isOnFire,
             textureIndex: this.textureIndex
         };
+        if (Number.isFinite(this.z)) {
+            data.z = Number(this.z);
+        }
         if (typeof this.castsLosShadows === "boolean") {
             data.castsLosShadows = this.castsLosShadows;
         }
@@ -2145,6 +2195,18 @@ void main(void) {
             if (obj) {
                 obj.x = data.x;
                 obj.y = data.y;
+                if (Number.isFinite(data.z)) {
+                    obj.z = Number(data.z);
+                } else if (
+                    data.type === "placedObject" &&
+                    typeof data.category === "string" &&
+                    data.category.trim().toLowerCase() === "windows"
+                ) {
+                    const inferredMountedCenterZ = resolveMountedWallCenterZ(obj);
+                    if (Number.isFinite(inferredMountedCenterZ)) {
+                        obj.z = Number(inferredMountedCenterZ);
+                    }
+                }
                 if (data.hp !== undefined) obj.hp = data.hp;
                 if (typeof data.burned === "boolean") obj.burned = data.burned;
                 if (typeof data._wasOnFire === "boolean") obj._wasOnFire = data._wasOnFire;
@@ -2192,6 +2254,9 @@ void main(void) {
                 } else if (typeof data.isPassable === "boolean") {
                     obj.isPassable = data.isPassable;
                 }
+                if (typeof data.blocksTile === "boolean") {
+                    obj.blocksTile = data.blocksTile;
+                }
 
                 // Preserve tree sprite variant across save/load.
                 if (
@@ -2226,6 +2291,21 @@ void main(void) {
                         obj.applySize(4, treeLoadOptions);
                     }
                     Tree.recordPrototypeLoadDebug("sizeRestoreMs", getTreeDebugNow() - treeSizeRestoreStart);
+                }
+
+                const isMountedWindowWithoutSavedZ = (
+                    data.type === "placedObject" &&
+                    typeof data.category === "string" &&
+                    data.category.trim().toLowerCase() === "windows" &&
+                    !Number.isFinite(data.z) &&
+                    Number.isInteger(data.mountedWallSectionUnitId || data.mountedWallLineGroupId || data.mountedSectionId)
+                );
+                if (
+                    isMountedWindowWithoutSavedZ &&
+                    obj &&
+                    typeof obj.snapToMountedWall === "function"
+                ) {
+                    obj.snapToMountedWall();
                 }
             }
 
@@ -3205,7 +3285,8 @@ class PlacedObject extends StaticObject {
         if (this.isFallenDoorEffect) data.isFallenDoorEffect = true;
         if (this._doorLockedOpen) data.doorLockedOpen = true;
         if (this._scriptDoorLocked === true) data._scriptDoorLocked = true;
-        if (this.isPassable === false) data.isPassable = false;
+        if (typeof this.isPassable === "boolean") data.isPassable = this.isPassable;
+        if (typeof this.blocksTile === "boolean") data.blocksTile = this.blocksTile;
         if (this.falling) data.falling = true;
         if (Number.isFinite(this.doorFallAngle)) {
             data.doorFallAngle = Math.max(0, Math.min(90, Number(this.doorFallAngle)));
@@ -3280,6 +3361,15 @@ class PlacedObject extends StaticObject {
         if (category !== "windows" && category !== "doors") return false;
         if (this.rotationAxis !== "spatial") return false;
         if (!this.map) return false;
+        if (category === "windows") {
+            this.placeableAnchorY = 0.5;
+            if (this.pixiSprite && this.pixiSprite.anchor) {
+                this.pixiSprite.anchor.set(
+                    Number.isFinite(this.placeableAnchorX) ? Number(this.placeableAnchorX) : 0.5,
+                    0.5
+                );
+            }
+        }
         const previousMountedId = Number.isInteger(this.mountedWallLineGroupId)
             ? Number(this.mountedWallLineGroupId)
             : null;
@@ -3464,8 +3554,8 @@ class PlacedObject extends StaticObject {
                 this.x = snappedX;
                 this.y = snappedY;
                 if (Number.isInteger(nextWallSectionUnitId)) {
-                    // For WallSectionUnit mounts, center the window anchor point vertically on the wall.
-                    this.z = wallHeight * 0.5;
+                    const wallBottomZ = Number.isFinite(wall && wall.bottomZ) ? Number(wall.bottomZ) : 0;
+                    this.z = wallBottomZ + (wallHeight * 0.5);
                 }
                 this.mountedWallFacingSign = faceSign;
                 if (

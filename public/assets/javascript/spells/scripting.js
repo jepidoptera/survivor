@@ -288,6 +288,19 @@
         return true;
     }
 
+    function markPrototypeScriptTargetDirty(target) {
+        if (!target || typeof target !== "object" || target.gone) return false;
+        const mapRef = target.map || global.map || null;
+        if (!mapRef || !mapRef._prototypeSectionState) return false;
+        const objectState = mapRef._prototypeObjectState;
+        if (!objectState || target._prototypeObjectManaged !== true || target._prototypeRuntimeRecord !== true) {
+            return false;
+        }
+        target._prototypeDirty = true;
+        objectState.captureScanNeeded = true;
+        return true;
+    }
+
     function setDoorLockedState(door, locked) {
         if (!isDoorPlacedObject(door)) return false;
         const nextLocked = !!locked;
@@ -1893,6 +1906,7 @@
             try {
                 const changedByHandler = directAssignmentHandler(rhs, buildDirectAssignmentContext(path, context));
                 if (changedByHandler) {
+                    markPrototypeScriptTargetDirty(context && context.target ? context.target : null);
                     emit("script:assignmentApplied", {
                         path,
                         value: rhs,
@@ -1918,6 +1932,7 @@
                     target: objectAssignment.target
                 });
                 if (changedByHandler) {
+                    markPrototypeScriptTargetDirty(objectAssignment.target);
                     emit("script:assignmentApplied", {
                         path,
                         value: rhs,
@@ -1933,6 +1948,7 @@
         }
 
         if (objectAssignment && setObjectPathValue(objectAssignment.target, objectAssignment.pathSegments, rhs)) {
+            markPrototypeScriptTargetDirty(objectAssignment.target);
             emit("script:assignmentApplied", {
                 path,
                 value: rhs,
@@ -2032,6 +2048,25 @@
         const name = String(commandName || "").trim();
         if (!name.length) return false;
         const resolvedCommand = resolveScriptCommand(name, context);
+        const mutationTarget = (() => {
+            if (resolvedCommand && resolvedCommand.target) return resolvedCommand.target;
+            if (resolvedCommand && resolvedCommand.context && resolvedCommand.context.target) {
+                return resolvedCommand.context.target;
+            }
+            if (resolvedCommand && resolvedCommand.resolved) {
+                const receiver = resolvedCommand.resolved.receiver;
+                if (receiver && typeof receiver === "object") return receiver;
+            }
+            if (context && context.target && typeof context.target === "object") return context.target;
+            return null;
+        })();
+        const finalizeMutationResult = (result) => {
+            const didChange = !!result;
+            if (didChange) {
+                markPrototypeScriptTargetDirty(mutationTarget);
+            }
+            return didChange;
+        };
         try {
             const normalizedNamedArgs = (namedArgs && typeof namedArgs === "object")
                 ? namedArgs
@@ -2039,34 +2074,41 @@
             const callArgs = Array.isArray(args) ? args : [];
             if (resolvedCommand.kind === "handler" && typeof resolvedCommand.handler === "function") {
                 const result = resolvedCommand.handler(callArgs, resolvedCommand.context || null, normalizedNamedArgs);
-                return isPromiseLike(result) ? result : !!result;
+                return isPromiseLike(result)
+                    ? Promise.resolve(result).then(finalizeMutationResult)
+                    : finalizeMutationResult(result);
             }
             if (resolvedCommand.kind === "removeTarget") {
-                return removeTargetObject(resolvedCommand.target);
+                return finalizeMutationResult(removeTargetObject(resolvedCommand.target));
             }
             if (resolvedCommand.kind === "lockTarget") {
-                return setDoorLockedState(resolvedCommand.target, true);
+                return finalizeMutationResult(setDoorLockedState(resolvedCommand.target, true));
             }
             if (resolvedCommand.kind === "unlockTarget") {
-                return setDoorLockedState(resolvedCommand.target, false);
+                return finalizeMutationResult(setDoorLockedState(resolvedCommand.target, false));
             }
             if (resolvedCommand.kind === "openTarget") {
-                return openDoorForTraversal(resolvedCommand.target);
+                return finalizeMutationResult(openDoorForTraversal(resolvedCommand.target));
             }
             if (resolvedCommand.kind === "deactivateTarget") {
                 resolvedCommand.target._scriptDeactivated = true;
-                return true;
+                return finalizeMutationResult(true);
             }
             if (resolvedCommand.kind === "activateTarget") {
                 resolvedCommand.target._scriptDeactivated = false;
-                return true;
+                return finalizeMutationResult(true);
             }
             if (resolvedCommand.kind === "crumbleTarget") {
-                return performCrumble(resolvedCommand.target, callArgs, normalizedNamedArgs);
+                const result = performCrumble(resolvedCommand.target, callArgs, normalizedNamedArgs);
+                return isPromiseLike(result)
+                    ? Promise.resolve(result).then(finalizeMutationResult)
+                    : finalizeMutationResult(result);
             }
             if (resolvedCommand.kind === "namedMethod" && resolvedCommand.resolved) {
                 const result = resolvedCommand.resolved.fn.apply(resolvedCommand.resolved.receiver, callArgs);
-                return result !== false;
+                return isPromiseLike(result)
+                    ? Promise.resolve(result).then((value) => finalizeMutationResult(value !== false))
+                    : finalizeMutationResult(result !== false);
             }
             return false;
         } catch (error) {

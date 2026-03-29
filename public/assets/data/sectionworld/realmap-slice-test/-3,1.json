@@ -233,6 +233,8 @@
     "1,298": 12
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "road",

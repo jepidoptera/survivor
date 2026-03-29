@@ -257,6 +257,7 @@ class Wizard extends Character {
         this.food = 0;
         this.hp = 100;
         this.maxHp = 100;
+        this.ensureMagicPointsInitialized(true);
         this.dead = false;
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
@@ -1092,28 +1093,45 @@ class Wizard extends Character {
         const minNode = this.map.worldToNode(newX - padding, newY - padding);
         const maxNode = this.map.worldToNode(newX + padding, newY + padding);
         if (minNode && maxNode) {
-            const xStart = Math.max(minNode.xindex - 1, 0);
-            const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, (this.map.width || 0) - 1));
-            const yStart = Math.max(minNode.yindex - 1, 0);
-            const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, (this.map.height || 0) - 1));
+            const collectFromNode = (node) => {
+                if (!node || !Array.isArray(node.objects)) return;
+                const nodeObjects = node.objects;
+                for (let i = 0; i < nodeObjects.length; i++) {
+                    const obj = nodeObjects[i];
+                    if (!obj || obj.gone) continue;
+                    const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
+                    if (doorCandidate) {
+                        const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
+                        if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
+                            const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
+                            nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
+                        }
+                    }
+                    if (this.doesObjectBlockVectorMovement(obj, options)) {
+                        nearbyObjects.push(obj);
+                    }
+                }
+            };
 
-            for (let x = xStart; x <= xEnd; x++) {
-                for (let y = yStart; y <= yEnd; y++) {
-                    if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
-                    const nodeObjects = this.map.nodes[x][y].objects;
-                    for (const obj of nodeObjects) {
-                        if (!obj || obj.gone) continue;
-                        const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
-                        if (doorCandidate) {
-                            const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
-                            if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
-                                const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
-                                nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
-                            }
-                        }
-                        if (this.doesObjectBlockVectorMovement(obj, options)) {
-                            nearbyObjects.push(obj);
-                        }
+            if (typeof this.map.getNodesInIndexWindow === "function") {
+                const xStart = Math.min(minNode.xindex, maxNode.xindex) - 1;
+                const xEnd = Math.max(minNode.xindex, maxNode.xindex) + 1;
+                const yStart = Math.min(minNode.yindex, maxNode.yindex) - 1;
+                const yEnd = Math.max(minNode.yindex, maxNode.yindex) + 1;
+                const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
+                for (let i = 0; i < nearbyNodes.length; i++) {
+                    collectFromNode(nearbyNodes[i]);
+                }
+            } else {
+                const xStart = Math.max(minNode.xindex - 1, 0);
+                const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, (this.map.width || 0) - 1));
+                const yStart = Math.max(minNode.yindex - 1, 0);
+                const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, (this.map.height || 0) - 1));
+
+                for (let x = xStart; x <= xEnd; x++) {
+                    for (let y = yStart; y <= yEnd; y++) {
+                        if (!this.map.nodes[x] || !this.map.nodes[x][y]) continue;
+                        collectFromNode(this.map.nodes[x][y]);
                     }
                 }
             }
@@ -1571,6 +1589,8 @@ class Wizard extends Character {
             y: (this.map && typeof this.map.wrapWorldY === "function") ? this.map.wrapWorldY(this.y) : this.y,
             hp: this.hp,
             maxHp: this.maxHp,
+            mp: this.mp,
+            maxMp: this.maxMp,
             temperature: this.getTemperature(),
             baselineTemperature: this.getTemperatureBaseline(),
             gameMode: this.gameMode,
@@ -1656,6 +1676,14 @@ class Wizard extends Character {
         if (data.y !== undefined) this.y = data.y;
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
+        this.ensureMagicPointsInitialized(true);
+        if (data.mp !== undefined) this.mp = data.mp;
+        if (data.maxMp !== undefined || data.maxMP !== undefined) {
+            const nextMaxMp = data.maxMp !== undefined ? data.maxMp : data.maxMP;
+            this.maxMp = nextMaxMp;
+            this.maxMP = nextMaxMp;
+        }
+        this.ensureMagicPointsInitialized();
         if (typeof data.name === "string" && data.name.trim().length > 0) {
             this.name = data.name.trim();
         }

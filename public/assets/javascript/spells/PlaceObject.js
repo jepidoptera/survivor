@@ -186,6 +186,10 @@ class PlaceObject extends globalThis.Spell {
             wallSnapPlacement &&
             wallSnapPlacement.targetWall
         );
+        const effectiveAnchorY = (
+            useWallSnapPlacement &&
+            selectedCategoryKey === "windows"
+        ) ? 0.5 : selectedAnchorY;
         const effectiveAnchorX = useWallSnapPlacement ? 0.5 : selectedAnchorX;
         const rawYScale = Number(
             (typeof globalThis !== "undefined" && Number.isFinite(globalThis.xyratio))
@@ -235,7 +239,7 @@ class PlaceObject extends globalThis.Spell {
             width: clampedScale,
             height: clampedScale,
             placeableAnchorX: effectiveAnchorX,
-            placeableAnchorY: selectedAnchorY,
+            placeableAnchorY: effectiveAnchorY,
             rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
             placementRotation: resolvedPlacementRotation,
             mountedSectionId: (

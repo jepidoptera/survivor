@@ -35,6 +35,8 @@
     "399,399": 6
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [],
   "animals": [],
   "powerups": []

@@ -15202,6 +15202,8 @@
       "scriptingName": "wallsection410"
     }
   ],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "firewall",
@@ -15509,6 +15511,402 @@
     },
     {
       "type": "tree",
+      "x": 180.994,
+      "y": 246,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 187.922,
+      "y": 245,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 192.252,
+      "y": 241.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 192.252,
+      "y": 245.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 193.118,
+      "y": 247,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 194.85,
+      "y": 245,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 198.314,
+      "y": 236,
+      "tint": 16777215,
+      "hp": 102.43124999990685,
+      "maxHP": 102.43124999990685,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.097249999996274
+    },
+    {
+      "type": "tree",
+      "x": 200.912,
+      "y": 247.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 202.644,
+      "y": 242.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 203.51,
+      "y": 241,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 204.376,
+      "y": 236.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 206.108,
+      "y": 238.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 207.84,
+      "y": 243.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 208.706,
+      "y": 247,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 209.572,
+      "y": 233.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 209.572,
+      "y": 237.5,
+      "tint": 16777215,
+      "hp": 119.28125,
+      "maxHP": 119.28125,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4.77125
+    },
+    {
+      "type": "tree",
+      "x": 211.304,
+      "y": 246.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 212.17,
+      "y": 229.0319140625,
+      "tint": 16777215,
+      "hp": 67.75,
+      "maxHP": 67.75,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 2.71
+    },
+    {
+      "type": "tree",
+      "x": 213.902,
+      "y": 240,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 214.768,
+      "y": 237.5,
+      "tint": 16777215,
+      "hp": 69.13125000009313,
+      "maxHP": 69.13125000009313,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.765250000003725
+    },
+    {
+      "type": "tree",
+      "x": 215.634,
+      "y": 228.0454453125,
+      "tint": 16777215,
+      "hp": 67.75,
+      "maxHP": 67.75,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.71
+    },
+    {
+      "type": "tree",
+      "x": 215.634,
+      "y": 247,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 216.5,
+      "y": 240.5,
+      "tint": 16777215,
+      "hp": 69.36249999981372,
+      "maxHP": 69.36249999981372,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 2.774499999992549
+    },
+    {
+      "type": "tree",
+      "x": 217.36599999999999,
+      "y": 246,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.964,
+      "y": 231.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.964,
+      "y": 244.5,
+      "tint": 16777215,
+      "hp": 49.806249999906875,
+      "maxHP": 49.806249999906875,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 1.992249999996275
+    },
+    {
+      "type": "tree",
+      "x": 222.562,
+      "y": 234,
+      "tint": 16777215,
+      "hp": 131.30624999990687,
+      "maxHP": 131.30624999990687,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 5.252249999996274
+    },
+    {
+      "type": "tree",
+      "x": 224.294,
+      "y": 233,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 225.16,
+      "y": 234.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 226.026,
+      "y": 240,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 226.892,
+      "y": 232.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 227.758,
+      "y": 244,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 228.624,
+      "y": 235.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 234.686,
+      "y": 244,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 235.552,
+      "y": 237.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 241.614,
+      "y": 243,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 175.798,
       "y": 262,
       "tint": 16777215,
@@ -15538,17 +15936,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 180.994,
-      "y": 246,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
       "size": 4
     },
     {
@@ -15619,17 +16006,6 @@
     },
     {
       "type": "tree",
-      "x": 187.922,
-      "y": 245,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 190.52,
       "y": 248.5,
       "tint": 16777215,
@@ -15685,50 +16061,6 @@
     },
     {
       "type": "tree",
-      "x": 192.252,
-      "y": 241.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 192.252,
-      "y": 245.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 193.118,
-      "y": 247,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 194.85,
-      "y": 245,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 194.85,
       "y": 252,
       "tint": 16777215,
@@ -15748,17 +16080,6 @@
       "isOnFire": false,
       "textureIndex": 4,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 198.314,
-      "y": 236,
-      "tint": 16777215,
-      "hp": 102.43124999990685,
-      "maxHP": 102.43124999990685,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.097249999996274
     },
     {
       "type": "tree",
@@ -15795,63 +16116,8 @@
     },
     {
       "type": "tree",
-      "x": 200.912,
-      "y": 247.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 202.644,
-      "y": 242.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 203.51,
-      "y": 241,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 203.51,
       "y": 250,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 204.376,
-      "y": 236.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 206.108,
-      "y": 238.5,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -15869,50 +16135,6 @@
       "isOnFire": false,
       "textureIndex": 2,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 207.84,
-      "y": 243.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 208.706,
-      "y": 247,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 209.572,
-      "y": 233.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 209.572,
-      "y": 237.5,
-      "tint": 16777215,
-      "hp": 119.28125,
-      "maxHP": 119.28125,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4.77125
     },
     {
       "type": "tree",
@@ -15939,17 +16161,6 @@
     {
       "type": "tree",
       "x": 211.304,
-      "y": 246.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 211.304,
       "y": 248.5,
       "tint": 16777215,
       "hp": 100,
@@ -15957,17 +16168,6 @@
       "isOnFire": false,
       "textureIndex": 3,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 212.17,
-      "y": 229.0319140625,
-      "tint": 16777215,
-      "hp": 67.75,
-      "maxHP": 67.75,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 2.71
     },
     {
       "type": "tree",
@@ -15982,28 +16182,6 @@
     },
     {
       "type": "tree",
-      "x": 213.902,
-      "y": 240,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 214.768,
-      "y": 237.5,
-      "tint": 16777215,
-      "hp": 69.13125000009313,
-      "maxHP": 69.13125000009313,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.765250000003725
-    },
-    {
-      "type": "tree",
       "x": 214.768,
       "y": 254.5,
       "tint": 16777215,
@@ -16012,39 +16190,6 @@
       "isOnFire": false,
       "textureIndex": 1,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 215.634,
-      "y": 228.0454453125,
-      "tint": 16777215,
-      "hp": 67.75,
-      "maxHP": 67.75,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.71
-    },
-    {
-      "type": "tree",
-      "x": 215.634,
-      "y": 247,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 216.5,
-      "y": 240.5,
-      "tint": 16777215,
-      "hp": 69.36249999981372,
-      "maxHP": 69.36249999981372,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 2.774499999992549
     },
     {
       "type": "tree",
@@ -16066,17 +16211,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 217.36599999999999,
-      "y": 246,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
       "size": 4
     },
     {
@@ -16137,28 +16271,6 @@
     {
       "type": "tree",
       "x": 219.964,
-      "y": 231.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 219.964,
-      "y": 244.5,
-      "tint": 16777215,
-      "hp": 49.806249999906875,
-      "maxHP": 49.806249999906875,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 1.992249999996275
-    },
-    {
-      "type": "tree",
-      "x": 219.964,
       "y": 258.5,
       "tint": 16777215,
       "hp": 100,
@@ -16181,51 +16293,7 @@
     {
       "type": "tree",
       "x": 222.562,
-      "y": 234,
-      "tint": 16777215,
-      "hp": 131.30624999990687,
-      "maxHP": 131.30624999990687,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 5.252249999996274
-    },
-    {
-      "type": "tree",
-      "x": 222.562,
       "y": 252,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 224.294,
-      "y": 233,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 225.16,
-      "y": 234.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 226.026,
-      "y": 240,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
@@ -16247,45 +16315,12 @@
     {
       "type": "tree",
       "x": 226.892,
-      "y": 232.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 226.892,
       "y": 253.5,
       "tint": 16777215,
       "hp": 100,
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 227.758,
-      "y": 244,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 228.624,
-      "y": 235.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
       "size": 4
     },
     {
@@ -16308,17 +16343,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 234.686,
-      "y": 244,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
       "size": 4
     },
     {
@@ -16352,17 +16376,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 235.552,
-      "y": 237.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
       "size": 4
     },
     {
@@ -16418,17 +16431,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 241.614,
-      "y": 243,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
       "size": 4
     },
     {
@@ -18675,46 +18677,15 @@
             "y": 238
           }
         ]
-      }
+      },
+      "scriptingName": "roof10"
     }
   ],
   "animals": [
     {
       "type": "squirrel",
-      "x": 224.46720000000016,
-      "y": 318.10000000000036,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.57014639698778,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel21"
-    },
-    {
-      "type": "squirrel",
-      "x": 216.30015384615376,
-      "y": 235.1538461538462,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.4952472194749765,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel35"
-    },
-    {
-      "type": "squirrel",
-      "x": 252.13923076923118,
-      "y": 285.5,
+      "x": 256.68240000000003,
+      "y": 266.7000000000003,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18729,8 +18700,8 @@
     },
     {
       "type": "squirrel",
-      "x": 243.27938461538497,
-      "y": 275.11538461538476,
+      "x": 238.32319999999993,
+      "y": 283.9000000000001,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18745,8 +18716,24 @@
     },
     {
       "type": "squirrel",
-      "x": 213.96861538461508,
-      "y": 286.11538461538476,
+      "x": 221.696,
+      "y": 282.5,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5139003857906563,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel77"
+    },
+    {
+      "type": "squirrel",
+      "x": 211.9968,
+      "y": 289.0999999999999,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18761,8 +18748,24 @@
     },
     {
       "type": "squirrel",
-      "x": 204.02959999999996,
-      "y": 292.2999999999997,
+      "x": 175.798,
+      "y": 260.79999999999995,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5079257038393798,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel83"
+    },
+    {
+      "type": "squirrel",
+      "x": 177.06369230769235,
+      "y": 258.5,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18777,8 +18780,8 @@
     },
     {
       "type": "squirrel",
-      "x": 246.9832,
-      "y": 260.10000000000036,
+      "x": 235.15230769230755,
+      "y": 304.1923076923076,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18793,40 +18796,8 @@
     },
     {
       "type": "squirrel",
-      "x": 206.6275999999998,
-      "y": 280.7999999999997,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.42422932113416956,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel151"
-    },
-    {
-      "type": "squirrel",
-      "x": 200.31246153846132,
-      "y": 237.53846153846143,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5982523984910905,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel155"
-    },
-    {
-      "type": "squirrel",
-      "x": 208.87253846153817,
-      "y": 291.28846153846166,
+      "x": 223.7743999999999,
+      "y": 304.6999999999998,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -18841,24 +18812,56 @@
     },
     {
       "type": "squirrel",
-      "x": 218.39853846153812,
-      "y": 302.21153846153834,
+      "x": 178.39600000000007,
+      "y": 287.50000000000045,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.5705276752770551,
+      "size": 0.5307935836598919,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel162"
+      "scriptingName": "squirrel166"
+    },
+    {
+      "type": "squirrel",
+      "x": 215.6339999999998,
+      "y": 242.9999999999999,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.523910661614025,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel168"
     },
     {
       "type": "deer",
-      "x": 215.634,
-      "y": 291,
+      "x": 258.167923076923,
+      "y": 289.6730769230769,
+      "hp": 12.480049838706385,
+      "maxHp": 12.480049838706385,
+      "mp": 12.480049838706385,
+      "maxMp": 12.480049838706385,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.9951395287271925,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer11"
+    },
+    {
+      "type": "deer",
+      "x": 187.92200000000003,
+      "y": 292.2000000000007,
       "hp": 12.486952959803116,
       "maxHp": 12.486952959803116,
       "mp": 12.486952959803116,
@@ -18873,24 +18876,24 @@
     },
     {
       "type": "deer",
-      "x": 240.5481538461538,
-      "y": 288.1538461538462,
-      "hp": 12.463967220963287,
-      "maxHp": 12.463967220963287,
-      "mp": 12.463967220963287,
-      "maxMp": 12.463967220963287,
+      "x": 180.99400000000003,
+      "y": 296.9000000000001,
+      "hp": 12.478388112473613,
+      "maxHp": 12.478388112473613,
+      "mp": 12.478388112473613,
+      "maxMp": 12.478388112473613,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 1.1233154486624333,
+      "size": 1.0123679300247688,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "deer25"
+      "scriptingName": "deer56"
     },
     {
       "type": "deer",
-      "x": 204.34269230769303,
-      "y": 247.5,
+      "x": 195.71600000000046,
+      "y": 243.4999999999999,
       "hp": 12.470016968035358,
       "maxHp": 12.470016968035358,
       "mp": 12.470016968035358,

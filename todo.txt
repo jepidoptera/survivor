@@ -55,14 +55,16 @@ X startup message
 X dialogs in scripting
 X player dies
 
-  thunderbolts from fragglegod
+X thunderbolts from fragglegod
+
+/ infinite map extent
   shop sells magic items
   holding the spell hotkey works to cast the spell just like spacebar
   mind control spells
   time-slowing aura
   trees should be transparent when the player is behind them
   see-through windows
-/ revamp close combat - use hitboxes instead of hex tiles
+X revamp close combat - use hitboxes instead of hex tiles
   checkpoints
   undo system for editor
   refactor renderer

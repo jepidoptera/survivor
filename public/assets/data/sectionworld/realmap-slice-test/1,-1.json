@@ -17982,6 +17982,8 @@
       "scriptingName": "wallsection341"
     }
   ],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "triggerArea",
@@ -18188,8 +18190,8 @@
     },
     {
       "type": "placedObject",
-      "x": 229.9229999999999,
-      "y": 99.25,
+      "x": 229.923,
+      "y": 99.25000000000006,
       "hp": 100,
       "isOnFire": false,
       "textureIndex": 0,
@@ -18350,6 +18352,138 @@
     },
     {
       "type": "tree",
+      "x": 210.438,
+      "y": 159,
+      "tint": 16777215,
+      "hp": 0,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 212.17,
+      "y": 148.0319140625,
+      "tint": 16777215,
+      "hp": 100.75,
+      "maxHP": 100.75,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4.03
+    },
+    {
+      "type": "tree",
+      "x": 215.634,
+      "y": 159.0454453125,
+      "tint": 16777215,
+      "hp": 0,
+      "maxHP": 100.75,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4.03
+    },
+    {
+      "type": "tree",
+      "x": 215.634,
+      "y": 175,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.09799999999998,
+      "y": 143,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 2,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.964,
+      "y": 137.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.964,
+      "y": 139.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 219.964,
+      "y": 144.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 220.82999999999998,
+      "y": 153.0188671875,
+      "tint": 16777215,
+      "hp": 0,
+      "maxHP": 75.25,
+      "isOnFire": false,
+      "textureIndex": 1,
+      "size": 3.01
+    },
+    {
+      "type": "tree",
+      "x": 223.428,
+      "y": 132.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 0,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 224.294,
+      "y": 130,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 3,
+      "size": 4
+    },
+    {
+      "type": "tree",
+      "x": 225.16,
+      "y": 133.5,
+      "tint": 16777215,
+      "hp": 100,
+      "maxHP": 100,
+      "isOnFire": false,
+      "textureIndex": 4,
+      "size": 4
+    },
+    {
+      "type": "tree",
       "x": 226.026,
       "y": 136,
       "tint": 16777215,
@@ -18423,39 +18557,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 223.428,
-      "y": 132.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 224.294,
-      "y": 130,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 225.16,
-      "y": 133.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
       "size": 4
     },
     {
@@ -18590,17 +18691,6 @@
     },
     {
       "type": "tree",
-      "x": 212.17,
-      "y": 148.0319140625,
-      "tint": 16777215,
-      "hp": 100.75,
-      "maxHP": 100.75,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4.03
-    },
-    {
-      "type": "tree",
       "x": 213.902,
       "y": 128,
       "tint": 16777215,
@@ -18714,17 +18804,6 @@
     },
     {
       "type": "tree",
-      "x": 219.09799999999998,
-      "y": 143,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 2,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 219.964,
       "y": 130.5,
       "tint": 16777215,
@@ -18732,39 +18811,6 @@
       "maxHP": 100,
       "isOnFire": false,
       "textureIndex": 3,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 219.964,
-      "y": 137.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 219.964,
-      "y": 139.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 219.964,
-      "y": 144.5,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
       "size": 4
     },
     {
@@ -18777,17 +18823,6 @@
       "isOnFire": false,
       "textureIndex": 3,
       "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 220.82999999999998,
-      "y": 153.0188671875,
-      "tint": 16777215,
-      "hp": 0,
-      "maxHP": 75.25,
-      "isOnFire": false,
-      "textureIndex": 1,
-      "size": 3.01
     },
     {
       "type": "tree",
@@ -19267,39 +19302,6 @@
     },
     {
       "type": "tree",
-      "x": 210.438,
-      "y": 159,
-      "tint": 16777215,
-      "hp": 0,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 0,
-      "size": 4
-    },
-    {
-      "type": "tree",
-      "x": 215.634,
-      "y": 159.0454453125,
-      "tint": 16777215,
-      "hp": 0,
-      "maxHP": 100.75,
-      "isOnFire": false,
-      "textureIndex": 3,
-      "size": 4.03
-    },
-    {
-      "type": "tree",
-      "x": 215.634,
-      "y": 175,
-      "tint": 16777215,
-      "hp": 100,
-      "maxHP": 100,
-      "isOnFire": false,
-      "textureIndex": 4,
-      "size": 4
-    },
-    {
-      "type": "tree",
       "x": 180.994,
       "y": 154,
       "tint": 16777215,
@@ -19338,8 +19340,8 @@
   "animals": [
     {
       "type": "bear",
-      "x": 223.428,
-      "y": 149.70000000000005,
+      "x": 225.5064000000002,
+      "y": 141.30000000000018,
       "hp": 500,
       "maxHp": 500,
       "mp": 300,
@@ -19358,8 +19360,8 @@
     },
     {
       "type": "yeti",
-      "x": 192.252,
-      "y": 106.5,
+      "x": 198.314,
+      "y": 105,
       "hp": 69.88849780634264,
       "maxHp": 69.88849780634264,
       "mp": 69.88849780634264,
@@ -19374,8 +19376,8 @@
     },
     {
       "type": "yeti",
-      "x": 194.01730769230699,
-      "y": 106.5,
+      "x": 196.06239999999946,
+      "y": 102.70000000000005,
       "hp": 71.97199749212274,
       "maxHp": 71.97199749212274,
       "mp": 71.97199749212274,
@@ -19390,8 +19392,8 @@
     },
     {
       "type": "yeti",
-      "x": 196.14899999999966,
-      "y": 104.25000000000006,
+      "x": 199.6995999999997,
+      "y": 102.20000000000005,
       "hp": 69.32802006989694,
       "maxHp": 69.32802006989694,
       "mp": 69.32802006989694,
@@ -19406,8 +19408,8 @@
     },
     {
       "type": "yeti",
-      "x": 235.81180000000018,
-      "y": 127.35000000000014,
+      "x": 239.88199999999995,
+      "y": 132.5999999999999,
       "hp": 67.25829322708988,
       "maxHp": 67.25829322708988,
       "mp": 1,
@@ -19422,8 +19424,8 @@
     },
     {
       "type": "yeti",
-      "x": 192.38523076923013,
-      "y": 105.5,
+      "x": 194.8000384615384,
+      "y": 106.91346153846155,
       "hp": 68.45586109384664,
       "maxHp": 68.45586109384664,
       "mp": 1,
@@ -19454,8 +19456,8 @@
     },
     {
       "type": "eagleman",
-      "x": 257.202,
-      "y": 110.20000000000027,
+      "x": 246.81,
+      "y": 125,
       "hp": 115.46208479717363,
       "maxHp": 115.46208479717363,
       "mp": 230.92416959434726,

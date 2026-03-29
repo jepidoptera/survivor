@@ -2977,6 +2977,8 @@
     "201,2": 4
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "tree",
@@ -3625,55 +3627,6 @@
       "size": 4
     }
   ],
-  "animals": [
-    {
-      "type": "squirrel",
-      "x": 108.07679999999982,
-      "y": 10.899999999999864,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.4241819969490725,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel38"
-    },
-    {
-      "type": "deer",
-      "x": 115.178,
-      "y": 7.299999999999898,
-      "hp": 12.492629140522805,
-      "maxHp": 12.492629140522805,
-      "mp": 12.492629140522805,
-      "maxMp": 12.492629140522805,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.8490666836539069,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer13"
-    },
-    {
-      "type": "deer",
-      "x": 156.13980000000015,
-      "y": 10.35000000000008,
-      "hp": 12.476362626124867,
-      "maxHp": 12.476362626124867,
-      "mp": 12.476362626124867,
-      "maxMp": 12.476362626124867,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.216748437907701,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer62"
-    }
-  ],
+  "animals": [],
   "powerups": []
 }

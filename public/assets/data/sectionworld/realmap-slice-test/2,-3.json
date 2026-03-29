@@ -3075,6 +3075,8 @@
     "300,2": 0
   },
   "walls": [],
+  "blockedEdges": [],
+  "clearanceByTile": {},
   "objects": [
     {
       "type": "tree",

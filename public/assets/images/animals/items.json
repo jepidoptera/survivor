@@ -64,7 +64,16 @@
       "height": 1.0,
       "anchor": { "x": 0.5, "y": 0.8 },
       "frameCount": { "x": 2, "y": 4 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.5 }
+      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.5 },
+      "visualHitbox": { 
+        "type": "polygon",
+        "points": [
+          { "x": -0.5, "y": -0.8 },
+          { "x": 0.5, "y": -0.8 },
+          { "x": 0.5, "y": 0.1 },
+          { "x": -0.5, "y": 0.1 }
+        ]
+      }
     },
     {
       "id": "fragglegod",
