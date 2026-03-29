@@ -134,6 +134,36 @@ function cloneJsonValue(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+function hashCoordinatePair(x, y, seed) {
+    let h = ((Number(x) || 0) * 374761393) + ((Number(y) || 0) * 668265263) + ((Number(seed) || 0) * 1442695041);
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = Math.imul(h, 1274126177) >>> 0;
+    return (h ^ (h >>> 16)) >>> 0;
+}
+
+function hashToUnitFloat(hash) {
+    return (hash >>> 0) / 4294967295;
+}
+
+function pickFallbackGroundTextureId(x, y, textureCount) {
+    const count = Math.max(1, Math.floor(Number(textureCount)) || 1);
+    if (count <= 1) return 0;
+
+    const patchHash = hashCoordinatePair(Math.floor((Number(x) || 0) / 5), Math.floor((Number(y) || 0) / 4), 11);
+    const bandHash = hashCoordinatePair(Math.floor(((Number(x) || 0) - (Number(y) || 0)) / 6), Math.floor(((Number(x) || 0) + (Number(y) || 0)) / 6), 23);
+    const detailHash = hashCoordinatePair(Number(x) || 0, Number(y) || 0, 41);
+    const selector = hashToUnitFloat(hashCoordinatePair(Number(x) || 0, Number(y) || 0, 67));
+
+    let chosenHash = patchHash;
+    if (selector > 0.72) {
+        chosenHash = detailHash;
+    } else if (selector > 0.38) {
+        chosenHash = bandHash;
+    }
+
+    return chosenHash % count;
+}
+
 function decodeGroundTextureAt(encoded, x, y) {
     if (!encoded || encoded.encoding !== "base36-char-grid" || typeof encoded.data !== "string") {
         return 0;
@@ -145,6 +175,20 @@ function decodeGroundTextureAt(encoded, x, y) {
     const char = encoded.data[index];
     const parsed = parseInt(char, 36);
     return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getGroundTextureCount(encoded) {
+    if (!encoded || encoded.encoding !== "base36-char-grid" || typeof encoded.data !== "string") {
+        return 1;
+    }
+    let maxId = 0;
+    for (let i = 0; i < encoded.data.length; i++) {
+        const parsed = parseInt(encoded.data[i], 36);
+        if (Number.isFinite(parsed) && parsed > maxId) {
+            maxId = parsed;
+        }
+    }
+    return Math.max(1, maxId + 1);
 }
 
 function invertBasis(delta, basis) {
@@ -199,11 +243,43 @@ function findOwningSectionCoord(axial, basis, anchorCenter, radius) {
     return bestCoord;
 }
 
-function buildEmptySectionAsset(coord, basis, anchorCenter) {
+function buildSectionTileCoordKeys(centerAxial, radius) {
+    const tileCoordKeys = [];
+    const seen = new Set();
+    const localRadius = Math.max(1, Math.floor(Number(radius)) || 1);
+    for (let dq = -(localRadius - 1); dq <= (localRadius - 1); dq++) {
+        for (let dr = -(localRadius - 1); dr <= (localRadius - 1); dr++) {
+            const axial = {
+                q: Number(centerAxial.q) + dq,
+                r: Number(centerAxial.r) + dr
+            };
+            if (axialDistance(axial, centerAxial) > (localRadius - 1)) continue;
+            const offset = axialToEvenQOffset(axial);
+            const coordKey = `${offset.x},${offset.y}`;
+            if (seen.has(coordKey)) continue;
+            seen.add(coordKey);
+            tileCoordKeys.push(coordKey);
+        }
+    }
+    return tileCoordKeys;
+}
+
+function buildPrefilledGroundTiles(tileCoordKeys, textureCount) {
+    const groundTiles = {};
+    for (let i = 0; i < tileCoordKeys.length; i++) {
+        const coordKey = tileCoordKeys[i];
+        const [x, y] = coordKey.split(",").map(Number);
+        groundTiles[coordKey] = pickFallbackGroundTextureId(x, y, textureCount);
+    }
+    return groundTiles;
+}
+
+function buildEmptySectionAsset(coord, basis, anchorCenter, radius, textureCount) {
     const key = makeSectionKey(coord);
     const centerAxial = computeSectionCenterAxial(coord, basis, anchorCenter);
     const centerOffset = axialToEvenQOffset(centerAxial);
     const centerWorld = offsetToWorld(centerOffset);
+    const tileCoordKeys = buildSectionTileCoordKeys(centerAxial, radius);
     return {
         id: key,
         key,
@@ -212,9 +288,9 @@ function buildEmptySectionAsset(coord, basis, anchorCenter) {
         centerOffset,
         centerWorld,
         neighborKeys: new Array(6).fill(null),
-        tileCoordKeys: [],
+        tileCoordKeys,
         groundTextureId: 0,
-        groundTiles: {},
+        groundTiles: buildPrefilledGroundTiles(tileCoordKeys, textureCount),
         walls: [],
         blockedEdges: [],
         clearanceByTile: {},
@@ -224,10 +300,10 @@ function buildEmptySectionAsset(coord, basis, anchorCenter) {
     };
 }
 
-function getOrCreateSectionAsset(sectionAssetsByKey, coord, basis, anchorCenter) {
+function getOrCreateSectionAsset(sectionAssetsByKey, coord, basis, anchorCenter, radius, textureCount) {
     const key = makeSectionKey(coord);
     if (!sectionAssetsByKey.has(key)) {
-        sectionAssetsByKey.set(key, buildEmptySectionAsset(coord, basis, anchorCenter));
+        sectionAssetsByKey.set(key, buildEmptySectionAsset(coord, basis, anchorCenter, radius, textureCount));
     }
     return sectionAssetsByKey.get(key);
 }
@@ -343,6 +419,7 @@ function main() {
     const encodedGround = saveData && saveData.groundTiles;
     const width = Number(encodedGround && encodedGround.width) || 0;
     const height = Number(encodedGround && encodedGround.height) || 0;
+    const groundTextureCount = getGroundTextureCount(encodedGround);
     if (!width || !height) {
         throw new Error("Save file does not contain a valid ground tile grid");
     }
@@ -360,9 +437,8 @@ function main() {
         for (let y = 0; y < height; y++) {
             const axial = evenQOffsetToAxial(x, y);
             const ownerCoord = findOwningSectionCoord(axial, basis, anchorCenter, radius);
-            const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter);
+            const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter, radius, groundTextureCount);
             const coordKey = `${x},${y}`;
-            asset.tileCoordKeys.push(coordKey);
             asset.groundTiles[coordKey] = decodeGroundTextureAt(encodedGround, x, y);
         }
     }
@@ -372,7 +448,7 @@ function main() {
         if (!record || typeof record !== "object" || typeof record.type !== "string") continue;
         const ownerCoord = getObjectOwnerSectionCoord(record, basis, anchorCenter, radius);
         if (!ownerCoord) continue;
-        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter);
+        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter, radius, groundTextureCount);
         if (record.type === "wallSection") {
             asset.walls.push(cloneJsonValue(record));
         } else {
@@ -384,7 +460,7 @@ function main() {
     for (const record of animals) {
         const ownerCoord = getObjectOwnerSectionCoord(record, basis, anchorCenter, radius);
         if (!ownerCoord) continue;
-        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter);
+        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter, radius, groundTextureCount);
         asset.animals.push(cloneJsonValue(record));
     }
 
@@ -392,7 +468,7 @@ function main() {
     for (const record of powerups) {
         const ownerCoord = getObjectOwnerSectionCoord(record, basis, anchorCenter, radius);
         if (!ownerCoord) continue;
-        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter);
+        const asset = getOrCreateSectionAsset(sectionAssetsByKey, ownerCoord, basis, anchorCenter, radius, groundTextureCount);
         asset.powerups.push(cloneJsonValue(record));
     }
 

@@ -1682,6 +1682,7 @@
         applyFrozenTint(item, displayObj = null) {
             if (!item) return;
             const nowMs = Date.now();
+            const clamp01 = value => Math.max(0, Math.min(1, Number(value) || 0));
             const frozenUntilMs = Number(item._freezeTintUntilMs);
             const degreesBelowBaseline = (typeof item.getDegreesBelowBaseline === "function")
                 ? Math.max(0, Number(item.getDegreesBelowBaseline()) || 0)
@@ -1690,7 +1691,7 @@
             const targetTint = Number.isFinite(item._freezeTintColor)
                 ? Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(item._freezeTintColor))))
                 : 0x9fd8ff;
-            const colderTint = 0x4f9dff;
+            const fullyFrozenTint = 0xaaaaff;
             const baseTint = Number.isFinite(item.tint)
                 ? Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(item.tint))))
                 : (Number.isFinite(item._freezeOriginalTint) ? Number(item._freezeOriginalTint) : 0xFFFFFF);
@@ -1721,10 +1722,23 @@
                     const b = Math.round(fromB + ((toB - fromB) * t));
                     return (r << 16) | (g << 8) | b;
                 };
-                const targetBlend = Math.max(0, Math.min(1, degreesBelowBaseline / 5));
-                const extraColdBlend = Math.max(0, Math.min(1, (degreesBelowBaseline - 5) / 10));
-                const intermediateTint = blendColor(baseTint, targetTint, targetBlend);
-                const appliedTint = blendColor(intermediateTint, colderTint, extraColdBlend);
+                const baselineTemperature = (typeof item.getTemperatureBaseline === "function")
+                    ? Number(item.getTemperatureBaseline())
+                    : Number(item.baselineTemperature);
+                const freezeThreshold = (typeof item.getFreezeTemperatureThreshold === "function")
+                    ? Number(item.getFreezeTemperatureThreshold())
+                    : -20;
+                const fullFreezeDegrees = Math.max(
+                    1,
+                    Number.isFinite(baselineTemperature) && Number.isFinite(freezeThreshold)
+                        ? Math.abs(baselineTemperature - freezeThreshold)
+                        : 20
+                );
+                const freezeProgress = clamp01(degreesBelowBaseline / fullFreezeDegrees);
+                const impactFlashBlend = (Number.isFinite(frozenUntilMs) && frozenUntilMs > nowMs) ? 1 : 0;
+                const coldTintBlend = clamp01(freezeProgress * 2);
+                const intermediateTint = blendColor(baseTint, targetTint, Math.max(impactFlashBlend, coldTintBlend));
+                const appliedTint = blendColor(intermediateTint, fullyFrozenTint, freezeProgress);
                 displayObjects.forEach(obj => {
                     if (Number.isFinite(obj.tint)) obj.tint = appliedTint;
                 });

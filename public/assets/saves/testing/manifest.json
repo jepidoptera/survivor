@@ -1,13 +1,15 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": 183.64071219213568,
-    "y": 203.96711026945604,
+    "x": -48.01312087548848,
+    "y": 291.42516946853243,
     "hp": 100,
     "maxHp": 100,
+    "mp": 100,
+    "maxMp": 100,
     "temperature": 0,
     "baselineTemperature": 0,
-    "gameMode": "adventure",
+    "gameMode": "god",
     "name": "you",
     "difficulty": 2,
     "magic": 100,
@@ -16,15 +18,10 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "",
+    "currentSpell": "teleport",
     "activeAura": null,
     "activeAuras": [],
-    "unlockedMagic": [
-      "freeze",
-      "spikes",
-      "teleport",
-      "healing"
-    ],
+    "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
     "selectedPlaceableCategory": "doors",
@@ -69,18 +66,74 @@
     "selectedRoofOverhang": 0,
     "selectedRoofPeakHeight": 0,
     "selectedRoofTextureRepeat": 0.0625,
-    "showEditorPanel": false,
+    "showEditorPanel": true,
     "showPerfReadout": false,
-    "spells": [],
+    "spells": [
+      {
+        "name": "fireball",
+        "icon": "/assets/images/thumbnails/fireball.png",
+        "key": "F"
+      },
+      {
+        "name": "freeze",
+        "icon": "/assets/images/magic/iceball.png",
+        "key": "I"
+      },
+      {
+        "name": "spikes",
+        "icon": "/assets/images/magic/spike.png",
+        "key": "K"
+      },
+      {
+        "name": "maze",
+        "icon": "/assets/images/thumbnails/maze.png",
+        "key": "M"
+      },
+      {
+        "name": "teleport",
+        "icon": "/assets/images/magic/teleport.png",
+        "key": "J"
+      },
+      {
+        "name": "shield",
+        "icon": "/assets/images/thumbnails/aura.png",
+        "key": "D"
+      },
+      {
+        "name": "treegrow",
+        "icon": "/assets/images/thumbnails/tree.png",
+        "key": "T"
+      },
+      {
+        "name": "triggerarea",
+        "icon": "/assets/images/thumbnails/wall.png",
+        "key": "G"
+      },
+      {
+        "name": "editscript",
+        "icon": "/assets/images/thumbnails/edit.png",
+        "key": "E+T"
+      },
+      {
+        "name": "firewall",
+        "icon": "/assets/images/thumbnails/firewall.png",
+        "key": "F+W"
+      },
+      {
+        "name": "spawnanimal",
+        "icon": "/assets/images/animals/squirrel.png",
+        "key": "A"
+      }
+    ],
     "inventory": {},
-    "scriptingName": "human1",
+    "scriptingName": "",
     "viewport": {
-      "x": 168.14071219213568,
-      "y": 183.96684760110324
+      "x": -63.51312087548848,
+      "y": 277.9210306505861
     }
   },
   "los": {
     "mazeMode": false
   },
-  "activeCenterKey": "0,0"
+  "activeCenterKey": "-3,1"
 }
