@@ -76,6 +76,28 @@ function toTreeSaveRecord(data) {
     if (typeof data.fallDirection === 'string') record.fallDirection = data.fallDirection;
     if (Number.isFinite(data.rotation) && data.rotation !== 0) record.rotation = Number(data.rotation);
     if (Number.isInteger(data.textureIndex)) record.textureIndex = data.textureIndex;
+    let resolvedTexturePath = null;
+    if (typeof data.resolveTreeTexturePath === 'function') {
+        resolvedTexturePath = data.resolveTreeTexturePath();
+    } else if (typeof data.texturePath === 'string' && data.texturePath.length > 0) {
+        resolvedTexturePath = data.texturePath;
+    } else {
+        const spriteTexture = data.pixiSprite && data.pixiSprite.texture;
+        const baseTexture = spriteTexture && spriteTexture.baseTexture;
+        const resource = baseTexture && baseTexture.resource;
+        if (resource && typeof resource.url === 'string' && resource.url.length > 0) {
+            resolvedTexturePath = resource.url;
+        }
+    }
+    if (typeof resolvedTexturePath === 'string' && resolvedTexturePath.length > 0) {
+        if (typeof globalThis !== 'undefined' && typeof globalThis.normalizeTexturePathForMetadata === 'function') {
+            record.texturePath = globalThis.normalizeTexturePathForMetadata(resolvedTexturePath);
+        } else if (typeof globalThis !== 'undefined' && typeof globalThis.normalizeLegacyAssetPath === 'function') {
+            record.texturePath = globalThis.normalizeLegacyAssetPath(resolvedTexturePath);
+        } else {
+            record.texturePath = resolvedTexturePath;
+        }
+    }
     if (Number.isFinite(data.size)) record.size = Number(data.size);
     if (Object.prototype.hasOwnProperty.call(data, "script")) {
         try {
@@ -642,29 +664,6 @@ function saveGameState() {
         ? globalThis.roofs
         : [];
 
-    const saveData = {
-        version: 1,
-        timestamp: new Date().toISOString(),
-        wizard: wizard.saveJson(),
-        los: {
-            mazeMode: getSavedLosMazeModeValue()
-        },
-        animals: animals
-            .filter(animal => animal && !animal.gone && !animal.vanishing)
-            .map(animal => animal.saveJson()),
-        staticObjects: [],
-        groundTiles: encodeGroundTiles(map),
-        clearanceMap: (typeof map.serializeClearance === "function")
-            ? map.serializeClearance()
-            : null,
-        roof: null,
-        powerups: (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
-            ? globalThis.powerups
-                .filter(p => p && !p.gone && !p.collected && typeof p.saveJson === "function")
-                .map(p => p.saveJson())
-            : []
-    };
-
     if (map && typeof map.syncPrototypeWalls === "function") {
         try {
             map.syncPrototypeWalls();
@@ -679,6 +678,52 @@ function saveGameState() {
             console.warn("Prototype object sync before save failed:", e);
         }
     }
+    if (map && typeof map.syncPrototypeAnimals === "function") {
+        try {
+            map.syncPrototypeAnimals();
+        } catch (e) {
+            console.warn("Prototype animal sync before save failed:", e);
+        }
+    }
+    if (map && typeof map.syncPrototypePowerups === "function") {
+        try {
+            map.syncPrototypePowerups();
+        } catch (e) {
+            console.warn("Prototype powerup sync before save failed:", e);
+        }
+    }
+
+    const savingPrototypeSectionWorld = !!(map && map._prototypeSectionState);
+    const saveData = {
+        version: 1,
+        timestamp: new Date().toISOString(),
+        wizard: wizard.saveJson(),
+        los: {
+            mazeMode: getSavedLosMazeModeValue()
+        },
+        animals: animals
+            .filter(animal => {
+                if (!animal || animal.gone || animal.vanishing) return false;
+                if (!savingPrototypeSectionWorld) return true;
+                return animal._prototypeRuntimeRecord !== true;
+            })
+            .map(animal => animal.saveJson()),
+        staticObjects: [],
+        groundTiles: encodeGroundTiles(map),
+        clearanceMap: (typeof map.serializeClearance === "function")
+            ? map.serializeClearance()
+            : null,
+        roof: null,
+        powerups: (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
+            ? globalThis.powerups
+                .filter(p => {
+                    if (!p || p.gone || p.collected || typeof p.saveJson !== "function") return false;
+                    if (!savingPrototypeSectionWorld) return true;
+                    return p._prototypeRuntimeRecord !== true;
+                })
+                .map(p => p.saveJson())
+            : []
+    };
 
     const loadedRoadRecords = [];
     const loadedTreeRecords = [];
@@ -803,7 +848,9 @@ function saveGameState() {
                 groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
                 groundTiles,
                 walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
-                objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : []
+                objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
+                animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
+                powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
             });
         }
 
@@ -1035,12 +1082,34 @@ function loadGameState(saveData) {
             globalThis.powerups.length = 0;
         }
 
+        const hasPrototypeSectionWorld = !!(
+            saveData.prototypeSectionWorld &&
+            typeof saveData.prototypeSectionWorld === "object" &&
+            map &&
+            typeof map.loadPrototypeSectionWorld === "function"
+        );
+        let prototypeSectionWorldLoaded = false;
+        if (hasPrototypeSectionWorld) {
+            prototypeSectionWorldLoaded = map.loadPrototypeSectionWorld(saveData.prototypeSectionWorld) === true;
+        }
+        const isPrototypeManagedAnimalSaveRecord = (animalData) => {
+            if (!prototypeSectionWorldLoaded || !animalData || typeof map.getPrototypeSectionKeyForWorldPoint !== "function") {
+                return false;
+            }
+            const worldX = Number(animalData.x);
+            const worldY = Number(animalData.y);
+            if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+            const sectionKey = map.getPrototypeSectionKeyForWorldPoint(worldX, worldY);
+            return typeof sectionKey === "string" && sectionKey.length > 0;
+        };
+
         // Restore animals
         const _lt2 = performance.now();
         console.log(`[LOAD TIMING] wizard + clear animals: ${(_lt2 - _lt1).toFixed(1)}ms`);
         if (saveData.animals && Array.isArray(saveData.animals)) {
             saveData.animals.forEach(animalData => {
                 if (!animalData || animalData.gone || animalData.vanishing) return;
+                if (isPrototypeManagedAnimalSaveRecord(animalData)) return;
                 const animal = Animal.loadJson(animalData, map);
                 if (animal) {
                     animals.push(animal);
@@ -1149,18 +1218,21 @@ function loadGameState(saveData) {
         // Restore static objects (dedupe entries in save payload for backward compatibility)
         const _lt4 = performance.now();
         console.log(`[LOAD TIMING] clear static objects: ${(_lt4 - _lt3).toFixed(1)}ms`);
-        if (
-            saveData.prototypeSectionWorld &&
-            typeof saveData.prototypeSectionWorld === "object" &&
-            map &&
-            typeof map.loadPrototypeSectionWorld === "function"
-        ) {
-            map.loadPrototypeSectionWorld(saveData.prototypeSectionWorld);
+        if (hasPrototypeSectionWorld) {
+            if (!prototypeSectionWorldLoaded) {
+                map.loadPrototypeSectionWorld(saveData.prototypeSectionWorld);
+            }
             if (typeof map.syncPrototypeWalls === "function") {
                 map.syncPrototypeWalls();
             }
             if (typeof map.syncPrototypeObjects === "function") {
                 map.syncPrototypeObjects();
+            }
+            if (typeof map.syncPrototypeAnimals === "function") {
+                map.syncPrototypeAnimals();
+            }
+            if (typeof map.syncPrototypePowerups === "function") {
+                map.syncPrototypePowerups();
             }
         }
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
@@ -1312,6 +1384,13 @@ function loadGameState(saveData) {
             }
         }
 
+        if (typeof globalThis !== "undefined") {
+            const scriptingApi = globalThis.Scripting || null;
+            if (scriptingApi && typeof scriptingApi.rebuildNamedObjectRegistry === "function") {
+                scriptingApi.rebuildNamedObjectRegistry({ map, wizard });
+            }
+        }
+
         // Wizard.loadJson restores viewport (or centers when missing in old saves)
         if (wizard) {
             wizard._triggerAreaTraversalStateById = new Map();
@@ -1343,6 +1422,25 @@ function loadGameState(saveData) {
                     const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
                     if (!hitbox) continue;
                     touchEntries.push({ obj, hitbox, forceTouch: false });
+                }
+                const runtimeScriptObjects = (map && typeof map.getGameObjects === "function")
+                    ? (map.getGameObjects({ refresh: false }) || [])
+                    : [];
+                const touchObjects = new Set(touchEntries.map(entry => entry && entry.obj).filter(Boolean));
+                for (let i = 0; i < runtimeScriptObjects.length; i++) {
+                    const obj = runtimeScriptObjects[i];
+                    if (!obj || obj === wizard || obj.gone || obj.vanishing) continue;
+                    if (touchObjects.has(obj)) continue;
+                    if (obj.map && wizard.map && obj.map !== wizard.map) continue;
+                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    if (!hitbox) continue;
+                    const hasTouchScript = (
+                        typeof scriptingApi.hasEventScriptForTarget === "function" &&
+                        (scriptingApi.hasEventScriptForTarget(obj, "playerTouches") || scriptingApi.hasEventScriptForTarget(obj, "playerUntouches"))
+                    );
+                    if (!hasTouchScript) continue;
+                    touchEntries.push({ obj, hitbox, forceTouch: false });
+                    touchObjects.add(obj);
                 }
                 scriptingApi.processTriggerAreaTraversalEvents(
                     wizard,
@@ -1496,6 +1594,12 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
     }
     if (typeof map.syncPrototypeObjects === "function") {
         map.syncPrototypeObjects();
+    }
+    if (typeof map.syncPrototypeAnimals === "function") {
+        map.syncPrototypeAnimals();
+    }
+    if (typeof map.syncPrototypePowerups === "function") {
+        map.syncPrototypePowerups();
     }
     const activeWizard = (typeof globalThis !== "undefined" && globalThis.wizard && typeof globalThis.wizard.saveJson === "function")
         ? globalThis.wizard

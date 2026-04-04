@@ -45,6 +45,7 @@ X choose spells from menu on startup
    -maze
    -invisibility
    -omnivision
+    imps?
   
 X invisibility aura
 X shield spell
@@ -54,16 +55,18 @@ X trees popping in and out of view
 X startup message
 X dialogs in scripting
 X player dies
-
 X thunderbolts from fragglegod
 
 / infinite map extent
+  incremental, non-lagging load
+  upgradable spells
+  multiple floors!
   shop sells magic items
   holding the spell hotkey works to cast the spell just like spacebar
   mind control spells
   time-slowing aura
   trees should be transparent when the player is behind them
-  see-through windows
+X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
   checkpoints
   undo system for editor
@@ -94,4 +97,6 @@ X roofs phasing through walls
 X item messages not showing
 X spell images don't scale with zoom
 X walls sometimes connect sideways and get totally screwy
-  megabear sometimes gets stuck.
+X blodia fails to attack when you stand near a wall
+/ bears chase for a very long time
+  megabear sometimes gets stuck. (this may be because it's in hitbox mode!)

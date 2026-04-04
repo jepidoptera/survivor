@@ -62,6 +62,7 @@ let pointerLockRangeDragInput = null;
 var messages = [];
 let keysPressed = {}; // Track which keys are currently pressed
 let spacebarDownAt = null;
+let treeGrowVariantChosenThisHold = false;
 let spellMenuKeyboardIndex = -1;
 let auraMenuKeyboardIndex = -1;
 let editorMenuKeyboardIndex = -1;
@@ -95,6 +96,10 @@ if (typeof globalThis !== "undefined") {
     globalThis.releaseSpacebarCastingState = function releaseSpacebarCastingState() {
         keysPressed[" "] = false;
         spacebarDownAt = null;
+        treeGrowVariantChosenThisHold = false;
+        if (typeof SpellSystem !== "undefined" && SpellSystem && typeof SpellSystem.clearTreePlacementPreviewSize === "function") {
+            SpellSystem.clearTreePlacementPreviewSize(wizard);
+        }
     };
 
     globalThis.armSpacebarTypingGuardForElement = function armSpacebarTypingGuardForElement(targetEl) {
@@ -344,6 +349,32 @@ let characterLayer = new PIXI.Container();
 let projectileLayer = new PIXI.Container();
 let hitboxLayer = new PIXI.Container();
 let cursorLayer = new PIXI.Container();
+gameContainer.name = "gameContainer";
+landLayer.name = "landLayer";
+roadLayer.name = "roadLayer";
+gridLayer.name = "gridLayer";
+neighborDebugLayer.name = "neighborDebugLayer";
+opaqueMeshLayer.name = "opaqueMeshLayer";
+objectLayer.name = "objectLayer";
+roofLayer.name = "roofLayer";
+characterLayer.name = "characterLayer";
+projectileLayer.name = "projectileLayer";
+hitboxLayer.name = "hitboxLayer";
+cursorLayer.name = "cursorLayer";
+if (typeof globalThis !== "undefined") {
+    globalThis.gameContainer = gameContainer;
+    globalThis.landLayer = landLayer;
+    globalThis.roadLayer = roadLayer;
+    globalThis.gridLayer = gridLayer;
+    globalThis.neighborDebugLayer = neighborDebugLayer;
+    globalThis.opaqueMeshLayer = opaqueMeshLayer;
+    globalThis.objectLayer = objectLayer;
+    globalThis.roofLayer = roofLayer;
+    globalThis.characterLayer = characterLayer;
+    globalThis.projectileLayer = projectileLayer;
+    globalThis.hitboxLayer = hitboxLayer;
+    globalThis.cursorLayer = cursorLayer;
+}
 
 app.stage.addChild(gameContainer);
 gameContainer.addChild(landLayer);
@@ -507,18 +538,24 @@ function updateTreeGrowPreview() {
     const snapScreenY = dy * viewscale * xyratio;
 
     // Pick texture based on selected variant
-    const variantIndex = Number.isInteger(wizard.selectedTreeTextureVariant) ? wizard.selectedTreeTextureVariant : 0;
-    const treeTextures = (wizard.map.scenery && wizard.map.scenery.tree && wizard.map.scenery.tree.textures)
-        ? wizard.map.scenery.tree.textures
-        : null;
-    const tex = (treeTextures && treeTextures[variantIndex])
-        ? treeTextures[variantIndex]
-        : PIXI.Texture.from(`/assets/images/trees/tree${variantIndex}.png`);
+    const variantIndex = (
+        typeof SpellSystem !== "undefined" &&
+        typeof SpellSystem.resolveTreePlacementTextureVariant === "function"
+    )
+        ? SpellSystem.resolveTreePlacementTextureVariant(wizard)
+        : (Number.isInteger(wizard.selectedTreeTextureVariant) ? wizard.selectedTreeTextureVariant : 0);
+    const tex = PIXI.Texture.from(`/assets/images/trees/tree${variantIndex}.png`);
     if (tex && treeGrowPreviewSprite.texture !== tex) {
         treeGrowPreviewSprite.texture = tex;
     }
 
-    const placementSize = Number.isFinite(wizard.treeGrowPlacementSize) ? wizard.treeGrowPlacementSize : 4;
+    const placementSize = (
+        typeof SpellSystem !== "undefined" &&
+        SpellSystem &&
+        typeof SpellSystem.resolveTreePlacementSize === "function"
+    )
+        ? SpellSystem.resolveTreePlacementSize(wizard)
+        : (Number.isFinite(wizard.treeGrowPlacementSize) ? wizard.treeGrowPlacementSize : 4);
     treeGrowPreviewSprite.width = placementSize * viewscale;
     treeGrowPreviewSprite.height = placementSize * viewscale;
     treeGrowPreviewSprite.x = snapScreenX;
@@ -897,6 +934,7 @@ function onAssetsLoaded() {
     const cursorTexture = PIXI.Texture.from('/assets/images/arrow.png');
     cursorTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR; // Enable antialiasing
     cursorSprite = new PIXI.Sprite(cursorTexture);
+    cursorSprite.name = "cursorSprite";
     cursorSprite.anchor.set(0.5, 0);
     cursorSprite.visible = false; // Hidden until first cursor update
     cursorLayer.addChild(cursorSprite);
@@ -936,6 +974,7 @@ function onAssetsLoaded() {
 
     // Initialize animal preview sprite (hidden by default)
     animalPreviewSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+    animalPreviewSprite.name = "animalPreviewSprite";
     animalPreviewSprite.anchor.set(0.5, 1);
     animalPreviewSprite.visible = false;
     animalPreviewSprite.alpha = 0.45;
@@ -943,6 +982,7 @@ function onAssetsLoaded() {
 
     // Initialize tree grow preview sprite (hidden by default)
     treeGrowPreviewSprite = new PIXI.Sprite(PIXI.Texture.from('/assets/images/trees/tree0.png'));
+    treeGrowPreviewSprite.name = "treeGrowPreviewSprite";
     treeGrowPreviewSprite.anchor.set(0.5, 1);
     treeGrowPreviewSprite.visible = false;
     treeGrowPreviewSprite.alpha = 0.5;
@@ -1606,8 +1646,8 @@ jQuery(() => {
     }
 
     function ensureStartupClearanceReady() {
-        if (map && typeof map.ensurePrototypeSectionClearance === "function") {
-            map.ensurePrototypeSectionClearance();
+        if (map && typeof map.applyPrototypeSectionClearance === "function") {
+            map.applyPrototypeSectionClearance();
             return;
         }
         if (map && typeof map.computeClearance === "function") {
@@ -3226,6 +3266,17 @@ jQuery(() => {
                         ` p ${Number(drawBreakdown.passPostMs || 0).toFixed(2)}`
                     )
                     : "";
+                const drawWorldBuckets = drawBreakdown
+                    ? (
+                        `\ndraww g ${Number(drawBreakdown.passWorldGroundMs || 0).toFixed(2)}` +
+                        ` r ${Number(drawBreakdown.passWorldRoadsMs || 0).toFixed(2)}` +
+                        ` h ${Number(drawBreakdown.passWorldHexMs || 0).toFixed(2)}` +
+                        ` s ${Number(drawBreakdown.passWorldSeamsMs || 0).toFixed(2)}` +
+                        ` c ${Number(drawBreakdown.passWorldClearanceMs || 0).toFixed(2)}` +
+                        ` n ${Number(drawBreakdown.passWorldTileNumbersMs || 0).toFixed(2)}` +
+                        ` b ${Number(drawBreakdown.passWorldBorderMs || 0).toFixed(2)}`
+                    )
+                    : "";
                 const drawCounts = drawBreakdown
                     ? (
                         `\nobjs ${Number(drawBreakdown.mapItems || 0)}` +
@@ -3234,6 +3285,41 @@ jQuery(() => {
                         ` t${Number(drawBreakdown.hydratedTrees || 0)}`
                     )
                     : "";
+                const renderingLiveStats = (typeof globalThis !== "undefined" && globalThis.renderingLiveStats)
+                    ? globalThis.renderingLiveStats
+                    : null;
+                const drawCacheCounts = drawBreakdown
+                    ? (
+                        `\ncache g ${Number(drawBreakdown.groundCached || 0)}` +
+                        ` gv ${Number(drawBreakdown.groundVisible || 0)}` +
+                        ` gp ${Number(drawBreakdown.groundPool || 0)}` +
+                        ` r ${Number(drawBreakdown.roadCached || 0)}` +
+                        ` d ${Number(drawBreakdown.depthMeshes || 0)}` +
+                        ` o ${Number(drawBreakdown.objectDisplays || 0)}`
+                    )
+                    : (renderingLiveStats
+                        ? (
+                            `\ncache g ${Number(renderingLiveStats.groundCached || 0)}` +
+                            ` gv ${Number(renderingLiveStats.groundVisible || 0)}` +
+                            ` gp ${Number(renderingLiveStats.groundPool || 0)}` +
+                            ` r ${Number(renderingLiveStats.roadCached || 0)}` +
+                            ` d ${Number(renderingLiveStats.depthMeshes || 0)}` +
+                            ` o ${Number(renderingLiveStats.objectDisplays || 0)}`
+                        )
+                        : "");
+                const drawLayerCounts = drawBreakdown
+                    ? (
+                        `\nlayer g ${Number(drawBreakdown.groundLayerChildren || 0)}` +
+                        ` r ${Number(drawBreakdown.roadsLayerChildren || 0)}` +
+                        ` o ${Number(drawBreakdown.objectsLayerChildren || 0)}`
+                    )
+                    : (renderingLiveStats
+                        ? (
+                            `\nlayer g ${Number(renderingLiveStats.groundLayerChildren || 0)}` +
+                            ` r ${Number(renderingLiveStats.roadsLayerChildren || 0)}` +
+                            ` o ${Number(renderingLiveStats.objectsLayerChildren || 0)}`
+                        )
+                        : "");
                 const drawComposeBuckets = drawBreakdown
                     ? (
                         `\ndrawc mk ${Number(drawBreakdown.composeMaskMs || 0).toFixed(2)}` +
@@ -3257,8 +3343,11 @@ jQuery(() => {
                     `sim ${perfStats.simSteps}\n` +
                     drawBuckets +
                     drawPasses +
+                    drawWorldBuckets +
                     drawComposeBuckets +
                     drawCounts +
+                    drawCacheCounts +
+                    drawLayerCounts +
                     losSummary +
                     wwDebug
                 );
@@ -3864,6 +3953,7 @@ jQuery(() => {
                 wizard.currentSpell === "wall" ||
                 wizard.currentSpell === "buildroad" ||
                 wizard.currentSpell === "firewall" ||
+                wizard.currentSpell === "moveobject" ||
                 wizard.currentSpell === "vanish" ||
                 wizard.currentSpell === "editorvanish"
             )
@@ -4240,6 +4330,21 @@ jQuery(() => {
 
         // Track key state
         keysPressed[keyLower] = true;
+
+        if (
+            keyLower === " " &&
+            !treeGrowVariantChosenThisHold &&
+            wizard &&
+            wizard.currentSpell === "treegrow" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.resolveTreePlacementTextureVariant === "function"
+        ) {
+            treeGrowVariantChosenThisHold = true;
+            SpellSystem.resolveTreePlacementTextureVariant(wizard, { forceNew: true });
+            if (typeof SpellSystem.resolveTreePlacementSize === "function") {
+                SpellSystem.resolveTreePlacementSize(wizard, { forceNew: true });
+            }
+        }
 
         if (
             keyLower === "z" &&
@@ -4635,14 +4740,22 @@ jQuery(() => {
             updateEditorPlacementActiveState(false);
         }
         if (event.key === " " || event.code === "Space") {
+            treeGrowVariantChosenThisHold = false;
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (inEditorMode) {
                 updateEditorPlacementActiveState(false);
+            }
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.clearTreePlacementPreviewVariant === "function") {
+                SpellSystem.clearTreePlacementPreviewVariant(wizard);
+            }
+            if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.clearTreePlacementPreviewSize === "function") {
+                SpellSystem.clearTreePlacementPreviewSize(wizard);
             }
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
                 SpellSystem.cancelDragSpell(wizard, "wall");
                 SpellSystem.cancelDragSpell(wizard, "buildroad");
                 SpellSystem.cancelDragSpell(wizard, "firewall");
+                SpellSystem.cancelDragSpell(wizard, "moveobject");
                 SpellSystem.cancelDragSpell(wizard, "vanish");
             }
             SpellSystem.stopTreeGrowthChannel(wizard);
@@ -4667,6 +4780,7 @@ jQuery(() => {
                 wizard.currentSpell === "wall" ||
                 wizard.currentSpell === "buildroad" ||
                 wizard.currentSpell === "firewall" ||
+                wizard.currentSpell === "moveobject" ||
                 wizard.currentSpell === "vanish" ||
                 wizard.currentSpell === "editorvanish"
             ) return;

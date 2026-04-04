@@ -291,6 +291,13 @@ void main(void) {
             if (!options.deferSetup) {
                 this.handleJoineryOnPlacement();
             }
+
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                ? globalThis.Scripting
+                : null;
+            if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+                scriptingApi.ensureObjectScriptingName(this, { map: this.map || null });
+            }
         }
 
         static _isMapNode(candidate) {
@@ -2578,6 +2585,100 @@ void main(void) {
                 });
             };
 
+            const normalizeTransparentSpans = (spans) => {
+                if (!Array.isArray(spans) || spans.length === 0) return [];
+                const normalized = spans
+                    .map(span => {
+                        if (!span || !span.transparentForLos) return null;
+                        const rawStart = Number(span.startT);
+                        const rawEnd = Number(span.endT);
+                        if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) return null;
+                        const startT = Math.max(0, Math.min(1, Math.min(rawStart, rawEnd)));
+                        const endT = Math.max(0, Math.min(1, Math.max(rawStart, rawEnd)));
+                        if (endT - startT <= EPS) return null;
+                        return { startT, endT };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => a.startT - b.startT);
+                if (normalized.length === 0) return [];
+
+                const merged = [normalized[0]];
+                for (let i = 1; i < normalized.length; i++) {
+                    const current = normalized[i];
+                    const previous = merged[merged.length - 1];
+                    if (current.startT <= previous.endT + EPS) {
+                        previous.endT = Math.max(previous.endT, current.endT);
+                    } else {
+                        merged.push(current);
+                    }
+                }
+                return merged;
+            };
+
+            const interpolatePoint = (p1, p2, t) => ({
+                x: p1.x + (p2.x - p1.x) * t,
+                y: p1.y + (p2.y - p1.y) * t
+            });
+
+            const pushHitsForFaceWithOpenings = (faceStart, faceEnd, transparentSpans) => {
+                if (!faceStart || !faceEnd) return;
+                if (!Array.isArray(transparentSpans) || transparentSpans.length === 0) {
+                    pushHitsForSegment(faceStart, faceEnd);
+                    return;
+                }
+
+                let cursorT = 0;
+                for (let i = 0; i < transparentSpans.length; i++) {
+                    const span = transparentSpans[i];
+                    if (!span) continue;
+                    if (span.startT > cursorT + EPS) {
+                        pushHitsForSegment(
+                            interpolatePoint(faceStart, faceEnd, cursorT),
+                            interpolatePoint(faceStart, faceEnd, span.startT)
+                        );
+                    }
+                    cursorT = Math.max(cursorT, span.endT);
+                    if (cursorT >= 1 - EPS) break;
+                }
+
+                if (cursorT < 1 - EPS) {
+                    pushHitsForSegment(
+                        interpolatePoint(faceStart, faceEnd, cursorT),
+                        interpolatePoint(faceStart, faceEnd, 1)
+                    );
+                }
+            };
+
+            const projectLosPointToWallT = (point) => {
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+                return (((point.x - startX) * ux) + ((point.y - startY) * uy)) / len;
+            };
+
+            const orderFaceEndpointsAlongWall = (pointA, pointB) => {
+                if (!pointA || !pointB) return null;
+                const tA = projectLosPointToWallT(pointA);
+                const tB = projectLosPointToWallT(pointB);
+                if (!Number.isFinite(tA) || !Number.isFinite(tB)) return null;
+                if (tA <= tB) {
+                    return {
+                        start: pointA,
+                        end: pointB,
+                        startT: tA,
+                        endT: tB
+                    };
+                }
+                return {
+                    start: pointB,
+                    end: pointA,
+                    startT: tB,
+                    endT: tA
+                };
+            };
+
+            const transparentSpans = normalizeTransparentSpans(
+                this._collectMountedWallOpeningSpans({ forLos: true })
+            );
+
             if (mazeMode) {
                 const facingFace = this.getPlayerFacingLongSideCornersWorld({
                     player: wizardRef
@@ -2591,10 +2692,16 @@ void main(void) {
                             y: wy + shortestDeltaY(wy, Number(point.y))
                         };
                     };
-                    const faceStart = toLosSpace(facingFace[0]);
-                    const faceEnd = toLosSpace(facingFace[1]);
-                    if (faceStart && faceEnd) {
-                        pushHitsForSegment(faceStart, faceEnd);
+                    const orderedFacingFace = orderFaceEndpointsAlongWall(
+                        toLosSpace(facingFace[0]),
+                        toLosSpace(facingFace[1])
+                    );
+                    if (orderedFacingFace) {
+                        pushHitsForFaceWithOpenings(
+                            orderedFacingFace.start,
+                            orderedFacingFace.end,
+                            transparentSpans
+                        );
                     }
 
                     // In maze mode, wall ends should still occlude LOS.
@@ -2617,9 +2724,15 @@ void main(void) {
                             ? allFaces.longFaceLeft
                             : null;
 
-                    if (Array.isArray(oppositeFace) && oppositeFace.length >= 2) {
-                        const capStartA = toLosSpace(facingFace[0]);
-                        const capStartB = toLosSpace(oppositeFace[0]);
+                    if (Array.isArray(oppositeFace) && oppositeFace.length >= 2 && orderedFacingFace) {
+                        const orderedOppositeFace = orderFaceEndpointsAlongWall(
+                            toLosSpace(oppositeFace[0]),
+                            toLosSpace(oppositeFace[1])
+                        );
+                        if (!orderedOppositeFace) return hits;
+
+                        const capStartA = orderedFacingFace.start;
+                        const capStartB = orderedOppositeFace.start;
                         if (
                             capStartA &&
                             capStartB &&
@@ -2628,8 +2741,8 @@ void main(void) {
                             pushHitsForSegment(capStartA, capStartB);
                         }
 
-                        const capEndA = toLosSpace(facingFace[1]);
-                        const capEndB = toLosSpace(oppositeFace[1]);
+                        const capEndA = orderedFacingFace.end;
+                        const capEndB = orderedOppositeFace.end;
                         if (
                             capEndA &&
                             capEndB &&
@@ -2642,17 +2755,15 @@ void main(void) {
                 return hits;
             }
 
-            const corners = [
-                { x: startX + nx * halfT, y: startY + ny * halfT },
-                { x: endX + nx * halfT, y: endY + ny * halfT },
-                { x: endX - nx * halfT, y: endY - ny * halfT },
-                { x: startX - nx * halfT, y: startY - ny * halfT }
-            ];
-            for (let i = 0; i < corners.length; i++) {
-                const p1 = corners[i];
-                const p2 = corners[(i + 1) % corners.length];
-                pushHitsForSegment(p1, p2);
-            }
+            const positiveFaceStart = { x: startX + nx * halfT, y: startY + ny * halfT };
+            const positiveFaceEnd = { x: endX + nx * halfT, y: endY + ny * halfT };
+            const negativeFaceStart = { x: startX - nx * halfT, y: startY - ny * halfT };
+            const negativeFaceEnd = { x: endX - nx * halfT, y: endY - ny * halfT };
+
+            pushHitsForFaceWithOpenings(positiveFaceStart, positiveFaceEnd, transparentSpans);
+            pushHitsForFaceWithOpenings(negativeFaceStart, negativeFaceEnd, transparentSpans);
+            pushHitsForSegment(positiveFaceStart, negativeFaceStart);
+            pushHitsForSegment(positiveFaceEnd, negativeFaceEnd);
 
             return hits;
         }
@@ -5463,9 +5574,12 @@ void main(void) {
             return t;
         }
 
-        _collectMountedDoorTraversalSpans() {
+        _collectMountedWallOpeningSpans(options = {}) {
             const out = [];
             const mapRef = this.map || null;
+            const forLos = !!options.forLos;
+            const includeDoors = options.includeDoors !== false;
+            const includeWindows = options.includeWindows !== false;
             const sx = Number(this.startPoint && this.startPoint.x);
             const sy = Number(this.startPoint && this.startPoint.y);
             const ex = Number(this.endPoint && this.endPoint.x);
@@ -5488,21 +5602,25 @@ void main(void) {
             const attachments = Array.isArray(this.attachedObjects) ? this.attachedObjects : [];
             for (let i = 0; i < attachments.length; i++) {
                 const entry = attachments[i];
-                const door = entry && entry.object;
-                if (!this._isDoorOrWindowObject(door)) continue;
-                const category = (typeof door.category === "string") ? door.category.trim().toLowerCase() : "";
-                const type = (typeof door.type === "string") ? door.type.trim().toLowerCase() : "";
-                if (category !== "doors" && type !== "door") continue;
+                const mountedObject = entry && entry.object;
+                if (!this._isDoorOrWindowObject(mountedObject)) continue;
+                const category = (typeof mountedObject.category === "string") ? mountedObject.category.trim().toLowerCase() : "";
+                const type = (typeof mountedObject.type === "string") ? mountedObject.type.trim().toLowerCase() : "";
+                const isDoor = category === "doors" || type === "door";
+                const isWindow = category === "windows" || type === "window";
+                if ((isDoor && !includeDoors) || (isWindow && !includeWindows) || (!isDoor && !isWindow)) continue;
 
-                const doorX = Number(door.x);
-                const doorY = Number(door.y);
-                const doorWidth = Math.max(0.01, Number.isFinite(door.width) ? Number(door.width) : 1);
-                const traversalWidth = Math.max(0.01, doorWidth * 0.63);
-                const anchorX = Number.isFinite(door.placeableAnchorX) ? Number(door.placeableAnchorX) : 0.5;
-                if (!Number.isFinite(doorX) || !Number.isFinite(doorY)) continue;
+                const mountedX = Number(mountedObject.x);
+                const mountedY = Number(mountedObject.y);
+                const mountedWidth = Math.max(0.01, Number.isFinite(mountedObject.width) ? Number(mountedObject.width) : 1);
+                const openingWidth = forLos
+                    ? mountedWidth
+                    : Math.max(0.01, mountedWidth * 0.63);
+                const anchorX = Number.isFinite(mountedObject.placeableAnchorX) ? Number(mountedObject.placeableAnchorX) : 0.5;
+                if (!Number.isFinite(mountedX) || !Number.isFinite(mountedY)) continue;
 
-                const centerX = doorX - ux * ((anchorX - 0.5) * doorWidth);
-                const centerY = doorY - uy * ((anchorX - 0.5) * doorWidth);
+                const centerX = mountedX - ux * ((anchorX - 0.5) * mountedWidth);
+                const centerY = mountedY - uy * ((anchorX - 0.5) * mountedWidth);
                 const relX = (mapRef && typeof mapRef.shortestDeltaX === "function")
                     ? mapRef.shortestDeltaX(sx, centerX)
                     : (centerX - sx);
@@ -5510,17 +5628,42 @@ void main(void) {
                     ? mapRef.shortestDeltaY(sy, centerY)
                     : (centerY - sy);
                 const centerT = ((relX * ux) + (relY * uy)) / wallLen;
-                const halfT = (traversalWidth * 0.5) / wallLen;
+                const halfT = (openingWidth * 0.5) / wallLen;
                 const padT = Math.max(0.0001, 0.05 / wallLen);
-                const isOpenDoor = !!(door.isOpen || door._doorLockedOpen || door.isFallenDoorEffect);
+                const isOpenDoor = isDoor && !!(
+                    mountedObject.isOpen ||
+                    mountedObject._doorLockedOpen ||
+                    mountedObject.isFallenDoorEffect
+                );
+                const blocker = isDoor && !(
+                    isOpenDoor ||
+                    mountedObject.falling ||
+                    (Number.isFinite(mountedObject.hp) && Number(mountedObject.hp) <= 0)
+                )
+                    ? mountedObject
+                    : null;
+                const isOpenWindow = isWindow && !!mountedObject.isOpen;
+                const transparentForLos = isWindow
+                    ? isOpenWindow
+                    : (blocker === null);
                 out.push({
                     startT: centerT - halfT - padT,
                     endT: centerT + halfT + padT,
-                    blocker: (isOpenDoor || door.falling || (Number.isFinite(door.hp) && Number(door.hp) <= 0)) ? null : door
+                    blocker,
+                    transparentForLos,
+                    object: mountedObject
                 });
             }
 
             return out;
+        }
+
+        _collectMountedDoorTraversalSpans() {
+            return this._collectMountedWallOpeningSpans({
+                includeDoors: true,
+                includeWindows: false,
+                forLos: false
+            });
         }
 
         _resolveDirectionalBlockerForConnection(nodeA, nodeB, doorSpans = null) {
@@ -7516,7 +7659,29 @@ void main(void) {
                     section.script = data.script;
                 }
                 if (typeof data.scriptingName === "string") {
-                    section.scriptingName = data.scriptingName.trim();
+                    const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                        ? globalThis.Scripting
+                        : null;
+                    const restoredName = data.scriptingName.trim();
+                    const restoredTargetSectionKey = (
+                        mapRef &&
+                        mapRef._prototypeSectionState &&
+                        typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function" &&
+                        section.center &&
+                        Number.isFinite(section.center.x) &&
+                        Number.isFinite(section.center.y)
+                    )
+                        ? (mapRef.getPrototypeSectionKeyForWorldPoint(section.center.x, section.center.y) || "")
+                        : "";
+                    if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
+                            scriptingApi.setObjectScriptingName(section, restoredName, {
+                                map: section.map || null,
+                                restoreFromSave: true,
+                                targetSectionKey: restoredTargetSectionKey
+                            });
+                    } else {
+                        section.scriptingName = restoredName;
+                    }
                 }
                 if (!opts.deferSetup) {
                     section.addToMapNodes();

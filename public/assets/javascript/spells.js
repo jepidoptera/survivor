@@ -3,6 +3,7 @@ let spellKeyBindings = {
     "I": "freeze",
     "L": "lightning",
     "K": "spikes",
+    "Q": "attacksquirrel",
     "M": "maze",
     "V": "vanish",
     "D": "shield",
@@ -17,6 +18,7 @@ let spellKeyBindings = {
 let editorKeyBindings = {
     "B": "wall",
     "R": "buildroad",
+    "M": "moveobject",
     "N": "nodeinspector"
 };
 
@@ -271,6 +273,7 @@ const SpellSystem = (() => {
         { name: "freeze", icon: "/assets/images/magic/iceball.png" },
         { name: "lightning", icon: "/assets/images/magic/lightning.png" },
         { name: "spikes", icon: "/assets/images/magic/spike.png" },
+        { name: "attacksquirrel", icon: "/assets/images/animals/squirrel.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/magic/teleport.png" },
@@ -284,6 +287,7 @@ const SpellSystem = (() => {
     const EDITOR_TOOL_DEFS = [
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+            { name: "moveobject", icon: "/assets/images/thumbnails/move.png" },
         { name: "editorvanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "nodeinspector", icon: "/assets/images/thumbnails/maze.png", debugOnly: true }
     ];
@@ -346,6 +350,7 @@ const SpellSystem = (() => {
         spikes: "Spikes",
         vanish: "Vanish",
         editorvanish: "EditorVanish",
+        moveobject: "MoveObject",
         editscript: "EditScript",
         triggerarea: "TriggerAreaSpell"
     };
@@ -702,6 +707,9 @@ const SpellSystem = (() => {
         if (!wizardRef) return allSpellNames.slice();
         const unlockedMagic = syncUnifiedMagicUnlockState(wizardRef);
         const unlocked = allSpellNames.filter(name => unlockedMagic.includes(name));
+        if (unlocked.includes("spawnanimal") && !unlocked.includes("attacksquirrel")) {
+            unlocked.push("attacksquirrel");
+        }
         if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
             return allSpellNames.filter(name => name !== "vanish");
         }
@@ -921,7 +929,9 @@ const SpellSystem = (() => {
 
     function getSelectedTreeTextureVariant(wizardRef) {
         if (!wizardRef) return RANDOM_TREE_VARIANT;
-        if (wizardRef.selectedTreeTextureVariant === RANDOM_TREE_VARIANT) {
+        if (wizardRef.treeGrowRandomMode === true || wizardRef.selectedTreeTextureVariant === RANDOM_TREE_VARIANT) {
+            wizardRef.treeGrowRandomMode = true;
+            wizardRef.selectedTreeTextureVariant = RANDOM_TREE_VARIANT;
             return RANDOM_TREE_VARIANT;
         }
         const count = getTreeVariantCount(wizardRef);
@@ -930,10 +940,50 @@ const SpellSystem = (() => {
             wizardRef.selectedTreeTextureVariant >= 0 &&
             wizardRef.selectedTreeTextureVariant < count
         ) {
+            wizardRef.treeGrowRandomMode = false;
             return wizardRef.selectedTreeTextureVariant;
         }
+        wizardRef.treeGrowRandomMode = true;
         wizardRef.selectedTreeTextureVariant = RANDOM_TREE_VARIANT;
         return wizardRef.selectedTreeTextureVariant;
+    }
+
+    function clearTreePlacementPreviewVariant(wizardRef) {
+        if (!wizardRef) return;
+        wizardRef.treeGrowPreviewTextureVariant = undefined;
+    }
+
+    function resolveTreePlacementTextureVariant(wizardRef, options = null) {
+        const forceNew = !!(options && options.forceNew);
+        const selected = getSelectedTreeTextureVariant(wizardRef);
+        if (selected !== RANDOM_TREE_VARIANT) {
+            if (wizardRef) {
+                wizardRef.treeGrowPreviewTextureVariant = selected;
+            }
+            clearTreePlacementPreviewVariant(wizardRef);
+            return selected;
+        }
+        const variantCount = getTreeVariantCount(wizardRef);
+        if (!(variantCount > 0)) {
+            clearTreePlacementPreviewVariant(wizardRef);
+            return 0;
+        }
+        if (forceNew) {
+            clearTreePlacementPreviewVariant(wizardRef);
+        }
+        const lockedVariant = wizardRef ? wizardRef.treeGrowPreviewTextureVariant : undefined;
+        if (
+            Number.isInteger(lockedVariant) &&
+            lockedVariant >= 0 &&
+            lockedVariant < variantCount
+        ) {
+            return lockedVariant;
+        }
+        const randomVariant = Math.floor(Math.random() * variantCount);
+        if (wizardRef) {
+            wizardRef.treeGrowPreviewTextureVariant = randomVariant;
+        }
+        return randomVariant;
     }
 
     function getTreeSpellIcon(wizardRef) {
@@ -981,6 +1031,9 @@ const SpellSystem = (() => {
         }
         if (!wizardRef.selectedPlaceableAnchorYByTexture || typeof wizardRef.selectedPlaceableAnchorYByTexture !== "object") {
             wizardRef.selectedPlaceableAnchorYByTexture = {};
+        }
+        if (!wizardRef.selectedPlaceableSizingByTexture || typeof wizardRef.selectedPlaceableSizingByTexture !== "object") {
+            wizardRef.selectedPlaceableSizingByTexture = {};
         }
         PLACEABLE_CATEGORIES.forEach(category => {
             const existing = wizardRef.selectedPlaceableByCategory[category];
@@ -1104,6 +1157,11 @@ const SpellSystem = (() => {
             wizardRef.selectedPlaceableRotationAxis = "visual";
             wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = 0.5;
             wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = 0.5;
+            wizardRef.selectedPlaceableSizingByTexture[texturePath] = {
+                width: 1,
+                height: 1,
+                baseSize: 1
+            };
             wizardRef.selectedPlaceableAnchorX = 0.5;
             wizardRef.selectedPlaceableAnchorY = 0.5;
             return null;
@@ -1115,6 +1173,11 @@ const SpellSystem = (() => {
             wizardRef.selectedPlaceableRotationAxis = fallbackAxis;
             wizardRef.selectedPlaceableAnchorXByTexture[texturePath] = 0.5;
             wizardRef.selectedPlaceableAnchorYByTexture[texturePath] = fallbackAnchorY;
+            wizardRef.selectedPlaceableSizingByTexture[texturePath] = {
+                width: 1,
+                height: 1,
+                baseSize: 1
+            };
             wizardRef.selectedPlaceableAnchorX = 0.5;
             wizardRef.selectedPlaceableAnchorY = fallbackAnchorY;
             return null;
@@ -1144,10 +1207,17 @@ const SpellSystem = (() => {
             wizardRef.selectedPlaceableCompositeLayers = wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath];
         }
 
+        const metaWidth = (meta && Number.isFinite(meta.width) && meta.width > 0) ? Number(meta.width) : 1;
+        const metaHeight = (meta && Number.isFinite(meta.height) && meta.height > 0) ? Number(meta.height) : 1;
         // Apply baseSize / minSize / maxSize from item metadata
         const metaBaseSize = (meta && Number.isFinite(meta.baseSize) && meta.baseSize > 0) ? Number(meta.baseSize) : null;
         const metaMinSize = (meta && Number.isFinite(meta.minSize) && meta.minSize > 0) ? Number(meta.minSize) : null;
         const metaMaxSize = (meta && Number.isFinite(meta.maxSize) && meta.maxSize > 0) ? Number(meta.maxSize) : null;
+        wizardRef.selectedPlaceableSizingByTexture[texturePath] = {
+            width: metaWidth,
+            height: metaHeight,
+            baseSize: metaBaseSize ?? Math.max(metaWidth, metaHeight)
+        };
         const effectiveScaleMin = metaMinSize ?? (metaBaseSize ? metaBaseSize * 0.2 : 0.2);
         const effectiveScaleMax = metaMaxSize ?? (metaBaseSize ? metaBaseSize * 5 : 5);
         if (!wizardRef.selectedPlaceableScaleMinByTexture || typeof wizardRef.selectedPlaceableScaleMinByTexture !== "object") {
@@ -1338,6 +1408,10 @@ const SpellSystem = (() => {
     const TREE_GROW_SIZE_MAX = 20;
     const TREE_GROW_SIZE_DEFAULT = 4;
     const TREE_GROW_SIZE_SCROLL_SPEED = 10;
+    const TREE_GROW_RANDOM_SIZE_MIN = 1;
+    const TREE_GROW_RANDOM_SIZE_MAX = 7;
+    const TREE_GROW_RANDOM_SIZE_MEAN = 4;
+    const TREE_GROW_SIZE_SLIDER_STEP = 0.05;
 
     function getSelectedTreeGrowSize(wizardRef) {
         if (!wizardRef) return TREE_GROW_SIZE_DEFAULT;
@@ -1355,6 +1429,64 @@ const SpellSystem = (() => {
         const next = Math.max(TREE_GROW_SIZE_MIN, Math.min(TREE_GROW_SIZE_MAX, current + delta * TREE_GROW_SIZE_SCROLL_SPEED));
         wizardRef.treeGrowPlacementSize = Math.round(next * 100) / 100;
         return wizardRef.treeGrowPlacementSize;
+    }
+
+    function isTreeGrowRandomSizeEnabled(wizardRef) {
+        return !!(wizardRef && wizardRef.treeGrowRandomSizeMode === true);
+    }
+
+    function clearTreePlacementPreviewSize(wizardRef) {
+        if (!wizardRef) return;
+        wizardRef.treeGrowPreviewSize = undefined;
+    }
+
+    function sampleRandomTreePlacementSize() {
+        let total = 0;
+        const samples = 6;
+        for (let i = 0; i < samples; i++) {
+            total += Math.random();
+        }
+        const normalized = total / samples;
+        const size = TREE_GROW_RANDOM_SIZE_MIN + normalized * (TREE_GROW_RANDOM_SIZE_MAX - TREE_GROW_RANDOM_SIZE_MIN);
+        return Math.round(size * 100) / 100;
+    }
+
+    function resolveTreePlacementSize(wizardRef, options = null) {
+        const fixedSize = getSelectedTreeGrowSize(wizardRef);
+        if (!wizardRef || !isTreeGrowRandomSizeEnabled(wizardRef)) {
+            clearTreePlacementPreviewSize(wizardRef);
+            return fixedSize;
+        }
+        const forceNew = !!(options && options.forceNew === true);
+        const lockedSize = Number(wizardRef.treeGrowPreviewSize);
+        if (!forceNew && Number.isFinite(lockedSize) && lockedSize > 0) {
+            return Math.max(TREE_GROW_RANDOM_SIZE_MIN, Math.min(TREE_GROW_RANDOM_SIZE_MAX, lockedSize));
+        }
+        const sampledSize = sampleRandomTreePlacementSize();
+        wizardRef.treeGrowPreviewSize = sampledSize;
+        return sampledSize;
+    }
+
+    function syncTreeGrowSizeControls(wizardRef) {
+        const size = getSelectedTreeGrowSize(wizardRef);
+        const randomEnabled = isTreeGrowRandomSizeEnabled(wizardRef);
+        const $sizeSlider = $("#treeGrowSizeSlider");
+        if ($sizeSlider.length > 0) {
+            $sizeSlider.val(String(size));
+        }
+        const $sizeLabel = $("#treeGrowSizeLabel");
+        if ($sizeLabel.length > 0) {
+            if (randomEnabled) {
+                $sizeLabel.text(`Size: random bell curve around ${TREE_GROW_RANDOM_SIZE_MEAN} (${TREE_GROW_RANDOM_SIZE_MIN}-${TREE_GROW_RANDOM_SIZE_MAX})`);
+            } else {
+                $sizeLabel.text(`Size: ${size.toFixed(2)}`);
+            }
+        }
+        const $randomToggle = $("#treeGrowRandomSizeToggle");
+        if ($randomToggle.length > 0) {
+            $randomToggle.toggleClass("selected", randomEnabled);
+            $randomToggle.attr("aria-pressed", randomEnabled ? "true" : "false");
+        }
     }
 
     function getPowerupPlacementPreviewConfig(wizardRef) {
@@ -1532,7 +1664,11 @@ const SpellSystem = (() => {
     }
 
     function isEditorToolName(spellName) {
-        return spellName === "wall" || spellName === "buildroad" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "blackdiamond" || spellName === "nodeinspector";
+        return spellName === "wall" || spellName === "buildroad" || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "blackdiamond" || spellName === "nodeinspector";
+    }
+
+    function isMoveObjectToolName(spellName) {
+        return spellName === "moveobject";
     }
 
     function isVanishToolName(spellName) {
@@ -1612,6 +1748,9 @@ const SpellSystem = (() => {
         }
         if (wizardRef && wizardRef.currentSpell === "buildroad") {
             return getRoadSpellIcon(wizardRef);
+        }
+        if (wizardRef && wizardRef.currentSpell === "moveobject" && editorMode) {
+            return "/assets/images/thumbnails/move.png";
         }
         if (wizardRef && wizardRef.currentSpell === "editorvanish" && editorMode) {
             return "/assets/images/thumbnails/vanish.png";
@@ -2027,6 +2166,7 @@ const SpellSystem = (() => {
         if (spellName === "wall") return !!wizardRef.wallLayoutMode && !!wizardRef.wallStartPoint;
         if (spellName === "buildroad") return !!wizardRef.roadLayoutMode && !!wizardRef.roadStartPoint;
         if (spellName === "firewall") return !!wizardRef.firewallLayoutMode && !!wizardRef.firewallStartPoint;
+        if (isMoveObjectToolName(spellName)) return !!(wizardRef.moveObjectDragState && wizardRef.moveObjectDragState.target);
         if (isVanishToolName(spellName)) return !!wizardRef.vanishDragMode;
         return false;
     }
@@ -2054,6 +2194,10 @@ const SpellSystem = (() => {
             wizardRef.firewallLayoutMode = false;
             wizardRef.firewallStartPoint = null;
             clearDragPreview(wizardRef, "firewall");
+            return;
+        }
+        if (isMoveObjectToolName(spellName)) {
+            wizardRef.moveObjectDragState = null;
             return;
         }
         if (isVanishToolName(spellName)) {
@@ -3157,6 +3301,420 @@ const SpellSystem = (() => {
         return getDragStartSnapTargetAt(wizardRef, spellName, worldX, worldY);
     }
 
+    function getMoveObjectAnchorPoint(target) {
+        if (!target || target.gone || target.vanishing) return null;
+        if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
+            return { x: Number(target.x), y: Number(target.y) };
+        }
+        if (Array.isArray(target.polygonPoints) && target.polygonPoints.length >= 3) {
+            let sumX = 0;
+            let sumY = 0;
+            let count = 0;
+            for (let i = 0; i < target.polygonPoints.length; i++) {
+                const point = target.polygonPoints[i];
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+                sumX += Number(point.x);
+                sumY += Number(point.y);
+                count += 1;
+            }
+            if (count > 0) {
+                return { x: sumX / count, y: sumY / count };
+            }
+        }
+        return null;
+    }
+
+    function translatePointArray(points, dx, dy, mapRef) {
+        if (!Array.isArray(points)) return [];
+        const translated = [];
+        for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+            translated.push(wrapWorldPointForMap(
+                mapRef,
+                Number(point.x) + dx,
+                Number(point.y) + dy
+            ));
+        }
+        return translated;
+    }
+
+    function translateHitboxInPlace(hitbox, dx, dy, mapRef) {
+        if (!hitbox || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+        if (hitbox.type === "circle") {
+            const translated = wrapWorldPointForMap(mapRef, Number(hitbox.x) + dx, Number(hitbox.y) + dy);
+            hitbox.x = translated.x;
+            hitbox.y = translated.y;
+            return;
+        }
+        if (Array.isArray(hitbox.points)) {
+            const translated = translatePointArray(hitbox.points, dx, dy, mapRef);
+            if (translated.length === hitbox.points.length) {
+                hitbox.points = translated;
+            }
+        }
+    }
+
+    function clearMovedPlacedObjectMountState(target) {
+        if (!target || typeof target !== "object") return;
+        if (typeof target._refreshMountedWallDirectionalBlocking === "function") {
+            target._refreshMountedWallDirectionalBlocking(target.mountedWallSectionUnitId);
+        }
+        target.mountedWallLineGroupId = null;
+        target.mountedSectionId = null;
+        target.mountedWallSectionUnitId = null;
+    }
+
+    function isWallMountedMoveSnapCandidate(target) {
+        if (!target || target.type !== "placedObject") return false;
+        const category = (typeof target.category === "string") ? target.category.trim().toLowerCase() : "";
+        return (category === "windows" || category === "doors") && target.rotationAxis === "spatial";
+    }
+
+    function closestPointOnSegment2DForMove(px, py, ax, ay, bx, by) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        if (!(len2 > 1e-8)) {
+            const ddx = px - ax;
+            const ddy = py - ay;
+            return { x: ax, y: ay, t: 0, dist2: ddx * ddx + ddy * ddy };
+        }
+        const rawT = ((px - ax) * dx + (py - ay) * dy) / len2;
+        const t = Math.max(0, Math.min(1, rawT));
+        const x = ax + dx * t;
+        const y = ay + dy * t;
+        const ddx = px - x;
+        const ddy = py - y;
+        return { x, y, t, dist2: ddx * ddx + ddy * ddy };
+    }
+
+    function getMoveObjectMountedWallPlacement(target, targetX, targetY, mapRef) {
+        if (!isWallMountedMoveSnapCandidate(target) || !mapRef) return null;
+        if (
+            typeof WallSectionUnit === "undefined" ||
+            !WallSectionUnit ||
+            !(WallSectionUnit._allSections instanceof Map)
+        ) {
+            return null;
+        }
+
+        const category = (typeof target.category === "string") ? target.category.trim().toLowerCase() : "";
+        const width = Math.max(0.01, Number.isFinite(target.width) ? Number(target.width) : 1);
+        const height = Math.max(0.01, Number.isFinite(target.height) ? Number(target.height) : 1);
+        const anchorX = Number.isFinite(target.placeableAnchorX) ? Number(target.placeableAnchorX) : 0.5;
+        const anchorY = Number.isFinite(target.placeableAnchorY) ? Number(target.placeableAnchorY) : 1;
+        const effectiveAnchorY = (category === "windows") ? 0.5 : anchorY;
+        const halfWidth = width * 0.5;
+
+        const shortestDX = (fromX, toX) =>
+            (typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(fromX, toX)
+                : (toX - fromX);
+        const shortestDY = (fromY, toY) =>
+            (typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(fromY, toY)
+                : (toY - fromY);
+        const wrapX = (x) =>
+            (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(x) : x;
+        const wrapY = (y) =>
+            (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(y) : y;
+
+        let bestPlacement = null;
+        let bestScore = Infinity;
+        for (const section of WallSectionUnit._allSections.values()) {
+            if (!section || section.type !== "wallSection" || section.gone || section.vanishing) continue;
+            if (!section.startPoint || !section.endPoint) continue;
+
+            const sx = Number(section.startPoint.x);
+            const sy = Number(section.startPoint.y);
+            const ex = Number(section.endPoint.x);
+            const ey = Number(section.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) continue;
+
+            const ax = targetX + shortestDX(targetX, sx);
+            const ay = targetY + shortestDY(targetY, sy);
+            const bx = targetX + shortestDX(targetX, ex);
+            const by = targetY + shortestDY(targetY, ey);
+            const dx = bx - ax;
+            const dy = by - ay;
+            const len = Math.hypot(dx, dy);
+            if (!(len > 1e-6)) continue;
+
+            const wallHeight = Math.max(0, Number(section.height) || 0);
+            if (width > len + 1e-6 || height > wallHeight + 1e-6) continue;
+
+            const ux = dx / len;
+            const uy = dy / len;
+            const vx = -uy;
+            const vy = ux;
+            const halfT = Math.max(0.001, Number(section.thickness) || 0.001) * 0.5;
+            const centerPoint = closestPointOnSegment2DForMove(targetX, targetY, ax, ay, bx, by);
+
+            let along = centerPoint.t * len;
+            along = Math.max(halfWidth, Math.min(len - halfWidth, along));
+
+            let facingSign = null;
+            if (typeof section.getWallProfile === "function") {
+                const profile = section.getWallProfile();
+                if (profile && profile.aLeft && profile.bLeft && profile.aRight && profile.bRight) {
+                    const leftA = {
+                        x: targetX + shortestDX(targetX, Number(profile.aLeft.x)),
+                        y: targetY + shortestDY(targetY, Number(profile.aLeft.y))
+                    };
+                    const leftB = {
+                        x: targetX + shortestDX(targetX, Number(profile.bLeft.x)),
+                        y: targetY + shortestDY(targetY, Number(profile.bLeft.y))
+                    };
+                    const rightA = {
+                        x: targetX + shortestDX(targetX, Number(profile.aRight.x)),
+                        y: targetY + shortestDY(targetY, Number(profile.aRight.y))
+                    };
+                    const rightB = {
+                        x: targetX + shortestDX(targetX, Number(profile.bRight.x)),
+                        y: targetY + shortestDY(targetY, Number(profile.bRight.y))
+                    };
+                    const leftPoint = closestPointOnSegment2DForMove(targetX, targetY, leftA.x, leftA.y, leftB.x, leftB.y);
+                    const rightPoint = closestPointOnSegment2DForMove(targetX, targetY, rightA.x, rightA.y, rightB.x, rightB.y);
+                    facingSign = leftPoint.dist2 <= rightPoint.dist2 ? 1 : -1;
+                }
+            }
+            if (!Number.isFinite(facingSign)) {
+                const signed = ((targetX - centerPoint.x) * vx) + ((targetY - centerPoint.y) * vy);
+                facingSign = signed >= 0 ? 1 : -1;
+            }
+
+            const centerX = ax + ux * along;
+            const centerY = ay + uy * along;
+            const wallFaceCenterX = centerX + vx * halfT * facingSign;
+            const wallFaceCenterY = centerY + vy * halfT * facingSign;
+            const normalBias = (category === "windows") ? 0.001 : 0;
+            const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
+            const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
+            const verticalOffset = (1 - effectiveAnchorY) * height;
+            const snappedX = wrapX(desiredBaseX);
+            const snappedY = wrapY(category === "doors" ? (desiredBaseY - verticalOffset) : desiredBaseY);
+            const rotDeg = Math.atan2(uy, ux) * (180 / Math.PI);
+            const wallBottomZ = Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0;
+            const snappedZ = (category === "windows") ? (wallBottomZ + wallHeight * 0.5) : 0;
+            const hitboxHalfT = (category === "doors") ? (halfT * 1.1) : halfT;
+            const p1 = { x: wrapX(centerX - ux * halfWidth + vx * hitboxHalfT), y: wrapY(centerY - uy * halfWidth + vy * hitboxHalfT) };
+            const p2 = { x: wrapX(centerX + ux * halfWidth + vx * hitboxHalfT), y: wrapY(centerY + uy * halfWidth + vy * hitboxHalfT) };
+            const p3 = { x: wrapX(centerX + ux * halfWidth - vx * hitboxHalfT), y: wrapY(centerY + uy * halfWidth - vy * hitboxHalfT) };
+            const p4 = { x: wrapX(centerX - ux * halfWidth - vx * hitboxHalfT), y: wrapY(centerY - uy * halfWidth - vy * hitboxHalfT) };
+            const snapDx = (typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(targetX, wallFaceCenterX)
+                : (wallFaceCenterX - targetX);
+            const snapDy = (typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(targetY, wallFaceCenterY)
+                : (wallFaceCenterY - targetY);
+            const score = (snapDx * snapDx) + (snapDy * snapDy);
+            if (score < bestScore) {
+                bestScore = score;
+                bestPlacement = {
+                    targetWall: section,
+                    mountedWallLineGroupId: Number(section.id),
+                    mountedSectionId: Number(section.id),
+                    mountedWallSectionUnitId: Number(section.id),
+                    mountedWallFacingSign: facingSign,
+                    snappedX,
+                    snappedY,
+                    snappedZ,
+                    snappedRotationDeg: rotDeg,
+                    wallGroundHitboxPoints: [p1, p2, p3, p4]
+                };
+            }
+        }
+
+        if (!bestPlacement) return null;
+        const maxSnapDistance = Math.max(1.5, width, height);
+        if (bestScore > (maxSnapDistance * maxSnapDistance)) return null;
+        return bestPlacement;
+    }
+
+    function applyMoveObjectMountedWallPlacement(target, placement, dragState = null) {
+        if (!target || !placement) return false;
+        target.x = placement.snappedX;
+        target.y = placement.snappedY;
+        if (Number.isFinite(placement.snappedZ)) target.z = placement.snappedZ;
+        if (Number.isFinite(target.prevX)) target.prevX = target.x;
+        if (Number.isFinite(target.prevY)) target.prevY = target.y;
+        if (Object.prototype.hasOwnProperty.call(target, "destination")) target.destination = null;
+        if (Array.isArray(target.path)) target.path.length = 0;
+        if (Object.prototype.hasOwnProperty.call(target, "nextNode")) target.nextNode = null;
+        if (Number.isFinite(target.travelFrames)) target.travelFrames = 0;
+        if (Number.isFinite(target.travelX)) target.travelX = 0;
+        if (Number.isFinite(target.travelY)) target.travelY = 0;
+        if (Object.prototype.hasOwnProperty.call(target, "moving")) target.moving = false;
+
+        target.placementRotation = placement.snappedRotationDeg;
+        target.rotation = placement.snappedRotationDeg;
+        target.mountedWallLineGroupId = placement.mountedWallLineGroupId;
+        target.mountedSectionId = placement.mountedSectionId;
+        target.mountedWallSectionUnitId = placement.mountedWallSectionUnitId;
+        target.mountedWallFacingSign = placement.mountedWallFacingSign;
+        target.groundPlaneHitboxOverridePoints = Array.isArray(placement.wallGroundHitboxPoints)
+            ? placement.wallGroundHitboxPoints.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+            : null;
+
+        if (typeof target.applyPlaceableMetadata === "function" && target._placedObjectMetadata) {
+            target.applyPlaceableMetadata(target._placedObjectMetadata);
+            return true;
+        }
+
+        if (typeof target.snapToMountedWall === "function") {
+            target.snapToMountedWall();
+        }
+        if (
+            Array.isArray(target.groundPlaneHitboxOverridePoints) &&
+            target.groundPlaneHitboxOverridePoints.length >= 3 &&
+            typeof PolygonHitbox === "function"
+        ) {
+            target.groundPlaneHitbox = new PolygonHitbox(
+                target.groundPlaneHitboxOverridePoints.map(point => ({ x: point.x, y: point.y }))
+            );
+        }
+        if (typeof target.refreshIndexedNodesFromHitbox === "function") {
+            target.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+            return true;
+        }
+        syncMovedObjectNodeState(target, target.map || map || null, dragState);
+        return true;
+    }
+
+    function syncMovedObjectNodeState(target, mapRef, dragState = null) {
+        if (!target || !mapRef || typeof mapRef.worldToNode !== "function") return;
+        if (typeof target.refreshIndexedNodesFromHitbox === "function") {
+            target.refreshIndexedNodesFromHitbox(
+                target.isTriggerArea === true
+                    ? { forceExpanded: true, sampleSpacing: 1.0, extraPoints: target.polygonPoints }
+                    : {}
+            );
+            return;
+        }
+
+        const nextNode = mapRef.worldToNode(target.x, target.y);
+        if (dragState && dragState.occupiesNodeObjects) {
+            const previousNode = dragState.currentOccupancyNode || null;
+            if (previousNode && previousNode !== nextNode && typeof previousNode.removeObject === "function") {
+                previousNode.removeObject(target);
+            }
+            if (nextNode && nextNode !== previousNode && typeof nextNode.addObject === "function") {
+                nextNode.addObject(target);
+            }
+            dragState.currentOccupancyNode = nextNode || null;
+        }
+        if (nextNode) {
+            target.node = nextNode;
+        }
+    }
+
+    function applyMoveObjectTargetPosition(target, targetX, targetY, dragState = null) {
+        if (!target || target.gone || target.vanishing) return false;
+        const mapRef = target.map || map || null;
+        const anchor = getMoveObjectAnchorPoint(target);
+        if (!mapRef || !anchor || !Number.isFinite(targetX) || !Number.isFinite(targetY)) return false;
+
+        const wrappedTarget = wrapWorldPointForMap(mapRef, targetX, targetY);
+        const dx = (typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(anchor.x, wrappedTarget.x)
+            : (wrappedTarget.x - anchor.x);
+        const dy = (typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(anchor.y, wrappedTarget.y)
+            : (wrappedTarget.y - anchor.y);
+
+        if ((target.type === "triggerArea" || target.isTriggerArea === true) && typeof target.setPolygonPoints === "function") {
+            const translatedPoints = translatePointArray(target.polygonPoints, dx, dy, mapRef);
+            if (translatedPoints.length >= 3) {
+                target.setPolygonPoints(translatedPoints);
+                return true;
+            }
+            return false;
+        }
+
+        const mountedWallPlacement = getMoveObjectMountedWallPlacement(target, wrappedTarget.x, wrappedTarget.y, mapRef);
+        if (mountedWallPlacement) {
+            return applyMoveObjectMountedWallPlacement(target, mountedWallPlacement, dragState);
+        }
+
+        target.x = wrappedTarget.x;
+        target.y = wrappedTarget.y;
+        if (Number.isFinite(target.prevX)) target.prevX = target.x;
+        if (Number.isFinite(target.prevY)) target.prevY = target.y;
+        if (Object.prototype.hasOwnProperty.call(target, "destination")) target.destination = null;
+        if (Array.isArray(target.path)) target.path.length = 0;
+        if (Object.prototype.hasOwnProperty.call(target, "nextNode")) target.nextNode = null;
+        if (Number.isFinite(target.travelFrames)) target.travelFrames = 0;
+        if (Number.isFinite(target.travelX)) target.travelX = 0;
+        if (Number.isFinite(target.travelY)) target.travelY = 0;
+        if (Object.prototype.hasOwnProperty.call(target, "moving")) target.moving = false;
+
+        if (Array.isArray(target.groundPlaneHitboxOverridePoints) && target.groundPlaneHitboxOverridePoints.length >= 3) {
+            target.groundPlaneHitboxOverridePoints = translatePointArray(target.groundPlaneHitboxOverridePoints, dx, dy, mapRef);
+        }
+
+        if (target.visualHitbox) {
+            translateHitboxInPlace(target.visualHitbox, dx, dy, mapRef);
+        }
+        if (target.groundPlaneHitbox && target.groundPlaneHitbox !== target.visualHitbox) {
+            translateHitboxInPlace(target.groundPlaneHitbox, dx, dy, mapRef);
+        }
+        if (target.hitbox && target.hitbox !== target.groundPlaneHitbox && target.hitbox !== target.visualHitbox) {
+            translateHitboxInPlace(target.hitbox, dx, dy, mapRef);
+        }
+
+        if (target.type === "placedObject") {
+            clearMovedPlacedObjectMountState(target);
+        }
+
+        syncMovedObjectNodeState(target, mapRef, dragState);
+        return true;
+    }
+
+    function beginMoveObjectDrag(wizardRef, worldX, worldY) {
+        if (!wizardRef || !keysPressed[" "]) return false;
+        const target = getObjectTargetAt(wizardRef, worldX, worldY);
+        if (!target || !isValidObjectTargetForSpell("moveobject", target, wizardRef)) return false;
+
+        const mapRef = target.map || wizardRef.map || null;
+        const anchor = getMoveObjectAnchorPoint(target);
+        if (!mapRef || !anchor) return false;
+
+        wizardRef.moveObjectDragState = {
+            target,
+            offsetX: (typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(worldX, anchor.x)
+                : (anchor.x - worldX),
+            offsetY: (typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(worldY, anchor.y)
+                : (anchor.y - worldY),
+            occupiesNodeObjects: !!(
+                target.node &&
+                Array.isArray(target.node.objects) &&
+                target.node.objects.includes(target)
+            ),
+            currentOccupancyNode: target.node || null
+        };
+        return true;
+    }
+
+    function updateMoveObjectDrag(wizardRef, worldX, worldY) {
+        const dragState = wizardRef && wizardRef.moveObjectDragState;
+        if (!dragState || !dragState.target) return false;
+        const target = dragState.target;
+        const mapRef = target.map || wizardRef.map || null;
+        if (!mapRef || target.gone || target.vanishing) {
+            cancelDragSpell(wizardRef, "moveobject");
+            return false;
+        }
+        const desired = wrapWorldPointForMap(
+            mapRef,
+            Number(worldX) + Number(dragState.offsetX || 0),
+            Number(worldY) + Number(dragState.offsetY || 0)
+        );
+        return applyMoveObjectTargetPosition(target, desired.x, desired.y, dragState);
+    }
+
     function getVanishWallPreviewPolygonForHover(wizardRef, candidate, worldX, worldY) {
         if (!wizardRef || !candidate || candidate.gone || candidate.vanishing) return null;
         if (candidate.type !== "wallSection") return null;
@@ -3546,6 +4104,10 @@ const SpellSystem = (() => {
             return true;
         }
 
+        if (isMoveObjectToolName(spellName)) {
+            return beginMoveObjectDrag(wizardRef, worldX, worldY);
+        }
+
         if (isVanishToolName(spellName)) {
             wizardRef.vanishDragMode = true;
             ensureVanishDragTargetingState(wizardRef);
@@ -3562,6 +4124,7 @@ const SpellSystem = (() => {
             if (wizardRef.currentSpell === "wall") cancelDragSpell(wizardRef, "wall");
             if (wizardRef.currentSpell === "buildroad") cancelDragSpell(wizardRef, "buildroad");
             if (wizardRef.currentSpell === "firewall") cancelDragSpell(wizardRef, "firewall");
+            if (isMoveObjectToolName(wizardRef.currentSpell)) cancelDragSpell(wizardRef, wizardRef.currentSpell);
             if (isVanishToolName(wizardRef.currentSpell)) cancelDragSpell(wizardRef, wizardRef.currentSpell);
             return false;
         }
@@ -3575,6 +4138,9 @@ const SpellSystem = (() => {
         }
         if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint) {
             return true;
+        }
+        if (isMoveObjectToolName(wizardRef.currentSpell) && wizardRef.moveObjectDragState) {
+            return updateMoveObjectDrag(wizardRef, worldX, worldY);
         }
         if (isVanishToolName(wizardRef.currentSpell) && wizardRef.vanishDragMode) {
             queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
@@ -3696,11 +4262,14 @@ const SpellSystem = (() => {
             const nodeB = roadNode;
             const width = (nodeA === nodeB) ? 1 : getSelectedRoadWidth(wizardRef);
             const roadNodes = wizardRef.map.getHexLine(nodeA, nodeB, width);
+            const selectedFlooring = getSelectedFlooringTexture(wizardRef);
             roadNodes.forEach(node => {
-                const hasRoad = node.objects && node.objects.some(obj => obj.type === "road");
+                const hasRoad = (typeof Road !== "undefined" && typeof Road.hasMatchingRoadAtNode === "function")
+                    ? Road.hasMatchingRoadAtNode(node, selectedFlooring)
+                    : (node.objects && node.objects.some(obj => obj.type === "road"));
                 if (!hasRoad) {
                     new Road({x: node.x, y: node.y}, [], wizardRef.map, {
-                        fillTexturePath: getSelectedFlooringTexture(wizardRef)
+                        fillTexturePath: selectedFlooring
                     });
                 }
             });
@@ -3730,6 +4299,13 @@ const SpellSystem = (() => {
             }
             cancelDragSpell(wizardRef, "firewall");
             cooldown(wizardRef, wizardRef.cooldownTime);
+            return true;
+        }
+
+        if (isMoveObjectToolName(spellName)) {
+            if (!isDragSpellActive(wizardRef, spellName)) return false;
+            updateMoveObjectDrag(wizardRef, worldX, worldY);
+            cancelDragSpell(wizardRef, spellName);
             return true;
         }
 
@@ -4077,6 +4653,27 @@ const SpellSystem = (() => {
             nearbyScriptObjects.add(obj);
         }
 
+        const runtimeScriptObjects = (wizardRef.map && typeof wizardRef.map.getGameObjects === "function")
+            ? (wizardRef.map.getGameObjects({ refresh: false }) || [])
+            : [];
+        for (let i = 0; i < runtimeScriptObjects.length; i++) {
+            const obj = runtimeScriptObjects[i];
+            if (!obj || obj === wizardRef || obj.gone || obj.vanishing) continue;
+            if (nearbyScriptObjects.has(obj)) continue;
+            if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) continue;
+            const hasTouchScript = (
+                (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
+                    ? (globalThis.Scripting.hasEventScriptForTarget(obj, "playerTouches") || globalThis.Scripting.hasEventScriptForTarget(obj, "playerUntouches"))
+                    : false
+            );
+            if (!hasTouchScript) continue;
+            const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
+            nearbyScriptEntries.push({ obj, hitbox, forceTouch });
+            nearbyScriptObjects.add(obj);
+        }
+
         // Trigger areas are polygonal and can be much larger than a local node query.
         // They are currently indexed by a single node, so side-dependent misses can
         // occur when crossing far from the trigger's center. Include all trigger
@@ -4127,6 +4724,7 @@ const SpellSystem = (() => {
         const triggerAreaTargetingEnabled = !!(
             debugEnabled ||
             activeSpell === "editscript" ||
+            activeSpell === "moveobject" ||
             activeSpell === "triggerarea"
         );
         const canTargetObject = (obj) => !!(
@@ -4576,6 +5174,15 @@ const SpellSystem = (() => {
 
     function castWizardSpell(wizardRef, worldX, worldY, options = null) {
         if (!wizardRef || wizardRef.castDelay) return;
+        if (wizardRef.currentSpell === "attacksquirrel") {
+            console.log("[AttackSquirrelSelection] cast-dispatch", {
+                worldX,
+                worldY,
+                castDelay: !!wizardRef.castDelay,
+                casting: !!wizardRef.casting,
+                options
+            });
+        }
         if (typeof wizardRef.isFrozen === "function" && wizardRef.isFrozen()) return;
 
         if (wizardRef.currentSpell === "shield") {
@@ -4881,6 +5488,20 @@ const SpellSystem = (() => {
             projectile = new globalThis.Lightning();
         } else if (wizardRef.currentSpell === "spikes") {
             projectile = new globalThis.Spikes();
+        } else if (wizardRef.currentSpell === "attacksquirrel") {
+            console.log("[AttackSquirrelSelection] branch-enter", {
+                ctorType: typeof globalThis.AttackSquirrel
+            });
+            if (typeof globalThis.AttackSquirrel !== "function") {
+                console.log("[AttackSquirrelSelection] branch-missing-ctor");
+                message("Attack squirrel spell is not loaded. Reload the page.");
+                return;
+            }
+            projectile = new globalThis.AttackSquirrel();
+            console.log("[AttackSquirrelSelection] branch-constructed", {
+                projectileType: projectile && projectile.constructor ? projectile.constructor.name : null,
+                hasCast: !!(projectile && typeof projectile.cast === "function")
+            });
         } else if (wizardRef.currentSpell === "vanish") {
             projectile = new globalThis.Vanish();
         } else if (wizardRef.currentSpell === "editorvanish") {
@@ -4909,7 +5530,19 @@ const SpellSystem = (() => {
         }
         const delayTime = projectile.delayTime || wizardRef.cooldownTime;
         wizardRef.castDelay = true;
+        if (wizardRef.currentSpell === "attacksquirrel") {
+            console.log("[AttackSquirrelSelection] branch-before-cast", {
+                worldX,
+                worldY,
+                projectileType: projectile && projectile.constructor ? projectile.constructor.name : null
+            });
+        }
         projectiles.push(projectile.cast(worldX, worldY));
+        if (wizardRef.currentSpell === "attacksquirrel") {
+            console.log("[AttackSquirrelSelection] branch-after-cast", {
+                projectileCount: Array.isArray(projectiles) ? projectiles.length : null
+            });
+        }
         if (wizardRef.currentSpell === "lightning") {
             syncWizardUnlockState(wizardRef);
         }
@@ -5218,6 +5851,86 @@ const SpellSystem = (() => {
             });
         $grid.append(backButton);
 
+        const selectedTreeSize = getSelectedTreeGrowSize(wizardRef);
+        const randomSizeEnabled = isTreeGrowRandomSizeEnabled(wizardRef);
+        const $sizeHeader = $("<div>")
+            .text("Tree Size")
+            .css({
+                color: "#ffffff",
+                "font-weight": "bold",
+                "grid-column": "1 / -1"
+            });
+        const $sizeRow = $("<div>")
+            .css({
+                display: "flex",
+                gap: "8px",
+                "align-items": "center",
+                width: "100%",
+                "grid-column": "1 / -1"
+            });
+        const $sizeSlider = $("<input>")
+            .attr("id", "treeGrowSizeSlider")
+            .attr({
+                type: "range",
+                min: TREE_GROW_SIZE_MIN,
+                max: TREE_GROW_SIZE_MAX,
+                step: TREE_GROW_SIZE_SLIDER_STEP,
+                value: selectedTreeSize
+            })
+            .css({
+                flex: "1 1 auto",
+                width: "100%",
+                "accent-color": "#ffd700",
+                cursor: "pointer"
+            })
+            .on("input change", event => {
+                wizardRef.treeGrowPlacementSize = quantizeToStep(
+                    event.target.value,
+                    TREE_GROW_SIZE_MIN,
+                    TREE_GROW_SIZE_MAX,
+                    TREE_GROW_SIZE_SLIDER_STEP
+                );
+                clearTreePlacementPreviewSize(wizardRef);
+                syncTreeGrowSizeControls(wizardRef);
+            });
+        const $randomSizeToggle = $("<button>")
+            .attr("id", "treeGrowRandomSizeToggle")
+            .attr("type", "button")
+            .addClass("spellIcon")
+            .attr("title", "Randomize tree size with a bell curve centered on 4")
+            .text("?")
+            .css({
+                display: "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                background: "rgba(20,20,20,0.95)",
+                color: "#ffd700",
+                "font-size": "28px",
+                "font-weight": "bold",
+                "line-height": "1",
+                flex: "0 0 auto"
+            })
+            .on("click", () => {
+                wizardRef.treeGrowRandomSizeMode = !isTreeGrowRandomSizeEnabled(wizardRef);
+                clearTreePlacementPreviewSize(wizardRef);
+                syncTreeGrowSizeControls(wizardRef);
+            });
+        const $sizeLabel = $("<div>")
+            .attr("id", "treeGrowSizeLabel")
+            .css({
+                color: "#ffffff",
+                "font-size": "13px",
+                "grid-column": "1 / -1"
+            });
+        if (randomSizeEnabled) {
+            $randomSizeToggle.addClass("selected");
+        }
+        $sizeRow.append($sizeSlider, $randomSizeToggle);
+        $grid.append($sizeHeader);
+        $grid.append($sizeRow);
+        $grid.append($sizeLabel);
+        syncTreeGrowSizeControls(wizardRef);
+
         const selected = getSelectedTreeTextureVariant(wizardRef);
         const randomIcon = $("<div>")
             .addClass("spellIcon")
@@ -5234,6 +5947,7 @@ const SpellSystem = (() => {
             .attr("title", "Random Tree")
             .text("?")
             .click(() => {
+                wizardRef.treeGrowRandomMode = true;
                 wizardRef.selectedTreeTextureVariant = RANDOM_TREE_VARIANT;
                 spellMenuMode = "main";
                 setCurrentSpell(wizardRef, "treegrow");
@@ -5256,6 +5970,7 @@ const SpellSystem = (() => {
                 })
                 .attr("title", `Tree ${textureIndex}`)
                 .click(() => {
+                    wizardRef.treeGrowRandomMode = false;
                     wizardRef.selectedTreeTextureVariant = textureIndex;
                     spellMenuMode = "main";
                     setCurrentSpell(wizardRef, "treegrow");
@@ -6320,10 +7035,24 @@ const SpellSystem = (() => {
     function setCurrentSpell(wizardRef, spellName) {
         if (!wizardRef) return;
         if ((isEditorSpellName(spellName) || isEditorToolName(spellName)) && !canUseEditorFeatures(wizardRef)) {
+            if (spellName === "attacksquirrel") {
+                console.log("[AttackSquirrelSelection] rejected-editor-access", {
+                    spellName,
+                    currentSpell: wizardRef.currentSpell
+                });
+            }
             return;
         }
         const isUnifiedMagicSelection = isAuraUnlocked(wizardRef, spellName);
         if (!isEditorSpellName(spellName) && !isEditorToolName(spellName) && !isUnifiedMagicSelection && !isSpellUnlocked(wizardRef, spellName)) {
+            if (spellName === "attacksquirrel") {
+                console.log("[AttackSquirrelSelection] rejected-locked", {
+                    spellName,
+                    currentSpell: wizardRef.currentSpell,
+                    unlockedSpells: getUnlockedSpellNames(wizardRef),
+                    unlockedMagic: Array.isArray(wizardRef.unlockedMagic) ? wizardRef.unlockedMagic.slice() : []
+                });
+            }
             return;
         }
         const previousSpell = wizardRef.currentSpell;
@@ -6340,6 +7069,7 @@ const SpellSystem = (() => {
         if (spellName !== "wall") cancelDragSpell(wizardRef, "wall");
         if (spellName !== "buildroad") cancelDragSpell(wizardRef, "buildroad");
         if (spellName !== "firewall") cancelDragSpell(wizardRef, "firewall");
+        if (!isMoveObjectToolName(spellName)) cancelDragSpell(wizardRef, "moveobject");
         if (!isVanishToolName(spellName)) cancelDragSpell(wizardRef, "vanish");
         if (spellName !== "triggerarea") clearTriggerAreaPlacementDraft(wizardRef);
         if (spellName !== "triggerarea") clearTriggerAreaVertexSelection(wizardRef);
@@ -6348,8 +7078,20 @@ const SpellSystem = (() => {
             setActiveAuras(wizardRef, remainingAuras);
         }
         wizardRef.currentSpell = spellName;
+        clearTreePlacementPreviewVariant(wizardRef);
+        clearTreePlacementPreviewSize(wizardRef);
+        if (spellName === "treegrow") {
+            getSelectedTreeGrowSize(wizardRef);
+        }
         if (!isEditorSpellName(spellName) && !isEditorToolName(spellName)) {
             wizardRef.selectedSpellName = spellName;
+        }
+        if (spellName === "attacksquirrel") {
+            console.log("[AttackSquirrelSelection] selected", {
+                previousSpell,
+                currentSpell: spellName,
+                selectedSpellName: wizardRef.selectedSpellName
+            });
         }
         if (previousSpell !== spellName) {
             const setForSpell = getSpellTargetHistorySet(wizardRef, spellName);
@@ -6589,6 +7331,10 @@ const SpellSystem = (() => {
         adjustAnimalSizeScale,
         adjustTreeGrowSize,
         adjustPlaceableRotation,
+        resolveTreePlacementSize,
+        resolveTreePlacementTextureVariant,
+        clearTreePlacementPreviewSize,
+        clearTreePlacementPreviewVariant,
         getPowerupPlacementPreviewConfig,
         beginDragSpell,
         updateDragPreview,
@@ -6621,3 +7367,7 @@ const SpellSystem = (() => {
         getAdjustedWallDragWorldPoint
     };
 })();
+
+if (typeof globalThis !== "undefined") {
+    globalThis.SpellSystem = SpellSystem;
+}

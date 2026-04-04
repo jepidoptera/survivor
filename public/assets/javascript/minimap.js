@@ -1,15 +1,15 @@
 // minimap.js — Toggle-able mini-map overlay (Ctrl+M)
 // Renders the entire game map onto a small canvas in the lower-right corner.
-// Colors: walls=gray, trees=dark green, roads=light brown,
-//         animals=brownish red, wizard=white, ground=very dark green.
+// Colors: walls=gray, trees=bright green, roads=light brown,
+//         animals=brownish red, wizard=white, ground=green.
 
 (function () {
     "use strict";
 
     // ---- colour palette ----
-    const COL_GROUND   = "#0a1f0a";   // very dark green (forest floor)
+    const COL_GROUND   = "#007700";   // grass
     const COL_WALL     = "#999999";   // gray
-    const COL_TREE     = "#0b3d0b";   // dark green
+    const COL_TREE     = "#00aa00";   // bright green
     const COL_ROAD     = "#c4a46c";   // light brown
     const COL_ANIMAL   = "#8b3a2a";   // brownish red
     const COL_WIZARD   = "#ffffff";   // white dot for player
@@ -207,12 +207,17 @@
         applySize(w, h);
     }
 
-    // Draw a filled rect that is at least 1×1 pixel.
+    // Align to pixel edges and cover the full projected bounds so resize-driven
+    // rounding never leaves background seams between adjacent cells.
     function drawDot(target, px, py, nomW, nomH, colour) {
         target.fillStyle = colour;
-        const w = Math.max(1, Math.round(nomW));
-        const h = Math.max(1, Math.round(nomH));
-        target.fillRect(Math.round(px), Math.round(py), w, h);
+        const startX = Math.floor(px);
+        const startY = Math.floor(py);
+        const endX = Math.ceil(px + Math.max(1, nomW));
+        const endY = Math.ceil(py + Math.max(1, nomH));
+        const w = Math.max(1, endX - startX);
+        const h = Math.max(1, endY - startY);
+        target.fillRect(startX, startY, w, h);
     }
 
     function drawWallSegment(target, mapRef, mw, mh, ax, ay, bx, by, lineWidth) {
@@ -320,6 +325,93 @@
         );
     }
 
+    function clipLineSegmentToPrototypeWindow(windowRect, ax, ay, bx, by) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        let t0 = 0;
+        let t1 = 1;
+
+        const clip = (p, q) => {
+            if (Math.abs(p) <= 1e-9) {
+                return q >= 0;
+            }
+            const r = q / p;
+            if (p < 0) {
+                if (r > t1) return false;
+                if (r > t0) t0 = r;
+                return true;
+            }
+            if (r < t0) return false;
+            if (r < t1) t1 = r;
+            return true;
+        };
+
+        if (
+            !clip(-dx, ax - windowRect.minX) ||
+            !clip(dx, windowRect.maxX - ax) ||
+            !clip(-dy, ay - windowRect.minY) ||
+            !clip(dy, windowRect.maxY - ay)
+        ) {
+            return null;
+        }
+
+        return {
+            ax: ax + (dx * t0),
+            ay: ay + (dy * t0),
+            bx: ax + (dx * t1),
+            by: ay + (dy * t1)
+        };
+    }
+
+    function collectPrototypeMinimapWallSections(mapRef, loadedNodes) {
+        const walls = [];
+        const seenWalls = new Set();
+
+        const addWall = (wall) => {
+            if (!wall || wall.type !== "wallSection" || wall.gone || seenWalls.has(wall)) return;
+            if (!wall.startPoint || !wall.endPoint) return;
+            seenWalls.add(wall);
+            walls.push(wall);
+        };
+
+        if (mapRef && typeof mapRef.getGameObjects === "function") {
+            const gameObjects = mapRef.getGameObjects();
+            if (Array.isArray(gameObjects)) {
+                for (let i = 0; i < gameObjects.length; i++) {
+                    addWall(gameObjects[i]);
+                }
+            }
+        }
+
+        if (mapRef && Array.isArray(mapRef.gameObjects)) {
+            for (let i = 0; i < mapRef.gameObjects.length; i++) {
+                addWall(mapRef.gameObjects[i]);
+            }
+        }
+
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.WallSectionUnit &&
+            globalThis.WallSectionUnit._allSections instanceof Map
+        ) {
+            for (const wall of globalThis.WallSectionUnit._allSections.values()) {
+                addWall(wall);
+            }
+        }
+
+        if (walls.length === 0 && Array.isArray(loadedNodes)) {
+            for (let i = 0; i < loadedNodes.length; i++) {
+                const node = loadedNodes[i];
+                if (!node || !Array.isArray(node.objects)) continue;
+                for (let j = 0; j < node.objects.length; j++) {
+                    addWall(node.objects[j]);
+                }
+            }
+        }
+
+        return walls;
+    }
+
     function drawPrototypeWallSegment(target, windowRect, mw, mh, lineWidth, ax, ay, bx, by) {
         if (
             !Number.isFinite(ax) ||
@@ -329,17 +421,11 @@
         ) {
             return;
         }
-        const pad = Math.max(2, lineWidth * 2);
-        const overlapsWindow = !(
-            (ax < windowRect.minX - pad && bx < windowRect.minX - pad) ||
-            (ax > windowRect.maxX + pad && bx > windowRect.maxX + pad) ||
-            (ay < windowRect.minY - pad && by < windowRect.minY - pad) ||
-            (ay > windowRect.maxY + pad && by > windowRect.maxY + pad)
-        );
-        if (!overlapsWindow) return;
+        const clipped = clipLineSegmentToPrototypeWindow(windowRect, ax, ay, bx, by);
+        if (!clipped) return;
 
-        const startPx = projectPrototypePoint(windowRect, mw, mh, ax, ay);
-        const endPx = projectPrototypePoint(windowRect, mw, mh, bx, by);
+        const startPx = projectPrototypePoint(windowRect, mw, mh, clipped.ax, clipped.ay);
+        const endPx = projectPrototypePoint(windowRect, mw, mh, clipped.bx, clipped.by);
         target.strokeStyle = COL_WALL;
         target.lineWidth = Math.max(1, lineWidth);
         target.lineCap = "round";
@@ -356,11 +442,11 @@
         const mh = target.canvas.height;
         const loadedNodes = map.getLoadedPrototypeNodes();
         const windowRect = getPrototypeMinimapWindow();
+        const wallSections = collectPrototypeMinimapWallSections(map, loadedNodes);
         const tileScale = mw / PROTOTYPE_MINIMAP_WINDOW_SIZE;
         const dotW = Math.max(1, tileScale * 0.95);
         const dotH = Math.max(1, tileScale * 0.95);
         const lineWidth = Math.max(1, tileScale * 0.9);
-        const drawnWallSections = new Set();
 
         target.fillStyle = "#000000";
         target.fillRect(0, 0, mw, mh);
@@ -379,22 +465,7 @@
             for (let oi = 0; oi < node.objects.length; oi++) {
                 const obj = node.objects[oi];
                 if (!obj) continue;
-                if (obj.type === "wallSection") {
-                    if (!drawnWallSections.has(obj) && obj.startPoint && obj.endPoint) {
-                        drawPrototypeWallSegment(
-                            target,
-                            windowRect,
-                            mw,
-                            mh,
-                            lineWidth,
-                            Number(obj.startPoint.x),
-                            Number(obj.startPoint.y),
-                            Number(obj.endPoint.x),
-                            Number(obj.endPoint.y)
-                        );
-                        drawnWallSections.add(obj);
-                    }
-                } else if (Number.isFinite(obj.x) && Number.isFinite(obj.y) && isPointInsidePrototypeWindow(windowRect, obj.x, obj.y, 2)) {
+                if (obj.type !== "wallSection" && Number.isFinite(obj.x) && Number.isFinite(obj.y) && isPointInsidePrototypeWindow(windowRect, obj.x, obj.y, 2)) {
                     const objPoint = projectPrototypePoint(windowRect, mw, mh, obj.x, obj.y);
                     if (obj.type === "tree") {
                         drawDot(target, objPoint.x, objPoint.y, dotW, dotH, COL_TREE);
@@ -403,6 +474,21 @@
                     }
                 }
             }
+        }
+
+        for (let i = 0; i < wallSections.length; i++) {
+            const wall = wallSections[i];
+            drawPrototypeWallSegment(
+                target,
+                windowRect,
+                mw,
+                mh,
+                lineWidth,
+                Number(wall.startPoint.x),
+                Number(wall.startPoint.y),
+                Number(wall.endPoint.x),
+                Number(wall.endPoint.y)
+            );
         }
 
         if (typeof animals !== "undefined" && Array.isArray(animals)) {

@@ -100,7 +100,7 @@
       "width": 0.9,
       "height": 2.8,
       "frameCount": { "x": 2, "y": 1 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 },
+      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.1666666667 },
       "visualHitbox": { 
         "type": "polygon",
         "points": [

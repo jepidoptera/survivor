@@ -4,7 +4,7 @@
   "description": "tbd",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/*.test.js",
     "start": "node server.js",
     "slice:realmap": "node scripts/slice-real-map.js"
   },

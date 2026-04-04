@@ -23,6 +23,94 @@ let perfStats = {
     simSteps: 0,
     lastUiUpdateAt: 0
 };
+let gpuAssetStats = {
+    gauges: {
+        prototypeLoadedNodes: 0,
+        prototypeRuntimeWalls: 0,
+        prototypeRuntimeObjects: 0,
+        prototypeRuntimeRoads: 0,
+        prototypeRuntimeTrees: 0,
+        prototypeRuntimeRoofs: 0,
+        prototypeRuntimeAnimals: 0,
+        roadCacheTextures: 0,
+        roadCacheLimit: 0,
+        roadCacheCreates: 0,
+        roadCacheEvictions: 0,
+        roadCacheDestroyCalls: 0
+    },
+    peaks: {
+        prototypeLoadedNodes: 0,
+        prototypeRuntimeWalls: 0,
+        prototypeRuntimeObjects: 0,
+        prototypeRuntimeRoads: 0,
+        prototypeRuntimeTrees: 0,
+        prototypeRuntimeRoofs: 0,
+        prototypeRuntimeAnimals: 0,
+        roadCacheTextures: 0,
+        roadCacheCreates: 0,
+        roadCacheEvictions: 0,
+        roadCacheDestroyCalls: 0
+    },
+    updatedAtMs: 0
+};
+
+function updateGpuAssetTimestamp() {
+    gpuAssetStats.updatedAtMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now();
+}
+
+function setGpuAssetGauge(name, value) {
+    if (typeof name !== "string" || name.length === 0) return 0;
+    const nextValue = Math.max(0, toFinitePerfNumber(value, 0));
+    gpuAssetStats.gauges[name] = nextValue;
+    gpuAssetStats.peaks[name] = Math.max(toFinitePerfNumber(gpuAssetStats.peaks[name], 0), nextValue);
+    updateGpuAssetTimestamp();
+    return nextValue;
+}
+
+function addGpuAssetGauge(name, delta) {
+    if (typeof name !== "string" || name.length === 0) return 0;
+    const nextValue = Math.max(0, toFinitePerfNumber(gpuAssetStats.gauges[name], 0) + toFinitePerfNumber(delta, 0));
+    gpuAssetStats.gauges[name] = nextValue;
+    gpuAssetStats.peaks[name] = Math.max(toFinitePerfNumber(gpuAssetStats.peaks[name], 0), nextValue);
+    updateGpuAssetTimestamp();
+    return nextValue;
+}
+
+function getGpuAssetStatsSnapshot() {
+    return {
+        gauges: { ...gpuAssetStats.gauges },
+        peaks: { ...gpuAssetStats.peaks },
+        updatedAtMs: toFinitePerfNumber(gpuAssetStats.updatedAtMs, 0)
+    };
+}
+
+function formatGpuAssetDebugSummary() {
+    const gauges = gpuAssetStats.gauges || {};
+    const peaks = gpuAssetStats.peaks || {};
+    return (
+        `\ngpu rt w ${toFinitePerfNumber(gauges.prototypeRuntimeWalls, 0)}` +
+        ` o ${toFinitePerfNumber(gauges.prototypeRuntimeObjects, 0)}` +
+        ` r ${toFinitePerfNumber(gauges.prototypeRuntimeRoads, 0)}` +
+        ` t ${toFinitePerfNumber(gauges.prototypeRuntimeTrees, 0)}` +
+        ` rf ${toFinitePerfNumber(gauges.prototypeRuntimeRoofs, 0)}` +
+        ` a ${toFinitePerfNumber(gauges.prototypeRuntimeAnimals, 0)}` +
+        ` n ${toFinitePerfNumber(gauges.prototypeLoadedNodes, 0)}` +
+        `\ngpu rc ${toFinitePerfNumber(gauges.roadCacheTextures, 0)}/${toFinitePerfNumber(gauges.roadCacheLimit, 0)}` +
+        ` c ${toFinitePerfNumber(gauges.roadCacheCreates, 0)}` +
+        ` e ${toFinitePerfNumber(gauges.roadCacheEvictions, 0)}` +
+        ` d ${toFinitePerfNumber(gauges.roadCacheDestroyCalls, 0)}` +
+        ` pk ${toFinitePerfNumber(peaks.roadCacheTextures, 0)}`
+    );
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.setGpuAssetGauge = setGpuAssetGauge;
+    globalThis.addGpuAssetGauge = addGpuAssetGauge;
+    globalThis.getGpuAssetStatsSnapshot = getGpuAssetStatsSnapshot;
+    globalThis.formatGpuAssetDebugSummary = formatGpuAssetDebugSummary;
+}
 let simPerfBreakdown = {
     steps: 0,
     totalMs: 0,

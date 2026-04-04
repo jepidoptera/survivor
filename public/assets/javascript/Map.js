@@ -152,12 +152,72 @@ if (typeof globalThis !== "undefined") {
     globalThis.hasActiveDirectionalBlockers = hasActiveDirectionalBlockers;
 }
 
+class MinPriorityQueue {
+    constructor() {
+        this.items = [];
+    }
+
+    push(value, priority) {
+        this.items.push({ value, priority });
+        this.bubbleUp(this.items.length - 1);
+    }
+
+    pop() {
+        if (this.items.length === 0) return null;
+        const top = this.items[0];
+        const last = this.items.pop();
+        if (this.items.length > 0 && last) {
+            this.items[0] = last;
+            this.sinkDown(0);
+        }
+        return top;
+    }
+
+    isEmpty() {
+        return this.items.length === 0;
+    }
+
+    bubbleUp(index) {
+        let currentIndex = index;
+        while (currentIndex > 0) {
+            const parentIndex = Math.floor((currentIndex - 1) / 2);
+            if (this.items[parentIndex].priority <= this.items[currentIndex].priority) break;
+            [this.items[parentIndex], this.items[currentIndex]] = [this.items[currentIndex], this.items[parentIndex]];
+            currentIndex = parentIndex;
+        }
+    }
+
+    sinkDown(index) {
+        let currentIndex = index;
+        const length = this.items.length;
+        while (true) {
+            const leftIndex = currentIndex * 2 + 1;
+            const rightIndex = currentIndex * 2 + 2;
+            let smallest = currentIndex;
+
+            if (leftIndex < length && this.items[leftIndex].priority < this.items[smallest].priority) {
+                smallest = leftIndex;
+            }
+            if (rightIndex < length && this.items[rightIndex].priority < this.items[smallest].priority) {
+                smallest = rightIndex;
+            }
+            if (smallest === currentIndex) break;
+            [this.items[currentIndex], this.items[smallest]] = [this.items[smallest], this.items[currentIndex]];
+            currentIndex = smallest;
+        }
+    }
+}
+
 class MapNode {
     constructor(x, y, mapWidth, mapHeight) {
         this.x = x * 0.866;
         this.y = y + (x % 2 === 0 ? 0.5 : 0);
         this.xindex = x;
         this.yindex = y;
+        this.traversalLayer = 0;
+        this.baseZ = 0;
+        this.portalEdges = [];
+        this.id = `${x},${y},0`;
         
         // Initialize neighbors array with length 12
         // Indices correspond to hunter sprite rows, starting with left and going counterclockwise:
@@ -744,6 +804,7 @@ class GameMap {
         ];
         for (let i = 0; i < powerupsCandidates.length; i++) {
             const powerupsList = powerupsCandidates[i];
+
             if (!Array.isArray(powerupsList)) continue;
             for (let j = 0; j < powerupsList.length; j++) {
                 addObject(powerupsList[j]);
@@ -767,6 +828,247 @@ class GameMap {
             this.rebuildGameObjectRegistry();
         }
         return this.gameObjects;
+    }
+
+    getNodeKey(nodeOrX, y = null, traversalLayer = 0) {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            const x = Number(nodeOrX.xindex);
+            const nodeY = Number(nodeOrX.yindex);
+            const layer = Number.isFinite(nodeOrX.traversalLayer)
+                ? Number(nodeOrX.traversalLayer)
+                : 0;
+            return `${x},${nodeY},${layer}`;
+        }
+        return `${Number(nodeOrX)},${Number(y)},${Number.isFinite(traversalLayer) ? Number(traversalLayer) : 0}`;
+    }
+
+    getNode(x, y, traversalLayer = 0) {
+        const resolvedLayer = Number.isFinite(traversalLayer) ? Number(traversalLayer) : 0;
+        if (resolvedLayer !== 0) return null;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const tx = this.wrapX ? this.wrapIndexX(Math.round(x)) : Math.round(x);
+        const ty = this.wrapY ? this.wrapIndexY(Math.round(y)) : Math.round(y);
+        return (this.nodes[tx] && this.nodes[tx][ty]) ? this.nodes[tx][ty] : null;
+    }
+
+    getNodeBaseZ(node) {
+        if (!node) return 0;
+        return Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0;
+    }
+
+    createTraversalEdge(fromNode, toNode, options = {}) {
+        if (!fromNode || !toNode) return null;
+        const type = (typeof options.type === "string" && options.type)
+            ? options.type
+            : "planar";
+        const directionIndex = Number.isInteger(options.directionIndex)
+            ? Number(options.directionIndex)
+            : null;
+        const fromKey = this.getNodeKey(fromNode);
+        const toKey = this.getNodeKey(toNode);
+        return {
+            id: `${fromKey}->${toKey}:${directionIndex === null ? "x" : directionIndex}`,
+            type,
+            directionIndex,
+            fromNode,
+            toNode,
+            allowed: options.allowed !== false,
+            penalty: Number.isFinite(options.penalty) ? Number(options.penalty) : 0,
+            blockers: Array.isArray(options.blockers) ? options.blockers.slice() : [],
+            movementCost: Number.isFinite(options.movementCost) ? Number(options.movementCost) : 1,
+            zProfile: (typeof options.zProfile === "string" && options.zProfile) ? options.zProfile : "linear",
+            metadata: (options.metadata && typeof options.metadata === "object") ? { ...options.metadata } : {}
+        };
+    }
+
+    sampleTraversalEdgePosition(edge, progress = 1) {
+        if (!edge || !edge.fromNode || !edge.toNode) return null;
+        const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        const fromNode = edge.fromNode;
+        const toNode = edge.toNode;
+        const x = fromNode.x + this.shortestDeltaX(fromNode.x, toNode.x) * t;
+        const y = fromNode.y + this.shortestDeltaY(fromNode.y, toNode.y) * t;
+        const fromZ = this.getNodeBaseZ(fromNode);
+        const toZ = this.getNodeBaseZ(toNode);
+        const z = fromZ + (toZ - fromZ) * t;
+        return { x, y, z };
+    }
+
+    createPathStep(edge, options = {}) {
+        if (!edge || !edge.fromNode || !edge.toNode) return null;
+        return {
+            edge,
+            fromNode: edge.fromNode,
+            toNode: edge.toNode,
+            type: edge.type || "planar",
+            directionIndex: Number.isInteger(edge.directionIndex) ? Number(edge.directionIndex) : null,
+            penalty: Number.isFinite(edge.penalty) ? Number(edge.penalty) : 0,
+            blockers: Array.isArray(edge.blockers) ? edge.blockers.slice() : [],
+            metadata: (options.metadata && typeof options.metadata === "object")
+                ? { ...options.metadata }
+                : ((edge.metadata && typeof edge.metadata === "object") ? { ...edge.metadata } : {}),
+            getWorldPositionAt: (progress = 1) => this.sampleTraversalEdgePosition(edge, progress)
+        };
+    }
+
+    createTraversalPathItem(edge, options = {}) {
+        if (!edge || !edge.toNode) return null;
+        if (options.returnPathSteps === true) {
+            return this.createPathStep(edge);
+        }
+        return edge.toNode;
+    }
+
+    getObjectPortalEdges(node) {
+        if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return [];
+        const edges = [];
+        const seen = new Set();
+        for (let i = 0; i < node.objects.length; i++) {
+            const obj = node.objects[i];
+            if (!obj || obj.gone || typeof obj.getTraversalPortalEdges !== "function") continue;
+            const portalEdges = obj.getTraversalPortalEdges(node, this);
+            if (!Array.isArray(portalEdges) || portalEdges.length === 0) continue;
+            for (let j = 0; j < portalEdges.length; j++) {
+                const portalEdge = portalEdges[j];
+                if (!portalEdge || !portalEdge.toNode) continue;
+                const edge = this.createTraversalEdge(
+                    portalEdge.fromNode || node,
+                    portalEdge.toNode,
+                    {
+                        type: (typeof portalEdge.type === "string" && portalEdge.type) ? portalEdge.type : "portal",
+                        directionIndex: Number.isInteger(portalEdge.directionIndex) ? Number(portalEdge.directionIndex) : null,
+                        allowed: portalEdge.allowed !== false,
+                        penalty: Number.isFinite(portalEdge.penalty) ? Number(portalEdge.penalty) : 0,
+                        blockers: Array.isArray(portalEdge.blockers) ? portalEdge.blockers : [],
+                        movementCost: Number.isFinite(portalEdge.movementCost) ? Number(portalEdge.movementCost) : 1,
+                        zProfile: (typeof portalEdge.zProfile === "string" && portalEdge.zProfile) ? portalEdge.zProfile : "linear",
+                        metadata: (portalEdge.metadata && typeof portalEdge.metadata === "object") ? portalEdge.metadata : {}
+                    }
+                );
+                if (!edge || seen.has(edge.id)) continue;
+                seen.add(edge.id);
+                edges.push(edge);
+            }
+        }
+        return edges;
+    }
+
+    finalizeTraversalPath(startingNode, path, options = {}) {
+        if (!Array.isArray(path)) return path;
+        if (options.returnPathSteps !== true) return path;
+
+        const steps = [];
+        const blockers = Array.isArray(path.blockers) ? path.blockers.slice() : null;
+        let fromNode = startingNode || null;
+
+        for (let i = 0; i < path.length; i++) {
+            const pathItem = path[i];
+            if (!pathItem) continue;
+            if (pathItem.toNode) {
+                steps.push(pathItem);
+                fromNode = pathItem.toNode || fromNode;
+                continue;
+            }
+
+            const toNode = pathItem;
+            if (!fromNode || !toNode) {
+                fromNode = toNode || fromNode;
+                continue;
+            }
+
+            let step = null;
+            const outgoingEdges = this.getOutgoingEdges(fromNode, {
+                includeBlocked: true,
+                traversalOptions: {
+                    destinationNode: toNode,
+                    allowBlockedDestination: true,
+                    requiredClearance: 0,
+                    clearanceReferenceNode: toNode
+                }
+            });
+            const matchingEdge = outgoingEdges.find((edge) => edge && edge.toNode === toNode) || null;
+            if (matchingEdge) {
+                step = this.createPathStep(matchingEdge);
+            }
+
+            if (!step) {
+                const directionIndex = Array.isArray(fromNode.neighbors)
+                    ? fromNode.neighbors.indexOf(toNode)
+                    : -1;
+                step = {
+                    fromNode,
+                    toNode,
+                    type: "planar",
+                    directionIndex: directionIndex >= 0 ? directionIndex : null,
+                    penalty: 0,
+                    blockers: [],
+                    metadata: {},
+                    getWorldPositionAt: (progress = 1) => this.sampleTraversalEdgePosition({ fromNode, toNode }, progress)
+                };
+            }
+
+            steps.push(step);
+            fromNode = toNode;
+        }
+
+        if (blockers) {
+            steps.blockers = blockers;
+        }
+        return steps;
+    }
+
+    getOutgoingEdges(node, options = {}) {
+        if (!node) return [];
+        const includeBlocked = options.includeBlocked === true;
+        const traversalOptions = (options.traversalOptions && typeof options.traversalOptions === "object")
+            ? options.traversalOptions
+            : options;
+        const edges = [];
+
+        if (Array.isArray(node.neighbors)) {
+            for (let directionIndex = 0; directionIndex < node.neighbors.length; directionIndex++) {
+                const neighborNode = node.neighbors[directionIndex];
+                if (!neighborNode) continue;
+                const traversal = this.getTraversalInfo(node, directionIndex, traversalOptions);
+                if (!includeBlocked && !traversal.allowed) continue;
+                edges.push(this.createTraversalEdge(node, neighborNode, {
+                    type: "planar",
+                    directionIndex,
+                    allowed: traversal.allowed,
+                    penalty: traversal.penalty,
+                    blockers: traversal.blockers,
+                    metadata: { kind: "planar" }
+                }));
+            }
+        }
+
+        const objectPortalEdges = this.getObjectPortalEdges(node);
+        for (let i = 0; i < objectPortalEdges.length; i++) {
+            edges.push(objectPortalEdges[i]);
+        }
+
+        if (Array.isArray(node.portalEdges)) {
+            for (let i = 0; i < node.portalEdges.length; i++) {
+                const portalEdge = node.portalEdges[i];
+                if (!portalEdge || !portalEdge.toNode) continue;
+                edges.push(this.createTraversalEdge(
+                    portalEdge.fromNode || node,
+                    portalEdge.toNode,
+                    {
+                        type: (typeof portalEdge.type === "string" && portalEdge.type) ? portalEdge.type : "portal",
+                        directionIndex: Number.isInteger(portalEdge.directionIndex) ? Number(portalEdge.directionIndex) : null,
+                        allowed: portalEdge.allowed !== false,
+                        penalty: Number.isFinite(portalEdge.penalty) ? Number(portalEdge.penalty) : 0,
+                        blockers: Array.isArray(portalEdge.blockers) ? portalEdge.blockers : [],
+                        movementCost: Number.isFinite(portalEdge.movementCost) ? Number(portalEdge.movementCost) : 1,
+                        zProfile: (typeof portalEdge.zProfile === "string" && portalEdge.zProfile) ? portalEdge.zProfile : "linear",
+                        metadata: (portalEdge.metadata && typeof portalEdge.metadata === "object") ? portalEdge.metadata : {}
+                    }
+                ));
+            }
+        }
+
+        return edges.filter(edge => !!edge);
     }
 
     // ── Clearance map ────────────────────────────────────────────────
@@ -1242,10 +1544,7 @@ class GameMap {
             blockersUsed.push(...traversal.blockers);
         }
 
-        if (
-            !(allowBlockedDestination && destinationNode && neighborNode === destinationNode) &&
-            (neighborNode.blocked || neighborNode.hasBlockingObject())
-        ) {
+        if (!(allowBlockedDestination && destinationNode && neighborNode === destinationNode)) {
             const tileBlockers = getActiveTileBlockingObjects(neighborNode, {
                 currentNode,
                 neighborNode,
@@ -1253,15 +1552,17 @@ class GameMap {
                 directionIndex,
                 kind: "tile"
             });
-            if (tileBlockers.length === 0) {
-                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+            if (neighborNode.blocked || tileBlockers.length > 0) {
+                if (tileBlockers.length === 0) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                const traversal = resolveKnockableTraversal(tileBlockers, "tile");
+                if (!traversal.allowed) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                penalty += traversal.penalty;
+                blockersUsed.push(...traversal.blockers);
             }
-            const traversal = resolveKnockableTraversal(tileBlockers, "tile");
-            if (!traversal.allowed) {
-                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
-            }
-            penalty += traversal.penalty;
-            blockersUsed.push(...traversal.blockers);
         }
 
         const cornerPair = blockerPairs[directionIndex];
@@ -1269,32 +1570,26 @@ class GameMap {
             const [blocker1, blocker2] = cornerPair;
             const blockerNode1 = currentNode.neighbors[blocker1];
             const blockerNode2 = currentNode.neighbors[blocker2];
-            if (
-                (blockerNode1 && blockerNode1.hasBlockingObject()) ||
-                (blockerNode2 && blockerNode2.hasBlockingObject())
-            ) {
-                const cornerBlockers = [];
-                if (blockerNode1) {
-                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode1, {
-                        currentNode,
-                        neighborNode,
-                        destinationNode,
-                        directionIndex: blocker1,
-                        kind: "corner"
-                    }));
-                }
-                if (blockerNode2) {
-                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode2, {
-                        currentNode,
-                        neighborNode,
-                        destinationNode,
-                        directionIndex: blocker2,
-                        kind: "corner"
-                    }));
-                }
-                if (cornerBlockers.length === 0) {
-                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
-                }
+            const cornerBlockers = [];
+            if (blockerNode1) {
+                cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode1, {
+                    currentNode,
+                    neighborNode,
+                    destinationNode,
+                    directionIndex: blocker1,
+                    kind: "corner"
+                }));
+            }
+            if (blockerNode2) {
+                cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode2, {
+                    currentNode,
+                    neighborNode,
+                    destinationNode,
+                    directionIndex: blocker2,
+                    kind: "corner"
+                }));
+            }
+            if (cornerBlockers.length > 0) {
                 const traversal = resolveKnockableTraversal(cornerBlockers, "corner");
                 if (!traversal.allowed) {
                     return { allowed: false, neighborNode, penalty: 0, blockers: [] };
@@ -1353,6 +1648,14 @@ class GameMap {
         const maxRandomDetours = Number.isFinite(opts.maxRandomDetours)
             ? Math.max(0, Math.floor(opts.maxRandomDetours))
             : 0; // unused — kept for API compatibility
+        const keyFor = (node) => this.getNodeKey(node);
+        const outgoingTraversalOptions = {
+            destinationNode,
+            allowBlockedDestination,
+            requiredClearance,
+            canTraverseObject,
+            clearanceReferenceNode: destinationNode
+        };
 
         // Even indices are far (diagonal) moves, odd indices are adjacent moves
         // Blocker pairs for far moves: the two adjacent directions that flank the far direction
@@ -1464,22 +1767,28 @@ class GameMap {
         const visited = new Set();
         const maxSteps = Math.max(200, (this.width + this.height));
         if (currentNode) {
-            visited.add(`${currentNode.xindex},${currentNode.yindex}`);
+            visited.add(keyFor(currentNode));
         }
 
         while (currentNode && path.length < maxSteps) {
             let bestValidDistance = Infinity;
-            let bestValidDirection = -1;
-            let idealDirection = -1;
+            let bestValidEdge = null;
+            let idealEdge = null;
             let idealDist = Infinity;
-            let idealDirectionPassable = false; // true if idealDirection passes canMoveDirection
-            const validDirections = [];
+            let idealDirectionPassable = false;
+            const validEdges = [];
+            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+                traversalOptions: outgoingTraversalOptions,
+                includeBlocked: true
+            });
 
-            for (let n = 0; n < 12; n++) {
-                const neighborNode = currentNode.neighbors[n];
+            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
+                const edge = outgoingEdges[edgeIndex];
+                const neighborNode = edge && edge.toNode;
                 if (!neighborNode) continue;
 
-                const distFactor = distFactors[n];
+                const directionIndex = Number.isInteger(edge.directionIndex) ? Number(edge.directionIndex) : null;
+                const distFactor = directionIndex === null ? 1 : distFactors[directionIndex];
                 const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x)
                             - this.shortestDeltaX(currentNode.x, neighborNode.x) * distFactor;
                 const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y)
@@ -1489,36 +1798,36 @@ class GameMap {
                 // Track the best direction regardless of passability or visited state
                 if (dist < idealDist) {
                     idealDist = dist;
-                    idealDirection = n;
-                    idealDirectionPassable = canMoveDirection(currentNode, n);
+                    idealEdge = edge;
+                    idealDirectionPassable = edge.allowed !== false;
                 }
 
-                if (!canMoveDirection(currentNode, n)) continue;
+                if (edge.allowed === false) continue;
 
                 // Reached destination?
                 if (neighborNode === destinationNode) {
-                    path.push(destinationNode);
-                    return path;
+                    path.push(this.createTraversalPathItem(edge, opts));
+                    return this.finalizeTraversalPath(startingNode, path, opts);
                 }
 
-                const nKey = `${neighborNode.xindex},${neighborNode.yindex}`;
+                const nKey = keyFor(neighborNode);
                 if (visited.has(nKey)) continue;
 
-                validDirections.push(n);
+                validEdges.push(edge);
                 if (dist < bestValidDistance) {
                     bestValidDistance = dist;
-                    bestValidDirection = n;
+                    bestValidEdge = edge;
                 }
             }
 
             // The ideal direction toward the destination is physically blocked (fails
             // canMoveDirection — not merely visited). Collect the culprit objects,
             // take one random bounce step so the animal keeps moving, then return.
-            if (idealDirection !== -1 && !idealDirectionPassable) {
+            if (idealEdge && !idealDirectionPassable) {
                 const likelyBlockers = this._collectLikelyPathBlockers(currentNode, destinationNode, requiredClearance, {
                     currentNode,
-                    neighborNode: currentNode.neighbors[idealDirection] || null,
-                    directionIndex: idealDirection,
+                    neighborNode: idealEdge.toNode || null,
+                    directionIndex: Number.isInteger(idealEdge.directionIndex) ? Number(idealEdge.directionIndex) : null,
                     referenceNode: currentNode,
                     canTraverseObject
                 });
@@ -1531,72 +1840,74 @@ class GameMap {
 
                 // Find a bounce step. Try valid (clearance-respecting) directions first;
                 // fall back to any unblocked direction so the animal never fully freezes.
-                let bounceDirections = validDirections.length > 0 ? validDirections : null;
-                if (!bounceDirections) {
+                let bounceEdges = validEdges.length > 0 ? validEdges : null;
+                if (!bounceEdges) {
                     // Clearance-ignoring fallback: any neighbor that isn't hard-blocked
-                    bounceDirections = [];
-                    for (let n = 0; n < 12; n++) {
-                        const nb = currentNode.neighbors[n];
-                        const directionalBlockers = currentNode.blockedNeighbors
-                            ? currentNode.blockedNeighbors.get(n)
-                            : null;
-                        if (hasDirectionalBlockersForPath(directionalBlockers, { currentNode, directionIndex: n, destinationNode, kind: "directional" })) continue;
-                        if (!nb || hasBlockingObjectForPath(nb, { currentNode, neighborNode: nb, directionIndex: n, destinationNode, kind: "tile" }) || nb.blocked) continue;
-                        const nKey = `${nb.xindex},${nb.yindex}`;
-                        if (visited.has(nKey)) continue;
-                        bounceDirections.push(n);
-                    }
+                    bounceEdges = this.getOutgoingEdges(currentNode, {
+                        traversalOptions: {
+                            ...outgoingTraversalOptions,
+                            requiredClearance: 0
+                        },
+                        includeBlocked: false
+                    }).filter((edge) => edge && edge.toNode && !visited.has(keyFor(edge.toNode)));
                 }
-                if (bounceDirections.length > 0) {
-                    const bounce = bounceDirections[Math.floor(Math.random() * bounceDirections.length)];
-                    path.push(currentNode.neighbors[bounce]);
+                if (bounceEdges.length > 0) {
+                    const bounceEdge = bounceEdges[Math.floor(Math.random() * bounceEdges.length)];
+                    path.push(this.createTraversalPathItem(bounceEdge, opts));
                 }
-                return path;
+                return this.finalizeTraversalPath(startingNode, path, opts);
             }
 
             // Ideal direction is passable — take the greedy step.
             // If no valid (clearance-respecting) direction exists, fall back to any
             // unblocked direction so the animal can escape a tight spot.
-            if (validDirections.length === 0) {
-                for (let n = 0; n < 12; n++) {
-                    const nb = currentNode.neighbors[n];
-                    const directionalBlockers = currentNode.blockedNeighbors
-                        ? currentNode.blockedNeighbors.get(n)
-                        : null;
-                    if (hasDirectionalBlockersForPath(directionalBlockers, { currentNode, directionIndex: n, destinationNode, kind: "directional" })) continue;
-                    if (!nb || hasBlockingObjectForPath(nb, { currentNode, neighborNode: nb, directionIndex: n, destinationNode, kind: "tile" }) || nb.blocked) continue;
-                    const nKey = `${nb.xindex},${nb.yindex}`;
+            if (validEdges.length === 0) {
+                const fallbackEdges = this.getOutgoingEdges(currentNode, {
+                    traversalOptions: {
+                        ...outgoingTraversalOptions,
+                        requiredClearance: 0
+                    },
+                    includeBlocked: false
+                });
+                for (let edgeIndex = 0; edgeIndex < fallbackEdges.length; edgeIndex++) {
+                    const edge = fallbackEdges[edgeIndex];
+                    const nb = edge && edge.toNode;
+                    if (!nb) continue;
+                    const nKey = keyFor(nb);
                     if (visited.has(nKey)) continue;
-                    validDirections.push(n);
-                    // Pick any single escape direction; recompute best as closest to dest
-                    const distFactor = distFactors[n];
+                    validEdges.push(edge);
+                    const directionIndex = Number.isInteger(edge.directionIndex) ? Number(edge.directionIndex) : null;
+                    const distFactor = directionIndex === null ? 1 : distFactors[directionIndex];
                     const xdist = this.shortestDeltaX(currentNode.x, destinationNode.x)
                                 - this.shortestDeltaX(currentNode.x, nb.x) * distFactor;
                     const ydist = this.shortestDeltaY(currentNode.y, destinationNode.y)
                                 - this.shortestDeltaY(currentNode.y, nb.y) * distFactor;
                     const dist = xdist ** 2 + ydist ** 2;
-                    if (dist < bestValidDistance) { bestValidDistance = dist; bestValidDirection = n; }
+                    if (dist < bestValidDistance) {
+                        bestValidDistance = dist;
+                        bestValidEdge = edge;
+                    }
                 }
-                if (validDirections.length === 0) return path; // truly surrounded, give up
+                if (validEdges.length === 0) return this.finalizeTraversalPath(startingNode, path, opts); // truly surrounded, give up
             }
 
-            const chosenNeighbor = currentNode.neighbors[bestValidDirection];
-            if (!chosenNeighbor) return path;
+            const chosenNeighbor = bestValidEdge ? bestValidEdge.toNode : null;
+            if (!chosenNeighbor) return this.finalizeTraversalPath(startingNode, path, opts);
 
-            const chosenKey = `${chosenNeighbor.xindex},${chosenNeighbor.yindex}`;
-            if (visited.has(chosenKey)) return path;
+            const chosenKey = keyFor(chosenNeighbor);
+            if (visited.has(chosenKey)) return this.finalizeTraversalPath(startingNode, path, opts);
 
-            path.push(chosenNeighbor);
+            path.push(this.createTraversalPathItem(bestValidEdge, opts));
             visited.add(chosenKey);
             currentNode = chosenNeighbor;
         }
 
-        return path;
+        return this.finalizeTraversalPath(startingNode, path, opts);
     }
 
     findPathAStar(startingNode, destinationNode, options = {}) {
         if (!startingNode || !destinationNode) return null;
-        if (startingNode === destinationNode) return [];
+        if (startingNode === destinationNode) return this.finalizeTraversalPath(startingNode, [], options);
 
         // Keep traversal rules aligned with legacy findPath().
         // Even indices are far moves, odd indices are adjacent moves.
@@ -1625,17 +1936,6 @@ class GameMap {
             ? options.canTraverseObject
             : null;
 
-        if (!allowBlockedDestination && (destinationNode.blocked || destinationNode.hasBlockingObject())) {
-            return null;
-        }
-        // If we need clearance, the destination must also satisfy it (unless caller opts out).
-        if (
-            !allowBlockedDestination &&
-            requiredClearance > 0 &&
-            destinationNode.clearance < requiredClearance
-        ) {
-            return null;
-        }
         if (Number.isFinite(maxPathLength)) {
             const startHeuristic = Math.hypot(
                 this.shortestDeltaX(startingNode.x, destinationNode.x),
@@ -1646,7 +1946,7 @@ class GameMap {
             }
         }
 
-        const keyFor = (node) => `${node.xindex},${node.yindex}`;
+        const keyFor = (node) => this.getNodeKey(node);
         const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
         const getActiveDirectionalBlockers = (blockers, context = null) => {
             if (!(blockers instanceof Set) || blockers.size === 0) return [];
@@ -1674,6 +1974,20 @@ class GameMap {
             }
             return blockers;
         };
+        if (!allowBlockedDestination) {
+            const destinationTileBlockers = getActiveTileBlockingObjects(destinationNode);
+            if (destinationNode.blocked || destinationTileBlockers.length > 0) {
+                return null;
+            }
+        }
+        // If we need clearance, the destination must also satisfy it (unless caller opts out).
+        if (
+            !allowBlockedDestination &&
+            requiredClearance > 0 &&
+            destinationNode.clearance < requiredClearance
+        ) {
+            return null;
+        }
         const resolveKnockableTraversal = (blockers, currentNode, neighborNode, directionIndex, kind) => {
             if (!Array.isArray(blockers) || blockers.length === 0) {
                 return { allowed: true, penalty: 0, blockers: [] };
@@ -1722,21 +2036,26 @@ class GameMap {
             const dy = this.shortestDeltaY(node.y, destinationNode.y);
             return Math.hypot(dx, dy);
         };
-        const getTraversalInfo = (currentNode, directionIndex) => this.getTraversalInfo(currentNode, directionIndex, {
+        const outgoingTraversalOptions = {
             destinationNode,
             allowBlockedDestination,
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
             clearanceReferenceNode: destinationNode
-        });
+        };
 
-        const reconstructPath = (cameFrom, currentKey, blockersByKey) => {
+        const reconstructPath = (cameFrom, cameFromEdge, currentKey, blockersByKey) => {
             const result = [];
             let walkKey = currentKey;
             while (cameFrom.has(walkKey)) {
-                const node = openOrClosedNodes.get(walkKey);
-                if (node) result.unshift(node);
+                const edge = cameFromEdge.get(walkKey) || null;
+                if (edge) {
+                    result.unshift(this.createTraversalPathItem(edge, options));
+                } else {
+                    const node = openOrClosedNodes.get(walkKey);
+                    if (node) result.unshift(node);
+                }
                 walkKey = cameFrom.get(walkKey);
             }
             const blockers = blockersByKey.get(currentKey);
@@ -1747,7 +2066,9 @@ class GameMap {
         };
 
         const openSet = new Set();
+        const openQueue = new MinPriorityQueue();
         const cameFrom = new Map();
+        const cameFromEdge = new Map();
         const gScore = new Map();
         const distanceScore = new Map();
         const fScore = new Map();
@@ -1759,7 +2080,9 @@ class GameMap {
         openSet.add(startKey);
         gScore.set(startKey, 0);
         distanceScore.set(startKey, 0);
-        fScore.set(startKey, heuristic(startingNode));
+        const startF = heuristic(startingNode);
+        fScore.set(startKey, startF);
+        openQueue.push(startKey, startF);
         openOrClosedNodes.set(startKey, startingNode);
         openOrClosedNodes.set(goalKey, destinationNode);
         blockersByKey.set(startKey, new Set());
@@ -1769,20 +2092,22 @@ class GameMap {
             : Math.max(1000, this.width * this.height * 2);
 
         let iterations = 0;
-        while (openSet.size > 0 && iterations < maxIterations) {
+        while (!openQueue.isEmpty() && openSet.size > 0 && iterations < maxIterations) {
             iterations += 1;
 
-            // Pick node in open set with smallest f-score.
-            let currentKey = null;
-            let currentBestF = Infinity;
-            for (const key of openSet) {
-                const score = fScore.has(key) ? fScore.get(key) : Infinity;
-                if (score < currentBestF) {
-                    currentBestF = score;
-                    currentKey = key;
-                }
+            let currentEntry = null;
+            while (!openQueue.isEmpty()) {
+                const candidate = openQueue.pop();
+                if (!candidate) break;
+                if (!openSet.has(candidate.value)) continue;
+                const liveScore = fScore.has(candidate.value) ? fScore.get(candidate.value) : Infinity;
+                if (candidate.priority > liveScore) continue;
+                currentEntry = candidate;
+                break;
             }
-            if (!currentKey) break;
+            if (!currentEntry) break;
+
+            const currentKey = currentEntry.value;
 
             const currentNode = openOrClosedNodes.get(currentKey);
             if (!currentNode) {
@@ -1791,16 +2116,18 @@ class GameMap {
             }
 
             if (currentKey === goalKey) {
-                return reconstructPath(cameFrom, currentKey, blockersByKey);
+                return this.finalizeTraversalPath(startingNode, reconstructPath(cameFrom, cameFromEdge, currentKey, blockersByKey), options);
             }
 
             openSet.delete(currentKey);
 
-            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
-                const traversal = getTraversalInfo(currentNode, directionIndex);
-                if (!traversal.allowed) continue;
-
-                const neighborNode = traversal.neighborNode;
+            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+                traversalOptions: outgoingTraversalOptions,
+                includeBlocked: false
+            });
+            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
+                const traversal = outgoingEdges[edgeIndex];
+                const neighborNode = traversal && traversal.toNode;
                 if (!neighborNode) continue;
 
                 const neighborKey = keyFor(neighborNode);
@@ -1815,15 +2142,18 @@ class GameMap {
                 if (tentativeG >= existingG) continue;
 
                 cameFrom.set(neighborKey, currentKey);
+                cameFromEdge.set(neighborKey, traversal);
                 gScore.set(neighborKey, tentativeG);
                 distanceScore.set(neighborKey, tentativeDistance);
-                fScore.set(neighborKey, tentativeG + heuristic(neighborNode));
+                const neighborF = tentativeG + heuristic(neighborNode);
+                fScore.set(neighborKey, neighborF);
                 const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
                 for (let i = 0; i < traversal.blockers.length; i++) {
                     nextBlockers.add(traversal.blockers[i]);
                 }
                 blockersByKey.set(neighborKey, nextBlockers);
                 openSet.add(neighborKey);
+                openQueue.push(neighborKey, neighborF);
             }
         }
 
@@ -1837,7 +2167,7 @@ class GameMap {
             ? Math.max(0, Number(options.maxPathLength))
             : NaN;
         if (!Number.isFinite(maxPathLength)) return null;
-        if (maxPathLength <= 0) return [];
+        if (maxPathLength <= 0) return this.finalizeTraversalPath(startingNode, [], options);
 
         const requiredClearance = Number.isFinite(options.clearance)
             ? Math.max(0, Math.floor(options.clearance))
@@ -1873,7 +2203,14 @@ class GameMap {
         const path = [];
         path.blockers = [];
         const blockersSeen = new Set();
-        const visited = new Set([`${startingNode.xindex},${startingNode.yindex}`]);
+        const keyFor = (node) => this.getNodeKey(node);
+        const outgoingTraversalOptions = {
+            requiredClearance,
+            knockableTraversalCost,
+            canTraverseObject,
+            clearanceReferenceNode: startingNode
+        };
+        const visited = new Set([keyFor(startingNode)]);
         let currentNode = startingNode;
         let totalDistance = 0;
         let previousNode = null;
@@ -1883,20 +2220,18 @@ class GameMap {
         while (totalDistance < (maxPathLength - epsilon)) {
             let bestMove = null;
 
-            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
-                const traversal = this.getTraversalInfo(currentNode, directionIndex, {
-                    requiredClearance,
-                    knockableTraversalCost,
-                    canTraverseObject,
-                    clearanceReferenceNode: startingNode
-                });
-                if (!traversal.allowed || !traversal.neighborNode) continue;
-
-                const neighborNode = traversal.neighborNode;
+            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+                traversalOptions: outgoingTraversalOptions,
+                includeBlocked: false
+            });
+            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
+                const traversal = outgoingEdges[edgeIndex];
+                const neighborNode = traversal && traversal.toNode;
+                if (!neighborNode) continue;
                 const step = stepDistance(currentNode, neighborNode);
                 if ((totalDistance + step) > (maxPathLength + epsilon)) continue;
 
-                const neighborKey = `${neighborNode.xindex},${neighborNode.yindex}`;
+                const neighborKey = keyFor(neighborNode);
                 const reverse = !!(previousNode && neighborNode === previousNode);
                 const revisited = visited.has(neighborKey);
                 const neighborThreatDistance = threatDistance(neighborNode);
@@ -1952,7 +2287,7 @@ class GameMap {
 
             if (!bestMove) break;
 
-            path.push(bestMove.neighborNode);
+            path.push(this.createTraversalPathItem(bestMove.traversal, options));
             for (let i = 0; i < bestMove.traversal.blockers.length; i++) {
                 const blocker = bestMove.traversal.blockers[i];
                 if (blockersSeen.has(blocker)) continue;
@@ -1966,7 +2301,7 @@ class GameMap {
             visited.add(bestMove.neighborKey);
         }
 
-        return path;
+        return this.finalizeTraversalPath(startingNode, path, options);
     }
 
     findRetreatPathAStar(startingNode, threatNodeOrPoint, options = {}) {
@@ -1998,9 +2333,9 @@ class GameMap {
             );
 
         if (!threatPoint || !Number.isFinite(maxPathLength)) return null;
-        if (maxPathLength <= 0) return [];
+        if (maxPathLength <= 0) return this.finalizeTraversalPath(startingNode, [], options);
 
-        const keyFor = (node) => `${node.xindex},${node.yindex}`;
+        const keyFor = (node) => this.getNodeKey(node);
         const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
         const getActiveDirectionalBlockers = (blockers, context = null) => {
             if (!(blockers instanceof Set) || blockers.size === 0) return [];
@@ -2072,18 +2407,23 @@ class GameMap {
             const dy = this.shortestDeltaY(threatPoint.y, node.y);
             return Math.hypot(dx, dy);
         };
-        const getTraversalInfo = (currentNode, directionIndex) => this.getTraversalInfo(currentNode, directionIndex, {
+        const outgoingTraversalOptions = {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
             clearanceReferenceNode: startingNode
-        });
-        const reconstructPath = (cameFrom, currentKey, nodesByKey, blockersByKey) => {
+        };
+        const reconstructPath = (cameFrom, cameFromEdge, currentKey, nodesByKey, blockersByKey) => {
             const result = [];
             let walkKey = currentKey;
             while (cameFrom.has(walkKey)) {
-                const node = nodesByKey.get(walkKey);
-                if (node) result.unshift(node);
+                const edge = cameFromEdge.get(walkKey) || null;
+                if (edge) {
+                    result.unshift(this.createTraversalPathItem(edge, options));
+                } else {
+                    const node = nodesByKey.get(walkKey);
+                    if (node) result.unshift(node);
+                }
                 walkKey = cameFrom.get(walkKey);
             }
             const blockers = blockersByKey.get(currentKey);
@@ -2094,7 +2434,9 @@ class GameMap {
         };
 
         const openSet = new Set();
+        const openQueue = new MinPriorityQueue();
         const cameFrom = new Map();
+        const cameFromEdge = new Map();
         const gScore = new Map();
         const distanceScore = new Map();
         const bestPossibleScore = new Map();
@@ -2107,7 +2449,9 @@ class GameMap {
         openSet.add(startKey);
         gScore.set(startKey, 0);
         distanceScore.set(startKey, 0);
-        bestPossibleScore.set(startKey, startThreatDistance + maxPathLength);
+        const startBestPossible = startThreatDistance + maxPathLength;
+        bestPossibleScore.set(startKey, startBestPossible);
+        openQueue.push(startKey, -startBestPossible);
         nodesByKey.set(startKey, startingNode);
         blockersByKey.set(startKey, new Set());
 
@@ -2121,36 +2465,21 @@ class GameMap {
             : Math.max(1000, Math.ceil(maxPathLength * 64));
 
         let iterations = 0;
-        while (openSet.size > 0 && iterations < maxIterations) {
+        while (!openQueue.isEmpty() && openSet.size > 0 && iterations < maxIterations) {
             iterations += 1;
 
             let currentKey = null;
             let currentBestPossible = -Infinity;
-            let currentBestThreat = -Infinity;
-            let currentBestTravel = Infinity;
-            for (const key of openSet) {
-                const upperBound = bestPossibleScore.has(key) ? bestPossibleScore.get(key) : -Infinity;
-                const node = nodesByKey.get(key);
-                const nodeThreatDistance = node ? threatDistance(node) : -Infinity;
-                const nodeTravelDistance = distanceScore.has(key) ? distanceScore.get(key) : Infinity;
-                if (
-                    upperBound > currentBestPossible + epsilon ||
-                    (
-                        Math.abs(upperBound - currentBestPossible) <= epsilon &&
-                        (
-                            nodeThreatDistance > currentBestThreat + epsilon ||
-                            (
-                                Math.abs(nodeThreatDistance - currentBestThreat) <= epsilon &&
-                                nodeTravelDistance < currentBestTravel - epsilon
-                            )
-                        )
-                    )
-                ) {
-                    currentBestPossible = upperBound;
-                    currentBestThreat = nodeThreatDistance;
-                    currentBestTravel = nodeTravelDistance;
-                    currentKey = key;
-                }
+            while (!openQueue.isEmpty()) {
+                const candidate = openQueue.pop();
+                if (!candidate) break;
+                const candidateKey = candidate.value;
+                if (!openSet.has(candidateKey)) continue;
+                const liveUpperBound = bestPossibleScore.has(candidateKey) ? bestPossibleScore.get(candidateKey) : -Infinity;
+                if ((-candidate.priority) + epsilon < liveUpperBound) continue;
+                currentKey = candidateKey;
+                currentBestPossible = liveUpperBound;
+                break;
             }
             if (!currentKey) break;
             if (currentBestPossible < bestThreatDistance - epsilon) break;
@@ -2182,11 +2511,13 @@ class GameMap {
                 bestTraversalCost = currentTraversalCost;
             }
 
-            for (let directionIndex = 0; directionIndex < 12; directionIndex++) {
-                const traversal = getTraversalInfo(currentNode, directionIndex);
-                if (!traversal.allowed) continue;
-
-                const neighborNode = traversal.neighborNode;
+            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+                traversalOptions: outgoingTraversalOptions,
+                includeBlocked: false
+            });
+            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
+                const traversal = outgoingEdges[edgeIndex];
+                const neighborNode = traversal && traversal.toNode;
                 if (!neighborNode) continue;
 
                 const neighborKey = keyFor(neighborNode);
@@ -2207,6 +2538,7 @@ class GameMap {
                 }
 
                 cameFrom.set(neighborKey, currentKey);
+                cameFromEdge.set(neighborKey, traversal);
                 distanceScore.set(neighborKey, tentativeDistance);
                 gScore.set(neighborKey, tentativeG);
                 const neighborThreatDistance = threatDistance(neighborNode);
@@ -2214,6 +2546,7 @@ class GameMap {
                     neighborKey,
                     neighborThreatDistance + Math.max(0, maxPathLength - tentativeDistance)
                 );
+                openQueue.push(neighborKey, -bestPossibleScore.get(neighborKey));
                 const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
                 for (let i = 0; i < traversal.blockers.length; i++) {
                     nextBlockers.add(traversal.blockers[i]);
@@ -2242,7 +2575,7 @@ class GameMap {
             }
         }
 
-        return reconstructPath(cameFrom, bestKey, nodesByKey, blockersByKey);
+        return this.finalizeTraversalPath(startingNode, reconstructPath(cameFrom, cameFromEdge, bestKey, nodesByKey, blockersByKey), options);
     }
     
     // Convert world coordinates to the nearest MapNode

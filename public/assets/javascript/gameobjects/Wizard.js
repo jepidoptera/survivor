@@ -1628,6 +1628,7 @@ class Wizard extends Character {
             selectedEditorCategory: this.selectedEditorCategory,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
+            selectedRoadWidth: this.selectedRoadWidth,
             selectedWallTexture: this.selectedWallTexture,
             selectedRoofOverhang: this.selectedRoofOverhang,
             selectedRoofPeakHeight: this.selectedRoofPeakHeight,
@@ -1639,6 +1640,12 @@ class Wizard extends Character {
             scriptingName: (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0)
                 ? this.scriptingName.trim()
                 : "",
+            _scriptFrozenInfinite: Number(this._scriptFrozenUntilMs) === Infinity,
+            _scriptFrozenRemainingMs: (
+                Number.isFinite(Number(this._scriptFrozenUntilMs)) && Number(this._scriptFrozenUntilMs) > Date.now()
+            )
+                ? Math.max(1, Math.ceil(Number(this._scriptFrozenUntilMs) - Date.now()))
+                : 0,
             viewport: {
                 x: viewportX,
                 y: viewportY
@@ -1695,6 +1702,16 @@ class Wizard extends Character {
         if (data.temperature !== undefined && typeof this.setTemperature === "function") {
             this.setTemperature(data.temperature);
         }
+        if (data._scriptFrozenInfinite === true) {
+            this._scriptFrozenUntilMs = Infinity;
+        } else if (Number.isFinite(data._scriptFrozenRemainingMs) && Number(data._scriptFrozenRemainingMs) > 0) {
+            this._scriptFrozenUntilMs = Date.now() + Math.max(1, Number(data._scriptFrozenRemainingMs));
+        } else {
+            this._scriptFrozenUntilMs = 0;
+        }
+        if (typeof this.isFrozen === "function" && this.isFrozen()) {
+            this.applyFrozenState({ clearMoveTimeout: true });
+        }
         const nextGameMode = (data && data.gameMode !== undefined) ? data.gameMode : this.gameMode;
         this.setGameMode(nextGameMode);
         if (Number.isFinite(data.difficulty)) {
@@ -1716,7 +1733,17 @@ class Wizard extends Character {
             : null;
         if (data.food !== undefined) this.food = data.food;
         if (data.currentSpell !== undefined) this.currentSpell = data.currentSpell;
-        if (typeof data.scriptingName === "string") this.scriptingName = data.scriptingName.trim();
+        if (typeof data.scriptingName === "string") {
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                ? globalThis.Scripting
+                : null;
+            const restoredName = data.scriptingName.trim();
+            if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
+                    scriptingApi.setObjectScriptingName(this, restoredName, { map: this.map, restoreFromSave: true });
+            } else {
+                this.scriptingName = restoredName;
+            }
+        }
         if (Array.isArray(data.activeAuras)) {
             this.activeAuras = data.activeAuras.slice();
             this.activeAura = this.activeAuras.length > 0 ? this.activeAuras[0] : null;
@@ -1747,6 +1774,7 @@ class Wizard extends Character {
         if (data.selectedEditorCategory !== undefined) this.selectedEditorCategory = data.selectedEditorCategory;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
+        if (data.selectedRoadWidth !== undefined) this.selectedRoadWidth = data.selectedRoadWidth;
         if (data.selectedWallTexture !== undefined) this.selectedWallTexture = data.selectedWallTexture;
         if (data.selectedRoofOverhang !== undefined) this.selectedRoofOverhang = data.selectedRoofOverhang;
         if (data.selectedRoofPeakHeight !== undefined) this.selectedRoofPeakHeight = data.selectedRoofPeakHeight;

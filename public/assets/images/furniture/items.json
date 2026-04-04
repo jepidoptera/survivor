@@ -163,7 +163,7 @@
         }
       ],
       "width": 4,
-      "height": 4,
+      "height": 3,
       "baseSize": 4,
       "maxSize": 20,
       "renderDepthOffset": 0,
@@ -178,17 +178,89 @@
       "groundPlaneHitbox": {
         "type": "polygon",
         "points": [
-          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.33 },
-          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.33 },
-          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.33 },
-          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.33 }
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.5 }
         ]
+      }
+    },
+    {
+      "file": "redrug.png",
+      "texturePath": "/assets/images/furniture/redrug.png",
+      "width": 4,
+      "height": 3,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
       },
-      "visualHitbox": {
+      "groundPlaneHitbox": {
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.5 }
+        ]
+      }
+    },
+    {
+      "file": "hexrug.png",
+      "texturePath": "/assets/images/furniture/hexrug.png",
+      "width": 0.866,
+      "height": 1,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.25 },
+          { "xFromWidthMultiplier":  0, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.25 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.25 },
+          { "xFromWidthMultiplier":  0, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.25 }
+        ]
+      }
+    },
+    {
+      "file": "circlerug.png",
+      "texturePath": "/assets/images/furniture/circlerug.png",
+      "width": 1,
+      "height": 1,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
-        "radiusFromMaxDimensionMultiplier": 0.5
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.5,
+        "minRadius": 0.12
       }
     }
   ]

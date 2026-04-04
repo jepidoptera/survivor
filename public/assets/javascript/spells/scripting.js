@@ -159,6 +159,7 @@
         ]),
         animal: Object.freeze([
             Object.freeze({ name: "chaseRadius", kind: "property", syntax: "this.chaseRadius=8", description: "set chase radius" }),
+            Object.freeze({ name: "disengageRadius", kind: "property", syntax: "this.disengageRadius=20", description: "set disengage radius" }),
             Object.freeze({ name: "freeze", kind: "method", syntax: "this.freeze(seconds?)", description: "pause movement and AI; omit seconds to freeze indefinitely" }),
             Object.freeze({ name: "maxMp", kind: "property", syntax: "this.maxMp=20", description: "set max MP" }),
             Object.freeze({ name: "maxMP", kind: "property", syntax: "this.maxMP=20", description: "alias for maxMp" }),
@@ -171,7 +172,12 @@
         door: Object.freeze([
             Object.freeze({ name: "lock", kind: "method", syntax: "this.lock()", description: "lock the door" }),
             Object.freeze({ name: "unlock", kind: "method", syntax: "this.unlock()", description: "unlock the door" }),
-            Object.freeze({ name: "open", kind: "method", syntax: "this.open()", description: "open the door so all creatures can pass" })
+            Object.freeze({ name: "open", kind: "method", syntax: "this.open()", description: "open the door so all creatures can pass" }),
+            Object.freeze({ name: "close", kind: "method", syntax: "this.close()", description: "close the door" })
+        ]),
+        window: Object.freeze([
+            Object.freeze({ name: "open", kind: "method", syntax: "this.open()", description: "open the window so it no longer blocks line of sight" }),
+            Object.freeze({ name: "close", kind: "method", syntax: "this.close()", description: "close the window so it blocks line of sight" })
         ]),
         wallSection: Object.freeze([
             Object.freeze({ name: "crumble", kind: "method", syntax: "this.crumble(x=1, y=0)", description: "break the wall section into fragments" })
@@ -267,6 +273,15 @@
         );
     }
 
+    function isWindowPlacedObject(obj) {
+        if (!obj || obj.gone) return false;
+        const category = (typeof obj.category === "string") ? obj.category.trim().toLowerCase() : "";
+        return !!(
+            (obj.isPlacedObject || obj.objectType === "placedObject" || obj.type === "placedObject" || obj.type === "window") &&
+            (category === "windows" || obj.type === "window" || (typeof obj.texturePath === "string" && obj.texturePath.includes("/windows/")))
+        );
+    }
+
     function isTriggerAreaObject(obj) {
         if (!obj || obj.gone) return false;
         if (obj.isTriggerArea === true) return true;
@@ -288,16 +303,30 @@
         return true;
     }
 
+    function notifyWindowLosStateChanged(windowObj) {
+        if (!isWindowPlacedObject(windowObj)) return false;
+        if (typeof windowObj.notifyMountedWallStateChanged === "function") {
+            windowObj.notifyMountedWallStateChanged();
+        }
+        return true;
+    }
+
     function markPrototypeScriptTargetDirty(target) {
         if (!target || typeof target !== "object" || target.gone) return false;
         const mapRef = target.map || global.map || null;
         if (!mapRef || !mapRef._prototypeSectionState) return false;
-        const objectState = mapRef._prototypeObjectState;
-        if (!objectState || target._prototypeObjectManaged !== true || target._prototypeRuntimeRecord !== true) {
+        if (target._prototypeRuntimeRecord !== true) {
             return false;
         }
         target._prototypeDirty = true;
-        objectState.captureScanNeeded = true;
+        const objectState = mapRef._prototypeObjectState;
+        if (objectState && target._prototypeObjectManaged === true) {
+            if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+                objectState.dirtyRuntimeObjects = new Set();
+            }
+            objectState.dirtyRuntimeObjects.add(target);
+            objectState.captureScanNeeded = true;
+        }
         return true;
     }
 
@@ -326,6 +355,15 @@
         door.isPassable = true;
         door.castsLosShadows = false;
         notifyDoorTraversalStateChanged(door);
+        return true;
+    }
+
+    function setWindowOpenState(windowObj, open) {
+        if (!isWindowPlacedObject(windowObj)) return false;
+        const nextOpen = !!open;
+        windowObj.isOpen = nextOpen;
+        windowObj.castsLosShadows = !nextOpen;
+        notifyWindowLosStateChanged(windowObj);
         return true;
     }
 
@@ -390,6 +428,169 @@
         return candidate;
     }
 
+    function getScriptingContextMap(context = null) {
+        const candidates = [
+            (context && context.map) || null,
+            (context && context.wizard && context.wizard.map) || null,
+            (context && context.target && context.target.map) || null,
+            (context && context.source && context.source.map) || null,
+            (context && context.actor && context.actor.map) || null,
+            global.map || null
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            if (candidates[i]) return candidates[i];
+        }
+        return null;
+    }
+
+    function getPrototypeNamingSectionKey(target, context = null) {
+        const mapRef = getScriptingContextMap(context);
+        if (!mapRef || !mapRef._prototypeSectionState) return "";
+        if (context && typeof context.targetSectionKey === "string" && context.targetSectionKey.length > 0) {
+            return context.targetSectionKey;
+        }
+        if (target && typeof target._prototypeOwnerSectionKey === "string" && target._prototypeOwnerSectionKey.length > 0) {
+            return target._prototypeOwnerSectionKey;
+        }
+        if (target && Number.isFinite(target.x) && Number.isFinite(target.y) && typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function") {
+            return mapRef.getPrototypeSectionKeyForWorldPoint(target.x, target.y) || "";
+        }
+        return "";
+    }
+
+    function getPrototypeBubbleCenterSectionKey(context = null) {
+        const mapRef = getScriptingContextMap(context);
+        if (!mapRef || !mapRef._prototypeSectionState) return "";
+        if (context && typeof context.targetSectionKey === "string" && context.targetSectionKey.length > 0) {
+            return context.targetSectionKey;
+        }
+        if (context && context.target && typeof context.target._prototypeOwnerSectionKey === "string" && context.target._prototypeOwnerSectionKey.length > 0) {
+            return context.target._prototypeOwnerSectionKey;
+        }
+        if (context && Number.isFinite(context.x) && Number.isFinite(context.y) && typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function") {
+            return mapRef.getPrototypeSectionKeyForWorldPoint(context.x, context.y) || "";
+        }
+        return (mapRef._prototypeSectionState && typeof mapRef._prototypeSectionState.activeCenterKey === "string")
+            ? mapRef._prototypeSectionState.activeCenterKey
+            : "";
+    }
+
+    function getPrototypeNamedObjectByName(name, context = null) {
+        const normalized = String(name || "").trim();
+        if (!isValidScriptingName(normalized)) return null;
+        const mapRef = getScriptingContextMap(context);
+        if (!mapRef || !mapRef._prototypeSectionState || typeof mapRef.findPrototypeNamedObjectInBubble !== "function") {
+            return null;
+        }
+        const centerSectionKey = getPrototypeBubbleCenterSectionKey(context);
+        return mapRef.findPrototypeNamedObjectInBubble(normalized, centerSectionKey) || null;
+    }
+
+    function getPrototypeNamedObjectEntries(context = null) {
+        const mapRef = getScriptingContextMap(context);
+        if (!mapRef || !mapRef._prototypeSectionState) return [];
+        const bubbleKeys = (typeof mapRef.getPrototypeBubbleSectionKeys === "function")
+            ? mapRef.getPrototypeBubbleSectionKeys(getPrototypeBubbleCenterSectionKey(context))
+            : null;
+        if (!(bubbleKeys instanceof Set) || bubbleKeys.size === 0) return [];
+        const out = [];
+        const seenNames = new Set();
+        bubbleKeys.forEach((sectionKey) => {
+            const asset = (typeof mapRef.getPrototypeSectionAsset === "function")
+                ? mapRef.getPrototypeSectionAsset(sectionKey)
+                : null;
+            if (!asset) return;
+            const recordLists = [asset.objects, asset.animals, asset.powerups];
+            for (let listIndex = 0; listIndex < recordLists.length; listIndex++) {
+                const records = recordLists[listIndex];
+                if (!Array.isArray(records)) continue;
+                for (let i = 0; i < records.length; i++) {
+                    const record = records[i];
+                    const name = getObjectScriptingName(record);
+                    if (!name || seenNames.has(name)) continue;
+                    const obj = getPrototypeNamedObjectByName(name, Object.assign({}, context || {}, {
+                        targetSectionKey: getPrototypeBubbleCenterSectionKey(context)
+                    }));
+                    if (!obj || obj.gone) continue;
+                    seenNames.add(name);
+                    out.push([name, obj]);
+                }
+            }
+        });
+        out.sort((a, b) => a[0].localeCompare(b[0]));
+        return out;
+    }
+
+    function ensureObjectScriptingName(target, context = null) {
+        if (!target || typeof target !== "object") return "";
+
+        const mapRef = getScriptingContextMap(context);
+        const prototypeSectionKey = getPrototypeNamingSectionKey(target, context);
+        if (
+            mapRef &&
+            mapRef._prototypeSectionState &&
+            typeof mapRef.generatePrototypeObjectScriptingName === "function" &&
+            prototypeSectionKey
+        ) {
+            const existingPrototypeName = getObjectScriptingName(target);
+            if (existingPrototypeName) {
+                return existingPrototypeName;
+            }
+            const generated = mapRef.generatePrototypeObjectScriptingName(
+                getDefaultScriptingNameBase(target),
+                prototypeSectionKey,
+                { ignoreRuntimeObj: target }
+            );
+            target.scriptingName = generated;
+            return generated;
+        }
+
+        const existing = getObjectScriptingName(target);
+        if (existing) {
+            const owner = namedObjectsByName.get(existing) || null;
+            if (!owner || owner === target || owner.gone) {
+                unregisterNamedObject(target);
+                namedObjectsByName.set(existing, target);
+                return existing;
+            }
+        }
+
+        unregisterNamedObject(target);
+        const usedNames = new Set();
+        const seedFromRuntime = namedObjectsByName.size === 0;
+
+        const rememberName = (name, obj) => {
+            if (!name || !obj || obj === target || obj.gone) return;
+            if (usedNames.has(name)) return;
+            usedNames.add(name);
+            namedObjectsByName.set(name, obj);
+        };
+
+        if (seedFromRuntime) {
+            const objects = getKnownScriptRuntimeObjects(context);
+            for (let i = 0; i < objects.length; i++) {
+                const obj = objects[i];
+                if (!obj || obj === target) continue;
+                rememberName(getObjectScriptingName(obj), obj);
+            }
+        } else {
+            for (const [registeredName, obj] of namedObjectsByName.entries()) {
+                if (!obj || obj.gone || obj === target) continue;
+                const normalizedName = getObjectScriptingName(obj);
+                if (!normalizedName) continue;
+                if (normalizedName !== registeredName) {
+                    namedObjectsByName.delete(registeredName);
+                }
+                rememberName(normalizedName, obj);
+            }
+        }
+
+        const generated = generateUniqueScriptingName(getDefaultScriptingNameBase(target), usedNames);
+        target.scriptingName = generated;
+        namedObjectsByName.set(generated, target);
+        return generated;
+    }
+
     function getKnownScriptRuntimeObjects(context = null) {
         const out = [];
         const seen = new Set();
@@ -409,20 +610,74 @@
         for (let i = 0; i < mapCandidates.length; i++) {
             const mapRef = mapCandidates[i];
             if (!mapRef) continue;
-            if (typeof mapRef.getGameObjects === "function") {
-                const gameObjects = mapRef.getGameObjects({ refresh: true });
+            if (Array.isArray(mapRef.gameObjects) && mapRef.gameObjects.length > 0) {
+                const gameObjects = mapRef.gameObjects;
                 if (Array.isArray(gameObjects)) {
                     for (let j = 0; j < gameObjects.length; j++) {
                         addObject(gameObjects[j]);
                     }
                 }
-                continue;
             }
             if (Array.isArray(mapRef.objects)) {
                 for (let j = 0; j < mapRef.objects.length; j++) {
                     addObject(mapRef.objects[j]);
                 }
             }
+            if (typeof mapRef.getAllPrototypeNodes === "function") {
+                const prototypeNodes = mapRef.getAllPrototypeNodes();
+                if (Array.isArray(prototypeNodes)) {
+                    for (let j = 0; j < prototypeNodes.length; j++) {
+                        const node = prototypeNodes[j];
+                        if (!node || !Array.isArray(node.objects)) continue;
+                        for (let k = 0; k < node.objects.length; k++) {
+                            addObject(node.objects[k]);
+                        }
+                    }
+                }
+            }
+        }
+
+        const wallCtor = (typeof globalThis !== "undefined" && globalThis.WallSectionUnit)
+            ? globalThis.WallSectionUnit
+            : null;
+        if (wallCtor && wallCtor._allSections instanceof Map) {
+            for (const section of wallCtor._allSections.values()) {
+                addObject(section);
+            }
+        }
+
+        const roofsList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
+            ? globalThis.roofs
+            : ((typeof roofs !== "undefined" && Array.isArray(roofs)) ? roofs : null);
+        if (Array.isArray(roofsList)) {
+            for (let i = 0; i < roofsList.length; i++) {
+                addObject(roofsList[i]);
+            }
+        }
+
+        const animalsList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals))
+            ? globalThis.animals
+            : ((typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null);
+        if (Array.isArray(animalsList)) {
+            for (let i = 0; i < animalsList.length; i++) {
+                addObject(animalsList[i]);
+            }
+        }
+
+        const powerupsList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
+            ? globalThis.powerups
+            : ((typeof powerups !== "undefined" && Array.isArray(powerups)) ? powerups : null);
+        if (Array.isArray(powerupsList)) {
+            for (let i = 0; i < powerupsList.length; i++) {
+                addObject(powerupsList[i]);
+            }
+        }
+
+        const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard)
+            ? globalThis.wizard
+            : ((typeof wizard !== "undefined") ? wizard : null);
+        if (wizardRef) {
+            addObject(wizardRef);
         }
 
         return out;
@@ -449,20 +704,22 @@
             const obj = objects[i];
             const existing = getObjectScriptingName(obj);
             if (existing) continue;
-            const baseName = getDefaultScriptingNameBase(obj);
-            const generated = generateUniqueScriptingName(baseName, usedNames);
-            obj.scriptingName = generated;
+            const generated = ensureObjectScriptingName(obj, context);
+            if (!generated) continue;
             usedNames.add(generated);
-            namedObjectsByName.set(generated, obj);
         }
     }
 
     function getNamedObjectByName(name, context = null) {
         const normalized = String(name || "").trim();
         if (!isValidScriptingName(normalized)) return null;
+        const prototypeTarget = getPrototypeNamedObjectByName(normalized, context);
+        if (prototypeTarget && !prototypeTarget.gone) return prototypeTarget;
         const existing = namedObjectsByName.get(normalized) || null;
         if (existing && !existing.gone) return existing;
         rebuildNamedObjectRegistry(context);
+        const rebuiltPrototypeTarget = getPrototypeNamedObjectByName(normalized, context);
+        if (rebuiltPrototypeTarget && !rebuiltPrototypeTarget.gone) return rebuiltPrototypeTarget;
         const rebuilt = namedObjectsByName.get(normalized) || null;
         return (rebuilt && !rebuilt.gone) ? rebuilt : null;
     }
@@ -480,13 +737,27 @@
     function setObjectScriptingName(target, rawName, context = null) {
         if (!target || typeof target !== "object") return false;
         const nextName = String(rawName || "").trim();
+        const restoreFromSave = !!(context && context.restoreFromSave === true);
+        const mapRef = getScriptingContextMap(context);
+        if (
+            mapRef &&
+            mapRef._prototypeSectionState &&
+            typeof mapRef.setPrototypeRuntimeObjectScriptingName === "function"
+        ) {
+            return mapRef.setPrototypeRuntimeObjectScriptingName(target, nextName, {
+                restoreFromSave,
+                targetSectionKey: getPrototypeNamingSectionKey(target, context)
+            });
+        }
         unregisterNamedObject(target);
         if (!nextName.length) {
             target.scriptingName = "";
             return true;
         }
         if (!isValidScriptingName(nextName)) return false;
-        const existingTarget = getNamedObjectByName(nextName, context);
+        const existingTarget = restoreFromSave
+            ? (namedObjectsByName.get(nextName) || null)
+            : getNamedObjectByName(nextName, context);
         if (existingTarget && existingTarget !== target) return false;
         target.scriptingName = nextName;
         namedObjectsByName.set(nextName, target);
@@ -494,10 +765,19 @@
     }
 
     function getNamedObjectEntries(context = null) {
+        const prototypeEntries = getPrototypeNamedObjectEntries(context);
         rebuildNamedObjectRegistry(context);
         const out = [];
+        const seenNames = new Set();
+        for (let i = 0; i < prototypeEntries.length; i++) {
+            const entry = prototypeEntries[i];
+            if (!entry || !entry[0] || !entry[1] || entry[1].gone) continue;
+            seenNames.add(entry[0]);
+            out.push(entry);
+        }
         for (const [name, obj] of namedObjectsByName.entries()) {
             if (!obj || obj.gone) continue;
+            if (seenNames.has(name)) continue;
             out.push([name, obj]);
         }
         out.sort((a, b) => a[0].localeCompare(b[0]));
@@ -2021,6 +2301,9 @@
         if (methodPath === "open") {
             return { kind: "openTarget", name, target: namedCommand.target };
         }
+        if (methodPath === "close") {
+            return { kind: "closeTarget", name, target: namedCommand.target };
+        }
         if (methodPath === "deactivate") {
             return { kind: "deactivateTarget", name, target: namedCommand.target };
         }
@@ -2088,7 +2371,20 @@
                 return finalizeMutationResult(setDoorLockedState(resolvedCommand.target, false));
             }
             if (resolvedCommand.kind === "openTarget") {
-                return finalizeMutationResult(openDoorForTraversal(resolvedCommand.target));
+                const target = resolvedCommand.target;
+                return finalizeMutationResult(
+                    isDoorPlacedObject(target)
+                        ? openDoorForTraversal(target)
+                        : setWindowOpenState(target, true)
+                );
+            }
+            if (resolvedCommand.kind === "closeTarget") {
+                const target = resolvedCommand.target;
+                return finalizeMutationResult(
+                    isDoorPlacedObject(target)
+                        ? setDoorLockedState(target, true)
+                        : setWindowOpenState(target, false)
+                );
             }
             if (resolvedCommand.kind === "deactivateTarget") {
                 resolvedCommand.target._scriptDeactivated = true;
@@ -3064,6 +3360,7 @@
         );
         if (isAnimalTarget) kinds.push("animal");
         if (isDoorPlacedObject(target)) kinds.push("door");
+        if (isWindowPlacedObject(target)) kinds.push("window");
         if (target.type === "wallSection") kinds.push("wallSection");
         return kinds;
     }
@@ -3904,6 +4201,7 @@
             return;
         }
         scriptEditorTargetObject.script = parsed.value;
+        markPrototypeScriptTargetDirty(scriptEditorTargetObject);
         setObjectScriptingName(scriptEditorTargetObject, rawName, {
             map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || null,
             wizard: global.wizard || null
@@ -4303,7 +4601,11 @@
     function openScriptEditorForTarget(target) {
         if (!target || target.gone) return false;
         const $panel = getScriptEditorPanel();
-        rebuildNamedObjectRegistry({ map: (target && target.map) || null, wizard: global.wizard || null });
+        ensureObjectScriptingName(target, {
+            map: (target && target.map) || null,
+            wizard: global.wizard || null,
+            target
+        });
         if (typeof global.releaseSpacebarCastingState === "function") {
             global.releaseSpacebarCastingState();
         } else if (global.keysPressed && typeof global.keysPressed === "object") {
@@ -4920,6 +5222,13 @@
                 target.chaseRadius = radius;
                 return true;
             },
+            disengageRadius(value, context) {
+                const target = context && context.target;
+                const radius = Number(value);
+                if (!target || !Number.isFinite(radius) || radius < 0) return false;
+                target.disengageRadius = radius;
+                return true;
+            },
             retreatThreshold(value, context) {
                 const target = context && context.target;
                 const threshold = Number(value);
@@ -5195,7 +5504,16 @@
                 return setDoorLockedState((context && context.target) || null, false);
             },
             open(_args, context) {
-                return openDoorForTraversal((context && context.target) || null);
+                const target = (context && context.target) || null;
+                return isDoorPlacedObject(target)
+                    ? openDoorForTraversal(target)
+                    : setWindowOpenState(target, true);
+            },
+            close(_args, context) {
+                const target = (context && context.target) || null;
+                return isDoorPlacedObject(target)
+                    ? setDoorLockedState(target, true)
+                    : setWindowOpenState(target, false);
             },
             deactivate(_args, context) {
                 const target = (context && context.target) || null;
@@ -5920,11 +6238,13 @@
         processDoorTraversalEvents,
         processTriggerAreaTraversalEvents,
         processObjectTouchEvents,
+        hasEventScriptForTarget,
         runScript,
         runAssignmentScript,
         fireObjectScriptEvent,
         fireDoorTraversalEvent,
         runObjectInitScript,
+        ensureObjectScriptingName,
         applyTargetBrightness,
         validateScript,
         openScriptEditorForTarget,

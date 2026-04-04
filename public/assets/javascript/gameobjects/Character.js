@@ -157,6 +157,7 @@ class Character {
         this.size = Number.isFinite(size) ? size : 1;
         this.z = 0;
         this.travelFrames = 0;
+        this.travelZ = 0;
         this.moving = false;
         this.useExternalScheduler = false;
         this.isOnFire = false;
@@ -197,12 +198,14 @@ class Character {
         this.node = node;
         this.x = this.node.x;
         this.y = this.node.y;
+        this.z = this.getNodeStandingZ(this.node);
         this.prevX = this.x;
         this.prevY = this.y;
         this.prevZ = this.z;
         this.destination = null;
-        this.path = []; // Array of MapNodes to follow
+        this.path = []; // Array of MapNodes or traversal steps to follow
         this.nextNode = null;
+        this.currentPathStep = null;
         this.useAStarPathfinding = false;
 
         // Pathfinding clearance — how many hex-ring steps around each tile
@@ -213,6 +216,17 @@ class Character {
         this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
         this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
         this._recordVisitedNode(this.node, "spawn");
+
+        if (this.map && typeof this.map.registerGameObject === "function") {
+            this.map.registerGameObject(this);
+        }
+
+        const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+            ? globalThis.Scripting
+            : null;
+        if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+            scriptingApi.ensureObjectScriptingName(this, { map: this.map });
+        }
     }
 
     dropPowerup(powerupType, options = {}) {
@@ -479,9 +493,97 @@ class Character {
         this.destination = null;
         this.path = [];
         this.nextNode = null;
+        this.currentPathStep = null;
         this.travelFrames = 0;
         this.travelX = 0;
         this.travelY = 0;
+        this.travelZ = 0;
+    }
+
+    getNodeStandingZ(node) {
+        if (this.map && typeof this.map.getNodeBaseZ === "function") {
+            return this.map.getNodeBaseZ(node);
+        }
+        if (node && Number.isFinite(node.baseZ)) {
+            return Number(node.baseZ);
+        }
+        return 0;
+    }
+
+    getPathItemDestinationNode(pathItem) {
+        if (!pathItem) return null;
+        if (pathItem.toNode) return pathItem.toNode;
+        return pathItem;
+    }
+
+    getTraversalStepWorldPosition(step, progress = 1) {
+        if (!step) return null;
+        if (typeof step.getWorldPositionAt === "function") {
+            const sampledPosition = step.getWorldPositionAt(progress);
+            if (
+                sampledPosition
+                && Number.isFinite(sampledPosition.x)
+                && Number.isFinite(sampledPosition.y)
+            ) {
+                return {
+                    x: Number(sampledPosition.x),
+                    y: Number(sampledPosition.y),
+                    z: Number.isFinite(sampledPosition.z)
+                        ? Number(sampledPosition.z)
+                        : this.getNodeStandingZ(step.toNode || null)
+                };
+            }
+        }
+        const fromNode = step.fromNode || this.node || null;
+        const toNode = step.toNode || null;
+        if (!toNode) return null;
+        const clampedProgress = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        if (!fromNode) {
+            return {
+                x: Number(toNode.x),
+                y: Number(toNode.y),
+                z: this.getNodeStandingZ(toNode)
+            };
+        }
+        const x = fromNode.x + ((this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(fromNode.x, toNode.x)
+            : (toNode.x - fromNode.x)) * clampedProgress;
+        const y = fromNode.y + ((this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(fromNode.y, toNode.y)
+            : (toNode.y - fromNode.y)) * clampedProgress;
+        const fromZ = this.getNodeStandingZ(fromNode);
+        const toZ = this.getNodeStandingZ(toNode);
+        return {
+            x,
+            y,
+            z: fromZ + (toZ - fromZ) * clampedProgress
+        };
+    }
+
+    resolvePathStep(pathItem, fromNode = null) {
+        if (!pathItem) return null;
+        if (pathItem.toNode) return pathItem;
+
+        const originNode = fromNode || this.node || null;
+        const destinationNode = pathItem;
+        const directionIndex = (
+            originNode
+            && Array.isArray(originNode.neighbors)
+            && originNode.neighbors.indexOf(destinationNode) >= 0
+        )
+            ? originNode.neighbors.indexOf(destinationNode)
+            : null;
+
+        return {
+            fromNode: originNode,
+            toNode: destinationNode,
+            type: "planar",
+            directionIndex,
+            getWorldPositionAt: (progress = 1) => this.getTraversalStepWorldPosition({
+                fromNode: originNode,
+                toNode: destinationNode
+            }, progress)
+        };
     }
 
     getVectorMovementInputSpeedMultiplier(options = {}) {
@@ -1149,12 +1251,135 @@ class Character {
         return this.predictTargetPosition(target, timeToClose + extraLeadSeconds);
     }
 
+    getCloseCombatInterceptPoint(target, options = {}) {
+        if (!target) return null;
+        const interceptSpeed = Number.isFinite(options.interceptSpeed)
+            ? Math.max(1e-4, Number(options.interceptSpeed))
+            : Math.max(
+                1e-4,
+                Number(options.lungeSpeed)
+                || Number(options.approachSpeed)
+                || Number(this.lungeSpeed)
+                || Number(this.runSpeed)
+                || 1
+            );
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Math.max(0, Number(options.strikeDistance))
+            : this.getStrikeDistance(target, options.strikeRange);
+        const maxDistance = Number.isFinite(options.maxDistance)
+            ? Math.max(0, Number(options.maxDistance))
+            : Number.POSITIVE_INFINITY;
+        const maxTimeSeconds = Number.isFinite(options.maxTimeSeconds)
+            ? Math.max(0, Number(options.maxTimeSeconds))
+            : Number.POSITIVE_INFINITY;
+        const relative = this._getLocalWrappedDelta(this.x, this.y, target.x, target.y);
+        const velocity = this.getTargetMovementVelocity(target);
+        const relativeDistance = Math.hypot(relative.x, relative.y);
+
+        let interceptTimeSeconds = null;
+        if (relativeDistance <= strikeDistance) {
+            interceptTimeSeconds = 0;
+        } else {
+            const a = (velocity.x * velocity.x + velocity.y * velocity.y) - (interceptSpeed * interceptSpeed);
+            const b = 2 * ((relative.x * velocity.x) + (relative.y * velocity.y) - (interceptSpeed * strikeDistance));
+            const c = (relativeDistance * relativeDistance) - (strikeDistance * strikeDistance);
+            const epsilon = 1e-8;
+
+            if (Math.abs(a) <= epsilon) {
+                if (Math.abs(b) <= epsilon) {
+                    interceptTimeSeconds = c <= 0 ? 0 : null;
+                } else {
+                    const linearRoot = -c / b;
+                    interceptTimeSeconds = linearRoot >= 0 ? linearRoot : null;
+                }
+            } else {
+                const discriminant = (b * b) - (4 * a * c);
+                if (discriminant >= 0) {
+                    const sqrtDiscriminant = Math.sqrt(discriminant);
+                    const candidateRoots = [
+                        (-b - sqrtDiscriminant) / (2 * a),
+                        (-b + sqrtDiscriminant) / (2 * a)
+                    ].filter(root => Number.isFinite(root) && root >= 0);
+                    if (candidateRoots.length > 0) {
+                        interceptTimeSeconds = Math.min(...candidateRoots);
+                    }
+                }
+            }
+        }
+
+        if (!Number.isFinite(interceptTimeSeconds) || interceptTimeSeconds < 0) {
+            return null;
+        }
+        if (interceptTimeSeconds > maxTimeSeconds) {
+            return null;
+        }
+
+        let x = Number(target.x) + velocity.x * interceptTimeSeconds;
+        let y = Number(target.y) + velocity.y * interceptTimeSeconds;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            x = this.map.wrapWorldX(x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            y = this.map.wrapWorldY(y);
+        }
+
+        const travelDistance = this.distanceToPoint(x, y);
+        if (travelDistance > maxDistance) {
+            return null;
+        }
+
+        return {
+            x,
+            y,
+            timeSeconds: interceptTimeSeconds,
+            travelDistance,
+            velocityX: velocity.x,
+            velocityY: velocity.y,
+            strikeDistance
+        };
+    }
+
+    resolveCloseCombatLungeTargetPoint(target, state = null, options = {}) {
+        if (!target) return null;
+        if (typeof options.lungeTargetResolver === "function") {
+            const resolvedPoint = options.lungeTargetResolver(target, state, this, options);
+            if (
+                resolvedPoint &&
+                Number.isFinite(resolvedPoint.x) &&
+                Number.isFinite(resolvedPoint.y)
+            ) {
+                return resolvedPoint;
+            }
+            return null;
+        }
+        if (options.useCloseCombatInterceptPoint === true || options.requireCommittedLungeTarget === true) {
+            return this.getCloseCombatInterceptPoint(target, {
+                ...options,
+                interceptSpeed: Number.isFinite(options.interceptSpeed)
+                    ? Number(options.interceptSpeed)
+                    : (Number.isFinite(options.lungeSpeed) ? Number(options.lungeSpeed) : Number(this.lungeSpeed) || Number(this.runSpeed) || 1),
+                maxDistance: Number.isFinite(options.maxDistance)
+                    ? Number(options.maxDistance)
+                    : (Number.isFinite(options.lungeRadius) ? Number(options.lungeRadius) : Number(this.lungeRadius) || 0)
+            });
+        }
+        return null;
+    }
+
     isTargetCloseEnoughToLunge(target, options = {}) {
         if (!target) return false;
         const lungeRadius = Number.isFinite(options.lungeRadius)
             ? Math.max(0, Number(options.lungeRadius))
             : Math.max(0, Number(this.lungeRadius) || 0);
         if (!(lungeRadius > 0)) return false;
+
+        if (
+            options.targetPoint &&
+            Number.isFinite(options.targetPoint.x) &&
+            Number.isFinite(options.targetPoint.y)
+        ) {
+            return this.distanceToPoint(options.targetPoint.x, options.targetPoint.y) <= lungeRadius;
+        }
 
         const approachSpeed = Number.isFinite(options.approachSpeed)
             ? Math.max(1e-4, Number(options.approachSpeed))
@@ -1177,18 +1402,25 @@ class Character {
         if (!targetPoint || !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
             return false;
         }
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Math.max(0, Number(options.strikeDistance))
+            : this.getStrikeDistance(target, options.strikeRange);
 
         const corridorRadius = Number.isFinite(options.corridorRadius)
             ? Math.max(0.05, Number(options.corridorRadius))
             : Math.max(0.05, this.getVectorMovementCollisionRadius(options));
         const localDelta = this._getLocalWrappedDelta(this.x, this.y, targetPoint.x, targetPoint.y);
-        const corridorDistance = Math.hypot(localDelta.x, localDelta.y);
-        if (corridorDistance <= 1e-6) return true;
+        const corridorDistanceToTarget = Math.hypot(localDelta.x, localDelta.y);
+        if (corridorDistanceToTarget <= 1e-6) return true;
+        const desiredDirX = localDelta.x / corridorDistanceToTarget;
+        const desiredDirY = localDelta.y / corridorDistanceToTarget;
+        const corridorSweepDistance = Math.max(0, corridorDistanceToTarget - strikeDistance);
+        if (corridorSweepDistance <= 1e-6) return true;
 
         const sampleStep = Number.isFinite(options.corridorSampleStep)
             ? Math.max(0.05, Number(options.corridorSampleStep))
             : Math.max(0.15, corridorRadius * 0.5);
-        const sampleCount = Math.max(1, Math.ceil(corridorDistance / sampleStep));
+        const sampleCount = Math.max(1, Math.ceil(corridorSweepDistance / sampleStep));
         const testHitbox = this._closeCombatCorridorHitbox || {
             type: "circle",
             x: this.x,
@@ -1200,8 +1432,8 @@ class Character {
 
         for (let i = 1; i <= sampleCount; i++) {
             const t = i / sampleCount;
-            let sampleX = this.x + localDelta.x * t;
-            let sampleY = this.y + localDelta.y * t;
+            let sampleX = this.x + desiredDirX * corridorSweepDistance * t;
+            let sampleY = this.y + desiredDirY * corridorSweepDistance * t;
             if (this.map && typeof this.map.wrapWorldX === "function") {
                 sampleX = this.map.wrapWorldX(sampleX);
             }
@@ -1267,7 +1499,13 @@ class Character {
             };
         }
 
-        const targetPoint = this.getPredictedCloseCombatTargetPoint(target, options);
+        const targetPoint = (
+            options.targetPoint &&
+            Number.isFinite(options.targetPoint.x) &&
+            Number.isFinite(options.targetPoint.y)
+        )
+            ? options.targetPoint
+            : this.getPredictedCloseCombatTargetPoint(target, options);
         if (!targetPoint) {
             return {
                 canEngage: false,
@@ -1316,6 +1554,13 @@ class Character {
     shouldAbortCloseCombat(target, state = null, options = {}) {
         if (!target) return true;
         if (!state) return true;
+        if (
+            state.phase === "lunge" &&
+            Number.isFinite(state.lungeTargetX) &&
+            Number.isFinite(state.lungeTargetY)
+        ) {
+            return false;
+        }
         const now = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
         const abortGraceMs = Number.isFinite(options.closeCombatAbortGraceMs)
             ? Math.max(0, Number(options.closeCombatAbortGraceMs))
@@ -1388,6 +1633,9 @@ class Character {
                 lungeStartedMs: null,
                 lungeOriginX: null,
                 lungeOriginY: null,
+                lungeTargetX: null,
+                lungeTargetY: null,
+                lungeTargetTimeSeconds: null,
                 lastAttackResolvedMs: null,
                 lastAttackResult: null,
                 attackCount: 0,
@@ -1423,6 +1671,11 @@ class Character {
             state.lungeStartedMs = null;
             state.lungeOriginX = null;
             state.lungeOriginY = null;
+        }
+        if (phase !== "lunge") {
+            state.lungeTargetX = null;
+            state.lungeTargetY = null;
+            state.lungeTargetTimeSeconds = null;
         }
         return state;
     }
@@ -1512,6 +1765,7 @@ class Character {
         const canStartLunge = typeof mergedOptions.canStartLunge === "function"
             ? (mergedOptions.canStartLunge(targetRef, state, this) !== false)
             : (mergedOptions.canStartLunge !== false);
+        const requireCommittedLungeTarget = mergedOptions.requireCommittedLungeTarget === true;
 
         state.target = targetRef;
         state.lastDistance = this.distanceToPoint(targetRef.x, targetRef.y);
@@ -1522,12 +1776,35 @@ class Character {
 
         this.cancelPathMovement();
 
-        if (state.phase === "approach" && canStartLunge && this.canEnterCloseCombat(targetRef, {
-            ...mergedOptions,
-            lungeRadius,
-            approachSpeed
-        })) {
-            this._setCloseCombatPhase(state, "lunge", now);
+        if (state.phase === "approach" && canStartLunge) {
+            const resolvedLungeTargetPoint = this.resolveCloseCombatLungeTargetPoint(targetRef, state, {
+                ...mergedOptions,
+                lungeRadius,
+                lungeSpeed,
+                strikeDistance
+            });
+            const lungeEntryOptions = {
+                ...mergedOptions,
+                lungeRadius,
+                approachSpeed
+            };
+            if (resolvedLungeTargetPoint) {
+                lungeEntryOptions.targetPoint = resolvedLungeTargetPoint;
+            }
+            if ((!requireCommittedLungeTarget || resolvedLungeTargetPoint) && this.canEnterCloseCombat(targetRef, lungeEntryOptions)) {
+                this._setCloseCombatPhase(state, "lunge", now);
+                if (resolvedLungeTargetPoint) {
+                    state.lungeTargetX = Number(resolvedLungeTargetPoint.x);
+                    state.lungeTargetY = Number(resolvedLungeTargetPoint.y);
+                    state.lungeTargetTimeSeconds = Number.isFinite(resolvedLungeTargetPoint.timeSeconds)
+                        ? Number(resolvedLungeTargetPoint.timeSeconds)
+                        : null;
+                }
+                if (mergedOptions.resetMovementVectorOnLunge === true && this.movementVector) {
+                    this.movementVector.x = 0;
+                    this.movementVector.y = 0;
+                }
+            }
         }
 
         if (state.phase === "lunge" && !Number.isFinite(state.lungeStartedMs)) {
@@ -1549,11 +1826,18 @@ class Character {
         }
 
         if (state.phase === "lunge") {
-            const towardVector = this._getCloseCombatVectorToTarget(targetRef);
+            const lungeTargetPoint = (
+                Number.isFinite(state.lungeTargetX) &&
+                Number.isFinite(state.lungeTargetY)
+            )
+                ? { x: Number(state.lungeTargetX), y: Number(state.lungeTargetY) }
+                : targetRef;
+            const towardVector = this._getLocalWrappedDelta(this.x, this.y, lungeTargetPoint.x, lungeTargetPoint.y);
             this.speed = lungeSpeed;
             this.moveDirection(towardVector, {
                 ...mergedOptions,
                 target: targetRef,
+                targetPoint: lungeTargetPoint,
                 facingVector: towardVector
             });
 
@@ -1588,6 +1872,21 @@ class Character {
                 if (result.hit) {
                     if (typeof mergedOptions.onHit === "function") {
                         mergedOptions.onHit(targetRef, state, result, this);
+                    }
+                    const postHitPhase = typeof mergedOptions.postHitPhase === "string"
+                        ? mergedOptions.postHitPhase
+                        : "backoff";
+                    if (postHitPhase === "retreat" && typeof this.beginRetreat === "function") {
+                        this.beginRetreat(targetRef, {
+                            holdAttackAnimation: mergedOptions.holdAttackAnimationOnHit === true
+                        });
+                        return {
+                            ...state,
+                            strikeDistance,
+                            lungeRadius,
+                            backoffRadius,
+                            transitionedTo: "retreat"
+                        };
                     }
                 } else if (typeof mergedOptions.onMiss === "function") {
                     mergedOptions.onMiss(targetRef, state, result, this);
@@ -1962,6 +2261,9 @@ class Character {
             const idx = animals.indexOf(this);
             if (idx >= 0) animals.splice(idx, 1);
         }
+        if (this.map && typeof this.map.unregisterGameObject === "function") {
+            this.map.unregisterGameObject(this);
+        }
     }
     remove() {
         this.removeFromGame();
@@ -1983,6 +2285,7 @@ class Character {
         if (this.pathfindingClearance > 0) {
             pathOptions.clearance = this.pathfindingClearance;
         }
+        pathOptions.returnPathSteps = true;
         this.path = (this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
             ? this.map.findPathAStar(this.node, destinationNode, pathOptions)
             : this.map.findPath(this.node, destinationNode, pathOptions);
@@ -1990,7 +2293,9 @@ class Character {
             this.path = [];
         }
         this.travelFrames = 0;
+        this.travelZ = 0;
         this.nextNode = null;
+        this.currentPathStep = null;
     }
     move() {
         if (!this.useExternalScheduler) {
@@ -2079,14 +2384,19 @@ class Character {
             
             // If we've reached the nextNode, update our position and request next step
             if (this.nextNode) {
+                const arrivalPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1);
                 this.node = this.nextNode;
-                this.x = this.node.x;
-                this.y = this.node.y;
+                this.x = arrivalPosition && Number.isFinite(arrivalPosition.x) ? arrivalPosition.x : this.node.x;
+                this.y = arrivalPosition && Number.isFinite(arrivalPosition.y) ? arrivalPosition.y : this.node.y;
+                this.z = arrivalPosition && Number.isFinite(arrivalPosition.z) ? arrivalPosition.z : this.getNodeStandingZ(this.node);
                 this._recordVisitedNode(this.node);
+                this.currentPathStep = null;
             }
             
-            // Get next node from path
-            this.nextNode = this.path.shift();
+            // Get next step from path
+            const nextPathItem = this.path.shift();
+            this.currentPathStep = this.resolvePathStep(nextPathItem, this.node);
+            this.nextNode = this.getPathItemDestinationNode(this.currentPathStep);
             if (!this.nextNode) {
                 // Reached destination
                 this.destination = null;
@@ -2106,17 +2416,25 @@ class Character {
                 this.moving = false;
                 return;
             }
-            this.directionIndex = Array.isArray(this.node.neighbors)
-                ? this.node.neighbors.indexOf(this.nextNode)
-                : -1;
+            this.directionIndex = Number.isInteger(this.currentPathStep && this.currentPathStep.directionIndex)
+                ? Number(this.currentPathStep.directionIndex)
+                : (Array.isArray(this.node.neighbors)
+                    ? this.node.neighbors.indexOf(this.nextNode)
+                    : -1);
             
             // Calculate travel parameters using world coordinates
+            const targetPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1) || {
+                x: this.nextNode.x,
+                y: this.nextNode.y,
+                z: this.getNodeStandingZ(this.nextNode)
+            };
             let xdist = (this.map && typeof this.map.shortestDeltaX === "function")
-                ? this.map.shortestDeltaX(this.x, this.nextNode.x)
-                : (this.nextNode.x - this.x);
+                ? this.map.shortestDeltaX(this.x, targetPosition.x)
+                : (targetPosition.x - this.x);
             let ydist = (this.map && typeof this.map.shortestDeltaY === "function")
-                ? this.map.shortestDeltaY(this.y, this.nextNode.y)
-                : (this.nextNode.y - this.y);
+                ? this.map.shortestDeltaY(this.y, targetPosition.y)
+                : (targetPosition.y - this.y);
+            const zdist = (Number.isFinite(targetPosition.z) ? targetPosition.z : this.getNodeStandingZ(this.nextNode)) - this.z;
             let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
             const effectiveSpeed = this.getEffectiveMovementSpeed(this.speed);
             if (!(effectiveSpeed > 0)) {
@@ -2126,12 +2444,14 @@ class Character {
             this.travelFrames = Math.max(1, Math.ceil(direction_distance / effectiveSpeed * this.frameRate));
             this.travelX = xdist / this.travelFrames;
             this.travelY = ydist / this.travelFrames;
+            this.travelZ = zdist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
         }
         
         this.travelFrames--;
         this.x += this.travelX;
         this.y += this.travelY;
+        this.z += this.travelZ;
         if (this.map && typeof this.map.wrapWorldX === "function") {
             this.x = this.map.wrapWorldX(this.x);
         }

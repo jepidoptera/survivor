@@ -6,7 +6,7 @@
 
             this.ground = new PIXI.Container();
             this.ground.name = "renderingGround";
-            this.ground.sortableChildren = true;
+            this.ground.sortableChildren = false;
 
             this.roadsFloor = new PIXI.Container();
             this.roadsFloor.name = "renderingRoadsFloor";

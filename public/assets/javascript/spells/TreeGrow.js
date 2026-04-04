@@ -10,7 +10,7 @@ class TreeGrow extends globalThis.Spell {
         this.apparentSize = 0;
         this.delayTime = 0;
         this.magicCost = 0;
-        this.initialSize = 1;
+        this.initialSize = 4;
         this.maxSize = 20;
         this.growthPerSecond = 2.5;
         this.magicPerSecond = 20;
@@ -39,14 +39,20 @@ class TreeGrow extends globalThis.Spell {
         const newTree = new Tree({x: targetNode.x, y: targetNode.y}, treeTextures, wizard.map);
         const selectedTreeVariant = (
             wizard &&
-            Number.isInteger(wizard.selectedTreeTextureVariant) &&
-            wizard.selectedTreeTextureVariant >= 0 &&
-            wizard.selectedTreeTextureVariant < treeTextures.length
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.resolveTreePlacementTextureVariant === "function"
         )
-            ? wizard.selectedTreeTextureVariant
-            : null;
+            ? SpellSystem.resolveTreePlacementTextureVariant(wizard)
+            : (
+                wizard &&
+                Number.isInteger(wizard.selectedTreeTextureVariant) &&
+                wizard.selectedTreeTextureVariant >= 0 &&
+                wizard.selectedTreeTextureVariant < treeTextures.length
+            )
+                ? wizard.selectedTreeTextureVariant
+                : null;
         if (selectedTreeVariant !== null && newTree.pixiSprite) {
-            const selectedTexture = treeTextures[selectedTreeVariant];
+            const selectedTexture = PIXI.Texture.from(`/assets/images/trees/tree${selectedTreeVariant}.png`);
             if (selectedTexture) {
                 if (typeof newTree.setTreeTextureIndex === "function") {
                     newTree.setTreeTextureIndex(selectedTreeVariant, treeTextures);
@@ -58,9 +64,15 @@ class TreeGrow extends globalThis.Spell {
         }
 
         // Use the placement size set via scroll wheel (default 4, clamped 0.5-20)
-        const placementSize = (wizard && Number.isFinite(wizard.treeGrowPlacementSize))
-            ? Math.max(0.5, Math.min(20, wizard.treeGrowPlacementSize))
-            : this.initialSize;
+        const placementSize = (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.resolveTreePlacementSize === "function"
+        )
+            ? SpellSystem.resolveTreePlacementSize(wizard)
+            : ((wizard && Number.isFinite(wizard.treeGrowPlacementSize))
+                ? Math.max(0.5, Math.min(20, wizard.treeGrowPlacementSize))
+                : this.initialSize);
         newTree.applySize(placementSize);
 
         if (
@@ -78,6 +90,26 @@ class TreeGrow extends globalThis.Spell {
         // Deactivate this spell projectile immediately (tree is now placed)
         this.visible = false;
         this.detachPixiSprite();
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.clearTreePlacementPreviewVariant === "function"
+        ) {
+            SpellSystem.clearTreePlacementPreviewVariant(wizard);
+            if (typeof SpellSystem.clearTreePlacementPreviewSize === "function") {
+                SpellSystem.clearTreePlacementPreviewSize(wizard);
+            }
+            if (
+                keysPressed &&
+                keysPressed[" "] &&
+                typeof SpellSystem.resolveTreePlacementTextureVariant === "function"
+            ) {
+                SpellSystem.resolveTreePlacementTextureVariant(wizard, { forceNew: true });
+                if (typeof SpellSystem.resolveTreePlacementSize === "function") {
+                    SpellSystem.resolveTreePlacementSize(wizard, { forceNew: true });
+                }
+            }
+        }
         
         return this;
     }

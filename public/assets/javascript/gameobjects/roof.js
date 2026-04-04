@@ -874,6 +874,13 @@ void main(void) {
         this.vertices = [...eaves, ...hexRingInner, ...hexRingOuter, topPoint];
         this.faces = this.buildFaces(this.numEaves, this.numHexRing);
         this.updateGroundPlaneHitbox();
+
+        const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+            ? globalThis.Scripting
+            : null;
+        if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+            scriptingApi.ensureObjectScriptingName(this, { map: this.map || null });
+        }
     }
 
     buildFaces(numEaves, numHexRing) {
@@ -1345,7 +1352,15 @@ void main(void) {
             roof.script = data.script;
         }
         if (typeof data.scriptingName === "string") {
-            roof.scriptingName = data.scriptingName.trim();
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                ? globalThis.Scripting
+                : null;
+            const restoredName = data.scriptingName.trim();
+            if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
+                    scriptingApi.setObjectScriptingName(roof, restoredName, { map: roof.map || null, restoreFromSave: true });
+            } else {
+                roof.scriptingName = restoredName;
+            }
         }
         if (Array.isArray(data._scriptMessages)) {
             roof._scriptMessages = data._scriptMessages

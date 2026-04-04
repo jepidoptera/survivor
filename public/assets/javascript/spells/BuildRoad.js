@@ -27,20 +27,31 @@ class BuildRoad extends globalThis.Spell {
             message("Cannot place road there!");
             return this;
         }
+
+        const selectedFlooring = (wizard && typeof wizard.selectedFlooringTexture === "string" && wizard.selectedFlooringTexture.length > 0)
+            ? wizard.selectedFlooringTexture
+            : "/assets/images/flooring/dirt.jpg";
         
-        // Check if there's already road at this location
-        if (targetNode.objects && targetNode.objects.some(obj => obj.type === 'road')) {
+        // Only block placing an identical flooring tile on the same node.
+        if (typeof Road !== "undefined" && typeof Road.hasMatchingRoadAtNode === "function"
+            ? Road.hasMatchingRoadAtNode(targetNode, selectedFlooring)
+            : (targetNode.objects && targetNode.objects.some(obj => obj.type === 'road'))) {
             message("Road already there!");
             return this;
         }
         
         // Create road (textures are generated dynamically in the constructor)
-        const selectedFlooring = (wizard && typeof wizard.selectedFlooringTexture === "string" && wizard.selectedFlooringTexture.length > 0)
-            ? wizard.selectedFlooringTexture
-            : "/assets/images/flooring/dirt.jpg";
         const newRoad = new Road({x: targetNode.x, y: targetNode.y}, [], wizard.map, {
             fillTexturePath: selectedFlooring
         });
+        if (
+            newRoad &&
+            wizard &&
+            wizard.map &&
+            wizard.map._prototypeObjectState
+        ) {
+            wizard.map._prototypeObjectState.captureScanNeeded = true;
+        }
         
         // Deactivate this spell projectile immediately
         this.visible = false;

@@ -318,6 +318,13 @@
             this._animatedLastFrameCount = null;
             this._animatedFrameSignature = "";
 
+            const scriptingApi = (typeof global !== "undefined" && global.Scripting)
+                ? global.Scripting
+                : null;
+            if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+                scriptingApi.ensureObjectScriptingName(this, { map: this.map });
+            }
+
             const staticProto = (typeof global.StaticObject === "function" && global.StaticObject.prototype)
                 ? global.StaticObject.prototype
                 : null;

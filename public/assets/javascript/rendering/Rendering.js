@@ -1,5 +1,8 @@
 (function attachRendering(global) {
     const GROUND_TILE_OVERLAP_SCALE = 1.5;
+    const GROUND_TILE_CACHE_LIMIT = 6000;
+    const GROUND_TILE_TRIM_CHUNK_SIZE = 250;
+    const GROUND_TILE_POOL_LIMIT = 1024;
     const TREE_ALPHA_CUTOFF = 0.08;
     const LOS_NEAR_REVEAL_RADIUS = 1.0;
     const LOS_THROTTLE_MS = 33;
@@ -17,6 +20,252 @@
         const next = !!enabled;
         global.renderingShowPickerScreen = next;
         return next;
+    }
+
+    // Keep expensive renderer diagnostics available for triage, but leave them
+    // off in normal gameplay. Re-enable only when chasing invalid PIXI textures
+    // or ground tile lifetime bugs.
+    function ensureRenderingDiagnosticsConfig() {
+        const defaults = {
+            textureSanitizer: false,
+            pixiSpriteCrashDiagnostics: false,
+            groundTileProfiling: false,
+            drawPassBreakdown: false,
+            scenePickerHoverProfiling: false
+        };
+        if (!global.renderingDiagnostics || typeof global.renderingDiagnostics !== "object") {
+            global.renderingDiagnostics = { ...defaults };
+            return global.renderingDiagnostics;
+        }
+        const config = global.renderingDiagnostics;
+        for (const key of Object.keys(defaults)) {
+            if (typeof config[key] !== "boolean") {
+                config[key] = defaults[key];
+            }
+        }
+        return config;
+    }
+
+    function isTextureSanitizerEnabled() {
+        return !!ensureRenderingDiagnosticsConfig().textureSanitizer;
+    }
+
+    function isPixiSpriteCrashDiagnosticsEnabled() {
+        return !!ensureRenderingDiagnosticsConfig().pixiSpriteCrashDiagnostics;
+    }
+
+    function isGroundTileProfilingEnabled() {
+        return !!ensureRenderingDiagnosticsConfig().groundTileProfiling;
+    }
+
+    function isDrawPassBreakdownEnabled() {
+        return !!ensureRenderingDiagnosticsConfig().drawPassBreakdown;
+    }
+
+    if (typeof global.RenderingDiagnostics !== "object" || !global.RenderingDiagnostics) {
+        global.RenderingDiagnostics = {
+            getFlags() {
+                return { ...ensureRenderingDiagnosticsConfig() };
+            },
+            setTextureSanitizerEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.textureSanitizer = !!enabled;
+                return config.textureSanitizer;
+            },
+            setPixiSpriteCrashDiagnosticsEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.pixiSpriteCrashDiagnostics = !!enabled;
+                if (config.pixiSpriteCrashDiagnostics) {
+                    installPixiSpriteRenderDiagnostics();
+                }
+                return config.pixiSpriteCrashDiagnostics;
+            },
+            setGroundTileProfilingEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.groundTileProfiling = !!enabled;
+                return config.groundTileProfiling;
+            },
+            setDrawPassBreakdownEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.drawPassBreakdown = !!enabled;
+                return config.drawPassBreakdown;
+            },
+            setScenePickerHoverProfilingEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.scenePickerHoverProfiling = !!enabled;
+                return config.scenePickerHoverProfiling;
+            }
+        };
+    }
+
+    function isRenderablePixiTexture(texture) {
+        if (!texture || texture === PIXI.Texture.EMPTY) return false;
+        const baseTexture = texture.baseTexture || null;
+        const orig = texture.orig || null;
+        const hasUvs = !!(texture._uvs && texture._uvs.uvsFloat32);
+        const hasOrigSize = !!(
+            orig &&
+            Number.isFinite(orig.width) &&
+            Number.isFinite(orig.height)
+        );
+        return !!(baseTexture && hasUvs && hasOrigSize);
+    }
+
+    function sanitizeDisplayTreeTextures(root, options = {}) {
+        if (!root) return { repaired: 0, samples: [] };
+        const maxSamples = Number.isFinite(options.maxSamples) ? Math.max(1, Number(options.maxSamples)) : 8;
+        const samples = [];
+        let repaired = 0;
+        const stack = [root];
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (!current) continue;
+            const texture = current.texture;
+            if (Object.prototype.hasOwnProperty.call(current, "texture") && texture && !isRenderablePixiTexture(texture)) {
+                if (samples.length < maxSamples) {
+                    samples.push({
+                        name: typeof current.name === "string" ? current.name : "",
+                        ctor: current.constructor && current.constructor.name ? current.constructor.name : "",
+                        textureValid: !!texture,
+                        hasBaseTexture: !!(texture && texture.baseTexture),
+                        hasUvs: !!(texture && texture._uvs && texture._uvs.uvsFloat32),
+                        origWidth: texture && texture.orig ? Number(texture.orig.width) : null,
+                        origHeight: texture && texture.orig ? Number(texture.orig.height) : null
+                    });
+                }
+                current.texture = PIXI.Texture.WHITE;
+                repaired += 1;
+            }
+            const children = Array.isArray(current.children) ? current.children : null;
+            if (!children) continue;
+            for (let i = children.length - 1; i >= 0; i--) {
+                stack.push(children[i]);
+            }
+        }
+        return { repaired, samples };
+    }
+
+    function summarizePixiTexture(texture) {
+        if (!texture) {
+            return {
+                exists: false
+            };
+        }
+        const baseTexture = texture.baseTexture || null;
+        const orig = texture.orig || null;
+        return {
+            exists: true,
+            hasBaseTexture: !!baseTexture,
+            baseTextureValid: !!(baseTexture && baseTexture.valid),
+            hasUvs: !!(texture._uvs && texture._uvs.uvsFloat32),
+            origWidth: orig && Number.isFinite(orig.width) ? Number(orig.width) : null,
+            origHeight: orig && Number.isFinite(orig.height) ? Number(orig.height) : null,
+            frameWidth: texture.frame && Number.isFinite(texture.frame.width) ? Number(texture.frame.width) : null,
+            frameHeight: texture.frame && Number.isFinite(texture.frame.height) ? Number(texture.frame.height) : null
+        };
+    }
+
+    function summarizePixiDisplayObject(displayObj) {
+        if (!displayObj) return null;
+        const parent = displayObj.parent || null;
+        const scale = displayObj.scale || null;
+        const anchor = displayObj.anchor || null;
+        return {
+            ctor: displayObj.constructor && displayObj.constructor.name ? displayObj.constructor.name : "",
+            name: typeof displayObj.name === "string" ? displayObj.name : "",
+            visible: displayObj.visible !== false,
+            renderable: displayObj.renderable !== false,
+            x: Number.isFinite(displayObj.x) ? Number(displayObj.x) : null,
+            y: Number.isFinite(displayObj.y) ? Number(displayObj.y) : null,
+            scaleX: scale && Number.isFinite(scale.x) ? Number(scale.x) : null,
+            scaleY: scale && Number.isFinite(scale.y) ? Number(scale.y) : null,
+            anchorX: anchor && Number.isFinite(anchor.x) ? Number(anchor.x) : null,
+            anchorY: anchor && Number.isFinite(anchor.y) ? Number(anchor.y) : null,
+            alpha: Number.isFinite(displayObj.alpha) ? Number(displayObj.alpha) : null,
+            parentName: parent && typeof parent.name === "string" ? parent.name : "",
+            texture: summarizePixiTexture(displayObj.texture)
+        };
+    }
+
+    function buildPixiDisplayObjectCrashSignature(summary) {
+        if (!summary) return "unknown";
+        const tex = summary.texture || {};
+        return [
+            summary.ctor || "",
+            summary.name || "",
+            summary.parentName || "",
+            tex.hasBaseTexture ? "bt1" : "bt0",
+            tex.hasUvs ? "uv1" : "uv0",
+            tex.origWidth === null ? "owx" : `ow${tex.origWidth}`,
+            tex.origHeight === null ? "ohx" : `oh${tex.origHeight}`
+        ].join("|");
+    }
+
+    function syncRoadRenderSpriteTextureRetention(sprite, road) {
+        if (!sprite) return;
+        const RoadClass = (typeof global !== "undefined" && global && global.Road) ? global.Road : null;
+        const nextKey = (road && typeof road._roadTextureCacheKey === "string" && road._roadTextureCacheKey.length > 0)
+            ? road._roadTextureCacheKey
+            : "";
+        const currentKey = (typeof sprite._roadTextureCacheKey === "string") ? sprite._roadTextureCacheKey : "";
+        if (currentKey === nextKey) return;
+        if (currentKey && RoadClass && typeof RoadClass._releaseTextureCacheEntry === "function") {
+            RoadClass._releaseTextureCacheEntry(currentKey);
+        }
+        sprite._roadTextureCacheKey = "";
+        if (nextKey && RoadClass && typeof RoadClass._retainTextureCacheEntry === "function") {
+            RoadClass._retainTextureCacheEntry(nextKey);
+            sprite._roadTextureCacheKey = nextKey;
+        }
+    }
+
+    function installPixiSpriteRenderDiagnostics() {
+        if (!PIXI || !PIXI.Sprite || !PIXI.Sprite.prototype) return;
+        if (PIXI.Sprite.prototype._survivorTextureDiagInstalled === true) return;
+        PIXI.Sprite.prototype._survivorTextureDiagInstalled = true;
+        const loggedCrashSignatures = new Set();
+
+        const originalCalculateVertices = PIXI.Sprite.prototype.calculateVertices;
+        if (typeof originalCalculateVertices === "function") {
+            PIXI.Sprite.prototype.calculateVertices = function survivorDiagnoseCalculateVertices(...args) {
+                try {
+                    return originalCalculateVertices.apply(this, args);
+                } catch (err) {
+                    if (!isPixiSpriteCrashDiagnosticsEnabled()) {
+                        throw err;
+                    }
+                    const message = err && err.message ? String(err.message) : "";
+                    const textureState = summarizePixiDisplayObject(this);
+                    const signature = buildPixiDisplayObjectCrashSignature(textureState);
+                    if (!loggedCrashSignatures.has(signature)) {
+                        loggedCrashSignatures.add(signature);
+                        console.error("[pixi sprite calculateVertices crash]", {
+                            message,
+                            signature,
+                            sprite: textureState
+                        });
+                        try {
+                            console.error("[pixi sprite calculateVertices crash json]", JSON.stringify({
+                                message,
+                                signature,
+                                sprite: textureState
+                            }));
+                        } catch (_jsonErr) {
+                            // ignore JSON serialization failures
+                        }
+                    }
+                    if (!isRenderablePixiTexture(this.texture)) {
+                        this.texture = PIXI.Texture.WHITE;
+                        try {
+                            return originalCalculateVertices.apply(this, args);
+                        } catch (_retryErr) {
+                            // fall through to original error
+                        }
+                    }
+                    throw err;
+                }
+            };
+        }
     }
 
     class RenderingImpl {
@@ -55,9 +304,12 @@
             this.hexGridSprites = [];
             this.hexGridContainer = null;
             this.hexGridPickerBackdrop = null;
+            this.groundTileContainer = null;
             this.hexGridLastViewscale = 0;
             this.hexGridLastXyratio = 0;
             this.groundSpriteByNodeKey = new Map();
+            this.groundVisibleNodeKeys = new Set();
+            this.groundSpritePool = [];
             this.roadSpriteByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
@@ -87,6 +339,32 @@
                 sections: Object.create(null),
                 printed: false
             };
+            this.currentFrameDrawSections = Object.create(null);
+            this.groundTileProfiler = {
+                startMs: null,
+                deadlineMs: null,
+                frameCount: 0,
+                printed: false,
+                totals: {
+                    totalMs: 0,
+                    activeKeyBuildMs: 0,
+                    visibleSetMs: 0,
+                    createSpriteMs: 0,
+                    parentAttachMs: 0,
+                    textureResolveMs: 0,
+                    positionSizeMs: 0,
+                    cleanupMs: 0
+                },
+                counts: {
+                    visibleNodes: 0,
+                    createdSprites: 0,
+                    attachedSprites: 0,
+                    cleanedSprites: 0,
+                    evictedSprites: 0,
+                    reusedSprites: 0
+                }
+            };
+            this._lastTextureSanitizerLogAtMs = 0;
             const ScenePickerCtor = global.RenderingScenePicker;
             this.scenePicker = (ScenePickerCtor && typeof ScenePickerCtor === "function")
                 ? new ScenePickerCtor()
@@ -787,7 +1065,13 @@
                 Number.isFinite(interpolatedWorld.x) &&
                 Number.isFinite(interpolatedWorld.y)
             ) ? interpolatedWorld.y : fallbackWorldY;
-            const coors = this.camera.worldToScreen(drawX, drawY, 0);
+            const drawZ = (
+                interpolatedWorld &&
+                Number.isFinite(interpolatedWorld.z)
+            )
+                ? interpolatedWorld.z
+                : (Number.isFinite(item.z) ? Number(item.z) : 0);
+            const coors = this.camera.worldToScreen(drawX, drawY, drawZ);
             item.pixiSprite.x = coors.x;
             item.pixiSprite.y = coors.y;
 
@@ -840,7 +1124,7 @@
                 targetHeight = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
             } else if (item.rotationAxis === "ground") {
                 targetWidth = (item.width || 1) * this.camera.viewscale;
-                targetHeight = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
+                targetHeight = (item.height || 1) * this.camera.viewscale;
             } else if (useNativeLodSize) {
                 targetWidth = nativeTexW;
                 targetHeight = nativeTexH;
@@ -1683,15 +1967,68 @@
             if (!item) return;
             const nowMs = Date.now();
             const clamp01 = value => Math.max(0, Math.min(1, Number(value) || 0));
+            const fullyFrozenBaseTint = 0x2222ff;
+            const freezeBrightnessFilterKey = "__freezeBrightnessFilter";
+            const freezeTemperatureRecoverRateDegreesPerSecond = 1;
             const frozenUntilMs = Number(item._freezeTintUntilMs);
             const degreesBelowBaseline = (typeof item.getDegreesBelowBaseline === "function")
                 ? Math.max(0, Number(item.getDegreesBelowBaseline()) || 0)
                 : 0;
-            const isFrozen = degreesBelowBaseline > 1e-6 || (Number.isFinite(frozenUntilMs) && frozenUntilMs > nowMs);
+            const baselineTemperature = (typeof item.getTemperatureBaseline === "function")
+                ? Number(item.getTemperatureBaseline())
+                : Number(item.baselineTemperature);
+            const freezeThreshold = (typeof item.getFreezeTemperatureThreshold === "function")
+                ? Number(item.getFreezeTemperatureThreshold())
+                : -20;
+            const fullFreezeDegrees = Math.max(
+                1,
+                Number.isFinite(baselineTemperature) && Number.isFinite(freezeThreshold)
+                    ? Math.abs(baselineTemperature - freezeThreshold)
+                    : 20
+            );
+            const isDead = item.dead === true;
+            const isTemperatureFrozen = typeof item.isTemperatureFrozen === "function" && item.isTemperatureFrozen();
+            const hasFreezeFlash = Number.isFinite(frozenUntilMs) && frozenUntilMs > nowMs;
+            const deadFreezeFadeCompleted = isDead && item._freezeDeathFadeCompleted === true;
+            const liveTemperatureFreezeProgress = clamp01(degreesBelowBaseline / fullFreezeDegrees);
+            const liveFreezeProgress = deadFreezeFadeCompleted
+                ? 0
+                : Math.max(liveTemperatureFreezeProgress, hasFreezeFlash ? 0.35 : 0);
+            const hadFrozenVisualState = !!(
+                !deadFreezeFadeCompleted && (
+                    liveFreezeProgress > 1e-6 ||
+                    Number.isFinite(item._freezeOriginalTint) ||
+                    Number.isFinite(item._freezeDeathFadeStartedAtMs) ||
+                    Number.isFinite(item._freezeDeathFadeInitialDegreesBelow)
+                )
+            );
+            if (isDead && hadFrozenVisualState && !Number.isFinite(item._freezeDeathFadeStartedAtMs)) {
+                item._freezeDeathFadeStartedAtMs = nowMs;
+                item._freezeDeathFadeInitialDegreesBelow = Math.max(0, liveFreezeProgress * fullFreezeDegrees);
+                item._freezeDeathFadeCompleted = false;
+            } else if (!isDead && Number.isFinite(item._freezeDeathFadeStartedAtMs)) {
+                item._freezeDeathFadeStartedAtMs = null;
+                item._freezeDeathFadeInitialDegreesBelow = null;
+                item._freezeDeathFadeCompleted = null;
+            }
+            const deathFadeStartMs = Number(item._freezeDeathFadeStartedAtMs);
+            const deathFadeInitialDegreesBelow = Number(item._freezeDeathFadeInitialDegreesBelow);
+            const corpseDegreesBelowBaseline = (isDead && Number.isFinite(deathFadeStartMs))
+                ? Math.max(
+                    0,
+                    (Number.isFinite(deathFadeInitialDegreesBelow)
+                        ? deathFadeInitialDegreesBelow
+                        : (liveFreezeProgress * fullFreezeDegrees)) -
+                    (((nowMs - deathFadeStartMs) / 1000) * freezeTemperatureRecoverRateDegreesPerSecond)
+                )
+                : null;
+            const freezeProgress = isDead
+                ? clamp01((Number.isFinite(corpseDegreesBelowBaseline) ? corpseDegreesBelowBaseline : 0) / fullFreezeDegrees)
+                : liveFreezeProgress;
+            const shouldRenderFrozen = hadFrozenVisualState && freezeProgress > 1e-6;
             const targetTint = Number.isFinite(item._freezeTintColor)
                 ? Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(item._freezeTintColor))))
                 : 0x9fd8ff;
-            const fullyFrozenTint = 0xaaaaff;
             const baseTint = Number.isFinite(item.tint)
                 ? Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(item.tint))))
                 : (Number.isFinite(item._freezeOriginalTint) ? Number(item._freezeOriginalTint) : 0xFFFFFF);
@@ -1702,7 +2039,7 @@
             if (item._renderingDisplayObject && typeof item._renderingDisplayObject === "object") displayObjects.add(item._renderingDisplayObject);
             if (item._compositeUnderlayMesh && typeof item._compositeUnderlayMesh === "object") displayObjects.add(item._compositeUnderlayMesh);
 
-            if (isFrozen) {
+            if (shouldRenderFrozen) {
                 if (!Number.isFinite(item._freezeOriginalTint)) {
                     const currentTint = Number.isFinite(item.tint)
                         ? Number(item.tint)
@@ -1722,36 +2059,102 @@
                     const b = Math.round(fromB + ((toB - fromB) * t));
                     return (r << 16) | (g << 8) | b;
                 };
-                const baselineTemperature = (typeof item.getTemperatureBaseline === "function")
-                    ? Number(item.getTemperatureBaseline())
-                    : Number(item.baselineTemperature);
-                const freezeThreshold = (typeof item.getFreezeTemperatureThreshold === "function")
-                    ? Number(item.getFreezeTemperatureThreshold())
-                    : -20;
-                const fullFreezeDegrees = Math.max(
-                    1,
-                    Number.isFinite(baselineTemperature) && Number.isFinite(freezeThreshold)
-                        ? Math.abs(baselineTemperature - freezeThreshold)
-                        : 20
+                const applyFreezeBrightness = (obj, brightnessPercent = null) => {
+                    if (!obj || typeof obj !== "object") return;
+                    if (
+                        obj.shader &&
+                        obj.shader.uniforms &&
+                        Object.prototype.hasOwnProperty.call(obj.shader.uniforms, "uBrightness")
+                    ) {
+                        obj.shader.uniforms.uBrightness = Number.isFinite(brightnessPercent)
+                            ? Math.max(-1, Math.min(1, Number(brightnessPercent) / 100))
+                            : 0;
+                        return;
+                    }
+                    const pixiScope = (typeof PIXI !== "undefined" && PIXI)
+                        ? PIXI
+                        : ((typeof globalThis !== "undefined" && globalThis.PIXI) ? globalThis.PIXI : null);
+                    const ColorMatrixFilterCtor = pixiScope && pixiScope.filters && pixiScope.filters.ColorMatrixFilter;
+                    const SpriteCtor = pixiScope && pixiScope.Sprite;
+                    const currentFilters = Array.isArray(obj.filters) ? obj.filters.filter(Boolean) : [];
+                    const existingFilter = obj[freezeBrightnessFilterKey];
+                    const retainedFilters = currentFilters.filter(filter => filter !== existingFilter);
+                    const isSprite = (typeof SpriteCtor === "function") && (obj instanceof SpriteCtor);
+                    if (!isSprite || typeof ColorMatrixFilterCtor !== "function") {
+                        obj[freezeBrightnessFilterKey] = null;
+                        obj.filters = retainedFilters.length > 0 ? retainedFilters : null;
+                        return;
+                    }
+                    if (!(Number.isFinite(brightnessPercent) && brightnessPercent > 1e-6)) {
+                        obj[freezeBrightnessFilterKey] = null;
+                        obj.filters = retainedFilters.length > 0 ? retainedFilters : null;
+                        return;
+                    }
+                    const normalized = clamp01(Number(brightnessPercent) / 100);
+                    const whiteMix = 0.55 * normalized;
+                    const scale = 1 - whiteMix;
+                    const filter = (existingFilter instanceof ColorMatrixFilterCtor)
+                        ? existingFilter
+                        : new ColorMatrixFilterCtor();
+                    filter.matrix = [
+                        scale, 0, 0, 0, whiteMix,
+                        0, scale, 0, 0, whiteMix,
+                        0, 0, scale, 0, whiteMix,
+                        0, 0, 0, 1, 0
+                    ];
+                    obj[freezeBrightnessFilterKey] = filter;
+                    retainedFilters.push(filter);
+                    obj.filters = retainedFilters;
+                };
+                const freezeFadeScale = (isDead && liveFreezeProgress > 1e-6)
+                    ? clamp01(freezeProgress / liveFreezeProgress)
+                    : 1;
+                const impactFlashBlend = (hasFreezeFlash ? 1 : 0) * freezeFadeScale;
+                const coldTintBlend = Math.max(
+                    (!isDead && isTemperatureFrozen ? 1 : 0),
+                    clamp01(0.2 + (freezeProgress * 0.8))
                 );
-                const freezeProgress = clamp01(degreesBelowBaseline / fullFreezeDegrees);
-                const impactFlashBlend = (Number.isFinite(frozenUntilMs) && frozenUntilMs > nowMs) ? 1 : 0;
-                const coldTintBlend = clamp01(freezeProgress * 2);
                 const intermediateTint = blendColor(baseTint, targetTint, Math.max(impactFlashBlend, coldTintBlend));
-                const appliedTint = blendColor(intermediateTint, fullyFrozenTint, freezeProgress);
+                const appliedTint = blendColor(intermediateTint, fullyFrozenBaseTint, freezeProgress);
+                const appliedBrightness = 35 * freezeProgress;
                 displayObjects.forEach(obj => {
                     if (Number.isFinite(obj.tint)) obj.tint = appliedTint;
+                    applyFreezeBrightness(obj, appliedBrightness);
                 });
                 return;
             }
 
-            if (Number.isFinite(item._freezeOriginalTint) || Number.isFinite(frozenUntilMs)) {
+            if (
+                Number.isFinite(item._freezeOriginalTint) ||
+                Number.isFinite(frozenUntilMs) ||
+                Number.isFinite(item._freezeDeathFadeStartedAtMs) ||
+                item._freezeDeathFadeCompleted === true
+            ) {
                 displayObjects.forEach(obj => {
                     if (Number.isFinite(obj.tint)) obj.tint = baseTint;
+                    if (
+                        obj &&
+                        typeof obj === "object" &&
+                        obj.shader &&
+                        obj.shader.uniforms &&
+                        Object.prototype.hasOwnProperty.call(obj.shader.uniforms, "uBrightness")
+                    ) {
+                        obj.shader.uniforms.uBrightness = 0;
+                    }
+                    if (obj && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, freezeBrightnessFilterKey)) {
+                        const currentFilters = Array.isArray(obj.filters) ? obj.filters.filter(Boolean) : [];
+                        const existingFilter = obj[freezeBrightnessFilterKey];
+                        const retainedFilters = currentFilters.filter(filter => filter !== existingFilter);
+                        obj[freezeBrightnessFilterKey] = null;
+                        obj.filters = retainedFilters.length > 0 ? retainedFilters : null;
+                    }
                 });
                 item._freezeTintUntilMs = 0;
                 item._freezeTintColor = null;
                 item._freezeOriginalTint = null;
+                item._freezeDeathFadeStartedAtMs = null;
+                item._freezeDeathFadeInitialDegreesBelow = null;
+                item._freezeDeathFadeCompleted = isDead ? true : null;
             }
         }
 
@@ -2289,9 +2692,45 @@
                 if (!this.shouldUseDepthBillboard(item)) continue;
                 // Windows on top-face-only roof walls should be hidden; doors remain visible.
                 if (this.isWallMountedSpatialItem(item)) {
+                    const _mountedSection = this.resolveMountedWallSectionForItem(item);
+                    // Section streaming can temporarily leave a mounted door/window alive
+                    // while its backing wall section is unloaded. In that state, falling
+                    // back to the single-plane depth billboard uses raw sprite pixel
+                    // dimensions and renders at the wrong size, so keep it hidden until
+                    // the mounted wall is present again.
+                    if (!_mountedSection) {
+                        if (item.pixiSprite) {
+                            item.pixiSprite.visible = false;
+                            if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                                item.pixiSprite.renderable = false;
+                            }
+                        }
+                        if (item.fireSprite) {
+                            item.fireSprite.visible = false;
+                            if (Object.prototype.hasOwnProperty.call(item.fireSprite, "renderable")) {
+                                item.fireSprite.renderable = false;
+                            }
+                        }
+                        if (item._renderingDepthMesh) {
+                            item._renderingDepthMesh.visible = false;
+                        }
+                        if (item._compositeUnderlayMesh) {
+                            item._compositeUnderlayMesh.visible = false;
+                            if (Object.prototype.hasOwnProperty.call(item._compositeUnderlayMesh, "renderable")) {
+                                item._compositeUnderlayMesh.renderable = false;
+                            }
+                        }
+                        if (item._doorBottomFaceDebugGraphics) {
+                            item._doorBottomFaceDebugGraphics.visible = false;
+                            if (Object.prototype.hasOwnProperty.call(item._doorBottomFaceDebugGraphics, "renderable")) {
+                                item._doorBottomFaceDebugGraphics.renderable = false;
+                            }
+                        }
+                        depthRenderedItems.add(item);
+                        continue;
+                    }
                     const _itemCat = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
                     if (_itemCat === "windows" || item.type === "window") {
-                        const _mountedSection = this.resolveMountedWallSectionForItem(item);
                         if (_mountedSection && _mountedSection._roofForceTopFace) {
                             if (item.pixiSprite) {
                                 item.pixiSprite.visible = false;
@@ -2675,22 +3114,180 @@
             return y * mapWidth + x;
         }
 
+        ensureGroundTileContainer() {
+            const layer = this.layers && this.layers.ground;
+            if (!layer) return null;
+            if (!this.groundTileContainer) {
+                this.groundTileContainer = new PIXI.Container();
+                this.groundTileContainer.name = "renderingGroundTiles";
+                layer.addChild(this.groundTileContainer);
+            } else if (this.groundTileContainer.parent !== layer) {
+                layer.addChild(this.groundTileContainer);
+            }
+            return this.groundTileContainer;
+        }
+
+        beginGroundTileProfiling(nowMs) {
+            const profiler = this.groundTileProfiler;
+            if (!profiler || profiler.printed || !isGroundTileProfilingEnabled()) return null;
+            const currentNow = Number.isFinite(nowMs) ? Number(nowMs) : performance.now();
+            if (!Number.isFinite(profiler.startMs)) {
+                profiler.startMs = currentNow;
+                profiler.deadlineMs = currentNow + 10000;
+            }
+            return profiler;
+        }
+
+        maybePrintGroundTileProfile(nowMs) {
+            const profiler = this.groundTileProfiler;
+            if (!profiler || profiler.printed || !Number.isFinite(profiler.deadlineMs)) return;
+            const currentNow = Number.isFinite(nowMs) ? Number(nowMs) : performance.now();
+            if (currentNow < profiler.deadlineMs) return;
+            const frameCount = Math.max(1, Number(profiler.frameCount) || 1);
+            const totals = profiler.totals || {};
+            const counts = profiler.counts || {};
+            console.log("[ground tile profile 10s]", {
+                durationMs: Number((currentNow - profiler.startMs).toFixed(2)),
+                frameCount,
+                avg: {
+                    totalMs: Number((Number(totals.totalMs || 0) / frameCount).toFixed(3)),
+                    activeKeyBuildMs: Number((Number(totals.activeKeyBuildMs || 0) / frameCount).toFixed(3)),
+                    visibleSetMs: Number((Number(totals.visibleSetMs || 0) / frameCount).toFixed(3)),
+                    createSpriteMs: Number((Number(totals.createSpriteMs || 0) / frameCount).toFixed(3)),
+                    parentAttachMs: Number((Number(totals.parentAttachMs || 0) / frameCount).toFixed(3)),
+                    textureResolveMs: Number((Number(totals.textureResolveMs || 0) / frameCount).toFixed(3)),
+                    positionSizeMs: Number((Number(totals.positionSizeMs || 0) / frameCount).toFixed(3)),
+                    cleanupMs: Number((Number(totals.cleanupMs || 0) / frameCount).toFixed(3))
+                },
+                counts: {
+                    visibleNodesPerFrame: Number((Number(counts.visibleNodes || 0) / frameCount).toFixed(2)),
+                    createdSpritesPerFrame: Number((Number(counts.createdSprites || 0) / frameCount).toFixed(2)),
+                    attachedSpritesPerFrame: Number((Number(counts.attachedSprites || 0) / frameCount).toFixed(2)),
+                    cleanedSpritesPerFrame: Number((Number(counts.cleanedSprites || 0) / frameCount).toFixed(2)),
+                    evictedSpritesPerFrame: Number((Number(counts.evictedSprites || 0) / frameCount).toFixed(2)),
+                    reusedSpritesPerFrame: Number((Number(counts.reusedSprites || 0) / frameCount).toFixed(2))
+                }
+            });
+            profiler.printed = true;
+        }
+
+        acquireGroundTileSprite() {
+            let sprite = Array.isArray(this.groundSpritePool) && this.groundSpritePool.length > 0
+                ? this.groundSpritePool.pop()
+                : null;
+            if (!sprite) {
+                sprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+                sprite.name = "renderingGroundTile";
+                sprite.anchor.set(0.5, 0.5);
+            }
+            sprite.visible = true;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                sprite.renderable = true;
+            }
+            sprite.alpha = 1;
+            return sprite;
+        }
+
+        releaseGroundTileSprite(sprite) {
+            if (!sprite) return false;
+            if (sprite.parent) {
+                sprite.parent.removeChild(sprite);
+            }
+            sprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                sprite.renderable = false;
+            }
+            sprite.alpha = 1;
+            sprite.texture = PIXI.Texture.WHITE;
+            if (Array.isArray(this.groundSpritePool) && this.groundSpritePool.length < GROUND_TILE_POOL_LIMIT) {
+                this.groundSpritePool.push(sprite);
+                return false;
+            }
+            if (typeof sprite.destroy === "function") {
+                sprite.destroy({ children: false, texture: false, baseTexture: false });
+            }
+            return true;
+        }
+
+        trimGroundTileSpriteCache(maxEvictions = GROUND_TILE_TRIM_CHUNK_SIZE) {
+            if (!(this.groundSpriteByNodeKey instanceof Map) || this.groundSpriteByNodeKey.size <= GROUND_TILE_CACHE_LIMIT) {
+                return 0;
+            }
+            const visibleKeys = this.groundVisibleNodeKeys instanceof Set
+                ? this.groundVisibleNodeKeys
+                : new Set();
+            const evictTarget = Math.max(
+                0,
+                Math.min(
+                    Math.floor(Number(maxEvictions) || 0),
+                    this.groundSpriteByNodeKey.size - GROUND_TILE_CACHE_LIMIT
+                )
+            );
+            if (evictTarget <= 0) return 0;
+
+            let evictedSprites = 0;
+            for (const [key, sprite] of this.groundSpriteByNodeKey.entries()) {
+                if (visibleKeys.has(key)) continue;
+                this.groundSpriteByNodeKey.delete(key);
+                this.groundVisibleNodeKeys.delete(key);
+                this.releaseGroundTileSprite(sprite);
+                evictedSprites += 1;
+                if (evictedSprites >= evictTarget || this.groundSpriteByNodeKey.size <= GROUND_TILE_CACHE_LIMIT) {
+                    break;
+                }
+            }
+            return evictedSprites;
+        }
+
         renderGroundTiles(ctx, visibleNodes) {
             const map = ctx.map;
-            const container = this.layers.ground;
-            if (!map || !Array.isArray(map.nodes) || !container) return;
+            const layer = this.layers.ground;
+            if (!map || !Array.isArray(map.nodes) || !layer) return;
+            const frameStartMs = performance.now();
+            const profiler = this.beginGroundTileProfiling(
+                ctx && Number.isFinite(ctx.renderNowMs) ? Number(ctx.renderNowMs) : frameStartMs
+            );
 
             const cam = this.camera;
-            const tileW = (Number.isFinite(map.hexWidth) ? map.hexWidth : (1 / 0.866))
-                * cam.viewscale
+            const tileWorldW = (Number.isFinite(map.hexWidth) ? map.hexWidth : (1 / 0.866))
                 * GROUND_TILE_OVERLAP_SCALE;
-            const tileH = (Number.isFinite(map.hexHeight) ? map.hexHeight : 1)
-                * cam.viewscale
-                * cam.xyratio
+            const tileWorldH = (Number.isFinite(map.hexHeight) ? map.hexHeight : 1)
                 * GROUND_TILE_OVERLAP_SCALE;
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const visibleNodeKeys = new Set();
+            const activeKeyBuildStartMs = profiler ? performance.now() : 0;
+            const activePrototypeNodeKeys = (typeof map.getLoadedPrototypeNodeKeySet === "function")
+                ? map.getLoadedPrototypeNodeKeySet()
+                : null;
+            const activeKeyBuildMs = profiler ? (performance.now() - activeKeyBuildStartMs) : 0;
+            const usePrototypeContainerTransform = !!activePrototypeNodeKeys;
+            const container = usePrototypeContainerTransform
+                ? this.ensureGroundTileContainer()
+                : layer;
+            if (!container) return;
 
+            if (usePrototypeContainerTransform) {
+                container.position.set(
+                    -(Number(cam.x) || 0) * (Number(cam.viewscale) || 1),
+                    -(Number(cam.y) || 0) * (Number(cam.viewscale) || 1) * (Number(cam.xyratio) || 1)
+                );
+                container.scale.set(
+                    Number(cam.viewscale) || 1,
+                    (Number(cam.viewscale) || 1) * (Number(cam.xyratio) || 1)
+                );
+            } else if (this.groundTileContainer) {
+                this.groundTileContainer.position.set(0, 0);
+                this.groundTileContainer.scale.set(1, 1);
+            }
+
+            let createSpriteMs = 0;
+            let parentAttachMs = 0;
+            let textureResolveMs = 0;
+            let positionSizeMs = 0;
+            let createdSprites = 0;
+            let attachedSprites = 0;
+            let reusedSprites = 0;
+            const visibleSetStartMs = profiler ? performance.now() : 0;
             for (let i = 0; i < nodes.length; i++) {
                 const node = nodes[i];
                 if (!node) continue;
@@ -2698,17 +3295,24 @@
                 visibleNodeKeys.add(key);
                 let sprite = this.groundSpriteByNodeKey.get(key);
                 if (!sprite) {
-                    sprite = new PIXI.Sprite(PIXI.Texture.WHITE);
-                    sprite.name = "renderingGroundTile";
-                    sprite.anchor.set(0.5, 0.5);
-                    sprite.zIndex = this.getGroundTileZIndex(node, map);
+                    const createStartMs = profiler ? performance.now() : 0;
+                    sprite = this.acquireGroundTileSprite();
                     this.groundSpriteByNodeKey.set(key, sprite);
+                    if (profiler) createSpriteMs += (performance.now() - createStartMs);
+                    createdSprites += 1;
+                } else {
+                    this.groundSpriteByNodeKey.delete(key);
+                    this.groundSpriteByNodeKey.set(key, sprite);
+                    reusedSprites += 1;
                 }
-                const center = cam.worldToScreen(node.x, node.y, 0);
                 if (sprite.parent !== container) {
+                    const attachStartMs = profiler ? performance.now() : 0;
                     container.addChild(sprite);
+                    if (profiler) parentAttachMs += (performance.now() - attachStartMs);
+                    attachedSprites += 1;
                 }
 
+                const textureStartMs = profiler ? performance.now() : 0;
                 const maxTextureIndex = Array.isArray(map.groundTextures) ? (map.groundTextures.length - 1) : 0;
                 const textureIndex = Math.max(
                     0,
@@ -2720,19 +3324,65 @@
                 if (sprite.texture !== texture) {
                     sprite.texture = texture;
                 }
+                if (profiler) textureResolveMs += (performance.now() - textureStartMs);
 
-                sprite.x = center.x;
-                sprite.y = center.y;
-                sprite.width = tileW;
-                sprite.height = tileH;
+                const positionStartMs = profiler ? performance.now() : 0;
+                if (usePrototypeContainerTransform) {
+                    sprite.x = Number(node.x) || 0;
+                    sprite.y = Number(node.y) || 0;
+                    sprite.width = tileWorldW;
+                    sprite.height = tileWorldH;
+                } else {
+                    const center = cam.worldToScreen(node.x, node.y, 0);
+                    sprite.x = center.x;
+                    sprite.y = center.y;
+                    sprite.width = tileWorldW * cam.viewscale;
+                    sprite.height = tileWorldH * cam.viewscale * cam.xyratio;
+                }
                 sprite.alpha = 1;
                 sprite.visible = true;
+                if (profiler) positionSizeMs += (performance.now() - positionStartMs);
             }
+            const visibleSetMs = profiler ? (performance.now() - visibleSetStartMs) : 0;
 
-            for (const [key, sprite] of this.groundSpriteByNodeKey.entries()) {
-                if (!visibleNodeKeys.has(key) && sprite) {
+            const cleanupStartMs = profiler ? performance.now() : 0;
+            let cleanedSprites = 0;
+            let evictedSprites = 0;
+            const previouslyVisibleNodeKeys = this.groundVisibleNodeKeys instanceof Set
+                ? this.groundVisibleNodeKeys
+                : new Set();
+            for (const key of previouslyVisibleNodeKeys) {
+                if (visibleNodeKeys.has(key)) continue;
+                const sprite = this.groundSpriteByNodeKey.get(key);
+                if (sprite) {
                     sprite.visible = false;
+                    cleanedSprites += 1;
                 }
+            }
+            this.groundVisibleNodeKeys = visibleNodeKeys;
+            evictedSprites = this.trimGroundTileSpriteCache(GROUND_TILE_TRIM_CHUNK_SIZE);
+            cleanedSprites += evictedSprites;
+            const cleanupMs = profiler ? (performance.now() - cleanupStartMs) : 0;
+
+            if (profiler) {
+                profiler.frameCount += 1;
+                profiler.totals.totalMs += (performance.now() - frameStartMs);
+                profiler.totals.activeKeyBuildMs += activeKeyBuildMs;
+                profiler.totals.visibleSetMs += visibleSetMs;
+                profiler.totals.createSpriteMs += createSpriteMs;
+                profiler.totals.parentAttachMs += parentAttachMs;
+                profiler.totals.textureResolveMs += textureResolveMs;
+                profiler.totals.positionSizeMs += positionSizeMs;
+                profiler.totals.cleanupMs += cleanupMs;
+                profiler.counts.visibleNodes += nodes.length;
+                profiler.counts.createdSprites += createdSprites;
+                profiler.counts.attachedSprites += attachedSprites;
+                profiler.counts.cleanedSprites += cleanedSprites;
+                profiler.counts.evictedSprites += evictedSprites;
+                profiler.counts.reusedSprites += reusedSprites;
+                this.maybePrintGroundTileProfile(
+                    ctx && Number.isFinite(ctx.renderNowMs) ? Number(ctx.renderNowMs) : performance.now()
+                );
             }
         }
 
@@ -2741,6 +3391,26 @@
             const cam = this.camera;
             const container = this.layers.roadsFloor;
             if (!map || !Array.isArray(map.nodes) || !container) return;
+            const nowMs = (ctx && Number.isFinite(ctx.renderNowMs))
+                ? Number(ctx.renderNowMs)
+                : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now());
+            const hiddenSpriteGraceMs = 500;
+            const maxHiddenSprites = 96;
+
+            const destroyRoadSprite = (road, sprite) => {
+                if (sprite) {
+                    syncRoadRenderSpriteTextureRetention(sprite, null);
+                    if (sprite.parent) {
+                        sprite.parent.removeChild(sprite);
+                    }
+                    if (typeof sprite.destroy === "function") {
+                        sprite.destroy({ children: false, texture: false, baseTexture: false });
+                    }
+                }
+                this.roadSpriteByObject.delete(road);
+            };
 
             const visibleRoadObjects = new Set();
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
@@ -2769,43 +3439,89 @@
                     container.addChild(sprite);
                 }
 
-                const sourceTexture = road && road.pixiSprite && road.pixiSprite.texture
-                    ? road.pixiSprite.texture
-                    : null;
-                if (sourceTexture && sourceTexture !== sprite.texture) {
-                    sprite.texture = sourceTexture;
-                } else if (
-                    !sourceTexture &&
-                    typeof road.fillTexturePath === "string" &&
-                    road.fillTexturePath.length > 0
-                ) {
-                    sprite.texture = PIXI.Texture.from(road.fillTexturePath);
-                }
-
                 const worldX = Number.isFinite(road.x) ? road.x : (road.node && Number.isFinite(road.node.x) ? road.node.x : 0);
                 const worldY = Number.isFinite(road.y) ? road.y : (road.node && Number.isFinite(road.node.y) ? road.node.y : 0);
+                const roadScreenWidth = (Number(road.width) || 1) * cam.viewscale * 1.1547;
+                const roadScreenHeight = (Number(road.height) || 1) * cam.viewscale * cam.xyratio;
+                if (typeof global.Road !== "undefined" && typeof global.Road.resolveFillTexturePathForSize === "function") {
+                    const lodMetric = typeof global.Road.getFillTextureLodMetric === "function"
+                        ? global.Road.getFillTextureLodMetric(road.fillTexturePath, roadScreenWidth, roadScreenHeight)
+                        : Math.max(roadScreenWidth, roadScreenHeight);
+                    const resolvedFillTexturePath = global.Road.resolveFillTexturePathForSize(road.fillTexturePath, lodMetric);
+                    if (resolvedFillTexturePath !== road._resolvedRenderFillTexturePath && typeof road.updateTexture === "function") {
+                        road.updateTexture(null, resolvedFillTexturePath);
+                    }
+                }
+
+                const sourceTexture = (
+                    road &&
+                    road.pixiSprite &&
+                    isRenderablePixiTexture(road.pixiSprite.texture)
+                ) ? road.pixiSprite.texture : null;
+                if (!sourceTexture && typeof road.updateTexture === "function") {
+                    road.updateTexture();
+                }
+                const refreshedSourceTexture = (
+                    road &&
+                    road.pixiSprite &&
+                    isRenderablePixiTexture(road.pixiSprite.texture)
+                ) ? road.pixiSprite.texture : null;
+                if (refreshedSourceTexture && refreshedSourceTexture !== sprite.texture) {
+                    sprite.texture = refreshedSourceTexture;
+                    syncRoadRenderSpriteTextureRetention(sprite, road);
+                } else if (refreshedSourceTexture) {
+                    syncRoadRenderSpriteTextureRetention(sprite, road);
+                } else if (!isRenderablePixiTexture(sprite.texture)) {
+                    syncRoadRenderSpriteTextureRetention(sprite, null);
+                    sprite.texture = PIXI.Texture.WHITE;
+                }
+
                 const p = cam.worldToScreen(worldX, worldY, 0);
                 sprite.x = p.x;
                 sprite.y = p.y;
-                sprite.width = (Number(road.width) || 1) * cam.viewscale * 1.1547;
-                sprite.height = (Number(road.height) || 1) * cam.viewscale * cam.xyratio;
+                if (!isRenderablePixiTexture(sprite.texture)) {
+                    syncRoadRenderSpriteTextureRetention(sprite, null);
+                    sprite.texture = PIXI.Texture.WHITE;
+                }
+                sprite.width = roadScreenWidth;
+                sprite.height = roadScreenHeight;
                 sprite.alpha = Number.isFinite(road.alpha) ? road.alpha : 1;
                 sprite.visible = true;
+                sprite._lastVisibleAtMs = nowMs;
                 this.applyScriptBrightness(road, sprite);
                 road._renderingDisplayObject = sprite;
                 this.addPickRenderItem(road, sprite);
             }
 
+            const hiddenEntries = [];
             for (const [road, sprite] of this.roadSpriteByObject.entries()) {
                 if (!road || road.gone) {
-                    if (sprite && sprite.parent) {
-                        sprite.parent.removeChild(sprite);
-                    }
-                    this.roadSpriteByObject.delete(road);
+                    destroyRoadSprite(road, sprite);
                     continue;
                 }
                 if (!visibleRoadObjects.has(road) && sprite) {
+                    const lastVisibleAtMs = Number.isFinite(sprite._lastVisibleAtMs)
+                        ? Number(sprite._lastVisibleAtMs)
+                        : 0;
+                    if (lastVisibleAtMs > 0 && (nowMs - lastVisibleAtMs) > hiddenSpriteGraceMs) {
+                        destroyRoadSprite(road, sprite);
+                        continue;
+                    }
+                    if (!isRenderablePixiTexture(sprite.texture)) {
+                        syncRoadRenderSpriteTextureRetention(sprite, null);
+                        sprite.texture = PIXI.Texture.WHITE;
+                    }
                     sprite.visible = false;
+                    hiddenEntries.push({ road, sprite, lastVisibleAtMs });
+                }
+            }
+
+            if (hiddenEntries.length > maxHiddenSprites) {
+                hiddenEntries.sort((a, b) => a.lastVisibleAtMs - b.lastVisibleAtMs);
+                const evictCount = hiddenEntries.length - maxHiddenSprites;
+                for (let i = 0; i < evictCount; i++) {
+                    const entry = hiddenEntries[i];
+                    destroyRoadSprite(entry.road, entry.sprite);
                 }
             }
         }
@@ -3083,13 +3799,12 @@
                 this.hexGridContainer.setChildIndex(directionalGfx, this.hexGridContainer.children.length - 1);
             }
 
-            // Keep the grid behind roads/objects so debug lines sit under scene content.
             if (this.hexGridContainer.parent === layer) {
-                const gridBottomIdx = (showPickerScreen && this.hexGridPickerBackdrop && this.hexGridPickerBackdrop.parent === layer)
-                    ? 1
-                    : 0;
-                if (layer.getChildIndex(this.hexGridContainer) !== gridBottomIdx) {
-                    layer.setChildIndex(this.hexGridContainer, gridBottomIdx);
+                    const targetIdx = showPickerScreen
+                        ? ((this.hexGridPickerBackdrop && this.hexGridPickerBackdrop.parent === layer) ? 1 : 0)
+                        : Math.max(0, layer.children.length - 1);
+                    if (layer.getChildIndex(this.hexGridContainer) !== targetIdx) {
+                        layer.setChildIndex(this.hexGridContainer, targetIdx);
                 }
             }
         }
@@ -3497,17 +4212,47 @@
             if (!wizard || !Number.isFinite(wizard.x) || !Number.isFinite(wizard.y)) return;
             if (!depthContainer || !overlayContainer) return;
 
-            if (!this.wizardSprite) {
+            const createWizardSprite = (texture) => {
+                const sprite = new PIXI.Sprite(texture || PIXI.Texture.WHITE);
+                sprite.name = "renderingWizard";
+                sprite.anchor.set(0.5, 0.75);
+                return sprite;
+            };
+            const ensureWizardSprite = (forceRecreate = false) => {
+                const current = this.wizardSprite;
+                const transform = current && current.transform ? current.transform : null;
+                const anchor = current && current._anchor ? current._anchor : null;
+                const usable = !!(
+                    current &&
+                    current.destroyed !== true &&
+                    transform &&
+                    transform.scale &&
+                    anchor
+                );
+                if (!forceRecreate && usable) {
+                    return current;
+                }
+                if (current && current.parent) {
+                    current.parent.removeChild(current);
+                }
+                if (current && typeof current.destroy === "function") {
+                    try {
+                        current.destroy({ children: false, texture: false, baseTexture: false });
+                    } catch (_destroyErr) {
+                        // Ignore stale Pixi teardown failures and rebuild the sprite.
+                    }
+                }
                 const initialTexture = (Array.isArray(ctx.wizardFrames) && ctx.wizardFrames[0])
                     ? ctx.wizardFrames[0]
                     : PIXI.Texture.WHITE;
-                this.wizardSprite = new PIXI.Sprite(initialTexture);
-                this.wizardSprite.name = "renderingWizard";
-                this.wizardSprite.anchor.set(0.5, 0.75);
-            }
-            wizard.pixiSprite = this.wizardSprite;
-            if (this.wizardSprite.parent) {
-                this.wizardSprite.parent.removeChild(this.wizardSprite);
+                this.wizardSprite = createWizardSprite(initialTexture);
+                return this.wizardSprite;
+            };
+
+            let wizardSprite = ensureWizardSprite();
+            wizard.pixiSprite = wizardSprite;
+            if (wizardSprite.parent) {
+                wizardSprite.parent.removeChild(wizardSprite);
             }
 
             const visualSpeed = Math.hypot(
@@ -3538,12 +4283,22 @@
             }
 
             if (Array.isArray(ctx.wizardFrames) && ctx.wizardFrames[frameIndex]) {
-                this.wizardSprite.texture = ctx.wizardFrames[frameIndex];
+                try {
+                    wizardSprite.texture = ctx.wizardFrames[frameIndex];
+                } catch (_textureErr) {
+                    wizardSprite = ensureWizardSprite(true);
+                    wizard.pixiSprite = wizardSprite;
+                    try {
+                        wizardSprite.texture = ctx.wizardFrames[frameIndex] || PIXI.Texture.WHITE;
+                    } catch (_retryErr) {
+                        wizardSprite.texture = PIXI.Texture.WHITE;
+                    }
+                }
             }
 
             const invisibilityActive = this.isInvisibilityActive(wizard);
             const wizardAlpha = invisibilityActive ? 0.45 : 1;
-            this.wizardSprite.alpha = wizardAlpha;
+            wizardSprite.alpha = wizardAlpha;
 
             const alpha = Number.isFinite(ctx.renderAlpha)
                 ? Math.max(0, Math.min(1, ctx.renderAlpha))
@@ -3574,11 +4329,11 @@
                 : 0;
             const ghostSprite = this.ensureWizardGhostSprite();
 
-            this.wizardSprite.width = this.camera.viewscale;
-            this.wizardSprite.height = this.camera.viewscale;
-            this.wizardSprite.visible = false;
-            if (Object.prototype.hasOwnProperty.call(this.wizardSprite, "renderable")) {
-                this.wizardSprite.renderable = false;
+            wizardSprite.width = this.camera.viewscale;
+            wizardSprite.height = this.camera.viewscale;
+            wizardSprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(wizardSprite, "renderable")) {
+                wizardSprite.renderable = false;
             }
             if (ghostSprite) {
                 ghostSprite.visible = false;
@@ -3607,17 +4362,17 @@
                         this.wizardShadowGraphics.renderable = false;
                     }
                 }
-                if (this.wizardSprite.parent !== overlayContainer) {
-                    overlayContainer.addChild(this.wizardSprite);
+                if (wizardSprite.parent !== overlayContainer) {
+                    overlayContainer.addChild(wizardSprite);
                 }
-                this.wizardSprite.anchor.set(0.5, 0.5);
-                this.wizardSprite.x = pGround.x;
-                this.wizardSprite.y = wizardCenterY;
-                this.wizardSprite.rotation = Math.PI / 2;
-                this.wizardSprite.alpha = wizardAlpha;
-                this.wizardSprite.visible = true;
-                if (Object.prototype.hasOwnProperty.call(this.wizardSprite, "renderable")) {
-                    this.wizardSprite.renderable = true;
+                wizardSprite.anchor.set(0.5, 0.5);
+                wizardSprite.x = pGround.x;
+                wizardSprite.y = wizardCenterY;
+                wizardSprite.rotation = Math.PI / 2;
+                wizardSprite.alpha = wizardAlpha;
+                wizardSprite.visible = true;
+                if (Object.prototype.hasOwnProperty.call(wizardSprite, "renderable")) {
+                    wizardSprite.renderable = true;
                 }
 
                 if (ghostSprite) {
@@ -4437,6 +5192,11 @@
             g.clear();
 
             const mapRef = (ctx && ctx.map) || global.map || null;
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizardRef && typeof wizardRef.isAdventureMode === "function" && wizardRef.isAdventureMode()) {
+                g.visible = false;
+                return;
+            }
             if (!mapRef || typeof mapRef.getPrototypeSectionSeamSegments !== "function") {
                 g.visible = false;
                 return;
@@ -4467,6 +5227,7 @@
             if (this.roadPlacementPreviewSpriteByKey && this.roadPlacementPreviewSpriteByKey.size > 0) {
                 for (const sprite of this.roadPlacementPreviewSpriteByKey.values()) {
                     if (!sprite) continue;
+                    syncRoadRenderSpriteTextureRetention(sprite, null);
                     sprite.visible = false;
                     if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
                         sprite.renderable = false;
@@ -4699,12 +5460,6 @@
                 return;
             }
 
-            const repeat = Number.isFinite(RoadClass._repeatWorldUnits) ? Number(RoadClass._repeatWorldUnits) : 10;
-            const repeatPx = repeat * (
-                Number.isFinite(RoadClass._pixelsPerWorldUnit)
-                    ? Number(RoadClass._pixelsPerWorldUnit)
-                    : ((128 * 2) / 1.1547)
-            );
             const oddDirections = Array.isArray(RoadClass._oddDirections) && RoadClass._oddDirections.length > 0
                 ? RoadClass._oddDirections.slice()
                 : [1, 3, 5, 7, 9, 11];
@@ -4732,6 +5487,9 @@
 
             const hasRoadObjectAtNode = (node) => {
                 if (!node || !Array.isArray(node.objects)) return false;
+                if (RoadClass && typeof RoadClass.hasMatchingRoadAtNode === "function") {
+                    return RoadClass.hasMatchingRoadAtNode(node, fillTexturePath);
+                }
                 for (let i = 0; i < node.objects.length; i++) {
                     const obj = node.objects[i];
                     if (obj && obj.type === "road" && !obj.gone && !obj.vanishing) return true;
@@ -4754,12 +5512,38 @@
                 const mask = (typeof RoadClass._getNeighborMask === "function")
                     ? RoadClass._getNeighborMask(neighborDirections)
                     : 0;
-                const offsetWorldX = ((Number(node.x) % repeat) + repeat) % repeat;
-                const offsetWorldY = ((Number(node.y) % repeat) + repeat) % repeat;
-                const phaseX = (offsetWorldX / repeat) * repeatPx;
-                const phaseY = (offsetWorldY / repeat) * repeatPx;
-                const texture = RoadClass._getTextureForMaskAndPhase(mask, phaseX, phaseY, fillTexturePath);
-                if (!texture) continue;
+                const roadScreenWidth = this.camera.viewscale * 1.1547;
+                const roadScreenHeight = this.camera.viewscale * this.camera.xyratio;
+                const lodMetric = (typeof RoadClass.getFillTextureLodMetric === "function")
+                    ? RoadClass.getFillTextureLodMetric(fillTexturePath, roadScreenWidth, roadScreenHeight)
+                    : Math.max(roadScreenWidth, roadScreenHeight);
+                const resolvedFillTexturePath = (typeof RoadClass.resolveFillTexturePathForSize === "function")
+                    ? RoadClass.resolveFillTexturePathForSize(fillTexturePath, lodMetric)
+                    : fillTexturePath;
+                const metrics = (typeof RoadClass._getTextureTileMetrics === "function")
+                    ? RoadClass._getTextureTileMetrics(resolvedFillTexturePath)
+                    : { tileW: 1, tileH: 1 };
+                const pixelsPerWorldUnit = Number.isFinite(RoadClass._pixelsPerWorldUnit)
+                    ? Number(RoadClass._pixelsPerWorldUnit)
+                    : ((128 * 2) / 1.1547);
+                const phaseX = (((Number(node.x) * pixelsPerWorldUnit) % metrics.tileW) + metrics.tileW) % metrics.tileW;
+                const phaseY = (((Number(node.y) * pixelsPerWorldUnit) % metrics.tileH) + metrics.tileH) % metrics.tileH;
+                const textureRef = RoadClass._getTextureForMaskAndPhase(mask, phaseX, phaseY, resolvedFillTexturePath);
+                const textureCacheKey = (textureRef && typeof textureRef.key === "string") ? textureRef.key : "";
+                const texture = (textureRef && textureRef.entry && isRenderablePixiTexture(textureRef.entry.texture))
+                    ? textureRef.entry.texture
+                    : null;
+                if (!texture) {
+                    const existingSprite = previewSpriteByKey.get(key);
+                    if (existingSprite) {
+                        syncRoadRenderSpriteTextureRetention(existingSprite, null);
+                        existingSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(existingSprite, "renderable")) {
+                            existingSprite.renderable = false;
+                        }
+                    }
+                    continue;
+                }
 
                 let sprite = previewSpriteByKey.get(key);
                 if (!sprite) {
@@ -4770,7 +5554,9 @@
                     previewContainer.addChild(sprite);
                 } else if (sprite.texture !== texture) {
                     sprite.texture = texture;
-                } else if (sprite.parent !== previewContainer) {
+                }
+                syncRoadRenderSpriteTextureRetention(sprite, { _roadTextureCacheKey: textureCacheKey });
+                if (sprite.parent !== previewContainer) {
                     previewContainer.addChild(sprite);
                 }
 
@@ -4789,6 +5575,7 @@
 
             for (const [key, sprite] of previewSpriteByKey.entries()) {
                 if (!sprite || activeKeys.has(key)) continue;
+                syncRoadRenderSpriteTextureRetention(sprite, null);
                 sprite.visible = false;
                 if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
                     sprite.renderable = false;
@@ -5069,6 +5856,17 @@
             const scaleMin = Number.isFinite(wizard.selectedPlaceableScaleMin) ? wizard.selectedPlaceableScaleMin : 0.2;
             const scaleMax = Number.isFinite(wizard.selectedPlaceableScaleMax) ? wizard.selectedPlaceableScaleMax : 5;
             const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
+            const selectedSizing = (
+                wizard.selectedPlaceableSizingByTexture &&
+                typeof wizard.selectedPlaceableSizingByTexture === "object"
+            ) ? wizard.selectedPlaceableSizingByTexture[texturePath] : null;
+            const scaledDimensions = (
+                typeof globalThis !== "undefined" &&
+                typeof globalThis.resolvePlaceableScaledDimensions === "function"
+            ) ? globalThis.resolvePlaceableScaledDimensions(selectedSizing, clampedScale) : {
+                width: clampedScale,
+                height: clampedScale
+            };
             const selectedAnchorY = Number.isFinite(wizard.selectedPlaceableAnchorY)
                 ? Number(wizard.selectedPlaceableAnchorY)
                 : 1;
@@ -5078,14 +5876,14 @@
             const yScale = Math.max(0.1, Math.abs(Number.isFinite(this.camera.xyratio) ? this.camera.xyratio : 0.66));
             const placementYOffset = (rotationAxis === "spatial" || rotationAxis === "ground" || isRoofPlacement)
                 ? 0
-                : (((effectiveAnchorY - 0.5) * clampedScale) / yScale);
+                : (((effectiveAnchorY - 0.5) * scaledDimensions.height) / yScale);
             const spatialAnchorPlacementYOffset = (
                 rotationAxis === "spatial" &&
                 !useSnapPlacement &&
                 !useRoofPlacement &&
                 (selectedCategory === "doors" || selectedCategory === "windows")
             )
-                ? (((effectiveAnchorY - 0.5) * clampedScale) / yScale)
+                ? (((effectiveAnchorY - 0.5) * scaledDimensions.height) / yScale)
                 : 0;
             const previewX = useRoofPlacement
                 ? Number(snapPlacement.previewX)
@@ -5112,8 +5910,8 @@
             previewItem.z = useRoofPlacement
                 ? Number(snapPlacement.previewZ)
                 : (useSnapPlacement ? Number(snapPlacement.snappedZ) : 0);
-            previewItem.width = clampedScale;
-            previewItem.height = clampedScale;
+            previewItem.width = scaledDimensions.width;
+            previewItem.height = scaledDimensions.height;
             previewItem.renderZ = placedY + renderDepthOffset;
             previewItem.previewAlpha = 0.5;
             previewItem.texturePath = texturePath;
@@ -5729,7 +6527,7 @@
 
         beginDrawPassProfiling(ctx) {
             const profiler = this.drawPassProfiler;
-            if (!profiler || profiler.printed) return null;
+            if (!profiler || profiler.printed || !isDrawPassBreakdownEnabled()) return null;
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : performance.now();
             if (!Number.isFinite(profiler.startMs)) {
                 profiler.startMs = nowMs;
@@ -5758,9 +6556,17 @@
         }
 
         profileDrawPassSection(sectionName, fn) {
+            if (!isDrawPassBreakdownEnabled()) {
+                return fn();
+            }
             const t0 = performance.now();
             const result = fn();
-            this.recordDrawPassSection(sectionName, performance.now() - t0);
+            const elapsedMs = performance.now() - t0;
+            this.recordDrawPassSection(sectionName, elapsedMs);
+            if (!this.currentFrameDrawSections) {
+                this.currentFrameDrawSections = Object.create(null);
+            }
+            this.currentFrameDrawSections[sectionName] = elapsedMs;
             return result;
         }
 
@@ -5801,6 +6607,7 @@
             this.init(ctx);
             if (!this.initialized) return false;
             const frameStartMs = performance.now();
+            this.currentFrameDrawSections = isDrawPassBreakdownEnabled() ? Object.create(null) : null;
             const frameNowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : frameStartMs;
             const mazeModeSettingEnabled = this.isLosMazeModeEnabled();
             if (mazeModeSettingEnabled && (!this.lastMazeModeSettingEnabled || !Number.isFinite(this.mazeModeActivatedAtMs))) {
@@ -5852,9 +6659,6 @@
             this.profileDrawPassSection("renderGroundTiles", () => {
                 this.renderGroundTiles(ctx, visibleNodes);
             });
-            this.profileDrawPassSection("renderHexGridOverlay", () => {
-                this.renderHexGridOverlay(ctx);
-            });
             this.profileDrawPassSection("renderPrototypeSectionSeams", () => {
                 this.renderPrototypeSectionSeams(ctx);
             });
@@ -5879,6 +6683,9 @@
             });
             this.profileDrawPassSection("renderRoadsAndFloors", () => {
                 this.renderRoadsAndFloors(ctx, visibleNodes);
+            });
+            this.profileDrawPassSection("renderHexGridOverlay", () => {
+                this.renderHexGridOverlay(ctx);
             });
             this.profileDrawPassSection("applyMazeModeCompositor", () => {
                 this.applyMazeModeCompositor(ctx);
@@ -6017,8 +6824,157 @@
             if (this.mazeModeRenderer && this.mazeModeRenderer.occlusionMaskGraphics) {
                 this.mazeModeRenderer.occlusionMaskGraphics.visible = !showPickerScreen && this.mazeModeOverlayActive;
             }
+            if (isTextureSanitizerEnabled()) {
+                this.profileDrawPassSection("sanitizeDisplayTreeTextures", () => {
+                    const sanitizeRoot = (ctx && ctx.app && ctx.app.stage) ? ctx.app.stage : this.layers.root;
+                    const sanitizeResult = sanitizeDisplayTreeTextures(sanitizeRoot, { maxSamples: 6 });
+                    if (sanitizeResult && sanitizeResult.repaired > 0) {
+                        const nowMs = performance.now();
+                        if (!Number.isFinite(this._lastTextureSanitizerLogAtMs) || (nowMs - this._lastTextureSanitizerLogAtMs) > 1000) {
+                            this._lastTextureSanitizerLogAtMs = nowMs;
+                            console.warn("[render texture sanitizer]", {
+                                repaired: sanitizeResult.repaired,
+                                samples: sanitizeResult.samples
+                            });
+                        }
+                    }
+                });
+            }
             const frameElapsedMs = performance.now() - frameStartMs;
             this.recordDrawPassSection("renderFrame.total", frameElapsedMs);
+            if (typeof globalThis !== "undefined") {
+                globalThis.renderingLiveStats = {
+                    groundCached: this.groundSpriteByNodeKey instanceof Map
+                        ? this.groundSpriteByNodeKey.size
+                        : 0,
+                    groundVisible: this.groundVisibleNodeKeys instanceof Set
+                        ? this.groundVisibleNodeKeys.size
+                        : 0,
+                    groundPool: Array.isArray(this.groundSpritePool)
+                        ? this.groundSpritePool.length
+                        : 0,
+                    roadCached: this.roadSpriteByObject instanceof Map
+                        ? this.roadSpriteByObject.size
+                        : 0,
+                    depthMeshes: this.activeDepthBillboardMeshes instanceof Set
+                        ? this.activeDepthBillboardMeshes.size
+                        : 0,
+                    objectDisplays: this.activeObjectDisplayObjects instanceof Set
+                        ? this.activeObjectDisplayObjects.size
+                        : 0,
+                    groundLayerChildren: this.layers && this.layers.ground && Array.isArray(this.layers.ground.children)
+                        ? this.layers.ground.children.length
+                        : 0,
+                    roadsLayerChildren: this.layers && this.layers.roadsFloor && Array.isArray(this.layers.roadsFloor.children)
+                        ? this.layers.roadsFloor.children.length
+                        : 0,
+                    objectsLayerChildren: this.layers && this.layers.objects3d && Array.isArray(this.layers.objects3d.children)
+                        ? this.layers.objects3d.children.length
+                        : 0
+                };
+            }
+            if (typeof globalThis !== "undefined" && isDrawPassBreakdownEnabled()) {
+                const sections = this.currentFrameDrawSections || Object.create(null);
+                const getMs = (name) => Number(sections[name] || 0);
+                const visibleObjectsCount = Array.isArray(visibleObjects) ? visibleObjects.length : 0;
+                let hydratedRoads = 0;
+                let hydratedTrees = 0;
+                for (let i = 0; i < visibleObjectsCount; i++) {
+                    const item = visibleObjects[i];
+                    if (!item || item.gone || item.vanishing) continue;
+                    if (item.type === "road") {
+                        hydratedRoads += 1;
+                    } else if (item.type === "tree") {
+                        hydratedTrees += 1;
+                    }
+                }
+                globalThis.drawPerfBreakdown = {
+                    lazyMs: 0,
+                    prepMs: getMs("resetWallDepthGeometryBudget") + getMs("camera.update"),
+                    collectMs: getMs("collectVisibleNodes") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache"),
+                    losMs: getMs("updateLosState") + getMs("updateWallLosIlluminationTallies"),
+                    composeMs: frameElapsedMs,
+                    passWorldMs:
+                        getMs("renderGroundTiles") +
+                        getMs("renderHexGridOverlay") +
+                        getMs("renderPrototypeSectionSeams") +
+                        getMs("renderClearanceOverlay") +
+                        getMs("renderTileClearanceNumbers") +
+                        getMs("drawMapBorder") +
+                        getMs("renderRoadsAndFloors"),
+                    passWorldGroundMs: getMs("renderGroundTiles"),
+                    passWorldHexMs: getMs("renderHexGridOverlay"),
+                    passWorldSeamsMs: getMs("renderPrototypeSectionSeams"),
+                    passWorldClearanceMs: getMs("renderClearanceOverlay"),
+                    passWorldTileNumbersMs: getMs("renderTileClearanceNumbers"),
+                    passWorldBorderMs: getMs("drawMapBorder"),
+                    passWorldRoadsMs: getMs("renderRoadsAndFloors"),
+                    passLosMs:
+                        getMs("applyMazeModeCompositor") +
+                        getMs("renderLosShadowOverlay"),
+                    passObjectsMs:
+                        getMs("renderObjects3D") +
+                        getMs("renderPowerups") +
+                        getMs("renderWizard") +
+                        getMs("renderCreatureTracePaths") +
+                        getMs("renderProjectiles") +
+                        getMs("renderScriptMessages"),
+                    passPostMs:
+                        getMs("renderWallPlacementPreview") +
+                        getMs("renderRoadPlacementPreview") +
+                        getMs("renderFirewallPlacementPreview") +
+                        getMs("renderTriggerAreaPlacementPreview") +
+                        getMs("renderPlaceObjectPreview") +
+                        getMs("renderPowerupPlacementPreview") +
+                        getMs("scenePicker.renderHoverHighlight") +
+                        getMs("drawNodeInspectorOverlay") +
+                        getMs("sanitizeDisplayTreeTextures"),
+                    composeMaskMs: 0,
+                    composeSortMs: 0,
+                    composePopulateMs: 0,
+                    composeInvariantMs: 0,
+                    composeWallSectionsMs: 0,
+                    composeWallSectionsGroups: 0,
+                    composeWallSectionsRebuilt: 0,
+                    composeUnaccountedMs: 0,
+                    composeInvariantSkipped: 0,
+                    mapItems: visibleObjectsCount,
+                    onscreen: (typeof global.onscreenObjects !== "undefined" && global.onscreenObjects && Number.isFinite(global.onscreenObjects.size))
+                        ? Number(global.onscreenObjects.size)
+                        : visibleObjectsCount,
+                    groundCached: this.groundSpriteByNodeKey instanceof Map
+                        ? this.groundSpriteByNodeKey.size
+                        : 0,
+                    groundVisible: this.groundVisibleNodeKeys instanceof Set
+                        ? this.groundVisibleNodeKeys.size
+                        : 0,
+                    groundPool: Array.isArray(this.groundSpritePool)
+                        ? this.groundSpritePool.length
+                        : 0,
+                    roadCached: this.roadSpriteByObject instanceof Map
+                        ? this.roadSpriteByObject.size
+                        : 0,
+                    depthMeshes: this.activeDepthBillboardMeshes instanceof Set
+                        ? this.activeDepthBillboardMeshes.size
+                        : 0,
+                    objectDisplays: this.activeObjectDisplayObjects instanceof Set
+                        ? this.activeObjectDisplayObjects.size
+                        : 0,
+                    groundLayerChildren: this.layers && this.layers.ground && Array.isArray(this.layers.ground.children)
+                        ? this.layers.ground.children.length
+                        : 0,
+                    roadsLayerChildren: this.layers && this.layers.roadsFloor && Array.isArray(this.layers.roadsFloor.children)
+                        ? this.layers.roadsFloor.children.length
+                        : 0,
+                    objectsLayerChildren: this.layers && this.layers.objects3d && Array.isArray(this.layers.objects3d.children)
+                        ? this.layers.objects3d.children.length
+                        : 0,
+                    hydratedRoads,
+                    hydratedTrees
+                };
+            } else if (typeof globalThis !== "undefined") {
+                globalThis.drawPerfBreakdown = null;
+            }
             if (this.drawPassProfiler && !this.drawPassProfiler.printed) {
                 this.drawPassProfiler.frameCount += 1;
                 this.drawPassProfiler.totalFrameMs += frameElapsedMs;

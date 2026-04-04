@@ -40,6 +40,15 @@ void main(void) {
     gl_FragColor = vec4(uPickColor, 1.0);
 }
 `;
+
+    function isScenePickerHoverProfilingEnabled() {
+        return !!(
+            global.renderingDiagnostics &&
+            typeof global.renderingDiagnostics === "object" &&
+            global.renderingDiagnostics.scenePickerHoverProfiling === true
+        );
+    }
+
     const PICK_WORLD_MESH_VS = `
 precision mediump float;
 attribute vec3 aWorldPosition;
@@ -1879,7 +1888,7 @@ void main(void) {
 
         beginHoverProfile(ctx) {
             const profiler = this.hoverProfiler;
-            if (!profiler || profiler.printed) return null;
+            if (!profiler || profiler.printed || !isScenePickerHoverProfilingEnabled()) return null;
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : performance.now();
             if (!Number.isFinite(profiler.startMs)) {
                 profiler.startMs = nowMs;
@@ -1890,7 +1899,7 @@ void main(void) {
 
         recordHoverProfileSection(sectionName, elapsedMs) {
             const profiler = this.hoverProfiler;
-            if (!profiler || profiler.printed || !sectionName || !Number.isFinite(elapsedMs)) return;
+            if (!profiler || profiler.printed || !isScenePickerHoverProfilingEnabled() || !sectionName || !Number.isFinite(elapsedMs)) return;
             let section = profiler.sections[sectionName];
             if (!section) {
                 section = {
@@ -1908,6 +1917,9 @@ void main(void) {
         }
 
         profileHoverSection(sectionName, fn) {
+            if (!isScenePickerHoverProfilingEnabled()) {
+                return fn();
+            }
             const startMs = performance.now();
             const result = fn();
             this.recordHoverProfileSection(sectionName, performance.now() - startMs);
@@ -1946,9 +1958,11 @@ void main(void) {
         }
 
         renderHoverHighlight(ctx) {
-            const hoverFrameStartMs = performance.now();
+            const hoverProfilingEnabled = isScenePickerHoverProfilingEnabled();
+            const hoverFrameStartMs = hoverProfilingEnabled ? performance.now() : 0;
             this.beginHoverProfile(ctx);
             const finalizeHoverProfile = () => {
+                if (!hoverProfilingEnabled) return;
                 const hoverFrameMs = performance.now() - hoverFrameStartMs;
                 this.recordHoverProfileSection("hover.total", hoverFrameMs);
                 if (this.hoverProfiler && !this.hoverProfiler.printed) {
@@ -1980,6 +1994,7 @@ void main(void) {
                 currentSpell === "wall" ||
                 currentSpell === "buildroad" ||
                 currentSpell === "firewall" ||
+                currentSpell === "moveobject" ||
                 currentSpell === "vanish" ||
                 currentSpell === "editorvanish" ||
                 currentSpell === "fireball" ||

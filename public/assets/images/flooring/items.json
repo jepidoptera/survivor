@@ -1,0 +1,75 @@
+{
+  "category": "flooring",
+  "version": 1,
+  "defaults": {
+    "repeatsPerMapUnitX": 0.1,
+    "repeatsPerMapUnitY": 0.1
+  },
+  "items": [
+    {
+      "file": "cobblestones.png",
+      "texturePath": "/assets/images/flooring/cobblestones.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/flooring/lod/cobblestones_lod096.png",
+          "maxDistance": 96
+        },
+        {
+          "texturePath": "/assets/images/flooring/lod/cobblestones_lod192.png",
+          "maxDistance": 192
+        },
+        {
+          "texturePath": "/assets/images/flooring/cobblestones.png"
+        }
+      ],
+      "repeatsPerMapUnitX": 0.2,
+      "repeatsPerMapUnitY": 0.2
+    },
+    {
+      "file": "dirt.jpg",
+      "texturePath": "/assets/images/flooring/dirt.jpg",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/flooring/lod/dirt_lod096.jpg",
+          "maxDistance": 56
+        },
+        {
+          "texturePath": "/assets/images/flooring/lod/dirt_lod192.jpg",
+          "maxDistance": 104
+        },
+        {
+          "texturePath": "/assets/images/flooring/lod/dirt_lod384.jpg",
+          "maxDistance": 176
+        },
+        {
+          "texturePath": "/assets/images/flooring/lod/dirt_lod768.jpg",
+          "maxDistance": 288
+        },
+        {
+          "texturePath": "/assets/images/flooring/dirt.jpg"
+        }
+      ],
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    },
+    {
+      "file": "woodfloor.png",
+      "texturePath": "/assets/images/flooring/woodfloor.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/flooring/lod/woodfloor_lod096.png",
+          "maxDistance": 96
+        },
+        {
+          "texturePath": "/assets/images/flooring/lod/woodfloor_lod192.png",
+          "maxDistance": 192
+        },
+        {
+          "texturePath": "/assets/images/flooring/woodfloor.png"
+        }
+      ],
+      "repeatsPerMapUnitX": 0.4,
+      "repeatsPerMapUnitY": 0.4
+    }
+  ]
+}

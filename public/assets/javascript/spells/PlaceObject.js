@@ -107,6 +107,13 @@ class PlaceObject extends globalThis.Spell {
             if (wizard.map && Array.isArray(wizard.map.objects)) {
                 wizard.map.objects.push(targetRoof);
             }
+            if (
+                typeof globalThis !== "undefined" &&
+                globalThis.Scripting &&
+                typeof globalThis.Scripting.ensureObjectScriptingName === "function"
+            ) {
+                globalThis.Scripting.ensureObjectScriptingName(targetRoof, { map: wizard.map || null });
+            }
             if (typeof globalThis !== "undefined") {
                 if (!Array.isArray(globalThis.roofs)) {
                     globalThis.roofs = [];
@@ -129,6 +136,18 @@ class PlaceObject extends globalThis.Spell {
                     (typeof wizard !== "undefined") ? wizard : null,
                     { reason: "objectCreated" }
                 );
+            }
+            if (
+                wizard &&
+                wizard.map &&
+                wizard.map._prototypeObjectState
+            ) {
+                if (!(wizard.map._prototypeObjectState.dirtyRuntimeObjects instanceof Set)) {
+                    wizard.map._prototypeObjectState.dirtyRuntimeObjects = new Set();
+                }
+                wizard.map._prototypeObjectState.dirtyRuntimeObjects.add(targetRoof);
+                targetRoof._prototypeDirty = true;
+                wizard.map._prototypeObjectState.captureScanNeeded = true;
             }
             this.visible = false;
             this.detachPixiSprite();
@@ -154,6 +173,18 @@ class PlaceObject extends globalThis.Spell {
         const scaleMin = (wizard && Number.isFinite(wizard.selectedPlaceableScaleMin)) ? wizard.selectedPlaceableScaleMin : 0.2;
         const scaleMax = (wizard && Number.isFinite(wizard.selectedPlaceableScaleMax)) ? wizard.selectedPlaceableScaleMax : 5;
         const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
+        const selectedSizing = (
+            wizard &&
+            wizard.selectedPlaceableSizingByTexture &&
+            typeof wizard.selectedPlaceableSizingByTexture === "object"
+        ) ? wizard.selectedPlaceableSizingByTexture[selectedTexturePath] : null;
+        const scaledDimensions = (
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.resolvePlaceableScaledDimensions === "function"
+        ) ? globalThis.resolvePlaceableScaledDimensions(selectedSizing, clampedScale) : {
+            width: clampedScale,
+            height: clampedScale
+        };
         const selectedAnchorX = (wizard && Number.isFinite(wizard.selectedPlaceableAnchorX))
             ? Number(wizard.selectedPlaceableAnchorX)
             : 0.5;
@@ -199,13 +230,13 @@ class PlaceObject extends globalThis.Spell {
         const yScale = Math.max(0.1, Math.abs(rawYScale));
         const placementYOffset = (rotationAxis === "spatial" || rotationAxis === "ground")
             ? 0
-            : (((selectedAnchorY - 0.5) * clampedScale) / yScale);
+            : (((selectedAnchorY - 0.5) * scaledDimensions.height) / yScale);
         const spatialAnchorPlacementYOffset = (
             rotationAxis === "spatial" &&
             !useWallSnapPlacement &&
             (selectedCategoryKey === "doors" || selectedCategoryKey === "windows")
         )
-            ? (((selectedAnchorY - 0.5) * clampedScale) / yScale)
+            ? (((selectedAnchorY - 0.5) * scaledDimensions.height) / yScale)
             : 0;
         const placedX = (
             useWallSnapPlacement &&
@@ -236,8 +267,8 @@ class PlaceObject extends globalThis.Spell {
             texturePath: selectedTexturePath,
             category: selectedCategory,
             renderDepthOffset,
-            width: clampedScale,
-            height: clampedScale,
+            width: scaledDimensions.width,
+            height: scaledDimensions.height,
             placeableAnchorX: effectiveAnchorX,
             placeableAnchorY: effectiveAnchorY,
             rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
@@ -264,6 +295,23 @@ class PlaceObject extends globalThis.Spell {
             placedObject.z = Number(wallSnapPlacement.snappedZ);
         }
         if (
+            placedObject &&
+            typeof globalThis !== "undefined" &&
+            globalThis.Scripting &&
+            typeof globalThis.Scripting.ensureObjectScriptingName === "function"
+        ) {
+            const targetSectionKey = (
+                wizard &&
+                wizard.map &&
+                typeof wizard.map.getPrototypeSectionKeyForWorldPoint === "function"
+            ) ? wizard.map.getPrototypeSectionKeyForWorldPoint(placedObject.x, placedObject.y) : "";
+            globalThis.Scripting.ensureObjectScriptingName(placedObject, {
+                map: wizard ? wizard.map : null,
+                target: placedObject,
+                targetSectionKey
+            });
+        }
+        if (
             typeof globalThis !== "undefined" &&
             globalThis.Scripting &&
             typeof globalThis.Scripting.runObjectInitScript === "function"
@@ -273,6 +321,14 @@ class PlaceObject extends globalThis.Spell {
                 (typeof wizard !== "undefined") ? wizard : null,
                 { reason: "objectCreated" }
             );
+        }
+        if (
+            placedObject &&
+            wizard &&
+            wizard.map &&
+            wizard.map._prototypeObjectState
+        ) {
+            wizard.map._prototypeObjectState.captureScanNeeded = true;
         }
 
         this.visible = false;

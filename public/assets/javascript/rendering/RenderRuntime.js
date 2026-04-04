@@ -533,6 +533,7 @@
             seenThisSync.add(animal);
             ensureAnimalTracked(animal, mapRef);
             updateAnimalTileIndex(animal, mapRef);
+            syncAnimalActivationForCurrentTile(animal);
         }
 
         animalVisibilityState.knownAnimals.forEach(animal => {
