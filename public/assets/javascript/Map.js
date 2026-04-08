@@ -521,6 +521,7 @@ class GameMap {
         this.objects = [];
         // Canonical cross-system runtime registry (walls, placed objects, animals, powerups, etc).
         this.gameObjects = [];
+        this.resetFloorRuntimeState();
         this.hexHeight = 1;
         this.hexWidth = 1 / 0.866;
         this.worldWidth = this.width * 0.866;
@@ -830,6 +831,235 @@ class GameMap {
         return this.gameObjects;
     }
 
+    resetFloorRuntimeState() {
+        this.floorsById = new Map();
+        this.floorFragmentsBySurfaceId = new Map();
+        this.floorFragmentsBySectionKey = new Map();
+        this.floorNodesById = new Map();
+        this.floorNodeIndex = new Map();
+        this.transitionsById = new Map();
+    }
+
+    getFloorNodeKey(nodeOrX, y = null, surfaceId = "", fragmentId = "") {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            const x = Number(nodeOrX.xindex);
+            const nodeY = Number(nodeOrX.yindex);
+            const resolvedSurfaceId = (typeof nodeOrX.surfaceId === "string") ? nodeOrX.surfaceId : "";
+            const resolvedFragmentId = (typeof nodeOrX.fragmentId === "string") ? nodeOrX.fragmentId : "";
+            return `${x},${nodeY},${resolvedSurfaceId},${resolvedFragmentId}`;
+        }
+        const resolvedSurfaceId = (typeof surfaceId === "string") ? surfaceId : "";
+        const resolvedFragmentId = (typeof fragmentId === "string") ? fragmentId : "";
+        return `${Number(nodeOrX)},${Number(y)},${resolvedSurfaceId},${resolvedFragmentId}`;
+    }
+
+    registerFloorFragment(fragment) {
+        if (!fragment || typeof fragment !== "object") return null;
+        if (!(this.floorsById instanceof Map)) this.resetFloorRuntimeState();
+
+        const fragmentId = (typeof fragment.fragmentId === "string" && fragment.fragmentId.length > 0)
+            ? fragment.fragmentId
+            : ((typeof fragment.id === "string" && fragment.id.length > 0) ? fragment.id : "");
+        if (!fragmentId) return null;
+
+        const normalized = {
+            ...fragment,
+            fragmentId,
+            surfaceId: (typeof fragment.surfaceId === "string" && fragment.surfaceId.length > 0)
+                ? fragment.surfaceId
+                : fragmentId,
+            ownerSectionKey: (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "",
+            level: Number.isFinite(fragment.level) ? Number(fragment.level) : 0,
+            nodeBaseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : 0,
+            outerPolygon: Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : [],
+            holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : [],
+            visibilityPolygon: Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length > 0
+                ? fragment.visibilityPolygon.slice()
+                : (Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : []),
+            visibilityHoles: Array.isArray(fragment.visibilityHoles)
+                ? fragment.visibilityHoles.slice()
+                : (Array.isArray(fragment.holes) ? fragment.holes.slice() : [])
+        };
+
+        this.floorsById.set(fragmentId, normalized);
+        if (!(this.floorNodesById instanceof Map)) this.floorNodesById = new Map();
+        if (!this.floorNodesById.has(fragmentId)) this.floorNodesById.set(fragmentId, []);
+
+        if (!(this.floorFragmentsBySurfaceId instanceof Map)) this.floorFragmentsBySurfaceId = new Map();
+        if (!this.floorFragmentsBySurfaceId.has(normalized.surfaceId)) {
+            this.floorFragmentsBySurfaceId.set(normalized.surfaceId, new Set());
+        }
+        this.floorFragmentsBySurfaceId.get(normalized.surfaceId).add(fragmentId);
+
+        const ownerSectionKey = normalized.ownerSectionKey;
+        if (ownerSectionKey.length > 0) {
+            if (!(this.floorFragmentsBySectionKey instanceof Map)) this.floorFragmentsBySectionKey = new Map();
+            if (!this.floorFragmentsBySectionKey.has(ownerSectionKey)) {
+                this.floorFragmentsBySectionKey.set(ownerSectionKey, new Set());
+            }
+            this.floorFragmentsBySectionKey.get(ownerSectionKey).add(fragmentId);
+        }
+
+        return normalized;
+    }
+
+    registerFloorNode(node, fragment = null) {
+        if (!node || typeof node !== "object") return null;
+        if (!(this.floorNodesById instanceof Map)) this.resetFloorRuntimeState();
+        const fragmentId = (fragment && typeof fragment.fragmentId === "string" && fragment.fragmentId.length > 0)
+            ? fragment.fragmentId
+            : ((typeof node.fragmentId === "string" && node.fragmentId.length > 0) ? node.fragmentId : "");
+        if (!fragmentId) return null;
+        const surfaceId = (fragment && typeof fragment.surfaceId === "string" && fragment.surfaceId.length > 0)
+            ? fragment.surfaceId
+            : ((typeof node.surfaceId === "string") ? node.surfaceId : "");
+        node.fragmentId = fragmentId;
+        node.surfaceId = surfaceId;
+        node.id = this.getFloorNodeKey(node);
+
+        if (!this.floorNodesById.has(fragmentId)) this.floorNodesById.set(fragmentId, []);
+        this.floorNodesById.get(fragmentId).push(node);
+
+        if (!(this.floorNodeIndex instanceof Map)) this.floorNodeIndex = new Map();
+        this.floorNodeIndex.set(node.id, node);
+        return node;
+    }
+
+    createFloorNodeFromSource(sourceNode, fragment, options = {}) {
+        if (!sourceNode || !fragment) return null;
+        let floorNode = null;
+        const SourceCtor = sourceNode && typeof sourceNode.constructor === "function" ? sourceNode.constructor : null;
+        if (SourceCtor) {
+            try {
+                floorNode = new SourceCtor(sourceNode.xindex, sourceNode.yindex, 1, 1);
+            } catch (_err) {
+                floorNode = null;
+            }
+        }
+        if (!floorNode || typeof floorNode !== "object") {
+            floorNode = {};
+        }
+
+        floorNode.xindex = Number(sourceNode.xindex);
+        floorNode.yindex = Number(sourceNode.yindex);
+        floorNode.x = Number(sourceNode.x);
+        floorNode.y = Number(sourceNode.y);
+        floorNode.sourceNode = sourceNode;
+        floorNode.surfaceId = (typeof fragment.surfaceId === "string") ? fragment.surfaceId : "";
+        floorNode.fragmentId = (typeof fragment.fragmentId === "string") ? fragment.fragmentId : "";
+        floorNode.ownerSectionKey = (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "";
+        floorNode.level = Number.isFinite(fragment.level) ? Number(fragment.level) : 0;
+        floorNode.traversalLayer = Number.isFinite(options.traversalLayer)
+            ? Number(options.traversalLayer)
+            : floorNode.level;
+        floorNode.baseZ = Number.isFinite(options.baseZ)
+            ? Number(options.baseZ)
+            : (Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : this.getNodeBaseZ(sourceNode));
+        floorNode.portalEdges = Array.isArray(sourceNode.portalEdges) ? sourceNode.portalEdges.slice() : [];
+        floorNode.neighbors = new Array(12).fill(null);
+        floorNode.neighborOffsets = Array.isArray(sourceNode.neighborOffsets)
+            ? sourceNode.neighborOffsets.slice()
+            : new Array(12).fill(null);
+        floorNode.blockedNeighbors = new Map();
+        floorNode.objects = [];
+        floorNode.visibilityObjects = [];
+        floorNode.blockedByObjects = 0;
+        floorNode.blocked = false;
+        floorNode.clearance = Number.isFinite(sourceNode.clearance) ? Number(sourceNode.clearance) : Infinity;
+        return this.registerFloorNode(floorNode, fragment);
+    }
+
+    registerFloorTransition(transition) {
+        if (!transition || typeof transition !== "object") return null;
+        if (!(this.transitionsById instanceof Map)) this.resetFloorRuntimeState();
+        const transitionId = (typeof transition.id === "string" && transition.id.length > 0)
+            ? transition.id
+            : "";
+        if (!transitionId) return null;
+        const normalized = {
+            ...transition,
+            id: transitionId,
+            type: (typeof transition.type === "string" && transition.type.length > 0)
+                ? transition.type
+                : "portal",
+            bidirectional: transition.bidirectional !== false,
+            zProfile: (typeof transition.zProfile === "string" && transition.zProfile.length > 0)
+                ? transition.zProfile
+                : "linear",
+            movementCost: Number.isFinite(transition.movementCost) ? Number(transition.movementCost) : 1,
+            penalty: Number.isFinite(transition.penalty) ? Number(transition.penalty) : 0,
+            metadata: (transition.metadata && typeof transition.metadata === "object") ? { ...transition.metadata } : {}
+        };
+        this.transitionsById.set(transitionId, normalized);
+        return normalized;
+    }
+
+    rebuildFloorRuntimeFromSectionState(sectionState, options = {}) {
+        this.resetFloorRuntimeState();
+        if (
+            !sectionState ||
+            !(sectionState.sectionAssetsByKey instanceof Map) ||
+            !(sectionState.nodesBySectionKey instanceof Map)
+        ) {
+            return { fragmentCount: 0, nodeCount: 0, transitionCount: 0 };
+        }
+
+        const synthesizeGroundFragment = (typeof options.synthesizeGroundFragment === "function")
+            ? options.synthesizeGroundFragment
+            : null;
+        const doesNodeBelongToFragment = (typeof options.doesNodeBelongToFragment === "function")
+            ? options.doesNodeBelongToFragment
+            : (() => true);
+        const transitions = Array.isArray(options.transitions)
+            ? options.transitions
+            : (Array.isArray(sectionState.floorTransitions) ? sectionState.floorTransitions : []);
+
+        let fragmentCount = 0;
+        let nodeCount = 0;
+
+        for (const [sectionKey, sectionNodes] of sectionState.nodesBySectionKey.entries()) {
+            const asset = sectionState.sectionAssetsByKey.get(sectionKey) || null;
+            if (!asset) continue;
+
+            const authoredFragments = Array.isArray(asset.floors) ? asset.floors.slice() : [];
+            const hasGroundFragment = authoredFragments.some((fragment) => Number(fragment && fragment.level) === 0);
+            if (!hasGroundFragment && synthesizeGroundFragment) {
+                const synthesizedGround = synthesizeGroundFragment(asset);
+                if (synthesizedGround) authoredFragments.unshift(synthesizedGround);
+            }
+
+            for (let i = 0; i < authoredFragments.length; i++) {
+                const registeredFragment = this.registerFloorFragment(authoredFragments[i]);
+                if (!registeredFragment) continue;
+                fragmentCount += 1;
+
+                const materializedNodeKeys = [];
+                for (let n = 0; n < sectionNodes.length; n++) {
+                    const sourceNode = sectionNodes[n];
+                    if (!doesNodeBelongToFragment(sourceNode, registeredFragment)) continue;
+                    const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                        baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                        traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                    });
+                    if (!floorNode) continue;
+                    nodeCount += 1;
+                    materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
+                }
+
+                registeredFragment.materializedNodeKeys = materializedNodeKeys;
+            }
+        }
+
+        let transitionCount = 0;
+        for (let i = 0; i < transitions.length; i++) {
+            if (this.registerFloorTransition(transitions[i])) transitionCount += 1;
+        }
+
+        const stats = { fragmentCount, nodeCount, transitionCount };
+        sectionState.floorRuntimeStats = stats;
+        return stats;
+    }
+
     getNodeKey(nodeOrX, y = null, traversalLayer = 0) {
         if (nodeOrX && typeof nodeOrX === "object") {
             const x = Number(nodeOrX.xindex);
@@ -1017,13 +1247,20 @@ class GameMap {
         return steps;
     }
 
-    getOutgoingEdges(node, options = {}) {
-        if (!node) return [];
+    forEachOutgoingTraversal(node, options = {}, visitor) {
+        if (!node || typeof visitor !== "function") return;
+        if (this.getOutgoingEdges !== GameMap.prototype.getOutgoingEdges) {
+            const customEdges = this.getOutgoingEdges(node, options);
+            if (!Array.isArray(customEdges)) return;
+            for (let i = 0; i < customEdges.length; i++) {
+                visitor(customEdges[i]);
+            }
+            return;
+        }
         const includeBlocked = options.includeBlocked === true;
         const traversalOptions = (options.traversalOptions && typeof options.traversalOptions === "object")
             ? options.traversalOptions
             : options;
-        const edges = [];
 
         if (Array.isArray(node.neighbors)) {
             for (let directionIndex = 0; directionIndex < node.neighbors.length; directionIndex++) {
@@ -1031,27 +1268,31 @@ class GameMap {
                 if (!neighborNode) continue;
                 const traversal = this.getTraversalInfo(node, directionIndex, traversalOptions);
                 if (!includeBlocked && !traversal.allowed) continue;
-                edges.push(this.createTraversalEdge(node, neighborNode, {
+                visitor({
                     type: "planar",
                     directionIndex,
+                    fromNode: node,
+                    toNode: neighborNode,
                     allowed: traversal.allowed,
                     penalty: traversal.penalty,
                     blockers: traversal.blockers,
+                    movementCost: 1,
+                    zProfile: "linear",
                     metadata: { kind: "planar" }
-                }));
+                });
             }
         }
 
         const objectPortalEdges = this.getObjectPortalEdges(node);
         for (let i = 0; i < objectPortalEdges.length; i++) {
-            edges.push(objectPortalEdges[i]);
+            visitor(objectPortalEdges[i]);
         }
 
         if (Array.isArray(node.portalEdges)) {
             for (let i = 0; i < node.portalEdges.length; i++) {
                 const portalEdge = node.portalEdges[i];
                 if (!portalEdge || !portalEdge.toNode) continue;
-                edges.push(this.createTraversalEdge(
+                visitor(this.createTraversalEdge(
                     portalEdge.fromNode || node,
                     portalEdge.toNode,
                     {
@@ -1067,7 +1308,19 @@ class GameMap {
                 ));
             }
         }
+    }
 
+    getOutgoingEdges(node, options = {}) {
+        if (!node) return [];
+        const edges = [];
+        this.forEachOutgoingTraversal(node, options, (traversal) => {
+            if (!traversal) return;
+            if (traversal.id) {
+                edges.push(traversal);
+                return;
+            }
+            edges.push(this.createTraversalEdge(traversal.fromNode, traversal.toNode, traversal));
+        });
         return edges.filter(edge => !!edge);
     }
 
@@ -1449,6 +1702,7 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const collectBlockers = options.collectBlockers !== false;
         const clearanceReferenceNode = options.clearanceReferenceNode || destinationNode || currentNode;
         const blockerPairs = [
             [11, 1],
@@ -1483,6 +1737,22 @@ class GameMap {
             }
             return active;
         };
+        const hasActiveDirectionalBlocker = (blockers, context = null) => {
+            if (!(blockers instanceof Set) || blockers.size === 0) return false;
+            for (const blocker of blockers) {
+                if (!blocker || blocker.gone) continue;
+                const resolvedBlocker = this._resolveDirectionalTraversalBlocker(
+                    blocker,
+                    context && context.currentNode,
+                    context && context.neighborNode
+                );
+                if (!resolvedBlocker || resolvedBlocker.gone) continue;
+                if (isNonBlockingSunkObject(resolvedBlocker)) continue;
+                if (typeof canTraverseObject === "function" && canTraverseObject(resolvedBlocker, context) === true) continue;
+                return true;
+            }
+            return false;
+        };
         const getActiveTileBlockingObjects = (node, context = null) => {
             if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return [];
             const blockers = [];
@@ -1494,6 +1764,16 @@ class GameMap {
             }
             return blockers;
         };
+        const hasActiveTileBlockingObject = (node, context = null) => {
+            if (!node || !Array.isArray(node.objects) || node.objects.length === 0) return false;
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (isBlockingObjectForPath(obj, context || { node, kind: "tile" })) {
+                    return true;
+                }
+            }
+            return false;
+        };
         const resolveKnockableTraversal = (blockers, kind) => {
             if (!Array.isArray(blockers) || blockers.length === 0) {
                 return { allowed: true, penalty: 0, blockers: [] };
@@ -1502,7 +1782,7 @@ class GameMap {
                 return { allowed: false, penalty: 0, blockers: [] };
             }
             let penalty = 0;
-            const usedBlockers = [];
+            const usedBlockers = collectBlockers ? [] : null;
             for (let i = 0; i < blockers.length; i++) {
                 const blocker = blockers[i];
                 const extraCost = knockableTraversalCost(blocker, {
@@ -1516,13 +1796,13 @@ class GameMap {
                     return { allowed: false, penalty: 0, blockers: [] };
                 }
                 penalty += Number(extraCost);
-                usedBlockers.push(blocker);
+                if (usedBlockers) usedBlockers.push(blocker);
             }
-            return { allowed: true, penalty, blockers: usedBlockers };
+            return { allowed: true, penalty, blockers: usedBlockers || [] };
         };
 
         let penalty = 0;
-        const blockersUsed = [];
+        const blockersUsed = collectBlockers ? [] : null;
         const directionalContext = {
             currentNode,
             neighborNode,
@@ -1531,37 +1811,52 @@ class GameMap {
             kind: "directional"
         };
 
-        const directionalBlockers = getActiveDirectionalBlockers(
+        if (knockableTraversalCost) {
+            const directionalBlockers = getActiveDirectionalBlockers(
+                currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null,
+                directionalContext
+            );
+            if (directionalBlockers.length > 0) {
+                const traversal = resolveKnockableTraversal(directionalBlockers, "directional");
+                if (!traversal.allowed) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
+                penalty += traversal.penalty;
+                if (blockersUsed) blockersUsed.push(...traversal.blockers);
+            }
+        } else if (hasActiveDirectionalBlocker(
             currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null,
             directionalContext
-        );
-        if (directionalBlockers.length > 0) {
-            const traversal = resolveKnockableTraversal(directionalBlockers, "directional");
-            if (!traversal.allowed) {
-                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
-            }
-            penalty += traversal.penalty;
-            blockersUsed.push(...traversal.blockers);
+        )) {
+            return { allowed: false, neighborNode, penalty: 0, blockers: [] };
         }
 
         if (!(allowBlockedDestination && destinationNode && neighborNode === destinationNode)) {
-            const tileBlockers = getActiveTileBlockingObjects(neighborNode, {
+            const tileContext = {
                 currentNode,
                 neighborNode,
                 destinationNode,
                 directionIndex,
                 kind: "tile"
-            });
-            if (neighborNode.blocked || tileBlockers.length > 0) {
-                if (tileBlockers.length === 0) {
+            };
+            if (knockableTraversalCost) {
+                const tileBlockers = getActiveTileBlockingObjects(neighborNode, tileContext);
+                if (neighborNode.blocked || tileBlockers.length > 0) {
+                    if (tileBlockers.length === 0) {
+                        return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                    }
+                    const traversal = resolveKnockableTraversal(tileBlockers, "tile");
+                    if (!traversal.allowed) {
+                        return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                    }
+                    penalty += traversal.penalty;
+                    if (blockersUsed) blockersUsed.push(...traversal.blockers);
+                }
+            } else if (neighborNode.blocked || hasActiveTileBlockingObject(neighborNode, tileContext)) {
+                if (neighborNode.blocked && !hasActiveTileBlockingObject(neighborNode, tileContext)) {
                     return { allowed: false, neighborNode, penalty: 0, blockers: [] };
                 }
-                const traversal = resolveKnockableTraversal(tileBlockers, "tile");
-                if (!traversal.allowed) {
-                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
-                }
-                penalty += traversal.penalty;
-                blockersUsed.push(...traversal.blockers);
+                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
             }
         }
 
@@ -1570,32 +1865,51 @@ class GameMap {
             const [blocker1, blocker2] = cornerPair;
             const blockerNode1 = currentNode.neighbors[blocker1];
             const blockerNode2 = currentNode.neighbors[blocker2];
-            const cornerBlockers = [];
-            if (blockerNode1) {
-                cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode1, {
+            if (knockableTraversalCost) {
+                const cornerBlockers = [];
+                if (blockerNode1) {
+                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode1, {
+                        currentNode,
+                        neighborNode,
+                        destinationNode,
+                        directionIndex: blocker1,
+                        kind: "corner"
+                    }));
+                }
+                if (blockerNode2) {
+                    cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode2, {
+                        currentNode,
+                        neighborNode,
+                        destinationNode,
+                        directionIndex: blocker2,
+                        kind: "corner"
+                    }));
+                }
+                if (cornerBlockers.length > 0) {
+                    const traversal = resolveKnockableTraversal(cornerBlockers, "corner");
+                    if (!traversal.allowed) {
+                        return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                    }
+                    penalty += traversal.penalty;
+                    if (blockersUsed) blockersUsed.push(...traversal.blockers);
+                }
+            } else if (
+                (blockerNode1 && hasActiveTileBlockingObject(blockerNode1, {
                     currentNode,
                     neighborNode,
                     destinationNode,
                     directionIndex: blocker1,
                     kind: "corner"
-                }));
-            }
-            if (blockerNode2) {
-                cornerBlockers.push(...getActiveTileBlockingObjects(blockerNode2, {
+                })) ||
+                (blockerNode2 && hasActiveTileBlockingObject(blockerNode2, {
                     currentNode,
                     neighborNode,
                     destinationNode,
                     directionIndex: blocker2,
                     kind: "corner"
-                }));
-            }
-            if (cornerBlockers.length > 0) {
-                const traversal = resolveKnockableTraversal(cornerBlockers, "corner");
-                if (!traversal.allowed) {
-                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
-                }
-                penalty += traversal.penalty;
-                blockersUsed.push(...traversal.blockers);
+                }))
+            ) {
+                return { allowed: false, neighborNode, penalty: 0, blockers: [] };
             }
         }
 
@@ -1604,6 +1918,9 @@ class GameMap {
             !(destinationNode && neighborNode === destinationNode)
         ) {
             if (!Number.isFinite(neighborNode.clearance) || neighborNode.clearance < requiredClearance) {
+                if (!knockableTraversalCost) {
+                    return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+                }
                 const clearanceBlockers = this._collectLikelyPathBlockers(
                     neighborNode,
                     clearanceReferenceNode,
@@ -1625,16 +1942,17 @@ class GameMap {
                     return { allowed: false, neighborNode, penalty: 0, blockers: [] };
                 }
                 penalty += traversal.penalty;
-                blockersUsed.push(...traversal.blockers);
+                if (blockersUsed) blockersUsed.push(...traversal.blockers);
             }
         }
 
-        return { allowed: true, neighborNode, penalty, blockers: blockersUsed };
+        return { allowed: true, neighborNode, penalty, blockers: blockersUsed || [] };
     }
 
     findPath(startingNode, destinationNode, options) {
         const opts = options || {};
         const allowBlockedDestination = opts.allowBlockedDestination === true;
+        const collectBlockers = opts.collectBlockers !== false;
         const canTraverseObject = (typeof opts.canTraverseObject === "function")
             ? opts.canTraverseObject
             : null;
@@ -1654,7 +1972,8 @@ class GameMap {
             allowBlockedDestination,
             requiredClearance,
             canTraverseObject,
-            clearanceReferenceNode: destinationNode
+            clearanceReferenceNode: destinationNode,
+            collectBlockers
         };
 
         // Even indices are far (diagonal) moves, odd indices are adjacent moves
@@ -1761,7 +2080,9 @@ class GameMap {
         };
 
         const path = [];
-        path.blockers = []; // blocking objects found when the ideal direction is impassable
+        if (collectBlockers) {
+            path.blockers = []; // blocking objects found when the ideal direction is impassable
+        }
         const blockersSeen = new Set();
         let currentNode = startingNode;
         const visited = new Set();
@@ -1777,15 +2098,12 @@ class GameMap {
             let idealDist = Infinity;
             let idealDirectionPassable = false;
             const validEdges = [];
-            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+            this.forEachOutgoingTraversal(currentNode, {
                 traversalOptions: outgoingTraversalOptions,
                 includeBlocked: true
-            });
-
-            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
-                const edge = outgoingEdges[edgeIndex];
+            }, (edge) => {
                 const neighborNode = edge && edge.toNode;
-                if (!neighborNode) continue;
+                if (!neighborNode) return;
 
                 const directionIndex = Number.isInteger(edge.directionIndex) ? Number(edge.directionIndex) : null;
                 const distFactor = directionIndex === null ? 1 : distFactors[directionIndex];
@@ -1802,40 +2120,46 @@ class GameMap {
                     idealDirectionPassable = edge.allowed !== false;
                 }
 
-                if (edge.allowed === false) continue;
+                if (edge.allowed === false) return;
 
                 // Reached destination?
                 if (neighborNode === destinationNode) {
                     path.push(this.createTraversalPathItem(edge, opts));
-                    return this.finalizeTraversalPath(startingNode, path, opts);
+                    bestValidEdge = "__found_destination__";
+                    return;
                 }
 
                 const nKey = keyFor(neighborNode);
-                if (visited.has(nKey)) continue;
+                if (visited.has(nKey)) return;
 
                 validEdges.push(edge);
                 if (dist < bestValidDistance) {
                     bestValidDistance = dist;
                     bestValidEdge = edge;
                 }
+            });
+            if (bestValidEdge === "__found_destination__") {
+                return this.finalizeTraversalPath(startingNode, path, opts);
             }
 
             // The ideal direction toward the destination is physically blocked (fails
             // canMoveDirection — not merely visited). Collect the culprit objects,
             // take one random bounce step so the animal keeps moving, then return.
             if (idealEdge && !idealDirectionPassable) {
-                const likelyBlockers = this._collectLikelyPathBlockers(currentNode, destinationNode, requiredClearance, {
-                    currentNode,
-                    neighborNode: idealEdge.toNode || null,
-                    directionIndex: Number.isInteger(idealEdge.directionIndex) ? Number(idealEdge.directionIndex) : null,
-                    referenceNode: currentNode,
-                    canTraverseObject
-                });
-                for (let i = 0; i < likelyBlockers.length; i++) {
-                    const blocker = likelyBlockers[i];
-                    if (blockersSeen.has(blocker)) continue;
-                    blockersSeen.add(blocker);
-                    path.blockers.push(blocker);
+                if (collectBlockers) {
+                    const likelyBlockers = this._collectLikelyPathBlockers(currentNode, destinationNode, requiredClearance, {
+                        currentNode,
+                        neighborNode: idealEdge.toNode || null,
+                        directionIndex: Number.isInteger(idealEdge.directionIndex) ? Number(idealEdge.directionIndex) : null,
+                        referenceNode: currentNode,
+                        canTraverseObject
+                    });
+                    for (let i = 0; i < likelyBlockers.length; i++) {
+                        const blocker = likelyBlockers[i];
+                        if (blockersSeen.has(blocker)) continue;
+                        blockersSeen.add(blocker);
+                        path.blockers.push(blocker);
+                    }
                 }
 
                 // Find a bounce step. Try valid (clearance-respecting) directions first;
@@ -1843,13 +2167,17 @@ class GameMap {
                 let bounceEdges = validEdges.length > 0 ? validEdges : null;
                 if (!bounceEdges) {
                     // Clearance-ignoring fallback: any neighbor that isn't hard-blocked
-                    bounceEdges = this.getOutgoingEdges(currentNode, {
+                    bounceEdges = [];
+                    this.forEachOutgoingTraversal(currentNode, {
                         traversalOptions: {
                             ...outgoingTraversalOptions,
                             requiredClearance: 0
                         },
                         includeBlocked: false
-                    }).filter((edge) => edge && edge.toNode && !visited.has(keyFor(edge.toNode)));
+                    }, (edge) => {
+                        if (!edge || !edge.toNode || visited.has(keyFor(edge.toNode))) return;
+                        bounceEdges.push(edge);
+                    });
                 }
                 if (bounceEdges.length > 0) {
                     const bounceEdge = bounceEdges[Math.floor(Math.random() * bounceEdges.length)];
@@ -1862,19 +2190,17 @@ class GameMap {
             // If no valid (clearance-respecting) direction exists, fall back to any
             // unblocked direction so the animal can escape a tight spot.
             if (validEdges.length === 0) {
-                const fallbackEdges = this.getOutgoingEdges(currentNode, {
+                this.forEachOutgoingTraversal(currentNode, {
                     traversalOptions: {
                         ...outgoingTraversalOptions,
                         requiredClearance: 0
                     },
                     includeBlocked: false
-                });
-                for (let edgeIndex = 0; edgeIndex < fallbackEdges.length; edgeIndex++) {
-                    const edge = fallbackEdges[edgeIndex];
+                }, (edge) => {
                     const nb = edge && edge.toNode;
-                    if (!nb) continue;
+                    if (!nb) return;
                     const nKey = keyFor(nb);
-                    if (visited.has(nKey)) continue;
+                    if (visited.has(nKey)) return;
                     validEdges.push(edge);
                     const directionIndex = Number.isInteger(edge.directionIndex) ? Number(edge.directionIndex) : null;
                     const distFactor = directionIndex === null ? 1 : distFactors[directionIndex];
@@ -1887,7 +2213,7 @@ class GameMap {
                         bestValidDistance = dist;
                         bestValidEdge = edge;
                     }
-                }
+                });
                 if (validEdges.length === 0) return this.finalizeTraversalPath(startingNode, path, opts); // truly surrounded, give up
             }
 
@@ -1935,6 +2261,7 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const collectBlockers = options.collectBlockers !== false;
 
         if (Number.isFinite(maxPathLength)) {
             const startHeuristic = Math.hypot(
@@ -2042,7 +2369,8 @@ class GameMap {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
-            clearanceReferenceNode: destinationNode
+            clearanceReferenceNode: destinationNode,
+            collectBlockers
         };
 
         const reconstructPath = (cameFrom, cameFromEdge, currentKey, blockersByKey) => {
@@ -2058,7 +2386,7 @@ class GameMap {
                 }
                 walkKey = cameFrom.get(walkKey);
             }
-            const blockers = blockersByKey.get(currentKey);
+            const blockers = blockersByKey ? blockersByKey.get(currentKey) : null;
             if (blockers instanceof Set && blockers.size > 0) {
                 result.blockers = Array.from(blockers);
             }
@@ -2073,7 +2401,7 @@ class GameMap {
         const distanceScore = new Map();
         const fScore = new Map();
         const openOrClosedNodes = new Map();
-        const blockersByKey = new Map();
+        const blockersByKey = collectBlockers ? new Map() : null;
 
         const startKey = keyFor(startingNode);
         const goalKey = keyFor(destinationNode);
@@ -2085,7 +2413,9 @@ class GameMap {
         openQueue.push(startKey, startF);
         openOrClosedNodes.set(startKey, startingNode);
         openOrClosedNodes.set(goalKey, destinationNode);
-        blockersByKey.set(startKey, new Set());
+        if (blockersByKey) {
+            blockersByKey.set(startKey, new Set());
+        }
 
         const maxIterations = Number.isFinite(options.maxIterations)
             ? Math.max(1, Math.floor(options.maxIterations))
@@ -2121,14 +2451,12 @@ class GameMap {
 
             openSet.delete(currentKey);
 
-            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+            this.forEachOutgoingTraversal(currentNode, {
                 traversalOptions: outgoingTraversalOptions,
                 includeBlocked: false
-            });
-            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
-                const traversal = outgoingEdges[edgeIndex];
+            }, (traversal) => {
                 const neighborNode = traversal && traversal.toNode;
-                if (!neighborNode) continue;
+                if (!neighborNode) return;
 
                 const neighborKey = keyFor(neighborNode);
                 openOrClosedNodes.set(neighborKey, neighborNode);
@@ -2136,10 +2464,10 @@ class GameMap {
                 const currentG = gScore.has(currentKey) ? gScore.get(currentKey) : Infinity;
                 const currentDistance = distanceScore.has(currentKey) ? distanceScore.get(currentKey) : Infinity;
                 const tentativeDistance = currentDistance + stepDistance(currentNode, neighborNode);
-                if (tentativeDistance > maxPathLength) continue;
+                if (tentativeDistance > maxPathLength) return;
                 const tentativeG = currentG + movementCost(currentNode, neighborNode) + traversal.penalty;
                 const existingG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
-                if (tentativeG >= existingG) continue;
+                if (tentativeG >= existingG) return;
 
                 cameFrom.set(neighborKey, currentKey);
                 cameFromEdge.set(neighborKey, traversal);
@@ -2147,14 +2475,16 @@ class GameMap {
                 distanceScore.set(neighborKey, tentativeDistance);
                 const neighborF = tentativeG + heuristic(neighborNode);
                 fScore.set(neighborKey, neighborF);
-                const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
-                for (let i = 0; i < traversal.blockers.length; i++) {
-                    nextBlockers.add(traversal.blockers[i]);
+                if (blockersByKey) {
+                    const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
+                    for (let i = 0; i < traversal.blockers.length; i++) {
+                        nextBlockers.add(traversal.blockers[i]);
+                    }
+                    blockersByKey.set(neighborKey, nextBlockers);
                 }
-                blockersByKey.set(neighborKey, nextBlockers);
                 openSet.add(neighborKey);
                 openQueue.push(neighborKey, neighborF);
-            }
+            });
         }
 
         return null;
@@ -2189,6 +2519,7 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const collectBlockers = options.collectBlockers !== false;
         const stepDistance = (fromNode, toNode) => {
             const dx = this.shortestDeltaX(fromNode.x, toNode.x);
             const dy = this.shortestDeltaY(fromNode.y, toNode.y);
@@ -2201,14 +2532,17 @@ class GameMap {
         };
 
         const path = [];
-        path.blockers = [];
-        const blockersSeen = new Set();
+        if (collectBlockers) {
+            path.blockers = [];
+        }
+        const blockersSeen = collectBlockers ? new Set() : null;
         const keyFor = (node) => this.getNodeKey(node);
         const outgoingTraversalOptions = {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
-            clearanceReferenceNode: startingNode
+            clearanceReferenceNode: startingNode,
+            collectBlockers
         };
         const visited = new Set([keyFor(startingNode)]);
         let currentNode = startingNode;
@@ -2220,16 +2554,14 @@ class GameMap {
         while (totalDistance < (maxPathLength - epsilon)) {
             let bestMove = null;
 
-            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+            this.forEachOutgoingTraversal(currentNode, {
                 traversalOptions: outgoingTraversalOptions,
                 includeBlocked: false
-            });
-            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
-                const traversal = outgoingEdges[edgeIndex];
+            }, (traversal) => {
                 const neighborNode = traversal && traversal.toNode;
-                if (!neighborNode) continue;
+                if (!neighborNode) return;
                 const step = stepDistance(currentNode, neighborNode);
-                if ((totalDistance + step) > (maxPathLength + epsilon)) continue;
+                if ((totalDistance + step) > (maxPathLength + epsilon)) return;
 
                 const neighborKey = keyFor(neighborNode);
                 const reverse = !!(previousNode && neighborNode === previousNode);
@@ -2283,16 +2615,18 @@ class GameMap {
                 ) {
                     bestMove = moveScore;
                 }
-            }
+            });
 
             if (!bestMove) break;
 
             path.push(this.createTraversalPathItem(bestMove.traversal, options));
-            for (let i = 0; i < bestMove.traversal.blockers.length; i++) {
-                const blocker = bestMove.traversal.blockers[i];
-                if (blockersSeen.has(blocker)) continue;
-                blockersSeen.add(blocker);
-                path.blockers.push(blocker);
+            if (collectBlockers) {
+                for (let i = 0; i < bestMove.traversal.blockers.length; i++) {
+                    const blocker = bestMove.traversal.blockers[i];
+                    if (blockersSeen.has(blocker)) continue;
+                    blockersSeen.add(blocker);
+                    path.blockers.push(blocker);
+                }
             }
             totalDistance += bestMove.step;
             previousNode = currentNode;
@@ -2322,6 +2656,7 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const collectBlockers = options.collectBlockers !== false;
         const threatPoint = (
             Number.isFinite(options.threatX) && Number.isFinite(options.threatY)
         )
@@ -2411,7 +2746,8 @@ class GameMap {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
-            clearanceReferenceNode: startingNode
+            clearanceReferenceNode: startingNode,
+            collectBlockers
         };
         const reconstructPath = (cameFrom, cameFromEdge, currentKey, nodesByKey, blockersByKey) => {
             const result = [];
@@ -2426,7 +2762,7 @@ class GameMap {
                 }
                 walkKey = cameFrom.get(walkKey);
             }
-            const blockers = blockersByKey.get(currentKey);
+            const blockers = blockersByKey ? blockersByKey.get(currentKey) : null;
             if (blockers instanceof Set && blockers.size > 0) {
                 result.blockers = Array.from(blockers);
             }
@@ -2441,7 +2777,7 @@ class GameMap {
         const distanceScore = new Map();
         const bestPossibleScore = new Map();
         const nodesByKey = new Map();
-        const blockersByKey = new Map();
+        const blockersByKey = collectBlockers ? new Map() : null;
         const epsilon = 1e-6;
 
         const startKey = keyFor(startingNode);
@@ -2453,7 +2789,9 @@ class GameMap {
         bestPossibleScore.set(startKey, startBestPossible);
         openQueue.push(startKey, -startBestPossible);
         nodesByKey.set(startKey, startingNode);
-        blockersByKey.set(startKey, new Set());
+        if (blockersByKey) {
+            blockersByKey.set(startKey, new Set());
+        }
 
         let bestKey = startKey;
         let bestThreatDistance = startThreatDistance;
@@ -2511,30 +2849,28 @@ class GameMap {
                 bestTraversalCost = currentTraversalCost;
             }
 
-            const outgoingEdges = this.getOutgoingEdges(currentNode, {
+            this.forEachOutgoingTraversal(currentNode, {
                 traversalOptions: outgoingTraversalOptions,
                 includeBlocked: false
-            });
-            for (let edgeIndex = 0; edgeIndex < outgoingEdges.length; edgeIndex++) {
-                const traversal = outgoingEdges[edgeIndex];
+            }, (traversal) => {
                 const neighborNode = traversal && traversal.toNode;
-                if (!neighborNode) continue;
+                if (!neighborNode) return;
 
                 const neighborKey = keyFor(neighborNode);
                 nodesByKey.set(neighborKey, neighborNode);
 
                 const tentativeDistance = currentTravelDistance + stepDistance(currentNode, neighborNode);
-                if (tentativeDistance > maxPathLength + epsilon) continue;
+                if (tentativeDistance > maxPathLength + epsilon) return;
 
                 const tentativeG = currentTraversalCost + movementCost(currentNode, neighborNode) + traversal.penalty;
                 const existingDistance = distanceScore.has(neighborKey) ? distanceScore.get(neighborKey) : Infinity;
                 const existingG = gScore.has(neighborKey) ? gScore.get(neighborKey) : Infinity;
-                if (tentativeDistance > existingDistance + epsilon) continue;
+                if (tentativeDistance > existingDistance + epsilon) return;
                 if (
                     Math.abs(tentativeDistance - existingDistance) <= epsilon &&
                     tentativeG >= existingG - epsilon
                 ) {
-                    continue;
+                    return;
                 }
 
                 cameFrom.set(neighborKey, currentKey);
@@ -2547,11 +2883,13 @@ class GameMap {
                     neighborThreatDistance + Math.max(0, maxPathLength - tentativeDistance)
                 );
                 openQueue.push(neighborKey, -bestPossibleScore.get(neighborKey));
-                const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
-                for (let i = 0; i < traversal.blockers.length; i++) {
-                    nextBlockers.add(traversal.blockers[i]);
+                if (blockersByKey) {
+                    const nextBlockers = new Set(blockersByKey.get(currentKey) || []);
+                    for (let i = 0; i < traversal.blockers.length; i++) {
+                        nextBlockers.add(traversal.blockers[i]);
+                    }
+                    blockersByKey.set(neighborKey, nextBlockers);
                 }
-                blockersByKey.set(neighborKey, nextBlockers);
                 openSet.add(neighborKey);
 
                 if (
@@ -2572,7 +2910,7 @@ class GameMap {
                     bestTravelDistance = tentativeDistance;
                     bestTraversalCost = tentativeG;
                 }
-            }
+            });
         }
 
         return this.finalizeTraversalPath(startingNode, reconstructPath(cameFrom, cameFromEdge, bestKey, nodesByKey, blockersByKey), options);

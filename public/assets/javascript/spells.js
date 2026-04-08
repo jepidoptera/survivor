@@ -4631,6 +4631,7 @@ const SpellSystem = (() => {
         for (let i = 0; i < nearbyAll.length; i++) {
             const obj = nearbyAll[i];
             if (!obj || obj.gone || obj.vanishing) continue;
+            if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
             const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
             if (!hitbox) continue;
             const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
@@ -4659,6 +4660,7 @@ const SpellSystem = (() => {
         for (let i = 0; i < runtimeScriptObjects.length; i++) {
             const obj = runtimeScriptObjects[i];
             if (!obj || obj === wizardRef || obj.gone || obj.vanishing) continue;
+            if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
             if (nearbyScriptObjects.has(obj)) continue;
             if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
             const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
@@ -4674,20 +4676,26 @@ const SpellSystem = (() => {
             nearbyScriptObjects.add(obj);
         }
 
-        // Trigger areas are polygonal and can be much larger than a local node query.
-        // They are currently indexed by a single node, so side-dependent misses can
-        // occur when crossing far from the trigger's center. Include all trigger
-        // areas in script traversal checks to make enter/exit detection reliable.
-        const allMapObjects = Array.isArray(wizardRef.map.objects) ? wizardRef.map.objects : [];
-        for (let i = 0; i < allMapObjects.length; i++) {
-            const obj = allMapObjects[i];
-            if (!obj || obj.gone || obj.vanishing) continue;
-            if (!(obj.type === "triggerArea" || obj.isTriggerArea === true)) continue;
-            if (nearbyScriptObjects.has(obj)) continue;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
-            if (!hitbox) continue;
-            nearbyScriptEntries.push({ obj, hitbox });
-            nearbyScriptObjects.add(obj);
+        if (wizardRef.map && typeof wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor === "function") {
+            const triggerEntries = wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor(wizardRef);
+            for (let i = 0; i < triggerEntries.length; i++) {
+                const entry = triggerEntries[i];
+                const obj = entry && entry.obj;
+                const hitbox = entry && entry.hitbox;
+                if (!obj || !hitbox) continue;
+                nearbyScriptEntries.push({ obj, hitbox, forceTouch: false });
+            }
+        } else {
+            const allMapObjects = Array.isArray(wizardRef.map.objects) ? wizardRef.map.objects : [];
+            for (let i = 0; i < allMapObjects.length; i++) {
+                const obj = allMapObjects[i];
+                if (!obj || obj.gone || obj.vanishing) continue;
+                if (!(obj.type === "triggerArea" || obj.isTriggerArea === true)) continue;
+                if (nearbyScriptObjects.has(obj)) continue;
+                const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                if (!hitbox) continue;
+                nearbyScriptEntries.push({ obj, hitbox });
+            }
         }
 
         scriptingApi.processDoorTraversalEvents(
@@ -4784,8 +4792,15 @@ const SpellSystem = (() => {
         return selection;
     }
 
-    function getAllTriggerAreaObjects(mapRef) {
-        const allMapObjects = Array.isArray(mapRef && mapRef.objects) ? mapRef.objects : [];
+    function getAllTriggerAreaObjects(mapRef, actorRef = null) {
+        const prototypeTriggerObjects = (
+            mapRef &&
+            actorRef &&
+            typeof mapRef.getPrototypeActiveTriggerDisplayObjectsForActor === "function"
+        ) ? mapRef.getPrototypeActiveTriggerDisplayObjectsForActor(actorRef) : null;
+        const allMapObjects = Array.isArray(prototypeTriggerObjects)
+            ? prototypeTriggerObjects
+            : (Array.isArray(mapRef && mapRef.objects) ? mapRef.objects : []);
         const results = [];
         for (let i = 0; i < allMapObjects.length; i++) {
             const obj = allMapObjects[i];
@@ -4802,7 +4817,7 @@ const SpellSystem = (() => {
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
         const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
         if (!worldToScreenFn) return null;
-        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map);
+        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map, wizardRef);
         if (triggerAreas.length === 0) return null;
 
         let best = null;
@@ -4850,7 +4865,7 @@ const SpellSystem = (() => {
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
         const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
         if (!worldToScreenFn) return null;
-        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map);
+        const triggerAreas = getAllTriggerAreaObjects(wizardRef.map, wizardRef);
         if (triggerAreas.length === 0) return null;
 
         let best = null;

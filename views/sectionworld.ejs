@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script src="jquery/jquery.min.js"></script>
+    <script src="pixi.js/pixi.js"></script>
+    <script src="assets/javascript/common.js"></script>
+    <script src="assets/javascript/components.js"></script>
+    <script src="assets/javascript/gameobjects/hitbox.js"></script>
+    <script src="assets/javascript/gameobjects/powerup.js"></script>
+    <script src="assets/javascript/Map.js"></script>
+    <script src="assets/javascript/gameobjects/staticObjects.js"></script>
+    <script src="assets/javascript/gameobjects/wallSectionUnit.js"></script>
+    <script src="assets/javascript/los.js"></script>
+    <script src="assets/javascript/gameobjects/roof.js"></script>
+    <script src="/vendor/lz-string/libs/lz-string.min.js"></script>
+    <script src="assets/javascript/filesystem.js"></script>
+    <script src="assets/javascript/spells/Spell.js"></script>
+    <script src="assets/javascript/spells/Grenade.js"></script>
+    <script src="assets/javascript/spells/Rock.js"></script>
+    <script src="assets/javascript/spells/Fireball.js"></script>
+    <script src="assets/javascript/spells/Iceball.js"></script>
+    <script src="assets/javascript/spells/Lightning.js"></script>
+    <script src="assets/javascript/spells/Spikes.js"></script>
+    <script src="assets/javascript/spells/Vanish.js"></script>
+    <script src="assets/javascript/spells/Teleport.js"></script>
+    <script src="assets/javascript/spells/Arrow.js"></script>
+    <script src="assets/javascript/spells/TreeGrow.js"></script>
+    <script src="assets/javascript/spells/BuildRoad.js"></script>
+    <script src="assets/javascript/spells/EditScript.js"></script>
+    <script src="assets/javascript/spells/TriggerArea.js"></script>
+    <script src="assets/javascript/spells/PlaceObject.js"></script>
+    <script src="assets/javascript/spells/MoveObject.js"></script>
+    <script src="assets/javascript/spells/AttackSquirrel.js"></script>
+    <script src="assets/javascript/spells/SpawnAnimal.js"></script>
+    <script src="assets/javascript/spells/NodeInspector.js"></script>
+    <script src="assets/javascript/spells.js"></script>
+    <script src="assets/javascript/debug.js"></script>
+    <script src="assets/javascript/rendering/RenderRuntime.js"></script>
+    <script src="assets/javascript/trading.js"></script>
+    <script src="assets/javascript/spells/scripting.js"></script>
+    <script src="assets/javascript/gameobjects/Inventory.js"></script>
+    <script src="assets/javascript/gameobjects/Character.js"></script>
+    <script src="assets/javascript/gameobjects/Wizard.js"></script>
+    <script src="assets/javascript/gameobjects/Animal.js"></script>
+    <script src="assets/javascript/map/sectionGeometry.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldApiInstallers.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldSectionRuntime.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldLayout.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldBubbleSync.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldEntitySync.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldRuntimeRecords.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldAsyncSync.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldPersistence.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldBlocking.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldAssets.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldState.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldImport.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorld.js"></script>
+    <script>
+        window.RUNAROUND_STARTUP_CONFIG = {
+            mapWidth: 160,
+            mapHeight: 160,
+            sectionRadius: 50,
+            sectionGraphRadius: 0,
+            prototypeSectionAssetUrl: "/api/sectionworld?slot=maps",
+            prototypeSectionFallbackAssetUrl: "/assets/data/sectionworld/realmap-slice-test/bundle.json",
+            wrapX: false,
+            wrapY: false,
+            prototypeSaveBackend: "indexeddb",
+            skipStartupDialogs: false,
+            prototypeBuilder: "buildSectionWorld"
+        };
+    </script>
+    <script src="assets/javascript/runaround.js"></script>
+    <script src="assets/javascript/minimap.js"></script>
+    <script src="assets/javascript/rendering/Camera.js"></script>
+    <script src="assets/javascript/rendering/Layers.js"></script>
+    <script src="assets/javascript/rendering/mazeMode.js"></script>
+    <script src="assets/javascript/rendering/ScenePicker.js"></script>
+    <script src="assets/javascript/rendering/Rendering.js"></script>
+    <link rel="icon" type="image/png" href="assets/images/wizard-hat-favicon.png">
+    <link rel="stylesheet" href="assets/css/survivor.css">
+    <link rel="stylesheet" href="assets/css/dialogBoxes.css">
+</head>
+<body>
+    <div id="msgbox" class="hidden dialogBox"><div id="msgbuttons"></div></div>
+    <div id="time"></div>
+    <div id="statusBars">
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/red heart.png"></div>
+            <div class="statusBar-background">
+                <div id="healthBar" class="statusBar-fill"></div>
+            </div>
+        </div>
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/beaker.png"></div>
+            <div class="statusBar-background">
+                <div id="magicBar" class="statusBar-fill"></div>
+            </div>
+        </div>
+    </div>
+    <div id="auraSelector">
+        <div id="selectedAura"></div>
+        <div id="activeAuraIcons" class="hidden"></div>
+        <div id="auraMenu" class="hidden">
+            <div id="auraGrid"></div>
+        </div>
+    </div>
+    <div id="editorSelector" class="hidden">
+        <div id="selectedEditor"></div>
+        <div id="editorMenu" class="hidden">
+            <div id="editorGrid"></div>
+        </div>
+    </div>
+    <div id="spellSelector">
+        <div id="selectedSpell"></div>
+        <div id="spellMenu" class="hidden">
+            <div id="spellGrid"></div>
+        </div>
+    </div>
+    <div id="inventorySelector">
+        <div id="selectedInventory" title="inventory"></div>
+    </div>
+
+    <div id="display"></div>
+    <div id="msg"></div>
+</body>
+</html>

@@ -3685,7 +3685,10 @@ class Blodia extends Animal {
         // Blodia always uses clearance:0 — it squeezes through every corridor.
         if ((now - this._lastAStarMs) >= 1000) {
             this._lastAStarMs = now;
-            const p = this.map.findPathAStar(startNode, targetNode, { clearance: 0 });
+            const p = this.map.findPathAStar(startNode, targetNode, {
+                clearance: 0,
+                collectBlockers: false
+            });
             if (Array.isArray(p) && p.length > 0) {
                 this._lastPathDist = this._pathTotalDist(p);
                 this._applyPath(p, targetNode, midStep);
@@ -3694,7 +3697,10 @@ class Blodia extends Animal {
         // Greedy BFS fallback — only when completely pathless so we never freeze.
         // Also updates _lastPathDist so lunge can trigger even when A* hasn't run yet.
         if (pathEmpty && !this.destination) {
-            const p = this.map.findPath(startNode, targetNode, { clearance: 0 });
+            const p = this.map.findPath(startNode, targetNode, {
+                clearance: 0,
+                collectBlockers: false
+            });
             if (Array.isArray(p) && p.length > 0) {
                 this._lastPathDist = this._pathTotalDist(p);
             }

@@ -288,3 +288,84 @@ test("savePrototypeSectionWorldToServerSlot syncs animals and powerups before ex
     assert.deepEqual(postedBody.sections[0].animals, [{ id: 1 }]);
     assert.deepEqual(postedBody.sections[0].powerups, [{ id: 2 }]);
 });
+
+test("saveGameState stores prototype trigger definitions at the world level", () => {
+    const prototypeSectionAsset = {
+        id: "section-0",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: 0, y: 0 },
+        neighborKeys: [],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: []
+    };
+
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 3,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]])
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = () => prototypeSectionAsset;
+    map.exportPrototypeTriggerDefinitions = () => ([
+        {
+            id: 41,
+            type: "triggerArea",
+            x: 0,
+            y: 0,
+            points: [
+                { x: -1, y: -1 },
+                { x: 1, y: -1 },
+                { x: 1, y: 1 },
+                { x: -1, y: 1 }
+            ],
+            coverageSectionKeys: ["0,0"],
+            script: { playerEnters: "mazeMode=true;" }
+        }
+    ]);
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+
+    assert.ok(saveData);
+    assert.deepEqual(saveData.prototypeSectionWorld.triggers, [
+        {
+            id: 41,
+            type: "triggerArea",
+            x: 0,
+            y: 0,
+            points: [
+                { x: -1, y: -1 },
+                { x: 1, y: -1 },
+                { x: 1, y: 1 },
+                { x: -1, y: 1 }
+            ],
+            coverageSectionKeys: ["0,0"],
+            script: { playerEnters: "mazeMode=true;" }
+        }
+    ]);
+    assert.deepEqual(saveData.prototypeSectionWorld.sections[0].objects, []);
+});

@@ -23,6 +23,10 @@ app.set('view engine', 'ejs');
 console.log('Listening on: http://localhost:' + port);
 
 app.get('/', (req, res) => {
+    res.render('sectionworld')
+})
+
+app.get('/hunt', (req, res) => {
     res.render('hunt')
 })
 
@@ -30,8 +34,12 @@ app.get('/sectiontesting', (req, res) => {
     res.render('sectiontesting')
 })
 
+app.get('/sectionworld', (req, res) => {
+    res.render('sectionworld')
+})
+
 app.get('/twosectionprototype', (req, res) => {
-    res.render('twosectionprototype')
+    res.render('sectionworld')
 })
 
 const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile.json');

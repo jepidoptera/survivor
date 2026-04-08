@@ -344,9 +344,9 @@ The map should eventually hold:
 
 Where:
 
-- `floorsById` stores authored floor entities
-- `floorNodesById` stores floor-owned node arrays keyed by `floorId`
-- `floorNodeIndex` stores per-node lookup keyed by `x,y,floorId`
+- `floorsById` stores runtime floor fragments keyed by `fragmentId`
+- `floorNodesById` stores floor-owned node arrays keyed by `fragmentId`
+- `floorNodeIndex` stores per-node lookup keyed by `x,y,surfaceId,fragmentId`
 - `transitionsById` stores explicit floor transitions
 
 In addition, map loading may synthesize default floor entities for ordinary terrain so that runtime systems
@@ -368,7 +368,9 @@ For a hex section 100 tiles wide, this means the loader can synthesize one secti
 
 ```js
 {
-  id: "section_12_8_ground",
+  fragmentId: "section:12,8:ground",
+  surfaceId: "overworld_ground_surface",
+  ownerSectionKey: "12,8",
   level: 0,
   outerPolygon: [...section footprint...],
   holes: [],
@@ -444,7 +446,7 @@ Floors may also exist below ordinary terrain.
 Recommended semantics:
 
 - caves, basements, and tunnels use negative `level` values such as `-1` or `-2`
-- they still use normal `floorId`, polygon, node, and transition rules
+- they still use normal `surfaceId`, `fragmentId`, polygon, node, and transition rules
 - movement into them still requires explicit transitions
 
 Example uses:
@@ -478,7 +480,9 @@ For early implementation, keep the authored schema plain JSON-compatible.
 {
   floors: [
     {
-      id: "houseA_floor0",
+      fragmentId: "section:12,8:houseA_floor0",
+      surfaceId: "houseA_ground_surface",
+      ownerSectionKey: "12,8",
       level: 0,
       nodeBaseZ: 0,
       outerPolygon: [...],
@@ -487,7 +491,9 @@ For early implementation, keep the authored schema plain JSON-compatible.
       visibilityHoles: []
     },
     {
-      id: "houseA_floor1",
+      fragmentId: "section:12,8:houseA_floor1",
+      surfaceId: "houseA_floor1_surface",
+      ownerSectionKey: "12,8",
       level: 1,
       nodeBaseZ: 3,
       outerPolygon: [...],
@@ -500,8 +506,18 @@ For early implementation, keep the authored schema plain JSON-compatible.
     {
       id: "houseA_stairs_0_to_1",
       type: "stairs",
-      from: { x: 26, y: 19, floorId: "houseA_floor0" },
-      to: { x: 26, y: 19, floorId: "houseA_floor1" },
+      from: {
+        x: 26,
+        y: 19,
+        surfaceId: "houseA_ground_surface",
+        fragmentId: "section:12,8:houseA_floor0"
+      },
+      to: {
+        x: 26,
+        y: 19,
+        surfaceId: "houseA_floor1_surface",
+        fragmentId: "section:12,8:houseA_floor1"
+      },
       bidirectional: true,
       zProfile: "linear"
     }
@@ -524,7 +540,9 @@ This example shows authored data that omits the ordinary terrain floor, one auth
 {
   floors: [
     {
-      id: "section_12_8_cave_a",
+      fragmentId: "section:12,8:cave_a",
+      surfaceId: "cave_a_surface",
+      ownerSectionKey: "12,8",
       level: -1,
       nodeBaseZ: -4,
       outerPolygon: [
@@ -549,8 +567,18 @@ This example shows authored data that omits the ordinary terrain floor, one auth
     {
       id: "section_12_8_cave_entrance_a",
       type: "stairs",
-      from: { x: 46, y: 47, floorId: "section_12_8_ground" },
-      to: { x: 46, y: 47, floorId: "section_12_8_cave_a" },
+      from: {
+        x: 46,
+        y: 47,
+        surfaceId: "overworld_ground_surface",
+        fragmentId: "section:12,8:ground"
+      },
+      to: {
+        x: 46,
+        y: 47,
+        surfaceId: "cave_a_surface",
+        fragmentId: "section:12,8:cave_a"
+      },
       bidirectional: true,
       zProfile: "linear",
       movementCost: 1,
@@ -608,5 +636,7 @@ This gives you a stable shell for vertical stacking while keeping the default au
 2. Materialize floor-owned nodes from authored polygons.
 3. Register explicit inter-floor transitions as traversal edges.
 4. Route pathfinding across those transitions.
-5. Add level-aware visibility hiding in rendering.
-6. Build one authored test structure before expanding tooling.
+5. Build and test one cross-seam floor whose fragments share a `surfaceId` across adjacent sections.
+6. Confirm that seam crossing on the same `surfaceId` behaves as ordinary planar movement while section streaming still updates correctly.
+7. Add level-aware visibility hiding in rendering.
+8. Build one authored test structure before expanding tooling.

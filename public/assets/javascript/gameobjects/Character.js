@@ -614,6 +614,31 @@ class Character {
         return Math.max(2, resolvedRadius + 1.5);
     }
 
+    getVectorMovementSearchNodes(newX, newY, padding) {
+        if (!this.map || typeof this.map.worldToNode !== "function") {
+            return [];
+        }
+
+        const sampledNodes = [
+            this.map.worldToNode(newX, newY),
+            this.map.worldToNode(newX - padding, newY - padding),
+            this.map.worldToNode(newX - padding, newY + padding),
+            this.map.worldToNode(newX + padding, newY - padding),
+            this.map.worldToNode(newX + padding, newY + padding)
+        ];
+        const uniqueNodes = [];
+        const seen = new Set();
+        for (let i = 0; i < sampledNodes.length; i++) {
+            const node = sampledNodes[i];
+            if (!node) continue;
+            const key = `${Number(node.xindex)}:${Number(node.yindex)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            uniqueNodes.push(node);
+        }
+        return uniqueNodes;
+    }
+
     doesObjectBlockVectorMovement(obj, _options = {}) {
         if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
         if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
@@ -631,15 +656,21 @@ class Character {
             return nearbyObjects;
         }
         const padding = this.getVectorMovementSearchPadding(radius, options);
-        const minNode = this.map.worldToNode(newX - padding, newY - padding);
-        const maxNode = this.map.worldToNode(newX + padding, newY + padding);
-        if (!minNode || !maxNode) return nearbyObjects;
+        const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
+        if (searchNodes.length === 0) return nearbyObjects;
+
+        const xIndices = searchNodes.map(node => Number(node.xindex));
+        const yIndices = searchNodes.map(node => Number(node.yindex));
+        const minXIndex = Math.min(...xIndices);
+        const maxXIndex = Math.max(...xIndices);
+        const minYIndex = Math.min(...yIndices);
+        const maxYIndex = Math.max(...yIndices);
 
         if (typeof this.map.getNodesInIndexWindow === "function") {
-            const xStart = Math.min(minNode.xindex, maxNode.xindex) - 1;
-            const xEnd = Math.max(minNode.xindex, maxNode.xindex) + 1;
-            const yStart = Math.min(minNode.yindex, maxNode.yindex) - 1;
-            const yEnd = Math.max(minNode.yindex, maxNode.yindex) + 1;
+            const xStart = minXIndex - 1;
+            const xEnd = maxXIndex + 1;
+            const yStart = minYIndex - 1;
+            const yEnd = maxYIndex + 1;
             const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
             for (let i = 0; i < nearbyNodes.length; i++) {
                 const node = nearbyNodes[i];
@@ -654,10 +685,10 @@ class Character {
 
         const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
         const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
-        const xStart = Math.max(minNode.xindex - 1, 0);
-        const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, mapWidth - 1));
-        const yStart = Math.max(minNode.yindex - 1, 0);
-        const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, mapHeight - 1));
+    const xStart = Math.max(minXIndex - 1, 0);
+    const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
+    const yStart = Math.max(minYIndex - 1, 0);
+    const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
 
         for (let x = xStart; x <= xEnd; x++) {
             for (let y = yStart; y <= yEnd; y++) {

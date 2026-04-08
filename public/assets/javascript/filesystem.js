@@ -389,9 +389,24 @@ function applySavedLosMazeModeValue(value) {
 
 const LEGACY_LOCAL_SAVE_KEY = "survivor_save";
 const ACTIVE_LOCAL_SAVE_SLOT_STORAGE_KEY = "survivor_active_save_slot_v1";
+const ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY = "survivor_active_prototype_save_slot_v1";
+const PROTOTYPE_INDEXED_DB_NAME = "survivor_prototype_saves";
+const PROTOTYPE_INDEXED_DB_VERSION = 2;
+const PROTOTYPE_INDEXED_DB_STORE = "slots";
+const PROTOTYPE_INDEXED_DB_SECTION_STORE = "slot_sections";
+const PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX = "slotKey";
+const PROTOTYPE_SECTION_DIRECTIONS = Object.freeze([
+    { q: 1, r: 0 },
+    { q: 1, r: -1 },
+    { q: 0, r: -1 },
+    { q: -1, r: 0 },
+    { q: -1, r: 1 },
+    { q: 0, r: 1 }
+]);
 const RESERVED_LOCAL_SAVE_KEYS = new Set([
     LEGACY_LOCAL_SAVE_KEY,
     ACTIVE_LOCAL_SAVE_SLOT_STORAGE_KEY,
+    ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY,
     "survivor_game_mode"
 ]);
 
@@ -501,6 +516,375 @@ function getPreferredLocalSaveSlotKey() {
         return null;
     }
     return null;
+}
+
+function canUsePrototypeSaveIndexedDb() {
+    return typeof indexedDB !== "undefined";
+}
+
+function getActivePrototypeSaveSlotKey() {
+    if (typeof localStorage === "undefined") return null;
+    try {
+        const raw = localStorage.getItem(ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY);
+        const normalized = normalizeLocalSaveSlotKey(raw);
+        return normalized.length > 0 ? normalized : null;
+    } catch (_err) {
+        return null;
+    }
+}
+
+function setActivePrototypeSaveSlotKey(saveKey) {
+    if (typeof localStorage === "undefined") return false;
+    const normalized = normalizeLocalSaveSlotKey(saveKey);
+    if (!normalized.length) return false;
+    try {
+        localStorage.setItem(ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY, normalized);
+        return true;
+    } catch (_err) {
+        return false;
+    }
+}
+
+function getPreferredPrototypeSaveSlotKey() {
+    const activeKey = getActivePrototypeSaveSlotKey();
+    return activeKey || null;
+}
+
+function makePrototypeSectionKey(coord) {
+    if (!coord || typeof coord !== "object") return "";
+    return `${Number(coord.q) || 0},${Number(coord.r) || 0}`;
+}
+
+function parsePrototypeSectionKey(sectionKey) {
+    const [qRaw, rRaw] = String(sectionKey || "").split(",");
+    return {
+        q: Number(qRaw) || 0,
+        r: Number(rRaw) || 0
+    };
+}
+
+function getPrototypeBubbleSectionKeysFromWorld(worldData) {
+    const world = (worldData && typeof worldData === "object") ? worldData : null;
+    if (!world) return [];
+    const activeCenterKey = (typeof world.activeCenterKey === "string" && world.activeCenterKey.length > 0)
+        ? world.activeCenterKey
+        : "";
+    if (!activeCenterKey.length) return [];
+    const sectionCoords = Array.isArray(world.sectionCoords)
+        ? world.sectionCoords
+        : ((Array.isArray(world.sections) ? world.sections.map(section => section && section.coord) : []));
+    const availableKeys = new Set();
+    for (let i = 0; i < sectionCoords.length; i++) {
+        const coord = sectionCoords[i];
+        if (!coord || typeof coord !== "object") continue;
+        availableKeys.add(makePrototypeSectionKey(coord));
+    }
+    if (availableKeys.size === 0) {
+        availableKeys.add(activeCenterKey);
+    }
+    const centerCoord = parsePrototypeSectionKey(activeCenterKey);
+    const bubbleKeys = [];
+    const pushKey = (coord) => {
+        const key = makePrototypeSectionKey(coord);
+        if (!availableKeys.has(key)) return;
+        if (bubbleKeys.indexOf(key) >= 0) return;
+        bubbleKeys.push(key);
+    };
+    pushKey(centerCoord);
+    for (let i = 0; i < PROTOTYPE_SECTION_DIRECTIONS.length; i++) {
+        const direction = PROTOTYPE_SECTION_DIRECTIONS[i];
+        pushKey({
+            q: centerCoord.q + direction.q,
+            r: centerCoord.r + direction.r
+        });
+    }
+    return bubbleKeys;
+}
+
+function makePrototypeSectionStoreRecordId(slotKey, sectionKey) {
+    return `${slotKey}::${sectionKey}`;
+}
+
+function clonePrototypeSectionRecord(section) {
+    return JSON.parse(JSON.stringify(section));
+}
+
+function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
+    const slotData = JSON.parse(JSON.stringify(saveData || {}));
+    const world = (slotData.prototypeSectionWorld && typeof slotData.prototypeSectionWorld === "object")
+        ? slotData.prototypeSectionWorld
+        : null;
+    if (!world) {
+        return { slotData, sectionRecords: [] };
+    }
+
+    const explicitSections = Array.isArray(options.sectionRecords) ? options.sectionRecords : null;
+    const rawSections = explicitSections || (Array.isArray(world.sections) ? world.sections : []);
+    const sectionRecords = [];
+    const seenKeys = new Set();
+    const sectionCoords = Array.isArray(options.sectionCoords)
+        ? options.sectionCoords.map((coord) => ({ q: Number(coord && coord.q) || 0, r: Number(coord && coord.r) || 0 }))
+        : (Array.isArray(world.sectionCoords) ? world.sectionCoords.slice() : []);
+    for (let i = 0; i < rawSections.length; i++) {
+        const section = rawSections[i];
+        if (!section || typeof section !== "object") continue;
+        const sectionKey = (typeof section.key === "string" && section.key.length > 0)
+            ? section.key
+            : makePrototypeSectionKey(section.coord);
+        if (!sectionKey.length || seenKeys.has(sectionKey)) continue;
+        seenKeys.add(sectionKey);
+        sectionRecords.push(clonePrototypeSectionRecord({ ...section, key: sectionKey }));
+        if (!sectionCoords.some(coord => makePrototypeSectionKey(coord) === sectionKey)) {
+            const coord = section.coord && typeof section.coord === "object"
+                ? { q: Number(section.coord.q) || 0, r: Number(section.coord.r) || 0 }
+                : parsePrototypeSectionKey(sectionKey);
+            sectionCoords.push(coord);
+        }
+    }
+
+    slotData.prototypeSectionWorld = {
+        ...world,
+        version: 2,
+        sectionCoords,
+        activeCenterKey: (typeof options.activeCenterKey === "string" && options.activeCenterKey.length > 0)
+            ? options.activeCenterKey
+            : world.activeCenterKey,
+        loadedSectionKeys: Array.isArray(options.loadedSectionKeys)
+            ? options.loadedSectionKeys.slice()
+            : getPrototypeBubbleSectionKeysFromWorld({
+                ...world,
+                activeCenterKey: (typeof options.activeCenterKey === "string" && options.activeCenterKey.length > 0)
+                    ? options.activeCenterKey
+                    : world.activeCenterKey,
+                sectionCoords
+            }),
+        sections: []
+    };
+    return { slotData, sectionRecords };
+}
+
+function openPrototypeSaveIndexedDb() {
+    return new Promise((resolve, reject) => {
+        if (!canUsePrototypeSaveIndexedDb()) {
+            reject(new Error("indexeddb-unavailable"));
+            return;
+        }
+        let request = null;
+        try {
+            request = indexedDB.open(PROTOTYPE_INDEXED_DB_NAME, PROTOTYPE_INDEXED_DB_VERSION);
+        } catch (error) {
+            reject(error);
+            return;
+        }
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains(PROTOTYPE_INDEXED_DB_STORE)) {
+                db.createObjectStore(PROTOTYPE_INDEXED_DB_STORE, { keyPath: "key" });
+            }
+            if (!db.objectStoreNames.contains(PROTOTYPE_INDEXED_DB_SECTION_STORE)) {
+                const sectionStore = db.createObjectStore(PROTOTYPE_INDEXED_DB_SECTION_STORE, { keyPath: "id" });
+                sectionStore.createIndex(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX, "slotKey", { unique: false });
+            } else {
+                const upgradeTxn = request.transaction;
+                const sectionStore = upgradeTxn ? upgradeTxn.objectStore(PROTOTYPE_INDEXED_DB_SECTION_STORE) : null;
+                if (sectionStore && !sectionStore.indexNames.contains(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX)) {
+                    sectionStore.createIndex(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX, "slotKey", { unique: false });
+                }
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("indexeddb-open-failed"));
+    });
+}
+
+function withPrototypeSaveStore(mode, work) {
+    return openPrototypeSaveIndexedDb().then(db => new Promise((resolve, reject) => {
+        let settled = false;
+        const finishResolve = (value) => {
+            if (settled) return;
+            settled = true;
+            try {
+                db.close();
+            } catch (_err) {}
+            resolve(value);
+        };
+        const finishReject = (error) => {
+            if (settled) return;
+            settled = true;
+            try {
+                db.close();
+            } catch (_err) {}
+            reject(error);
+        };
+        let transaction = null;
+        try {
+            transaction = db.transaction(PROTOTYPE_INDEXED_DB_STORE, mode);
+            const store = transaction.objectStore(PROTOTYPE_INDEXED_DB_STORE);
+            transaction.onabort = () => finishReject(transaction.error || new Error("indexeddb-transaction-aborted"));
+            transaction.onerror = () => finishReject(transaction.error || new Error("indexeddb-transaction-failed"));
+            Promise.resolve(work(store, transaction)).then(finishResolve).catch(finishReject);
+        } catch (error) {
+            finishReject(error);
+        }
+    }));
+}
+
+function withPrototypeSaveStores(mode, work) {
+    return openPrototypeSaveIndexedDb().then(db => new Promise((resolve, reject) => {
+        let settled = false;
+        const finishResolve = (value) => {
+            if (settled) return;
+            settled = true;
+            try {
+                db.close();
+            } catch (_err) {}
+            resolve(value);
+        };
+        const finishReject = (error) => {
+            if (settled) return;
+            settled = true;
+            try {
+                db.close();
+            } catch (_err) {}
+            reject(error);
+        };
+        try {
+            const transaction = db.transaction([PROTOTYPE_INDEXED_DB_STORE, PROTOTYPE_INDEXED_DB_SECTION_STORE], mode);
+            const slotStore = transaction.objectStore(PROTOTYPE_INDEXED_DB_STORE);
+            const sectionStore = transaction.objectStore(PROTOTYPE_INDEXED_DB_SECTION_STORE);
+            transaction.onabort = () => finishReject(transaction.error || new Error("indexeddb-transaction-aborted"));
+            transaction.onerror = () => finishReject(transaction.error || new Error("indexeddb-transaction-failed"));
+            Promise.resolve(work({ slotStore, sectionStore, transaction })).then(finishResolve).catch(finishReject);
+        } catch (error) {
+            finishReject(error);
+        }
+    }));
+}
+
+function readPrototypeSaveRecord(saveKey) {
+    const normalizedKey = normalizeLocalSaveSlotKey(saveKey, getPreferredPrototypeSaveSlotKey());
+    if (!normalizedKey.length) {
+        return Promise.resolve({ ok: false, reason: "missing" });
+    }
+    return withPrototypeSaveStore("readonly", (store) => new Promise((resolve, reject) => {
+        const request = store.get(normalizedKey);
+        request.onsuccess = () => {
+            const record = request.result;
+            if (!record || typeof record !== "object") {
+                resolve({ ok: false, reason: "missing", key: normalizedKey });
+                return;
+            }
+            resolve({ ok: true, key: normalizedKey, record });
+        };
+        request.onerror = () => reject(request.error || new Error("indexeddb-read-failed"));
+    })).catch(error => ({ ok: false, reason: "read-failed", key: normalizedKey, error }));
+}
+
+function getPrototypeSaveSectionRecords(slotKey, sectionKeys) {
+    const normalizedSlotKey = normalizeLocalSaveSlotKey(slotKey);
+    const normalizedSectionKeys = Array.isArray(sectionKeys)
+        ? sectionKeys
+            .map((key) => String(key || "").trim())
+            .filter((key, index, array) => key.length > 0 && array.indexOf(key) === index)
+        : [];
+    if (!normalizedSlotKey.length || normalizedSectionKeys.length === 0) {
+        return Promise.resolve([]);
+    }
+    return withPrototypeSaveStores("readonly", ({ sectionStore }) => Promise.all(
+        normalizedSectionKeys.map((sectionKey) => new Promise((resolve, reject) => {
+            const request = sectionStore.get(makePrototypeSectionStoreRecordId(normalizedSlotKey, sectionKey));
+            request.onsuccess = () => resolve(request.result && request.result.data ? clonePrototypeSectionRecord(request.result.data) : null);
+            request.onerror = () => reject(request.error || new Error("indexeddb-section-read-failed"));
+        }))
+    )).then((records) => records.filter(record => !!record)).catch(() => []);
+}
+
+function listPrototypeSaveSectionStoreKeys(slotKey) {
+    const normalizedSlotKey = normalizeLocalSaveSlotKey(slotKey);
+    if (!normalizedSlotKey.length) {
+        return Promise.resolve([]);
+    }
+    return withPrototypeSaveStores("readonly", ({ sectionStore }) => new Promise((resolve, reject) => {
+        const index = sectionStore.index(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX);
+        const request = index.getAllKeys(normalizedSlotKey);
+        request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+        request.onerror = () => reject(request.error || new Error("indexeddb-section-key-list-failed"));
+    })).catch(() => []);
+}
+
+function getPrototypeSaveEntries() {
+    return withPrototypeSaveStore("readonly", (store) => new Promise((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => {
+            const activeKey = getActivePrototypeSaveSlotKey();
+            const records = Array.isArray(request.result) ? request.result : [];
+            const entries = records
+                .filter(record => record && typeof record === "object" && isLikelySaveGameData(record.data))
+                .map(record => {
+                    const difficulty = inferWizardDifficultyFromSaveData(record.data);
+                    const key = normalizeLocalSaveSlotKey(record.key);
+                    return {
+                        key,
+                        wizardName: normalizeLocalSaveSlotKey(record.data && record.data.wizard ? record.data.wizard.name : "", key) || key,
+                        difficulty,
+                        difficultyLabel: formatWizardDifficultyLabel(difficulty),
+                        timestamp: (typeof record.timestamp === "string" && record.timestamp.trim().length > 0)
+                            ? record.timestamp
+                            : (typeof record.data.timestamp === "string" && record.data.timestamp.trim().length > 0
+                                ? record.data.timestamp
+                                : null),
+                        isActive: key === activeKey,
+                        data: record.data
+                    };
+                });
+
+            entries.sort((a, b) => {
+                const timeA = a.timestamp ? Date.parse(a.timestamp) : NaN;
+                const timeB = b.timestamp ? Date.parse(b.timestamp) : NaN;
+                if (Number.isFinite(timeA) && Number.isFinite(timeB) && timeA !== timeB) {
+                    return timeB - timeA;
+                }
+                if (Number.isFinite(timeA) && !Number.isFinite(timeB)) return -1;
+                if (!Number.isFinite(timeA) && Number.isFinite(timeB)) return 1;
+                return a.key.localeCompare(b.key);
+            });
+
+            resolve(entries);
+        };
+        request.onerror = () => reject(request.error || new Error("indexeddb-list-failed"));
+    })).catch(() => []);
+}
+
+function deletePrototypeSaveSlot(saveKey) {
+    const normalizedKey = normalizeLocalSaveSlotKey(saveKey);
+    if (!normalizedKey.length) {
+        return Promise.resolve({ ok: false, reason: "missing-save-key" });
+    }
+    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore }) => new Promise((resolve, reject) => {
+        const deleteSections = () => {
+            const index = sectionStore.index(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX);
+            const sectionKeysRequest = index.getAllKeys(normalizedKey);
+            sectionKeysRequest.onsuccess = () => {
+                const sectionRecordIds = Array.isArray(sectionKeysRequest.result) ? sectionKeysRequest.result : [];
+                for (let i = 0; i < sectionRecordIds.length; i++) {
+                    sectionStore.delete(sectionRecordIds[i]);
+                }
+                const request = slotStore.delete(normalizedKey);
+                request.onsuccess = () => {
+                    const activeKey = getActivePrototypeSaveSlotKey();
+                    if (activeKey === normalizedKey && typeof localStorage !== "undefined") {
+                        try {
+                            localStorage.removeItem(ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY);
+                        } catch (_err) {}
+                    }
+                    resolve({ ok: true, key: normalizedKey });
+                };
+                request.onerror = () => reject(request.error || new Error("indexeddb-delete-failed"));
+            };
+            sectionKeysRequest.onerror = () => reject(sectionKeysRequest.error || new Error("indexeddb-section-list-failed"));
+        };
+        deleteSections();
+    })).catch(error => ({ ok: false, reason: "delete-failed", error }));
 }
 
 function getSavedGameEntries() {
@@ -654,11 +1038,223 @@ function loadGameStateFromLocalStorageKey(saveKey) {
     return { ok: true, key: parsed.key, data: parsed.data };
 }
 
-function saveGameState() {
+function saveGameStateToIndexedDb(saveKey) {
+    if (!canUsePrototypeSaveIndexedDb()) {
+        return Promise.resolve({ ok: false, reason: "indexeddb-unavailable" });
+    }
+    const wizardName = (wizard && typeof wizard.name === "string") ? wizard.name : "";
+    const normalizedKey = normalizeLocalSaveSlotKey(saveKey, wizardName);
+    if (!normalizedKey.length) {
+        return Promise.resolve({ ok: false, reason: "missing-save-key" });
+    }
+    const saveData = saveGameState();
+    if (!saveData) {
+        return Promise.resolve({ ok: false, reason: "save-failed" });
+    }
+    if (saveData.wizard && typeof saveData.wizard === "object") {
+        saveData.wizard.name = normalizeLocalSaveSlotKey(saveData.wizard.name, normalizedKey) || normalizedKey;
+        if (Number.isFinite(saveData.wizard.difficulty)) {
+            saveData.wizard.difficulty = normalizeWizardDifficultyValue(saveData.wizard.difficulty);
+        }
+    }
+    const timestamp = (typeof saveData.timestamp === "string" && saveData.timestamp.trim().length > 0)
+        ? saveData.timestamp
+        : new Date().toISOString();
+    const record = {
+        key: normalizedKey,
+        timestamp,
+        route: "sectionworld",
+        version: 1,
+        data: saveData
+    };
+    let explicitSectionRecords = null;
+    let explicitSectionCoords = null;
+    let explicitActiveCenterKey = null;
+    let explicitLoadedSectionKeys = null;
+    if (map && map._prototypeSectionState) {
+        const state = map._prototypeSectionState;
+        explicitSectionCoords = Array.isArray(state.sectionCoords) ? state.sectionCoords.slice() : null;
+        explicitActiveCenterKey = (typeof state.activeCenterKey === "string") ? state.activeCenterKey : null;
+        explicitLoadedSectionKeys = getPrototypeBubbleSectionKeysFromWorld({
+            activeCenterKey: explicitActiveCenterKey,
+            sectionCoords: explicitSectionCoords
+        });
+        if (typeof map.exportPrototypeSectionAssets === "function") {
+            const hydratedKeys = (typeof map.getPrototypeHydratedSectionKeys === "function")
+                ? map.getPrototypeHydratedSectionKeys()
+                : [];
+            explicitSectionRecords = map.exportPrototypeSectionAssets(hydratedKeys);
+        }
+    }
+    const isFullSectionSnapshot = !!(
+        Array.isArray(explicitSectionCoords) &&
+        Array.isArray(explicitSectionRecords) &&
+        explicitSectionCoords.length > 0 &&
+        explicitSectionRecords.length >= explicitSectionCoords.length
+    );
+    const prototypePayload = buildPrototypeSaveSlotMetadata(saveData, {
+        sectionRecords: explicitSectionRecords,
+        sectionCoords: explicitSectionCoords,
+        activeCenterKey: explicitActiveCenterKey,
+        loadedSectionKeys: explicitLoadedSectionKeys
+    });
+    record.data = prototypePayload.slotData;
+    record.version = (record.data && record.data.prototypeSectionWorld && record.data.prototypeSectionWorld.version >= 2) ? 2 : 1;
+    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore }) => new Promise((resolve, reject) => {
+        const upsertSlot = () => {
+            const request = slotStore.put(record);
+            request.onsuccess = () => {
+                setActivePrototypeSaveSlotKey(normalizedKey);
+                const storedLength = JSON.stringify(record.data).length
+                    + prototypePayload.sectionRecords.reduce((sum, section) => sum + JSON.stringify(section).length, 0);
+                resolve({
+                    ok: true,
+                    key: normalizedKey,
+                    data: record.data,
+                    storedLength
+                });
+            };
+            request.onerror = () => reject(request.error || new Error("indexeddb-write-failed"));
+        };
+
+        const nextSectionIds = new Set();
+        for (let i = 0; i < prototypePayload.sectionRecords.length; i++) {
+            const section = prototypePayload.sectionRecords[i];
+            const sectionKey = String(section && section.key || "").trim();
+            if (!sectionKey.length) continue;
+            const id = makePrototypeSectionStoreRecordId(normalizedKey, sectionKey);
+            nextSectionIds.add(id);
+            sectionStore.put({
+                id,
+                slotKey: normalizedKey,
+                sectionKey,
+                timestamp,
+                data: clonePrototypeSectionRecord(section)
+            });
+        }
+
+        const index = sectionStore.index(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX);
+        const staleRequest = index.getAllKeys(normalizedKey);
+        staleRequest.onsuccess = () => {
+            if (isFullSectionSnapshot) {
+                const existingIds = Array.isArray(staleRequest.result) ? staleRequest.result : [];
+                for (let i = 0; i < existingIds.length; i++) {
+                    const id = existingIds[i];
+                    if (nextSectionIds.has(id)) continue;
+                    sectionStore.delete(id);
+                }
+            }
+            upsertSlot();
+        };
+        staleRequest.onerror = () => reject(staleRequest.error || new Error("indexeddb-section-list-failed"));
+    })).catch(error => ({ ok: false, reason: "write-failed", error }));
+}
+
+function getIndexedDbSavedGameState(saveKey = null) {
+    return readPrototypeSaveRecord(saveKey).then(result => {
+        if (!result || !result.ok) return result || { ok: false, reason: "missing" };
+        const record = result.record;
+        if (!record || !isLikelySaveGameData(record.data)) {
+            return { ok: false, reason: "invalid-save-structure", key: result.key };
+        }
+        const world = (record.data.prototypeSectionWorld && typeof record.data.prototypeSectionWorld === "object")
+            ? record.data.prototypeSectionWorld
+            : null;
+        const shouldHydrateSectionsFromStore = !!(
+            world &&
+            Number(world.version) >= 2 &&
+            Array.isArray(world.sectionCoords) &&
+            (!Array.isArray(world.sections) || world.sections.length === 0)
+        );
+        if (!shouldHydrateSectionsFromStore) {
+            return {
+                ok: true,
+                key: result.key,
+                data: record.data
+            };
+        }
+        const sectionKeys = getPrototypeBubbleSectionKeysFromWorld(world);
+        return getPrototypeSaveSectionRecords(result.key, sectionKeys).then((sections) => {
+            const data = JSON.parse(JSON.stringify(record.data));
+            if (data.prototypeSectionWorld && typeof data.prototypeSectionWorld === "object") {
+                data.prototypeSectionWorld.sections = sections;
+                data.prototypeSectionWorld.loadedSectionKeys = sectionKeys;
+            }
+            return {
+                ok: true,
+                key: result.key,
+                data,
+                prototypeSectionStoreBacked: true
+            };
+        });
+    });
+}
+
+function loadGameStateFromIndexedDbKey(saveKey) {
+    return getIndexedDbSavedGameState(saveKey).then(parsed => {
+        if (!parsed || !parsed.ok) return parsed || { ok: false, reason: "missing" };
+        if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+            globalThis.markPrototypeStartupPerf("indexeddb-save-data-ready", {
+                key: parsed.key,
+                prototypeSectionStoreBacked: !!parsed.prototypeSectionStoreBacked
+            });
+        }
+        const loaded = loadGameState(parsed.data);
+        if (!loaded) {
+            return {
+                ok: false,
+                reason: "load-failed",
+                error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
+                    ? globalThis.lastLoadGameStateError
+                    : null
+            };
+        }
+        if (
+            parsed.prototypeSectionStoreBacked &&
+            map &&
+            typeof map.setPrototypeSectionAssetLoader === "function"
+        ) {
+            map.setPrototypeSectionAssetLoader((sectionKeys) => getPrototypeSaveSectionRecords(parsed.key, sectionKeys));
+            if (typeof map.prefetchPrototypeSectionAssets === "function") {
+                const lookaheadKeys = (typeof map.getPrototypeBubbleSectionKeys === "function" && typeof map.getPrototypeActiveSectionKeys === "function")
+                    ? (() => {
+                        const activeKeys = Array.from(map.getPrototypeActiveSectionKeys());
+                        if (activeKeys.length === 0) return [];
+                        const centerKey = activeKeys[0];
+                        if (typeof map.getPrototypeLookaheadSectionKeys === "function") {
+                            return Array.from(map.getPrototypeLookaheadSectionKeys(centerKey));
+                        }
+                        return [];
+                    })()
+                    : [];
+                if (lookaheadKeys.length > 0) {
+                    map.prefetchPrototypeSectionAssets(lookaheadKeys, { materialize: false });
+                }
+            }
+        }
+        setActivePrototypeSaveSlotKey(parsed.key);
+        if (wizard) {
+            wizard.name = normalizeLocalSaveSlotKey(parsed.data && parsed.data.wizard ? parsed.data.wizard.name : "", parsed.key) || parsed.key;
+            if (typeof wizard.setDifficulty === "function") {
+                const inferredDifficulty = inferWizardDifficultyFromSaveData(parsed.data);
+                if (Number.isFinite(inferredDifficulty)) {
+                    wizard.setDifficulty(inferredDifficulty);
+                }
+            }
+            if (typeof wizard.updateStatusBars === "function") {
+                wizard.updateStatusBars();
+            }
+        }
+        return { ok: true, key: parsed.key, data: parsed.data };
+    });
+}
+
+function saveGameState(options = {}) {
     if (!wizard || !map || !animals) {
         console.error("Cannot save: wizard, map, or animals not initialized");
         return null;
     }
+    const includeAllPrototypeSections = options && options.includeAllPrototypeSections === true;
 
     const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
         ? globalThis.roofs
@@ -740,12 +1336,12 @@ function saveGameState() {
                 node.objects.forEach(obj => {
                     if (obj && !obj.gone && !obj.vanishing && !seenStaticObjects.has(obj)) {
                         seenStaticObjects.add(obj);
-                        if (obj.type === 'road') {
+                        if (!savingPrototypeSectionWorld && obj.type === 'road') {
                             const roadRecord = toRoadSaveRecord(obj);
                             if (roadRecord) loadedRoadRecords.push(roadRecord);
                             return;
                         }
-                        if (obj.type === 'tree') {
+                        if (!savingPrototypeSectionWorld && obj.type === 'tree') {
                             const treeRecord = toTreeSaveRecord(obj);
                             if (treeRecord) loadedTreeRecords.push(treeRecord);
                             return;
@@ -773,12 +1369,12 @@ function saveGameState() {
                 node.objects.forEach(obj => {
                     if (obj && !obj.gone && !obj.vanishing && !seenStaticObjects.has(obj)) {
                         seenStaticObjects.add(obj);
-                        if (obj.type === 'road') {
+                        if (!savingPrototypeSectionWorld && obj.type === 'road') {
                             const roadRecord = toRoadSaveRecord(obj);
                             if (roadRecord) loadedRoadRecords.push(roadRecord);
                             return;
                         }
-                        if (obj.type === 'tree') {
+                        if (!savingPrototypeSectionWorld && obj.type === 'tree') {
                             const treeRecord = toTreeSaveRecord(obj);
                             if (treeRecord) loadedTreeRecords.push(treeRecord);
                             return;
@@ -798,15 +1394,19 @@ function saveGameState() {
             }
         }
     }
-    saveData.staticObjects.push(...getAllRoadSaveRecords(loadedRoadRecords));
-    saveData.staticObjects.push(...getAllTreeSaveRecords(loadedTreeRecords));
+    if (!savingPrototypeSectionWorld) {
+        saveData.staticObjects.push(...getAllRoadSaveRecords(loadedRoadRecords));
+        saveData.staticObjects.push(...getAllTreeSaveRecords(loadedTreeRecords));
+    }
     const seenRoofs = new Set();
-    for (let i = 0; i < roofList.length; i++) {
-        const roofObj = roofList[i];
-        if (!roofObj || roofObj.gone || roofObj.vanishing || seenRoofs.has(roofObj)) continue;
-        seenRoofs.add(roofObj);
-        if (typeof roofObj.saveJson === "function") {
-            saveData.staticObjects.push(roofObj.saveJson());
+    if (!savingPrototypeSectionWorld) {
+        for (let i = 0; i < roofList.length; i++) {
+            const roofObj = roofList[i];
+            if (!roofObj || roofObj.gone || roofObj.vanishing || seenRoofs.has(roofObj)) continue;
+            seenRoofs.add(roofObj);
+            if (typeof roofObj.saveJson === "function") {
+                saveData.staticObjects.push(roofObj.saveJson());
+            }
         }
     }
 
@@ -815,53 +1415,72 @@ function saveGameState() {
         const activeKeys = (typeof map.getPrototypeActiveSectionKeys === "function")
             ? Array.from(map.getPrototypeActiveSectionKeys())
             : [];
-        const loadedSectionKeys = activeKeys.filter((key) => typeof key === "string" && key.length > 0);
+        const exportedSections = (typeof map.exportPrototypeSectionWorld === "function")
+            ? map.exportPrototypeSectionWorld()
+            : null;
+        const loadedSectionKeys = includeAllPrototypeSections
+            ? ((state.sectionAssetsByKey instanceof Map)
+                ? Array.from(state.sectionAssetsByKey.keys())
+                : ((Array.isArray(exportedSections) ? exportedSections.map(section => section && section.key) : [])
+                    .filter((key) => typeof key === "string" && key.length > 0)))
+            : activeKeys.filter((key) => typeof key === "string" && key.length > 0);
         const sections = [];
 
-        for (let i = 0; i < loadedSectionKeys.length; i++) {
-            const sectionKey = loadedSectionKeys[i];
-            const asset = (typeof map.getPrototypeSectionAsset === "function")
-                ? map.getPrototypeSectionAsset(sectionKey)
-                : null;
-            if (!asset) continue;
-
-            const sectionNodes = state.nodesBySectionKey instanceof Map
-                ? (state.nodesBySectionKey.get(sectionKey) || [])
-                : [];
-            const groundTiles = {};
-            for (let n = 0; n < sectionNodes.length; n++) {
-                const node = sectionNodes[n];
-                if (!node) continue;
-                groundTiles[`${node.xindex},${node.yindex}`] = Number.isFinite(node.groundTextureId)
-                    ? Number(node.groundTextureId)
-                    : 0;
+        if (includeAllPrototypeSections && Array.isArray(exportedSections) && exportedSections.length > 0) {
+            for (let i = 0; i < exportedSections.length; i++) {
+                const section = exportedSections[i];
+                if (!section || typeof section !== "object") continue;
+                sections.push(JSON.parse(JSON.stringify(section)));
             }
+        } else {
+            for (let i = 0; i < loadedSectionKeys.length; i++) {
+                const sectionKey = loadedSectionKeys[i];
+                const asset = (typeof map.getPrototypeSectionAsset === "function")
+                    ? map.getPrototypeSectionAsset(sectionKey)
+                    : null;
+                if (!asset) continue;
 
-            sections.push({
-                id: asset.id,
-                key: asset.key,
-                coord: asset.coord ? { q: Number(asset.coord.q) || 0, r: Number(asset.coord.r) || 0 } : { q: 0, r: 0 },
-                centerAxial: asset.centerAxial ? { q: Number(asset.centerAxial.q) || 0, r: Number(asset.centerAxial.r) || 0 } : { q: 0, r: 0 },
-                centerOffset: asset.centerOffset ? { x: Number(asset.centerOffset.x) || 0, y: Number(asset.centerOffset.y) || 0 } : { x: 0, y: 0 },
-                neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
-                tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
-                groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
-                groundTiles,
-                walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
-                objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
-                animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
-            });
+                const sectionNodes = state.nodesBySectionKey instanceof Map
+                    ? (state.nodesBySectionKey.get(sectionKey) || [])
+                    : [];
+                const groundTiles = {};
+                for (let n = 0; n < sectionNodes.length; n++) {
+                    const node = sectionNodes[n];
+                    if (!node) continue;
+                    groundTiles[`${node.xindex},${node.yindex}`] = Number.isFinite(node.groundTextureId)
+                        ? Number(node.groundTextureId)
+                        : 0;
+                }
+
+                sections.push({
+                    id: asset.id,
+                    key: asset.key,
+                    coord: asset.coord ? { q: Number(asset.coord.q) || 0, r: Number(asset.coord.r) || 0 } : { q: 0, r: 0 },
+                    centerAxial: asset.centerAxial ? { q: Number(asset.centerAxial.q) || 0, r: Number(asset.centerAxial.r) || 0 } : { q: 0, r: 0 },
+                    centerOffset: asset.centerOffset ? { x: Number(asset.centerOffset.x) || 0, y: Number(asset.centerOffset.y) || 0 } : { x: 0, y: 0 },
+                    neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
+                    tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
+                    groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
+                    groundTiles,
+                    walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
+                    objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
+                    animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
+                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
+                });
+            }
         }
 
         saveData.prototypeSectionWorld = {
-            version: 1,
+            version: 2,
             radius: Number.isFinite(state.radius) ? Number(state.radius) : 0,
             sectionGraphRadius: Number.isFinite(state.sectionGraphRadius) ? Number(state.sectionGraphRadius) : 0,
             anchorCenter: state.anchorCenter ? { q: Number(state.anchorCenter.q) || 0, r: Number(state.anchorCenter.r) || 0 } : { q: 0, r: 0 },
             activeCenterKey: typeof state.activeCenterKey === "string" ? state.activeCenterKey : "",
             loadedSectionKeys,
-            sections
+            sections,
+            triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
+                ? map.exportPrototypeTriggerDefinitions()
+                : []
         };
     }
 
@@ -957,6 +1576,101 @@ function buildRestoreStaticObjectKey(objData, index = -1) {
     return `${type}|${x}|${y}|${index}`;
 }
 
+function logPrototypeLoadDetail(mapInstance, label = "post-sync") {
+    if (!mapInstance || typeof console === "undefined" || typeof console.log !== "function") return;
+    const sectionState = mapInstance._prototypeSectionState;
+    if (!sectionState) return;
+    const wallState = mapInstance._prototypeWallState;
+    const objectState = mapInstance._prototypeObjectState;
+    const animalState = mapInstance._prototypeAnimalState;
+    const powerupState = mapInstance._prototypePowerupState;
+    const activeSectionKeys = (typeof mapInstance.getPrototypeActiveSectionKeys === "function")
+        ? Array.from(mapInstance.getPrototypeActiveSectionKeys())
+        : Array.from(sectionState.activeSectionKeys || []);
+    const bubbleSectionKeys = (typeof mapInstance.getPrototypeBubbleSectionKeys === "function")
+        ? Array.from(mapInstance.getPrototypeBubbleSectionKeys())
+        : [];
+    const hydratedSectionKeys = (typeof mapInstance.getPrototypeHydratedSectionKeys === "function")
+        ? mapInstance.getPrototypeHydratedSectionKeys()
+        : Array.from(sectionState.loadedSectionAssetKeys || []);
+    const perSection = activeSectionKeys.map((sectionKey) => {
+        const asset = (typeof mapInstance.getPrototypeSectionAsset === "function")
+            ? mapInstance.getPrototypeSectionAsset(sectionKey)
+            : null;
+        const nodes = sectionState.nodesBySectionKey instanceof Map
+            ? (sectionState.nodesBySectionKey.get(sectionKey) || [])
+            : [];
+        return {
+            key: sectionKey,
+            nodes: Array.isArray(nodes) ? nodes.length : 0,
+            walls: Array.isArray(asset && asset.walls) ? asset.walls.length : 0,
+            blockedEdges: Array.isArray(asset && asset.blockedEdges) ? asset.blockedEdges.length : 0,
+            objects: Array.isArray(asset && asset.objects) ? asset.objects.length : 0,
+            animals: Array.isArray(asset && asset.animals) ? asset.animals.length : 0,
+            powerups: Array.isArray(asset && asset.powerups) ? asset.powerups.length : 0,
+            floors: Array.isArray(asset && asset.floors) ? asset.floors.length : 0
+        };
+    });
+    console.log("[PROTOTYPE LOAD DETAIL]", {
+        label,
+        activeCenterKey: sectionState.activeCenterKey || "",
+        activeSectionKeys,
+        bubbleSectionKeys,
+        hydratedSectionKeys,
+        activeSectionCount: activeSectionKeys.length,
+        bubbleSectionCount: bubbleSectionKeys.length,
+        hydratedSectionCount: hydratedSectionKeys.length,
+        loadedNodeCount: Array.isArray(sectionState.loadedNodes) ? sectionState.loadedNodes.length : 0,
+        allNodeCount: Array.isArray(sectionState.allNodes) ? sectionState.allNodes.length : 0,
+        pendingHydrations: sectionState.pendingSectionHydrations instanceof Map
+            ? sectionState.pendingSectionHydrations.size
+            : 0,
+        perSection,
+        wallStats: wallState && wallState.lastSyncStats ? { ...wallState.lastSyncStats } : null,
+        objectStats: objectState && objectState.lastSyncStats ? { ...objectState.lastSyncStats } : null,
+        animalStats: animalState && animalState.lastSyncStats ? { ...animalState.lastSyncStats } : null,
+        powerupStats: powerupState && powerupState.lastSyncStats ? { ...powerupState.lastSyncStats } : null
+    });
+}
+
+function isPrototypeLegacyStaticRecord(objData) {
+    const type = (objData && typeof objData.type === "string") ? objData.type : "";
+    return type === "road" || type === "tree" || type === "roof" || type === "wallSection";
+}
+
+function summarizePrototypeSectionAssets(sectionAssets) {
+    const summary = {
+        sections: 0,
+        walls: 0,
+        objects: 0,
+        roads: 0,
+        trees: 0,
+        animals: 0,
+        powerups: 0
+    };
+    const sections = Array.isArray(sectionAssets) ? sectionAssets : [];
+    for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (!section || typeof section !== "object") continue;
+        summary.sections += 1;
+        const walls = Array.isArray(section.walls) ? section.walls : [];
+        const objects = Array.isArray(section.objects) ? section.objects : [];
+        const animals = Array.isArray(section.animals) ? section.animals : [];
+        const powerups = Array.isArray(section.powerups) ? section.powerups : [];
+        summary.walls += walls.length;
+        summary.objects += objects.length;
+        summary.animals += animals.length;
+        summary.powerups += powerups.length;
+        for (let j = 0; j < objects.length; j++) {
+            const obj = objects[j];
+            const type = (obj && typeof obj.type === "string") ? obj.type : "";
+            if (type === "road") summary.roads += 1;
+            if (type === "tree") summary.trees += 1;
+        }
+    }
+    return summary;
+}
+
 function getSavedGameState(saveKey = null) {
     const resolvedKey = normalizeLocalSaveSlotKey(saveKey, getPreferredLocalSaveSlotKey());
     if (!resolvedKey.length || typeof localStorage === "undefined") {
@@ -998,6 +1712,9 @@ function loadGameState(saveData) {
 
     const _lt0 = performance.now();
     try {
+        if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+            globalThis.markPrototypeStartupPerf("loadGameState-begin");
+        }
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = null;
         }
@@ -1222,6 +1939,7 @@ function loadGameState(saveData) {
             if (!prototypeSectionWorldLoaded) {
                 map.loadPrototypeSectionWorld(saveData.prototypeSectionWorld);
             }
+            logPrototypeLoadDetail(map, "post-world-load");
             if (typeof map.syncPrototypeWalls === "function") {
                 map.syncPrototypeWalls();
             }
@@ -1234,6 +1952,7 @@ function loadGameState(saveData) {
             if (typeof map.syncPrototypePowerups === "function") {
                 map.syncPrototypePowerups();
             }
+            logPrototypeLoadDetail(map, "post-sync");
         }
         if (saveData.staticObjects && Array.isArray(saveData.staticObjects)) {
             const _st0 = performance.now();
@@ -1241,6 +1960,9 @@ function loadGameState(saveData) {
             const loadedRoofs = [];
             const restoredKeys = new Set();
             saveData.staticObjects.forEach((objData, index) => {
+                if (hasPrototypeSectionWorld && isPrototypeLegacyStaticRecord(objData)) {
+                    return;
+                }
                 const key = buildRestoreStaticObjectKey(objData, index);
                 if (restoredKeys.has(key)) return;
                 restoredKeys.add(key);
@@ -1336,12 +2058,23 @@ function loadGameState(saveData) {
         hydrateVisibleLazyTrees({ maxPerFrame: 256, paddingWorld: 12 });
 
         // Repair any stale blocking counters from older runtime versions.
-        for (let x = 0; x < map.width; x++) {
-            for (let y = 0; y < map.height; y++) {
-                const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
-                if (!node) continue;
-                if (typeof node.recountBlockingObjects === "function") {
-                    node.recountBlockingObjects();
+        const prototypeNodes = (map && typeof map.getAllPrototypeNodes === "function")
+            ? map.getAllPrototypeNodes()
+            : null;
+        if (Array.isArray(prototypeNodes) && prototypeNodes.length > 0) {
+            for (let i = 0; i < prototypeNodes.length; i++) {
+                const node = prototypeNodes[i];
+                if (!node || typeof node.recountBlockingObjects !== "function") continue;
+                node.recountBlockingObjects();
+            }
+        } else {
+            for (let x = 0; x < map.width; x++) {
+                for (let y = 0; y < map.height; y++) {
+                    const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
+                    if (!node) continue;
+                    if (typeof node.recountBlockingObjects === "function") {
+                        node.recountBlockingObjects();
+                    }
                 }
             }
         }
@@ -1365,6 +2098,11 @@ function loadGameState(saveData) {
         const _lt7 = performance.now();
         console.log(`[LOAD TIMING] clearance restore/compute: ${(_lt7 - _lt6).toFixed(1)}ms`);
         console.log(`[LOAD TIMING] TOTAL loadGameState: ${(_lt7 - _lt0).toFixed(1)}ms`);
+        if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+            globalThis.markPrototypeStartupPerf("loadGameState-complete", {
+                totalMs: Number((_lt7 - _lt0).toFixed(1))
+            });
+        }
 
         // Backward compatibility: restore legacy singleton roof when no roofs were loaded.
         const hasLoadedRoofs = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs) && globalThis.roofs.length > 0);
@@ -1401,6 +2139,7 @@ function loadGameState(saveData) {
             if (scriptingApi && typeof scriptingApi.processTriggerAreaTraversalEvents === "function") {
                 const triggerAreaEntries = [];
                 const touchEntries = [];
+                const usePrototypeTriggerRegistry = !!(map && typeof map.getPrototypeActiveTriggerTraversalEntriesForActor === "function");
                 const mapObjects = Array.isArray(map.objects) ? map.objects : [];
                 for (let i = 0; i < mapObjects.length; i++) {
                     const obj = mapObjects[i];
@@ -1408,9 +2147,20 @@ function loadGameState(saveData) {
                     const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
                     if (!hitbox) continue;
                     if (obj.type === "triggerArea" || obj.isTriggerArea === true) {
-                        triggerAreaEntries.push({ obj, hitbox });
+                        if (!usePrototypeTriggerRegistry) {
+                            triggerAreaEntries.push({ obj, hitbox });
+                        }
+                        continue;
                     }
                     touchEntries.push({ obj, hitbox, forceTouch: false });
+                }
+                if (usePrototypeTriggerRegistry) {
+                    const activeTriggerEntries = map.getPrototypeActiveTriggerTraversalEntriesForActor(wizard, { force: true });
+                    for (let i = 0; i < activeTriggerEntries.length; i++) {
+                        const entry = activeTriggerEntries[i];
+                        if (!entry || !entry.obj || !entry.hitbox) continue;
+                        triggerAreaEntries.push({ obj: entry.obj, hitbox: entry.hitbox });
+                    }
                 }
                 const mapPowerups = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
                     ? globalThis.powerups
@@ -1465,10 +2215,18 @@ function loadGameState(saveData) {
 
         if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
             globalThis.presentGameFrame();
+            if (typeof globalThis.markPrototypeStartupPerf === "function") {
+                globalThis.markPrototypeStartupPerf("presentGameFrame-called");
+            }
         }
 
         return true;
     } catch (e) {
+        if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+            globalThis.markPrototypeStartupPerf("loadGameState-failed", {
+                reason: String(e && e.message || e || "error")
+            });
+        }
         console.error("Error loading game state:", e);
         // Ensure the suppression flag is always cleared even on error.
         if (map) map._suppressClearanceUpdates = false;
@@ -1589,6 +2347,26 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
     if (!slot) {
         return { ok: false, reason: "missing-slot" };
     }
+    if (typeof map.flushPrototypeBubbleShiftSession === "function") {
+        const flushed = map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 });
+        if (flushed !== true) {
+            return { ok: false, reason: "prototype-shift-flush-failed" };
+        }
+    }
+    if (
+        map &&
+        map._prototypeSectionState &&
+        Array.isArray(map._prototypeSectionState.sectionCoords) &&
+        typeof map.hydratePrototypeSectionAssets === "function"
+    ) {
+        const allSectionKeys = map._prototypeSectionState.sectionCoords
+            .map((coord) => `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`);
+        try {
+            await map.hydratePrototypeSectionAssets(allSectionKeys);
+        } catch (error) {
+            return { ok: false, reason: "prototype-hydration-failed", error };
+        }
+    }
     if (typeof map.syncPrototypeWalls === "function") {
         map.syncPrototypeWalls();
     }
@@ -1608,6 +2386,7 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         ? map.worldToNode(activeWizard.x, activeWizard.y)
         : null;
 
+    const exportedSections = map.exportPrototypeSectionAssets();
     const payload = {
         manifest: {
             wizard: activeWizard
@@ -1622,8 +2401,12 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
                     ? map._prototypeSectionState.activeCenterKey
                     : "")
         },
-        sections: map.exportPrototypeSectionAssets()
+        triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
+            ? map.exportPrototypeTriggerDefinitions()
+            : [],
+        sections: exportedSections
     };
+    const sectionSummary = summarizePrototypeSectionAssets(exportedSections);
 
     try {
         const qs = new URLSearchParams();
@@ -1637,6 +2420,10 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         if (!response.ok || !result || !result.ok) {
             return { ok: false, reason: result && result.reason ? result.reason : 'request-failed' };
         }
+        console.log("[MASTER SAVE SUMMARY]", {
+            slot,
+            ...sectionSummary
+        });
         return {
             ok: true,
             slot,
@@ -1682,17 +2469,25 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         LEGACY_LOCAL_SAVE_KEY,
         ACTIVE_LOCAL_SAVE_SLOT_STORAGE_KEY,
+        ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY,
         saveGameState,
         loadGameState,
         parseSavedGameState,
         getSavedGameState,
+        getIndexedDbSavedGameState,
         sanitizeSavedGameState,
         getSavedGameEntries,
+        getPrototypeSaveEntries,
         getActiveLocalSaveSlotKey,
         setActiveLocalSaveSlotKey,
+        getActivePrototypeSaveSlotKey,
+        setActivePrototypeSaveSlotKey,
         deleteLocalSaveSlot,
+        deletePrototypeSaveSlot,
         saveGameStateToLocalStorage,
+        saveGameStateToIndexedDb,
         loadGameStateFromLocalStorageKey,
+        loadGameStateFromIndexedDbKey,
         isReservedLocalSaveSlotKey,
         inferWizardDifficultyFromSaveData,
         formatWizardDifficultyLabel,

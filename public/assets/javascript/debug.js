@@ -13,6 +13,10 @@ let debugModePrevHexGridState = null;
 
 let perfPanel = null;
 let showPerfReadout = false;
+// Keep detailed perf instrumentation off during normal play.
+// The full accumulator is useful when profiling frame pacing or render/sim regressions,
+// but it adds steady per-frame work and can skew the very numbers it is measuring.
+let perfInstrumentationEnabled = false;
 let perfStats = {
     lastLoopAt: 0,
     fps: 0,
@@ -127,15 +131,119 @@ let simPerfBreakdown = {
     maxPointerPostMs: 0
 };
 const PERF_ACCUM_TOP_SPIKES = 10;
+const PERF_INSTRUMENTATION_HELP_LINES = [
+    "Performance instrumentation is OFF by default.",
+    "",
+    "Why keep it off:",
+    "- Detailed sampling aggregates a large set of per-frame counters.",
+    "- Leaving it on during normal play adds overhead and can skew perf checks.",
+    "",
+    "Turn it on only when profiling frame pacing, render spikes, LOS cost, or sim cost.",
+    "",
+    "How to turn it back on:",
+    "- Press Ctrl+F or run DebugView.togglePerfReadout() to show this panel.",
+    "- Run DebugView.setPerfInstrumentationEnabled(true) to collect detailed counters.",
+    "- Run printPerfAccumulator({ resetAfter: true }) to dump and clear a profiling sample.",
+    "",
+    "Turn it back off with DebugView.setPerfInstrumentationEnabled(false)."
+];
+const PERF_ACCUM_EXTRA_FIELDS = [
+    "visibleNodes",
+    "visibleNodesWrapped",
+    "visibleNodesFallback",
+    "visibleNodeFilterSkipped",
+    "visibleNodeFallbackUsed",
+    "visibleObjectNodeRefs",
+    "visibleObjectVisibilityRefs",
+    "visibleObjectDuplicateRefsSkipped",
+    "visibleAnimalsAdded",
+    "visibleAnimalsSkippedOffscreen",
+    "onscreenCacheObjects",
+    "onscreenCacheRoofs",
+    "losCandidates",
+    "losBuildMs",
+    "losTraceMs",
+    "losTotalMs",
+    "losRecomputed",
+    "losVisibleObjects",
+    "wallLosMs",
+    "wallLosResetSections",
+    "wallLosIlluminatedBins",
+    "wallLosRangedSections",
+    "wallLosEndpointLookups",
+    "wallLosEndpointOwnersResolved",
+    "mazeModeMaskWorldPoints",
+    "mazeModeMaskActive",
+    "roadsVisible",
+    "roadsCached",
+    "roadsCreated",
+    "roadsAttached",
+    "roadsTextureRefreshes",
+    "roadsTextureAssignments",
+    "roadsHidden",
+    "roadsDestroyed",
+    "roadsEvicted",
+    "roadsMs",
+    "depthCandidates",
+    "depthMissingMountedSection",
+    "depthHiddenByScript",
+    "depthDoorBottomOutlineOnly",
+    "groundObjectSpritesRendered",
+    "objects3dLosBuildMs",
+    "objects3dLosVisibleSetSize",
+    "objects3dLosVisibleWalls",
+    "objects3dFilterMs",
+    "objects3dTransformMs",
+    "objects3dDepthMs",
+    "objects3dGroundMs",
+    "objects3dDisplayMs",
+    "objects3dAnimalLosHidden",
+    "objects3dMazeHidden",
+    "objects3dMazeHiddenWalls",
+    "objects3dMapItems",
+    "objects3dRoofItems",
+    "objects3dRenderItems",
+    "objects3dDepthRendered",
+    "objects3dGroundRendered",
+    "objects3dDisplayObjects",
+    "objects3dVisibleAnimals",
+    "objects3dVisibleTrees"
+];
 
 function toFinitePerfNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
 }
 
+function getPerfInstrumentationHelpText() {
+    return PERF_INSTRUMENTATION_HELP_LINES.join("\n");
+}
+
+function describePerfInstrumentation() {
+    const helpText = getPerfInstrumentationHelpText();
+    console.log(helpText);
+    return helpText;
+}
+
+function createPerfAccumulatorExtraSums() {
+    const out = {};
+    for (let i = 0; i < PERF_ACCUM_EXTRA_FIELDS.length; i++) {
+        out[PERF_ACCUM_EXTRA_FIELDS[i]] = 0;
+    }
+    return out;
+}
+
+function createPerfAccumulatorExtraMax() {
+    const out = {};
+    for (let i = 0; i < PERF_ACCUM_EXTRA_FIELDS.length; i++) {
+        out[PERF_ACCUM_EXTRA_FIELDS[i]] = { value: -Infinity, sample: 0, atMs: 0 };
+    }
+    return out;
+}
+
 function createPerfAccumulatorState() {
     return {
-        enabled: true,
+        enabled: perfInstrumentationEnabled,
         startedAtMs: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
             ? performance.now()
             : 0,
@@ -196,7 +304,9 @@ function createPerfAccumulatorState() {
             simMs: [],
             stepMaxMs: [],
             accMs: []
-        }
+        },
+        extraSums: createPerfAccumulatorExtraSums(),
+        extraMax: createPerfAccumulatorExtraMax()
     };
 }
 
@@ -231,7 +341,7 @@ function perfAccumulatorPushSpike(list, entry, limit = PERF_ACCUM_TOP_SPIKES) {
 }
 
 function recordPerfAccumulatorSample(sample = {}) {
-    if (!perfAccumulator || perfAccumulator.enabled === false) return;
+    if (!perfInstrumentationEnabled || !perfAccumulator || perfAccumulator.enabled === false) return;
     const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
         ? performance.now()
         : 0;
@@ -313,6 +423,15 @@ function recordPerfAccumulatorSample(sample = {}) {
     perfAccumulatorPushSpike(s.topSpikes.simMs, { value: simMs, sample: sampleIdx, atMs: nowMs });
     perfAccumulatorPushSpike(s.topSpikes.stepMaxMs, { value: stepMaxMs, sample: sampleIdx, atMs: nowMs });
     perfAccumulatorPushSpike(s.topSpikes.accMs, { value: accMs, sample: sampleIdx, atMs: nowMs });
+
+    if (s.extraSums && s.extraMax) {
+        for (let i = 0; i < PERF_ACCUM_EXTRA_FIELDS.length; i++) {
+            const fieldName = PERF_ACCUM_EXTRA_FIELDS[i];
+            const fieldValue = toFinitePerfNumber(sample[fieldName], 0);
+            s.extraSums[fieldName] = toFinitePerfNumber(s.extraSums[fieldName], 0) + fieldValue;
+            perfAccumulatorUpdateMax(s.extraMax[fieldName], fieldValue, sampleIdx, nowMs);
+        }
+    }
 }
 
 function cloneTopSpikes(spikes) {
@@ -339,6 +458,13 @@ function getPerfAccumulatorSnapshot() {
     if (!s) return null;
     const n = Math.max(1, toFinitePerfNumber(s.samples, 0));
     const elapsedMs = Math.max(0, toFinitePerfNumber(s.lastSampleAtMs, 0) - toFinitePerfNumber(s.startedAtMs, 0));
+    const extraAverages = {};
+    const extraWorstMax = {};
+    for (let i = 0; i < PERF_ACCUM_EXTRA_FIELDS.length; i++) {
+        const fieldName = PERF_ACCUM_EXTRA_FIELDS[i];
+        extraAverages[fieldName] = toFinitePerfNumber(s.extraSums && s.extraSums[fieldName], 0) / n;
+        extraWorstMax[fieldName] = cloneExtremeEntry(s.extraMax && s.extraMax[fieldName]);
+    }
     return {
         enabled: s.enabled !== false,
         samples: toFinitePerfNumber(s.samples, 0),
@@ -394,6 +520,10 @@ function getPerfAccumulatorSnapshot() {
                 fps: cloneExtremeEntry(s.min.fps)
             }
         },
+        extra: {
+            averages: extraAverages,
+            max: extraWorstMax
+        },
         topSpikes: {
             loopMs: cloneTopSpikes(s.topSpikes.loopMs),
             drawMs: cloneTopSpikes(s.topSpikes.drawMs),
@@ -413,8 +543,14 @@ function printPerfAccumulator(options = {}) {
     const resetAfter = !!(options && options.resetAfter);
     const snapshot = getPerfAccumulatorSnapshot();
     if (!snapshot) return null;
+    if (!snapshot.enabled && snapshot.samples === 0) {
+        console.log(getPerfInstrumentationHelpText());
+        return snapshot;
+    }
     const avg = snapshot.averages;
     const worst = snapshot.worst;
+    const extraAvg = snapshot.extra && snapshot.extra.averages ? snapshot.extra.averages : {};
+    const extraMax = snapshot.extra && snapshot.extra.max ? snapshot.extra.max : {};
     console.groupCollapsed(
         `[PerfAccumulator] samples=${snapshot.samples} elapsed=${(snapshot.elapsedMs / 1000).toFixed(2)}s`
     );
@@ -443,6 +579,34 @@ function printPerfAccumulator(options = {}) {
         cmp_un_avg_ms: avg.drawComposeUnaccountedMs.toFixed(2),
         cmp_un_max_ms: worst.max.drawComposeUnaccountedMs ? Number(worst.max.drawComposeUnaccountedMs.value).toFixed(2) : "0.00"
     }]);
+    console.table([{
+        vis_nodes_avg: toFinitePerfNumber(extraAvg.visibleNodes, 0).toFixed(2),
+        vis_dup_avg: toFinitePerfNumber(extraAvg.visibleObjectDuplicateRefsSkipped, 0).toFixed(2),
+        los_candidates_avg: toFinitePerfNumber(extraAvg.losCandidates, 0).toFixed(2),
+        los_build_avg_ms: toFinitePerfNumber(extraAvg.losBuildMs, 0).toFixed(2),
+        los_trace_avg_ms: toFinitePerfNumber(extraAvg.losTraceMs, 0).toFixed(2),
+        wall_los_avg_ms: toFinitePerfNumber(extraAvg.wallLosMs, 0).toFixed(2),
+        roads_avg: toFinitePerfNumber(extraAvg.roadsVisible, 0).toFixed(2),
+        roads_avg_ms: toFinitePerfNumber(extraAvg.roadsMs, 0).toFixed(2),
+        obj3_items_avg: toFinitePerfNumber(extraAvg.objects3dRenderItems, 0).toFixed(2),
+        obj3_filter_avg_ms: toFinitePerfNumber(extraAvg.objects3dFilterMs, 0).toFixed(2),
+        obj3_depth_avg_ms: toFinitePerfNumber(extraAvg.objects3dDepthMs, 0).toFixed(2),
+        obj3_display_avg_ms: toFinitePerfNumber(extraAvg.objects3dDisplayMs, 0).toFixed(2)
+    }]);
+    console.table([{
+        los_build_max_ms: extraMax.losBuildMs ? toFinitePerfNumber(extraMax.losBuildMs.value, 0).toFixed(2) : "0.00",
+        los_trace_max_ms: extraMax.losTraceMs ? toFinitePerfNumber(extraMax.losTraceMs.value, 0).toFixed(2) : "0.00",
+        wall_los_max_ms: extraMax.wallLosMs ? toFinitePerfNumber(extraMax.wallLosMs.value, 0).toFixed(2) : "0.00",
+        roads_max_ms: extraMax.roadsMs ? toFinitePerfNumber(extraMax.roadsMs.value, 0).toFixed(2) : "0.00",
+        obj3_filter_max_ms: extraMax.objects3dFilterMs ? toFinitePerfNumber(extraMax.objects3dFilterMs.value, 0).toFixed(2) : "0.00",
+        obj3_depth_max_ms: extraMax.objects3dDepthMs ? toFinitePerfNumber(extraMax.objects3dDepthMs.value, 0).toFixed(2) : "0.00",
+        obj3_display_max_ms: extraMax.objects3dDisplayMs ? toFinitePerfNumber(extraMax.objects3dDisplayMs.value, 0).toFixed(2) : "0.00",
+        vis_nodes_max: extraMax.visibleNodes ? toFinitePerfNumber(extraMax.visibleNodes.value, 0).toFixed(2) : "0.00",
+        roads_max: extraMax.roadsVisible ? toFinitePerfNumber(extraMax.roadsVisible.value, 0).toFixed(2) : "0.00",
+        obj3_items_max: extraMax.objects3dRenderItems ? toFinitePerfNumber(extraMax.objects3dRenderItems.value, 0).toFixed(2) : "0.00"
+    }]);
+    console.log("Extra render metric averages:", extraAvg);
+    console.log("Extra render metric maxima:", extraMax);
     console.log("Top loop spikes (ms):", snapshot.topSpikes.loopMs);
     console.log("Top draw spikes (ms):", snapshot.topSpikes.drawMs);
     console.log("Top sim spikes (ms):", snapshot.topSpikes.simMs);
@@ -513,9 +677,32 @@ function updatePerfPanelVisibility() {
     perfPanel.css("display", showPerfReadout ? "block" : "none");
 }
 
+function isPerfInstrumentationEnabled() {
+    return perfInstrumentationEnabled;
+}
+
+function setPerfInstrumentationEnabled(enabled, options = {}) {
+    const nextEnabled = !!enabled;
+    const shouldResetAccumulator = nextEnabled && options.resetAccumulator !== false;
+    perfInstrumentationEnabled = nextEnabled;
+    if (shouldResetAccumulator) {
+        resetPerfAccumulator();
+    } else if (perfAccumulator) {
+        perfAccumulator.enabled = nextEnabled;
+    }
+    perfStats.lastUiUpdateAt = 0;
+    if (showPerfReadout && perfPanel && !nextEnabled) {
+        perfPanel.text(getPerfInstrumentationHelpText());
+    }
+    return perfInstrumentationEnabled;
+}
+
 function setShowPerfReadout(enabled) {
     showPerfReadout = !!enabled;
     updatePerfPanelVisibility();
+    if (showPerfReadout && perfPanel && !perfInstrumentationEnabled) {
+        perfPanel.text(getPerfInstrumentationHelpText());
+    }
 }
 
 function toggleShowPerfReadout() {
@@ -549,6 +736,9 @@ if (typeof globalThis !== "undefined") {
         toggleDebugMode: () => toggleDebugMode(),
         toggleHexGrid: () => toggleHexGrid(),
         togglePerfReadout: () => toggleShowPerfReadout(),
+        isPerfInstrumentationEnabled: () => isPerfInstrumentationEnabled(),
+        setPerfInstrumentationEnabled: (enabled, options) => setPerfInstrumentationEnabled(enabled, options),
+        describePerfInstrumentation: () => describePerfInstrumentation(),
         toggleVisualHitboxes: () => {
             debugViewSettings.showVisualHitboxes = !debugViewSettings.showVisualHitboxes;
             return debugViewSettings.showVisualHitboxes;
@@ -567,6 +757,9 @@ if (typeof globalThis !== "undefined") {
     globalThis.getPerfAccumulatorSnapshot = getPerfAccumulatorSnapshot;
     globalThis.resetPerfAccumulator = resetPerfAccumulator;
     globalThis.printPerfAccumulator = printPerfAccumulator;
+    globalThis.isPerfInstrumentationEnabled = isPerfInstrumentationEnabled;
+    globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
+    globalThis.describePerfInstrumentation = describePerfInstrumentation;
 }
 
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {

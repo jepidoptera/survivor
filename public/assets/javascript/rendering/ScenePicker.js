@@ -253,44 +253,121 @@ void main(void) {
                 .addIndex(new Uint16Array(indices));
         }
 
-        createPickTriggerAreaMeshProxy(item) {
-            const geometry = this.buildTriggerAreaPickGeometry(
-                item && item.groundPlaneHitbox && Array.isArray(item.groundPlaneHitbox.points)
-                    ? item.groundPlaneHitbox.points
-                    : null
+        getTriggerAreaOutlineClipRect() {
+            const appRef = (typeof app !== "undefined" && app)
+                ? app
+                : (global.app || null);
+            const screenWidth = Math.max(
+                1,
+                Number(appRef && appRef.renderer && appRef.renderer.width) ||
+                Number(appRef && appRef.screen && appRef.screen.width) ||
+                Number(window && window.innerWidth) ||
+                1
             );
-            if (!geometry || typeof PIXI === "undefined" || typeof PIXI.Mesh !== "function") {
-                return null;
+            const screenHeight = Math.max(
+                1,
+                Number(appRef && appRef.renderer && appRef.renderer.height) ||
+                Number(appRef && appRef.screen && appRef.screen.height) ||
+                Number(window && window.innerHeight) ||
+                1
+            );
+            const camera = this.pickLastCamera || null;
+            const insetX = Math.max(0, (Number(camera && camera.viewscale) || 1) * 0.5);
+            const insetY = Math.max(0, (Number(camera && camera.viewscale) || 1) * (Number(camera && camera.xyratio) || 1) * 0.5);
+            const rect = {
+                left: insetX,
+                top: insetY,
+                right: screenWidth - insetX,
+                bottom: screenHeight - insetY
+            };
+            if (!(rect.right > rect.left) || !(rect.bottom > rect.top)) return null;
+            return rect;
+        }
+
+        clipPolygonAgainstBoundary(points, isInside, intersect) {
+            const input = Array.isArray(points) ? points : [];
+            if (input.length === 0) return [];
+            const output = [];
+            let previous = input[input.length - 1];
+            let previousInside = !!isInside(previous);
+            for (let i = 0; i < input.length; i++) {
+                const current = input[i];
+                const currentInside = !!isInside(current);
+                if (currentInside) {
+                    if (!previousInside) {
+                        const entry = intersect(previous, current);
+                        if (entry) output.push(entry);
+                    }
+                    output.push(current);
+                } else if (previousInside) {
+                    const exit = intersect(previous, current);
+                    if (exit) output.push(exit);
+                }
+                previous = current;
+                previousInside = currentInside;
             }
-            const shader = PIXI.Shader.from(PICK_WORLD_MESH_VS, PICK_MESH_FS, {
-                uScreenSize: new Float32Array([1, 1]),
-                uCameraWorld: new Float32Array([0, 0]),
-                uViewScale: 1,
-                uXyRatio: 1,
-                uDepthRange: new Float32Array([1, 1]),
-                uWorldSize: new Float32Array([0, 0]),
-                uWrapEnabled: new Float32Array([0, 0]),
-                uWrapAnchorWorld: new Float32Array([0, 0]),
-                uSampler: PIXI.Texture.WHITE,
-                uPickColor: new Float32Array([1, 1, 1]),
-                uAlphaCutoff: 0
-            });
-            const state = PIXI.State ? new PIXI.State() : PIXI.State.for2d();
-            state.blend = false;
-            state.culling = false;
-            state.depthTest = true;
-            state.depthMask = true;
-            const mesh = new PIXI.Mesh(
-                geometry,
-                shader,
-                state,
-                PIXI.DRAW_MODES.TRIANGLES
+            return output;
+        }
+
+        clipTriggerAreaScreenPolygon(points, rect) {
+            let clipped = Array.isArray(points)
+                ? points
+                    .filter((pt) => pt && Number.isFinite(pt.x) && Number.isFinite(pt.y))
+                    .map((pt) => ({ x: Number(pt.x), y: Number(pt.y) }))
+                : [];
+            if (!rect || clipped.length < 3) return clipped;
+            const intersectVertical = (boundaryX) => (a, b) => {
+                const dx = Number(b.x) - Number(a.x);
+                if (Math.abs(dx) <= 1e-7) {
+                    return { x: boundaryX, y: Number(a.y) };
+                }
+                const t = (boundaryX - Number(a.x)) / dx;
+                return {
+                    x: boundaryX,
+                    y: Number(a.y) + (Number(b.y) - Number(a.y)) * t
+                };
+            };
+            const intersectHorizontal = (boundaryY) => (a, b) => {
+                const dy = Number(b.y) - Number(a.y);
+                if (Math.abs(dy) <= 1e-7) {
+                    return { x: Number(a.x), y: boundaryY };
+                }
+                const t = (boundaryY - Number(a.y)) / dy;
+                return {
+                    x: Number(a.x) + (Number(b.x) - Number(a.x)) * t,
+                    y: boundaryY
+                };
+            };
+            clipped = this.clipPolygonAgainstBoundary(clipped, (pt) => Number(pt.x) >= rect.left, intersectVertical(rect.left));
+            clipped = this.clipPolygonAgainstBoundary(clipped, (pt) => Number(pt.x) <= rect.right, intersectVertical(rect.right));
+            clipped = this.clipPolygonAgainstBoundary(clipped, (pt) => Number(pt.y) >= rect.top, intersectHorizontal(rect.top));
+            clipped = this.clipPolygonAgainstBoundary(clipped, (pt) => Number(pt.y) <= rect.bottom, intersectHorizontal(rect.bottom));
+            return clipped;
+        }
+
+        getClippedTriggerAreaScreenPolygon(camera, points) {
+            if (!camera || typeof camera.worldToScreen !== "function") return null;
+            const screenPoints = [];
+            for (let i = 0; i < points.length; i++) {
+                const pt = points[i];
+                if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+                const screenPoint = camera.worldToScreen(Number(pt.x), Number(pt.y), 0);
+                if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
+                screenPoints.push(screenPoint);
+            }
+            if (screenPoints.length < 3) return null;
+            const clippedPoints = this.clipTriggerAreaScreenPolygon(
+                screenPoints,
+                this.getTriggerAreaOutlineClipRect()
             );
-            mesh.name = "renderingPickerTriggerAreaMeshProxy";
-            mesh.visible = false;
-            mesh.interactive = false;
-            mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
-            return { proxy: mesh, type: "mesh", shader, useWorldPositions: true, isTriggerAreaMesh: true };
+            return Array.isArray(clippedPoints) && clippedPoints.length >= 2 ? clippedPoints : null;
+        }
+
+        createPickTriggerAreaMeshProxy(item) {
+            const created = this.createPickGraphicsProxy();
+            if (!created) return null;
+            created.proxy.name = "renderingPickerTriggerAreaBorderProxy";
+            return { ...created, isTriggerAreaBorder: true, triggerBorderWidthPx: 10 };
         }
 
         isDebugModeEnabled() {
@@ -747,14 +824,15 @@ void main(void) {
                 }
                 const points = Array.isArray(hitbox.points) ? hitbox.points : null;
                 if (!points || points.length < 2) continue;
-                const screenPoints = [];
-                for (let p = 0; p < points.length; p++) {
-                    const point = points[p];
-                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-                    const screenPoint = camera.worldToScreen(point.x, point.y, 0);
-                    if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
-                    screenPoints.push(screenPoint);
-                }
+                const screenPoints = isTriggerArea
+                    ? this.getClippedTriggerAreaScreenPolygon(camera, points)
+                    : points.reduce((acc, point) => {
+                        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return acc;
+                        const screenPoint = camera.worldToScreen(point.x, point.y, 0);
+                        if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) return acc;
+                        acc.push(screenPoint);
+                        return acc;
+                    }, []);
                 if (screenPoints.length < 2) continue;
                 if (isTriggerArea) {
                     const dashLengthPx = 10;
@@ -1296,22 +1374,6 @@ void main(void) {
         syncPickProxyFromDisplayObject(record, displayObj, rgbColor, item = null) {
             if (!record || !record.proxy || !displayObj) return false;
             const proxy = record.proxy;
-            if (record.isTriggerAreaMesh) {
-                const points = (
-                    item &&
-                    item.groundPlaneHitbox &&
-                    Array.isArray(item.groundPlaneHitbox.points)
-                ) ? item.groundPlaneHitbox.points : null;
-                const geometry = this.buildTriggerAreaPickGeometry(points);
-                if (!geometry) {
-                    proxy.visible = false;
-                    return false;
-                }
-                if (proxy.geometry && proxy.geometry !== geometry && typeof proxy.geometry.destroy === "function") {
-                    proxy.geometry.destroy();
-                }
-                proxy.geometry = geometry;
-            }
             if (record.type === "graphics") {
                 const camera = this.pickLastCamera || null;
                 const points = (
@@ -1323,17 +1385,32 @@ void main(void) {
                     proxy.visible = false;
                     return false;
                 }
+                const drawPoints = record.isTriggerAreaBorder
+                    ? this.getClippedTriggerAreaScreenPolygon(camera, points)
+                    : points.reduce((acc, pt) => {
+                        if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return acc;
+                        const sp = camera.worldToScreen(Number(pt.x), Number(pt.y), 0);
+                        if (!sp || !Number.isFinite(sp.x) || !Number.isFinite(sp.y)) return acc;
+                        acc.push(sp);
+                        return acc;
+                    }, []);
+                if (!drawPoints || drawPoints.length < 2) {
+                    proxy.visible = false;
+                    return false;
+                }
                 proxy.clear();
                 const colorHex = ((Number(rgbColor[0]) & 255) << 16) |
                     ((Number(rgbColor[1]) & 255) << 8) |
                     (Number(rgbColor[2]) & 255);
-                proxy.beginFill(colorHex, 1);
+                if (record.isTriggerAreaBorder) {
+                    const borderWidth = Math.max(1, Number(record.triggerBorderWidthPx) || 10);
+                    proxy.lineStyle(borderWidth, colorHex, 1, 0.5);
+                } else {
+                    proxy.beginFill(colorHex, 1);
+                }
                 let moved = false;
-                for (let i = 0; i < points.length; i++) {
-                    const pt = points[i];
-                    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
-                    const sp = camera.worldToScreen(Number(pt.x), Number(pt.y), 0);
-                    if (!sp || !Number.isFinite(sp.x) || !Number.isFinite(sp.y)) continue;
+                for (let i = 0; i < drawPoints.length; i++) {
+                    const sp = drawPoints[i];
                     if (!moved) {
                         proxy.moveTo(sp.x, sp.y);
                         moved = true;
@@ -1342,12 +1419,12 @@ void main(void) {
                     }
                 }
                 if (!moved) {
-                    proxy.endFill();
+                    if (!record.isTriggerAreaBorder) proxy.endFill();
                     proxy.visible = false;
                     return false;
                 }
                 proxy.closePath();
-                proxy.endFill();
+                if (!record.isTriggerAreaBorder) proxy.endFill();
                 proxy.visible = true;
                 proxy.alpha = 1;
                 return true;
@@ -1593,7 +1670,7 @@ void main(void) {
                     const displayObj = rec.displayObj;
                     const forceInclude = !!rec.forceInclude;
                     if (item.gone || item.vanishing) continue;
-                    if (!displayObj.parent) continue;
+                    if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) continue;
                     if (!forceInclude && !displayObj.visible) continue;
                     const entry = {
                         item,
@@ -1621,7 +1698,7 @@ void main(void) {
                     if (!(item.type === "triggerArea" || item.isTriggerArea === true)) continue;
                     if (triggerAreaItems.has(item)) continue;
                     const displayObj = this.getTargetDisplayObject(item, ctx);
-                    if (!displayObj || !displayObj.parent) continue;
+                    if (!displayObj) continue;
                     triggerAreaEntries.push({
                         item,
                         displayObj,
@@ -1639,7 +1716,8 @@ void main(void) {
                     }
                     return a.idx - b.idx;
                 });
-                sortable.push(...triggerAreaEntries, ...otherEntries);
+                triggerAreaEntries.sort((a, b) => a.idx - b.idx);
+                sortable.push(...otherEntries, ...triggerAreaEntries);
             } else {
                 const items = Array.isArray(onscreenObjects)
                     ? onscreenObjects
@@ -1853,7 +1931,9 @@ void main(void) {
                 const displayObj = ctx.getDisplayObjectForItem(target);
                 if (displayObj) return displayObj;
             }
-            if (target.pixiSprite && target.pixiSprite.parent) return target.pixiSprite;
+            if (target.pixiSprite && (target.pixiSprite.parent || target.type === "triggerArea" || target.isTriggerArea === true)) {
+                return target.pixiSprite;
+            }
             return null;
         }
 

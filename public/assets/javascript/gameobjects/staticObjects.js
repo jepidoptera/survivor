@@ -928,6 +928,42 @@ function resolveMountedWallThickness(item) {
     return Number.isFinite(bestThickness) ? bestThickness : null;
 }
 
+function resolveStaticObjectLoadNode(map, data, options = {}) {
+    if (!map || !data) return null;
+    if (typeof map.worldToNode === "function") {
+        const directNode = map.worldToNode(data.x, data.y);
+        if (directNode) return directNode;
+    }
+    const sectionKey = (typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
+        ? options.targetSectionKey
+        : null;
+    if (!sectionKey) return null;
+    const state = map._prototypeSectionState;
+    if (!state || !(state.nodesBySectionKey instanceof Map)) return null;
+    const sectionNodes = state.nodesBySectionKey.get(sectionKey);
+    if (!Array.isArray(sectionNodes) || sectionNodes.length === 0) return null;
+    let fallbackNode = sectionNodes[0] || null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    const targetX = Number(data.x);
+    const targetY = Number(data.y);
+    for (let i = 0; i < sectionNodes.length; i++) {
+        const candidate = sectionNodes[i];
+        if (!candidate) continue;
+        if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y) || !Number.isFinite(targetX) || !Number.isFinite(targetY)) {
+            if (!fallbackNode) fallbackNode = candidate;
+            continue;
+        }
+        const dx = candidate.x - targetX;
+        const dy = candidate.y - targetY;
+        const distance = (dx * dx) + (dy * dy);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            fallbackNode = candidate;
+        }
+    }
+    return fallbackNode;
+}
+
 function getMountedWallFaceCentersForObject(item) {
     const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
         ? Number(item.mountedWallLineGroupId)
@@ -2366,7 +2402,7 @@ void main(void) {
         if (!data || !data.type || !map) return null;
 
         try {
-            const node = map.worldToNode(data.x, data.y);
+            const node = resolveStaticObjectLoadNode(map, data, options);
 
             if (!node) return null;
 

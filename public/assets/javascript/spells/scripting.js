@@ -383,6 +383,19 @@
         return obj._scriptTouchRuntimeId;
     }
 
+    function getTriggerTraversalStateId(obj) {
+        if (!obj || typeof obj !== "object") return "trigger:invalid";
+        const explicitId = Number(
+            Number.isInteger(Number(obj.id))
+                ? Number(obj.id)
+                : (Number.isInteger(Number(obj._prototypeRecordId)) ? Number(obj._prototypeRecordId) : NaN)
+        );
+        if (Number.isInteger(explicitId)) {
+            return `trigger:${explicitId}`;
+        }
+        return getObjectTouchRuntimeId(obj);
+    }
+
     function getNamedObjectRuntimeId(obj) {
         if (!obj || typeof obj !== "object") return "named:invalid";
         if (!obj._scriptNamedObjectRuntimeId) {
@@ -2853,7 +2866,36 @@
             : new Map();
         wizardRef._doorTraversalStateById = stateByDoorId;
 
-        if (!Array.isArray(nearbyDoors) || nearbyDoors.length === 0) {
+        const resolvedDoorEntries = [];
+        const resolvedDoorIds = new Set();
+        const appendDoorEntry = (door, hitbox) => {
+            if (!isDoorPlacedObject(door) || !hitbox) return;
+            const doorId = getDoorRuntimeId(door);
+            if (resolvedDoorIds.has(doorId)) return;
+            resolvedDoorIds.add(doorId);
+            resolvedDoorEntries.push({ obj: door, hitbox, doorId });
+        };
+
+        if (Array.isArray(nearbyDoors)) {
+            for (let i = 0; i < nearbyDoors.length; i++) {
+                const entry = nearbyDoors[i];
+                appendDoorEntry(entry && entry.obj, entry && entry.hitbox);
+            }
+        }
+
+        for (const [doorId, state] of stateByDoorId.entries()) {
+            if (!state || (!state.inside && !state.touching) || resolvedDoorIds.has(doorId)) continue;
+            const trackedDoor = state.door;
+            if (!isDoorPlacedObject(trackedDoor) || trackedDoor.gone || trackedDoor.vanishing) {
+                stateByDoorId.delete(doorId);
+                continue;
+            }
+            const trackedHitbox = trackedDoor.groundPlaneHitbox || trackedDoor.visualHitbox || trackedDoor.hitbox || state.hitbox || null;
+            if (!trackedHitbox) continue;
+            appendDoorEntry(trackedDoor, trackedHitbox);
+        }
+
+        if (resolvedDoorEntries.length === 0) {
             for (const [doorId, state] of stateByDoorId.entries()) {
                 if (!state || !state.inside) {
                     stateByDoorId.delete(doorId);
@@ -2863,15 +2905,17 @@
         }
 
         const activeIds = new Set();
-        for (let i = 0; i < nearbyDoors.length; i++) {
-            const entry = nearbyDoors[i];
+        for (let i = 0; i < resolvedDoorEntries.length; i++) {
+            const entry = resolvedDoorEntries[i];
             const door = entry && entry.obj;
             const hitbox = entry && entry.hitbox;
             if (!isDoorPlacedObject(door) || !hitbox) continue;
 
-            const doorId = getDoorRuntimeId(door);
+            const doorId = entry && entry.doorId ? entry.doorId : getDoorRuntimeId(door);
             activeIds.add(doorId);
             const state = stateByDoorId.get(doorId) || { inside: false, touching: false, entrySide: 0, lastSide: 0 };
+            state.door = door;
+            state.hitbox = hitbox;
 
             const insideFrom = isPointInDoorHitbox(hitbox, fromX, fromY, radius);
             const insideTo = isPointInDoorHitbox(hitbox, toX, toY, radius);
@@ -2976,7 +3020,7 @@
                 ) {
                     continue;
                 }
-                const areaId = getObjectTouchRuntimeId(area);
+                const areaId = getTriggerTraversalStateId(area);
                 activeIds.add(areaId);
                 const sampledPrevInside = isPointInDoorHitbox(hitbox, fromX, fromY, touchRadius);
                 const priorState = stateById.get(areaId) || null;

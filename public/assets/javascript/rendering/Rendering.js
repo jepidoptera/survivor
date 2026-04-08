@@ -30,7 +30,7 @@
             textureSanitizer: false,
             pixiSpriteCrashDiagnostics: false,
             groundTileProfiling: false,
-            drawPassBreakdown: false,
+            drawPassBreakdown: true,
             scenePickerHoverProfiling: false
         };
         if (!global.renderingDiagnostics || typeof global.renderingDiagnostics !== "object") {
@@ -381,7 +381,7 @@
             const opts = options && typeof options === "object" ? options : {};
             const forceInclude = !!opts.forceInclude;
             if (!forceInclude && !displayObj.visible) return;
-            if (!displayObj.parent) return;
+            if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) return;
             this.pickRenderItems.push({ item, displayObj, forceInclude });
         }
 
@@ -1546,6 +1546,17 @@
                 recomputed: shouldRecomputeLos,
                 candidates: candidateCount
             };
+            this.setFrameMetric("losCandidates", candidateCount);
+            this.setFrameMetric("losBuildMs", losBuildMs);
+            this.setFrameMetric("losTraceMs", losTraceMs);
+            this.setFrameMetric("losTotalMs", losBuildMs + losTraceMs);
+            this.setFrameMetric("losRecomputed", shouldRecomputeLos ? 1 : 0);
+            this.setFrameMetric(
+                "losVisibleObjects",
+                (this.currentLosState && Array.isArray(this.currentLosState.visibleObjects))
+                    ? this.currentLosState.visibleObjects.length
+                    : 0
+            );
         }
 
         updateWallLosIlluminationTallies(ctx) {
@@ -1555,9 +1566,18 @@
                 : null;
             if (!allSections) return;
 
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const functionStartMs = diagnosticsEnabled ? performance.now() : 0;
+            let resetSections = 0;
+            let illuminatedBins = 0;
+            let rangedSections = 0;
+            let endpointOwnerLookups = 0;
+            let endpointOwnersResolved = 0;
+
             for (const section of allSections.values()) {
                 if (!section || typeof section.resetLosIlluminationTally !== "function") continue;
                 section.resetLosIlluminationTally();
+                resetSections += 1;
             }
 
             const wizard = ctx && ctx.wizard ? ctx.wizard : null;
@@ -1583,6 +1603,7 @@
 
             const collectEndpointOwners = endpoint => {
                 if (!endpoint || !Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return [];
+                endpointOwnerLookups += 1;
                 const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
                     ? mapRef.shortestDeltaX(wizard.x, endpoint.x)
                     : (endpoint.x - wizard.x);
@@ -1623,6 +1644,7 @@
                         out.push(owner);
                     }
                 }
+                endpointOwnersResolved += out.length;
                 return out;
             };
 
@@ -1631,6 +1653,7 @@
                 if (!owner || owner.type !== "wallSection" || typeof owner.accumulateLosIlluminationT !== "function") continue;
                 const hitDist = Number(state.depth[i]);
                 if (!Number.isFinite(hitDist) || hitDist <= 0) continue;
+                illuminatedBins += 1;
 
                 const theta = minAngle + ((i + 0.5) / bins) * twoPi;
                 const hitX = Number(wizard.x) + Math.cos(theta) * hitDist;
@@ -1645,6 +1668,7 @@
                 if (!section || typeof section.getLosIlluminationRangeT !== "function") continue;
                 const range = section.getLosIlluminationRangeT();
                 if (!range) continue;
+                rangedSections += 1;
 
                 const sectionLength = Number.isFinite(section.length) ? Math.max(0, Number(section.length)) : 0;
                 const tMin = Number(range.tMin);
@@ -1709,6 +1733,16 @@
                     section.setLosEndpointSnapEligibility("b", snapEnd);
                 }
             }
+
+            this.setFrameMetric("wallLosResetSections", resetSections);
+            this.setFrameMetric("wallLosIlluminatedBins", illuminatedBins);
+            this.setFrameMetric("wallLosRangedSections", rangedSections);
+            this.setFrameMetric("wallLosEndpointLookups", endpointOwnerLookups);
+            this.setFrameMetric("wallLosEndpointOwnersResolved", endpointOwnersResolved);
+            this.setFrameMetric(
+                "wallLosMs",
+                diagnosticsEnabled ? (performance.now() - functionStartMs) : 0
+            );
         }
 
         ensureLosShadowGraphics() {
@@ -1839,8 +1873,12 @@
 
         collectVisibleObjects(visibleNodes, ctx) {
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
+            const mapRef = ctx && ctx.map ? ctx.map : null;
             const seen = new Set();
             const out = [];
+            let nodeObjectsRefs = 0;
+            let nodeVisibilityRefs = 0;
+            let duplicateRefsSkipped = 0;
             for (let n = 0; n < nodes.length; n++) {
                 const node = nodes[n];
                 if (!node) continue;
@@ -1848,10 +1886,25 @@
                 for (let listIndex = 0; listIndex < objectLists.length; listIndex++) {
                     const list = objectLists[listIndex];
                     if (!Array.isArray(list)) continue;
+                    if (listIndex === 0) {
+                        nodeObjectsRefs += list.length;
+                    } else {
+                        nodeVisibilityRefs += list.length;
+                    }
                     for (let i = 0; i < list.length; i++) {
                         const obj = list[i];
                         if (!obj || obj.gone || obj.vanishing) continue;
-                        if (seen.has(obj)) continue;
+                        if (
+                            mapRef &&
+                            mapRef._prototypeTriggerState &&
+                            (obj.type === "triggerArea" || obj.isTriggerArea === true)
+                        ) {
+                            continue;
+                        }
+                        if (seen.has(obj)) {
+                            duplicateRefsSkipped += 1;
+                            continue;
+                        }
                         seen.add(obj);
                         out.push(obj);
                     }
@@ -1861,14 +1914,44 @@
                 ? ctx.animals
                 : (Array.isArray(global.animals) ? global.animals : []);
             const animalsPreFilteredVisible = !!(ctx && ctx.animalsPreFilteredVisible);
+            let animalsConsidered = 0;
+            let animalsAdded = 0;
+            let animalsSkippedOffscreen = 0;
             for (let i = 0; i < animalsList.length; i++) {
                 const animal = animalsList[i];
                 if (!animal || animal.gone || animal.vanishing) continue;
-                if (!animalsPreFilteredVisible && !animal.onScreen) continue;
+                animalsConsidered += 1;
+                if (!animalsPreFilteredVisible && !animal.onScreen) {
+                    animalsSkippedOffscreen += 1;
+                    continue;
+                }
                 if (seen.has(animal)) continue;
                 seen.add(animal);
                 out.push(animal);
+                animalsAdded += 1;
             }
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (
+                mapRef &&
+                wizardRef &&
+                typeof mapRef.getPrototypeActiveTriggerDisplayObjectsForActor === "function"
+            ) {
+                const triggerObjects = mapRef.getPrototypeActiveTriggerDisplayObjectsForActor(wizardRef);
+                for (let i = 0; i < triggerObjects.length; i++) {
+                    const triggerObj = triggerObjects[i];
+                    if (!triggerObj || triggerObj.gone || triggerObj.vanishing) continue;
+                    if (seen.has(triggerObj)) continue;
+                    seen.add(triggerObj);
+                    out.push(triggerObj);
+                }
+            }
+            this.setFrameMetric("visibleObjectNodeRefs", nodeObjectsRefs);
+            this.setFrameMetric("visibleObjectVisibilityRefs", nodeVisibilityRefs);
+            this.setFrameMetric("visibleObjectDuplicateRefsSkipped", duplicateRefsSkipped);
+            this.setFrameMetric("visibleAnimalCandidates", animalsConsidered);
+            this.setFrameMetric("visibleAnimalsAdded", animalsAdded);
+            this.setFrameMetric("visibleAnimalsSkippedOffscreen", animalsSkippedOffscreen);
+            this.setFrameMetric("visibleObjects", out.length);
             return out;
         }
 
@@ -1879,18 +1962,34 @@
             const shouldRenderNode = (typeof map.shouldRenderNode === "function")
                 ? map.shouldRenderNode.bind(map)
                 : null;
+            let skippedByRenderFilter = 0;
+            let wrappedNodes = 0;
+            let fallbackNodes = 0;
 
             this.forEachWrappedNodeInViewport(
                 map,
                 xPadding,
                 yPadding,
                 (node) => {
-                    if (shouldRenderNode && !shouldRenderNode(node)) return;
-                    if (node) nodes.push(node);
+                    if (shouldRenderNode && !shouldRenderNode(node)) {
+                        skippedByRenderFilter += 1;
+                        return;
+                    }
+                    if (node) {
+                        nodes.push(node);
+                        wrappedNodes += 1;
+                    }
                 },
                 ctx.camera
             );
-            if (nodes.length > 0) return nodes;
+            if (nodes.length > 0) {
+                this.setFrameMetric("visibleNodes", nodes.length);
+                this.setFrameMetric("visibleNodesWrapped", wrappedNodes);
+                this.setFrameMetric("visibleNodesFallback", 0);
+                this.setFrameMetric("visibleNodeFilterSkipped", skippedByRenderFilter);
+                this.setFrameMetric("visibleNodeFallbackUsed", 0);
+                return nodes;
+            }
 
             const cam = this.camera;
             const padX = Math.max(0, Number.isFinite(xPadding) ? Math.floor(xPadding) : 0);
@@ -1904,10 +2003,21 @@
                 if (!Array.isArray(col)) continue;
                 for (let y = minY; y <= maxY; y++) {
                     const node = col[y];
-                    if (shouldRenderNode && !shouldRenderNode(node)) continue;
-                    if (node) nodes.push(node);
+                    if (shouldRenderNode && !shouldRenderNode(node)) {
+                        skippedByRenderFilter += 1;
+                        continue;
+                    }
+                    if (node) {
+                        nodes.push(node);
+                        fallbackNodes += 1;
+                    }
                 }
             }
+            this.setFrameMetric("visibleNodes", nodes.length);
+            this.setFrameMetric("visibleNodesWrapped", wrappedNodes);
+            this.setFrameMetric("visibleNodesFallback", fallbackNodes);
+            this.setFrameMetric("visibleNodeFilterSkipped", skippedByRenderFilter);
+            this.setFrameMetric("visibleNodeFallbackUsed", fallbackNodes > 0 ? 1 : 0);
             return nodes;
         }
 
@@ -1919,18 +2029,24 @@
             const visibleObjects = Array.isArray(visibleObjectsOverride)
                 ? visibleObjectsOverride
                 : this.collectVisibleObjects(visibleNodes, ctx);
+            let cacheObjectsAdded = 0;
             for (let i = 0; i < visibleObjects.length; i++) {
                 const obj = visibleObjects[i];
                 if (!obj || obj.gone || obj.vanishing) continue;
                 cache.add(obj);
+                cacheObjectsAdded += 1;
             }
 
             const roofList = this.getRoofsList(ctx);
+            let cacheRoofsAdded = 0;
             for (let i = 0; i < roofList.length; i++) {
                 const roofRef = roofList[i];
                 if (!roofRef || roofRef.gone || !roofRef.placed || !roofRef.pixiMesh || !roofRef.pixiMesh.visible) continue;
                 cache.add(roofRef);
+                cacheRoofsAdded += 1;
             }
+            this.setFrameMetric("onscreenCacheObjects", cacheObjectsAdded);
+            this.setFrameMetric("onscreenCacheRoofs", cacheRoofsAdded);
         }
 
         shouldUseDepthBillboard(item) {
@@ -2686,10 +2802,15 @@
             const currentItems = new Set();
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const mazeModeForDepth = this.isLosMazeModeEnabled() && !this.isOmnivisionActive(wizardRef);
+            let depthCandidates = 0;
+            let depthMissingMountedSection = 0;
+            let depthHiddenByScript = 0;
+            let depthDoorBottomOutlineOnly = 0;
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!this.shouldUseDepthBillboard(item)) continue;
+                depthCandidates += 1;
                 // Windows on top-face-only roof walls should be hidden; doors remain visible.
                 if (this.isWallMountedSpatialItem(item)) {
                     const _mountedSection = this.resolveMountedWallSectionForItem(item);
@@ -2726,6 +2847,7 @@
                                 item._doorBottomFaceDebugGraphics.renderable = false;
                             }
                         }
+                        depthMissingMountedSection += 1;
                         depthRenderedItems.add(item);
                         continue;
                     }
@@ -2752,6 +2874,7 @@
                     }
                 }
                 if (!this.isScriptVisible(item)) {
+                    depthHiddenByScript += 1;
                     if (item.pixiSprite) {
                         item.pixiSprite.visible = false;
                         if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
@@ -2796,6 +2919,7 @@
                     }
                 }
                 if (showDoorBottomDebugOutline) {
+                    depthDoorBottomOutlineOnly += 1;
                     const itemContainer = this.isCharacterRenderItem(item) ? characterContainer : container;
                     const targetContainer = (item.rotationAxis === "ground" && groundContainer)
                         ? groundContainer
@@ -3059,6 +3183,11 @@
             this.activeDepthBillboardMeshes = currentMeshes;
             this.activeDepthBillboardItems = currentItems;
 
+            this.setFrameMetric("depthCandidates", depthCandidates);
+            this.setFrameMetric("depthMissingMountedSection", depthMissingMountedSection);
+            this.setFrameMetric("depthHiddenByScript", depthHiddenByScript);
+            this.setFrameMetric("depthDoorBottomOutlineOnly", depthDoorBottomOutlineOnly);
+
             return depthRenderedItems;
         }
 
@@ -3103,6 +3232,8 @@
                 }
             }
             this._activeGroundObjectSprites = currentSprites;
+
+            this.setFrameMetric("groundObjectSpritesRendered", currentSprites.size);
 
             return groundRenderedItems;
         }
@@ -3391,6 +3522,8 @@
             const cam = this.camera;
             const container = this.layers.roadsFloor;
             if (!map || !Array.isArray(map.nodes) || !container) return;
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const functionStartMs = diagnosticsEnabled ? performance.now() : 0;
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs))
                 ? Number(ctx.renderNowMs)
                 : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
@@ -3398,6 +3531,13 @@
                     : Date.now());
             const hiddenSpriteGraceMs = 500;
             const maxHiddenSprites = 96;
+            let roadSpritesCreated = 0;
+            let roadSpritesAttached = 0;
+            let roadTextureRefreshes = 0;
+            let roadTextureAssignments = 0;
+            let roadHiddenSprites = 0;
+            let roadDestroyedSprites = 0;
+            let roadEvictedSprites = 0;
 
             const destroyRoadSprite = (road, sprite) => {
                 if (sprite) {
@@ -3410,6 +3550,7 @@
                     }
                 }
                 this.roadSpriteByObject.delete(road);
+                roadDestroyedSprites += 1;
             };
 
             const visibleRoadObjects = new Set();
@@ -3434,9 +3575,11 @@
                     sprite.name = "renderingRoad";
                     sprite.anchor.set(0.5, 0.5);
                     this.roadSpriteByObject.set(road, sprite);
+                    roadSpritesCreated += 1;
                 }
                 if (sprite.parent !== container) {
                     container.addChild(sprite);
+                    roadSpritesAttached += 1;
                 }
 
                 const worldX = Number.isFinite(road.x) ? road.x : (road.node && Number.isFinite(road.node.x) ? road.node.x : 0);
@@ -3460,6 +3603,7 @@
                 ) ? road.pixiSprite.texture : null;
                 if (!sourceTexture && typeof road.updateTexture === "function") {
                     road.updateTexture();
+                    roadTextureRefreshes += 1;
                 }
                 const refreshedSourceTexture = (
                     road &&
@@ -3469,11 +3613,13 @@
                 if (refreshedSourceTexture && refreshedSourceTexture !== sprite.texture) {
                     sprite.texture = refreshedSourceTexture;
                     syncRoadRenderSpriteTextureRetention(sprite, road);
+                    roadTextureAssignments += 1;
                 } else if (refreshedSourceTexture) {
                     syncRoadRenderSpriteTextureRetention(sprite, road);
                 } else if (!isRenderablePixiTexture(sprite.texture)) {
                     syncRoadRenderSpriteTextureRetention(sprite, null);
                     sprite.texture = PIXI.Texture.WHITE;
+                    roadTextureAssignments += 1;
                 }
 
                 const p = cam.worldToScreen(worldX, worldY, 0);
@@ -3512,6 +3658,7 @@
                         sprite.texture = PIXI.Texture.WHITE;
                     }
                     sprite.visible = false;
+                    roadHiddenSprites += 1;
                     hiddenEntries.push({ road, sprite, lastVisibleAtMs });
                 }
             }
@@ -3522,8 +3669,23 @@
                 for (let i = 0; i < evictCount; i++) {
                     const entry = hiddenEntries[i];
                     destroyRoadSprite(entry.road, entry.sprite);
+                    roadEvictedSprites += 1;
                 }
             }
+
+            this.setFrameMetric("roadsVisible", roadObjects.length);
+            this.setFrameMetric("roadsCached", this.roadSpriteByObject instanceof Map ? this.roadSpriteByObject.size : 0);
+            this.setFrameMetric("roadsCreated", roadSpritesCreated);
+            this.setFrameMetric("roadsAttached", roadSpritesAttached);
+            this.setFrameMetric("roadsTextureRefreshes", roadTextureRefreshes);
+            this.setFrameMetric("roadsTextureAssignments", roadTextureAssignments);
+            this.setFrameMetric("roadsHidden", roadHiddenSprites);
+            this.setFrameMetric("roadsDestroyed", roadDestroyedSprites);
+            this.setFrameMetric("roadsEvicted", roadEvictedSprites);
+            this.setFrameMetric(
+                "roadsMs",
+                diagnosticsEnabled ? (performance.now() - functionStartMs) : 0
+            );
         }
 
         renderHexGridOverlay(ctx) {
@@ -3812,12 +3974,15 @@
         renderObjects3D(ctx, visibleNodes, visibleObjectsOverride = null) {
             const container = this.layers.objects3d;
             if (!container) return;
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const nowIfEnabled = () => diagnosticsEnabled ? performance.now() : 0;
             const showPickerScreen = getShowPickerScreenFlag();
             const wizard = (ctx && ctx.wizard) ? ctx.wizard : null;
             const mapRef = (ctx && ctx.map) ? ctx.map : (this.camera && this.camera.map) || global.map || null;
             const omnivisionActive = this.isOmnivisionActive(wizard);
             const mazeMode = this.isLosMazeModeEnabled() && !omnivisionActive;
             const useMazeLosClipping = mazeMode;
+            const buildLosSetsStartMs = nowIfEnabled();
             const losVisibleObjectSet = (
                 useMazeLosClipping &&
                 this.currentLosState &&
@@ -3841,6 +4006,10 @@
                 }
                 return out;
             })();
+            const buildLosSetsMs = diagnosticsEnabled ? (performance.now() - buildLosSetsStartMs) : 0;
+            this.setFrameMetric("objects3dLosBuildMs", buildLosSetsMs);
+            this.setFrameMetric("objects3dLosVisibleSetSize", losVisibleObjectSet ? losVisibleObjectSet.size : 0);
+            this.setFrameMetric("objects3dLosVisibleWalls", losVisibleWalls.length);
             const sharesVisibleCollinearWallLine = (item) => {
                 if (!item || !useMazeLosClipping || !losVisibleObjectSet || losVisibleWalls.length === 0) {
                     return false;
@@ -3967,14 +4136,28 @@
             const visibleObjects = Array.isArray(visibleObjectsOverride)
                 ? visibleObjectsOverride
                 : this.collectVisibleObjects(visibleNodes, ctx);
-            const mapItems = visibleObjects.filter(item =>
-                item &&
-                this.isScriptVisible(item) &&
-                item.type !== "road" &&
-                item !== wizard &&
-                !isAnimalHiddenByLos(item) &&
-                !isItemHiddenByMazeLos(item)
-            );
+            let animalLosHiddenCount = 0;
+            let itemMazeHiddenCount = 0;
+            let wallMazeHiddenCount = 0;
+            const filterStartMs = nowIfEnabled();
+            const mapItems = visibleObjects.filter(item => {
+                if (!item) return false;
+                if (!this.isScriptVisible(item)) return false;
+                if (item.type === "road" || item === wizard) return false;
+                if (isAnimalHiddenByLos(item)) {
+                    animalLosHiddenCount += 1;
+                    return false;
+                }
+                if (isItemHiddenByMazeLos(item)) {
+                    itemMazeHiddenCount += 1;
+                    if (item.type === "wallSection") {
+                        wallMazeHiddenCount += 1;
+                    }
+                    return false;
+                }
+                return true;
+            });
+            const filterMs = diagnosticsEnabled ? (performance.now() - filterStartMs) : 0;
             const renderNowMs = Number.isFinite(ctx && ctx.renderNowMs) ? Number(ctx.renderNowMs) : performance.now();
             const inMazeModeActivationRevealBypassWindow = !!(
                 useMazeLosClipping &&
@@ -3995,10 +4178,18 @@
                 !isItemHiddenByMazeLos(roofRef)
             );
             const renderItems = mapItems.concat(roofItems);
+            this.setFrameMetric("objects3dFilterMs", filterMs);
+            this.setFrameMetric("objects3dAnimalLosHidden", animalLosHiddenCount);
+            this.setFrameMetric("objects3dMazeHidden", itemMazeHiddenCount);
+            this.setFrameMetric("objects3dMazeHiddenWalls", wallMazeHiddenCount);
+            this.setFrameMetric("objects3dMapItems", mapItems.length);
+            this.setFrameMetric("objects3dRoofItems", roofItems.length);
+            this.setFrameMetric("objects3dRenderItems", renderItems.length);
             for (let i = 0; i < renderItems.length; i++) {
                 this.updateSinkAnimation(renderItems[i], renderNowMs);
             }
 
+            const transformStartMs = nowIfEnabled();
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item) continue;
@@ -4015,9 +4206,20 @@
                     }
                 }
             }
+            const transformMs = diagnosticsEnabled ? (performance.now() - transformStartMs) : 0;
+            this.setFrameMetric("objects3dTransformMs", transformMs);
+            const depthStartMs = nowIfEnabled();
             const depthBillboardRenderedItems = this.renderDepthBillboardObjects(ctx, renderItems);
+            const depthMs = diagnosticsEnabled ? (performance.now() - depthStartMs) : 0;
+            this.setFrameMetric("objects3dDepthMs", depthMs);
+            this.setFrameMetric("objects3dDepthRendered", depthBillboardRenderedItems.size);
+            const groundStartMs = nowIfEnabled();
             const groundObjectsRenderedItems = this.renderGroundObjects(ctx, renderItems, depthBillboardRenderedItems);
+            const groundMs = diagnosticsEnabled ? (performance.now() - groundStartMs) : 0;
+            this.setFrameMetric("objects3dGroundMs", groundMs);
+            this.setFrameMetric("objects3dGroundRendered", groundObjectsRenderedItems.size);
             const currentDisplayObjects = new Set();
+            const displayStartMs = nowIfEnabled();
 
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
@@ -4203,6 +4405,12 @@
                 }
             }
             this.activeTreeHealthBarItems = visibleTreeItems;
+
+            const displayMs = diagnosticsEnabled ? (performance.now() - displayStartMs) : 0;
+            this.setFrameMetric("objects3dDisplayMs", displayMs);
+            this.setFrameMetric("objects3dDisplayObjects", currentDisplayObjects.size);
+            this.setFrameMetric("objects3dVisibleAnimals", visibleAnimalItems.size);
+            this.setFrameMetric("objects3dVisibleTrees", visibleTreeItems.size);
         }
 
         renderWizard(ctx) {
@@ -6536,6 +6744,28 @@
             return profiler;
         }
 
+        beginFrameMetrics() {
+            if (!isDrawPassBreakdownEnabled()) {
+                this.currentFrameMetrics = null;
+                return null;
+            }
+            this.currentFrameMetrics = Object.create(null);
+            return this.currentFrameMetrics;
+        }
+
+        setFrameMetric(metricName, value) {
+            if (!this.currentFrameMetrics || !metricName) return value;
+            this.currentFrameMetrics[metricName] = value;
+            return value;
+        }
+
+        incrementFrameMetric(metricName, delta = 1) {
+            if (!this.currentFrameMetrics || !metricName || !Number.isFinite(delta)) return 0;
+            const nextValue = Number(this.currentFrameMetrics[metricName] || 0) + Number(delta);
+            this.currentFrameMetrics[metricName] = nextValue;
+            return nextValue;
+        }
+
         recordDrawPassSection(sectionName, elapsedMs) {
             const profiler = this.drawPassProfiler;
             if (!profiler || profiler.printed || !sectionName || !Number.isFinite(elapsedMs)) return;
@@ -6608,6 +6838,7 @@
             if (!this.initialized) return false;
             const frameStartMs = performance.now();
             this.currentFrameDrawSections = isDrawPassBreakdownEnabled() ? Object.create(null) : null;
+            this.beginFrameMetrics();
             const frameNowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : frameStartMs;
             const mazeModeSettingEnabled = this.isLosMazeModeEnabled();
             if (mazeModeSettingEnabled && (!this.lastMazeModeSettingEnabled || !Number.isFinite(this.mazeModeActivatedAtMs))) {
@@ -6875,7 +7106,9 @@
             }
             if (typeof globalThis !== "undefined" && isDrawPassBreakdownEnabled()) {
                 const sections = this.currentFrameDrawSections || Object.create(null);
+                const metrics = this.currentFrameMetrics || Object.create(null);
                 const getMs = (name) => Number(sections[name] || 0);
+                const getMetric = (name) => Number(metrics[name] || 0);
                 const visibleObjectsCount = Array.isArray(visibleObjects) ? visibleObjects.length : 0;
                 let hydratedRoads = 0;
                 let hydratedTrees = 0;
@@ -6938,6 +7171,66 @@
                     composeWallSectionsRebuilt: 0,
                     composeUnaccountedMs: 0,
                     composeInvariantSkipped: 0,
+                    visibleNodes: getMetric("visibleNodes"),
+                    visibleNodesWrapped: getMetric("visibleNodesWrapped"),
+                    visibleNodesFallback: getMetric("visibleNodesFallback"),
+                    visibleNodeFilterSkipped: getMetric("visibleNodeFilterSkipped"),
+                    visibleNodeFallbackUsed: getMetric("visibleNodeFallbackUsed"),
+                    visibleObjectNodeRefs: getMetric("visibleObjectNodeRefs"),
+                    visibleObjectVisibilityRefs: getMetric("visibleObjectVisibilityRefs"),
+                    visibleObjectDuplicateRefsSkipped: getMetric("visibleObjectDuplicateRefsSkipped"),
+                    visibleAnimalsAdded: getMetric("visibleAnimalsAdded"),
+                    visibleAnimalsSkippedOffscreen: getMetric("visibleAnimalsSkippedOffscreen"),
+                    onscreenCacheObjects: getMetric("onscreenCacheObjects"),
+                    onscreenCacheRoofs: getMetric("onscreenCacheRoofs"),
+                    losCandidates: getMetric("losCandidates"),
+                    losBuildMs: getMetric("losBuildMs"),
+                    losTraceMs: getMetric("losTraceMs"),
+                    losTotalMs: getMetric("losTotalMs"),
+                    losRecomputed: getMetric("losRecomputed"),
+                    losVisibleObjects: getMetric("losVisibleObjects"),
+                    wallLosMs: getMetric("wallLosMs"),
+                    wallLosResetSections: getMetric("wallLosResetSections"),
+                    wallLosIlluminatedBins: getMetric("wallLosIlluminatedBins"),
+                    wallLosRangedSections: getMetric("wallLosRangedSections"),
+                    wallLosEndpointLookups: getMetric("wallLosEndpointLookups"),
+                    wallLosEndpointOwnersResolved: getMetric("wallLosEndpointOwnersResolved"),
+                    mazeModeMaskWorldPoints: getMetric("mazeModeMaskWorldPoints"),
+                    mazeModeMaskActive: getMetric("mazeModeMaskActive"),
+                    roadsVisible: getMetric("roadsVisible"),
+                    roadsCached: getMetric("roadsCached"),
+                    roadsCreated: getMetric("roadsCreated"),
+                    roadsAttached: getMetric("roadsAttached"),
+                    roadsTextureRefreshes: getMetric("roadsTextureRefreshes"),
+                    roadsTextureAssignments: getMetric("roadsTextureAssignments"),
+                    roadsHidden: getMetric("roadsHidden"),
+                    roadsDestroyed: getMetric("roadsDestroyed"),
+                    roadsEvicted: getMetric("roadsEvicted"),
+                    roadsMs: getMetric("roadsMs"),
+                    depthCandidates: getMetric("depthCandidates"),
+                    depthMissingMountedSection: getMetric("depthMissingMountedSection"),
+                    depthHiddenByScript: getMetric("depthHiddenByScript"),
+                    depthDoorBottomOutlineOnly: getMetric("depthDoorBottomOutlineOnly"),
+                    groundObjectSpritesRendered: getMetric("groundObjectSpritesRendered"),
+                    objects3dLosBuildMs: getMetric("objects3dLosBuildMs"),
+                    objects3dLosVisibleSetSize: getMetric("objects3dLosVisibleSetSize"),
+                    objects3dLosVisibleWalls: getMetric("objects3dLosVisibleWalls"),
+                    objects3dFilterMs: getMetric("objects3dFilterMs"),
+                    objects3dTransformMs: getMetric("objects3dTransformMs"),
+                    objects3dDepthMs: getMetric("objects3dDepthMs"),
+                    objects3dGroundMs: getMetric("objects3dGroundMs"),
+                    objects3dDisplayMs: getMetric("objects3dDisplayMs"),
+                    objects3dAnimalLosHidden: getMetric("objects3dAnimalLosHidden"),
+                    objects3dMazeHidden: getMetric("objects3dMazeHidden"),
+                    objects3dMazeHiddenWalls: getMetric("objects3dMazeHiddenWalls"),
+                    objects3dMapItems: getMetric("objects3dMapItems"),
+                    objects3dRoofItems: getMetric("objects3dRoofItems"),
+                    objects3dRenderItems: getMetric("objects3dRenderItems"),
+                    objects3dDepthRendered: getMetric("objects3dDepthRendered"),
+                    objects3dGroundRendered: getMetric("objects3dGroundRendered"),
+                    objects3dDisplayObjects: getMetric("objects3dDisplayObjects"),
+                    objects3dVisibleAnimals: getMetric("objects3dVisibleAnimals"),
+                    objects3dVisibleTrees: getMetric("objects3dVisibleTrees"),
                     mapItems: visibleObjectsCount,
                     onscreen: (typeof global.onscreenObjects !== "undefined" && global.onscreenObjects && Number.isFinite(global.onscreenObjects.size))
                         ? Number(global.onscreenObjects.size)
@@ -6972,8 +7265,10 @@
                     hydratedRoads,
                     hydratedTrees
                 };
+                globalThis.renderingFrameMetrics = { ...metrics };
             } else if (typeof globalThis !== "undefined") {
                 globalThis.drawPerfBreakdown = null;
+                globalThis.renderingFrameMetrics = null;
             }
             if (this.drawPassProfiler && !this.drawPassProfiler.printed) {
                 this.drawPassProfiler.frameCount += 1;

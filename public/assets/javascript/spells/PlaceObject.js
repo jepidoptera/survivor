@@ -328,6 +328,10 @@ class PlaceObject extends globalThis.Spell {
             wizard.map &&
             wizard.map._prototypeObjectState
         ) {
+            if (!(wizard.map._prototypeObjectState.dirtyRuntimeObjects instanceof Set)) {
+                wizard.map._prototypeObjectState.dirtyRuntimeObjects = new Set();
+            }
+            wizard.map._prototypeObjectState.dirtyRuntimeObjects.add(placedObject);
             wizard.map._prototypeObjectState.captureScanNeeded = true;
         }
 

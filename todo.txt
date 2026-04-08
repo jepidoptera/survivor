@@ -56,9 +56,11 @@ X startup message
 X dialogs in scripting
 X player dies
 X thunderbolts from fragglegod
+X see-through windows
+X revamp close combat - use hitboxes instead of hex tiles
+X infinite map extent
 
-/ infinite map extent
-  incremental, non-lagging load
+/ incremental, non-lagging load
   upgradable spells
   multiple floors!
   shop sells magic items
@@ -66,8 +68,6 @@ X thunderbolts from fragglegod
   mind control spells
   time-slowing aura
   trees should be transparent when the player is behind them
-X see-through windows
-X revamp close combat - use hitboxes instead of hex tiles
   checkpoints
   undo system for editor
   refactor renderer
@@ -99,4 +99,26 @@ X spell images don't scale with zoom
 X walls sometimes connect sideways and get totally screwy
 X blodia fails to attack when you stand near a wall
 / bears chase for a very long time
+  creatures escape from walls when their section leaves the active bubble
+  walls disappear when their section leaves the active bubble (separate problem)
+  built walls disappear on save
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
+
+large trigger area architecture checklist:
+  [ ] add stable trigger ids to saved trigger-area records
+  [ ] add prototype trigger-definition registry state on map
+  [ ] build trigger registry from section asset records, not runtime objects
+  [ ] compute trigger bounds and coverage section keys from polygon footprints
+  [ ] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
+  [ ] change trigger traversal candidate gathering to query the trigger registry
+  [ ] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
+  [ ] preserve enter/exit state by stable trigger id instead of runtime-object residency
+  [ ] decide script policy: metadata-safe immediate execution vs hydrate/materialize-on-demand
+  [ ] add temporary trigger script target materialization for `this` if needed
+  [ ] keep ownerSectionKey as persistence home, separate from coverage authority
+  [ ] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
+  [ ] test: player enters trigger before owner section loads
+  [ ] test: player exits trigger after owner section unloads
+  [ ] test: multi-section trigger coverage lookup returns the trigger from any covered section
+  [ ] test: large trigger does not double-fire enter or exit during continuous traversal
+  [ ] test: trigger scripts using `this` still work when the owner section is not materialized

@@ -74,8 +74,14 @@
             }
             const worldPoints = global.LOSSystem.buildPolygonWorldPoints(wizard, state, farDist);
             if (!Array.isArray(worldPoints) || worldPoints.length < 3) {
+                if (typeof rendering.setFrameMetric === "function") {
+                    rendering.setFrameMetric("mazeModeMaskWorldPoints", 0);
+                }
                 maskGraphics.visible = false;
                 return false;
+            }
+            if (typeof rendering.setFrameMetric === "function") {
+                rendering.setFrameMetric("mazeModeMaskWorldPoints", worldPoints.length);
             }
 
             maskGraphics.visible = true;
@@ -109,6 +115,9 @@
                 if (layers.groundObjects) layers.groundObjects.mask = null;
                 if (this.blackBackdropGraphics) this.blackBackdropGraphics.visible = false;
                 if (this.occlusionMaskGraphics) this.occlusionMaskGraphics.visible = false;
+                if (typeof rendering.setFrameMetric === "function") {
+                    rendering.setFrameMetric("mazeModeMaskActive", 0);
+                }
                 this.active = false;
                 return false;
             }
@@ -117,6 +126,9 @@
             const occlusionMask = this.ensureOcclusionMaskGraphics(layers);
             this.drawBlackBackdrop(backdrop, ctx && ctx.app ? ctx.app : null);
             const hasMask = this.drawLosOcclusionMask(occlusionMask, rendering, ctx || {});
+            if (typeof rendering.setFrameMetric === "function") {
+                rendering.setFrameMetric("mazeModeMaskActive", hasMask ? 1 : 0);
+            }
 
             if (layers.ground) layers.ground.mask = hasMask ? occlusionMask : null;
             if (layers.roadsFloor) layers.roadsFloor.mask = hasMask ? occlusionMask : null;

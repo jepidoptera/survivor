@@ -1090,9 +1090,14 @@ class Wizard extends Character {
         this._movementForceTouchedObjects = forceTouchedObjects;
 
         const padding = this.getVectorMovementSearchPadding(radius, options);
-        const minNode = this.map.worldToNode(newX - padding, newY - padding);
-        const maxNode = this.map.worldToNode(newX + padding, newY + padding);
-        if (minNode && maxNode) {
+        const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
+        if (searchNodes.length > 0) {
+            const xIndices = searchNodes.map(node => Number(node.xindex));
+            const yIndices = searchNodes.map(node => Number(node.yindex));
+            const minXIndex = Math.min(...xIndices);
+            const maxXIndex = Math.max(...xIndices);
+            const minYIndex = Math.min(...yIndices);
+            const maxYIndex = Math.max(...yIndices);
             const collectFromNode = (node) => {
                 if (!node || !Array.isArray(node.objects)) return;
                 const nodeObjects = node.objects;
@@ -1114,19 +1119,19 @@ class Wizard extends Character {
             };
 
             if (typeof this.map.getNodesInIndexWindow === "function") {
-                const xStart = Math.min(minNode.xindex, maxNode.xindex) - 1;
-                const xEnd = Math.max(minNode.xindex, maxNode.xindex) + 1;
-                const yStart = Math.min(minNode.yindex, maxNode.yindex) - 1;
-                const yEnd = Math.max(minNode.yindex, maxNode.yindex) + 1;
+                const xStart = minXIndex - 1;
+                const xEnd = maxXIndex + 1;
+                const yStart = minYIndex - 1;
+                const yEnd = maxYIndex + 1;
                 const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
                 for (let i = 0; i < nearbyNodes.length; i++) {
                     collectFromNode(nearbyNodes[i]);
                 }
             } else {
-                const xStart = Math.max(minNode.xindex - 1, 0);
-                const xEnd = Math.min(maxNode.xindex + 1, Math.max(0, (this.map.width || 0) - 1));
-                const yStart = Math.max(minNode.yindex - 1, 0);
-                const yEnd = Math.min(maxNode.yindex + 1, Math.max(0, (this.map.height || 0) - 1));
+                const xStart = Math.max(minXIndex - 1, 0);
+                const xEnd = Math.min(maxXIndex + 1, Math.max(0, (this.map.width || 0) - 1));
+                const yStart = Math.max(minYIndex - 1, 0);
+                const yEnd = Math.min(maxYIndex + 1, Math.max(0, (this.map.height || 0) - 1));
 
                 for (let x = xStart; x <= xEnd; x++) {
                     for (let y = yStart; y <= yEnd; y++) {
@@ -1150,26 +1155,85 @@ class Wizard extends Character {
 
     canBypassVectorMovementCollisions(currentX, currentY, newX, newY, radius, context, _options = {}) {
         const nearbyDoors = Array.isArray(context?.nearbyDoors) ? context.nearbyDoors : [];
+        const nearbyObjects = Array.isArray(context?.nearbyObjects) ? context.nearbyObjects : [];
         const isPointInDoorHitboxFn = context?.isPointInDoorHitboxFn;
         if (typeof isPointInDoorHitboxFn !== "function" || nearbyDoors.length === 0) {
             return false;
         }
 
-        const isInOrTouchingNearbyDoor = (px, py, doorRadius = 0) => {
+        const hasDoorSpanClearance = (entry, px, py, doorRadius = 0) => {
+            if (!entry || !entry.hitbox) return false;
+            const hitbox = entry.hitbox;
+            const resolvedRadius = Math.max(0, Number(doorRadius) || 0);
+            const points = Array.isArray(hitbox.points) ? hitbox.points : null;
+            const widthHint = Number.isFinite(entry.obj?.width) ? Math.max(0, Number(entry.obj.width)) : null;
+            if (!(resolvedRadius > 0) || !points || points.length !== 4 || !(widthHint > 0)) {
+                return true;
+            }
+
+            const edgeA = {
+                dx: Number(points[1].x) - Number(points[0].x),
+                dy: Number(points[1].y) - Number(points[0].y)
+            };
+            const edgeB = {
+                dx: Number(points[2].x) - Number(points[1].x),
+                dy: Number(points[2].y) - Number(points[1].y)
+            };
+            const lenA = Math.hypot(edgeA.dx, edgeA.dy);
+            const lenB = Math.hypot(edgeB.dx, edgeB.dy);
+            const useEdgeA = Math.abs(lenA - widthHint) <= Math.abs(lenB - widthHint);
+            const widthLen = useEdgeA ? lenA : lenB;
+            if (!(widthLen > 1e-6)) {
+                return true;
+            }
+
+            const axisDx = useEdgeA ? edgeA.dx : edgeB.dx;
+            const axisDy = useEdgeA ? edgeA.dy : edgeB.dy;
+            const axisX = axisDx / widthLen;
+            const axisY = axisDy / widthLen;
+            const centerX = (Number(points[0].x) + Number(points[1].x) + Number(points[2].x) + Number(points[3].x)) * 0.25;
+            const centerY = (Number(points[0].y) + Number(points[1].y) + Number(points[2].y) + Number(points[3].y)) * 0.25;
+            const projectedSpan = Math.abs((px - centerX) * axisX + (py - centerY) * axisY);
+            const halfSpan = widthLen * 0.5;
+            const insetClearance = Math.max(0, halfSpan - resolvedRadius);
+            const minimumViableCenterCorridor = Math.min(halfSpan, resolvedRadius * 0.5);
+            return projectedSpan <= Math.max(insetClearance, minimumViableCenterCorridor) + 1e-6;
+        };
+
+        const findTraversableDoorAtPoint = (px, py, doorRadius = 0, requireSpanClearance = false) => {
             for (let i = 0; i < nearbyDoors.length; i++) {
                 const entry = nearbyDoors[i];
                 if (!entry || !entry.canTraverse) continue;
-                if (isPointInDoorHitboxFn(entry.hitbox, px, py, doorRadius)) {
-                    return true;
-                }
+                if (!isPointInDoorHitboxFn(entry.hitbox, px, py, doorRadius)) continue;
+                if (requireSpanClearance && !hasDoorSpanClearance(entry, px, py, doorRadius)) continue;
+                return entry;
             }
-            return false;
+            return null;
         };
 
-        return (
-            isInOrTouchingNearbyDoor(currentX, currentY, radius) ||
-            isInOrTouchingNearbyDoor(newX, newY, radius)
-        );
+        const currentDoor = findTraversableDoorAtPoint(currentX, currentY, radius);
+        const nextDoor = findTraversableDoorAtPoint(newX, newY, radius);
+        const currentDoorWithClearance = findTraversableDoorAtPoint(currentX, currentY, radius, true);
+        const nextDoorWithClearance = findTraversableDoorAtPoint(newX, newY, radius, true);
+        if (!currentDoor && !nextDoor) {
+            return false;
+        }
+
+        if (nextDoorWithClearance) {
+            return true;
+        }
+
+        const candidateHitbox = { type: "circle", x: newX, y: newY, radius: Math.max(0, Number(radius) || 0) };
+        for (let i = 0; i < nearbyObjects.length; i++) {
+            const obj = nearbyObjects[i];
+            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") continue;
+            const collision = obj.groundPlaneHitbox.intersects(candidateHitbox);
+            if (collision && collision.pushX !== undefined) {
+                return false;
+            }
+        }
+
+        return !!currentDoorWithClearance;
     }
 
     onVectorMovementApplied(movementResult, _options = {}) {

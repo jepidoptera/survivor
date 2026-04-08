@@ -581,3 +581,31 @@ test("GameMap.findPathAStar handles improved paths after stale queue entries", (
     assert.equal(path[1], a);
     assert.equal(path[2], goal);
 });
+
+test("GameMap.findPathAStar skips blocker collection when collectBlockers is false", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 2;
+    map.height = 1;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+
+    const start = createNode(0, 0, { x: 0, y: 0 });
+    const goal = createNode(1, 0, { x: 1, y: 0 });
+    start.neighbors[3] = goal;
+
+    map.getTraversalInfo = () => ({
+        allowed: true,
+        neighborNode: goal,
+        penalty: 0,
+        blockers: [{ type: "door" }]
+    });
+
+    const path = map.findPathAStar(start, goal, {
+        returnPathSteps: true,
+        collectBlockers: false
+    });
+
+    assert.equal(Array.isArray(path), true);
+    assert.equal(path.length, 1);
+    assert.equal(Array.isArray(path.blockers), false);
+});
