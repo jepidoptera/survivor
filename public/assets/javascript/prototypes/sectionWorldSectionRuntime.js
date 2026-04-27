@@ -1,6 +1,15 @@
 (function (globalScope) {
     "use strict";
 
+    function sectionOwnsPrototypeNode(node, assetKey) {
+        if (!node) return false;
+        if (typeof node._prototypeSectionKey !== "string" || node._prototypeSectionKey.length === 0) {
+            node._prototypeSectionKey = assetKey;
+            return true;
+        }
+        return node._prototypeSectionKey === assetKey;
+    }
+
     function refreshSparseNodesForSectionAsset(map, prototypeState, asset, deps) {
         const {
             getPrototypeGroundTextureCount,
@@ -22,15 +31,16 @@
             const node = sectionNodes[i];
             if (!node) continue;
             const coordKey = `${node.xindex},${node.yindex}`;
-            node._prototypeSectionKey = asset.key;
-            node.groundTextureId = Number.isFinite(groundTiles[coordKey])
-                ? Number(groundTiles[coordKey])
-                : pickPrototypeGroundTextureId(node.xindex, node.yindex, textureCount);
-            if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
-                const rawClearance = asset.clearanceByTile[coordKey];
-                node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
-            } else {
-                node.clearance = Infinity;
+            if (sectionOwnsPrototypeNode(node, asset.key)) {
+                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
+                    ? Number(groundTiles[coordKey])
+                    : pickPrototypeGroundTextureId(node.xindex, node.yindex, textureCount);
+                if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
+                    const rawClearance = asset.clearanceByTile[coordKey];
+                    node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
+                } else {
+                    node.clearance = Infinity;
+                }
             }
             updated += 1;
         }
@@ -90,12 +100,14 @@
                 prototypeState.allNodes.push(node);
                 prototypeState.allNodesByCoordKey.set(coordKey, node);
             }
-            node.groundTextureId = Number.isFinite(groundTiles[coordKey])
-                ? Number(groundTiles[coordKey])
-                : pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
-            node._prototypeSectionKey = asset.key;
+            const sectionOwnsNode = sectionOwnsPrototypeNode(node, asset.key);
+            if (sectionOwnsNode) {
+                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
+                    ? Number(groundTiles[coordKey])
+                    : pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
+            }
             node._prototypeSectionActive = false;
-            if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
+            if (sectionOwnsNode && asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
                 const rawClearance = asset.clearanceByTile[coordKey];
                 node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
             }
@@ -138,7 +150,11 @@
         if (existingSection) {
             if (prototypeState.useSparseNodes === true) {
                 const existingAsset = prototypeState.sectionAssetsByKey.get(key);
-                if (existingAsset && !prototypeState.nodesBySectionKey.has(key)) {
+                if (
+                    existingAsset &&
+                    existingAsset._prototypeSectionHydrated === true &&
+                    !prototypeState.nodesBySectionKey.has(key)
+                ) {
                     addSparseNodesForSectionFn(map, prototypeState, existingAsset);
                 }
             }
@@ -147,7 +163,7 @@
 
         const asset = createPrototypeSectionAsset(prototypeState, sectionCoord, map);
         if (!asset) return null;
-        if (prototypeState.useSparseNodes === true) {
+        if (prototypeState.useSparseNodes === true && asset._prototypeSectionHydrated === true) {
             addSparseNodesForSectionFn(map, prototypeState, asset);
         }
         return prototypeState.sectionsByKey.get(key) || null;
@@ -222,6 +238,7 @@
                     prototypeState.allNodes.push(node);
                     prototypeState.allNodesByCoordKey.set(coordKey, node);
                 }
+                sectionOwnsPrototypeNode(node, asset.key);
                 sectionNodes.push(node);
             }
             prototypeState.nodesBySectionKey.set(asset.key, sectionNodes);

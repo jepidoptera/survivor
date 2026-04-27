@@ -143,6 +143,7 @@ function createNode(xindex, yindex, overrides = {}) {
         y: overrides.y ?? yindex,
         baseZ: overrides.baseZ ?? 0,
         traversalLayer: overrides.traversalLayer ?? 0,
+        neighborOffsets: overrides.neighborOffsets ?? new Array(12).fill(null),
         neighbors: overrides.neighbors ?? new Array(12).fill(null),
         portalEdges: overrides.portalEdges ?? [],
         objects: [],
@@ -540,6 +541,88 @@ test("GameMap.findPathAStar preserves portal edge steps when returnPathSteps is 
     assert.equal(path[0].toNode, goal);
     assert.equal(path[0].metadata.source, "object-portal");
     assert.equal(path[0].getWorldPositionAt(0.5).z, 3);
+});
+
+test("GameMap.findPathAStar routes from a ground source node onto a floor transition and across stitched floor neighbors", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 4;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.getTraversalInfo = (node, directionIndex) => ({
+        allowed: !!(node && Array.isArray(node.neighbors) && node.neighbors[directionIndex]),
+        neighborNode: node && Array.isArray(node.neighbors) ? node.neighbors[directionIndex] : null,
+        penalty: 0,
+        blockers: []
+    });
+    map.resetFloorRuntimeState();
+
+    const groundSource = createNode(0, 0, {
+        x: 0,
+        y: 0,
+        baseZ: 0,
+        neighborOffsets: [null, null, null, { x: 1, y: 0 }, null, null, null, null, null, null, null, null]
+    });
+    const upperNeighborSource = createNode(1, 0, {
+        x: 1,
+        y: 0,
+        baseZ: 0,
+        neighborOffsets: [null, null, null, null, null, null, null, null, null, null, null, { x: -1, y: 0 }]
+    });
+
+    const groundFragment = map.registerFloorFragment({
+        fragmentId: "house_ground",
+        surfaceId: "house_ground_surface",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 0
+    });
+    const upperFragment = map.registerFloorFragment({
+        fragmentId: "house_upper",
+        surfaceId: "house_upper_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3
+    });
+
+    map.createFloorNodeFromSource(groundSource, groundFragment, {
+        baseZ: 0,
+        traversalLayer: 0
+    });
+    const upperStart = map.createFloorNodeFromSource(groundSource, upperFragment, {
+        baseZ: 3,
+        traversalLayer: 1
+    });
+    const upperEnd = map.createFloorNodeFromSource(upperNeighborSource, upperFragment, {
+        baseZ: 3,
+        traversalLayer: 1
+    });
+
+    map.registerFloorTransition({
+        id: "house_stairs",
+        type: "stairs",
+        from: { x: 0, y: 0, floorId: "house_ground" },
+        to: { x: 0, y: 0, floorId: "house_upper" },
+        bidirectional: true,
+        zProfile: "linear"
+    });
+
+    map.connectFloorNodeNeighbors();
+    map.connectFloorTransitions();
+
+    const path = map.findPathAStar(groundSource, upperEnd, { returnPathSteps: true });
+
+    assert.equal(Array.isArray(path), true);
+    assert.equal(path.length, 2);
+    assert.equal(path[0].type, "stairs");
+    assert.equal(path[0].fromNode, groundSource);
+    assert.equal(path[0].toNode, upperStart);
+    assert.equal(path[1].type, "planar");
+    assert.equal(path[1].fromNode, upperStart);
+    assert.equal(path[1].toNode, upperEnd);
+    assert.equal(path[0].getWorldPositionAt(0.5).z, 1.5);
 });
 
 test("GameMap.findPathAStar handles improved paths after stale queue entries", () => {

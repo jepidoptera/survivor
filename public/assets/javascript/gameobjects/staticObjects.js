@@ -2168,6 +2168,36 @@ void main(void) {
         this._depthBillboardWorldPositions = null;
         this._depthBillboardLastSignature = "";
         this._depthBillboardMeshMode = "";
+        const extraDisplayObject = (
+            this._renderingDisplayObject &&
+            this._renderingDisplayObject !== this.pixiSprite &&
+            this._renderingDisplayObject !== this.fireSprite &&
+            this._renderingDisplayObject !== this._depthBillboardMesh
+        ) ? this._renderingDisplayObject : null;
+        const roadTextureLifecycleDiagnostics = !!(
+            typeof globalThis !== "undefined" &&
+            globalThis.renderingDiagnostics &&
+            globalThis.renderingDiagnostics.roadTextureLifecycleDiagnostics === true
+        );
+        if (roadTextureLifecycleDiagnostics && extraDisplayObject) {
+            console.warn("[static object removeFromGame display cleanup]", {
+                type: this.type || "",
+                x: Number.isFinite(this.x) ? Number(this.x) : null,
+                y: Number.isFinite(this.y) ? Number(this.y) : null,
+                roadTextureCacheKey: (typeof extraDisplayObject._roadTextureCacheKey === "string")
+                    ? extraDisplayObject._roadTextureCacheKey
+                    : "",
+                hasParent: !!extraDisplayObject.parent,
+                destroyed: extraDisplayObject.destroyed === true
+            });
+        }
+        if (extraDisplayObject && extraDisplayObject.parent) {
+            extraDisplayObject.parent.removeChild(extraDisplayObject);
+        }
+        if (extraDisplayObject && typeof extraDisplayObject.destroy === "function") {
+            extraDisplayObject.destroy({ children: false, texture: false, baseTexture: false });
+        }
+        this._renderingDisplayObject = null;
         if (typeof globalThis !== "undefined") {
             if (this.type === "tree" && typeof globalThis.unregisterLazyTreeRecordAt === "function") {
                 globalThis.unregisterLazyTreeRecordAt(this.x, this.y);
@@ -2402,6 +2432,21 @@ void main(void) {
         if (!data || !data.type || !map) return null;
 
         try {
+            // TriggerArea uses coordinate-based polygon points, not a node, so skip
+            // node resolution for that type entirely.
+            if (data.type === 'triggerArea') {
+                if (typeof TriggerArea !== 'function') return null;
+                const triggerObj = new TriggerArea({ x: data.x, y: data.y }, map, {
+                    points: Array.isArray(data.points) ? data.points : [],
+                    playerEnters: normalizeDoorEventScript(data.playerEnters),
+                    playerExits: normalizeDoorEventScript(data.playerExits)
+                });
+                if (triggerObj && typeof data.scriptingName === 'string' && data.scriptingName.length > 0) {
+                    triggerObj.scriptingName = data.scriptingName;
+                }
+                return triggerObj;
+            }
+
             const node = resolveStaticObjectLoadNode(map, data, options);
 
             if (!node) return null;
@@ -3775,6 +3820,15 @@ class PlacedObject extends StaticObject {
         if (category !== "windows" && category !== "doors") return false;
         if (this.rotationAxis !== "spatial") return false;
         if (!this.map) return false;
+        const refreshMountedIndexing = () => {
+            if (typeof this.refreshIndexedNodesFromHitbox === "function") {
+                this.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                return;
+            }
+            if (typeof this.moveNode === "function" && typeof this.map.worldToNode === "function") {
+                this.moveNode(this.map.worldToNode(this.x, this.y) || null);
+            }
+        };
         if (category === "windows") {
             this.placeableAnchorY = 0.5;
             if (this.pixiSprite && this.pixiSprite.anchor) {
@@ -3993,6 +4047,7 @@ class PlacedObject extends StaticObject {
                     if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
                 }
                 this._refreshMountedWallDirectionalBlocking([previousWallSectionUnitId, nextWallSectionUnitId]);
+                refreshMountedIndexing();
                 return true;
             }
         }
@@ -4027,6 +4082,7 @@ class PlacedObject extends StaticObject {
             if (Number.isInteger(groupId)) globalThis.markWallSectionDirty(groupId);
         }
         this._refreshMountedWallDirectionalBlocking([previousWallSectionUnitId, nextWallSectionUnitId]);
+        refreshMountedIndexing();
         return true;
     }
 
@@ -4937,7 +4993,9 @@ class Road extends StaticObject {
     static _repeatWorldUnits = 10;
     static _pixelsPerWorldUnit = (128 * 2) / 1.1547;
     static _edgeFadePx = 64;
-    static _phaseQuantPx = 1;
+    // Quantize phase offsets so nearby roads share cached textures instead of
+    // generating near-identical variants during section streaming refreshes.
+    static _phaseQuantPx = 8;
     static _maxTextureCacheEntries = 384;
     static _textureDestroyGraceMs = 1000;
     static _textureScaleFallbackByName = {
@@ -5591,6 +5649,11 @@ class Road extends StaticObject {
 
     static clearRuntimeCaches(options = {}) {
         const destroyTextures = !!(options && options.destroyTextures);
+        const roadTextureLifecycleDiagnostics = !!(
+            typeof globalThis !== "undefined" &&
+            globalThis.renderingDiagnostics &&
+            globalThis.renderingDiagnostics.roadTextureLifecycleDiagnostics === true
+        );
         if (Road._textureCache && typeof Road._textureCache.forEach === 'function') {
             let texturesToDestroy = null;
             if (destroyTextures) {
@@ -5599,6 +5662,13 @@ class Road extends StaticObject {
                     const texture = entry && entry.texture ? entry.texture : null;
                     if (texture) texturesToDestroy.add(texture);
                 });
+                if (roadTextureLifecycleDiagnostics) {
+                    console.warn("[road runtime cache clear]", {
+                        destroyTextures: true,
+                        textureCount: texturesToDestroy.size,
+                        cacheEntries: Road._textureCache.size
+                    });
+                }
                 Road._detachDestroyedTexturesFromLiveRoadSprites(texturesToDestroy);
                 Road._textureCache.forEach(entry => {
                     const texture = entry && entry.texture ? entry.texture : null;
@@ -5633,19 +5703,45 @@ class Road extends StaticObject {
         }
     }
 
-    static refreshTexturesAroundNodes(nodes) {
+    static collectRefreshRoadsFromNodes(nodes) {
         const nodeSet = nodes instanceof Set ? nodes : new Set(Array.isArray(nodes) ? nodes : []);
         const seenRoads = new Set();
+        const roads = [];
         nodeSet.forEach((node) => {
             if (!node || !Array.isArray(node.objects)) return;
             for (let i = 0; i < node.objects.length; i++) {
                 const obj = node.objects[i];
                 if (!obj || obj.type !== 'road' || typeof obj.updateTexture !== 'function' || seenRoads.has(obj)) continue;
                 seenRoads.add(obj);
-                obj.updateTexture();
+                roads.push(obj);
             }
         });
-        return seenRoads.size;
+        return roads;
+    }
+
+    static refreshTexturesForRoads(roads, startIndex = 0, maxCount = Infinity) {
+        if (!Array.isArray(roads) || roads.length === 0) return 0;
+        const begin = Math.max(0, Number(startIndex) || 0);
+        if (begin >= roads.length) return 0;
+        const limit = Number.isFinite(Number(maxCount))
+            ? Math.max(0, Number(maxCount) || 0)
+            : Infinity;
+        const end = Number.isFinite(limit)
+            ? Math.min(roads.length, begin + limit)
+            : roads.length;
+        let refreshed = 0;
+        for (let i = begin; i < end; i++) {
+            const road = roads[i];
+            if (!road || typeof road.updateTexture !== 'function') continue;
+            road.updateTexture();
+            refreshed += 1;
+        }
+        return refreshed;
+    }
+
+    static refreshTexturesAroundNodes(nodes) {
+        const roads = Road.collectRefreshRoadsFromNodes(nodes);
+        return Road.refreshTexturesForRoads(roads);
     }
 
     constructor(location, textures, map, options = {}) {

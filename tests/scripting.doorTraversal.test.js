@@ -144,3 +144,19 @@ test("door exit still fires after the door drops out of the nearby query", () =>
     assert.equal(events[0].door, door);
     assert.equal(wizard._doorTraversalStateById.get(door._doorRuntimeId).inside, false);
 });
+
+test("player.hurt aliases hurtPlayer for backward-compatible scripting", async () => {
+    const scripting = loadScripting();
+    const wizard = {
+        hp: 20,
+        maxHp: 20
+    };
+
+    const legacyResult = await scripting.runScript("hurtPlayer(3)", { wizard });
+    assert.equal(legacyResult.changed, true);
+    assert.equal(wizard.hp, 17);
+
+    const aliasResult = await scripting.runScript("player.hurt(4)", { wizard });
+    assert.equal(aliasResult.changed, true);
+    assert.equal(wizard.hp, 13);
+});

@@ -29,6 +29,7 @@
         const defaults = {
             textureSanitizer: false,
             pixiSpriteCrashDiagnostics: false,
+            roadTextureLifecycleDiagnostics: false,
             groundTileProfiling: false,
             drawPassBreakdown: true,
             scenePickerHoverProfiling: false
@@ -52,6 +53,10 @@
 
     function isPixiSpriteCrashDiagnosticsEnabled() {
         return !!ensureRenderingDiagnosticsConfig().pixiSpriteCrashDiagnostics;
+    }
+
+    function isRoadTextureLifecycleDiagnosticsEnabled() {
+        return !!ensureRenderingDiagnosticsConfig().roadTextureLifecycleDiagnostics;
     }
 
     function isGroundTileProfilingEnabled() {
@@ -79,6 +84,11 @@
                     installPixiSpriteRenderDiagnostics();
                 }
                 return config.pixiSpriteCrashDiagnostics;
+            },
+            setRoadTextureLifecycleDiagnosticsEnabled(enabled) {
+                const config = ensureRenderingDiagnosticsConfig();
+                config.roadTextureLifecycleDiagnostics = !!enabled;
+                return config.roadTextureLifecycleDiagnostics;
             },
             setGroundTileProfilingEnabled(enabled) {
                 const config = ensureRenderingDiagnosticsConfig();
@@ -173,6 +183,7 @@
         return {
             ctor: displayObj.constructor && displayObj.constructor.name ? displayObj.constructor.name : "",
             name: typeof displayObj.name === "string" ? displayObj.name : "",
+            destroyed: displayObj.destroyed === true,
             visible: displayObj.visible !== false,
             renderable: displayObj.renderable !== false,
             x: Number.isFinite(displayObj.x) ? Number(displayObj.x) : null,
@@ -183,6 +194,7 @@
             anchorY: anchor && Number.isFinite(anchor.y) ? Number(anchor.y) : null,
             alpha: Number.isFinite(displayObj.alpha) ? Number(displayObj.alpha) : null,
             parentName: parent && typeof parent.name === "string" ? parent.name : "",
+            roadTextureCacheKey: (typeof displayObj._roadTextureCacheKey === "string") ? displayObj._roadTextureCacheKey : "",
             texture: summarizePixiTexture(displayObj.texture)
         };
     }
@@ -2500,7 +2512,8 @@
         }
 
         shouldShowTriggerAreaPickerPolygon() {
-            return this.shouldShowTriggerAreaToolOutlines();
+            const activeSpell = this.getActiveToolSpellName();
+            return activeSpell === "editscript";
         }
 
         isWallBottomFaceOutlineDebugEnabled() {
@@ -2560,6 +2573,9 @@
         shouldShowTriggerAreaToolOutlines(wizardOverride = null) {
             if (this.isDebugModeEnabled()) return true;
             const activeSpell = this.getActiveToolSpellName(wizardOverride);
+            if (global.renderingShowPickerScreen) {
+                return activeSpell === "editscript";
+            }
             return activeSpell === "editscript" || activeSpell === "triggerarea";
         }
 
@@ -3540,12 +3556,22 @@
             let roadEvictedSprites = 0;
 
             const destroyRoadSprite = (road, sprite) => {
+                if (isRoadTextureLifecycleDiagnosticsEnabled()) {
+                    console.warn("[road render sprite destroy]", {
+                        roadId: Number.isInteger(road && road._prototypeRecordId) ? Number(road._prototypeRecordId) : null,
+                        roadGone: !!(road && road.gone),
+                        roadTextureCacheKey: (road && typeof road._roadTextureCacheKey === "string") ? road._roadTextureCacheKey : "",
+                        sprite: summarizePixiDisplayObject(sprite)
+                    });
+                }
                 if (sprite) {
-                    syncRoadRenderSpriteTextureRetention(sprite, null);
+                    if (sprite.destroyed !== true) {
+                        syncRoadRenderSpriteTextureRetention(sprite, null);
+                    }
                     if (sprite.parent) {
                         sprite.parent.removeChild(sprite);
                     }
-                    if (typeof sprite.destroy === "function") {
+                    if (sprite.destroyed !== true && typeof sprite.destroy === "function") {
                         sprite.destroy({ children: false, texture: false, baseTexture: false });
                     }
                 }
@@ -5398,6 +5424,16 @@
 
             const g = this.prototypeSectionSeamGraphics;
             g.clear();
+
+            const showSectionWorldSeams = !!(
+                global.debugViewSettings
+                    ? global.debugViewSettings.showSectionWorldSeams !== false
+                    : global.renderingShowSectionWorldSeams !== false
+            );
+            if (!showSectionWorldSeams) {
+                g.visible = false;
+                return;
+            }
 
             const mapRef = (ctx && ctx.map) || global.map || null;
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;

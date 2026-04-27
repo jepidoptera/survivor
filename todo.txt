@@ -99,9 +99,11 @@ X spell images don't scale with zoom
 X walls sometimes connect sideways and get totally screwy
 X blodia fails to attack when you stand near a wall
 / bears chase for a very long time
-  creatures escape from walls when their section leaves the active bubble
+X creatures escape from walls when their section leaves the active bubble
   walls disappear when their section leaves the active bubble (separate problem)
   built walls disappear on save
+  yetis don't stay aggro
+  trigger areas disappear
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
 
 large trigger area architecture checklist:
@@ -122,3 +124,6 @@ large trigger area architecture checklist:
   [ ] test: multi-section trigger coverage lookup returns the trigger from any covered section
   [ ] test: large trigger does not double-fire enter or exit during continuous traversal
   [ ] test: trigger scripts using `this` still work when the owner section is not materialized
+
+
+66-fa-23-1826

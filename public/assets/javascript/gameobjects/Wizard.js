@@ -249,7 +249,7 @@ class Wizard extends Character {
     constructor(location, map) {
         super('human', location, 1, map);
         this.useAStarPathfinding = true;
-        this.speed = 2.5;
+        this.speed = 3;
         this.roadSpeedMultiplier = 1.3;
         this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
         this.frameRate = 60;
@@ -1602,7 +1602,8 @@ class Wizard extends Character {
         
         // Determine which row (direction) to use
         const visualSpeed = Math.hypot(this.movementVector?.x || 0, this.movementVector?.y || 0);
-        const isVisuallyMoving = this.moving || visualSpeed > 0.02;
+        const isDead = !!this.dead || (Number.isFinite(this.hp) && this.hp <= 0);
+        const isVisuallyMoving = !isDead && (this.moving || visualSpeed > 0.02);
         if (this.lastDirectionRow === undefined) this.lastDirectionRow = 0;
         const rowIndex = this.lastDirectionRow;
         

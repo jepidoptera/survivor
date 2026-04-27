@@ -37,6 +37,16 @@ function loadDebugContext() {
                 nowMs += 1;
                 return nowMs;
             }
+        },
+        WallSectionUnit: {
+            _showDirectionalBlockingDebug: false,
+            _showBottomFaceOnlyDebug: false,
+            setShowDirectionalBlockingDebug(enabled) {
+                this._showDirectionalBlockingDebug = !!enabled;
+            },
+            setShowBottomFaceOnlyDebug(enabled) {
+                this._showBottomFaceOnlyDebug = !!enabled;
+            }
         }
     };
     context.window = context;
@@ -104,4 +114,37 @@ test("performance samples are collected only after instrumentation is enabled", 
     });
     assert.equal(context.DebugView.isPerfInstrumentationEnabled(), false);
     assert.equal(context.getPerfAccumulatorSnapshot().samples, 1);
+});
+
+test("debugViewSettings exposes console-friendly debug toggles", () => {
+    const context = loadDebugContext();
+
+    assert.ok(context.debugViewSettings);
+    assert.equal(typeof context.debugViewSettings.snapshot, "function");
+    assert.equal(context.DebugView.settings, context.debugViewSettings);
+
+    const listedKeys = Object.keys(context.debugViewSettings);
+    assert.ok(listedKeys.includes("showFpsCounter"));
+    assert.ok(listedKeys.includes("showSectionWorldSeams"));
+    assert.ok(listedKeys.includes("showWallBlockers"));
+    assert.ok(listedKeys.includes("showWallGroundHitboxesOnly"));
+    assert.ok(listedKeys.includes("showAnimalHitboxes"));
+
+    context.debugViewSettings.showFpsCounter = true;
+    assert.equal(context.debugViewSettings.showPerfReadout, true);
+
+    context.debugViewSettings.showWallBlockers = true;
+    assert.equal(context.WallSectionUnit._showDirectionalBlockingDebug, true);
+
+    context.debugViewSettings.showWallGroundHitboxesOnly = true;
+    assert.equal(context.WallSectionUnit._showBottomFaceOnlyDebug, true);
+
+    context.debugViewSettings.showSectionWorldSeams = false;
+    assert.equal(context.renderingShowSectionWorldSeams, false);
+    assert.equal(context.debugViewSettings.showSectionSeams, false);
+
+    context.debugViewSettings.debugMode = true;
+    assert.equal(context.debugMode, true);
+    assert.equal(context.renderingShowPickerScreen, true);
+    assert.equal(context.debugViewSettings.showAnimalHitboxes, true);
 });

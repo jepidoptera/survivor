@@ -151,7 +151,7 @@ class FrozenDeathBurstEffect {
 }
 
 class Character {
-    constructor(type, location, size, map) {
+    constructor(type, location, size, map, options = {}) {
         this.type = type;
         this.map = map;
         this.size = Number.isFinite(size) ? size : 1;
@@ -221,10 +221,11 @@ class Character {
             this.map.registerGameObject(this);
         }
 
+        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
         const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
             ? globalThis.Scripting
             : null;
-        if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+        if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
             scriptingApi.ensureObjectScriptingName(this, { map: this.map });
         }
     }

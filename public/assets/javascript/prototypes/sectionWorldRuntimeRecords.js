@@ -26,15 +26,38 @@
         map.capturePrototypeWall = function capturePrototypeWall(wall) {
             if (!wall || wall.gone || wall._prototypeWallManaged === true) return false;
             if (typeof wall._collectOrderedLineAnchors !== "function" || typeof wall.saveJson !== "function") return false;
-            const anchors = wall._collectOrderedLineAnchors();
+            const collectedAnchors = wall._collectOrderedLineAnchors();
+            const anchors = Array.isArray(collectedAnchors) ? collectedAnchors.slice() : [];
             if (!Array.isArray(anchors) || anchors.length < 2) return false;
 
+            const rewriteEndpointAnchor = (anchorIndex, endpoint) => {
+                if (!endpoint || endpoint._splitVertex !== true) return;
+                if (!anchors[anchorIndex]) return;
+                anchors[anchorIndex] = {
+                    ...anchors[anchorIndex],
+                    anchor: endpoint,
+                    t: (anchorIndex === 0) ? 0 : 1,
+                    key: globalScope.WallSectionUnit.endpointKey(endpoint),
+                    isEndpoint: true
+                };
+            };
+            rewriteEndpointAnchor(0, wall.startPoint);
+            rewriteEndpointAnchor(anchors.length - 1, wall.endPoint);
+
             const baseRecord = wall.saveJson();
+            const endpointsMatch = (left, right) => {
+                if (!left || !right) return false;
+                if (globalScope.WallSectionUnit && typeof globalScope.WallSectionUnit._pointsMatch === "function") {
+                    return globalScope.WallSectionUnit._pointsMatch(left, right);
+                }
+                return globalScope.WallSectionUnit.endpointKey(left) === globalScope.WallSectionUnit.endpointKey(right);
+            };
             const segments = [];
             for (let i = 0; i < anchors.length - 1; i++) {
                 const startEntry = anchors[i];
                 const endEntry = anchors[i + 1];
                 if (!startEntry || !endEntry || !startEntry.anchor || !endEntry.anchor) continue;
+                if (endpointsMatch(startEntry.anchor, endEntry.anchor)) continue;
                 const midX = (Number(startEntry.anchor.x) + Number(endEntry.anchor.x)) * 0.5;
                 const midY = (Number(startEntry.anchor.y) + Number(endEntry.anchor.y)) * 0.5;
                 const ownerSectionKey = this.getPrototypeSectionKeyForWorldPoint(midX, midY);
@@ -68,6 +91,7 @@
             }
             for (let i = 0; i < grouped.length; i++) {
                 const fragment = grouped[i];
+                if (!fragment || endpointsMatch(fragment.startAnchor, fragment.endAnchor)) continue;
                 const asset = this.getPrototypeSectionAsset(fragment.ownerSectionKey);
                 if (!asset) continue;
                 const record = {
@@ -82,13 +106,34 @@
                 markPrototypeClearanceDirty(asset);
             }
 
+            const preservedMountedObjects = [];
+            if (Array.isArray(wall.attachedObjects)) {
+                for (let i = 0; i < wall.attachedObjects.length; i++) {
+                    const entry = wall.attachedObjects[i];
+                    if (entry && entry.object && !entry.object.gone) {
+                        preservedMountedObjects.push(entry.object);
+                    }
+                }
+            }
             wall._prototypeWallManaged = true;
             if (typeof wall._removeWallPreserving === "function") {
-                wall._removeWallPreserving([], { skipAutoMerge: true });
+                wall._removeWallPreserving(preservedMountedObjects, { skipAutoMerge: true });
             } else if (typeof wall.removeFromGame === "function") {
                 wall.removeFromGame();
             } else if (typeof wall.remove === "function") {
                 wall.remove();
+            }
+            if (
+                preservedMountedObjects.length > 0 &&
+                wallState &&
+                wallState.pendingCapturedMountedObjects instanceof Set
+            ) {
+                for (let i = 0; i < preservedMountedObjects.length; i++) {
+                    const obj = preservedMountedObjects[i];
+                    if (obj && !obj.gone) {
+                        wallState.pendingCapturedMountedObjects.add(obj);
+                    }
+                }
             }
             return true;
         };
@@ -354,7 +399,9 @@
                 const recordId = Number(entry && entry.record && entry.record.id);
                 if (!Number.isInteger(recordId) || animalState.activeRuntimeAnimalsByRecordId.has(recordId)) continue;
                 if (!globalScope.Animal || typeof globalScope.Animal.loadJson !== "function") continue;
-                const runtimeAnimal = globalScope.Animal.loadJson(entry.record, this);
+                const runtimeAnimal = globalScope.Animal.loadJson(entry.record, this, {
+                    targetSectionKey: entry.sectionKey
+                });
                 if (!runtimeAnimal) continue;
                 if (Array.isArray(globalScope.animals) && globalScope.animals.indexOf(runtimeAnimal) < 0) {
                     globalScope.animals.push(runtimeAnimal);

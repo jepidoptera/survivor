@@ -7,6 +7,7 @@
             addSectionCoords,
             axialDistance,
             axialToEvenQOffset,
+            comparePrototypeTileCoordKeys,
             clonePrototypeFloorTransitions,
             computeSectionCenterAxial,
             evenQOffsetToAxial,
@@ -126,6 +127,7 @@
                         tileCoordKeys.push(`${offset.x},${offset.y}`);
                     }
                 }
+                tileCoordKeys.sort(comparePrototypeTileCoordKeys);
 
                 const asset = {
                     id: section.key,
@@ -189,6 +191,7 @@
                     tileCoordKeys.push(`${offset.x},${offset.y}`);
                 }
             }
+            tileCoordKeys.sort(comparePrototypeTileCoordKeys);
 
             const neighborKeys = SECTION_DIRECTIONS.map((direction) => makeSectionKey(addSectionCoords(coord, direction)));
             const asset = {

@@ -388,8 +388,8 @@ function assignNeighbors(sectionAssetsByKey) {
 
 function sortSectionAssets(sectionAssetsByKey) {
     return Array.from(sectionAssetsByKey.values()).sort((a, b) => {
-        if (a.coord.q !== b.coord.q) return a.coord.q - b.coord.q;
-        return a.coord.r - b.coord.r;
+        if (a.centerOffset.y !== b.centerOffset.y) return a.centerOffset.y - b.centerOffset.y;
+        return a.centerOffset.x - b.centerOffset.x;
     });
 }
 
@@ -478,8 +478,8 @@ function main() {
         section.tileCoordKeys.sort((a, b) => {
             const [ax, ay] = a.split(",").map(Number);
             const [bx, by] = b.split(",").map(Number);
-            if (ax !== bx) return ax - bx;
-            return ay - by;
+            if (ay !== by) return ay - by;
+            return ax - bx;
         });
     }
 

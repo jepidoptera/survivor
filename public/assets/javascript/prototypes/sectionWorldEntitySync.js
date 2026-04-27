@@ -1,6 +1,143 @@
 (function (globalScope) {
     "use strict";
 
+    // Wall-splitting at section seams: loaded lazily
+    let _wallSplitting = null;
+    function getWallSplitting() {
+        if (!_wallSplitting) {
+            _wallSplitting = globalScope.__wallSectionSplitting || null;
+        }
+        return _wallSplitting;
+    }
+
+    /**
+     * Check all wall records in a section asset for cross-section spanning
+     * and split them at seam boundaries. Mutates `asset.walls` in-place,
+     * distributes split pieces to their owning section assets, and assigns
+     * new record IDs.
+     *
+     * Only runs once per asset (tracked by `_prototypeWallsSplitChecked`).
+     * Returns the number of walls that were split.
+     */
+    function applyWallSplitsForSectionAsset(map, asset, wallState, activeSectionKeys) {
+        if (!asset) return 0;
+        // Build a signature of the active section set.  Re-run splitting
+        // whenever new sections join the bubble, since walls that previously
+        // couldn't detect a seam (target section not loaded) may now be splittable.
+        // Already-split pieces are individually skipped (_splitGroupId != null).
+        const sig = activeSectionKeys ? Array.from(activeSectionKeys).sort().join(",") : "";
+        if (asset._prototypeWallsSplitCheckedSig === sig) return 0;
+        asset._prototypeWallsSplitCheckedSig = sig;
+
+        const splitting = getWallSplitting();
+        if (!splitting) return 0;
+
+        const WallSectionUnit = globalScope.WallSectionUnit;
+        if (!WallSectionUnit || typeof WallSectionUnit.loadJson !== "function") return 0;
+
+        const walls = asset.walls;
+        if (!Array.isArray(walls) || walls.length === 0) return 0;
+
+        let splitCount = 0;
+        // Process in reverse so splicing doesn't shift upcoming indices
+        for (let i = walls.length - 1; i >= 0; i--) {
+            const record = walls[i];
+            if (!record || record.type !== "wallSection") continue;
+            // Already-split pieces should not be re-checked
+            if (record._splitGroupId != null) continue;
+
+            // Build a temporary wall instance to walk anchors.
+            // Strip id and scriptingName to avoid polluting _allSections
+            // and the scripting registry with throwaway objects.
+            let tempWall;
+            try {
+                const tempRecord = Object.assign({}, record);
+                delete tempRecord.id;
+                delete tempRecord.scriptingName;
+                tempWall = WallSectionUnit.loadJson(tempRecord, map, { deferSetup: true });
+            } catch (_e) {
+                continue;
+            }
+            if (!tempWall) {
+                continue;
+            }
+
+            let orderedAnchors;
+            try {
+                orderedAnchors = tempWall._collectOrderedLineAnchors();
+            } catch (_e) {
+                // Clean up temp wall registration before continuing
+                if (WallSectionUnit._allSections instanceof Map) {
+                    WallSectionUnit._allSections.delete(tempWall.id);
+                }
+                continue;
+            }
+
+            // Clean up temp wall from global registry now that we have anchors
+            if (WallSectionUnit._allSections instanceof Map) {
+                WallSectionUnit._allSections.delete(tempWall.id);
+            }
+            if (!Array.isArray(orderedAnchors) || orderedAnchors.length < 2) {
+                continue;
+            }
+
+            const result = splitting.computeWallRecordSplits(record, orderedAnchors);
+            if (!result.needsSplit) {
+                continue;
+            }
+
+            // --- Split detected: distribute pieces ---
+            splitCount++;
+            const pieces = result.pieces;
+
+            // Remove the original record from this asset
+            walls.splice(i, 1);
+
+            // Assign new IDs and distribute to section assets
+            const groupMemberIds = [];
+            const groupMemberSectionKeys = [];
+            for (let p = 0; p < pieces.length; p++) {
+                const piece = pieces[p];
+                piece.record.id = wallState.nextRecordId++;
+                groupMemberIds.push(piece.record.id);
+                groupMemberSectionKeys.push(piece.sectionKey || asset.key);
+            }
+
+            // Stamp group membership on each piece
+            for (let p = 0; p < pieces.length; p++) {
+                pieces[p].record._splitGroupMemberRecordIds = groupMemberIds.slice();
+                pieces[p].record._splitGroupMemberSectionKeys = groupMemberSectionKeys.slice();
+            }
+
+            for (let p = 0; p < pieces.length; p++) {
+                const piece = pieces[p];
+                const targetSectionKey = piece.sectionKey || asset.key;
+                if (targetSectionKey === asset.key) {
+                    // This piece stays in the current asset
+                    walls.push(piece.record);
+                } else {
+                    // This piece goes to a different section asset
+                    const targetAsset = (typeof map.getPrototypeSectionAsset === "function")
+                        ? map.getPrototypeSectionAsset(targetSectionKey)
+                        : null;
+                    if (targetAsset && Array.isArray(targetAsset.walls)) {
+                        targetAsset.walls.push(piece.record);
+                        targetAsset._prototypeBlockedEdgesDirty = true;
+                        targetAsset._prototypeClearanceDirty = true;
+                    } else {
+                        // Target section not available — keep in current asset as fallback
+                        walls.push(piece.record);
+                    }
+                }
+            }
+
+            asset._prototypeBlockedEdgesDirty = true;
+            asset._prototypeClearanceDirty = true;
+        }
+
+        return splitCount;
+    }
+
     function installSectionWorldEntitySyncApis(map, deps) {
         const {
             applyPrototypeBlockedEdgesForSection,
@@ -11,6 +148,7 @@
             evictPrototypeParkedRuntimeObject,
             formatPrototypeObjectProfileMap,
             getPrototypeObjectProfileKey,
+            isPrototypeSavableObject,
             parkPrototypeRuntimeObject,
             prototypeNow,
             removePrototypeBlockedEdgesForSection,
@@ -18,7 +156,8 @@
             restorePrototypeParkedRuntimeObject,
             sanitizePrototypeObjectRecords,
             settlePendingPrototypeLayoutTransition,
-            trimPrototypeParkedRuntimeObjectCache
+            trimPrototypeParkedRuntimeObjectCache,
+            upsertPrototypeObjectRecord
         } = deps;
 
         map.syncPrototypeWalls = function syncPrototypeWalls() {
@@ -26,6 +165,9 @@
             const syncStart = prototypeNow();
             const wallState = this._prototypeWallState;
             if (!wallState) return false;
+            if (!(wallState.pendingCapturedMountedObjects instanceof Set)) {
+                wallState.pendingCapturedMountedObjects = new Set();
+            }
             const blockedEdgeState = ensurePrototypeBlockedEdgeState(this);
             const captureStart = prototypeNow();
             const capturedAny = this.capturePendingPrototypeWalls();
@@ -37,9 +179,14 @@
             }
             const desiredRecords = [];
             const blockedEdgesByRecordId = new Map();
+            // Load-time wall splitting disabled — walls are already split in
+            // saved section assets.  New walls placed at runtime are split by
+            // capturePrototypeWall when they are captured into section records.
+            // Collect desired wall records from all active sections.
             activeSectionKeys.forEach((sectionKey) => {
                 const asset = this.getPrototypeSectionAsset(sectionKey);
-                const records = Array.isArray(asset && asset.walls) ? asset.walls : null;
+                if (!asset) return;
+                const records = Array.isArray(asset.walls) ? asset.walls : null;
                 if (!Array.isArray(records)) return;
                 for (let i = 0; i < records.length; i++) {
                     desiredRecords.push({ sectionKey, record: records[i] });
@@ -116,6 +263,7 @@
                 blockedEdgeRemovedLinks += removePrototypeBlockedEdgesForSection(this, sectionKey, changedClearanceNodes);
                 blockedEdgeRemoveMs += (prototypeNow() - sectionRemoveStart);
             });
+            const orphanedMountedObjects = [];
             for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
                 if (desiredRecordIds.has(recordId)) continue;
                 if (!runtimeWall || runtimeWall.gone) {
@@ -123,6 +271,19 @@
                     continue;
                 }
                 removedRuntimeWalls.push(runtimeWall);
+                // Rescue attached objects (doors/windows) before the wall is
+                // removed — they will be re-snapped to replacement split pieces
+                // after the load phase creates the new runtime walls.
+                if (Array.isArray(runtimeWall.attachedObjects)) {
+                    for (let a = 0; a < runtimeWall.attachedObjects.length; a++) {
+                        const entry = runtimeWall.attachedObjects[a];
+                        if (entry && entry.object && !entry.object.gone) {
+                            orphanedMountedObjects.push(entry.object);
+                        }
+                    }
+                    // Clear before _removeWallPreserving so it won't destroy them
+                    runtimeWall.attachedObjects.length = 0;
+                }
                 if (runtimeWall._prototypeUsesSectionBlockedEdges === true) {
                     removePrototypeRuntimeWallVisual(runtimeWall);
                 } else if (typeof runtimeWall._removeWallPreserving === "function") {
@@ -162,7 +323,9 @@
                 const loadJsonStart = prototypeNow();
                 const runtimeWall = globalScope.WallSectionUnit.loadJson(entry.record, this, { deferSetup: true });
                 loadJsonMs += (prototypeNow() - loadJsonStart);
-                if (!runtimeWall) continue;
+                if (!runtimeWall) {
+                    continue;
+                }
                 const precomputedEdges = blockedEdgesByRecordId.get(recordId) || null;
                 const usesSectionBlockedEdges = !!(precomputedEdges && precomputedEdges.length > 0);
                 if (typeof runtimeWall.addToMapNodes === "function") {
@@ -215,6 +378,40 @@
                 const joineryStart = prototypeNow();
                 globalScope.WallSectionUnit.batchHandleJoinery(wallState.activeRuntimeWalls);
                 joineryMs = prototypeNow() - joineryStart;
+            }
+
+            // Re-snap doors/windows whose parent wall was removed due to re-splitting.
+            // The replacement split pieces are now in _allSections, so
+            // snapToMountedWall will geometrically find the correct new wall.
+            if (orphanedMountedObjects.length > 0) {
+                for (let i = 0; i < orphanedMountedObjects.length; i++) {
+                    const obj = orphanedMountedObjects[i];
+                    if (!obj || obj.gone) continue;
+                    if (typeof obj.snapToMountedWall === "function") {
+                        obj.snapToMountedWall();
+                    }
+                    if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                        obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                    }
+                }
+            }
+
+            if (wallState.pendingCapturedMountedObjects.size > 0) {
+                const preservedMountedObjects = Array.from(wallState.pendingCapturedMountedObjects);
+                wallState.pendingCapturedMountedObjects.clear();
+                for (let i = 0; i < preservedMountedObjects.length; i++) {
+                    const obj = preservedMountedObjects[i];
+                    if (!obj || obj.gone) continue;
+                    if (typeof obj.snapToMountedWall === "function") {
+                        obj.snapToMountedWall();
+                    }
+                    if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                        obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                    }
+                    if (isPrototypeSavableObject(obj)) {
+                        upsertPrototypeObjectRecord(obj);
+                    }
+                }
             }
 
             let needsClearanceRefresh = changedClearanceNodes.size > 0;
@@ -709,7 +906,8 @@
 
     globalScope.__sectionWorldEntitySync = {
         installSectionWorldEntitySyncApis,
-        installPrototypeEntitySyncApis: installSectionWorldEntitySyncApis
+        installPrototypeEntitySyncApis: installSectionWorldEntitySyncApis,
+        applyWallSplitsForSectionAsset
     };
     globalScope.__twoSectionPrototypeEntitySync = globalScope.__sectionWorldEntitySync;
 })(typeof globalThis !== "undefined" ? globalThis : window);

@@ -12,6 +12,7 @@
             getPrototypeObjectProfileKey,
             isPrototypeSavableObject,
             parkPrototypeRuntimeObject,
+            createPrototypeTask,
             prependPrototypeTasks,
             prototypeNow,
             removePrototypeBlockedEdgesForSection,
@@ -22,6 +23,11 @@
             trimPrototypeParkedRuntimeObjectCache,
             upsertPrototypeObjectRecord
         } = deps;
+
+        const objectTaskTypeLabel = (entryOrObj) => {
+            const type = (entryOrObj && entryOrObj.record && entryOrObj.record.type) || entryOrObj && entryOrObj.type;
+            return (typeof type === "string" && type.length > 0) ? type : "unknown";
+        };
 
         const enqueuePrototypeAsyncObjectSync = (session) => {
             const objectState = map._prototypeObjectState;
@@ -83,7 +89,7 @@
                 stats[field] = (Number(stats[field]) || 0) + deltaValue;
                 stats.ms = (Number(stats.ms) || 0) + (Number(msValue) || 0);
             };
-            prependPrototypeTasks(session, [() => {
+            prependPrototypeTasks(session, [createPrototypeTask("objects.plan", () => {
                 const nextTasks = [];
                 if (sync.treeDebugEnabled && sync.treeDebugStarted !== true) {
                     globalScope.Tree.beginPrototypeLoadDebugSession();
@@ -112,7 +118,7 @@
                     }
                     for (let i = 0; i < sync.goneRecordIds.length; i++) {
                         const recordId = sync.goneRecordIds[i];
-                        nextTasks.push(() => {
+                        nextTasks.push(createPrototypeTask("objects.captureGone", () => {
                             const taskStart = prototypeNow();
                             if (removePrototypeObjectRecordById(objectState, Number(recordId))) {
                                 sync.capturedAny = true;
@@ -121,11 +127,11 @@
                             const taskMs = prototypeNow() - taskStart;
                             sync.captureDetail.pruneGoneMs += taskMs;
                             sync.captureMs += taskMs;
-                        });
+                        }));
                     }
                     for (let i = 0; i < sync.dirtyObjects.length; i++) {
                         const obj = sync.dirtyObjects[i];
-                        nextTasks.push(() => {
+                        nextTasks.push(createPrototypeTask(`objects.captureDirty.${objectTaskTypeLabel(obj)}`, () => {
                             const taskStart = prototypeNow();
                             if (objectState.dirtyRuntimeObjects instanceof Set) {
                                 objectState.dirtyRuntimeObjects.delete(obj);
@@ -159,10 +165,10 @@
                             const taskMs = prototypeNow() - taskStart;
                             sync.captureDetail.scanDirtyMs += taskMs;
                             sync.captureMs += taskMs;
-                        });
+                        }));
                     }
                 }
-                nextTasks.push(() => {
+                nextTasks.push(createPrototypeTask("objects.captureFinalize", () => {
                     objectState.captureScanNeeded = !!(objectState.dirtyRuntimeObjects instanceof Set && objectState.dirtyRuntimeObjects.size > 0);
                     objectState.lastCaptureStats = {
                         pruneGoneMs: Number(sync.captureDetail.pruneGoneMs.toFixed(2)),
@@ -176,8 +182,8 @@
                         dirtySkippedCount: sync.captureDetail.dirtySkippedCount,
                         goneRemovedCount: sync.captureDetail.goneRemovedCount
                     };
-                });
-                nextTasks.push(() => {
+                }));
+                nextTasks.push(createPrototypeTask("objects.collect", () => {
                     const collectStart = prototypeNow();
                     const activeSectionKeys = map.getPrototypeActiveSectionKeys();
                     sync.activeSectionKeys = activeSectionKeys;
@@ -190,6 +196,14 @@
                             desiredRecords.push({ sectionKey, record: records[i] });
                         }
                     });
+                    if (typeof map.getPrototypeTriggerDefsForSectionKeys === "function") {
+                        const triggerDefs = map.getPrototypeTriggerDefsForSectionKeys(activeSectionKeys);
+                        for (let i = 0; i < triggerDefs.length; i++) {
+                            const triggerDef = triggerDefs[i];
+                            if (!triggerDef || typeof triggerDef !== "object") continue;
+                            desiredRecords.push({ sectionKey: "", record: triggerDef });
+                        }
+                    }
                     sync.desiredRecords = desiredRecords;
                     sync.desiredSignature = desiredRecords
                         .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
@@ -269,7 +283,7 @@
                     const phaseTasks = [];
                     for (let i = 0; i < sync.removalEntries.length; i++) {
                         const removalEntry = sync.removalEntries[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask(`objects.unload.${objectTaskTypeLabel(removalEntry && removalEntry.runtimeObj)}`, () => {
                             const removeStart = prototypeNow();
                             const recordId = Number(removalEntry && removalEntry.recordId);
                             const runtimeObj = removalEntry && removalEntry.runtimeObj;
@@ -335,16 +349,16 @@
                             sync.removedAny = true;
                             sync.removedCount += 1;
                             sync.unloadMs += prototypeNow() - removeStart;
-                        });
+                        }));
                     }
-                    phaseTasks.push(() => {
+                    phaseTasks.push(createPrototypeTask("objects.trimParked", () => {
                         const trimStart = prototypeNow();
                         sync.parkedEvicted += trimPrototypeParkedRuntimeObjectCache(objectState);
                         sync.unloadMs += prototypeNow() - trimStart;
-                    });
+                    }));
                     for (let i = 0; i < sync.loadEntries.length; i++) {
                         const entry = sync.loadEntries[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask(`objects.load.${objectTaskTypeLabel(entry)}`, () => {
                             const loadTaskStart = prototypeNow();
                             let runtimeObj = null;
                             const profileKey = getPrototypeObjectProfileKey(entry && entry.record);
@@ -397,7 +411,8 @@
                                         deferRoadTextureRefresh: true,
                                         deferTreePostLoad: true,
                                         suppressAutoScriptingName: true,
-                                        trustLoadedScriptingName: true
+                                        trustLoadedScriptingName: true,
+                                        targetSectionKey: entry.sectionKey
                                     });
                                     const staticMs = prototypeNow() - staticStart;
                                     sync.staticLoadMs += staticMs;
@@ -428,16 +443,37 @@
                             sync.loadedAny = true;
                             sync.loadedCount += 1;
                             sync.loadMs += prototypeNow() - loadTaskStart;
-                        });
+                        }));
                     }
-                    phaseTasks.push(() => {
-                        if (sync.roadRefreshNodes.size > 0 && globalScope.Road && typeof globalScope.Road.refreshTexturesAroundNodes === "function") {
-                            const roadRefreshStart = prototypeNow();
-                            sync.roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(sync.roadRefreshNodes);
-                            sync.roadRefreshMs += prototypeNow() - roadRefreshStart;
+                    phaseTasks.push(createPrototypeTask("objects.roadRefreshPlan", () => {
+                        if (sync.roadRefreshNodes.size === 0 || !globalScope.Road) return;
+                        const refreshRoads = (typeof globalScope.Road.collectRefreshRoadsFromNodes === "function")
+                            ? globalScope.Road.collectRefreshRoadsFromNodes(sync.roadRefreshNodes)
+                            : null;
+                        if (Array.isArray(refreshRoads) && refreshRoads.length > 0 && typeof globalScope.Road.refreshTexturesForRoads === "function") {
+                            const roadRefreshChunkSize = 64;
+                            sync.roadRefreshCount = refreshRoads.length;
+                            const refreshTasks = [];
+                            for (let i = 0; i < refreshRoads.length; i += roadRefreshChunkSize) {
+                                const startIndex = i;
+                                refreshTasks.push(createPrototypeTask("objects.roadRefresh", () => {
+                                    const roadRefreshStart = prototypeNow();
+                                    globalScope.Road.refreshTexturesForRoads(refreshRoads, startIndex, roadRefreshChunkSize);
+                                    sync.roadRefreshMs += prototypeNow() - roadRefreshStart;
+                                }));
+                            }
+                            prependPrototypeTasks(session, refreshTasks);
+                            return;
                         }
-                    });
-                    phaseTasks.push(() => {
+                        if (typeof globalScope.Road.refreshTexturesAroundNodes === "function") {
+                            prependPrototypeTasks(session, [createPrototypeTask("objects.roadRefresh", () => {
+                                const roadRefreshStart = prototypeNow();
+                                sync.roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(sync.roadRefreshNodes);
+                                sync.roadRefreshMs += prototypeNow() - roadRefreshStart;
+                            })]);
+                        }
+                    }));
+                    phaseTasks.push(createPrototypeTask("objects.treeFinalize", () => {
                         const deferredTrees = Array.isArray(sync.deferredTrees) ? sync.deferredTrees : [];
                         if (deferredTrees.length > 0) {
                             const treeFinalizeStart = prototypeNow();
@@ -501,17 +537,20 @@
                             invalidateMs: Number(sync.invalidateMs.toFixed(2))
                         };
                         session.objectsChanged = !!(sync.capturedAny || sync.removedAny || sync.loadedAny);
-                    });
+                    }));
                     prependPrototypeTasks(session, phaseTasks);
-                });
+                }));
                 prependPrototypeTasks(session, nextTasks);
-            }]);
+            })]);
         };
 
         const enqueuePrototypeAsyncWallSync = (session) => {
             const wallState = map._prototypeWallState;
             if (!wallState) return;
-            prependPrototypeTasks(session, [() => {
+            if (!(wallState.pendingCapturedMountedObjects instanceof Set)) {
+                wallState.pendingCapturedMountedObjects = new Set();
+            }
+            prependPrototypeTasks(session, [createPrototypeTask("walls.plan", () => {
                 const sync = {
                     captureMs: 0,
                     collectMs: 0,
@@ -547,7 +586,7 @@
                 sync.capturedAny = !!map.capturePendingPrototypeWalls();
                 sync.captureMs += prototypeNow() - captureStart;
                 const nextTasks = [];
-                nextTasks.push(() => {
+                nextTasks.push(createPrototypeTask("walls.collect", () => {
                     const collectStart = prototypeNow();
                     const activeSectionKeys = map.getPrototypeActiveSectionKeys();
                     sync.activeSectionKeys = activeSectionKeys;
@@ -556,9 +595,14 @@
                     }
                     const desiredRecords = [];
                     const blockedEdgesByRecordId = new Map();
+                    // Load-time wall splitting disabled — walls are already split in
+                    // saved section assets.  New walls placed at runtime are split by
+                    // capturePrototypeWall when they are captured into section records.
+                    // Collect desired wall records from all active sections.
                     activeSectionKeys.forEach((sectionKey) => {
                         const asset = map.getPrototypeSectionAsset(sectionKey);
-                        const records = Array.isArray(asset && asset.walls) ? asset.walls : null;
+                        if (!asset) return;
+                        const records = Array.isArray(asset.walls) ? asset.walls : null;
                         if (Array.isArray(records)) {
                             for (let i = 0; i < records.length; i++) {
                                 desiredRecords.push({ sectionKey, record: records[i] });
@@ -618,6 +662,7 @@
                         }
                     }
                     sync.removalEntries = [];
+                    sync.orphanedMountedObjects = [];
                     for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
                         if (desiredRecordIds.has(recordId)) continue;
                         sync.removalEntries.push({ recordId, runtimeWall });
@@ -634,15 +679,15 @@
                     const phaseTasks = [];
                     for (let i = 0; i < sync.removeBlockedSectionKeys.length; i++) {
                         const sectionKey = sync.removeBlockedSectionKeys[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask("walls.removeBlockedEdges", () => {
                             const start = prototypeNow();
                             sync.blockedEdgeRemovedLinks += removePrototypeBlockedEdgesForSection(map, sectionKey, sync.changedClearanceNodes);
                             sync.blockedEdgeRemoveMs += prototypeNow() - start;
-                        });
+                        }));
                     }
                     for (let i = 0; i < sync.removalEntries.length; i++) {
                         const removalEntry = sync.removalEntries[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask("walls.unload", () => {
                             const start = prototypeNow();
                             const recordId = Number(removalEntry && removalEntry.recordId);
                             const runtimeWall = removalEntry && removalEntry.runtimeWall;
@@ -650,6 +695,17 @@
                             if (!runtimeWall || runtimeWall.gone) {
                                 wallState.activeRuntimeWallsByRecordId.delete(recordId);
                                 return;
+                            }
+                            // Rescue attached objects (doors/windows) before the wall
+                            // is removed — they will be re-snapped after joinery.
+                            if (Array.isArray(runtimeWall.attachedObjects)) {
+                                for (let a = 0; a < runtimeWall.attachedObjects.length; a++) {
+                                    const entry = runtimeWall.attachedObjects[a];
+                                    if (entry && entry.object && !entry.object.gone) {
+                                        sync.orphanedMountedObjects.push(entry.object);
+                                    }
+                                }
+                                runtimeWall.attachedObjects.length = 0;
                             }
                             if (runtimeWall._prototypeUsesSectionBlockedEdges === true) {
                                 removePrototypeRuntimeWallVisual(runtimeWall);
@@ -664,11 +720,11 @@
                             sync.removedAny = true;
                             sync.removedCount += 1;
                             sync.unloadMs += prototypeNow() - start;
-                        });
+                        }));
                     }
                     for (let i = 0; i < sync.loadWallEntries.length; i++) {
                         const entry = sync.loadWallEntries[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask("walls.loadJson", () => {
                             const recordId = Number(entry && entry.record && entry.record.id);
                             if (!Number.isInteger(recordId) || wallState.activeRuntimeWallsByRecordId.has(recordId)) return;
                             const loadStart = prototypeNow();
@@ -704,27 +760,74 @@
                             wallState.activeRuntimeWallsByRecordId.set(recordId, runtimeWall);
                             sync.loadedAny = true;
                             sync.loadedCount += 1;
-                        });
+                        }));
                     }
                     for (let i = 0; i < sync.applyBlockedSectionKeys.length; i++) {
                         const sectionKey = sync.applyBlockedSectionKeys[i];
-                        phaseTasks.push(() => {
+                        phaseTasks.push(createPrototypeTask("walls.applyBlockedEdges", () => {
                             const start = prototypeNow();
                             const appliedLinks = applyPrototypeBlockedEdgesForSection(map, sectionKey, sync.changedClearanceNodes);
                             sync.blockedEdgeApplyMs += prototypeNow() - start;
                             sync.blockedEdgeAppliedLinks += appliedLinks;
-                        });
+                        }));
                     }
-                    phaseTasks.push(() => {
+                    phaseTasks.push(createPrototypeTask("walls.refreshActive", () => {
                         wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
-                    });
-                    phaseTasks.push(() => {
+                    }));
+                    phaseTasks.push(createPrototypeTask("walls.joinery", () => {
                         if (wallState.activeRuntimeWalls.length > 0 && globalScope.WallSectionUnit && typeof globalScope.WallSectionUnit.batchHandleJoinery === "function") {
                             const joineryStart = prototypeNow();
                             globalScope.WallSectionUnit.batchHandleJoinery(wallState.activeRuntimeWalls);
                             sync.joineryMs += prototypeNow() - joineryStart;
                         }
-                    });
+                        // Re-snap doors/windows whose parent wall was removed
+                        // due to re-splitting.
+                        if (sync.orphanedMountedObjects.length > 0) {
+                            for (let i = 0; i < sync.orphanedMountedObjects.length; i++) {
+                                const obj = sync.orphanedMountedObjects[i];
+                                if (!obj || obj.gone) continue;
+                                let snapSucceeded = false;
+                                if (typeof obj.snapToMountedWall === "function") {
+                                    snapSucceeded = !!obj.snapToMountedWall();
+                                }
+                                // Suppress dirty tracking for the node refresh: if snap failed (wall
+                                // is from a section that just left the bubble), clearing the indexed
+                                // nodes would mark the door dirty and cause it to be re-saved to an
+                                // inactive section's asset, causing disappearance on the next cycle.
+                                const previousSuppress = map._prototypeSuppressObjectDirtyTracking;
+                                map._prototypeSuppressObjectDirtyTracking = true;
+                                try {
+                                    if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                                        obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                                    }
+                                } finally {
+                                    map._prototypeSuppressObjectDirtyTracking = previousSuppress;
+                                }
+                                // If snap succeeded (door found an active wall), save the updated
+                                // position immediately — matching what pendingCapturedMountedObjects does.
+                                if (snapSucceeded && isPrototypeSavableObject(obj)) {
+                                    upsertPrototypeObjectRecord(obj);
+                                }
+                            }
+                        }
+                        if (wallState.pendingCapturedMountedObjects.size > 0) {
+                            const preservedMountedObjects = Array.from(wallState.pendingCapturedMountedObjects);
+                            wallState.pendingCapturedMountedObjects.clear();
+                            for (let i = 0; i < preservedMountedObjects.length; i++) {
+                                const obj = preservedMountedObjects[i];
+                                if (!obj || obj.gone) continue;
+                                if (typeof obj.snapToMountedWall === "function") {
+                                    obj.snapToMountedWall();
+                                }
+                                if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                                    obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                                }
+                                if (isPrototypeSavableObject(obj)) {
+                                    upsertPrototypeObjectRecord(obj);
+                                }
+                            }
+                        }
+                    }));
                     const needsClearanceRefresh = sync.changedClearanceNodes.size > 0 || (
                         map._prototypeSectionState &&
                         Array.isArray(map._prototypeSectionState.orderedSectionAssets) &&
@@ -742,15 +845,15 @@
                             sync.clearanceNodeCount += sectionNodes.length;
                             for (let startIndex = 0; startIndex < sectionNodes.length; startIndex += clearanceChunkSize) {
                                 const chunkStartIndex = startIndex;
-                                phaseTasks.push(() => {
+                                phaseTasks.push(createPrototypeTask("walls.clearanceChunk", () => {
                                     const start = prototypeNow();
                                     applyPrototypeSectionClearanceChunk(map, sectionKey, chunkStartIndex, clearanceChunkSize);
                                     sync.clearanceMs += prototypeNow() - start;
-                                });
+                                }));
                             }
                         }
                     }
-                    phaseTasks.push(() => {
+                    phaseTasks.push(createPrototypeTask("walls.finalize", () => {
                         sync.precomputedBlockMs = sync.blockedEdgeApplyMs;
                         sync.precomputedBlockedConnections = sync.blockedEdgeAppliedLinks;
                         wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
@@ -788,17 +891,17 @@
                             joineryMs: Number(sync.joineryMs.toFixed(2))
                         };
                         session.wallsChanged = !!(sync.capturedAny || sync.removedCount > 0 || sync.loadedCount > 0);
-                    });
+                    }));
                     prependPrototypeTasks(session, phaseTasks);
-                });
+                }));
                 prependPrototypeTasks(session, nextTasks);
-            }]);
+            })]);
         };
 
         const enqueuePrototypeAsyncAnimalSync = (session) => {
             const animalState = map._prototypeAnimalState;
             if (!animalState) return;
-            prependPrototypeTasks(session, [() => {
+            prependPrototypeTasks(session, [createPrototypeTask("animals.plan", () => {
                 const captureStart = prototypeNow();
                 const capturedAny = (typeof map.capturePendingPrototypeAnimals === "function")
                     ? map.capturePendingPrototypeAnimals()
@@ -849,7 +952,7 @@
                 let loadedAny = false;
                 for (const [recordId, runtimeAnimal] of animalState.activeRuntimeAnimalsByRecordId.entries()) {
                     if (desiredRecordIds.has(recordId)) continue;
-                    removeTasks.push(() => {
+                    removeTasks.push(createPrototypeTask("animals.remove", () => {
                         const taskStart = prototypeNow();
                         if (runtimeAnimal && typeof runtimeAnimal.removeFromGame === "function") runtimeAnimal.removeFromGame();
                         else if (runtimeAnimal && typeof runtimeAnimal.remove === "function") runtimeAnimal.remove();
@@ -858,16 +961,21 @@
                         removedAny = true;
                         removedCount += 1;
                         activeTaskMs += prototypeNow() - taskStart;
-                    });
+                    }));
                 }
                 for (let i = 0; i < desiredRecords.length; i++) {
                     const entry = desiredRecords[i];
-                    removeTasks.push(() => {
+                    const recordId = Number(entry && entry.record && entry.record.id);
+                    const animalType = (entry && entry.record && typeof entry.record.type === "string" && entry.record.type.length > 0)
+                        ? entry.record.type
+                        : "unknown";
+                    removeTasks.push(createPrototypeTask(`animals.load.${animalType}#${Number.isInteger(recordId) ? recordId : "?"}`, () => {
                         const taskStart = prototypeNow();
-                        const recordId = Number(entry && entry.record && entry.record.id);
                         if (!Number.isInteger(recordId) || animalState.activeRuntimeAnimalsByRecordId.has(recordId)) return;
                         if (!globalScope.Animal || typeof globalScope.Animal.loadJson !== "function") return;
-                        const runtimeAnimal = globalScope.Animal.loadJson(entry.record, map);
+                        const runtimeAnimal = globalScope.Animal.loadJson(entry.record, map, {
+                            targetSectionKey: entry.sectionKey
+                        });
                         if (!runtimeAnimal) return;
                         if (Array.isArray(globalScope.animals) && globalScope.animals.indexOf(runtimeAnimal) < 0) globalScope.animals.push(runtimeAnimal);
                         runtimeAnimal._prototypeRuntimeRecord = true;
@@ -876,10 +984,29 @@
                         animalState.activeRuntimeAnimalsByRecordId.set(recordId, runtimeAnimal);
                         loadedAny = true;
                         loadedCount += 1;
-                        activeTaskMs += prototypeNow() - taskStart;
-                    });
+                        const taskMs = prototypeNow() - taskStart;
+                        if (taskMs >= 8 && typeof console !== "undefined" && typeof console.log === "function") {
+                            console.log("[prototype animal load]", {
+                                type: animalType,
+                                recordId,
+                                ms: Number(taskMs.toFixed(2)),
+                                recordScriptingName: (
+                                    entry &&
+                                    entry.record &&
+                                    typeof entry.record.scriptingName === "string" &&
+                                    entry.record.scriptingName.trim().length > 0
+                                )
+                                    ? entry.record.scriptingName.trim()
+                                    : "",
+                                debug: runtimeAnimal && runtimeAnimal._prototypeLoadDebug
+                                    ? { ...runtimeAnimal._prototypeLoadDebug }
+                                    : null
+                            });
+                        }
+                        activeTaskMs += taskMs;
+                    }));
                 }
-                removeTasks.push(() => {
+                removeTasks.push(createPrototypeTask("animals.finalize", () => {
                     animalState.activeRuntimeAnimals = Array.from(animalState.activeRuntimeAnimalsByRecordId.values());
                     animalState.activeRecordSignature = desiredSignature;
                     animalState.lastSyncStats = {
@@ -891,15 +1018,15 @@
                         captureMs: Number(captureMs.toFixed(2))
                     };
                     session.animalsChanged = !!(capturedAny || removedAny || loadedAny);
-                });
+                }));
                 prependPrototypeTasks(session, removeTasks);
-            }]);
+            })]);
         };
 
         const enqueuePrototypeAsyncPowerupSync = (session) => {
             const powerupState = map._prototypePowerupState;
             if (!powerupState) return;
-            prependPrototypeTasks(session, [() => {
+            prependPrototypeTasks(session, [createPrototypeTask("powerups.plan", () => {
                 let activeTaskMs = 0;
                 const activeSectionKeys = map.getPrototypeActiveSectionKeys();
                 const desiredRecords = [];
@@ -937,7 +1064,7 @@
                 let loadedAny = false;
                 for (const [recordId, runtimePowerup] of powerupState.activeRuntimePowerupsByRecordId.entries()) {
                     if (desiredRecordIds.has(recordId)) continue;
-                    tasks.push(() => {
+                    tasks.push(createPrototypeTask("powerups.remove", () => {
                         const taskStart = prototypeNow();
                         if (runtimePowerup) {
                             runtimePowerup.collected = true;
@@ -952,11 +1079,11 @@
                         removedAny = true;
                         removedCount += 1;
                         activeTaskMs += prototypeNow() - taskStart;
-                    });
+                    }));
                 }
                 for (let i = 0; i < desiredRecords.length; i++) {
                     const entry = desiredRecords[i];
-                    tasks.push(() => {
+                    tasks.push(createPrototypeTask("powerups.load", () => {
                         const taskStart = prototypeNow();
                         const recordId = Number(entry && entry.record && entry.record.id);
                         if (!Number.isInteger(recordId) || powerupState.activeRuntimePowerupsByRecordId.has(recordId)) return;
@@ -972,9 +1099,9 @@
                         loadedAny = true;
                         loadedCount += 1;
                         activeTaskMs += prototypeNow() - taskStart;
-                    });
+                    }));
                 }
-                tasks.push(() => {
+                tasks.push(createPrototypeTask("powerups.finalize", () => {
                     powerupState.activeRuntimePowerups = Array.from(powerupState.activeRuntimePowerupsByRecordId.values());
                     powerupState.activeRecordSignature = desiredSignature;
                     powerupState.lastSyncStats = {
@@ -985,9 +1112,9 @@
                         active: powerupState.activeRuntimePowerupsByRecordId.size
                     };
                     session.powerupsChanged = !!(removedAny || loadedAny);
-                });
+                }));
                 prependPrototypeTasks(session, tasks);
-            }]);
+            })]);
         };
 
         return {

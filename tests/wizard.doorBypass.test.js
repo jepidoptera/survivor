@@ -44,14 +44,28 @@ function loadWizardClass() {
         overlayContainer: { addChild() {}, children: [], setChildIndex() {} },
         centerViewport() {},
         applyViewportWrapShift() {},
+        worldToScreen(point) { return { x: point.x, y: point.y }; },
         renderNowMs: 0,
         showPerfReadout: false,
+        wizardFrames: Array.from({ length: 36 }, (_, index) => ({ frame: index })),
         setTimeout: () => 1,
         clearTimeout() {},
         setInterval: () => 1,
         clearInterval() {},
         Inventory: class Inventory {},
         PIXI: {
+            Texture: { WHITE: { frame: "white" } },
+            Sprite: class Sprite {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.parent = null;
+                    this.x = 0;
+                    this.y = 0;
+                    this.width = 0;
+                    this.height = 0;
+                    this.anchor = { set() {} };
+                }
+            },
             Graphics: class Graphics {
                 constructor() {
                     this.parent = null;
@@ -95,11 +109,11 @@ function loadWizardClass() {
         vm.runInContext(source, context, { filename: filePath });
     }
 
-    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox };", context);
+    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox, wizardFrames };", context);
     return context.__testExports;
 }
 
-const { Wizard, PolygonHitbox } = loadWizardClass();
+const { Wizard, PolygonHitbox, wizardFrames } = loadWizardClass();
 
 function createDoorEntry(hitbox, canTraverse = true) {
     return {
@@ -269,6 +283,34 @@ test("wizard can still bypass through a narrow mounted door opening", () => {
     const bypass = wizard.canBypassVectorMovementCollisions(0, 0, 0.1, 0, 0.3, context, {});
 
     assert.equal(bypass, true);
+});
+
+test("wizard draw keeps dead wizard on standing frame", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.pixiSprite = null;
+    wizard.shadowGraphics = {
+        parent: true,
+        clear() {},
+        beginFill() {},
+        drawEllipse() {},
+        endFill() {}
+    };
+    wizard.getInterpolatedPosition = () => ({ x: 12, y: 8, z: 0 });
+    wizard.drawShield = () => {};
+    wizard.drawHat = () => {};
+    wizard.movementVector = { x: 2, y: 0 };
+    wizard.moving = true;
+    wizard.dead = true;
+    wizard.hp = 0;
+    wizard.lastDirectionRow = 1;
+    wizard.isJumping = false;
+    wizard.isMovingBackward = false;
+    wizard.animationSpeedMultiplier = 1;
+    wizard.speed = 2.5;
+
+    wizard.draw();
+
+    assert.deepEqual(wizard.pixiSprite.texture, wizardFrames[9]);
 });
 
 test("wizard can enter a thin mounted door opening before the center reaches the wall plane", () => {

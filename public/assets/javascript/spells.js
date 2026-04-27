@@ -299,7 +299,8 @@ const SpellSystem = (() => {
     ];
 
     const MAGIC_TICK_MS = 50;
-    let healingAuraHpMultiplier = 10;
+    const HEALING_AURA_EFFECT_MULTIPLIER = 2;
+    let healingAuraHpMultiplier = 10 * HEALING_AURA_EFFECT_MULTIPLIER;
     const SHIELD_SPELL_MAGIC_COST = 25;
     const SHIELD_SPELL_HP = 100;
     const WALL_HEIGHT_MIN = 0.5;
@@ -859,12 +860,19 @@ const SpellSystem = (() => {
         if (!active.length) return 0;
         let total = 0;
         active.forEach(name => {
-            const aura = getAuraDefinition(name);
-            if (aura && Number.isFinite(aura.magicPerSecond)) {
-                total += Math.max(0, aura.magicPerSecond);
-            }
+            total += getAuraMagicDrainPerSecond(name);
         });
         return total;
+    }
+
+    function getAuraMagicDrainPerSecond(auraName) {
+        const aura = getAuraDefinition(auraName);
+        if (!aura || !Number.isFinite(aura.magicPerSecond)) return 0;
+        const baseDrainPerSecond = Math.max(0, Number(aura.magicPerSecond));
+        if (aura.name === "healing") {
+            return baseDrainPerSecond * HEALING_AURA_EFFECT_MULTIPLIER;
+        }
+        return baseDrainPerSecond;
     }
 
     function getHealingAuraHpMultiplier() {
@@ -2029,10 +2037,7 @@ const SpellSystem = (() => {
             const currentHp = Number.isFinite(wizardRef.hp) ? Number(wizardRef.hp) : null;
             const healingNeedsHp = Number.isFinite(maxHp) && maxHp > 0 && Number.isFinite(currentHp) && currentHp < maxHp;
             if (!healingNeedsHp) {
-                const healingAura = getAuraDefinition("healing");
-                const healingDrainPerSecond = Number.isFinite(healingAura?.magicPerSecond)
-                    ? Math.max(0, Number(healingAura.magicPerSecond))
-                    : 0;
+                const healingDrainPerSecond = getAuraMagicDrainPerSecond("healing");
                 auraDrainPerSecond = Math.max(0, auraDrainPerSecond - healingDrainPerSecond);
             }
         }
@@ -4232,6 +4237,11 @@ const SpellSystem = (() => {
                 const height = Number.isFinite(wizardRef.selectedWallHeight)
                     ? wizardRef.selectedWallHeight : 1;
                 const wallTexturePath = getSelectedWallTexture(wizardRef);
+                // Snapshot existing walls so we can detect newly created/merged ones.
+                const wallsBefore = new Set(
+                    Array.from(WallSectionUnit._allSections.values())
+                        .filter(w => w && !w.gone && w.map === wizardRef.map)
+                );
                 const result = WallSectionUnit.createPlacementFromWorldPoints(
                     wizardRef.map, placementStartPoint, placementEndPoint, {
                         thickness,
@@ -4243,7 +4253,51 @@ const SpellSystem = (() => {
                 );
                 if (result && Array.isArray(result.sections)) {
                     for (let i = 0; i < result.sections.length; i++) {
-                        result.sections[i].addToMapNodes();
+                        const w = result.sections[i];
+                        if (w && !w.gone && typeof w.addToMapNodes === "function") {
+                            w.addToMapNodes();
+                        }
+                    }
+                    // Also check for brand-new walls that ended up outside
+                    // result.sections (e.g. created during cross-wall splits
+                    // inside createPlacementFromWorldPoints).
+                    const wallsAfter = Array.from(WallSectionUnit._allSections.values())
+                        .filter(w => w && !w.gone && w.map === wizardRef.map && !wallsBefore.has(w));
+                    // Combine: result.sections (may include pre-existing walls
+                    // that grew via merge) + truly new walls not yet listed.
+                    const seen = new Set(result.sections);
+                    const wallsToSplit = result.sections.slice();
+                    for (let i = 0; i < wallsAfter.length; i++) {
+                        if (!seen.has(wallsAfter[i])) wallsToSplit.push(wallsAfter[i]);
+                    }
+                    // Immediately split any wall that crosses a section seam
+                    // into separate runtime wall objects (one per section).
+                    const splitting = (typeof globalThis !== "undefined") && globalThis.__wallSectionSplitting;
+                    if (splitting && wizardRef.map._prototypeSectionState) {
+                        for (let i = 0; i < wallsToSplit.length; i++) {
+                            const wall = wallsToSplit[i];
+                            if (!wall || wall.gone) continue;
+                            if (typeof wall._collectOrderedLineAnchors !== "function") continue;
+                            let orderedAnchors;
+                            try { orderedAnchors = wall._collectOrderedLineAnchors(); } catch (_e) { continue; }
+                            if (!Array.isArray(orderedAnchors) || orderedAnchors.length < 2) continue;
+                            const record = wall.saveJson();
+                            const splitResult = splitting.computeWallRecordSplits(record, orderedAnchors);
+                            if (!splitResult || !splitResult.needsSplit) continue;
+                            // Remove original wall; no attached objects on a freshly built wall.
+                            wall._removeWallPreserving([], { skipAutoMerge: true });
+                            // Create runtime wall objects for each piece.
+                            for (let p = 0; p < splitResult.pieces.length; p++) {
+                                const pieceRecord = splitResult.pieces[p].record;
+                                const piece = WallSectionUnit.loadJson(pieceRecord, wizardRef.map);
+                                if (piece) {
+                                    piece.addToMapNodes();
+                                    if (typeof piece.handleJoineryOnPlacement === "function") {
+                                        piece.handleJoineryOnPlacement();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -5134,6 +5188,16 @@ const SpellSystem = (() => {
         const created = new TriggerAreaCtor({ x: points[0].x, y: points[0].y }, wizardRef.map, { points });
         if (Array.isArray(wizardRef.map.objects) && !wizardRef.map.objects.includes(created)) {
             wizardRef.map.objects.push(created);
+        }
+        // Immediately flush the dirty-capture queue so the trigger area is registered
+        // in the prototype trigger registry and becomes visible in the editor right away.
+        // Without this, the TriggerArea sits in dirtyRuntimeObjects and is invisible
+        // until the next bubble-shift async cycle processes it.
+        if (
+            wizardRef.map._prototypeTriggerState &&
+            typeof wizardRef.map.capturePendingPrototypeObjects === "function"
+        ) {
+            wizardRef.map.capturePendingPrototypeObjects();
         }
         if (
             typeof globalThis !== "undefined" &&

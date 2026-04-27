@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": 169.71729753795492,
-    "y": 197.01123664755957,
+    "x": -40.09762179881314,
+    "y": 132.85034560078182,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -27,12 +27,12 @@
     "selectedPlaceableCategory": "doors",
     "selectedPlaceableTexturePath": "/assets/images/doors/door2.png",
     "selectedPlaceableByCategory": {
-      "flowers": "/assets/images/flowers/red%20flower.png",
+      "flowers": "/assets/images/flowers/thornflowers.png",
       "windows": "/assets/images/windows/window.png",
       "doors": "/assets/images/doors/door2.png",
-      "furniture": "/assets/images/furniture/circlerug.png",
+      "furniture": "/assets/images/furniture/crystal%20ball.png",
       "signs": "/assets/images/signs/princess.png",
-      "roof": "/assets/images/roofs/slate.png"
+      "roof": "/assets/images/roofs/smallshingles.png"
     },
     "selectedPlaceableRenderOffset": 0,
     "selectedPlaceableRenderOffsetByTexture": {
@@ -42,17 +42,27 @@
       "/assets/images/roofs/slate.png": 0,
       "/assets/images/furniture/chair.png": 0,
       "/assets/images/furniture/circlerug.png": 0,
-      "/assets/images/doors/door2.png": 0
+      "/assets/images/doors/door2.png": 0,
+      "/assets/images/flowers/red%20flower.png": 0,
+      "/assets/images/flowers/fireflower.png": 0,
+      "/assets/images/flowers/thornflowers.png": 0,
+      "/assets/images/furniture/hexrug.png": 0,
+      "/assets/images/furniture/crystal%20ball.png": 0
     },
-    "selectedPlaceableScale": 0.55,
+    "selectedPlaceableScale": 2.177,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
-      "/assets/images/windows/window.png": 0.293,
+      "/assets/images/windows/window.png": 1.737,
       "/assets/images/roofs/smallshingles.png": 1,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
-      "/assets/images/furniture/circlerug.png": 13.711,
-      "/assets/images/doors/door2.png": 0.55
+      "/assets/images/furniture/circlerug.png": 4,
+      "/assets/images/doors/door2.png": 2.177,
+      "/assets/images/flowers/red%20flower.png": 0.55,
+      "/assets/images/flowers/fireflower.png": 5,
+      "/assets/images/flowers/thornflowers.png": 4.308,
+      "/assets/images/furniture/hexrug.png": 19.818,
+      "/assets/images/furniture/crystal%20ball.png": 1.979
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -62,7 +72,12 @@
       "/assets/images/roofs/slate.png": 0,
       "/assets/images/furniture/chair.png": 0,
       "/assets/images/furniture/circlerug.png": 0,
-      "/assets/images/doors/door2.png": 0
+      "/assets/images/doors/door2.png": 0,
+      "/assets/images/flowers/red%20flower.png": 0,
+      "/assets/images/flowers/fireflower.png": 0,
+      "/assets/images/flowers/thornflowers.png": 0,
+      "/assets/images/furniture/hexrug.png": 30,
+      "/assets/images/furniture/crystal%20ball.png": 30
     },
     "selectedPlaceableRotationAxis": "spatial",
     "selectedPlaceableRotationAxisByTexture": {
@@ -72,7 +87,12 @@
       "/assets/images/roofs/slate.png": "visual",
       "/assets/images/furniture/chair.png": "visual",
       "/assets/images/furniture/circlerug.png": "ground",
-      "/assets/images/doors/door2.png": "spatial"
+      "/assets/images/doors/door2.png": "spatial",
+      "/assets/images/flowers/red%20flower.png": "none",
+      "/assets/images/flowers/fireflower.png": "none",
+      "/assets/images/flowers/thornflowers.png": "none",
+      "/assets/images/furniture/hexrug.png": "ground",
+      "/assets/images/furniture/crystal%20ball.png": "visual"
     },
     "selectedPlaceableAnchorX": 0.5,
     "selectedPlaceableAnchorY": 1,
@@ -83,7 +103,12 @@
       "/assets/images/roofs/slate.png": 0.5,
       "/assets/images/furniture/chair.png": 0.5,
       "/assets/images/furniture/circlerug.png": 0.5,
-      "/assets/images/doors/door2.png": 0.5
+      "/assets/images/doors/door2.png": 0.5,
+      "/assets/images/flowers/red%20flower.png": 0.5,
+      "/assets/images/flowers/fireflower.png": 0.5,
+      "/assets/images/flowers/thornflowers.png": 0.5,
+      "/assets/images/furniture/hexrug.png": 0.5,
+      "/assets/images/furniture/crystal%20ball.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -92,33 +117,36 @@
       "/assets/images/roofs/slate.png": 0.5,
       "/assets/images/furniture/chair.png": 0.5,
       "/assets/images/furniture/circlerug.png": 0.5,
-      "/assets/images/doors/door2.png": 1
+      "/assets/images/doors/door2.png": 1,
+      "/assets/images/flowers/red%20flower.png": 0.5,
+      "/assets/images/flowers/fireflower.png": 0.5,
+      "/assets/images/flowers/thornflowers.png": 0.5,
+      "/assets/images/furniture/hexrug.png": 0.5,
+      "/assets/images/furniture/crystal%20ball.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
     "selectedEditorCategory": "doors",
-    "selectedWallHeight": 2,
-    "selectedWallThickness": 0.375,
+    "selectedWallHeight": 4,
+    "selectedWallThickness": 0.5,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
-    "selectedRoofOverhang": 0.1875,
-    "selectedRoofPeakHeight": 2,
-    "selectedRoofTextureRepeat": 0.5,
+    "selectedRoofOverhang": 0.8125,
+    "selectedRoofPeakHeight": 8.5,
+    "selectedRoofTextureRepeat": 0.09375,
     "showEditorPanel": false,
-    "showPerfReadout": true,
+    "showPerfReadout": false,
     "spells": [],
-    "inventory": {
-      "spellCredits": 4
-    },
+    "inventory": {},
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": 154.21729753795492,
-      "y": 183.50709782961323
+      "x": -55.59762179881314,
+      "y": 119.34620678283548
     }
   },
   "los": {
     "mazeMode": true
   },
-  "activeCenterKey": "0,0"
+  "activeCenterKey": "-2,-1"
 }

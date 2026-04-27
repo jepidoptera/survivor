@@ -1164,14 +1164,197 @@ jQuery(() => {
         return parsed.toLocaleString();
     }
 
+    function startupEvenQOffsetToAxial(x, y) {
+        const q = Number(x) || 0;
+        const offsetY = Number(y) || 0;
+        return {
+            q,
+            r: offsetY - ((q + (q & 1)) / 2)
+        };
+    }
+
+    function startupAxialToEvenQOffset(coord) {
+        const q = Number(coord && coord.q) || 0;
+        const r = Number(coord && coord.r) || 0;
+        return {
+            x: q,
+            y: r + ((q + (q & 1)) / 2)
+        };
+    }
+
+    function startupOffsetToWorld(offsetCoord) {
+        const x = Number(offsetCoord && offsetCoord.x) || 0;
+        const y = Number(offsetCoord && offsetCoord.y) || 0;
+        return {
+            x: x * 0.866,
+            y: y + (x % 2 === 0 ? 0.5 : 0)
+        };
+    }
+
+    function startupAxialDistance(a, b) {
+        const aq = Number(a && a.q) || 0;
+        const ar = Number(a && a.r) || 0;
+        const bq = Number(b && b.q) || 0;
+        const br = Number(b && b.r) || 0;
+        const as = -aq - ar;
+        const bs = -bq - br;
+        return Math.max(Math.abs(aq - bq), Math.abs(ar - br), Math.abs(as - bs));
+    }
+
+    function createPrototypeStartupBackgroundBundle() {
+        const sectionRadius = 36;
+        const anchorOffset = {
+            x: Math.max(0, Math.floor((Number(map && map.width) || 0) * 0.5)),
+            y: Math.max(0, Math.floor((Number(map && map.height) || 0) * 0.5))
+        };
+        const anchorCenter = startupEvenQOffsetToAxial(anchorOffset.x, anchorOffset.y);
+        const centerWorld = startupOffsetToWorld(anchorOffset);
+        const candidateTiles = [];
+        for (let dq = -(sectionRadius - 1); dq <= (sectionRadius - 1); dq++) {
+            for (let dr = -(sectionRadius - 1); dr <= (sectionRadius - 1); dr++) {
+                const axial = {
+                    q: anchorCenter.q + dq,
+                    r: anchorCenter.r + dr
+                };
+                const distance = startupAxialDistance(axial, anchorCenter);
+                if (distance > (sectionRadius - 1)) continue;
+                if (distance <= 5) continue;
+                candidateTiles.push(axial);
+            }
+        }
+
+        const shuffledTiles = candidateTiles
+            .map((axial) => ({ axial, sortKey: Math.random() }))
+            .sort((a, b) => a.sortKey - b.sortKey)
+            .map((entry) => entry.axial);
+        const selectedTiles = [];
+        for (let i = 0; i < shuffledTiles.length && selectedTiles.length < 156; i++) {
+            const candidate = shuffledTiles[i];
+            const tooClose = selectedTiles.some((chosen) => startupAxialDistance(candidate, chosen) <= 3);
+            if (tooClose) continue;
+            selectedTiles.push(candidate);
+        }
+        const objects = selectedTiles.map((axial) => {
+            const offset = startupAxialToEvenQOffset(axial);
+            const world = startupOffsetToWorld(offset);
+            return {
+                type: "tree",
+                x: Number(world.x.toFixed(3)),
+                y: Number(world.y.toFixed(3)),
+                hp: 100,
+                isOnFire: false,
+                textureIndex: Math.floor(Math.random() * 5),
+                size: Number((3.25 + (Math.random() * 1.5)).toFixed(2))
+            };
+        });
+
+        const wizardState = (wizard && typeof wizard.saveJson === "function")
+            ? wizard.saveJson()
+            : {};
+        wizardState.x = Number(centerWorld.x.toFixed(3));
+        wizardState.y = Number(centerWorld.y.toFixed(3));
+
+        return {
+            radius: sectionRadius,
+            sectionGraphRadius: 0,
+            activeCenterKey: "0,0",
+            anchorCenter,
+            sectionCoords: [{ q: 0, r: 0 }],
+            manifest: {
+                activeCenterKey: "0,0",
+                wizard: wizardState,
+                los: {
+                    mazeMode: false
+                }
+            },
+            sections: [{
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: anchorCenter,
+                centerOffset: anchorOffset,
+                objects,
+                walls: [],
+                animals: [],
+                powerups: []
+            }]
+        };
+    }
+
+    async function ensurePrototypeStartupWorldBackground() {
+        if (!isPrototypeIndexedDbRoute()) return false;
+        if (!map || !wizard) return false;
+        try {
+            if (typeof map.loadPrototypeSectionWorld !== "function") return false;
+            const bundle = createPrototypeStartupBackgroundBundle();
+            if (!bundle || map.loadPrototypeSectionWorld(bundle) !== true) {
+                return false;
+            }
+            if (typeof map.syncPrototypeWalls === "function") {
+                map.syncPrototypeWalls();
+            }
+            if (typeof map.syncPrototypeObjects === "function") {
+                map.syncPrototypeObjects();
+            }
+            if (typeof map.syncPrototypeAnimals === "function") {
+                map.syncPrototypeAnimals();
+            }
+            if (typeof map.syncPrototypePowerups === "function") {
+                map.syncPrototypePowerups();
+            }
+            const prototypeWizardState = (
+                typeof globalThis !== "undefined" &&
+                bundle.manifest &&
+                bundle.manifest.wizard &&
+                typeof bundle.manifest.wizard === "object"
+            ) ? bundle.manifest.wizard : null;
+            if (prototypeWizardState && typeof wizard.loadJson === "function") {
+                wizard.loadJson(prototypeWizardState);
+            }
+            if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                map.updatePrototypeSectionBubble(wizard, { force: true });
+            }
+            if (typeof centerViewport === "function") {
+                centerViewport(wizard, 0, 0);
+            }
+            if (typeof wizard.updateStatusBars === "function") {
+                wizard.updateStatusBars();
+            }
+            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+            return true;
+        } catch (error) {
+            console.error("Startup world background load failed:", error);
+            return false;
+        }
+    }
+
+    function hideStartupHudElements() {
+        if (typeof document === "undefined") return () => {};
+        const selectors = ["#statusBars", "#auraSelector", "#spellSelector", "#inventorySelector"];
+        const previousStates = selectors.map((selector) => {
+            const el = document.querySelector(selector);
+            return {
+                el,
+                previousDisplay: el ? el.style.display : ""
+            };
+        });
+        previousStates.forEach(({ el }) => {
+            if (el) {
+                el.style.display = "none";
+            }
+        });
+        return () => {
+            previousStates.forEach(({ el, previousDisplay }) => {
+                if (!el) return;
+                el.style.display = previousDisplay;
+            });
+        };
+    }
+
     function buildStartupMenuContent() {
         return $("<div>")
-            .addClass("startupDialogIntro")
-            .append(
-                $("<p>")
-                    .addClass("startupDialogLead")
-                    .text("Choose whether to begin a fresh journey or continue an earlier one.")
-            );
+            .addClass("startupDialogIntro startupModeDialogIntro");
     }
 
     function prototypePerfNow() {
@@ -1388,12 +1571,13 @@ jQuery(() => {
     function showOpeningModeDialog() {
         return showScrollDialog({
             title: "Wizard 4000",
-            dialogClass: "startupScrollDialog",
+            dialogClass: "startupScrollDialog startupModeScrollDialog",
             bodyClass: "startupDialogBody",
+            buttonRowClass: "startupModeButtonRow",
             content: buildStartupMenuContent(),
             buttons: [
-                { text: "New Game", value: { action: "new" }, unpause: false },
-                { text: "Load Game", value: { action: "load" }, unpause: false }
+                { text: "New Game", value: { action: "new" }, unpause: false, className: "startupModeButton" },
+                { text: "Load Game", value: { action: "load" }, unpause: false, className: "startupModeButton" }
             ]
         });
     }
@@ -2086,45 +2270,50 @@ jQuery(() => {
             name: wizard && typeof wizard.name === "string" ? wizard.name : "",
             difficulty: 2
         };
-        while (true) {
-            const modeChoice = await showOpeningModeDialog();
-            if (modeChoice && modeChoice.action === "new") {
-                const newGameChoice = await showNewGameDialog(cachedNewGameState);
-                if (!newGameChoice || newGameChoice.action === "back") {
+        const restoreHud = hideStartupHudElements();
+        try {
+            while (true) {
+                const modeChoice = await showOpeningModeDialog();
+                if (modeChoice && modeChoice.action === "new") {
+                    const newGameChoice = await showNewGameDialog(cachedNewGameState);
+                    if (!newGameChoice || newGameChoice.action === "back") {
+                        continue;
+                    }
+                    cachedNewGameState = {
+                        name: newGameChoice.name,
+                        difficulty: newGameChoice.difficulty
+                    };
+                    const startResult = isPrototypeIndexedDbRoute()
+                        ? await startNewPrototypeGame(newGameChoice)
+                        : await startNewGameFromServerTemplate(newGameChoice);
+                    if (startResult && startResult.ok) {
+                        clearDialogs();
+                        return true;
+                    }
+                    const reason = (startResult && startResult.reason) ? String(startResult.reason) : "unknown error";
+                    await showScrollMessage(`Unable to start a new game (${reason}).`, "ok", "New Game Failed");
                     continue;
                 }
-                cachedNewGameState = {
-                    name: newGameChoice.name,
-                    difficulty: newGameChoice.difficulty
-                };
-                const startResult = isPrototypeIndexedDbRoute()
-                    ? await startNewPrototypeGame(newGameChoice)
-                    : await startNewGameFromServerTemplate(newGameChoice);
-                if (startResult && startResult.ok) {
+
+                if (!modeChoice || modeChoice.action !== "load") {
+                    continue;
+                }
+
+                const loadChoice = await showLoadGameDialog();
+                if (!loadChoice || loadChoice.action === "back") {
+                    continue;
+                }
+                const loadResult = isPrototypeIndexedDbRoute()
+                    ? await loadNamedPrototypeSave(loadChoice.key)
+                    : loadNamedLocalSave(loadChoice.key);
+                if (loadResult && loadResult.ok) {
                     clearDialogs();
                     return true;
                 }
-                const reason = (startResult && startResult.reason) ? String(startResult.reason) : "unknown error";
-                await showScrollMessage(`Unable to start a new game (${reason}).`, "ok", "New Game Failed");
-                continue;
+                await showScrollMessage(`Unable to load '${loadChoice.key}'.`, "ok", "Load Failed");
             }
-
-            if (!modeChoice || modeChoice.action !== "load") {
-                continue;
-            }
-
-            const loadChoice = await showLoadGameDialog();
-            if (!loadChoice || loadChoice.action === "back") {
-                continue;
-            }
-            const loadResult = isPrototypeIndexedDbRoute()
-                ? await loadNamedPrototypeSave(loadChoice.key)
-                : loadNamedLocalSave(loadChoice.key);
-            if (loadResult && loadResult.ok) {
-                clearDialogs();
-                return true;
-            }
-            await showScrollMessage(`Unable to load '${loadChoice.key}'.`, "ok", "Load Failed");
+        } finally {
+            restoreHud();
         }
     }
 
@@ -4234,6 +4423,7 @@ jQuery(() => {
             ? await tryAutoLoadPrototypeSaveOnStartup()
             : false;
         if (!handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs !== true) {
+            await ensurePrototypeStartupWorldBackground();
             await runOpeningGameDialogFlow();
         }
         if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad) {

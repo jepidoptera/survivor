@@ -26,8 +26,8 @@ class Animal extends Character {
         return frames;
     }
 
-    constructor(type, location, size, map) {
-        super(type, location, size, map);
+    constructor(type, location, size, map, options = {}) {
+        super(type, location, size, map, options);
         this.useExternalScheduler = true;
         if (this.moveTimeout) {
             clearTimeout(this.moveTimeout);
@@ -2386,57 +2386,90 @@ class Animal extends Character {
         return data;
     }
 
-    static loadJson(data, map) {
+    static loadJson(data, map, options = {}) {
         if (!data || !data.type || !map) return null;
 
+        const loadStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const hasSavedScriptingName = typeof data.scriptingName === "string" && data.scriptingName.trim().length > 0;
+        const targetSectionKey = (options && typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
+            ? options.targetSectionKey
+            : "";
+        const constructorOptions = hasSavedScriptingName
+            ? { suppressAutoScriptingName: true }
+            : {};
         let animalInstance;
+        const nodeLookupStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
         const node = map.worldToNode(data.x, data.y);
+        const nodeLookupMs = (
+            ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now()) - nodeLookupStart
+        );
 
         if (!node) return null;
 
         try {
+            const constructStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
             switch (data.type) {
                 case 'squirrel':
-                    animalInstance = new Squirrel(node, map);
+                    animalInstance = new Squirrel(node, map, constructorOptions);
                     break;
                 case 'deer':
-                    animalInstance = new Deer(node, map);
+                    animalInstance = new Deer(node, map, constructorOptions);
                     break;
                 case 'bear':
-                    animalInstance = new Bear(node, map);
+                    animalInstance = new Bear(node, map, constructorOptions);
                     break;
                 case 'eagleman':
-                    animalInstance = new Eagleman(node, map);
+                    animalInstance = new Eagleman(node, map, constructorOptions);
                     break;
                 case 'fragglegod':
-                    animalInstance = new Fragglegod(node, map);
+                    animalInstance = new Fragglegod(node, map, constructorOptions);
                     break;
                 case 'scorpion':
-                    animalInstance = new Scorpion(node, map);
+                    animalInstance = new Scorpion(node, map, constructorOptions);
                     break;
                 case 'armadillo':
-                    animalInstance = new Armadillo(node, map);
+                    animalInstance = new Armadillo(node, map, constructorOptions);
                     break;
                 case 'coyote':
-                    animalInstance = new Coyote(node, map);
+                    animalInstance = new Coyote(node, map, constructorOptions);
                     break;
                 case 'goat':
-                    animalInstance = new Goat(node, map);
+                    animalInstance = new Goat(node, map, constructorOptions);
                     break;
                 case 'porcupine':
-                    animalInstance = new Porcupine(node, map);
+                    animalInstance = new Porcupine(node, map, constructorOptions);
                     break;
                 case 'yeti':
-                    animalInstance = new Yeti(node, map);
+                    animalInstance = new Yeti(node, map, constructorOptions);
                     break;
                 case 'blodia':
-                    animalInstance = new Blodia(node, map);
+                    animalInstance = new Blodia(node, map, constructorOptions);
                     break;
                 default:
-                    animalInstance = new Animal(data.type, node, map);
+                    animalInstance = new Animal(data.type, node, map, constructorOptions);
             }
+            const constructMs = (
+                ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now()) - constructStart
+            );
 
             if (animalInstance) {
+                const restoreStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now();
+                let inventoryMs = 0;
+                let scriptingNameMs = 0;
+                let scriptMessageMs = 0;
+                let resizeMs = 0;
                 animalInstance.x = data.x;
                 animalInstance.y = data.y;
                 if (data.hp !== undefined) animalInstance.hp = data.hp;
@@ -2470,23 +2503,47 @@ class Animal extends Character {
                     animalInstance.chaseRadius = Number(data.chaseRadius);
                 }
                 if (Object.prototype.hasOwnProperty.call(data, "inventory")) {
+                    const inventoryStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     animalInstance.loadInventory(data.inventory);
+                    inventoryMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - inventoryStart
+                    );
                 }
                 if (Object.prototype.hasOwnProperty.call(data, "script")) {
                     animalInstance.script = data.script;
                 }
                 if (typeof data.scriptingName === "string") {
+                    const scriptingNameStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
                         ? globalThis.Scripting
                         : null;
                     const restoredName = data.scriptingName.trim();
                     if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
-                            scriptingApi.setObjectScriptingName(animalInstance, restoredName, { map, restoreFromSave: true });
+                            scriptingApi.setObjectScriptingName(animalInstance, restoredName, {
+                                map,
+                                restoreFromSave: true,
+                                targetSectionKey,
+                                skipBubbleEnsureOnRestore: true
+                            });
                     } else {
                         animalInstance.scriptingName = restoredName;
                     }
+                    scriptingNameMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - scriptingNameStart
+                    );
                 }
                 if (Array.isArray(data._scriptMessages)) {
+                    const scriptMessageStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     animalInstance._scriptMessages = data._scriptMessages
                         .map(msg => ({
                             text: String((msg && msg.text) || ""),
@@ -2502,6 +2559,11 @@ class Animal extends Character {
                         }
                         globalThis._scriptMessageTargets.add(animalInstance);
                     }
+                    scriptMessageMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - scriptMessageStart
+                    );
                 }
                 if (data._scriptDeactivated === true) {
                     animalInstance._scriptDeactivated = true;
@@ -2517,6 +2579,9 @@ class Animal extends Character {
 
                 // Restore saved size and rescale derived properties
                 if (Number.isFinite(data.size) && data.size > 0) {
+                    const resizeStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     const baseSize = animalInstance.size;
                     const savedSize = data.size;
                     if (Math.abs(baseSize - savedSize) > 1e-6 && baseSize > 0) {
@@ -2546,7 +2611,33 @@ class Animal extends Character {
                             animalInstance.updateHitboxes();
                         }
                     }
+                    resizeMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - resizeStart
+                    );
                 }
+                const restoreMs = (
+                    ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now()) - restoreStart
+                );
+                animalInstance._prototypeLoadDebug = {
+                    type: data.type,
+                    recordId: Number(data.id),
+                    nodeLookupMs: Number(nodeLookupMs.toFixed(2)),
+                    constructMs: Number(constructMs.toFixed(2)),
+                    restoreMs: Number(restoreMs.toFixed(2)),
+                    inventoryMs: Number(inventoryMs.toFixed(2)),
+                    scriptingNameMs: Number(scriptingNameMs.toFixed(2)),
+                    scriptMessageMs: Number(scriptMessageMs.toFixed(2)),
+                    resizeMs: Number(resizeMs.toFixed(2)),
+                    totalMs: Number(((
+                        (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()
+                    ) - loadStart).toFixed(2))
+                };
             }
 
             return animalInstance;
@@ -2558,9 +2649,9 @@ class Animal extends Character {
 }
 
 class Squirrel extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .4;
-        super('squirrel', location, size, map);
+        super('squirrel', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -3050,9 +3141,9 @@ class Squirrel extends Animal {
 }
 
 class Deer extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + .75;
-        super('deer', location, size, map);
+        super('deer', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -3080,9 +3171,9 @@ class Deer extends Animal {
 }
 
 class Bear extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
-        super('bear', location, size, map);
+        super('bear', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 2,
@@ -3115,9 +3206,9 @@ class Bear extends Animal {
 }
 
 class Eagleman extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
-        super('eagleman', location, size, map);
+        super('eagleman', location, size, map, options);
         this._deathCoinsSpawned = false;
         this._depthBillboardAttackTiltDeg = 0;
         this.pixiSprite.anchor.set(0.5, 0.8);
@@ -3256,9 +3347,9 @@ class Eagleman extends Animal {
 }
 
 class Fragglegod extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
-        super('fragglegod', location, size, map);
+        super('fragglegod', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 2,
@@ -3339,9 +3430,9 @@ class Fragglegod extends Animal {
 
 
 class Scorpion extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .1 + .4;
-        super('scorpion', location, size, map);
+        super('scorpion', location, size, map, options);
         this.frameCount = {x: 1, y: 2};
         this.walkSpeed = .75;
         this.runSpeed = 1.5;
@@ -3356,9 +3447,9 @@ class Scorpion extends Animal {
 }
 
 class Armadillo extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .5;
-        super('armadillo', location, size, map);
+        super('armadillo', location, size, map, options);
         this.frameCount = {x: 1, y: 2};
         this.walkSpeed = 1;
         this.runSpeed = 2;
@@ -3371,9 +3462,9 @@ class Armadillo extends Animal {
 }
 
 class Coyote extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .25 + .7;
-        super('coyote', location, size, map);
+        super('coyote', location, size, map, options);
         this.frameCount = {x: 1, y: 2};
         this.walkSpeed = 1;
         this.runSpeed = 3.5;
@@ -3386,9 +3477,9 @@ class Coyote extends Animal {
 }
 
 class Goat extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .25 + .7;
-        super('goat', location, size, map);
+        super('goat', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 1,
@@ -3411,9 +3502,9 @@ class Goat extends Animal {
 }
 
 class Porcupine extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .5;
-        super('porcupine', location, size, map);
+        super('porcupine', location, size, map, options);
         this.frameCount = {x: 2, y: 2};
         this.walkSpeed = 1;
         this.runSpeed = 2;
@@ -3429,9 +3520,9 @@ class Porcupine extends Animal {
 }
 
 class Blodia extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.5;
-        super('blodia', location, size, map);
+        super('blodia', location, size, map, options);
         this.spriteSheet = {
             rows: 1,
             cols: 2,
@@ -3963,9 +4054,9 @@ class Blodia extends Animal {
 }
 
 class Yeti extends Animal {
-    constructor(location, map) {
+    constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.5;
-        super('yeti', location, size, map);
+        super('yeti', location, size, map, options);
         this.spriteSheet = {
             rows: 2,
             cols: 2,

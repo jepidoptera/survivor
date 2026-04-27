@@ -1,6 +1,21 @@
 (function (globalScope) {
     "use strict";
 
+    function comparePrototypeNodesByDrawOrder(nodeA, nodeB) {
+        const ay = Number(nodeA && nodeA.yindex) || 0;
+        const by = Number(nodeB && nodeB.yindex) || 0;
+        if (ay !== by) return ay - by;
+        const ax = Number(nodeA && nodeA.xindex) || 0;
+        const bx = Number(nodeB && nodeB.xindex) || 0;
+        return ax - bx;
+    }
+
+    function sortPrototypeLoadedNodes(loadedNodes) {
+        if (!Array.isArray(loadedNodes)) return [];
+        loadedNodes.sort(comparePrototypeNodesByDrawOrder);
+        return loadedNodes;
+    }
+
     function setActiveCenter(map, nextCenterKey, deps) {
         const {
             SECTION_DIRECTIONS,
@@ -15,6 +30,20 @@
         } = deps;
         const state = map && map._prototypeSectionState;
         if (!state) return false;
+        const compareSectionKeysByCenter = (a, b) => {
+            const sectionA = state.sectionsByKey instanceof Map ? state.sectionsByKey.get(a) : null;
+            const sectionB = state.sectionsByKey instanceof Map ? state.sectionsByKey.get(b) : null;
+            const centerA = sectionA && sectionA.centerOffset && typeof sectionA.centerOffset === "object"
+                ? sectionA.centerOffset
+                : { x: 0, y: 0 };
+            const centerB = sectionB && sectionB.centerOffset && typeof sectionB.centerOffset === "object"
+                ? sectionB.centerOffset
+                : { x: 0, y: 0 };
+            const ay = Number(centerA.y) || 0;
+            const by = Number(centerB.y) || 0;
+            if (ay !== by) return ay - by;
+            return (Number(centerA.x) || 0) - (Number(centerB.x) || 0);
+        };
         const layoutNow = () => (
             (typeof performance !== "undefined" && performance && typeof performance.now === "function")
                 ? performance.now()
@@ -85,17 +114,20 @@
         nextActiveKeys.forEach((key) => {
             if (!previousActiveKeys.has(key)) keysToActivate.push(key);
         });
-        let materializedActivatedSections = false;
-        for (let i = 0; i < keysToActivate.length; i++) {
-            const sectionKey = keysToActivate[i];
+        keysToDeactivate.sort(compareSectionKeysByCenter);
+        keysToActivate.sort(compareSectionKeysByCenter);
+        let materializedActiveSections = false;
+        const targetActiveKeysArray = Array.from(nextActiveKeys);
+        for (let i = 0; i < targetActiveKeysArray.length; i++) {
+            const sectionKey = targetActiveKeysArray[i];
             const asset = state.sectionAssetsByKey instanceof Map ? state.sectionAssetsByKey.get(sectionKey) : null;
             const hasNodes = state.nodesBySectionKey instanceof Map && state.nodesBySectionKey.has(sectionKey);
             if (!asset || hasNodes || asset._prototypeSectionHydrated !== true || state.useSparseNodes !== true) continue;
             addSparseNodesForSection(map, state, asset);
             refreshSparseNodesForSectionAsset(map, state, asset);
-            materializedActivatedSections = true;
+            materializedActiveSections = true;
         }
-        if (materializedActivatedSections) {
+        if (materializedActiveSections) {
             rebuildPrototypeFloorRuntime(map, state);
         }
 
@@ -151,6 +183,7 @@
             } else {
                 state.loadedNodes = state.loadedNodes.filter((node) => node && node._prototypeSectionActive === true);
             }
+            sortPrototypeLoadedNodes(state.loadedNodes);
             rebuildLoadedMs += layoutNow() - rebuildLoadedStart;
             const seamStart = layoutNow();
             updatePrototypeSeamSegmentsForSections(state, new Set([...keysToActivate, ...keysToDeactivate]));
@@ -316,6 +349,26 @@
 
         state.actualActiveSectionKeys = nextActualKeys;
 
+        // Re-activate nodes from still-active sections that were incorrectly
+        // deactivated by departing sections' overlap/padding nodes.
+        if (keysToDeactivate.length > 0) {
+            for (const sectionKey of nextActualKeys) {
+                const nodes = state.nodesBySectionKey.get(sectionKey) || [];
+                for (let n = 0; n < nodes.length; n++) {
+                    const node = nodes[n];
+                    if (!node || node._prototypeSectionActive === true) continue;
+                    node._prototypeSectionActive = true;
+                    node.blocked = false;
+                    const coordKey = `${node.xindex},${node.yindex}`;
+                    state.loadedNodesByCoordKey.set(coordKey, node);
+                    if (!state.loadedNodeKeySet.has(coordKey)) {
+                        state.loadedNodeKeySet.add(coordKey);
+                        state.loadedNodes.push(node);
+                    }
+                }
+            }
+        }
+
         const rebuildLoadedStart = layoutNow();
         state.loadedNodes = state.loadedNodes.filter((node) => (
             node &&
@@ -323,6 +376,7 @@
             !keysToDeactivateSet.has(node._prototypeSectionKey) &&
             state.loadedNodeKeySet.has(`${node.xindex},${node.yindex}`)
         ));
+        sortPrototypeLoadedNodes(state.loadedNodes);
         rebuildLoadedMs += layoutNow() - rebuildLoadedStart;
 
         const changedSectionKeys = transition.changedSectionKeys instanceof Set
@@ -367,7 +421,8 @@
 
     globalScope.__sectionWorldLayout = {
         setActiveCenter,
-        settlePendingPrototypeLayoutTransition
+        settlePendingPrototypeLayoutTransition,
+        sortPrototypeLoadedNodes
     };
     globalScope.__twoSectionPrototypeLayout = globalScope.__sectionWorldLayout;
 })(typeof globalThis !== "undefined" ? globalThis : window);

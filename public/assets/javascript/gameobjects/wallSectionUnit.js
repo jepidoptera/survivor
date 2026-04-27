@@ -295,7 +295,8 @@ void main(void) {
             const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
                 ? globalThis.Scripting
                 : null;
-            if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+            const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+            if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
                 scriptingApi.ensureObjectScriptingName(this, { map: this.map || null });
             }
         }
@@ -326,6 +327,13 @@ void main(void) {
             }
             if (!Number.isFinite(endpoint.x) || !Number.isFinite(endpoint.y)) return null;
 
+            // Split-vertex endpoints (hex corners at section seams) must not
+            // be snapped — they represent exact geometric positions that don't
+            // correspond to any node or midpoint on the grid.
+            if (endpoint._splitVertex === true) {
+                return { x: Number(endpoint.x), y: Number(endpoint.y), _splitVertex: true };
+            }
+
             if (mapRef && typeof mapRef.worldToNodeOrMidpoint === "function") {
                 const resolved = mapRef.worldToNodeOrMidpoint(Number(endpoint.x), Number(endpoint.y));
                 if (resolved && (WallSectionUnit._isMapNode(resolved) || WallSectionUnit._isNodeMidpoint(resolved))) {
@@ -334,6 +342,17 @@ void main(void) {
             }
 
             return null;
+        }
+
+        static _isSplitVertexPoint(endpoint) {
+            return !!(
+                endpoint &&
+                endpoint._splitVertex === true &&
+                !WallSectionUnit._isMapNode(endpoint) &&
+                !WallSectionUnit._isNodeMidpoint(endpoint) &&
+                Number.isFinite(endpoint.x) &&
+                Number.isFinite(endpoint.y)
+            );
         }
 
         static _serializeEndpoint(endpoint) {
@@ -361,11 +380,13 @@ void main(void) {
                 }
             }
             if (Number.isFinite(endpoint.x) && Number.isFinite(endpoint.y)) {
-                return {
+                const result = {
                     kind: "point",
                     x: Number(endpoint.x),
                     y: Number(endpoint.y)
                 };
+                if (endpoint._splitVertex === true) result._splitVertex = true;
+                return result;
             }
             return null;
         }
@@ -391,6 +412,7 @@ void main(void) {
             if (kind === "node") {
                 const node = WallSectionUnit._lookupMapNodeByIndex(mapRef, endpointData.xindex, endpointData.yindex);
                 if (node) return node;
+
             }
 
             if (kind === "midpoint") {
@@ -407,10 +429,19 @@ void main(void) {
                     const midpoint = mapRef.getMidpointNode(nodeA, nodeB);
                     if (midpoint) return midpoint;
                 }
+                // One or both seam nodes are in an inactive section — return a
+                // split-vertex point so the wall piece is skipped rather than
+                // snapping both endpoints to the same active node.
+                if (Number.isFinite(endpointData.x) && Number.isFinite(endpointData.y)) {
+                    return { x: Number(endpointData.x), y: Number(endpointData.y), _splitVertex: true };
+                }
+                return null;
             }
 
             if (Number.isFinite(endpointData.x) && Number.isFinite(endpointData.y)) {
-                return WallSectionUnit.normalizeEndpoint({ x: Number(endpointData.x), y: Number(endpointData.y) }, mapRef);
+                const rawPoint = { x: Number(endpointData.x), y: Number(endpointData.y) };
+                if (endpointData._splitVertex === true) rawPoint._splitVertex = true;
+                return WallSectionUnit.normalizeEndpoint(rawPoint, mapRef);
             }
 
             return null;
@@ -7622,9 +7653,25 @@ void main(void) {
             if (!data || data.type !== "wallSection" || !mapRef) return null;
             const opts = options || {};
             try {
+                const loadStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now();
+                const endpointResolveStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now();
                 const startPoint = WallSectionUnit._resolveSerializedEndpoint(data.startPoint, mapRef);
                 const endPoint = WallSectionUnit._resolveSerializedEndpoint(data.endPoint, mapRef);
+                const endpointResolveMs = (
+                    ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now()) - endpointResolveStart
+                );
                 if (!startPoint || !endPoint) return null;
+                if (WallSectionUnit._pointsMatch(startPoint, endPoint)) return null;
+                const hasSavedScriptingName = typeof data.scriptingName === "string" && data.scriptingName.trim().length > 0;
+                const constructStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now();
                 const section = new WallSectionUnit(startPoint, endPoint, {
                     id: Number.isInteger(data.id) ? Number(data.id) : undefined,
                     map: mapRef,
@@ -7636,8 +7683,19 @@ void main(void) {
                         : DEFAULT_WALL_TEXTURE,
                     texturePhaseA: Number.isFinite(data.texturePhaseA) ? Number(data.texturePhaseA) : NaN,
                     texturePhaseB: Number.isFinite(data.texturePhaseB) ? Number(data.texturePhaseB) : NaN,
-                    deferSetup: !!opts.deferSetup
+                    deferSetup: !!opts.deferSetup,
+                    suppressAutoScriptingName: hasSavedScriptingName
                 });
+                const constructMs = (
+                    ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now()) - constructStart
+                );
+                const restoreStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now();
+                let scriptingNameMs = 0;
+                let rebuildMeshMs = 0;
                 if (Number.isFinite(data.direction)) {
                     section.direction = WallSectionUnit._normalizeDirection(data.direction);
                 }
@@ -7659,6 +7717,9 @@ void main(void) {
                     section.script = data.script;
                 }
                 if (typeof data.scriptingName === "string") {
+                    const scriptingNameStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
                         ? globalThis.Scripting
                         : null;
@@ -7677,16 +7738,49 @@ void main(void) {
                             scriptingApi.setObjectScriptingName(section, restoredName, {
                                 map: section.map || null,
                                 restoreFromSave: true,
+                                skipBubbleEnsureOnRestore: true,
                                 targetSectionKey: restoredTargetSectionKey
                             });
                     } else {
                         section.scriptingName = restoredName;
                     }
+                    scriptingNameMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - scriptingNameStart
+                    );
                 }
                 if (!opts.deferSetup) {
                     section.addToMapNodes();
+                    const rebuildMeshStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
                     section.rebuildMesh3d();
+                    rebuildMeshMs += (
+                        ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()) - rebuildMeshStart
+                    );
                 }
+                const restoreMs = (
+                    ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now()) - restoreStart
+                );
+                section._prototypeLoadDebug = {
+                    type: "wallSection",
+                    recordId: Number(data.id),
+                    endpointResolveMs: Number(endpointResolveMs.toFixed(2)),
+                    constructMs: Number(constructMs.toFixed(2)),
+                    restoreMs: Number(restoreMs.toFixed(2)),
+                    scriptingNameMs: Number(scriptingNameMs.toFixed(2)),
+                    rebuildMeshMs: Number(rebuildMeshMs.toFixed(2)),
+                    totalMs: Number(((
+                        (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                            ? performance.now()
+                            : Date.now()
+                    ) - loadStart).toFixed(2))
+                };
                 return section;
             } catch (e) {
                 console.error("Error loading wallSection:", e);

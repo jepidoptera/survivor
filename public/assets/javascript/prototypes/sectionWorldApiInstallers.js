@@ -65,6 +65,15 @@
             ensurePrototypeBubbleSectionsExist(this, state, key);
             return getBubbleKeysForCenter(state, key);
         };
+        map.collectPrototypeBubbleSectionKeys = function collectPrototypeBubbleSectionKeys(centerSectionKey = null) {
+            const state = this._prototypeSectionState;
+            if (!state) return new Set();
+            const key = (typeof centerSectionKey === "string" && centerSectionKey.length > 0)
+                ? centerSectionKey
+                : state.activeCenterKey;
+            if (typeof key !== "string" || key.length === 0) return new Set();
+            return getBubbleKeysForCenter(state, key);
+        };
         map.getPrototypeLookaheadSectionKeys = function getPrototypeLookaheadSectionKeys(centerSectionKey = null) {
             const state = this._prototypeSectionState;
             if (!state) return new Set();
@@ -78,6 +87,37 @@
             const state = this._prototypeSectionState;
             if (!state || !(state.sectionAssetsByKey instanceof Map)) return null;
             return state.sectionAssetsByKey.get(sectionKey) || null;
+        };
+        map.materializePrototypeSectionNodes = function materializePrototypeSectionNodes(sectionKeys) {
+            const state = this._prototypeSectionState;
+            if (!state || state.useSparseNodes !== true) return 0;
+            const normalizedSectionKeys = Array.isArray(sectionKeys)
+                ? sectionKeys
+                    .map((key) => String(key || "").trim())
+                    .filter((key, index, array) => key.length > 0 && array.indexOf(key) === index)
+                : [];
+            if (normalizedSectionKeys.length === 0) return 0;
+            let materializedCount = 0;
+            for (let i = 0; i < normalizedSectionKeys.length; i++) {
+                const sectionKey = normalizedSectionKeys[i];
+                let asset = this.getPrototypeSectionAsset(sectionKey);
+                if (!asset) {
+                    const coord = parseSectionKey(sectionKey);
+                    ensurePrototypeSectionExists(this, state, coord);
+                    asset = this.getPrototypeSectionAsset(sectionKey);
+                }
+                if (!asset || state.nodesBySectionKey.has(sectionKey)) continue;
+                addSparseNodesForSection(this, state, asset);
+                refreshSparseNodesForSectionAsset(this, state, asset);
+                materializedCount += 1;
+            }
+            return materializedCount;
+        };
+        map.rebuildPrototypeFloorRuntime = function rebuildPrototypeFloorRuntimeForMap() {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            rebuildPrototypeFloorRuntime(this, state);
+            return 1;
         };
         map.getPrototypeHydratedSectionKeys = function getPrototypeHydratedSectionKeys() {
             const state = this._prototypeSectionState;
@@ -254,6 +294,11 @@
             if (!state) return false;
             const nextName = normalizePrototypeScriptingName(rawName);
             const restoreFromSave = !!(options && options.restoreFromSave === true);
+            const skipBubbleEnsureOnRestore = !!(
+                restoreFromSave &&
+                options &&
+                options.skipBubbleEnsureOnRestore === true
+            );
             const targetSectionKey = (typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
                 ? options.targetSectionKey
                 : (
@@ -262,23 +307,30 @@
                         : this.getPrototypeSectionKeyForWorldPoint(target.x, target.y)
                 );
             if (!targetSectionKey) return false;
-            ensurePrototypeBubbleSectionsExist(this, state, targetSectionKey);
             if (!nextName) {
                 target.scriptingName = "";
                 markPrototypeRuntimeTargetDirty(target);
                 return true;
             }
-            if (!restoreFromSave) {
-                const existing = resolvePrototypeActiveNamedObject(this, state, nextName, targetSectionKey);
-                if (existing && existing !== target) return false;
-                const usedNames = collectPrototypeBubbleObjectNames(this, state, targetSectionKey, {
-                    ignoreRuntimeObj: target,
-                    ignoreRecordId: Number.isInteger(target && target._prototypeRecordId)
-                        ? Number(target._prototypeRecordId)
-                        : null
-                });
-                if (usedNames.has(nextName)) return false;
+            if (!skipBubbleEnsureOnRestore) {
+                ensurePrototypeBubbleSectionsExist(this, state, targetSectionKey);
             }
+            if (restoreFromSave) {
+                target.scriptingName = nextName;
+                markPrototypeRuntimeTargetDirty(target);
+                return true;
+            }
+            const existing = resolvePrototypeActiveNamedObject(this, state, nextName, targetSectionKey);
+            const existingSharesRecord = existing && Number.isInteger(Number(target._prototypeRecordId)) &&
+                Number(existing._prototypeRecordId) === Number(target._prototypeRecordId);
+            if (existing && existing !== target && !existingSharesRecord) return false;
+            const usedNames = collectPrototypeBubbleObjectNames(this, state, targetSectionKey, {
+                ignoreRuntimeObj: target,
+                ignoreRecordId: Number.isInteger(target && target._prototypeRecordId)
+                    ? Number(target._prototypeRecordId)
+                    : null
+            });
+            if (usedNames.has(nextName)) return false;
             target.scriptingName = nextName;
             markPrototypeRuntimeTargetDirty(target);
             return true;
@@ -392,19 +444,27 @@
                 ? this._prototypeSectionState.seamSegments.slice()
                 : [];
         };
+        map.getPrototypeActivityNode = function getPrototypeActivityNode(node) {
+            if (!node) return null;
+            if (node.sourceNode && typeof node.sourceNode === "object") return node.sourceNode;
+            return node;
+        };
         map.isPrototypeNodeActive = function isPrototypeNodeActive(node) {
-            return !!(node && node._prototypeSectionActive === true);
+            const activityNode = this.getPrototypeActivityNode(node);
+            return !!(activityNode && activityNode._prototypeSectionActive === true);
         };
         map.shouldRenderNode = function shouldRenderNode(node) {
-            return !!(node && node._prototypeSectionActive === true);
+            return this.isPrototypeNodeActive(node);
         };
         map.getMinimapNodeColor = function getMinimapNodeColor(node) {
-            if (!node || node._prototypeVoid === true) return "#000000";
-            return node._prototypeSectionActive === true ? "#007700" : "#000000";
+            const activityNode = this.getPrototypeActivityNode(node);
+            if (!activityNode || activityNode._prototypeVoid === true) return "#000000";
+            return activityNode._prototypeSectionActive === true ? "#007700" : "#000000";
         };
         map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY) {
             const node = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
-            return !!(node && node._prototypeSectionActive === true && node._prototypeVoid !== true && !node.isBlocked());
+            const activityNode = this.getPrototypeActivityNode(node);
+            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !node.isBlocked());
         };
         map.getNodesInIndexWindow = function getNodesInIndexWindow(xStart, xEnd, yStart, yEnd) {
             const state = this._prototypeSectionState;

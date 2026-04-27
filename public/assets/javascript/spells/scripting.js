@@ -115,6 +115,7 @@
         Object.freeze({ name: "transport", syntax: "transport(x, y)", description: "teleport the player" }),
         Object.freeze({ name: "healPlayer", syntax: "healPlayer(hp)", description: "restore player HP" }),
         Object.freeze({ name: "hurtPlayer", syntax: "hurtPlayer(hp)", description: "damage the player" }),
+        Object.freeze({ name: "player.hurt", syntax: "player.hurt(hp)", description: "damage the player" }),
         Object.freeze({ name: "gainMagic", syntax: "gainMagic(amount)", description: "restore player magic" }),
         Object.freeze({ name: "drainMagic", syntax: "drainMagic(amount)", description: "drain player magic" }),
         Object.freeze({ name: "addSpell", syntax: "addSpell(name)", description: "unlock magic by name" }),
@@ -759,7 +760,8 @@
         ) {
             return mapRef.setPrototypeRuntimeObjectScriptingName(target, nextName, {
                 restoreFromSave,
-                targetSectionKey: getPrototypeNamingSectionKey(target, context)
+                targetSectionKey: getPrototypeNamingSectionKey(target, context),
+                skipBubbleEnsureOnRestore: !!(context && context.skipBubbleEnsureOnRestore === true)
             });
         }
         unregisterNamedObject(target);
@@ -4234,7 +4236,9 @@
                 map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || null,
                 wizard: global.wizard || null
             });
-            if (existingTarget && existingTarget !== scriptEditorTargetObject) {
+            const sameRecordId = Number.isInteger(Number(scriptEditorTargetObject && scriptEditorTargetObject._prototypeRecordId)) &&
+                Number(existingTarget._prototypeRecordId) === Number(scriptEditorTargetObject._prototypeRecordId);
+            if (existingTarget && existingTarget !== scriptEditorTargetObject && !sameRecordId) {
                 showScriptEditorMessage(`Name '${rawName}' is already in use.`);
                 return;
             }
@@ -4250,6 +4254,10 @@
             map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || null,
             wizard: global.wizard || null
         });
+        const scriptSaveMapRef = scriptEditorTargetObject && scriptEditorTargetObject.map;
+        if (scriptSaveMapRef && typeof scriptSaveMapRef.capturePendingPrototypeObjects === "function") {
+            scriptSaveMapRef.capturePendingPrototypeObjects();
+        }
         refreshDoorEnterExitConvention(scriptEditorTargetObject, (scriptEditorTargetObject && scriptEditorTargetObject.map) || null);
         runObjectInitScript(scriptEditorTargetObject, global.wizard || null, { reason: "scriptSaved" });
         showScriptEditorMessage("Object script saved.");
@@ -5462,6 +5470,9 @@
                 const currentHp = Number.isFinite(wizardRef.hp) ? wizardRef.hp : maxHp;
                 wizardRef.hp = Math.max(0, Math.min(maxHp, currentHp - damage));
                 return true;
+            },
+            "player.hurt"(args, context) {
+                return commandImplementations.hurtPlayer(args, context);
             },
             gainMagic(args, context) {
                 const wizardRef = (context && context.wizard) || global.wizard || null;

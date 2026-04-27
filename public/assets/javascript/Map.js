@@ -945,6 +945,15 @@ class GameMap {
         floorNode.x = Number(sourceNode.x);
         floorNode.y = Number(sourceNode.y);
         floorNode.sourceNode = sourceNode;
+        if (sourceNode && Object.prototype.hasOwnProperty.call(sourceNode, "_prototypeSectionKey")) {
+            floorNode._prototypeSectionKey = sourceNode._prototypeSectionKey;
+        }
+        if (sourceNode && Object.prototype.hasOwnProperty.call(sourceNode, "_prototypeSectionActive")) {
+            floorNode._prototypeSectionActive = sourceNode._prototypeSectionActive;
+        }
+        if (sourceNode && Object.prototype.hasOwnProperty.call(sourceNode, "_prototypeVoid")) {
+            floorNode._prototypeVoid = sourceNode._prototypeVoid;
+        }
         floorNode.surfaceId = (typeof fragment.surfaceId === "string") ? fragment.surfaceId : "";
         floorNode.fragmentId = (typeof fragment.fragmentId === "string") ? fragment.fragmentId : "";
         floorNode.ownerSectionKey = (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "";
@@ -992,6 +1001,144 @@ class GameMap {
         };
         this.transitionsById.set(transitionId, normalized);
         return normalized;
+    }
+
+    getFloorNodeBySurface(surfaceId, x, y) {
+        if (!(this.floorFragmentsBySurfaceId instanceof Map) || !(this.floorNodeIndex instanceof Map)) return null;
+        if (typeof surfaceId !== "string" || surfaceId.length === 0) return null;
+        const fragmentIds = this.floorFragmentsBySurfaceId.get(surfaceId);
+        if (!(fragmentIds instanceof Set) || fragmentIds.size === 0) return null;
+        for (const fragmentId of fragmentIds) {
+            const nodeKey = this.getFloorNodeKey(x, y, surfaceId, fragmentId);
+            const floorNode = this.floorNodeIndex.get(nodeKey) || null;
+            if (floorNode) return floorNode;
+        }
+        return null;
+    }
+
+    connectFloorNodeNeighbors() {
+        if (!(this.floorNodesById instanceof Map)) return 0;
+        let connectionCount = 0;
+        const wrapIndex = (value, size) => {
+            if (!Number.isFinite(value) || !Number.isFinite(size) || size <= 0) return value;
+            let wrapped = Number(value) % Number(size);
+            if (wrapped < 0) wrapped += Number(size);
+            return wrapped;
+        };
+
+        for (const floorNodes of this.floorNodesById.values()) {
+            if (!Array.isArray(floorNodes) || floorNodes.length === 0) continue;
+            for (let i = 0; i < floorNodes.length; i++) {
+                const floorNode = floorNodes[i];
+                if (!floorNode || !Array.isArray(floorNode.neighborOffsets) || !Array.isArray(floorNode.neighbors)) continue;
+                for (let directionIndex = 0; directionIndex < floorNode.neighborOffsets.length; directionIndex++) {
+                    const offset = floorNode.neighborOffsets[directionIndex];
+                    if (!offset) continue;
+
+                    let neighborX = Number(floorNode.xindex) + Number(offset.x);
+                    let neighborY = Number(floorNode.yindex) + Number(offset.y);
+
+                    if (this.wrapX === true && Number.isFinite(this.width) && this.width > 0) {
+                        neighborX = wrapIndex(neighborX, this.width);
+                    }
+                    if (this.wrapY === true && Number.isFinite(this.height) && this.height > 0) {
+                        neighborY = wrapIndex(neighborY, this.height);
+                    }
+
+                    const neighborNode = this.getFloorNodeBySurface(
+                        floorNode.surfaceId,
+                        neighborX,
+                        neighborY
+                    );
+                    if (!neighborNode) continue;
+                    floorNode.neighbors[directionIndex] = neighborNode;
+                    connectionCount += 1;
+                }
+            }
+        }
+
+        return connectionCount;
+    }
+
+    resolveFloorTransitionEndpoint(endpoint) {
+        if (!endpoint || typeof endpoint !== "object") return null;
+        const x = Number(endpoint.x);
+        const y = Number(endpoint.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+        const fragmentId = (typeof endpoint.fragmentId === "string" && endpoint.fragmentId.length > 0)
+            ? endpoint.fragmentId
+            : ((typeof endpoint.floorId === "string" && endpoint.floorId.length > 0) ? endpoint.floorId : "");
+        if (fragmentId && this.floorNodeIndex instanceof Map && this.floorsById instanceof Map) {
+            const fragment = this.floorsById.get(fragmentId) || null;
+            const surfaceId = fragment && typeof fragment.surfaceId === "string"
+                ? fragment.surfaceId
+                : ((typeof endpoint.surfaceId === "string" && endpoint.surfaceId.length > 0) ? endpoint.surfaceId : "");
+            const directNode = this.floorNodeIndex.get(this.getFloorNodeKey(x, y, surfaceId, fragmentId)) || null;
+            if (directNode) return directNode;
+        }
+
+        const surfaceId = (typeof endpoint.surfaceId === "string" && endpoint.surfaceId.length > 0)
+            ? endpoint.surfaceId
+            : ((fragmentId && this.floorsById instanceof Map && this.floorsById.get(fragmentId))
+                ? this.floorsById.get(fragmentId).surfaceId
+                : "");
+        if (surfaceId) {
+            return this.getFloorNodeBySurface(surfaceId, x, y);
+        }
+
+        return null;
+    }
+
+    connectFloorTransitions() {
+        if (!(this.transitionsById instanceof Map)) return 0;
+        let connectionCount = 0;
+        for (const transition of this.transitionsById.values()) {
+            if (!transition) continue;
+            const fromNode = this.resolveFloorTransitionEndpoint(transition.from);
+            const toNode = this.resolveFloorTransitionEndpoint(transition.to);
+            if (!fromNode || !toNode) continue;
+
+            const attachEdge = (sourceNode, targetNode) => {
+                if (!sourceNode || !targetNode) return false;
+                if (!Array.isArray(sourceNode.portalEdges)) sourceNode.portalEdges = [];
+                const edgeId = `${transition.id}:${targetNode.id || this.getNodeKey(targetNode)}`;
+                const existingEdge = sourceNode.portalEdges.find((edge) => {
+                    if (!edge || edge.toNode !== targetNode) return false;
+                    return edge.metadata && edge.metadata.transitionId === transition.id;
+                });
+                if (existingEdge) return false;
+                sourceNode.portalEdges.push({
+                    fromNode: sourceNode,
+                    toNode: targetNode,
+                    type: transition.type || "portal",
+                    movementCost: Number.isFinite(transition.movementCost) ? Number(transition.movementCost) : 1,
+                    penalty: Number.isFinite(transition.penalty) ? Number(transition.penalty) : 0,
+                    zProfile: (typeof transition.zProfile === "string" && transition.zProfile.length > 0)
+                        ? transition.zProfile
+                        : "linear",
+                    metadata: {
+                        ...(transition.metadata && typeof transition.metadata === "object" ? transition.metadata : {}),
+                        kind: transition.type || "portal",
+                        transitionId: transition.id,
+                        edgeId
+                    }
+                });
+                return true;
+            };
+
+            const attachGroundSourceMirror = (endpointNode, targetNode) => {
+                if (!endpointNode || !targetNode || !endpointNode.sourceNode) return false;
+                if (Number(endpointNode.level) !== 0) return false;
+                return attachEdge(endpointNode.sourceNode, targetNode);
+            };
+
+            if (attachEdge(fromNode, toNode)) connectionCount += 1;
+            if (attachGroundSourceMirror(fromNode, toNode)) connectionCount += 1;
+            if (transition.bidirectional !== false && attachEdge(toNode, fromNode)) connectionCount += 1;
+            if (transition.bidirectional !== false && attachGroundSourceMirror(toNode, fromNode)) connectionCount += 1;
+        }
+        return connectionCount;
     }
 
     rebuildFloorRuntimeFromSectionState(sectionState, options = {}) {
@@ -1055,6 +1202,9 @@ class GameMap {
             if (this.registerFloorTransition(transitions[i])) transitionCount += 1;
         }
 
+        this.connectFloorNodeNeighbors();
+        this.connectFloorTransitions();
+
         const stats = { fragmentCount, nodeCount, transitionCount };
         sectionState.floorRuntimeStats = stats;
         return stats;
@@ -1084,6 +1234,63 @@ class GameMap {
     getNodeBaseZ(node) {
         if (!node) return 0;
         return Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0;
+    }
+
+    // Resolve a node key (from a pathfinding worker result) back to a live node.
+    // Floor node keys use the composite format "xindex,yindex,surfaceId,fragmentId"
+    // and are looked up via floorNodeIndex.  Standard grid keys use the
+    // "xindex,yindex,traversalLayer" format and are looked up via getNode().
+    resolveNodeByKey(key) {
+        if (typeof key !== "string" || key.length === 0) return null;
+        // Floor node: composite id stored directly in floorNodeIndex
+        if (this.floorNodeIndex instanceof Map && this.floorNodeIndex.has(key)) {
+            return this.floorNodeIndex.get(key);
+        }
+        // Grid node: "x,y,layer"
+        const parts = key.split(",");
+        if (parts.length >= 2) {
+            const x = parseInt(parts[0], 10);
+            const y = parseInt(parts[1], 10);
+            const layer = parts.length >= 3 ? parseInt(parts[2], 10) : 0;
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                return this.getNode(x, y, layer);
+            }
+        }
+        return null;
+    }
+
+    // Convert a pathfinding worker path result into live traversal path items
+    // (same format as findPathAStar).  Returns null when reconciliation fails
+    // (e.g. map version changed between request and response).
+    resolveWorkerPathResult(result, options = {}) {
+        if (!result || result.ok !== true) return null;
+        if (!Array.isArray(result.pathNodeKeys) || result.pathNodeKeys.length === 0) {
+            return this.finalizeTraversalPath(null, [], options);
+        }
+        const path = [];
+        for (let i = 0; i < result.pathNodeKeys.length; i++) {
+            const toNode = this.resolveNodeByKey(result.pathNodeKeys[i]);
+            if (!toNode) return null; // node no longer live — stale result
+            const fromNode = i === 0
+                ? this.resolveNodeByKey(result.startNodeKey || "")
+                : this.resolveNodeByKey(result.pathNodeKeys[i - 1]);
+            if (fromNode && options.returnPathSteps === true) {
+                const edge = this.createTraversalEdge(fromNode, toNode, {
+                    type: "async",
+                    allowed: true,
+                    penalty: 0,
+                    blockers: [],
+                    movementCost: 1
+                });
+                path.push(this.createPathStep(edge, options));
+            } else {
+                path.push(toNode);
+            }
+        }
+        if (Array.isArray(result.plannedInteractions) && result.plannedInteractions.length > 0) {
+            path.blockers = result.plannedInteractions;
+        }
+        return this.finalizeTraversalPath(null, path, options);
     }
 
     createTraversalEdge(fromNode, toNode, options = {}) {
@@ -2273,7 +2480,14 @@ class GameMap {
             }
         }
 
-        const keyFor = (node) => this.getNodeKey(node);
+        // Floor nodes share grid coordinates with their source nodes, so use
+        // the floor node's unique composite id (xindex,yindex,surfaceId,fragmentId)
+        // as its key; regular grid nodes fall back to the standard key.
+        const keyFor = (node) => (
+            node && typeof node.id === "string" && node.id.length > 0 && typeof node.fragmentId === "string"
+                ? node.id
+                : this.getNodeKey(node)
+        );
         const isBlockingObjectForPath = (obj, context = null) => this._isObjectBlockingForTraversal(obj, canTraverseObject, context);
         const getActiveDirectionalBlockers = (blockers, context = null) => {
             if (!(blockers instanceof Set) || blockers.size === 0) return [];
@@ -2315,6 +2529,7 @@ class GameMap {
         ) {
             return null;
         }
+
         const resolveKnockableTraversal = (blockers, currentNode, neighborNode, directionIndex, kind) => {
             if (!Array.isArray(blockers) || blockers.length === 0) {
                 return { allowed: true, penalty: 0, blockers: [] };

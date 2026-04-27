@@ -37,6 +37,22 @@
             return chosenHash % count;
         }
 
+        function comparePrototypeTileCoordKeys(a, b) {
+            const [axRaw, ayRaw] = String(a || "").split(",");
+            const [bxRaw, byRaw] = String(b || "").split(",");
+            const ax = Number(axRaw) || 0;
+            const ay = Number(ayRaw) || 0;
+            const bx = Number(bxRaw) || 0;
+            const by = Number(byRaw) || 0;
+            if (ay !== by) return ay - by;
+            return ax - bx;
+        }
+
+        function sortPrototypeTileCoordKeys(tileCoordKeys) {
+            if (!Array.isArray(tileCoordKeys)) return [];
+            return tileCoordKeys.slice().sort(comparePrototypeTileCoordKeys);
+        }
+
         function normalizePrototypeGroundTiles(rawGroundTiles, tileCoordKeys, textureCount) {
             const count = Math.max(1, Math.floor(Number(textureCount)) || 1);
             const normalized = {};
@@ -149,7 +165,7 @@
                     visibilityHoles: Array.isArray(record.visibilityHoles)
                         ? clonePrototypePolygonList(record.visibilityHoles)
                         : clonePrototypePolygonList(record.holes),
-                    tileCoordKeys: Array.isArray(record.tileCoordKeys) ? record.tileCoordKeys.slice() : []
+                    tileCoordKeys: sortPrototypeTileCoordKeys(record.tileCoordKeys)
                 });
             }
             return cloned;
@@ -203,7 +219,9 @@
                 : asset.centerOffset;
             asset.centerWorld = offsetToWorld(asset.centerOffset);
             asset.neighborKeys = Array.isArray(rawAsset.neighborKeys) ? rawAsset.neighborKeys.slice() : asset.neighborKeys;
-            asset.tileCoordKeys = Array.isArray(rawAsset.tileCoordKeys) ? rawAsset.tileCoordKeys.slice() : asset.tileCoordKeys;
+            asset.tileCoordKeys = Array.isArray(rawAsset.tileCoordKeys)
+                ? sortPrototypeTileCoordKeys(rawAsset.tileCoordKeys)
+                : sortPrototypeTileCoordKeys(asset.tileCoordKeys);
             asset.groundTextureId = Number.isFinite(rawAsset.groundTextureId) ? Number(rawAsset.groundTextureId) : asset.groundTextureId;
             asset.groundTiles = normalizePrototypeGroundTiles(rawAsset.groundTiles, asset.tileCoordKeys, textureCount);
             asset.floors = clonePrototypeFloorRecords(rawAsset.floors, asset.key);
@@ -229,9 +247,11 @@
             clonePrototypeFloorRecords,
             clonePrototypeFloorTransitions,
             createPrototypeImplicitGroundFloorFragment,
+            comparePrototypeTileCoordKeys,
             getPrototypeGroundTextureCount,
             normalizePrototypeGroundTiles,
-            pickPrototypeGroundTextureId
+            pickPrototypeGroundTextureId,
+            sortPrototypeTileCoordKeys
         };
     }
 

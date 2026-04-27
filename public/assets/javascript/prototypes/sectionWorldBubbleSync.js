@@ -5,7 +5,8 @@
         const {
             updatePrototypeGpuDebugStats,
             updatePrototypeSeamSegmentsForSections,
-            applyPrototypeSectionClearanceChunk
+            applyPrototypeSectionClearanceChunk,
+            sortPrototypeLoadedNodes
         } = deps;
 
         const prototypeNow = () => (
@@ -18,6 +19,277 @@
             if (!session || !Array.isArray(session.queue) || !Array.isArray(tasks) || tasks.length === 0) return;
             session.queue.unshift(...tasks);
         };
+
+        const createPrototypeTask = (label, fn) => {
+            if (typeof fn !== "function") return fn;
+            const task = function prototypeBubbleTask() {
+                return fn();
+            };
+            task._prototypeTaskLabel = (typeof label === "string" && label.length > 0) ? label : "task";
+            return task;
+        };
+
+        const toBubbleMs = (value) => Number((Number(value) || 0).toFixed(2));
+
+        const hasBubbleValue = (value, minimum = 0.05) => {
+            const numericValue = Number(value);
+            return Number.isFinite(numericValue) && Math.abs(numericValue) >= minimum;
+        };
+
+        const addBubbleHotspot = (hotspots, label, ms, extra = null) => {
+            if (!Array.isArray(hotspots) || !hasBubbleValue(ms, 0.5)) return;
+            const entry = {
+                label,
+                ms: toBubbleMs(ms)
+            };
+            if (extra && typeof extra === "object") {
+                Object.keys(extra).forEach((key) => {
+                    const value = extra[key];
+                    if (value === null || value === undefined || value === "") return;
+                    if (typeof value === "number") {
+                        if (!Number.isFinite(value)) return;
+                        entry[key] = Number.isInteger(value) ? value : toBubbleMs(value);
+                        return;
+                    }
+                    entry[key] = value;
+                });
+            }
+            hotspots.push(entry);
+        };
+
+        const sortBubbleHotspots = (hotspots, limit = 8) => {
+            if (!Array.isArray(hotspots) || hotspots.length === 0) return [];
+            return hotspots
+                .slice()
+                .sort((left, right) => {
+                    const msDelta = Number(right && right.ms) - Number(left && left.ms);
+                    if (msDelta !== 0) return msDelta;
+                    return String(left && left.label || "").localeCompare(String(right && right.label || ""));
+                })
+                .slice(0, limit);
+        };
+
+        const buildBubbleByTypeList = (byTypeStats) => {
+            if (!byTypeStats || typeof byTypeStats !== "object") return [];
+            return Object.keys(byTypeStats)
+                .map((type) => {
+                    const stats = byTypeStats[type] || {};
+                    return {
+                        type,
+                        loaded: Number(stats.loaded) || 0,
+                        removed: Number(stats.removed) || 0,
+                        ms: toBubbleMs(stats.ms)
+                    };
+                })
+                .filter((entry) => entry.loaded > 0 || entry.removed > 0 || hasBubbleValue(entry.ms))
+                .sort((left, right) => {
+                    const msDelta = right.ms - left.ms;
+                    if (msDelta !== 0) return msDelta;
+                    const loadDelta = right.loaded - left.loaded;
+                    if (loadDelta !== 0) return loadDelta;
+                    return left.type.localeCompare(right.type);
+                });
+        };
+
+        const buildBubbleLayoutSummary = (layoutStats, fallbackLoadedNodes, hotspots) => {
+            const stats = (layoutStats && typeof layoutStats === "object") ? layoutStats : {};
+            addBubbleHotspot(hotspots, "layout.activate", stats.activateMs, {
+                nodes: Number(stats.activatedNodeCount) || 0
+            });
+            addBubbleHotspot(hotspots, "layout.deactivate", stats.deactivateMs, {
+                nodes: Number(stats.deactivatedNodeCount) || 0
+            });
+            addBubbleHotspot(hotspots, "layout.rebuildLoaded", stats.rebuildLoadedMs);
+            addBubbleHotspot(hotspots, "layout.clearance", stats.clearanceMs);
+            addBubbleHotspot(hotspots, "layout.seam", stats.seamMs);
+            return {
+                ms: toBubbleMs(stats.ms),
+                loadedNodes: Number(stats.loadedNodeCount) || Number(fallbackLoadedNodes) || 0,
+                activatedNodes: Number(stats.activatedNodeCount) || 0,
+                deactivatedNodes: Number(stats.deactivatedNodeCount) || 0,
+                keysToActivate: Number(stats.keysToActivate) || 0,
+                keysToDeactivate: Number(stats.keysToDeactivate) || 0,
+                timings: Object.fromEntries(
+                    [
+                        ["activate", stats.activateMs],
+                        ["deactivate", stats.deactivateMs],
+                        ["rebuildLoaded", stats.rebuildLoadedMs],
+                        ["clearance", stats.clearanceMs],
+                        ["seam", stats.seamMs]
+                    ].filter(([, value]) => hasBubbleValue(value)).map(([label, value]) => [label, toBubbleMs(value)])
+                )
+            };
+        };
+
+        const buildBubbleWallSummary = (wallStats, changed, hotspots) => {
+            const stats = (wallStats && typeof wallStats === "object") ? wallStats : {};
+            addBubbleHotspot(hotspots, "walls.blockedEdgeApply", stats.blockedEdgeApplyMs, {
+                links: Number(stats.blockedEdgeAppliedLinks) || 0
+            });
+            addBubbleHotspot(hotspots, "walls.clearance", stats.clearanceMs, {
+                nodes: Number(stats.clearanceNodeCount) || 0
+            });
+            addBubbleHotspot(hotspots, "walls.loadJson", stats.loadJsonMs, {
+                loaded: Number(stats.loaded) || 0
+            });
+            addBubbleHotspot(hotspots, "walls.joinery", stats.joineryMs);
+            addBubbleHotspot(hotspots, "walls.addNodes", stats.addNodesMs);
+            const timings = Object.fromEntries(
+                [
+                    ["blockedEdgeApply", stats.blockedEdgeApplyMs],
+                    ["clearance", stats.clearanceMs],
+                    ["loadJson", stats.loadJsonMs],
+                    ["joinery", stats.joineryMs],
+                    ["addNodes", stats.addNodesMs],
+                    ["unload", stats.unloadMs],
+                    ["capture", stats.captureMs],
+                    ["collect", stats.collectMs]
+                ].filter(([, value]) => hasBubbleValue(value)).map(([label, value]) => [label, toBubbleMs(value)])
+            );
+            const summary = {
+                changed: !!changed,
+                ms: toBubbleMs(stats.ms),
+                active: Number(stats.active) || 0,
+                desired: Number(stats.desired) || 0,
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0,
+                timings
+            };
+            if ((Number(stats.blockedEdgeAppliedLinks) || 0) > 0) {
+                summary.blockedEdgeLinks = Number(stats.blockedEdgeAppliedLinks) || 0;
+            }
+            return summary;
+        };
+
+        const buildBubblePowerupSummary = (powerupStats, changed, hotspots) => {
+            const stats = (powerupStats && typeof powerupStats === "object") ? powerupStats : {};
+            addBubbleHotspot(hotspots, "objects.powerups", stats.ms, {
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0
+            });
+            return {
+                changed: !!changed,
+                ms: toBubbleMs(stats.ms),
+                active: Number(stats.active) || 0,
+                desired: Number(stats.desired) || 0,
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0
+            };
+        };
+
+        const buildBubbleObjectSummary = (objectStats, changed, powerups, hotspots) => {
+            const stats = (objectStats && typeof objectStats === "object") ? objectStats : {};
+            addBubbleHotspot(hotspots, "objects.roadRefresh", stats.roadRefreshMs, {
+                count: Number(stats.roadRefreshCount) || 0
+            });
+            addBubbleHotspot(hotspots, "objects.load", stats.loadMs, {
+                loaded: Number(stats.loaded) || 0
+            });
+            addBubbleHotspot(hotspots, "objects.staticLoad", stats.staticLoadMs, {
+                loaded: Number(stats.staticLoaded) || 0
+            });
+            addBubbleHotspot(hotspots, "objects.treeFinalize", stats.treeFinalizeMs);
+            addBubbleHotspot(hotspots, "objects.roofLoad", stats.roofLoadMs, {
+                loaded: Number(stats.roofLoaded) || 0
+            });
+            addBubbleHotspot(hotspots, "objects.unload", stats.unloadMs, {
+                removed: Number(stats.removed) || 0
+            });
+            const timings = Object.fromEntries(
+                [
+                    ["roadRefresh", stats.roadRefreshMs],
+                    ["load", stats.loadMs],
+                    ["staticLoad", stats.staticLoadMs],
+                    ["treeFinalize", stats.treeFinalizeMs],
+                    ["roofLoad", stats.roofLoadMs],
+                    ["unload", stats.unloadMs],
+                    ["capture", stats.captureMs],
+                    ["collect", stats.collectMs],
+                    ["invalidate", stats.invalidateMs],
+                    ["stalePrune", stats.stalePruneMs]
+                ].filter(([, value]) => hasBubbleValue(value)).map(([label, value]) => [label, toBubbleMs(value)])
+            );
+            const summary = {
+                changed: !!changed,
+                ms: toBubbleMs(stats.ms),
+                active: Number(stats.active) || 0,
+                desired: Number(stats.desired) || 0,
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0,
+                timings
+            };
+            const byType = buildBubbleByTypeList(stats.byType);
+            if (byType.length > 0) {
+                summary.byType = byType;
+            }
+            if (
+                (Number(stats.parkedStored) || 0) > 0 ||
+                (Number(stats.parkedReused) || 0) > 0 ||
+                (Number(stats.parkedEvicted) || 0) > 0 ||
+                (Number(stats.parkedActive) || 0) > 0
+            ) {
+                summary.parking = {
+                    stored: Number(stats.parkedStored) || 0,
+                    reused: Number(stats.parkedReused) || 0,
+                    evicted: Number(stats.parkedEvicted) || 0,
+                    active: Number(stats.parkedActive) || 0
+                };
+            }
+            if (powerups) {
+                summary.powerups = powerups;
+            }
+            return summary;
+        };
+
+        const buildBubbleAnimalSummary = (animalStats, changed, hotspots) => {
+            const stats = (animalStats && typeof animalStats === "object") ? animalStats : {};
+            addBubbleHotspot(hotspots, "animals.sync", stats.ms, {
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0
+            });
+            return {
+                changed: !!changed,
+                ms: toBubbleMs(stats.ms),
+                active: Number(stats.active) || 0,
+                desired: Number(stats.desired) || 0,
+                loaded: Number(stats.loaded) || 0,
+                removed: Number(stats.removed) || 0
+            };
+        };
+
+        const recordPrototypeTaskExecution = (session, task, taskMs, sliceIndex = 0) => {
+            if (!session || !hasBubbleValue(taskMs, 0.1)) return;
+            const label = (task && typeof task._prototypeTaskLabel === "string" && task._prototypeTaskLabel.length > 0)
+                ? task._prototypeTaskLabel
+                : "task";
+            const entry = {
+                label,
+                ms: toBubbleMs(taskMs),
+                slice: Math.max(0, Number(sliceIndex) || 0)
+            };
+            if (!session.maxTaskExecution || entry.ms > Number(session.maxTaskExecution.ms) || 0) {
+                session.maxTaskExecution = { ...entry };
+            }
+            if (!Array.isArray(session.topTaskExecutions)) {
+                session.topTaskExecutions = [];
+            }
+            session.topTaskExecutions.push(entry);
+            session.topTaskExecutions.sort((left, right) => {
+                const msDelta = Number(right && right.ms) - Number(left && left.ms);
+                if (msDelta !== 0) return msDelta;
+                return Number(left && left.slice) - Number(right && right.slice);
+            });
+            if (session.topTaskExecutions.length > 8) {
+                session.topTaskExecutions.length = 8;
+            }
+        };
+
+        const buildBubbleTaskSummary = (session) => ({
+            max: session && session.maxTaskExecution ? { ...session.maxTaskExecution } : null,
+            top: Array.isArray(session && session.topTaskExecutions)
+                ? session.topTaskExecutions.map((entry) => ({ ...entry }))
+                : []
+        });
 
         const createPrototypeAsyncBubbleShiftSession = (startedAtMs, previousCenterKey, layoutMs, options = {}) => ({
             from: previousCenterKey || "",
@@ -32,6 +304,8 @@
             workMs: Number(layoutMs) || 0,
             maxFrameSliceMs: 0,
             frameSliceCount: 0,
+            maxTaskExecution: null,
+            topTaskExecutions: [],
             wallStats: null,
             wallsChanged: false,
             objectsChanged: false,
@@ -57,25 +331,34 @@
                 : null;
             updatePrototypeGpuDebugStats(map);
             try {
+                const loadedNodes = map._prototypeSectionState && Array.isArray(map._prototypeSectionState.loadedNodes)
+                    ? map._prototypeSectionState.loadedNodes.length
+                    : 0;
+                const hotspots = [];
+                const powerupSummary = buildBubblePowerupSummary(powerupStats, session.powerupsChanged, hotspots);
                 console.log("[prototype bubble shift]", {
                     from: session.from,
                     to: session.to,
-                    layoutMs: Number(Number(session.layoutMs || 0).toFixed(2)),
-                    layoutDetail: map._prototypeSectionState && map._prototypeSectionState.lastLayoutStats
-                        ? { ...map._prototypeSectionState.lastLayoutStats }
-                        : null,
-                    shiftFrameMs: Number((Number(session.shiftFrameMs) || 0).toFixed(2)),
-                    totalMs: Number(totalMs.toFixed(2)),
-                    workMs: Number((Number(session.workMs) || 0).toFixed(2)),
-                    maxFrameSliceMs: Number((Number(session.maxFrameSliceMs) || 0).toFixed(2)),
-                    frameSliceCount: Number(session.frameSliceCount) || 0,
-                    loadedNodes: map._prototypeSectionState && Array.isArray(map._prototypeSectionState.loadedNodes)
-                        ? map._prototypeSectionState.loadedNodes.length
-                        : 0,
-                    walls: wallStats ? { ...wallStats, changed: !!session.wallsChanged } : { changed: !!session.wallsChanged },
-                    objects: objectStats ? { ...objectStats, changed: !!session.objectsChanged } : { changed: !!session.objectsChanged },
-                    animals: animalStats ? { ...animalStats, changed: !!session.animalsChanged } : { changed: !!session.animalsChanged },
-                    powerups: powerupStats ? { ...powerupStats, changed: !!session.powerupsChanged } : { changed: !!session.powerupsChanged }
+                    frame: {
+                        budgetMs: toBubbleMs(session.frameBudgetMs),
+                        shiftFrameMs: toBubbleMs(session.shiftFrameMs),
+                        maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
+                        sliceCount: Number(session.frameSliceCount) || 0,
+                        workMs: toBubbleMs(session.workMs),
+                        totalMs: toBubbleMs(totalMs)
+                    },
+                    tasks: buildBubbleTaskSummary(session),
+                    layout: buildBubbleLayoutSummary(
+                        map._prototypeSectionState && map._prototypeSectionState.lastLayoutStats
+                            ? map._prototypeSectionState.lastLayoutStats
+                            : null,
+                        loadedNodes,
+                        hotspots
+                    ),
+                    walls: buildBubbleWallSummary(wallStats, session.wallsChanged, hotspots),
+                    objects: buildBubbleObjectSummary(objectStats, session.objectsChanged, powerupSummary, hotspots),
+                    animals: buildBubbleAnimalSummary(animalStats, session.animalsChanged, hotspots),
+                    hotspots: sortBubbleHotspots(hotspots)
                 });
             } catch (_err) {
                 // ignore debug logging failures
@@ -89,12 +372,15 @@
             const budgetMs = Math.max(0.25, Number(options.frameBudgetMs) || Number(session.frameBudgetMs) || 2);
             const deadline = prototypeNow() + budgetMs;
             const sliceStart = prototypeNow();
+            const sliceIndex = (Number(session.frameSliceCount) || 0) + 1;
             while (session.queue.length > 0 && prototypeNow() < deadline) {
                 const task = session.queue.shift();
                 if (typeof task === "function") {
                     const taskStart = prototypeNow();
                     task();
-                    session.workMs += prototypeNow() - taskStart;
+                    const taskMs = prototypeNow() - taskStart;
+                    session.workMs += taskMs;
+                    recordPrototypeTaskExecution(session, task, taskMs, sliceIndex);
                 }
             }
             const sliceMs = prototypeNow() - sliceStart;
@@ -126,7 +412,9 @@
                     if (typeof task === "function") {
                         const taskStart = prototypeNow();
                         task();
-                        session.workMs += prototypeNow() - taskStart;
+                        const taskMs = prototypeNow() - taskStart;
+                        session.workMs += taskMs;
+                        recordPrototypeTaskExecution(session, task, taskMs, 0);
                     }
                     tasksRun += 1;
                 }
@@ -156,12 +444,29 @@
             const tasks = [];
             const activateKeys = Array.isArray(transition.keysToActivate) ? transition.keysToActivate.slice() : [];
             const deactivateKeys = Array.isArray(transition.keysToDeactivate) ? transition.keysToDeactivate.slice() : [];
+            const targetActiveKeys = transition.targetActiveKeys instanceof Set
+                ? Array.from(transition.targetActiveKeys)
+                : [];
+            let materializedNodeSections = 0;
+            if (targetActiveKeys.length > 0 && typeof map.materializePrototypeSectionNodes === "function") {
+                for (let i = 0; i < targetActiveKeys.length; i++) {
+                    const sectionKey = targetActiveKeys[i];
+                    tasks.push(createPrototypeTask("layout.materializeNodes", () => {
+                        materializedNodeSections += map.materializePrototypeSectionNodes([sectionKey]);
+                    }));
+                }
+                tasks.push(createPrototypeTask("layout.materializeFinalize", () => {
+                    if (materializedNodeSections > 0 && typeof map.rebuildPrototypeFloorRuntime === "function") {
+                        map.rebuildPrototypeFloorRuntime();
+                    }
+                }));
+            }
             for (let s = 0; s < activateKeys.length; s++) {
                 const sectionKey = activateKeys[s];
                 const nodes = state.nodesBySectionKey.get(sectionKey) || [];
                 for (let i = 0; i < nodes.length; i += chunkSize) {
                     const startIndex = i;
-                    tasks.push(() => {
+                    tasks.push(createPrototypeTask("layout.activateChunk", () => {
                         const start = prototypeNow();
                         const end = Math.min(startIndex + chunkSize, nodes.length);
                         for (let n = startIndex; n < end; n++) {
@@ -178,21 +483,21 @@
                             stats.activatedNodeCount += 1;
                         }
                         stats.activateMs += prototypeNow() - start;
-                    });
+                    }));
                 }
-                tasks.push(() => {
+                tasks.push(createPrototypeTask("layout.activateSet", () => {
                     if (!(state.actualActiveSectionKeys instanceof Set)) {
                         state.actualActiveSectionKeys = new Set();
                     }
                     state.actualActiveSectionKeys.add(sectionKey);
-                });
+                }));
             }
             for (let s = 0; s < deactivateKeys.length; s++) {
                 const sectionKey = deactivateKeys[s];
                 const nodes = state.nodesBySectionKey.get(sectionKey) || [];
                 for (let i = 0; i < nodes.length; i += chunkSize) {
                     const startIndex = i;
-                    tasks.push(() => {
+                    tasks.push(createPrototypeTask("layout.deactivateChunk", () => {
                         const start = prototypeNow();
                         const end = Math.min(startIndex + chunkSize, nodes.length);
                         for (let n = startIndex; n < end; n++) {
@@ -206,28 +511,62 @@
                             stats.deactivatedNodeCount += 1;
                         }
                         stats.deactivateMs += prototypeNow() - start;
-                    });
+                    }));
                 }
-                tasks.push(() => {
+                tasks.push(createPrototypeTask("layout.deactivateSet", () => {
                     if (state.actualActiveSectionKeys instanceof Set) {
                         state.actualActiveSectionKeys.delete(sectionKey);
                     }
-                });
+                }));
             }
-            tasks.push(() => {
+            // Re-activate nodes from still-active sections that were incorrectly
+            // deactivated by departing sections' overlap/padding nodes.
+            // When a section loads, addSparseNodesForSection overwrites
+            // _prototypeSectionKey for shared boundary nodes. When that section
+            // later deactivates, it deactivates those shared nodes even though
+            // the original owning section is still active.
+            if (deactivateKeys.length > 0) {
+                tasks.push(createPrototypeTask("layout.reactivateOverlap", () => {
+                    const start = prototypeNow();
+                    if (!(state.actualActiveSectionKeys instanceof Set)) return;
+                    let reactivated = 0;
+                    for (const sectionKey of state.actualActiveSectionKeys) {
+                        const nodes = state.nodesBySectionKey.get(sectionKey) || [];
+                        for (let n = 0; n < nodes.length; n++) {
+                            const node = nodes[n];
+                            if (!node || node._prototypeSectionActive === true) continue;
+                            node._prototypeSectionActive = true;
+                            node.blocked = false;
+                            const coordKey = `${node.xindex},${node.yindex}`;
+                            state.loadedNodesByCoordKey.set(coordKey, node);
+                            if (!state.loadedNodeKeySet.has(coordKey)) {
+                                state.loadedNodeKeySet.add(coordKey);
+                                state.loadedNodes.push(node);
+                            }
+                            reactivated += 1;
+                        }
+                    }
+                    stats.reactivateOverlapMs = prototypeNow() - start;
+                    stats.reactivateOverlapCount = reactivated;
+                }));
+            }
+            tasks.push(createPrototypeTask("layout.rebuildLoaded", () => {
                 const start = prototypeNow();
                 state.loadedNodes = state.loadedNodes.filter((node) => (
                     node &&
                     node._prototypeSectionActive === true &&
                     state.loadedNodeKeySet.has(`${node.xindex},${node.yindex}`)
                 ));
+                if (typeof sortPrototypeLoadedNodes === "function") {
+                    sortPrototypeLoadedNodes(state.loadedNodes);
+                }
                 stats.rebuildLoadedMs += prototypeNow() - start;
-            });
-            tasks.push(() => {
+            }));
+            tasks.push(createPrototypeTask("layout.seam", () => {
                 const start = prototypeNow();
                 updatePrototypeSeamSegmentsForSections(state, transition.changedSectionKeys instanceof Set ? transition.changedSectionKeys : new Set());
                 stats.seamMs += prototypeNow() - start;
-            });
+            }));
             if (activateKeys.length > 0 && typeof map.applyPrototypeSectionClearance === "function") {
                 const clearanceChunkSize = 1200;
                 for (let i = 0; i < activateKeys.length; i++) {
@@ -235,15 +574,15 @@
                     const sectionNodes = state.nodesBySectionKey.get(sectionKey) || [];
                     for (let startIndex = 0; startIndex < sectionNodes.length; startIndex += clearanceChunkSize) {
                         const chunkStartIndex = startIndex;
-                        tasks.push(() => {
+                        tasks.push(createPrototypeTask("layout.clearanceChunk", () => {
                             const start = prototypeNow();
                             applyPrototypeSectionClearanceChunk(map, sectionKey, chunkStartIndex, clearanceChunkSize);
                             stats.clearanceMs += prototypeNow() - start;
-                        });
+                        }));
                     }
                 }
             }
-            tasks.push(() => {
+            tasks.push(createPrototypeTask("layout.finalize", () => {
                 state.pendingLayoutTransition = null;
                 session.layoutMs = Number((
                     stats.ensureSectionsMs
@@ -269,7 +608,7 @@
                     keysToActivate: activateKeys.length,
                     keysToDeactivate: deactivateKeys.length
                 };
-            });
+            }));
             prependPrototypeTasks(session, tasks);
         };
 
@@ -374,6 +713,7 @@
         return {
             prototypeNow,
             prependPrototypeTasks,
+            createPrototypeTask,
             createPrototypeAsyncBubbleShiftSession,
             finalizePrototypeAsyncBubbleShiftSession,
             advancePrototypeAsyncBubbleShiftSession,

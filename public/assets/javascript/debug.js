@@ -667,10 +667,168 @@ let cameraForwardLeadRatio = 0.0;
 let cameraFollowSmoothing = 0.0; // 0.025;
 
 const debugUseLodNativePixelSize = false;
-const debugViewSettings = {
-    // Show only non-visual debug hitboxes by default.
-    showVisualHitboxes: false
-};
+
+function setDebugModeEnabled(enabled) {
+    const next = !!enabled;
+    if (debugMode === next) {
+        if (typeof globalThis !== "undefined") {
+            globalThis.debugMode = debugMode;
+            globalThis.renderingShowPickerScreen = !!debugMode;
+        }
+        return debugMode;
+    }
+    debugMode = next;
+    if (debugMode) {
+        debugModePrevHexGridState = showHexGrid;
+        showHexGrid = true;
+    } else if (debugModePrevHexGridState !== null) {
+        showHexGrid = !!debugModePrevHexGridState;
+        debugModePrevHexGridState = null;
+    }
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugMode = debugMode;
+        globalThis.renderingShowPickerScreen = !!debugMode;
+    }
+    return debugMode;
+}
+
+function setShowHexGridEnabled(enabled) {
+    showHexGrid = !!enabled;
+    return showHexGrid;
+}
+
+function setShowAnimalClearanceEnabled(enabled) {
+    showAnimalClearance = !!enabled;
+    return showAnimalClearance;
+}
+
+function setShowTileClearanceEnabled(enabled) {
+    showTileClearance = !!enabled;
+    return showTileClearance;
+}
+
+function setLosDebugFillEnabled(enabled) {
+    losDebugFillEnabled = !!enabled;
+    return losDebugFillEnabled;
+}
+
+function setPickerScreenVisible(enabled) {
+    if (typeof globalThis !== "undefined") {
+        globalThis.renderingShowPickerScreen = !!enabled;
+        return globalThis.renderingShowPickerScreen;
+    }
+    return !!enabled;
+}
+
+function setSectionWorldSeamsVisible(enabled) {
+    if (typeof globalThis !== "undefined") {
+        globalThis.renderingShowSectionWorldSeams = !!enabled;
+        return globalThis.renderingShowSectionWorldSeams;
+    }
+    return !!enabled;
+}
+
+function getSectionWorldSeamsVisible() {
+    return !!(typeof globalThis !== "undefined" && globalThis.renderingShowSectionWorldSeams !== false);
+}
+
+function getWallSectionUnitCtor() {
+    return (typeof globalThis !== "undefined" && globalThis && globalThis.WallSectionUnit)
+        ? globalThis.WallSectionUnit
+        : null;
+}
+
+function setWallDirectionalBlockersVisible(enabled) {
+    const wallCtor = getWallSectionUnitCtor();
+    if (wallCtor && typeof wallCtor.setShowDirectionalBlockingDebug === "function") {
+        wallCtor.setShowDirectionalBlockingDebug(enabled);
+        return !!wallCtor._showDirectionalBlockingDebug;
+    }
+    return !!enabled;
+}
+
+function getWallDirectionalBlockersVisible() {
+    const wallCtor = getWallSectionUnitCtor();
+    return !!(wallCtor && wallCtor._showDirectionalBlockingDebug);
+}
+
+function setWallGroundHitboxesOnlyVisible(enabled) {
+    const wallCtor = getWallSectionUnitCtor();
+    if (wallCtor && typeof wallCtor.setShowBottomFaceOnlyDebug === "function") {
+        wallCtor.setShowBottomFaceOnlyDebug(enabled);
+        return !!wallCtor._showBottomFaceOnlyDebug;
+    }
+    return !!enabled;
+}
+
+function getWallGroundHitboxesOnlyVisible() {
+    const wallCtor = getWallSectionUnitCtor();
+    return !!(wallCtor && wallCtor._showBottomFaceOnlyDebug);
+}
+
+class DebugViewSettings {
+    constructor() {
+        this._defineBooleanSetting("debugMode", () => debugMode, value => setDebugModeEnabled(value));
+        this._defineBooleanSetting("showHexGrid", () => showHexGrid, value => setShowHexGridEnabled(value));
+        this._defineBooleanSetting("showAnimalClearance", () => showAnimalClearance, value => setShowAnimalClearanceEnabled(value));
+        this._defineBooleanSetting("showAnimalHitboxes", () => debugMode, value => setDebugModeEnabled(value));
+        this._defineBooleanSetting("showTileClearance", () => showTileClearance, value => setShowTileClearanceEnabled(value));
+        this._defineBooleanSetting("showPerfReadout", () => showPerfReadout, value => setShowPerfReadout(value));
+        this._defineBooleanSetting("showFpsCounter", () => showPerfReadout, value => setShowPerfReadout(value));
+        this._defineBooleanSetting("perfInstrumentationEnabled", () => perfInstrumentationEnabled, value => setPerfInstrumentationEnabled(value));
+        this._defineBooleanSetting("showVisualHitboxes", () => this._showVisualHitboxes !== false, value => {
+            this._showVisualHitboxes = !!value;
+            return this._showVisualHitboxes;
+        });
+        this._defineBooleanSetting("showLosFill", () => losDebugFillEnabled, value => setLosDebugFillEnabled(value));
+        this._defineBooleanSetting("showPickerScreen", () => !!(typeof globalThis !== "undefined" && globalThis.renderingShowPickerScreen), value => setPickerScreenVisible(value));
+        this._defineBooleanSetting("showSectionWorldSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
+        this._defineBooleanSetting("showSectionSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
+        this._defineBooleanSetting("showWallBlockers", () => getWallDirectionalBlockersVisible(), value => setWallDirectionalBlockersVisible(value));
+        this._defineBooleanSetting("showWallGroundHitboxesOnly", () => getWallGroundHitboxesOnlyVisible(), value => setWallGroundHitboxesOnlyVisible(value));
+
+        // Show only non-visual debug hitboxes by default.
+        this.showVisualHitboxes = false;
+        this.showSectionWorldSeams = true;
+    }
+
+    _defineBooleanSetting(name, getter, setter) {
+        Object.defineProperty(this, name, {
+            enumerable: true,
+            configurable: false,
+            get: getter,
+            set(value) {
+                setter(!!value);
+            }
+        });
+    }
+
+    snapshot() {
+        return {
+            debugMode: this.debugMode,
+            showHexGrid: this.showHexGrid,
+            showAnimalClearance: this.showAnimalClearance,
+            showAnimalHitboxes: this.showAnimalHitboxes,
+            showTileClearance: this.showTileClearance,
+            showPerfReadout: this.showPerfReadout,
+            showFpsCounter: this.showFpsCounter,
+            perfInstrumentationEnabled: this.perfInstrumentationEnabled,
+            showVisualHitboxes: this.showVisualHitboxes,
+            showLosFill: this.showLosFill,
+            showPickerScreen: this.showPickerScreen,
+            showSectionWorldSeams: this.showSectionWorldSeams,
+            showSectionSeams: this.showSectionSeams,
+            showWallBlockers: this.showWallBlockers,
+            showWallGroundHitboxesOnly: this.showWallGroundHitboxesOnly
+        };
+    }
+
+    toJSON() {
+        return this.snapshot();
+    }
+}
+
+const debugViewSettings = new DebugViewSettings();
 
 function updatePerfPanelVisibility() {
     if (!perfPanel) return;
@@ -711,23 +869,11 @@ function toggleShowPerfReadout() {
 }
 
 function toggleDebugMode() {
-    debugMode = !debugMode;
-    if (debugMode) {
-        debugModePrevHexGridState = showHexGrid;
-        showHexGrid = true;
-    } else if (debugModePrevHexGridState !== null) {
-        showHexGrid = !!debugModePrevHexGridState;
-        debugModePrevHexGridState = null;
-    }
-    if (typeof globalThis !== "undefined") {
-        globalThis.debugMode = debugMode;
-    }
-    return debugMode;
+    return setDebugModeEnabled(!debugMode);
 }
 
 function toggleHexGrid() {
-    showHexGrid = !showHexGrid;
-    return showHexGrid;
+    return setShowHexGridEnabled(!showHexGrid);
 }
 
 if (typeof globalThis !== "undefined") {
@@ -748,11 +894,20 @@ if (typeof globalThis !== "undefined") {
             return debugViewSettings.showVisualHitboxes;
         },
         toggleAnimalClearance: () => {
-            showAnimalClearance = !showAnimalClearance;
-            return showAnimalClearance;
+            debugViewSettings.showAnimalClearance = !debugViewSettings.showAnimalClearance;
+            return debugViewSettings.showAnimalClearance;
+        },
+        toggleWallBlockers: () => {
+            debugViewSettings.showWallBlockers = !debugViewSettings.showWallBlockers;
+            return debugViewSettings.showWallBlockers;
+        },
+        toggleWallGroundHitboxesOnly: () => {
+            debugViewSettings.showWallGroundHitboxesOnly = !debugViewSettings.showWallGroundHitboxesOnly;
+            return debugViewSettings.showWallGroundHitboxesOnly;
         }
     };
     globalThis.DebugView = debugView;
+    globalThis.debugViewSettings = debugViewSettings;
     globalThis.recordPerfAccumulatorSample = recordPerfAccumulatorSample;
     globalThis.getPerfAccumulatorSnapshot = getPerfAccumulatorSnapshot;
     globalThis.resetPerfAccumulator = resetPerfAccumulator;
@@ -764,7 +919,7 @@ if (typeof globalThis !== "undefined") {
 
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {
     globalThis.setLosDebugFillEnabled = function setLosDebugFillEnabled(enabled) {
-        losDebugFillEnabled = !!enabled;
+        return debugViewSettings.showLosFill = !!enabled;
     };
 }
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosGroundMaskEnabled !== "function") {

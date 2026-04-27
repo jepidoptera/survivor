@@ -47,7 +47,8 @@
     );
     const {
         setActiveCenter: prototypeLayoutSetActiveCenter,
-        settlePendingPrototypeLayoutTransition: prototypeLayoutSettlePendingLayoutTransition
+        settlePendingPrototypeLayoutTransition: prototypeLayoutSettlePendingLayoutTransition,
+        sortPrototypeLoadedNodes
     } = sectionWorldLayout;
 
     const sectionWorldBubbleSync = resolveSectionWorldModule(
@@ -205,6 +206,7 @@
     });
     const {
         applyRawPrototypeSectionAssetToStateAsset,
+        comparePrototypeTileCoordKeys,
         clonePrototypeBlockedEdges,
         clonePrototypeClearanceByTile,
         clonePrototypeFloorRecords,
@@ -219,6 +221,7 @@
         addSectionCoords,
         axialDistance,
         axialToEvenQOffset,
+        comparePrototypeTileCoordKeys,
         clonePrototypeFloorTransitions,
         computeSectionCenterAxial,
         evenQOffsetToAxial,
@@ -1685,11 +1688,13 @@
         const bubbleSyncHelpers = createSectionWorldBubbleSyncHelpers(map, {
             updatePrototypeGpuDebugStats,
             updatePrototypeSeamSegmentsForSections,
-            applyPrototypeSectionClearanceChunk
+            applyPrototypeSectionClearanceChunk,
+            sortPrototypeLoadedNodes
         });
         const {
             prototypeNow,
             prependPrototypeTasks,
+            createPrototypeTask,
             createPrototypeAsyncBubbleShiftSession,
             advancePrototypeAsyncBubbleShiftSession,
             attachFlushPrototypeBubbleShiftSession,
@@ -1733,6 +1738,7 @@
             getPrototypeObjectProfileKey,
             isPrototypeSavableObject,
             parkPrototypeRuntimeObject,
+            createPrototypeTask,
             prependPrototypeTasks,
             prototypeNow,
             removePrototypeBlockedEdgesForSection,
@@ -1782,6 +1788,7 @@
             evictPrototypeParkedRuntimeObject,
             formatPrototypeObjectProfileMap,
             getPrototypeObjectProfileKey,
+            isPrototypeSavableObject,
             parkPrototypeRuntimeObject,
             prototypeNow,
             removePrototypeBlockedEdgesForSection,
@@ -1790,7 +1797,8 @@
             restorePrototypeParkedRuntimeObject,
             sanitizePrototypeObjectRecords,
             settlePendingPrototypeLayoutTransition,
-            trimPrototypeParkedRuntimeObjectCache
+            trimPrototypeParkedRuntimeObjectCache,
+            upsertPrototypeObjectRecord
         });
     }
 
@@ -1854,7 +1862,9 @@
 
         assignNodesToSections(map, prototypeState);
         attachSectionWorldApis(map, prototypeState);
-        ensurePrototypeBlockedEdges(map);
+        if (typeof map.ensurePrototypeBlockedEdges === "function") {
+            map.ensurePrototypeBlockedEdges();
+        }
         setActiveCenter(map, prototypeState.activeCenterKey);
         map.syncPrototypeWalls();
         map.syncPrototypeObjects();

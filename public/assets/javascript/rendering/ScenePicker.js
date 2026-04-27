@@ -792,6 +792,12 @@ void main(void) {
             if (!this.pickerGroundHitboxGraphics) this.ensureObjects();
             const g = this.pickerGroundHitboxGraphics;
             if (!g) return false;
+            const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null;
+            const includeTriggerAreas = !!(
+                wizardRef &&
+                typeof wizardRef.currentSpell === "string" &&
+                wizardRef.currentSpell === "editscript"
+            );
 
             const items = Array.isArray(onscreenObjects)
                 ? onscreenObjects
@@ -807,6 +813,7 @@ void main(void) {
                 const hitbox = obj.groundPlaneHitbox;
                 if (!hitbox) continue;
                 const isTriggerArea = !!(obj.type === "triggerArea" || obj.isTriggerArea === true);
+                if (isTriggerArea && !includeTriggerAreas) continue;
                 const isCircle = (
                     hitbox.type === "circle" &&
                     Number.isFinite(hitbox.x) &&
@@ -833,6 +840,7 @@ void main(void) {
                         acc.push(screenPoint);
                         return acc;
                     }, []);
+                if (!Array.isArray(screenPoints)) continue;
                 if (screenPoints.length < 2) continue;
                 if (isTriggerArea) {
                     const dashLengthPx = 10;
@@ -1345,8 +1353,30 @@ void main(void) {
             return { proxy: graphics, type: "graphics" };
         }
 
+        getRenderableTexture(texture, fallback = null) {
+            if (!texture || texture.destroyed) return fallback;
+            if (texture.valid === false) return fallback;
+            const baseTexture = texture.baseTexture || null;
+            if (baseTexture && baseTexture.destroyed) return fallback;
+            const frame = texture.orig || texture.frame || null;
+            const width = Number(frame && frame.width);
+            const height = Number(frame && frame.height);
+            if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+                return fallback;
+            }
+            return texture;
+        }
+
+        isRenderablePickDisplayObject(displayObj) {
+            if (!displayObj || displayObj.destroyed) return false;
+            if (displayObj instanceof PIXI.Sprite) {
+                return !!this.getRenderableTexture(displayObj.texture, null);
+            }
+            return true;
+        }
+
         ensurePickProxyForDisplayObject(item, displayObj) {
-            if (!item || !displayObj) return null;
+            if (!item || !this.isRenderablePickDisplayObject(displayObj)) return null;
             // Key proxy records by display object, not logical item.
             // Roofs submit many child meshes for one item and each needs its own proxy.
             let record = this.pickProxyByObject.get(displayObj) || null;
@@ -1372,7 +1402,7 @@ void main(void) {
         }
 
         syncPickProxyFromDisplayObject(record, displayObj, rgbColor, item = null) {
-            if (!record || !record.proxy || !displayObj) return false;
+            if (!record || !record.proxy || !this.isRenderablePickDisplayObject(displayObj)) return false;
             const proxy = record.proxy;
             if (record.type === "graphics") {
                 const camera = this.pickLastCamera || null;
@@ -1430,15 +1460,13 @@ void main(void) {
                 return true;
             }
             if (record.type === "spriteMesh") {
-                const texture = displayObj.texture || PIXI.Texture.WHITE;
-                const sxAbs = Math.max(1e-6, Math.abs(Number(displayObj.scale && displayObj.scale.x) || 0));
-                const syAbs = Math.max(1e-6, Math.abs(Number(displayObj.scale && displayObj.scale.y) || 0));
-                const w = (texture && texture.orig && Number.isFinite(texture.orig.width))
-                    ? Number(texture.orig.width)
-                    : (Math.abs(Number(displayObj.width) || 0) / sxAbs);
-                const h = (texture && texture.orig && Number.isFinite(texture.orig.height))
-                    ? Number(texture.orig.height)
-                    : (Math.abs(Number(displayObj.height) || 0) / syAbs);
+                const texture = this.getRenderableTexture(displayObj.texture, null);
+                if (!texture) {
+                    proxy.visible = false;
+                    return false;
+                }
+                const w = Number(texture.orig && texture.orig.width);
+                const h = Number(texture.orig && texture.orig.height);
                 const anchorX = (displayObj.anchor && Number.isFinite(displayObj.anchor.x))
                     ? Number(displayObj.anchor.x)
                     : 0;
@@ -1512,9 +1540,9 @@ void main(void) {
                     const sourceTexture = record.isTriggerAreaMesh
                         ? PIXI.Texture.WHITE
                         : (displayObj.material && displayObj.material.texture)
-                            ? displayObj.material.texture
+                            ? this.getRenderableTexture(displayObj.material.texture, PIXI.Texture.WHITE)
                             : ((displayObj.shader && displayObj.shader.uniforms && displayObj.shader.uniforms.uSampler)
-                                ? displayObj.shader.uniforms.uSampler
+                                ? this.getRenderableTexture(displayObj.shader.uniforms.uSampler, PIXI.Texture.WHITE)
                                 : PIXI.Texture.WHITE);
                     record.shader.uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
                     record.shader.uniforms.uPickColor = new Float32Array([
@@ -1636,6 +1664,12 @@ void main(void) {
             const screenHeight = Math.max(1, Math.round(Number(app.screen && app.screen.height) || 1));
             const showPickerScreen = !!global.renderingShowPickerScreen;
             const renderScale = this.getPickRenderScale(showPickerScreen);
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            const includeTriggerAreas = !!(
+                wizardRef &&
+                typeof wizardRef.currentSpell === "string" &&
+                wizardRef.currentSpell === "editscript"
+            );
             this.pickRenderScale = renderScale;
             const scaledWidth = Math.max(1, Math.round(screenWidth * renderScale));
             const scaledHeight = Math.max(1, Math.round(screenHeight * renderScale));
@@ -1670,6 +1704,7 @@ void main(void) {
                     const displayObj = rec.displayObj;
                     const forceInclude = !!rec.forceInclude;
                     if (item.gone || item.vanishing) continue;
+                    if (!this.isRenderablePickDisplayObject(displayObj)) continue;
                     if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) continue;
                     if (!forceInclude && !displayObj.visible) continue;
                     const entry = {
@@ -1681,6 +1716,7 @@ void main(void) {
                         sourceOrder: this.getDisplayObjectSourceOrder(displayObj, i)
                     };
                     if (item.type === "triggerArea" || item.isTriggerArea === true) {
+                        if (!includeTriggerAreas) continue;
                         triggerAreaEntries.push(entry);
                         triggerAreaItems.add(item);
                     } else {
@@ -1696,6 +1732,7 @@ void main(void) {
                     const item = onscreenItems[i];
                     if (!item || item.gone || item.vanishing) continue;
                     if (!(item.type === "triggerArea" || item.isTriggerArea === true)) continue;
+                    if (!includeTriggerAreas) continue;
                     if (triggerAreaItems.has(item)) continue;
                     const displayObj = this.getTargetDisplayObject(item, ctx);
                     if (!displayObj) continue;
@@ -1729,7 +1766,7 @@ void main(void) {
                     const idx = i++;
                     if (!item || item.gone || item.vanishing) continue;
                     const displayObj = this.getTargetDisplayObject(item, ctx);
-                    if (!displayObj || !displayObj.parent || !displayObj.visible) continue;
+                    if (!this.isRenderablePickDisplayObject(displayObj) || !displayObj.parent || !displayObj.visible) continue;
                     let childIndex = idx;
                     try {
                         childIndex = displayObj.parent.getChildIndex(displayObj);

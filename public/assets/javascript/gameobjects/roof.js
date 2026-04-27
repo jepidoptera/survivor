@@ -106,6 +106,92 @@ void main(void) {
         return Math.max(0.0625, Math.min(1, value));
     }
 
+    static computeFaceUvs(faceVertices, repeatsPerUnit) {
+        if (!Array.isArray(faceVertices) || faceVertices.length !== 3) {
+            return new Float32Array([0, 0, repeatsPerUnit, 0, 0, repeatsPerUnit]);
+        }
+
+        const v0 = faceVertices[0];
+        const v1 = faceVertices[1];
+        const v2 = faceVertices[2];
+        const edge1 = {
+            x: (Number(v1.x) || 0) - (Number(v0.x) || 0),
+            y: (Number(v1.y) || 0) - (Number(v0.y) || 0),
+            z: (Number(v1.z) || 0) - (Number(v0.z) || 0)
+        };
+        const edge2 = {
+            x: (Number(v2.x) || 0) - (Number(v0.x) || 0),
+            y: (Number(v2.y) || 0) - (Number(v0.y) || 0),
+            z: (Number(v2.z) || 0) - (Number(v0.z) || 0)
+        };
+        const normal = {
+            x: edge1.y * edge2.z - edge1.z * edge2.y,
+            y: edge1.z * edge2.x - edge1.x * edge2.z,
+            z: edge1.x * edge2.y - edge1.y * edge2.x
+        };
+        const normalLen = Math.hypot(normal.x, normal.y, normal.z);
+        const normalizedNormal = normalLen > 1e-6
+            ? { x: normal.x / normalLen, y: normal.y / normalLen, z: normal.z / normalLen }
+            : { x: 0, y: 0, z: 1 };
+
+        // Project gravity onto the triangle plane so V consistently runs downhill.
+        const gravityDotNormal = -normalizedNormal.z;
+        let vAxis = {
+            x: -gravityDotNormal * normalizedNormal.x,
+            y: -gravityDotNormal * normalizedNormal.y,
+            z: -1 - gravityDotNormal * normalizedNormal.z
+        };
+        let vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
+        if (vAxisLen <= 1e-6) {
+            vAxis = {
+                x: normalizedNormal.y,
+                y: -normalizedNormal.x,
+                z: 0
+            };
+            vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
+        }
+        if (vAxisLen <= 1e-6) {
+            vAxis = { x: 0, y: -1, z: 0 };
+            vAxisLen = 1;
+        }
+        vAxis.x /= vAxisLen;
+        vAxis.y /= vAxisLen;
+        vAxis.z /= vAxisLen;
+
+        let uAxis = {
+            x: vAxis.y * normalizedNormal.z - vAxis.z * normalizedNormal.y,
+            y: vAxis.z * normalizedNormal.x - vAxis.x * normalizedNormal.z,
+            z: vAxis.x * normalizedNormal.y - vAxis.y * normalizedNormal.x
+        };
+        let uAxisLen = Math.hypot(uAxis.x, uAxis.y, uAxis.z);
+        if (uAxisLen <= 1e-6) {
+            uAxis = { x: 1, y: 0, z: 0 };
+            uAxisLen = 1;
+        }
+        uAxis.x /= uAxisLen;
+        uAxis.y /= uAxisLen;
+        uAxis.z /= uAxisLen;
+
+        const rawVValues = faceVertices.map(vertex => {
+            const vx = Number(vertex.x) || 0;
+            const vy = Number(vertex.y) || 0;
+            const vz = Number(vertex.z) || 0;
+            return vx * vAxis.x + vy * vAxis.y + vz * vAxis.z;
+        });
+        const bottomEdgeV = Math.max(...rawVValues);
+
+        const faceUvData = new Float32Array(6);
+        for (let i = 0; i < 3; i++) {
+            const vertex = faceVertices[i];
+            const vx = Number(vertex.x) || 0;
+            const vy = Number(vertex.y) || 0;
+            const vz = Number(vertex.z) || 0;
+            faceUvData[i * 2] = (vx * uAxis.x + vy * uAxis.y + vz * uAxis.z) * repeatsPerUnit;
+            faceUvData[i * 2 + 1] = 1 - (bottomEdgeV - rawVValues[i]) * repeatsPerUnit;
+        }
+        return faceUvData;
+    }
+
     static _barycentricAtPoint(px, py, ax, ay, bx, by, cx, cy) {
         const v0x = bx - ax;
         const v0y = by - ay;
@@ -1038,74 +1124,6 @@ void main(void) {
         // Neutral base color so texture color stays true after normalization.
         const baseColor = { r: 0xff, g: 0xff, b: 0xff };
 
-        const computeFaceUvs = (faceVertices, repeatsPerUnit) => {
-            if (!Array.isArray(faceVertices) || faceVertices.length !== 3) {
-                return new Float32Array([0, 0, repeatsPerUnit, 0, 0, repeatsPerUnit]);
-            }
-
-            const v0 = faceVertices[0];
-            const v1 = faceVertices[1];
-            const v2 = faceVertices[2];
-            const edge1 = {
-                x: (Number(v1.x) || 0) - (Number(v0.x) || 0),
-                y: (Number(v1.y) || 0) - (Number(v0.y) || 0),
-                z: (Number(v1.z) || 0) - (Number(v0.z) || 0)
-            };
-            const edge2 = {
-                x: (Number(v2.x) || 0) - (Number(v0.x) || 0),
-                y: (Number(v2.y) || 0) - (Number(v0.y) || 0),
-                z: (Number(v2.z) || 0) - (Number(v0.z) || 0)
-            };
-            const normal = {
-                x: edge1.y * edge2.z - edge1.z * edge2.y,
-                y: edge1.z * edge2.x - edge1.x * edge2.z,
-                z: edge1.x * edge2.y - edge1.y * edge2.x
-            };
-            const normalLen = Math.hypot(normal.x, normal.y, normal.z);
-            const normalizedNormal = normalLen > 1e-6
-                ? { x: normal.x / normalLen, y: normal.y / normalLen, z: normal.z / normalLen }
-                : { x: 0, y: 0, z: 1 };
-
-            let uAxis = {
-                x: -normalizedNormal.y,
-                y: normalizedNormal.x,
-                z: 0
-            };
-            let uAxisLen = Math.hypot(uAxis.x, uAxis.y, uAxis.z);
-            if (uAxisLen <= 1e-6) {
-                uAxis = { x: 1, y: 0, z: 0 };
-                uAxisLen = 1;
-            }
-            uAxis.x /= uAxisLen;
-            uAxis.y /= uAxisLen;
-            uAxis.z /= uAxisLen;
-
-            let vAxis = {
-                x: normalizedNormal.y * uAxis.z - normalizedNormal.z * uAxis.y,
-                y: normalizedNormal.z * uAxis.x - normalizedNormal.x * uAxis.z,
-                z: normalizedNormal.x * uAxis.y - normalizedNormal.y * uAxis.x
-            };
-            let vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
-            if (vAxisLen <= 1e-6) {
-                vAxis = { x: 0, y: 1, z: 0 };
-                vAxisLen = 1;
-            }
-            vAxis.x /= vAxisLen;
-            vAxis.y /= vAxisLen;
-            vAxis.z /= vAxisLen;
-
-            const faceUvData = new Float32Array(6);
-            for (let i = 0; i < 3; i++) {
-                const vertex = faceVertices[i];
-                const vx = Number(vertex.x) || 0;
-                const vy = Number(vertex.y) || 0;
-                const vz = Number(vertex.z) || 0;
-                faceUvData[i * 2] = (vx * uAxis.x + vy * uAxis.y + vz * uAxis.z) * repeatsPerUnit;
-                faceUvData[i * 2 + 1] = -(vx * vAxis.x + vy * vAxis.y + vz * vAxis.z) * repeatsPerUnit;
-            }
-            return faceUvData;
-        };
-
         // Create a separate mesh for each face with its own lighting
         for (let f = 0; f < this.faces.length; f++) {
             const face = this.faces[f];
@@ -1129,7 +1147,7 @@ void main(void) {
             // Simple index data for single triangle
             const faceIndexData = new Uint16Array([0, 1, 2]);
 
-            const faceUvData = computeFaceUvs(faceVertices, textureRepeat);
+            const faceUvData = Roof.computeFaceUvs(faceVertices, textureRepeat);
 
             let faceMesh = null;
             if (depthState && PIXI.Shader) {

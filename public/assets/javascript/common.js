@@ -119,6 +119,7 @@ function showScrollDialog(options = {}) {
     const buttons = Array.isArray(options.buttons) ? options.buttons : [];
     const dialogClass = String(options.dialogClass || "").trim();
     const bodyClass = String(options.bodyClass || "").trim();
+    const buttonRowClass = String(options.buttonRowClass || "").trim();
     const $box = $("#msgbox");
     const previousDialogClass = String($box.data("scrollDialogClass") || "").trim();
     if (previousDialogClass.length > 0) {
@@ -162,6 +163,9 @@ function showScrollDialog(options = {}) {
     const $buttonRow = $("<div>")
         .attr("id", "msgbuttons")
         .addClass("scrollMessageButtons scrollDialogButtons");
+    if (buttonRowClass.length > 0) {
+        $buttonRow.addClass(buttonRowClass);
+    }
     $box.append($buttonRow);
 
     buttons.forEach(button => {
