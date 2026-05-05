@@ -160,6 +160,176 @@
             upsertPrototypeObjectRecord
         } = deps;
 
+        const restoreActivePrototypeWallRegistry = (wallState) => {
+            const wallCtor = globalScope.WallSectionUnit;
+            const registry = (wallCtor && wallCtor._allSections instanceof Map)
+                ? wallCtor._allSections
+                : null;
+            if (!registry || !(wallState && wallState.activeRuntimeWallsByRecordId instanceof Map)) {
+                return 0;
+            }
+            let restoredCount = 0;
+            for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
+                if (!runtimeWall || runtimeWall.gone) continue;
+                const wallId = Number.isInteger(runtimeWall.id)
+                    ? Number(runtimeWall.id)
+                    : (Number.isInteger(recordId) ? Number(recordId) : null);
+                if (!Number.isInteger(wallId)) continue;
+                if (!Number.isInteger(runtimeWall.id)) {
+                    runtimeWall.id = wallId;
+                }
+                if (registry.get(wallId) === runtimeWall) continue;
+                registry.set(wallId, runtimeWall);
+                restoredCount += 1;
+            }
+            return restoredCount;
+        };
+
+        const chooseMountedWallReplacementId = (obj, replacementIds) => {
+            const ids = Array.isArray(replacementIds)
+                ? replacementIds.filter((id) => Number.isInteger(Number(id))).map((id) => Number(id))
+                : [];
+            if (ids.length === 0) return null;
+            if (ids.length === 1 || !obj || !Number.isFinite(obj.x) || !Number.isFinite(obj.y)) return ids[0];
+            const wallCtor = globalScope.WallSectionUnit;
+            const registry = wallCtor && wallCtor._allSections instanceof Map ? wallCtor._allSections : null;
+            if (!registry) return ids[0];
+            let bestId = ids[0];
+            let bestDist = Infinity;
+            for (let i = 0; i < ids.length; i++) {
+                const wall = registry.get(ids[i]);
+                if (!wall || !wall.startPoint || !wall.endPoint) continue;
+                const ax = Number(wall.startPoint.x);
+                const ay = Number(wall.startPoint.y);
+                const bx = Number(wall.endPoint.x);
+                const by = Number(wall.endPoint.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+                const dx = bx - ax;
+                const dy = by - ay;
+                const lenSq = dx * dx + dy * dy;
+                const t = lenSq > 1e-8
+                    ? Math.max(0, Math.min(1, (((Number(obj.x) - ax) * dx) + ((Number(obj.y) - ay) * dy)) / lenSq))
+                    : 0;
+                const cx = ax + dx * t;
+                const cy = ay + dy * t;
+                const ox = Number(obj.x) - cx;
+                const oy = Number(obj.y) - cy;
+                const dist = (ox * ox) + (oy * oy);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestId = ids[i];
+                }
+            }
+            return bestId;
+        };
+
+        const getMountedWallReferenceId = (entry) => {
+            if (!entry || typeof entry !== "object") return null;
+            const candidates = [
+                entry.mountedWallSectionUnitId,
+                entry.mountedWallLineGroupId,
+                entry.mountedSectionId
+            ];
+            for (let i = 0; i < candidates.length; i++) {
+                const id = Number(candidates[i]);
+                if (Number.isInteger(id)) return id;
+            }
+            return null;
+        };
+
+        const setMountedWallReferenceId = (entry, replacementId) => {
+            if (!entry || !Number.isInteger(replacementId)) return false;
+            entry.mountedWallSectionUnitId = replacementId;
+            entry.mountedWallLineGroupId = replacementId;
+            entry.mountedSectionId = replacementId;
+            return true;
+        };
+
+        const applyPendingMountedWallIdRemaps = (wallState) => {
+            const remaps = wallState && wallState.pendingMountedWallIdRemaps instanceof Map
+                ? wallState.pendingMountedWallIdRemaps
+                : null;
+            if (!remaps || remaps.size === 0) return [];
+            const remappedObjects = [];
+            const remapRecord = (record) => {
+                const oldId = getMountedWallReferenceId(record);
+                if (!Number.isInteger(oldId) || !remaps.has(oldId)) return false;
+                const nextId = chooseMountedWallReplacementId(record, remaps.get(oldId));
+                if (!Number.isInteger(nextId)) return false;
+                return setMountedWallReferenceId(record, nextId);
+            };
+            const sectionState = map && map._prototypeSectionState;
+            const assets = sectionState && Array.isArray(sectionState.orderedSectionAssets)
+                ? sectionState.orderedSectionAssets
+                : [];
+            for (let i = 0; i < assets.length; i++) {
+                const records = Array.isArray(assets[i] && assets[i].objects) ? assets[i].objects : [];
+                for (let j = 0; j < records.length; j++) {
+                    remapRecord(records[j]);
+                }
+            }
+            const objectState = map && map._prototypeObjectState;
+            const runtimeObjects = objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map
+                ? Array.from(objectState.activeRuntimeObjectsByRecordId.values())
+                : [];
+            for (let i = 0; i < runtimeObjects.length; i++) {
+                const obj = runtimeObjects[i];
+                if (!obj || obj.gone) continue;
+                const oldId = getMountedWallReferenceId(obj);
+                if (!Number.isInteger(oldId) || !remaps.has(oldId)) continue;
+                const nextId = chooseMountedWallReplacementId(obj, remaps.get(oldId));
+                if (!Number.isInteger(nextId)) continue;
+                setMountedWallReferenceId(obj, nextId);
+                let snapSucceeded = false;
+                if (typeof obj.snapToMountedWall === "function") {
+                    snapSucceeded = !!obj.snapToMountedWall();
+                }
+                if (!snapSucceeded) {
+                    const wallCtor = globalScope.WallSectionUnit;
+                    const wall = wallCtor && wallCtor._allSections instanceof Map
+                        ? wallCtor._allSections.get(nextId)
+                        : null;
+                    if (wall && typeof wall.attachObject === "function") {
+                        snapSucceeded = !!wall.attachObject(obj);
+                    }
+                }
+                if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                    obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                }
+                if (isPrototypeSavableObject(obj)) {
+                    upsertPrototypeObjectRecord(obj);
+                }
+                remappedObjects.push(obj);
+            }
+            remaps.clear();
+            return remappedObjects;
+        };
+
+        const markLevel0RoadSurfacesDirtyForNodes = (nodes) => {
+            if (!(nodes instanceof Set) || nodes.size === 0) return 0;
+            const markDirty = globalScope.markPrototypeLevel0RoadSurfaceDirty;
+            if (typeof markDirty !== "function") return 0;
+            const flushDirty = globalScope.flushPrototypeLevel0RoadSurfaceDirtyAsset;
+            const sectionState = map && map._prototypeSectionState;
+            const dirtyAssets = new Set();
+            let dirtyCount = 0;
+            nodes.forEach((node) => {
+                if (!node || typeof node !== "object") return;
+                if (markDirty(map, node, { immediate: typeof flushDirty !== "function" })) {
+                    dirtyCount += 1;
+                    const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                    const asset = sectionKey && sectionState && sectionState.sectionAssetsByKey instanceof Map
+                        ? sectionState.sectionAssetsByKey.get(sectionKey)
+                        : null;
+                    if (asset) dirtyAssets.add(asset);
+                }
+            });
+            if (typeof flushDirty === "function") {
+                dirtyAssets.forEach((asset) => flushDirty(asset));
+            }
+            return dirtyCount;
+        };
+
         map.syncPrototypeWalls = function syncPrototypeWalls() {
             settlePendingPrototypeLayoutTransition(this);
             const syncStart = prototypeNow();
@@ -208,8 +378,9 @@
                 .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
                 .join("|");
             const collectMs = prototypeNow() - collectStart;
+            const restoredRegistryCount = restoreActivePrototypeWallRegistry(wallState);
 
-            if (!capturedAny && desiredSignature === wallState.activeRecordSignature) {
+            if (!capturedAny && desiredSignature === wallState.activeRecordSignature && restoredRegistryCount === 0) {
                 wallState.lastSyncStats = {
                     ms: Number((prototypeNow() - syncStart).toFixed(2)),
                     desired: desiredRecords.length,
@@ -225,7 +396,8 @@
                     blockedEdgeRemoveMs: 0,
                     blockedEdgeAppliedLinks: 0,
                     blockedEdgeRemovedLinks: 0,
-                    joineryMs: 0
+                    joineryMs: 0,
+                    restoredRegistryCount: 0
                 };
                 return false;
             }
@@ -380,6 +552,8 @@
                 joineryMs = prototypeNow() - joineryStart;
             }
 
+            applyPendingMountedWallIdRemaps(wallState);
+
             // Re-snap doors/windows whose parent wall was removed due to re-splitting.
             // The replacement split pieces are now in _allSections, so
             // snapToMountedWall will geometrically find the correct new wall.
@@ -466,7 +640,8 @@
                 directionalCollectMs: Number(directionalCollectMs.toFixed(2)),
                 directionalBlockMs: Number(directionalBlockMs.toFixed(2)),
                 directionalBlockedConnections,
-                joineryMs: Number(joineryMs.toFixed(2))
+                joineryMs: Number(joineryMs.toFixed(2)),
+                restoredRegistryCount
             };
             return capturedAny || removedRuntimeWalls.length > 0 || loadedWalls.length > 0;
         };
@@ -750,7 +925,11 @@
                     if (entry && entry.record && entry.record.type === "roof") {
                         if (globalScope.Roof && typeof globalScope.Roof.loadJson === "function") {
                             const roofStart = prototypeNow();
-                            runtimeObj = globalScope.Roof.loadJson(entry.record);
+                            runtimeObj = globalScope.Roof.loadJson(entry.record, {
+                                suppressAutoScriptingName: true,
+                                trustLoadedScriptingName: true,
+                                targetSectionKey: entry.sectionKey
+                            });
                             const roofMs = prototypeNow() - roofStart;
                             roofLoadMs += roofMs;
                             if (runtimeObj) {
@@ -806,6 +985,7 @@
                     roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(roadRefreshNodes);
                     roadRefreshMs = prototypeNow() - roadRefreshStart;
                 }
+                markLevel0RoadSurfacesDirtyForNodes(roadRefreshNodes);
                 if (deferredTrees.length > 0) {
                     const treeFinalizeStart = prototypeNow();
                     for (let i = 0; i < deferredTrees.length; i++) {

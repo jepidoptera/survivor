@@ -31,7 +31,6 @@ X animals have health bars
 X fireballs should stop on walls
 X doors should have separate frame and door sprites
 X ice ball trails snow and explodes on impact
-
 X god mode/ adventure mode
 X treasures in the maze
 X choose spells from menu on startup
@@ -45,8 +44,9 @@ X choose spells from menu on startup
    -maze
    -invisibility
    -omnivision
-    imps?
-  
+    imps? squirrels?
+    move
+
 X invisibility aura
 X shield spell
 X unify spells and auras
@@ -60,20 +60,22 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
+  make omnivision use a floating eye
+  see over short walls or objects
 / incremental, non-lagging load
   upgradable spells
-  multiple floors!
+/ multiple floors!
   shop sells magic items
   holding the spell hotkey works to cast the spell just like spacebar
   mind control spells
   time-slowing aura
   trees should be transparent when the player is behind them
-  checkpoints
+/ checkpoints
   undo system for editor
-  refactor renderer
+X refactor renderer
   revamp maze mode
-  -acute wall corners clip to sight lines - no false corners in visible space.
-  -walls transition from upright to flat as the player changes angle to the wall
+    -acute wall corners clip to sight lines - no false corners in visible space.
+    -walls transition from upright to flat as the player changes angle to the wall
 
 problems:
 X animals running through walls
@@ -98,13 +100,14 @@ X item messages not showing
 X spell images don't scale with zoom
 X walls sometimes connect sideways and get totally screwy
 X blodia fails to attack when you stand near a wall
-/ bears chase for a very long time
+X bears chase for a very long time
 X creatures escape from walls when their section leaves the active bubble
-  walls disappear when their section leaves the active bubble (separate problem)
-  built walls disappear on save
-  yetis don't stay aggro
-  trigger areas disappear
+X walls disappear when their section leaves the active bubble (separate problem)
+X built walls disappear on save
+X trigger areas disappear
+  yetis don't stay aggro or knock down doors
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
+  level editing (and probably other stuff) shouldn't be in spells.js
 
 large trigger area architecture checklist:
   [ ] add stable trigger ids to saved trigger-area records

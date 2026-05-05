@@ -14729,8 +14729,2454 @@
     "53,26": 8
   },
   "floors": [],
-  "walls": [],
-  "blockedEdges": [],
+  "walls": [
+    {
+      "type": "wallSection",
+      "id": 5126,
+      "height": 2,
+      "thickness": 0.375,
+      "bottomZ": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 6,
+      "lineAxis": 0,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 93,
+          "yindex": -34
+        },
+        "b": {
+          "xindex": 92,
+          "yindex": -35
+        },
+        "x": 80.10499999999999,
+        "y": -34.25
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 103,
+          "yindex": -34
+        },
+        "b": {
+          "xindex": 102,
+          "yindex": -35
+        },
+        "x": 88.76499999999999,
+        "y": -34.25
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection1",
+      "_prototypeManagedRecordId": 5127
+    },
+    {
+      "type": "wallSection",
+      "id": 5128,
+      "height": 2,
+      "thickness": 0.375,
+      "bottomZ": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 9,
+      "lineAxis": 3,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 93,
+          "yindex": -34
+        },
+        "b": {
+          "xindex": 92,
+          "yindex": -35
+        },
+        "x": 80.10499999999999,
+        "y": -34.25
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 92,
+          "yindex": -20
+        },
+        "b": {
+          "xindex": 93,
+          "yindex": -20
+        },
+        "x": 80.10499999999999,
+        "y": -19.75
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection1",
+      "_prototypeManagedRecordId": 5129
+    },
+    {
+      "type": "wallSection",
+      "id": 5129,
+      "height": 2,
+      "thickness": 0.375,
+      "bottomZ": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 6,
+      "lineAxis": 0,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 92,
+          "yindex": -20
+        },
+        "b": {
+          "xindex": 93,
+          "yindex": -20
+        },
+        "x": 80.10499999999999,
+        "y": -19.75
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": 102,
+          "yindex": -20
+        },
+        "b": {
+          "xindex": 103,
+          "yindex": -20
+        },
+        "x": 88.76499999999999,
+        "y": -19.75
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection2",
+      "_prototypeManagedRecordId": 5130
+    }
+  ],
+  "blockedEdges": [
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 93,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 93,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -36
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 93,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 92,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 93,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 94,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 94,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 94,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 93,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 92,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 91,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 92,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 94,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 95,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 95,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 94,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 95,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 95,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -36
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 95,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 96,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 96,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 96,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 96,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 97,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 97,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 96,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 97,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 97,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -36
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 97,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 98,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 98,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 98,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 98,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 99,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 98,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 100,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 101,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 101,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 100,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 101,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 101,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -36
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 101,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 102,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 102,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 102,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 102,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 103,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 102,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5126,
+      "a": {
+        "xindex": 103,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 104,
+        "yindex": -36
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -35
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -36
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -35
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -34
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -34
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -33
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -33
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -32
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -32
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -31
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -31
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -30
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -30
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -29
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -29
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -28
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -28
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -27
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -27
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -26
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -26
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -25
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -25
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -24
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -24
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -23
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -23
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -22
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -22
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 91,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5128,
+      "a": {
+        "xindex": 92,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 92,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 92,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 93,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 93,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 91,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 92,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 92,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 93,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 94,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 94,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 93,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 93,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 94,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 92,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 93,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 94,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 94,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 94,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 95,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 95,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 95,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 95,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 95,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 96,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 96,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 95,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 96,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 96,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 96,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 96,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 97,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 97,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 97,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 97,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 97,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 98,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 98,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 97,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 98,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 98,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 98,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 98,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 99,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 100,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 99,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 100,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 101,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 101,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 101,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 101,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 101,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 102,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 102,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 101,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 102,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 102,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 102,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -21
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 102,
+        "yindex": -21
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -19
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 103,
+        "yindex": -19
+      },
+      "b": {
+        "xindex": 103,
+        "yindex": -20
+      }
+    },
+    {
+      "recordId": 5129,
+      "a": {
+        "xindex": 103,
+        "yindex": -20
+      },
+      "b": {
+        "xindex": 104,
+        "yindex": -19
+      }
+    }
+  ],
   "clearanceByTile": {},
   "objects": [
     {
@@ -15630,6 +18076,2085 @@
       "texturePath": "/assets/images/trees/tree2.png",
       "tint": 16777215,
       "id": 8321
+    },
+    {
+      "type": "roof",
+      "x": 88.47633333333333,
+      "y": -27,
+      "z": 2,
+      "heightFromGround": 2,
+      "peakHeight": 5,
+      "midHeight": 2.5,
+      "textureName": "/assets/images/roofs/smallshingles.png",
+      "textureRepeat": 0.09375,
+      "placed": true,
+      "numEaves": 6,
+      "numHexRing": 0,
+      "vertices": [
+        {
+          "x": -9.18383333333334,
+          "y": 8.0625,
+          "z": 0
+        },
+        {
+          "x": -9.18383333333334,
+          "y": -8.0625,
+          "z": 0
+        },
+        {
+          "x": 0.2886666666666571,
+          "y": -8.0625,
+          "z": 0
+        },
+        {
+          "x": 8.895166666666668,
+          "y": -8.0625,
+          "z": 0
+        },
+        {
+          "x": 8.895166666666668,
+          "y": 8.0625,
+          "z": 0
+        },
+        {
+          "x": 0.2886666666666571,
+          "y": 8.0625,
+          "z": 0
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "z": 5
+        }
+      ],
+      "triangles": [
+        [
+          5,
+          0,
+          6
+        ],
+        [
+          0,
+          1,
+          6
+        ],
+        [
+          1,
+          2,
+          6
+        ],
+        [
+          2,
+          3,
+          6
+        ],
+        [
+          3,
+          4,
+          6
+        ],
+        [
+          4,
+          5,
+          6
+        ]
+      ],
+      "groundPlaneHitbox": {
+        "points": [
+          {
+            "x": 79.85612135572634,
+            "y": -19.43230396862716
+          },
+          {
+            "x": 79.85612135572634,
+            "y": -34.56769603137284
+          },
+          {
+            "x": 88.73816448152556,
+            "y": -34.31298025046153
+          },
+          {
+            "x": 96.81579880673671,
+            "y": -34.55881737789977
+          },
+          {
+            "x": 96.81579880673671,
+            "y": -19.44118262210023
+          },
+          {
+            "x": 88.73816448152556,
+            "y": -19.687019749538468
+          }
+        ]
+      },
+      "interiorHideHitbox": {
+        "points": [
+          {
+            "x": 80.10499999999999,
+            "y": -19.75
+          },
+          {
+            "x": 80.10499999999999,
+            "y": -34.25
+          },
+          {
+            "x": 88.76499999999999,
+            "y": -34.25
+          },
+          {
+            "x": 96.559,
+            "y": -34.25
+          },
+          {
+            "x": 96.559,
+            "y": -19.75
+          },
+          {
+            "x": 88.76499999999999,
+            "y": -19.75
+          }
+        ]
+      },
+      "scriptingName": "roof1",
+      "id": 10519
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -33,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road219",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10520
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -33.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road220",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10521
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -33,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road221",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10522
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -33.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road268",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10523
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -33,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road269",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10524
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -33.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road270",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10525
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -33,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road271",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10526
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -33.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road272",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10527
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -33,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road273",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10528
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -33.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road274",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10529
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -34,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road276",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10539
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -32.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road277",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10540
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -32,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road278",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10541
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -34.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road280",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10542
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -34,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road281",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10543
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -32.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road282",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10544
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -32,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road283",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10545
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -34.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road284",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10546
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -34,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road285",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10547
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -32.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road286",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10548
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -32,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road287",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10549
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -34.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road289",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10550
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -34,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road290",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10551
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -32.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road293",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10552
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -32,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road295",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10553
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -34.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road296",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10554
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -34,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road299",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10555
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -32.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road300",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10556
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -32,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road305",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10557
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -34.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road306",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10558
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -31,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road307",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10578
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -31.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road308",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10579
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -31,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road309",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10580
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -31.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road310",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10581
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -31,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road311",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10582
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -31.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road312",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10583
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -31,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road313",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10584
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -31.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road314",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10585
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -31,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road315",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10586
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -31.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road316",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10587
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -30.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road318",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10597
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -30,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road319",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10598
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -30.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road321",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10599
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -30,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road322",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10600
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -30.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road323",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10601
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -30,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road324",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10602
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -30.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road325",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10603
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -30,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road326",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10604
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -30.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road327",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10605
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -30,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road328",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10606
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -29,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road329",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10616
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -29.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road330",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10617
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -29,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road331",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10618
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -29.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road332",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10619
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -29,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road333",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10620
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -29.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road334",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10621
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -29,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road335",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10622
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -29.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road336",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10623
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -29,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road337",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10624
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -29.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road338",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10625
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -28.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road340",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10635
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -28,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road341",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10636
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -28.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road343",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10637
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -28,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road344",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10638
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -28.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road345",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10639
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -28,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road346",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10640
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -28.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road347",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10641
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -28,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road348",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10642
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -28.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road349",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10643
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -28,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road350",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10644
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road351",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10654
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -27.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road352",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10655
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road353",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10656
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -27.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road354",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10657
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road355",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10658
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -27.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road356",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10659
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road357",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10660
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -27.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road358",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10661
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road359",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10662
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -27.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road360",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10663
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -26.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road362",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10673
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -26,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road363",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10674
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -26.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road365",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10675
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -26,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road366",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10676
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -26.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road367",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10677
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -26,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road368",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10678
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -26.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road369",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10679
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -26,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road370",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10680
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -26.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road371",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10681
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -26,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road372",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10682
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -24.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road373",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10700
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -25,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road374",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10701
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -24.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road375",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10702
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -25,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road376",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10703
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -24.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road377",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10704
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -25,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road378",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10705
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -24.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road379",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10706
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -25,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road380",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10707
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -24.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road381",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10708
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -25.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road382",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10723
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -23.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road383",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10724
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -24,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road384",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10725
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -25.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road385",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10726
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -23.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road386",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10727
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -24,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road387",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10728
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -25.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road388",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10729
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -23.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road389",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10730
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -24,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road390",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10731
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -25.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road391",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10732
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -23.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road392",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10733
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -24,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road393",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10734
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -25.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road394",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10735
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -25,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road395",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10736
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -23.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road396",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10737
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -24,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road397",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10738
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -21,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road398",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10739
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -22,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road399",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10740
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -23,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road400",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10741
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -21.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road402",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10742
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -20.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road403",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10743
+    },
+    {
+      "type": "road",
+      "x": 80.538,
+      "y": -20,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road404",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10744
+    },
+    {
+      "type": "road",
+      "x": 81.404,
+      "y": -22.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road407",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10745
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -21,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road411",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10746
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -21.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road412",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10747
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -21,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road413",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10748
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -21.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road414",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10749
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -21,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road415",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10750
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -21.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road416",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10751
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -21,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road417",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10752
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -21.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road418",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10753
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -22,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road419",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10763
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -20.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road420",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10764
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -20,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road421",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10765
+    },
+    {
+      "type": "road",
+      "x": 83.136,
+      "y": -22.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road422",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10766
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -22,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road423",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10767
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -20.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road424",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10768
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -20,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road425",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10769
+    },
+    {
+      "type": "road",
+      "x": 84.868,
+      "y": -22.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road426",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10770
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -22,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road427",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10771
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -20.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road428",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10772
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -20,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road429",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10773
+    },
+    {
+      "type": "road",
+      "x": 86.6,
+      "y": -22.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road430",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10774
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -22,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road431",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10775
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -20.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road432",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10776
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -20,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road433",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10777
+    },
+    {
+      "type": "road",
+      "x": 88.332,
+      "y": -22.5,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road434",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10778
+    },
+    {
+      "type": "road",
+      "x": 82.27,
+      "y": -23,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road435",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10797
+    },
+    {
+      "type": "road",
+      "x": 84.002,
+      "y": -23,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road436",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10798
+    },
+    {
+      "type": "road",
+      "x": 85.734,
+      "y": -23,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road437",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10799
+    },
+    {
+      "type": "road",
+      "x": 87.466,
+      "y": -23,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "scriptingName": "road438",
+      "fillTexturePath": "/assets/images/flooring/woodfloor.png",
+      "id": 10800
+    },
+    {
+      "type": "placedObject",
+      "x": 84.13852659892407,
+      "y": -19.590575132677643,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "scriptingName": "door1",
+      "texturePath": "/assets/images/doors/door2.png",
+      "category": "doors",
+      "width": 0.9247500000000001,
+      "height": 1.233,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "learnedEnterSign": -1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "castsLosShadows": true,
+      "mountedWallLineGroupId": 5129,
+      "mountedSectionId": 5129,
+      "mountedWallSectionUnitId": 5129,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 83.52202659892407,
+          "y": -19.571825132677642
+        },
+        {
+          "x": 84.75502659892408,
+          "y": -19.571825132677642
+        },
+        {
+          "x": 84.75502659892408,
+          "y": -19.984325132677643
+        },
+        {
+          "x": 83.52202659892407,
+          "y": -19.984325132677643
+        }
+      ],
+      "id": 10508
+    },
+    {
+      "type": "placedObject",
+      "x": 86.19061583633042,
+      "y": -19.673800530710572,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 1,
+      "scriptingName": "window1",
+      "texturePath": "/assets/images/windows/window.png",
+      "category": "windows",
+      "width": 0.997,
+      "height": 0.997,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "mountedWallLineGroupId": 5129,
+      "mountedSectionId": 5129,
+      "mountedWallSectionUnitId": 5129,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 85.69211583633042,
+          "y": -19.674800530710574
+        },
+        {
+          "x": 86.68911583633043,
+          "y": -19.674800530710574
+        },
+        {
+          "x": 86.68911583633043,
+          "y": -20.049800530710574
+        },
+        {
+          "x": 85.69211583633042,
+          "y": -20.049800530710574
+        }
+      ],
+      "id": 10509
+    },
+    {
+      "type": "placedObject",
+      "x": 82.05297306929444,
+      "y": -19.5615,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 1,
+      "scriptingName": "window2",
+      "texturePath": "/assets/images/windows/window.png",
+      "category": "windows",
+      "width": 0.997,
+      "height": 0.997,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "mountedWallLineGroupId": 5129,
+      "mountedSectionId": 5129,
+      "mountedWallSectionUnitId": 5129,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 81.55447306929443,
+          "y": -19.5625
+        },
+        {
+          "x": 82.55147306929445,
+          "y": -19.5625
+        },
+        {
+          "x": 82.55147306929445,
+          "y": -19.9375
+        },
+        {
+          "x": 81.55447306929443,
+          "y": -19.9375
+        }
+      ],
+      "id": 10510
+    },
+    {
+      "type": "placedObject",
+      "x": 81.95349099643354,
+      "y": -34.089575132677645,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 1,
+      "scriptingName": "window5",
+      "texturePath": "/assets/images/windows/window.png",
+      "category": "windows",
+      "width": 0.997,
+      "height": 0.997,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "mountedWallLineGroupId": 5126,
+      "mountedSectionId": 5126,
+      "mountedWallSectionUnitId": 5126,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 81.45499099643354,
+          "y": -34.09057513267764
+        },
+        {
+          "x": 82.45199099643355,
+          "y": -34.09057513267764
+        },
+        {
+          "x": 82.45199099643355,
+          "y": -34.46557513267764
+        },
+        {
+          "x": 81.45499099643354,
+          "y": -34.46557513267764
+        }
+      ],
+      "id": 10513
+    },
+    {
+      "type": "placedObject",
+      "x": 86.11078357674991,
+      "y": -34.0615,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 1,
+      "scriptingName": "window8",
+      "texturePath": "/assets/images/windows/window.png",
+      "category": "windows",
+      "width": 0.997,
+      "height": 0.997,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "mountedWallLineGroupId": 5126,
+      "mountedSectionId": 5126,
+      "mountedWallSectionUnitId": 5126,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 85.6122835767499,
+          "y": -34.0625
+        },
+        {
+          "x": 86.60928357674992,
+          "y": -34.0625
+        },
+        {
+          "x": 86.60928357674992,
+          "y": -34.4375
+        },
+        {
+          "x": 85.6122835767499,
+          "y": -34.4375
+        }
+      ],
+      "id": 10516
+    },
+    {
+      "type": "placedObject",
+      "x": 80.2935,
+      "y": -27,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 1,
+      "scriptingName": "window9",
+      "texturePath": "/assets/images/windows/window.png",
+      "category": "windows",
+      "width": 0.997,
+      "height": 0.997,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "mountedWallLineGroupId": 5128,
+      "mountedSectionId": 5128,
+      "mountedWallSectionUnitId": 5128,
+      "mountedWallFacingSign": -1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 79.91749999999999,
+          "y": -27.4985
+        },
+        {
+          "x": 79.91749999999999,
+          "y": -26.5015
+        },
+        {
+          "x": 80.29249999999999,
+          "y": -26.5015
+        },
+        {
+          "x": 80.29249999999999,
+          "y": -27.4985
+        }
+      ],
+      "id": 10517
     }
   ],
   "animals": [
@@ -15652,37 +20177,20 @@
     },
     {
       "type": "squirrel",
-      "x": 39.6628,
-      "y": 21.599999999999998,
+      "x": 52.15984615384615,
+      "y": 19.846153846153847,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
       "maxMp": 1,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.5096886252122392,
+      "size": 0.4831789000519928,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel156",
-      "id": 149
-    },
-    {
-      "type": "squirrel",
-      "x": 16.454,
-      "y": 6,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.46022692697799306,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel3",
-      "id": 147
+      "scriptingName": "squirrel138",
+      "id": 64
     }
   ],
   "powerups": []

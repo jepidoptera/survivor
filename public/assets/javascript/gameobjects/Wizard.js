@@ -247,7 +247,8 @@ if (typeof globalThis !== "undefined") {
 
 class Wizard extends Character {
     constructor(location, map) {
-        super('human', location, 1, map);
+        super('human', location, 1, map, { useExternalScheduler: true });
+        this.useExternalScheduler = true;
         this.useAStarPathfinding = true;
         this.speed = 3;
         this.roadSpeedMultiplier = 1.3;
@@ -336,6 +337,8 @@ class Wizard extends Character {
         this.baseJumpDurationSec = 0.55;
         this.baseJumpMaxHeight = 0.5; // world units
         this.doubleJumpDurationSec = 1.2;
+        this.tripleJumpDurationSec = 1.6;
+        this.tripleJumpMaxHeight = 1.1; // world units — only via triple-tap
         this.jumpDurationSec = this.baseJumpDurationSec;
         this.jumpMaxHeight = this.baseJumpMaxHeight;
         this.jumpMode = "single";
@@ -346,6 +349,22 @@ class Wizard extends Character {
         this._doorTraversalStateById = new Map();
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
+        this.currentLayer = 0; // Floor layer the wizard is currently standing on (0 = ground)
+        Object.defineProperty(this, "selectedFloorEditLevel", {
+            configurable: true,
+            enumerable: true,
+            get: () => {
+                return Number.isFinite(this.currentLayer)
+                    ? Math.round(Number(this.currentLayer))
+                    : 0;
+            },
+            set: (value) => {
+                const normalized = Number.isFinite(value) ? Math.round(Number(value)) : 0;
+                this.currentLayer = normalized;
+                this.currentLayerBaseZ = normalized * 3;
+            }
+        });
+        this.selectedFloorEditLevel = this.currentLayer;
         this.updateHitboxes();
         this.move();
         clearTimeout(this.moveTimeout);
@@ -517,7 +536,7 @@ class Wizard extends Character {
         const dt = Math.max(0, Number(dtSec) || 0);
         this.jumpElapsedSec += dt;
 
-        if (this.jumpMode === "double") {
+        if (this.jumpMode === "double" || this.jumpMode === "triple") {
             const t = Math.max(0, this.jumpElapsedSec);
             this.jumpHeight = Math.max(0, this.jumpPolyA * t * t + this.jumpPolyB * t + this.jumpPolyC);
         } else {
@@ -536,6 +555,32 @@ class Wizard extends Character {
             this.jumpLockedMovingBackward = false;
             this.z = 0;
         }
+    }
+    startTripleJump() {
+        if (typeof this.isFrozen === "function" && this.isFrozen()) return;
+        if (this.jumpCount !== 2 || !this.isJumping) return;
+        const h0 = Math.max(0, Number(this.jumpHeight) || 0);
+        const T = this.tripleJumpDurationSec;
+        const peakTime = T * 0.35;
+        const targetPeak = this.tripleJumpMaxHeight;
+        const denom = (peakTime * peakTime - peakTime * T);
+        let a = 0;
+        let b = 0;
+        if (Math.abs(denom) > 1e-6) {
+            a = (targetPeak - h0 + (peakTime * h0) / T) / denom;
+            b = (-h0 - a * T * T) / T;
+        } else {
+            a = -targetPeak / Math.max(1e-6, T * T);
+            b = 0;
+        }
+        this.isJumping = true;
+        this.jumpMode = "triple";
+        this.jumpCount = 3;
+        this.jumpElapsedSec = 0;
+        this.jumpDurationSec = T;
+        this.jumpPolyA = a;
+        this.jumpPolyB = b;
+        this.jumpPolyC = h0;
     }
     getInterpolatedPosition(alpha = null) {
         const clampedAlpha = Number.isFinite(alpha)
@@ -1048,12 +1093,19 @@ class Wizard extends Character {
         if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
-        const wizardZ = Number.isFinite(this.z) ? Number(this.z) : 0;
-        if (wizardZ > 0) {
-            const objBottomZ = Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0;
+        const wizardLayerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0) * 3);
+        const wizardWorldZ = wizardLayerBaseZ + (Number.isFinite(this.z) ? Number(this.z) : 0);
+        if (wizardWorldZ > 0) {
+            const objBottomZ = Number.isFinite(obj.bottomZ)
+                ? Number(obj.bottomZ)
+                : ((Number.isFinite(obj.traversalLayer)
+                    ? Math.round(Number(obj.traversalLayer))
+                    : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0)) * 3);
             const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
             const objTopZ = objBottomZ + objHeight;
-            if (objTopZ > 0 && wizardZ >= objTopZ) {
+            if (objTopZ > 0 && wizardWorldZ >= objTopZ) {
                 return false;
             }
         }
@@ -1082,6 +1134,16 @@ class Wizard extends Character {
         const nearbyDoors = Array.isArray(this._movementNearbyDoors) ? this._movementNearbyDoors : [];
         nearbyDoors.length = 0;
         this._movementNearbyDoors = nearbyDoors;
+        const nearbyObjectSet = this._movementNearbyObjectSet instanceof Set
+            ? this._movementNearbyObjectSet
+            : new Set();
+        nearbyObjectSet.clear();
+        this._movementNearbyObjectSet = nearbyObjectSet;
+        const nearbyDoorSet = this._movementNearbyDoorSet instanceof Set
+            ? this._movementNearbyDoorSet
+            : new Set();
+        nearbyDoorSet.clear();
+        this._movementNearbyDoorSet = nearbyDoorSet;
 
         const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
             ? this._movementForceTouchedObjects
@@ -1091,6 +1153,38 @@ class Wizard extends Character {
 
         const padding = this.getVectorMovementSearchPadding(radius, options);
         const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
+        const wizardLayer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        const getNodeTraversalLayer = (node) => (
+            Number.isFinite(node && node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0)
+        );
+        const resolveNodeForWizardLayer = (node) => {
+            if (!node) return null;
+            if (getNodeTraversalLayer(node) === wizardLayer) return node;
+            if (!this.map) return null;
+            const sourceNode = node.sourceNode && typeof node.sourceNode === "object"
+                ? node.sourceNode
+                : node;
+            const xindex = Number(sourceNode.xindex);
+            const yindex = Number(sourceNode.yindex);
+            if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+            const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
+                ? sourceNode._prototypeSectionKey
+                : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+            if (typeof this.map.getFloorNodeAtLayer === "function") {
+                const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, wizardLayer, {
+                    sectionKey,
+                    allowScan: false
+                });
+                if (floorNode) return floorNode;
+            }
+            if (wizardLayer === 0 && typeof this.map.getNode === "function") {
+                const layeredNode = this.map.getNode(xindex, yindex, wizardLayer);
+                if (layeredNode) return layeredNode;
+            }
+            return null;
+        };
         if (searchNodes.length > 0) {
             const xIndices = searchNodes.map(node => Number(node.xindex));
             const yIndices = searchNodes.map(node => Number(node.yindex));
@@ -1100,19 +1194,28 @@ class Wizard extends Character {
             const maxYIndex = Math.max(...yIndices);
             const collectFromNode = (node) => {
                 if (!node || !Array.isArray(node.objects)) return;
+                const nodeLayer = getNodeTraversalLayer(node);
+                if (nodeLayer !== wizardLayer) return;
                 const nodeObjects = node.objects;
                 for (let i = 0; i < nodeObjects.length; i++) {
                     const obj = nodeObjects[i];
                     if (!obj || obj.gone) continue;
+                    const objLayer = Number.isFinite(obj.traversalLayer)
+                        ? Math.round(Number(obj.traversalLayer))
+                        : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : nodeLayer);
+                    if (objLayer !== wizardLayer) continue;
                     const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
-                    if (doorCandidate) {
+                    if (doorCandidate && !nearbyDoorSet.has(obj)) {
                         const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
                         if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
                             const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
                             nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
+                            nearbyDoorSet.add(obj);
                         }
                     }
                     if (this.doesObjectBlockVectorMovement(obj, options)) {
+                        if (nearbyObjectSet.has(obj)) continue;
+                        nearbyObjectSet.add(obj);
                         nearbyObjects.push(obj);
                     }
                 }
@@ -1125,7 +1228,7 @@ class Wizard extends Character {
                 const yEnd = maxYIndex + 1;
                 const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
                 for (let i = 0; i < nearbyNodes.length; i++) {
-                    collectFromNode(nearbyNodes[i]);
+                    collectFromNode(resolveNodeForWizardLayer(nearbyNodes[i]));
                 }
             } else {
                 const xStart = Math.max(minXIndex - 1, 0);
@@ -1136,7 +1239,7 @@ class Wizard extends Character {
                 for (let x = xStart; x <= xEnd; x++) {
                     for (let y = yStart; y <= yEnd; y++) {
                         if (!this.map.nodes[x] || !this.map.nodes[x][y]) continue;
-                        collectFromNode(this.map.nodes[x][y]);
+                        collectFromNode(resolveNodeForWizardLayer(this.map.nodes[x][y]));
                     }
                 }
             }
@@ -1243,6 +1346,42 @@ class Wizard extends Character {
         );
         centerViewport(this, 0);
     }
+
+    getVectorMovementSearchNodes(newX, newY, padding) {
+        const baseNodes = super.getVectorMovementSearchNodes(newX, newY, padding);
+        if (!this.map || (
+            typeof this.map.getNode !== "function" &&
+            typeof this.map.getFloorNodeAtLayer !== "function"
+        )) {
+            return baseNodes;
+        }
+        const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        const uniqueNodes = [];
+        const seen = new Set();
+        for (let i = 0; i < baseNodes.length; i++) {
+            const baseNode = baseNodes[i];
+            if (!baseNode) continue;
+            const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                ? baseNode._prototypeSectionKey
+                : "";
+            let layeredNode = null;
+            if (typeof this.map.getFloorNodeAtLayer === "function") {
+                layeredNode = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                    sectionKey,
+                    allowScan: false
+                });
+            }
+            if (!layeredNode && layer === 0 && typeof this.map.getNode === "function") {
+                layeredNode = this.map.getNode(baseNode.xindex, baseNode.yindex, layer);
+            }
+            layeredNode = layeredNode || baseNode;
+            const key = `${Number(layeredNode.xindex)}:${Number(layeredNode.yindex)}:${Number.isFinite(layeredNode.traversalLayer) ? Number(layeredNode.traversalLayer) : layer}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            uniqueNodes.push(layeredNode);
+        }
+        return uniqueNodes;
+    }
     
     moveDirection(vector, options = {}) {
         return super.moveDirection(vector, options);
@@ -1251,7 +1390,10 @@ class Wizard extends Character {
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
         const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
-        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
+        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y, z: layerBaseZ });
         let wizardScreenX = screenCoors.x;
         const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
             ? interpolatedJumpHeight
@@ -1691,6 +1833,7 @@ class Wizard extends Character {
             selectedPowerupPlacementScale: this.selectedPowerupPlacementScale,
             selectedPowerupFileName: this.selectedPowerupFileName,
             selectedEditorCategory: this.selectedEditorCategory,
+            selectedFloorEditLevel: this.selectedFloorEditLevel,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
             selectedRoadWidth: this.selectedRoadWidth,
@@ -1837,6 +1980,7 @@ class Wizard extends Character {
         if (data.selectedPowerupPlacementScale !== undefined) this.selectedPowerupPlacementScale = data.selectedPowerupPlacementScale;
         if (data.selectedPowerupFileName !== undefined) this.selectedPowerupFileName = data.selectedPowerupFileName;
         if (data.selectedEditorCategory !== undefined) this.selectedEditorCategory = data.selectedEditorCategory;
+        if (data.selectedFloorEditLevel !== undefined) this.selectedFloorEditLevel = data.selectedFloorEditLevel;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (data.selectedRoadWidth !== undefined) this.selectedRoadWidth = data.selectedRoadWidth;

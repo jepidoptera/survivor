@@ -27,7 +27,7 @@ class Animal extends Character {
     }
 
     constructor(type, location, size, map, options = {}) {
-        super(type, location, size, map, options);
+        super(type, location, size, map, { ...(options || {}), useExternalScheduler: true });
         this.useExternalScheduler = true;
         if (this.moveTimeout) {
             clearTimeout(this.moveTimeout);

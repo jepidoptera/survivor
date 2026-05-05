@@ -10,6 +10,7 @@
             comparePrototypeTileCoordKeys,
             clonePrototypeFloorTransitions,
             computeSectionCenterAxial,
+            createPrototypeImplicitGroundFloorFragment,
             evenQOffsetToAxial,
             getSectionBasisVectors,
             getSectionCoordsInRingRange,
@@ -141,6 +142,8 @@
                     groundTextureId: 0,
                     groundTiles: {},
                     floors: [],
+                    floorHoles: [],
+                    floorVoids: [],
                     walls: [],
                     blockedEdges: [],
                     clearanceByTile: {},
@@ -148,6 +151,10 @@
                     animals: [],
                     powerups: []
                 };
+                const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
+                    ? createPrototypeImplicitGroundFloorFragment(asset)
+                    : null;
+                if (groundFloor) asset.floors.push(groundFloor);
                 asset._prototypeBlockedEdgesDirty = false;
                 asset._prototypeClearanceDirty = true;
                 asset._prototypeNamedObjectRecordIdByName = new Map();
@@ -206,6 +213,8 @@
                 groundTextureId: 0,
                 groundTiles: normalizePrototypeGroundTiles(null, tileCoordKeys, getPrototypeGroundTextureCount(map)),
                 floors: [],
+                floorHoles: [],
+                floorVoids: [],
                 walls: [],
                 blockedEdges: [],
                 clearanceByTile: {},
@@ -213,6 +222,10 @@
                 animals: [],
                 powerups: []
             };
+            const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
+                ? createPrototypeImplicitGroundFloorFragment(asset)
+                : null;
+            if (groundFloor) asset.floors.push(groundFloor);
             asset._prototypeBlockedEdgesDirty = false;
             asset._prototypeClearanceDirty = true;
             asset._prototypeNamedObjectRecordIdByName = new Map();

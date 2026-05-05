@@ -1,3 +1,77 @@
+function resolvePlaceObjectLayerInfo(wizardRef) {
+    const layer = (() => {
+        const candidates = [
+            wizardRef && wizardRef.currentLayer,
+            wizardRef && wizardRef.selectedFloorEditLevel,
+            wizardRef && wizardRef.traversalLayer
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const value = Number(candidates[i]);
+            if (Number.isFinite(value)) return Math.round(value);
+        }
+        return 0;
+    })();
+    const baseZ = (wizardRef && Number.isFinite(wizardRef.currentLayerBaseZ))
+        ? Number(wizardRef.currentLayerBaseZ)
+        : layer * 3;
+    return { layer, baseZ };
+}
+
+function resolvePlaceObjectWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options = {}) {
+    const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+    const screenX = Number.isFinite(options && options.screenX)
+        ? Number(options.screenX)
+        : ((typeof globalThis !== "undefined" && globalThis.mousePos && Number.isFinite(globalThis.mousePos.screenX))
+            ? Number(globalThis.mousePos.screenX)
+            : null);
+    const screenY = Number.isFinite(options && options.screenY)
+        ? Number(options.screenY)
+        : ((typeof globalThis !== "undefined" && globalThis.mousePos && Number.isFinite(globalThis.mousePos.screenY))
+            ? Number(globalThis.mousePos.screenY)
+            : null);
+    const viewportRef = (typeof viewport !== "undefined") ? viewport : null;
+    if (
+        Number.isFinite(screenX) &&
+        Number.isFinite(screenY) &&
+        viewportRef &&
+        Number.isFinite(viewportRef.x) &&
+        Number.isFinite(viewportRef.y)
+    ) {
+        const vs = (typeof viewscale !== "undefined" && Number.isFinite(viewscale) && viewscale)
+            ? Number(viewscale)
+            : 1;
+        const xyr = (typeof xyratio !== "undefined" && Number.isFinite(xyratio) && xyratio)
+            ? Number(xyratio)
+            : 1;
+        const layerInfo = resolvePlaceObjectLayerInfo(wizardRef);
+        const cameraZ = Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0;
+        let worldX = (screenX / vs) + Number(viewportRef.x);
+        let worldY = (screenY / (vs * xyr)) + Number(viewportRef.y) + (layerInfo.baseZ - cameraZ);
+        if (mapRef && typeof mapRef.wrapWorldX === "function" && Number.isFinite(worldX)) {
+            worldX = mapRef.wrapWorldX(worldX);
+        }
+        if (mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(worldY)) {
+            worldY = mapRef.wrapWorldY(worldY);
+        }
+        if (
+            wizardRef &&
+            mapRef &&
+            typeof mapRef.shortestDeltaX === "function" &&
+            typeof mapRef.shortestDeltaY === "function" &&
+            Number.isFinite(wizardRef.x) &&
+            Number.isFinite(wizardRef.y) &&
+            Number.isFinite(worldX) &&
+            Number.isFinite(worldY)
+        ) {
+            worldX = Number(wizardRef.x) + mapRef.shortestDeltaX(Number(wizardRef.x), worldX);
+            worldY = Number(wizardRef.y) + mapRef.shortestDeltaY(Number(wizardRef.y), worldY);
+        }
+        return { x: worldX, y: worldY, layer: layerInfo.layer, baseZ: layerInfo.baseZ };
+    }
+    const layerInfo = resolvePlaceObjectLayerInfo(wizardRef);
+    return { x: fallbackX, y: fallbackY, layer: layerInfo.layer, baseZ: layerInfo.baseZ };
+}
+
 class PlaceObject extends globalThis.Spell {
     constructor(x, y) {
         super(x, y);
@@ -20,20 +94,23 @@ class PlaceObject extends globalThis.Spell {
         return Number(snapped.toFixed(precision));
     }
 
-    cast(targetX, targetY) {
+    cast(targetX, targetY, options = {}) {
         const selectedCategory = (
             wizard &&
             typeof wizard.selectedPlaceableCategory === "string" &&
             wizard.selectedPlaceableCategory.length > 0
         ) ? wizard.selectedPlaceableCategory : "doors";
         const selectedCategoryKey = selectedCategory.trim().toLowerCase();
+        const layerPoint = resolvePlaceObjectWorldPointOnLayer(wizard, targetX, targetY, options);
+        const placementTargetX = Number.isFinite(layerPoint.x) ? Number(layerPoint.x) : targetX;
+        const placementTargetY = Number.isFinite(layerPoint.y) ? Number(layerPoint.y) : targetY;
 
         const wrappedX = (wizard.map && typeof wizard.map.wrapWorldX === "function")
-            ? wizard.map.wrapWorldX(targetX)
-            : targetX;
+            ? wizard.map.wrapWorldX(placementTargetX)
+            : placementTargetX;
         const wrappedY = (wizard.map && typeof wizard.map.wrapWorldY === "function")
-            ? wizard.map.wrapWorldY(targetY)
-            : targetY;
+            ? wizard.map.wrapWorldY(placementTargetY)
+            : placementTargetY;
         if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) {
             message("Cannot place object there!");
             return this;
@@ -56,7 +133,7 @@ class PlaceObject extends globalThis.Spell {
                 message("Roof placement is unavailable.");
                 return this;
             }
-            const candidate = roofCtor.getPlacementCandidate(wizard, wrappedX, wrappedY, { maxDepth: 12 });
+            const candidate = roofCtor.getPlacementCandidate(wizard, wrappedX, wrappedY, { maxDepth: null });
             if (!candidate || !Array.isArray(candidate.wallSections) || candidate.wallSections.length < 3) {
                 message("No valid closed wall loop for roof placement.");
                 return this;
@@ -202,6 +279,8 @@ class PlaceObject extends globalThis.Spell {
             ? rotationAxisNormalized
             : ((selectedCategory === "doors" || selectedCategory === "windows") ? "spatial" : "visual");
         const effectivePlacementRotation = (rotationAxis === "none") ? 0 : placementRotation;
+        const placementLayer = Number.isFinite(layerPoint.layer) ? Number(layerPoint.layer) : 0;
+        const placementLayerBaseZ = Number.isFinite(layerPoint.baseZ) ? Number(layerPoint.baseZ) : placementLayer * 3;
         const isWallMountedPlacement = selectedCategory === "windows" || selectedCategory === "doors";
         const wallSnapPlacement = isWallMountedPlacement
             ? (
@@ -269,6 +348,8 @@ class PlaceObject extends globalThis.Spell {
             renderDepthOffset,
             width: scaledDimensions.width,
             height: scaledDimensions.height,
+            traversalLayer: placementLayer,
+            level: placementLayer,
             placeableAnchorX: effectiveAnchorX,
             placeableAnchorY: effectiveAnchorY,
             rotationAxis: useWallSnapPlacement ? "spatial" : rotationAxis,
@@ -293,6 +374,12 @@ class PlaceObject extends globalThis.Spell {
             placedObject
         ) {
             placedObject.z = Number(wallSnapPlacement.snappedZ);
+        }
+        if (placedObject) {
+            placedObject.traversalLayer = placementLayer;
+            placedObject.level = placementLayer;
+            placedObject._renderTraversalLayer = placementLayer;
+            placedObject._renderLayerBaseZ = placementLayerBaseZ;
         }
         if (
             placedObject &&

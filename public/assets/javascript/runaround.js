@@ -12,7 +12,7 @@ const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align 
 const wizardMouseTurnZeroDistanceUnits = 1;
 const wizardMouseTurnFullDistanceUnits = 3;
 
-let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494, prevX: 488, prevY: 494}
+let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494, z: 0, prevX: 488, prevY: 494, prevZ: 0}
 let renderAlpha = 1;
 let viewScale = 1;
 let viewscale = 1;
@@ -2420,6 +2420,15 @@ jQuery(() => {
         mousePos.clientY = event.clientY;
     }
 
+    function recordFloorEditDiagnosticFromRunaround(eventName, payload = null, options = null) {
+        if (
+            typeof globalThis !== "undefined" &&
+            typeof globalThis.__recordFloorEditDiagnostic === "function"
+        ) {
+            globalThis.__recordFloorEditDiagnostic(eventName, payload, options);
+        }
+    }
+
     function syncMouseScreenFromClientPosition(event) {
         if (pointerLockActive) return;
         if (!app || !app.view) return;
@@ -2457,6 +2466,10 @@ jQuery(() => {
 
     function isPointerLockedOnCanvas() {
         return document.pointerLockElement === app.view;
+    }
+
+    function getMouseProjectionPlaneZ() {
+        return 0;
     }
 
     function syncMouseWorldFromScreenWithViewport() {
@@ -2781,6 +2794,13 @@ jQuery(() => {
             typeof SpellSystem.updateTriggerAreaVertexDrag === "function"
         ) {
             SpellSystem.updateTriggerAreaVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateFloorEditorVertexDrag === "function"
+        ) {
+            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
         }
     }
 
@@ -3321,8 +3341,9 @@ jQuery(() => {
         if (!target) return { activated: false, shouldCloseMenu: false };
         const targetLabel = (target.textContent || "").trim().toLowerCase();
         const isBackAction = targetLabel === "back";
+        const opensSubmenu = !!(target.dataset && target.dataset.opensSubmenu === "true");
         target.click();
-        return { activated: true, shouldCloseMenu: !isBackAction };
+        return { activated: true, shouldCloseMenu: !isBackAction && !opensSubmenu };
     }
 
     function getFocusedSpellNameFromMenu() {
@@ -3350,6 +3371,11 @@ jQuery(() => {
         }
         if (spellName === "wall" && typeof SpellSystem.showWallMenu === "function") {
             SpellSystem.showWallMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        if (spellName === "flooredit" && typeof SpellSystem.showFloorEditingMenu === "function") {
+            SpellSystem.showFloorEditingMenu(wizard);
             initSpellMenuKeyboardFocus();
             return true;
         }
@@ -3573,6 +3599,202 @@ jQuery(() => {
             }
         }
 
+        // Returns true if (x, y) is on solid floor at the given layer number.
+        // Solid means: inside an outer polygon AND not inside any hole polygon of a
+        // registered floor fragment at that layer. Ground (layer 0) is treated as
+        // unconditionally solid when no floor fragments are registered at that level.
+        function isPositionSupportedAtLayer(x, y, layer, mapRef) {
+            if (!(mapRef && mapRef.floorsById instanceof Map)) return true;
+            let hasFragmentsAtLayer = false;
+            for (const fragment of mapRef.floorsById.values()) {
+                if (!fragment) continue;
+                const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
+                if (fragLevel !== layer) continue;
+                if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                hasFragmentsAtLayer = true;
+                if (!pointInPolygon2D(x, y, fragment.outerPolygon)) continue;
+                // Point is inside the fragment's outer area. Check whether it's also
+                // inside one of the cut-out holes (which means it's NOT supported).
+                const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                let inHole = false;
+                for (const hole of holes) {
+                    if (Array.isArray(hole) && hole.length >= 3 && pointInPolygon2D(x, y, hole)) {
+                        inHole = true;
+                        break;
+                    }
+                }
+                if (!inHole) return true;
+            }
+            // No registered fragments at this layer → ground (layer 0) is always solid.
+            if (!hasFragmentsAtLayer && layer === 0) return true;
+            return false;
+        }
+
+        function getLowestRegisteredFloorLayer(mapRef) {
+            if (!(mapRef && mapRef.floorsById instanceof Map) || mapRef.floorsById.size <= 0) return 0;
+            let minLayer = 0;
+            for (const fragment of mapRef.floorsById.values()) {
+                if (!fragment) continue;
+                const layer = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
+                if (layer < minLayer) minLayer = layer;
+            }
+            return minLayer;
+        }
+
+        function getLayerBaseZ(layer) {
+            return Math.round(Number.isFinite(layer) ? Number(layer) : 0) * 3;
+        }
+
+        // Gravity in world-units/sec² for the floor-fall animation.
+        const FLOOR_FALL_GRAVITY = -9;
+        // Negative z threshold at which the fall "lands" (sprite has slid off screen).
+        const FLOOR_FALL_LAND_Z = -2.0;
+
+        // Begin a fall animation. Any finite targetLayer means land there;
+        // null means there is no floor below and the fall is lethal.
+        function startWizardFall(wizardRef, targetLayer) {
+            if (!wizardRef || (wizardRef._floorFallState && wizardRef._floorFallState.active)) return;
+            const fromLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
+            const fromBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
+                ? Number(wizardRef.currentLayerBaseZ)
+                : getLayerBaseZ(fromLayer);
+            const targetBaseZ = Number.isFinite(targetLayer) ? getLayerBaseZ(targetLayer) : null;
+            wizardRef._floorFallState = {
+                active: true,
+                velocityZ: 0,
+                targetLayer,
+                fromLayer,
+                fromBaseZ,
+                landZ: Number.isFinite(targetBaseZ)
+                    ? Math.min(FLOOR_FALL_LAND_Z, targetBaseZ - fromBaseZ)
+                    : FLOOR_FALL_LAND_Z
+            };
+            // Clear any movement path so the wizard doesn't teleport mid-fall.
+            wizardRef.path = [];
+            wizardRef.nextNode = null;
+            wizardRef.isJumping = false;
+            wizardRef.jumpHeight = 0;
+            wizardRef.z = 0;
+        }
+
+        // Advance fall physics. Must be called every sim frame while a fall is active.
+        function updateWizardFall(wizardRef, dtSec) {
+            if (!wizardRef || !wizardRef._floorFallState || !wizardRef._floorFallState.active) return;
+            const state = wizardRef._floorFallState;
+            const dt = Math.max(0, Number(dtSec) || 0);
+            state.velocityZ += FLOOR_FALL_GRAVITY * dt;
+            wizardRef.z = (Number.isFinite(wizardRef.z) ? wizardRef.z : 0) + state.velocityZ * dt;
+
+            const landZ = Number.isFinite(state.landZ) ? Number(state.landZ) : FLOOR_FALL_LAND_Z;
+            if (wizardRef.z > landZ) return; // still falling
+
+            // ── Landing ──────────────────────────────────────────────────────────
+            wizardRef._floorFallState = null;
+            wizardRef.z = 0;
+
+            if (Number.isFinite(state.targetLayer)) {
+                const toLayer = Math.round(Number(state.targetLayer));
+                const toBaseZ = getLayerBaseZ(toLayer);
+                const previousLayer = Number.isFinite(wizardRef.currentLayer) ? Number(wizardRef.currentLayer) : null;
+                const previousBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ) ? Number(wizardRef.currentLayerBaseZ) : null;
+                wizardRef.selectedFloorEditLevel = toLayer;
+                console.log("[wizard.layer.set]", {
+                    source: "updateWizardFall",
+                    reason: "fall-landing",
+                    previousLayer,
+                    nextLayer: toLayer,
+                    previousBaseZ,
+                    nextBaseZ: toBaseZ,
+                    targetLayer: Number(state.targetLayer)
+                });
+                // Sync floor edit level directly, without calling presentGameFrame,
+                // since we are mid-sim-step and the viewport hasn't been updated yet.
+                if (typeof globalThis !== "undefined") globalThis.selectedFloorEditLevel = toLayer;
+                wizardRef._pendingLayerTransition = {
+                    active: true,
+                    fromLevel: Number.isFinite(state.fromLayer) ? Math.round(state.fromLayer) : 0,
+                    toLevel: toLayer,
+                    fromBaseZ: Number.isFinite(state.fromBaseZ) ? Number(state.fromBaseZ) : getLayerBaseZ(state.fromLayer),
+                    toBaseZ,
+                    startedAtMs: Number.isFinite(renderNowMs) ? Number(renderNowMs) : Date.now(),
+                    durationMs: 320
+                };
+                if (typeof message === "function") {
+                    message("You land on the floor below.");
+                }
+            } else {
+                // Fell off the world. Only lethal in adventure mode.
+                const isAdventure = (typeof wizardRef.isAdventureMode === "function") && wizardRef.isAdventureMode();
+                if (isAdventure && Number.isFinite(wizardRef.hp) && wizardRef.hp > 0) {
+                    wizardRef.hp = 0;
+                    if (typeof wizardRef.updateStatusBars === "function") wizardRef.updateStatusBars();
+                    if (typeof message === "function") {
+                        message("You fell to your death!");
+                    }
+                }
+            }
+        }
+
+        // Called every frame after movement. Detects whether the wizard stepped into
+        // a hole and starts the fall animation if not already falling.
+        function checkWizardFloorFall(wizardRef, mapRef) {
+            if (!wizardRef || wizardRef.dead) return;
+            // Already in a fall — nothing to do here; updateWizardFall handles it.
+            if (wizardRef._floorFallState && wizardRef._floorFallState.active) return;
+            // The layer editor and its sub-tools suppress auto-fall so the
+            // wizard can freely inspect and edit different layers.
+            const spellName = typeof wizardRef.currentSpell === "string"
+                ? wizardRef.currentSpell
+                : "";
+            if (
+                spellName === "flooredit" ||
+                spellName === "floorshape" ||
+                spellName === "floorhole" ||
+                spellName === "floorstair"
+            ) {
+                return;
+            }
+            // Don't trigger while the wizard is mid-jump (airborne intentionally).
+            if (wizardRef.isJumping) return;
+            if (!(mapRef && mapRef.floorsById instanceof Map && mapRef.floorsById.size > 0)) return;
+
+            const wx = wizardRef.x;
+            const wy = wizardRef.y;
+            const layer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
+
+            if (isPositionSupportedAtLayer(wx, wy, layer, mapRef)) return;
+
+            // Underground layers should behave as enclosed spaces: outside the level
+            // polygons is blocked, not a lethal bottomless fall.
+            if (layer < 0) {
+                const prevX = Number.isFinite(wizardRef.prevX) ? Number(wizardRef.prevX) : wx;
+                const prevY = Number.isFinite(wizardRef.prevY) ? Number(wizardRef.prevY) : wy;
+                if (isPositionSupportedAtLayer(prevX, prevY, layer, mapRef)) {
+                    wizardRef.x = prevX;
+                    wizardRef.y = prevY;
+                }
+                wizardRef.path = [];
+                wizardRef.nextNode = null;
+                wizardRef.z = 0;
+                return;
+            }
+
+            // Walk downward through layers to find where the wizard will land.
+            // null = no floor below → death.
+            let targetLayer = null;
+            const lowestLayer = getLowestRegisteredFloorLayer(mapRef);
+            let checkLayer = layer;
+            while (checkLayer > lowestLayer) {
+                checkLayer -= 1;
+                if (isPositionSupportedAtLayer(wx, wy, checkLayer, mapRef)) {
+                    targetLayer = checkLayer;
+                    break;
+                }
+            }
+
+            startWizardFall(wizardRef, targetLayer);
+        }
+
         function advanceNonWizardSimulationStep() {
             if (!wizard) return;
             if (typeof updatePowerupsForWizard === "function") {
@@ -3587,7 +3809,13 @@ jQuery(() => {
                 if (typeof obj.update === "function") {
                     obj.update();
                 }
-                if (!obj.isOnFire && !obj.isGrowing && !obj.falling && obj.fireFadeStart === undefined) {
+                if (
+                    !obj.isOnFire &&
+                    !obj.isGrowing &&
+                    !obj.falling &&
+                    obj.fireFadeStart === undefined &&
+                    !(Array.isArray(obj._flowerBurnFragments) && obj._flowerBurnFragments.length > 0)
+                ) {
                     activeSimObjects.delete(obj);
                 }
             }
@@ -3664,7 +3892,8 @@ jQuery(() => {
                 moveOptions = {
                     speedMultiplier: wizard.jumpLockedMovingBackward ? wizard.backwardSpeedMultiplier : 1,
                     animateBackward: wizard.jumpLockedMovingBackward,
-                    lockMovementVector: true
+                    lockMovementVector: true,
+                    allowUnsupportedPosition: true
                 };
             } else if (movingForward && !movingBackward) {
                 moveVector = forwardVector;
@@ -3707,9 +3936,40 @@ jQuery(() => {
             const movementStartMs = performance.now();
             const wizardStartX = wizard.x;
             const wizardStartY = wizard.y;
+            const wizardLayer = Number.isFinite(wizard.currentLayer) ? Math.round(wizard.currentLayer) : 0;
+            const wizardLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
+                ? Number(wizard.currentLayerBaseZ)
+                : getLayerBaseZ(wizardLayer);
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
-            wizard.moveDirection(moveVector, moveOptions);
-            wizard.updateJump(1 / frameRate);
+            const isFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
+            if (!isFalling) {
+                wizard.moveDirection(moveVector, moveOptions);
+                wizard.updateJump(1 / frameRate);
+                checkWizardFloorFall(wizard, map);
+            } else {
+                // Keep applying horizontal momentum during the fall — don't steer or brake,
+                // just carry whatever velocity the wizard had when they stepped off the edge.
+                wizard.moveDirection(wizard.movementVector, {
+                    lockMovementVector: true,
+                    allowUnsupportedPosition: true
+                });
+            }
+            updateWizardFall(wizard, 1 / frameRate);
+            if (typeof wizard.regenerateHealth === "function") {
+                wizard.regenerateHealth(1 / frameRate);
+            }
+            // Re-read layer state after updateWizardFall so the landing frame
+            // gets the correct cameraFollowZ (-3 for level -1) instead of the
+            // pre-landing value that was captured before the fall settled.
+            const isNowFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
+            const postFallLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
+                ? Number(wizard.currentLayerBaseZ)
+                : wizardLayerBaseZ;
+            const cameraFollowZ = isNowFalling
+                ? (postFallLayerBaseZ + (Number.isFinite(wizard.z) ? Number(wizard.z) : 0))
+                : postFallLayerBaseZ;
+            viewport.prevZ = Number.isFinite(viewport.z) ? Number(viewport.z) : 0;
+            viewport.z = cameraFollowZ;
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard);
             }
@@ -4174,7 +4434,7 @@ jQuery(() => {
                     )
                     : "";
                 const wwDebug = debugMode ? formatWindowWallLinkDebugSummary() : "";
-                perfPanel.text(
+                const perfReadoutText = (
                     `FPS ${perfStats.fps.toFixed(1)}\n` +
                     `cpu ${cpuMs.toFixed(1)} ms\n` +
                     `simms ${perfStats.simMs.toFixed(1)} ms\n` +
@@ -4201,6 +4461,20 @@ jQuery(() => {
                     losSummary +
                     wwDebug
                 );
+                const perfReadoutSummaryText = [
+                    `FPS ${perfStats.fps.toFixed(1)}`,
+                    `cpu ${cpuMs.toFixed(1)} ms`,
+                    `draw ${perfStats.drawMs.toFixed(1)} ms`,
+                    `idle ${perfStats.idleMs.toFixed(1)} ms`
+                ].join("\n");
+                const showPerfDetails = !!(
+                    (typeof showPerfReadoutDetails !== "undefined" && showPerfReadoutDetails) ||
+                    (typeof globalThis !== "undefined" && globalThis.showPerfReadoutDetails)
+                );
+                const perfReadoutVisibleText = showPerfDetails
+                    ? perfReadoutText
+                    : perfReadoutSummaryText;
+                perfPanel.text(perfReadoutVisibleText);
                 perfStats.lastUiUpdateAt = panelNow;
             }
             requestAnimationFrame(renderFrame);
@@ -4459,6 +4733,17 @@ jQuery(() => {
         if (wasHidden) {
             closeHudMenus({ spell: false, aura: true, editor: true });
         }
+        if (
+            wasHidden &&
+            (wizard.currentSpell === "flooredit" || wizard.currentSpell === "floorshape" || wizard.currentSpell === "floorhole" || wizard.currentSpell === "floorstair") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showFloorEditingMenu === "function"
+        ) {
+            SpellSystem.showFloorEditingMenu(wizard);
+            $("#spellMenu").removeClass("hidden");
+            initSpellMenuKeyboardFocus();
+            return;
+        }
         if ($("#spellMenu").hasClass('hidden') && typeof SpellSystem !== "undefined" && typeof SpellSystem.showMainSpellMenu === "function") {
             SpellSystem.showMainSpellMenu(wizard);
         }
@@ -4544,6 +4829,17 @@ jQuery(() => {
             event.preventDefault();
             closeHudMenus({ spell: false, aura: true, editor: true });
             SpellSystem.showWallMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            (wizard.currentSpell === "flooredit" || wizard.currentSpell === "floorshape" || wizard.currentSpell === "floorhole" || wizard.currentSpell === "floorstair") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showFloorEditingMenu === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showFloorEditingMenu(wizard);
             return;
         }
         if (
@@ -4650,6 +4946,7 @@ jQuery(() => {
             const normalized = normalizeAimWorldPointForWizard(worldCoors.x, worldCoors.y);
             mousePos.worldX = normalized.x;
             mousePos.worldY = normalized.y;
+
         }
 
         // Also store hex tile for movement
@@ -4675,6 +4972,13 @@ jQuery(() => {
             typeof SpellSystem.updateTriggerAreaVertexDrag === "function"
         ) {
             SpellSystem.updateTriggerAreaVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateFloorEditorVertexDrag === "function"
+        ) {
+            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
         }
     })
 
@@ -4815,7 +5119,24 @@ jQuery(() => {
                 suppressNextTriggerAreaToolClick = true;
                 return;
             }
+            if (
+                event.shiftKey &&
+                typeof SpellSystem.insertFloorEditorVertexOnEdge === "function" &&
+                SpellSystem.insertFloorEditorVertexOnEdge(wizard, screenX, screenY)
+            ) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
             if (SpellSystem.beginTriggerAreaVertexDrag(wizard, screenX, screenY)) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
+            if (
+                typeof SpellSystem.beginFloorEditorVertexDrag === "function" &&
+                SpellSystem.beginFloorEditorVertexDrag(wizard, screenX, screenY)
+            ) {
                 event.preventDefault();
                 suppressNextTriggerAreaToolClick = true;
                 return;
@@ -4835,14 +5156,20 @@ jQuery(() => {
             )
         ) {
             event.preventDefault();
+            const rect = app.view.getBoundingClientRect();
+            const dragScreenX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : (event.clientX - rect.left);
+            const dragScreenY = Number.isFinite(mousePos.screenY) ? mousePos.screenY : (event.clientY - rect.top);
+            if (
+                wizard.currentSpell === "buildroad" &&
+                typeof SpellSystem.getVisibleFloorPolygonTargetAtScreenPoint === "function" &&
+                SpellSystem.getVisibleFloorPolygonTargetAtScreenPoint(wizard, dragScreenX, dragScreenY)
+            ) {
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
             const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
                 ? {x: mousePos.worldX, y: mousePos.worldY}
-                : (() => {
-                    const rect = app.view.getBoundingClientRect();
-                    const screenX = event.clientX - rect.left;
-                    const screenY = event.clientY - rect.top;
-                    return screenToWorld(screenX, screenY);
-                })();
+                : screenToWorld(dragScreenX, dragScreenY);
             SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
             return;
         }
@@ -4868,6 +5195,16 @@ jQuery(() => {
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.endTriggerAreaVertexDrag === "function" &&
             SpellSystem.endTriggerAreaVertexDrag(wizard)
+        ) {
+            event.preventDefault();
+            suppressNextTriggerAreaToolClick = true;
+            return;
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.endFloorEditorVertexDrag === "function" &&
+            SpellSystem.endFloorEditorVertexDrag(wizard)
         ) {
             event.preventDefault();
             suppressNextTriggerAreaToolClick = true;
@@ -4904,13 +5241,15 @@ jQuery(() => {
         if (!castWithSpace && !castWithEditorKey) return;
 
         event.preventDefault();
+        let castScreenX = null;
+        let castScreenY = null;
         const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
             ? {x: mousePos.worldX, y: mousePos.worldY}
             : (() => {
                 const rect = app.view.getBoundingClientRect();
-                const screenX = event.clientX - rect.left;
-                const screenY = event.clientY - rect.top;
-                return screenToWorld(screenX, screenY);
+                castScreenX = event.clientX - rect.left;
+                castScreenY = event.clientY - rect.top;
+                return screenToWorld(castScreenX, castScreenY);
             })();
         const aim = getWizardAimVectorTo(worldCoors.x, worldCoors.y);
         // Stop wizard movement by setting destination to current node
@@ -4939,13 +5278,41 @@ jQuery(() => {
             return;
         }
         SpellSystem.castWizardSpell(wizard, castWorldX, castWorldY, {
-            clickCount: Number.isFinite(event.detail) ? Number(event.detail) : 1
+            clickCount: Number.isFinite(event.detail) ? Number(event.detail) : 1,
+            screenX: castScreenX,
+            screenY: castScreenY
         });
         // Prevent keyup quick-cast from firing a duplicate cast.
         spacebarDownAt = null;
     })
+
+    app.view.addEventListener("dblclick", event => {
+        if (
+            !wizard ||
+            typeof SpellSystem === "undefined" ||
+            typeof SpellSystem.paintFloorPolygonAtWorldPoint !== "function"
+        ) return;
+        let paintScreenX = null;
+        let paintScreenY = null;
+        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+            ? {x: mousePos.worldX, y: mousePos.worldY}
+            : (() => {
+                const rect = app.view.getBoundingClientRect();
+                paintScreenX = event.clientX - rect.left;
+                paintScreenY = event.clientY - rect.top;
+                return screenToWorld(paintScreenX, paintScreenY);
+            })();
+        if (SpellSystem.paintFloorPolygonAtWorldPoint(wizard, worldCoors.x, worldCoors.y, {
+            screenX: paintScreenX,
+            screenY: paintScreenY
+        })) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
      
     $("#msg").contextmenu(event => event.preventDefault())
+    let jumpKeyPressHistory = [];
     $(document).keydown(event => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
@@ -5096,6 +5463,28 @@ jQuery(() => {
             return;
         }
 
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelFloorShapePlacement === "function" &&
+            SpellSystem.cancelFloorShapePlacement(wizard)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelFloorHolePlacement === "function" &&
+            SpellSystem.cancelFloorHolePlacement(wizard)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
         if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible || editorMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
@@ -5118,6 +5507,25 @@ jQuery(() => {
             event.preventDefault();
             if (typeof SpellSystem.deleteSelectedTriggerAreaVertex === "function") {
                 SpellSystem.deleteSelectedTriggerAreaVertex(wizard);
+            }
+            return;
+        }
+
+        if (
+            (event.key === "Delete" || event.key === "Backspace") &&
+            !(typeof globalThis !== "undefined" && typeof globalThis.isTextEntryElement === "function" && globalThis.isTextEntryElement(event.target)) &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            (
+                wizard.currentSpell === "flooredit" ||
+                (typeof SpellSystem.isFloorEditorToolName === "function" && SpellSystem.isFloorEditorToolName(wizard.currentSpell))
+            ) &&
+            typeof SpellSystem.getFloorEditorVertexSelection === "function" &&
+            SpellSystem.getFloorEditorVertexSelection(wizard)
+        ) {
+            event.preventDefault();
+            if (typeof SpellSystem.deleteSelectedFloorEditorVertex === "function") {
+                SpellSystem.deleteSelectedFloorEditorVertex(wizard);
             }
             return;
         }
@@ -5378,7 +5786,22 @@ jQuery(() => {
                 }
             }
         } else if ((event.key === "a" || event.key === "A") && !event.repeat) {
-            if (wizard && typeof wizard.startJump === "function") {
+            const now = Date.now();
+            jumpKeyPressHistory.push(now);
+            // Keep only presses within the last 0.5 seconds
+            while (jumpKeyPressHistory.length > 0 && now - jumpKeyPressHistory[0] > 500) {
+                jumpKeyPressHistory.shift();
+            }
+            if (
+                jumpKeyPressHistory.length >= 3 &&
+                wizard &&
+                wizard.jumpCount === 2 &&
+                wizard.isJumping &&
+                typeof wizard.startTripleJump === "function"
+            ) {
+                jumpKeyPressHistory = [];
+                wizard.startTripleJump();
+            } else if (wizard && typeof wizard.startJump === "function") {
                 wizard.startJump();
             }
         } else if ((event.key === "o" || event.key === "O") && !event.repeat) {
@@ -5443,6 +5866,25 @@ jQuery(() => {
             }
         }
 
+        if (
+            wizard &&
+            !event.ctrlKey && !event.altKey && !event.metaKey && !event.repeat &&
+            typeof wizard.isGodMode === "function" && wizard.isGodMode() &&
+            wizard.currentSpell === "flooredit" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.setSelectedFloorEditLevel === "function"
+        ) {
+            const digit = event.code.startsWith("Digit") ? parseInt(event.code.slice(5), 10)
+                : event.code.startsWith("Numpad") && !isNaN(parseInt(event.code.slice(6), 10)) ? parseInt(event.code.slice(6), 10)
+                : NaN;
+            if (Number.isFinite(digit)) {
+                event.preventDefault();
+                const level = event.shiftKey ? -digit : digit;
+                SpellSystem.setSelectedFloorEditLevel(wizard, level, { moveWizard: true });
+                return;
+            }
+        }
+
         const hasNonShiftHotkeyModifier = !!(event.ctrlKey || event.altKey || event.metaKey);
 
         if (
@@ -5461,9 +5903,18 @@ jQuery(() => {
                     inEditorMode
                 )
             );
+            const shouldUseLayerTool = (
+                spellHotkey === "L" &&
+                wizard &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.setCurrentSpell === "function" &&
+                typeof wizard.isGodMode === "function" && wizard.isGodMode()
+            );
             if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
                 // In editor mode, prefer editor key bindings for shared keys
                 SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+            } else if (shouldUseLayerTool) {
+                SpellSystem.setCurrentSpell(wizard, "flooredit");
             } else if (shouldUseEditorVanish) {
                 SpellSystem.setCurrentSpell(wizard, "editorvanish");
             } else {

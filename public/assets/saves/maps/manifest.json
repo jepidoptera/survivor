@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -40.09762179881314,
-    "y": 132.85034560078182,
+    "x": -40.89295968671905,
+    "y": 131.18888504129674,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -22,7 +22,7 @@
     "activeAura": null,
     "activeAuras": [],
     "unlockedMagic": [],
-    "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
+    "selectedFlooringTexture": "/assets/images/flooring/cobblestones.png",
     "selectedTreeTextureVariant": "random",
     "selectedPlaceableCategory": "doors",
     "selectedPlaceableTexturePath": "/assets/images/doors/door2.png",
@@ -32,7 +32,7 @@
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/crystal%20ball.png",
       "signs": "/assets/images/signs/princess.png",
-      "roof": "/assets/images/roofs/smallshingles.png"
+      "roof": "/assets/images/roofs/slate.png"
     },
     "selectedPlaceableRenderOffset": 0,
     "selectedPlaceableRenderOffsetByTexture": {
@@ -49,18 +49,18 @@
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 0
     },
-    "selectedPlaceableScale": 2.177,
+    "selectedPlaceableScale": 1.654,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
-      "/assets/images/windows/window.png": 1.737,
-      "/assets/images/roofs/smallshingles.png": 1,
+      "/assets/images/windows/window.png": 0.997,
+      "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
       "/assets/images/furniture/circlerug.png": 4,
-      "/assets/images/doors/door2.png": 2.177,
+      "/assets/images/doors/door2.png": 1.654,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
-      "/assets/images/flowers/thornflowers.png": 4.308,
+      "/assets/images/flowers/thornflowers.png": 5,
       "/assets/images/furniture/hexrug.png": 19.818,
       "/assets/images/furniture/crystal%20ball.png": 1.979
     },
@@ -126,23 +126,27 @@
     },
     "selectedPowerupPlacementScale": 1,
     "selectedEditorCategory": "doors",
-    "selectedWallHeight": 4,
+    "selectedFloorEditLevel": 0,
+    "selectedWallHeight": 1,
     "selectedWallThickness": 0.5,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
-    "selectedRoofOverhang": 0.8125,
-    "selectedRoofPeakHeight": 8.5,
-    "selectedRoofTextureRepeat": 0.09375,
+    "selectedRoofOverhang": 0.1875,
+    "selectedRoofPeakHeight": 1.5,
+    "selectedRoofTextureRepeat": 0.46875,
     "showEditorPanel": false,
     "showPerfReadout": false,
     "spells": [],
-    "inventory": {},
+    "inventory": {
+      "spellCredits": 4,
+      "gold": 45
+    },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -55.59762179881314,
-      "y": 119.34620678283548
+      "x": -56.39430771211057,
+      "y": 117.6847462233504
     }
   },
   "los": {

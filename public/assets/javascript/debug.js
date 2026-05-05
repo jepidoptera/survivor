@@ -13,6 +13,7 @@ let debugModePrevHexGridState = null;
 
 let perfPanel = null;
 let showPerfReadout = false;
+let showPerfReadoutDetails = false;
 // Keep detailed perf instrumentation off during normal play.
 // The full accumulator is useful when profiling frame pacing or render/sim regressions,
 // but it adds steady per-frame work and can skew the very numbers it is measuring.
@@ -775,6 +776,7 @@ class DebugViewSettings {
         this._defineBooleanSetting("showTileClearance", () => showTileClearance, value => setShowTileClearanceEnabled(value));
         this._defineBooleanSetting("showPerfReadout", () => showPerfReadout, value => setShowPerfReadout(value));
         this._defineBooleanSetting("showFpsCounter", () => showPerfReadout, value => setShowPerfReadout(value));
+        this._defineBooleanSetting("showPerfReadoutDetails", () => showPerfReadoutDetails, value => setShowPerfReadoutDetails(value));
         this._defineBooleanSetting("perfInstrumentationEnabled", () => perfInstrumentationEnabled, value => setPerfInstrumentationEnabled(value));
         this._defineBooleanSetting("showVisualHitboxes", () => this._showVisualHitboxes !== false, value => {
             this._showVisualHitboxes = !!value;
@@ -812,6 +814,7 @@ class DebugViewSettings {
             showTileClearance: this.showTileClearance,
             showPerfReadout: this.showPerfReadout,
             showFpsCounter: this.showFpsCounter,
+            showPerfReadoutDetails: this.showPerfReadoutDetails,
             perfInstrumentationEnabled: this.perfInstrumentationEnabled,
             showVisualHitboxes: this.showVisualHitboxes,
             showLosFill: this.showLosFill,
@@ -868,6 +871,22 @@ function toggleShowPerfReadout() {
     return showPerfReadout;
 }
 
+function setShowPerfReadoutDetails(enabled) {
+    showPerfReadoutDetails = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.showPerfReadoutDetails = showPerfReadoutDetails;
+    }
+    return showPerfReadoutDetails;
+}
+
+function toggleShowPerfReadoutDetails() {
+    return setShowPerfReadoutDetails(!showPerfReadoutDetails);
+}
+
+function isShowPerfReadoutDetailsEnabled() {
+    return !!showPerfReadoutDetails;
+}
+
 function toggleDebugMode() {
     return setDebugModeEnabled(!debugMode);
 }
@@ -882,6 +901,9 @@ if (typeof globalThis !== "undefined") {
         toggleDebugMode: () => toggleDebugMode(),
         toggleHexGrid: () => toggleHexGrid(),
         togglePerfReadout: () => toggleShowPerfReadout(),
+        togglePerfReadoutDetails: () => toggleShowPerfReadoutDetails(),
+        setPerfReadoutDetails: enabled => setShowPerfReadoutDetails(enabled),
+        isPerfReadoutDetailsEnabled: () => isShowPerfReadoutDetailsEnabled(),
         isPerfInstrumentationEnabled: () => isPerfInstrumentationEnabled(),
         setPerfInstrumentationEnabled: (enabled, options) => setPerfInstrumentationEnabled(enabled, options),
         describePerfInstrumentation: () => describePerfInstrumentation(),
@@ -912,6 +934,10 @@ if (typeof globalThis !== "undefined") {
     globalThis.getPerfAccumulatorSnapshot = getPerfAccumulatorSnapshot;
     globalThis.resetPerfAccumulator = resetPerfAccumulator;
     globalThis.printPerfAccumulator = printPerfAccumulator;
+    globalThis.showPerfReadoutDetails = showPerfReadoutDetails;
+    globalThis.setShowPerfReadoutDetails = setShowPerfReadoutDetails;
+    globalThis.toggleShowPerfReadoutDetails = toggleShowPerfReadoutDetails;
+    globalThis.isShowPerfReadoutDetailsEnabled = isShowPerfReadoutDetailsEnabled;
     globalThis.isPerfInstrumentationEnabled = isPerfInstrumentationEnabled;
     globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
     globalThis.describePerfInstrumentation = describePerfInstrumentation;

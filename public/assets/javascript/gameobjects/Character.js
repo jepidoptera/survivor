@@ -152,6 +152,7 @@ class FrozenDeathBurstEffect {
 
 class Character {
     constructor(type, location, size, map, options = {}) {
+        const constructorOptions = (options && typeof options === "object") ? options : {};
         this.type = type;
         this.map = map;
         this.size = Number.isFinite(size) ? size : 1;
@@ -159,7 +160,7 @@ class Character {
         this.travelFrames = 0;
         this.travelZ = 0;
         this.moving = false;
-        this.useExternalScheduler = false;
+        this.useExternalScheduler = constructorOptions.useExternalScheduler === true;
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
@@ -169,7 +170,7 @@ class Character {
         this.groundRadius = this.size / 3; // Default hitbox radius in hex units
         this.visualRadius = this.size / 2; // Default visual hitbox radius in hex units
         this.frameRate = 1;
-        this.moveTimeout = this.nextMove();
+        this.moveTimeout = null;
         this.attackTimeout = null;
         this.acceleration = 50;
         this.movementVector = {x: 0, y: 0};
@@ -221,12 +222,16 @@ class Character {
             this.map.registerGameObject(this);
         }
 
-        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+        const suppressAutoScriptingName = !!constructorOptions.suppressAutoScriptingName;
         const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
             ? globalThis.Scripting
             : null;
         if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
             scriptingApi.ensureObjectScriptingName(this, { map: this.map });
+        }
+
+        if (!this.useExternalScheduler && constructorOptions.startMoveLoop !== false) {
+            this.moveTimeout = this.nextMove();
         }
     }
 
@@ -936,6 +941,143 @@ class Character {
         const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
             ? this._hitboxCollisionDebug.staticCollisions
             : [];
+        const shouldTestObjectHitbox = (obj, hitbox) => {
+            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") return false;
+            if (typeof obj.groundPlaneHitbox.getBounds !== "function") return true;
+            const bounds = obj.groundPlaneHitbox.getBounds();
+            if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+                !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+                return true;
+            }
+            const radius = Math.max(0, Number(hitbox.radius) || 0);
+            return !(
+                hitbox.x + radius < bounds.x ||
+                hitbox.x - radius > bounds.x + bounds.width ||
+                hitbox.y + radius < bounds.y ||
+                hitbox.y - radius > bounds.y + bounds.height
+            );
+        };
+        const fallbackCollisionPush = (obj, hitbox) => {
+            const velocityX = Number(this.movementVector && this.movementVector.x) || 0;
+            const velocityY = Number(this.movementVector && this.movementVector.y) || 0;
+            const velocityLen = Math.hypot(velocityX, velocityY);
+            if (velocityLen > 1e-6) {
+                return {
+                    pushX: -(velocityX / velocityLen) * 0.05,
+                    pushY: -(velocityY / velocityLen) * 0.05
+                };
+            }
+            if (obj && obj.groundPlaneHitbox && typeof obj.groundPlaneHitbox.getBounds === "function") {
+                const bounds = obj.groundPlaneHitbox.getBounds();
+                if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y) &&
+                    Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+                    const centerX = bounds.x + bounds.width * 0.5;
+                    const centerY = bounds.y + bounds.height * 0.5;
+                    const dx = Number(hitbox.x) - centerX;
+                    const dy = Number(hitbox.y) - centerY;
+                    const len = Math.hypot(dx, dy);
+                    if (len > 1e-6) {
+                        return { pushX: (dx / len) * 0.05, pushY: (dy / len) * 0.05 };
+                    }
+                }
+            }
+            const dx = Number(hitbox.x) - Number(this.x);
+            const dy = Number(hitbox.y) - Number(this.y);
+            const len = Math.hypot(dx, dy);
+            if (len > 1e-6) {
+                return { pushX: -(dx / len) * 0.05, pushY: -(dy / len) * 0.05 };
+            }
+            return { pushX: 0.05, pushY: 0 };
+        };
+        const resolveCollision = (obj, hitbox) => {
+            if (!shouldTestObjectHitbox(obj, hitbox)) return null;
+            const collision = obj.groundPlaneHitbox.intersects(hitbox);
+            if (!collision || collision.pushX === undefined) return null;
+            let pushX = Number(collision.pushX) || 0;
+            let pushY = Number(collision.pushY) || 0;
+            if (Math.hypot(pushX, pushY) <= 1e-9) {
+                const fallback = fallbackCollisionPush(obj, hitbox);
+                pushX = Number(fallback.pushX) || 0;
+                pushY = Number(fallback.pushY) || 0;
+            }
+            return { pushX, pushY };
+        };
+        const isStaticCollisionAt = (x, y) => {
+            if (!nearbyObjects.length) return false;
+            const hitbox = this._movementStartHitbox || { type: "circle", x, y, radius: movementRadius };
+            hitbox.x = x;
+            hitbox.y = y;
+            hitbox.radius = movementRadius;
+            this._movementStartHitbox = hitbox;
+            for (const obj of nearbyObjects) {
+                if (resolveCollision(obj, hitbox)) return true;
+            }
+            return false;
+        };
+        const findSweptCollision = (fromX, fromY, toX, toY) => {
+            if (!nearbyObjects.length) return null;
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const distance = Math.hypot(dx, dy);
+            if (!(distance > 1e-6)) return null;
+
+            const radius = Math.max(0, Number(movementRadius) || 0);
+            const stepSize = Math.max(0.03, Math.min(0.12, radius > 0 ? radius * 0.25 : 0.05));
+            const steps = Math.min(32, Math.max(1, Math.ceil(distance / stepSize)));
+            const sweepHitbox = this._movementSweepHitbox || { type: "circle", x: fromX, y: fromY, radius };
+            sweepHitbox.radius = radius;
+            this._movementSweepHitbox = sweepHitbox;
+
+            let lastClearX = fromX;
+            let lastClearY = fromY;
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                sweepHitbox.x = fromX + dx * t;
+                sweepHitbox.y = fromY + dy * t;
+
+                let totalPushX = 0;
+                let totalPushY = 0;
+                let maxPushLen = 0;
+                let hasCollision = false;
+
+                for (const obj of nearbyObjects) {
+                    const collision = resolveCollision(obj, sweepHitbox);
+                    if (!collision) continue;
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (movementContext.forceTouchedObjects instanceof Set) {
+                        movementContext.forceTouchedObjects.add(obj);
+                    }
+                    staticCollisionLog.push({
+                        label: this._getHitboxDebugLabel(obj),
+                        iteration: "sweep",
+                        sampleX: sweepHitbox.x,
+                        sampleY: sweepHitbox.y,
+                        pushX: Number(collision.pushX) || 0,
+                        pushY: Number(collision.pushY) || 0,
+                        overlap: pushLen
+                    });
+                }
+
+                if (hasCollision) {
+                    return {
+                        x: lastClearX,
+                        y: lastClearY,
+                        pushX: totalPushX,
+                        pushY: totalPushY,
+                        maxPushLen
+                    };
+                }
+
+                lastClearX = sweepHitbox.x;
+                lastClearY = sweepHitbox.y;
+            }
+
+            return null;
+        };
 
         while (iteration < maxIterations) {
             iteration++;
@@ -951,8 +1093,8 @@ class Character {
             let hasCollision = false;
 
             for (const obj of nearbyObjects) {
-                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-                if (collision && collision.pushX !== undefined) {
+                const collision = resolveCollision(obj, testHitbox);
+                if (collision) {
                     hasCollision = true;
                     totalPushX += collision.pushX;
                     totalPushY += collision.pushY;
@@ -974,6 +1116,39 @@ class Character {
             }
 
             if (!hasCollision) {
+                if (!isStaticCollisionAt(this.x, this.y)) {
+                    const sweptCollision = findSweptCollision(this.x, this.y, testX, testY);
+                    if (sweptCollision) {
+                        collided = true;
+                        let pushLen = Math.hypot(sweptCollision.pushX, sweptCollision.pushY);
+                        if (pushLen > sweptCollision.maxPushLen && sweptCollision.maxPushLen > 0) {
+                            const scale = sweptCollision.maxPushLen / pushLen;
+                            sweptCollision.pushX *= scale;
+                            sweptCollision.pushY *= scale;
+                            pushLen = sweptCollision.maxPushLen;
+                        }
+                        if (pushLen > 0) {
+                            const normalX = sweptCollision.pushX / pushLen;
+                            const normalY = sweptCollision.pushY / pushLen;
+                            if (this.movementVector && typeof this.movementVector === "object") {
+                                const vectorX = Number(this.movementVector.x) || 0;
+                                const vectorY = Number(this.movementVector.y) || 0;
+                                const normalComponent = vectorX * normalX + vectorY * normalY;
+                                if (normalComponent < 0) {
+                                    this.movementVector.x = vectorX - normalX * normalComponent;
+                                    this.movementVector.y = vectorY - normalY * normalComponent;
+                                }
+                            }
+                            const backoff = Math.max(0.005, Math.min(0.02, movementRadius * 0.05));
+                            return {
+                                x: sweptCollision.x + normalX * backoff,
+                                y: sweptCollision.y + normalY * backoff,
+                                collided
+                            };
+                        }
+                        return { x: sweptCollision.x, y: sweptCollision.y, collided };
+                    }
+                }
                 return { x: testX, y: testY, collided };
             }
 
@@ -1026,8 +1201,8 @@ class Character {
         let totalPushY = 0;
         let maxPushLen = 0;
         for (const obj of nearbyObjects) {
-            const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-            if (collision && collision.pushX !== undefined) {
+            const collision = resolveCollision(obj, testHitbox);
+            if (collision) {
                 totalPushX += collision.pushX;
                 totalPushY += collision.pushY;
                 const pushLen = Math.hypot(collision.pushX, collision.pushY);
@@ -1068,7 +1243,11 @@ class Character {
             }
         }
 
-        return { x: candidateX, y: candidateY, collided };
+        return {
+            x: collided ? testX : candidateX,
+            y: collided ? testY : candidateY,
+            collided
+        };
     }
 
     _resolveHitboxMovementConstraints(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
@@ -1113,6 +1292,7 @@ class Character {
 
     _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
         if (
+            options.allowUnsupportedPosition !== true &&
             this.map &&
             typeof this.map.canOccupyWorldPosition === "function" &&
             this.map.canOccupyWorldPosition(targetX, targetY, this, options) !== true
@@ -2068,6 +2248,33 @@ class Character {
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
+    regenerateHealth(deltaSeconds = null) {
+        if (
+            this.dead ||
+            !Number.isFinite(this.maxHp) ||
+            this.maxHp <= 0 ||
+            !Number.isFinite(this.hp) ||
+            this.hp >= this.maxHp
+        ) {
+            return 0;
+        }
+        const dtSec = Number.isFinite(deltaSeconds)
+            ? Math.max(0, Number(deltaSeconds))
+            : (1 / Math.max(1, Number(this.frameRate) || 1));
+        const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
+        const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
+        const healPerSecond = this.maxHp * healRate * healMult;
+        if (!(dtSec > 0) || !(healPerSecond > 0)) {
+            return 0;
+        }
+        const previousHp = this.hp;
+        this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
+        const healed = Math.max(0, this.hp - previousHp);
+        if (healed > 0 && typeof this.updateStatusBars === "function") {
+            this.updateStatusBars();
+        }
+        return healed;
+    }
     ensureMagicPointsInitialized(resetCurrent = false) {
         const fallbackHp = Number.isFinite(this.hp) ? Number(this.hp) : 0;
         const fallbackMaxHp = Math.max(
@@ -2355,21 +2562,7 @@ class Character {
             this.burn();
         }
 
-        if (
-            !this.dead &&
-            Number.isFinite(this.maxHp) &&
-            this.maxHp > 0 &&
-            Number.isFinite(this.hp) &&
-            this.hp < this.maxHp
-        ) {
-            const dtSec = 1 / Math.max(1, Number(this.frameRate) || 1);
-            const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
-            const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
-            const healPerSecond = this.maxHp * healRate * healMult;
-            if (healPerSecond > 0) {
-                this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
-            }
-        }
+        this.regenerateHealth(dtSeconds);
 
         if (this._closeCombatState && this._closeCombatState.target) {
             this.updateCloseCombat();

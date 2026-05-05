@@ -625,6 +625,57 @@ test("GameMap.findPathAStar routes from a ground source node onto a floor transi
     assert.equal(path[0].getWorldPositionAt(0.5).z, 1.5);
 });
 
+test("GameMap.getNode resolves materialized floor nodes for nonzero traversal layers", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0, traversalLayer: 0 })]];
+    map.resetFloorRuntimeState();
+
+    const upperFragment = map.registerFloorFragment({
+        fragmentId: "upper",
+        surfaceId: "upper_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3
+    });
+    const upperNode = map.createFloorNodeFromSource(map.nodes[0][0], upperFragment, {
+        baseZ: 3,
+        traversalLayer: 1
+    });
+
+    assert.equal(map.getNode(0, 0, 0), map.nodes[0][0]);
+    assert.equal(map.getNode(0, 0, 1), upperNode);
+});
+
+test("GameMap.getNode skips full floor scans for missing nonzero layer nodes", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0, traversalLayer: 0 })]];
+    map.resetFloorRuntimeState();
+
+    const upperFragment = map.registerFloorFragment({
+        fragmentId: "upper",
+        surfaceId: "upper_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3
+    });
+    const upperNode = map.createFloorNodeFromSource(map.nodes[0][0], upperFragment, {
+        baseZ: 3,
+        traversalLayer: 1
+    });
+    map.floorNodeLayerIndex.delete(map.getFloorLayerNodeKey(upperNode));
+
+    assert.equal(map.getFloorNodeAtLayer(0, 0, 1), upperNode);
+    assert.equal(map.getNode(0, 0, 1), null);
+});
+
 test("GameMap.findPathAStar handles improved paths after stale queue entries", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 4;

@@ -503,6 +503,15 @@ function anchorNeighborInDirection(anchor, dir) {
 // save files with stale cached clearance are automatically recomputed.
 const CLEARANCE_VERSION = 2;
 
+const _floorNodeCtorWorkMap = new WeakMap();
+function _tryMakeFloorNodeFromCtor(SourceCtor, x, y) {
+    try {
+        return new SourceCtor(x, y, 1, 1);
+    } catch (_err) {
+        return null;
+    }
+}
+
 class GameMap {
     constructor(width, height, options, callback) {
         const _t0 = performance.now();
@@ -837,6 +846,7 @@ class GameMap {
         this.floorFragmentsBySectionKey = new Map();
         this.floorNodesById = new Map();
         this.floorNodeIndex = new Map();
+        this.floorNodeLayerIndex = new Map();
         this.transitionsById = new Map();
     }
 
@@ -853,6 +863,48 @@ class GameMap {
         return `${Number(nodeOrX)},${Number(y)},${resolvedSurfaceId},${resolvedFragmentId}`;
     }
 
+    getFloorLayerNodeKey(nodeOrX, y = null, traversalLayer = 0) {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            const layer = Number.isFinite(nodeOrX.traversalLayer)
+                ? Math.round(Number(nodeOrX.traversalLayer))
+                : (Number.isFinite(nodeOrX.level) ? Math.round(Number(nodeOrX.level)) : 0);
+            return `${Number(nodeOrX.xindex)},${Number(nodeOrX.yindex)},${layer}`;
+        }
+        const layer = Number.isFinite(traversalLayer) ? Math.round(Number(traversalLayer)) : 0;
+        return `${Number(nodeOrX)},${Number(y)},${layer}`;
+    }
+
+    _indexFloorNodeByLayer(node) {
+        if (!node) return;
+        if (!(this.floorNodeLayerIndex instanceof Map)) this.floorNodeLayerIndex = new Map();
+        const key = this.getFloorLayerNodeKey(node);
+        if (!this.floorNodeLayerIndex.has(key)) this.floorNodeLayerIndex.set(key, []);
+        const nodes = this.floorNodeLayerIndex.get(key);
+        if (!nodes.includes(node)) nodes.push(node);
+    }
+
+    _unindexFloorNodeByLayer(node) {
+        if (!node || !(this.floorNodeLayerIndex instanceof Map)) return;
+        const key = this.getFloorLayerNodeKey(node);
+        const nodes = this.floorNodeLayerIndex.get(key);
+        if (!Array.isArray(nodes)) return;
+        const index = nodes.indexOf(node);
+        if (index >= 0) nodes.splice(index, 1);
+        if (nodes.length === 0) this.floorNodeLayerIndex.delete(key);
+    }
+
+    _ensureFloorNodeLayerIndex() {
+        if (this.floorNodeLayerIndex instanceof Map) return;
+        this.floorNodeLayerIndex = new Map();
+        if (!(this.floorNodesById instanceof Map)) return;
+        for (const nodes of this.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                this._indexFloorNodeByLayer(nodes[i]);
+            }
+        }
+    }
+
     registerFloorFragment(fragment) {
         if (!fragment || typeof fragment !== "object") return null;
         if (!(this.floorsById instanceof Map)) this.resetFloorRuntimeState();
@@ -862,6 +914,19 @@ class GameMap {
             : ((typeof fragment.id === "string" && fragment.id.length > 0) ? fragment.id : "");
         if (!fragmentId) return null;
 
+        const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        const canonicalBaseZ = level * 3;
+        const explicitOffset = Number.isFinite(fragment.nodeBaseZOffset) ? Number(fragment.nodeBaseZOffset) : null;
+        const legacyBaseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : null;
+        let resolvedOffset = 0;
+        if (Number.isFinite(explicitOffset)) {
+            resolvedOffset = Number(explicitOffset);
+        } else if (Number.isFinite(legacyBaseZ)) {
+            const looksLikeLegacyBug = Math.abs(Number(legacyBaseZ) - level) < 1e-6
+                && Math.abs(Number(legacyBaseZ) - canonicalBaseZ) > 1e-6;
+            resolvedOffset = looksLikeLegacyBug ? 0 : (Number(legacyBaseZ) - canonicalBaseZ);
+        }
+
         const normalized = {
             ...fragment,
             fragmentId,
@@ -869,8 +934,9 @@ class GameMap {
                 ? fragment.surfaceId
                 : fragmentId,
             ownerSectionKey: (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "",
-            level: Number.isFinite(fragment.level) ? Number(fragment.level) : 0,
-            nodeBaseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : 0,
+            level,
+            nodeBaseZOffset: resolvedOffset,
+            nodeBaseZ: canonicalBaseZ + resolvedOffset,
             outerPolygon: Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : [],
             holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : [],
             visibilityPolygon: Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length > 0
@@ -922,19 +988,23 @@ class GameMap {
 
         if (!(this.floorNodeIndex instanceof Map)) this.floorNodeIndex = new Map();
         this.floorNodeIndex.set(node.id, node);
+        this._indexFloorNodeByLayer(node);
         return node;
     }
 
     createFloorNodeFromSource(sourceNode, fragment, options = {}) {
         if (!sourceNode || !fragment) return null;
         let floorNode = null;
-        const SourceCtor = sourceNode && typeof sourceNode.constructor === "function" ? sourceNode.constructor : null;
+        const SourceCtor = (typeof sourceNode.constructor === "function" && sourceNode.constructor !== Object)
+            ? sourceNode.constructor : null;
         if (SourceCtor) {
-            try {
-                floorNode = new SourceCtor(sourceNode.xindex, sourceNode.yindex, 1, 1);
-            } catch (_err) {
-                floorNode = null;
+            let ctorWorks = _floorNodeCtorWorkMap.get(SourceCtor);
+            if (ctorWorks === undefined) {
+                const probe = _tryMakeFloorNodeFromCtor(SourceCtor, 0, 0);
+                ctorWorks = (probe !== null && typeof probe === "object");
+                _floorNodeCtorWorkMap.set(SourceCtor, ctorWorks);
             }
+            if (ctorWorks) floorNode = new SourceCtor(sourceNode.xindex, sourceNode.yindex, 1, 1);
         }
         if (!floorNode || typeof floorNode !== "object") {
             floorNode = {};
@@ -1016,6 +1086,91 @@ class GameMap {
         return null;
     }
 
+    getFloorNodeAtLayer(x, y, layer = 0, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const xi = Number(x);
+        const yi = Number(y);
+        if (!Number.isFinite(xi) || !Number.isFinite(yi)) return null;
+        if (targetLayer === 0) {
+            const baseNode = this.getNode(xi, yi, 0);
+            if (baseNode) return baseNode;
+        }
+        this._ensureFloorNodeLayerIndex();
+        if (!(this.floorNodesById instanceof Map)) return null;
+        const sectionKey = (options && typeof options.sectionKey === "string") ? options.sectionKey : "";
+        const surfaceId = (options && typeof options.surfaceId === "string") ? options.surfaceId : "";
+        const fragmentId = (options && typeof options.fragmentId === "string") ? options.fragmentId : "";
+        const allowScan = !options || options.allowScan !== false;
+
+        if (surfaceId || fragmentId) {
+            const directFragmentIds = fragmentId
+                ? [fragmentId]
+                : (this.floorFragmentsBySurfaceId instanceof Map && this.floorFragmentsBySurfaceId.get(surfaceId) instanceof Set
+                    ? Array.from(this.floorFragmentsBySurfaceId.get(surfaceId))
+                    : []);
+            for (let i = 0; i < directFragmentIds.length; i++) {
+                const directFragmentId = directFragmentIds[i];
+                const directSurfaceId = surfaceId || (
+                    this.floorsById instanceof Map && this.floorsById.get(directFragmentId)
+                        ? this.floorsById.get(directFragmentId).surfaceId
+                        : ""
+                );
+                if (!directSurfaceId) continue;
+                const directNode = this.floorNodeIndex instanceof Map
+                    ? this.floorNodeIndex.get(this.getFloorNodeKey(xi, yi, directSurfaceId, directFragmentId))
+                    : null;
+                if (directNode) return directNode;
+            }
+        }
+
+        const layerCandidates = this.floorNodeLayerIndex instanceof Map
+            ? (this.floorNodeLayerIndex.get(this.getFloorLayerNodeKey(xi, yi, targetLayer)) || [])
+            : [];
+        if (layerCandidates.length > 0) {
+            let fallback = null;
+            for (let i = 0; i < layerCandidates.length; i++) {
+                const candidate = layerCandidates[i];
+                if (!candidate) continue;
+                if (surfaceId && candidate.surfaceId !== surfaceId) continue;
+                if (fragmentId && candidate.fragmentId !== fragmentId) continue;
+                if (sectionKey && (
+                    candidate.ownerSectionKey === sectionKey ||
+                    candidate._prototypeSectionKey === sectionKey ||
+                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                )) {
+                    return candidate;
+                }
+                if (!fallback) fallback = candidate;
+            }
+            if (fallback) return fallback;
+        }
+
+        if (!allowScan) return null;
+
+        let fallback = null;
+        for (const nodes of this.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                const candidate = nodes[i];
+                if (!candidate) continue;
+                if (Number(candidate.xindex) !== xi || Number(candidate.yindex) !== yi) continue;
+                const candidateLayer = Number.isFinite(candidate.traversalLayer)
+                    ? Math.round(Number(candidate.traversalLayer))
+                    : (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0);
+                if (candidateLayer !== targetLayer) continue;
+                if (sectionKey && (
+                    candidate.ownerSectionKey === sectionKey ||
+                    candidate._prototypeSectionKey === sectionKey ||
+                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                )) {
+                    return candidate;
+                }
+                if (!fallback) fallback = candidate;
+            }
+        }
+        return fallback;
+    }
+
     connectFloorNodeNeighbors() {
         if (!(this.floorNodesById instanceof Map)) return 0;
         let connectionCount = 0;
@@ -1058,6 +1213,288 @@ class GameMap {
         }
 
         return connectionCount;
+    }
+
+    _connectFloorNodesIncremental(newFloorNodes, newNodeIdSet) {
+        if (!Array.isArray(newFloorNodes) || newFloorNodes.length === 0) return;
+        const wrapX = this.wrapX === true && Number.isFinite(this.width) && this.width > 0;
+        const wrapY = this.wrapY === true && Number.isFinite(this.height) && this.height > 0;
+        const mapWidth = wrapX ? this.width : 0;
+        const mapHeight = wrapY ? this.height : 0;
+        const nodeIndex = this.floorNodeIndex;
+        for (let i = 0; i < newFloorNodes.length; i++) {
+            const floorNode = newFloorNodes[i];
+            if (!floorNode || !Array.isArray(floorNode.neighborOffsets) || !Array.isArray(floorNode.neighbors)) continue;
+            const surfaceId = floorNode.surfaceId;
+            const fragmentId = floorNode.fragmentId;
+            const nx0 = floorNode.xindex;
+            const ny0 = floorNode.yindex;
+            for (let d = 0; d < floorNode.neighborOffsets.length; d++) {
+                const offset = floorNode.neighborOffsets[d];
+                if (!offset) continue;
+                let nx = nx0 + offset.x;
+                let ny = ny0 + offset.y;
+                if (wrapX) { nx = nx % mapWidth; if (nx < 0) nx += mapWidth; }
+                if (wrapY) { ny = ny % mapHeight; if (ny < 0) ny += mapHeight; }
+                // Fast path: try same fragment first (common case)
+                let neighborNode = nodeIndex.get(`${nx},${ny},${surfaceId},${fragmentId}`) || null;
+                // Slow path: scan other fragments on same surface
+                if (!neighborNode) neighborNode = this.getFloorNodeBySurface(surfaceId, nx, ny);
+                if (!neighborNode) continue;
+                floorNode.neighbors[d] = neighborNode;
+                // Skip back-link if neighbor is also new (its own forward pass will link back to us)
+                if (newNodeIdSet && newNodeIdSet.has(neighborNode.id)) continue;
+                if (Array.isArray(neighborNode.neighborOffsets) && Array.isArray(neighborNode.neighbors)) {
+                    for (let rd = 0; rd < neighborNode.neighborOffsets.length; rd++) {
+                        const reverseOffset = neighborNode.neighborOffsets[rd];
+                        if (!reverseOffset) continue;
+                        if (
+                            (neighborNode.xindex + reverseOffset.x) === nx0 &&
+                            (neighborNode.yindex + reverseOffset.y) === ny0
+                        ) {
+                            neighborNode.neighbors[rd] = floorNode;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Prepare fragment registration for a section without creating any floor nodes.
+    // Returns the array of registered fragments (including synthesized ground), or null if already registered.
+    prepareFloorSectionFragments(sectionKey, sectionState, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return null;
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return null;
+        if (this.floorFragmentsBySectionKey instanceof Map && this.floorFragmentsBySectionKey.has(sectionKey)) return null;
+        const asset = sectionState.sectionAssetsByKey.get(sectionKey);
+        if (!asset) return null;
+        const synthesizeGroundFragment = (typeof options.synthesizeGroundFragment === "function")
+            ? options.synthesizeGroundFragment : null;
+        const authoredFragments = Array.isArray(asset.floors) ? asset.floors.slice() : [];
+        const hasGroundFragment = authoredFragments.some((f) => Number(f && f.level) === 0);
+        if (!hasGroundFragment && synthesizeGroundFragment) {
+            const synthesized = synthesizeGroundFragment(asset);
+            if (synthesized) authoredFragments.unshift(synthesized);
+        }
+        const registeredFragments = [];
+        for (let i = 0; i < authoredFragments.length; i++) {
+            const registeredFragment = this.registerFloorFragment(authoredFragments[i]);
+            if (!registeredFragment) continue;
+            registeredFragments.push(registeredFragment);
+        }
+        // Store pending batch state under a staging key
+        if (!(this._pendingFloorSectionNodes instanceof Map)) this._pendingFloorSectionNodes = new Map();
+        this._pendingFloorSectionNodes.set(sectionKey, { fragments: registeredFragments, nodes: [] });
+        return registeredFragments;
+    }
+
+    // Add a batch of nodes (sourceNodes[start..start+count]) for a section that was prepared via prepareFloorSectionFragments.
+    // Returns the number of floor nodes created in this batch.
+    addFloorSectionNodeBatch(sectionKey, sectionState, sourceNodes, start, count, doesNodeBelongToFragment) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { fragments, nodes: pendingNodes } = pending;
+        const end = Math.min(start + count, sourceNodes.length);
+        const checkBelongs = (typeof doesNodeBelongToFragment === "function") ? doesNodeBelongToFragment : null;
+        let created = 0;
+        for (let n = start; n < end; n++) {
+            const sourceNode = sourceNodes[n];
+            for (let fi = 0; fi < fragments.length; fi++) {
+                const registeredFragment = fragments[fi];
+                if (checkBelongs && !checkBelongs(sourceNode, registeredFragment)) continue;
+                const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                    baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                    traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                });
+                if (!floorNode) continue;
+                pendingNodes.push(floorNode);
+                created += 1;
+            }
+        }
+        return created;
+    }
+
+    // Finalize: connect all pending nodes for the section and clear staging state.
+    // Returns total floor node count for the section.
+    // Step 1 of chunked connection: build the newNodeIdSet and store it. Returns node count.
+    prepareFloorSectionConnection(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i] && nodes[i].id) newNodeIdSet.add(nodes[i].id);
+        }
+        pending.newNodeIdSet = newNodeIdSet;
+        return nodes.length;
+    }
+
+    // Step 2: connect nodes[start..start+count] using the pre-built newNodeIdSet.
+    connectFloorSectionNodeBatch(sectionKey, start, count) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes, newNodeIdSet } = pending;
+        const end = Math.min(start + count, nodes.length);
+        const batch = nodes.slice(start, end);
+        this._connectFloorNodesIncremental(batch, newNodeIdSet);
+        return batch.length;
+    }
+
+    // Step 3: clean up pending state after all connection batches are done.
+    commitFloorSectionConnection(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return;
+        this._pendingFloorSectionNodes.delete(sectionKey);
+    }
+
+    // Monolithic finalize (used by initial load and registerFloorSection fallback).
+    finalizeFloorSectionNodes(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i] && nodes[i].id) newNodeIdSet.add(nodes[i].id);
+        }
+        this._connectFloorNodesIncremental(nodes, newNodeIdSet);
+        this._pendingFloorSectionNodes.delete(sectionKey);
+        return nodes.length;
+    }
+
+    // Collect all floor nodes for a section into staging for chunked removal. Returns node count.
+    prepareFloorSectionUnregister(sectionKey) {
+        if (!(this.floorFragmentsBySectionKey instanceof Map)) return 0;
+        const fragmentIds = this.floorFragmentsBySectionKey.get(sectionKey);
+        if (!fragmentIds || fragmentIds.size === 0) return 0;
+        const allNodes = [];
+        for (const fragmentId of fragmentIds) {
+            const nodes = (this.floorNodesById instanceof Map) ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i]) allNodes.push(nodes[i]);
+            }
+        }
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) this._pendingFloorSectionUnregister = new Map();
+        this._pendingFloorSectionUnregister.set(sectionKey, { nodes: allNodes, fragmentIds });
+        return allNodes.length;
+    }
+
+    // Remove nodes[start..start+count] from floorNodeIndex and null their back-refs in neighbors.
+    unregisterFloorSectionNodeBatch(sectionKey, start, count) {
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionUnregister.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const end = Math.min(start + count, nodes.length);
+        for (let i = start; i < end; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            this._unindexFloorNodeByLayer(node);
+            if (this.floorNodeIndex instanceof Map) this.floorNodeIndex.delete(node.id);
+            if (!Array.isArray(node.neighbors)) continue;
+            for (let d = 0; d < node.neighbors.length; d++) {
+                const neighbor = node.neighbors[d];
+                if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                    if (neighbor.neighbors[rd] === node) { neighbor.neighbors[rd] = null; }
+                }
+            }
+        }
+        return end - start;
+    }
+
+    // Finalize removal: clean up floorsById/floorNodesById/floorFragmentsBySurfaceId/floorFragmentsBySectionKey.
+    commitFloorSectionUnregister(sectionKey) {
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionUnregister.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes, fragmentIds } = pending;
+        this._pendingFloorSectionUnregister.delete(sectionKey);
+        for (const fragmentId of fragmentIds) {
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        if (this.floorFragmentsBySectionKey instanceof Map) this.floorFragmentsBySectionKey.delete(sectionKey);
+        return nodes.length;
+    }
+
+    // Monolithic version kept for initial load (setActiveCenter) and fallback.
+    registerFloorSection(sectionKey, sectionState, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return 0;
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return 0;
+        if (this.floorFragmentsBySectionKey instanceof Map && this.floorFragmentsBySectionKey.has(sectionKey)) return 0;
+        const asset = sectionState.sectionAssetsByKey.get(sectionKey);
+        if (!asset) return 0;
+        const sectionNodes = (sectionState.nodesBySectionKey instanceof Map)
+            ? (sectionState.nodesBySectionKey.get(sectionKey) || [])
+            : [];
+        const doesNodeBelongToFragment = (typeof options.doesNodeBelongToFragment === "function")
+            ? options.doesNodeBelongToFragment : null;
+        const fragments = this.prepareFloorSectionFragments(sectionKey, sectionState, options);
+        if (!fragments) return 0;
+        this.addFloorSectionNodeBatch(sectionKey, sectionState, sectionNodes, 0, sectionNodes.length, doesNodeBelongToFragment);
+        return this.finalizeFloorSectionNodes(sectionKey);
+    }
+
+    unregisterFloorSection(sectionKey) {
+        if (!(this.floorFragmentsBySectionKey instanceof Map)) return 0;
+        const fragmentIds = this.floorFragmentsBySectionKey.get(sectionKey);
+        if (!fragmentIds || fragmentIds.size === 0) {
+            this.floorFragmentsBySectionKey.delete(sectionKey);
+            return 0;
+        }
+        let removedCount = 0;
+        for (const fragmentId of fragmentIds) {
+            const floorNodes = (this.floorNodesById instanceof Map)
+                ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < floorNodes.length; i++) {
+                const floorNode = floorNodes[i];
+                if (!floorNode) continue;
+                this._unindexFloorNodeByLayer(floorNode);
+                if (this.floorNodeIndex instanceof Map) {
+                    this.floorNodeIndex.delete(floorNode.id);
+                }
+                if (Array.isArray(floorNode.neighbors)) {
+                    for (let d = 0; d < floorNode.neighbors.length; d++) {
+                        const neighbor = floorNode.neighbors[d];
+                        if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                        for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                            if (neighbor.neighbors[rd] === floorNode) {
+                                neighbor.neighbors[rd] = null;
+                            }
+                        }
+                    }
+                }
+                removedCount += 1;
+            }
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        this.floorFragmentsBySectionKey.delete(sectionKey);
+        return removedCount;
     }
 
     resolveFloorTransitionEndpoint(endpoint) {
@@ -1224,8 +1661,13 @@ class GameMap {
 
     getNode(x, y, traversalLayer = 0) {
         const resolvedLayer = Number.isFinite(traversalLayer) ? Number(traversalLayer) : 0;
-        if (resolvedLayer !== 0) return null;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (resolvedLayer !== 0) {
+            if (typeof this.getFloorNodeAtLayer === "function") {
+                return this.getFloorNodeAtLayer(x, y, resolvedLayer, { allowScan: false }) || null;
+            }
+            return null;
+        }
         const tx = this.wrapX ? this.wrapIndexX(Math.round(x)) : Math.round(x);
         const ty = this.wrapY ? this.wrapIndexY(Math.round(y)) : Math.round(y);
         return (this.nodes[tx] && this.nodes[tx][ty]) ? this.nodes[tx][ty] : null;

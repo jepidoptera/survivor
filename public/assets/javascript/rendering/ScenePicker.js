@@ -3,6 +3,7 @@
     const PICK_READBACK_MIN_FRAME_DELAY = 1;
     const PICK_RENDER_BASE_SCALE = 0.5;
     const PICK_RENDER_DEBUG_SCALE = 1;
+    const PICK_FLOOR_LAYER_DEFAULT_HEIGHT_UNITS = 3;
     const PICK_PREVIEW_BLACK_KEY_FS = `
 precision mediump float;
 varying vec2 vTextureCoord;
@@ -55,12 +56,14 @@ attribute vec3 aWorldPosition;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
+uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
+uniform float uLayerBaseZ;
 varying vec2 vUvs;
 void main(void) {
     float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
@@ -79,7 +82,7 @@ void main(void) {
     float localDy = aWorldPosition.y - uWrapAnchorWorld.y;
     float camDx = anchorDx + localDx;
     float camDy = anchorDy + localDy;
-    float camDz = aWorldPosition.z;
+    float camDz = (aWorldPosition.z + uLayerBaseZ) - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
@@ -103,6 +106,7 @@ attribute vec3 aDepthWorld;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
+uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
@@ -110,6 +114,7 @@ uniform vec3 uModelOrigin;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
+uniform float uLayerBaseZ;
 varying vec2 vUvs;
 float shortestDelta(float fromV, float toV, float sizeV, float wrapEnabled) {
     if (wrapEnabled < 0.5 || sizeV <= 0.0) return toV - fromV;
@@ -125,13 +130,13 @@ void main(void) {
     float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWrappedX, uWorldSize.x, uWrapEnabled.x);
     float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWrappedY, uWorldSize.y, uWrapEnabled.y);
     float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
-    float screenY = (anchorCamDy - uModelOrigin.z) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
+    float screenY = (anchorCamDy - ((uModelOrigin.z + uLayerBaseZ) - uCameraZ)) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
 
     float worldY = uModelOrigin.y + aDepthWorld.y;
-    float worldZ = uModelOrigin.z + aDepthWorld.z;
+    float worldZ = uModelOrigin.z + aDepthWorld.z + uLayerBaseZ;
     float wrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, worldY, uWorldSize.y, uWrapEnabled.y);
     float camDy = shortestDelta(uCameraWorld.y, wrappedY, uWorldSize.y, uWrapEnabled.y);
-    float camDz = worldZ;
+    float camDz = worldZ - uCameraZ;
 
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
@@ -178,6 +183,19 @@ void main(void) {
             this.pickProxyByObject = new WeakMap();
             this.pickProxiesActiveThisFrame = new Set();
             this.pickEntriesThisFrame = [];
+            this.roadTilePickSurfaceCache = new Map();
+            this.roadTilePickSpriteBySectionKey = new Map();
+            this.roadTilePickStats = {
+                called: false,
+                version: "road-tile-pick-v2",
+                reason: "not-yet-run",
+                sections: 0,
+                roads: 0,
+                candidates: 0,
+                cacheMisses: 0,
+                cacheSize: 0
+            };
+            global.renderingScenePickerRoadTilePickStats = this.roadTilePickStats;
             this.pickPixelScratch = new Uint8Array(4);
             this.latestPickFrame = -1;
             this.latestPickX = 0;
@@ -200,7 +218,8 @@ void main(void) {
                 printed: false
             };
             this.publicApi = {
-                getHoveredObject: (options = null) => this.getHoveredObject(options)
+                getHoveredObject: (options = null) => this.getHoveredObject(options),
+                getRoadTilePickStats: () => ({ ...(this.roadTilePickStats || {}) })
             };
             global.renderingScenePicker = this.publicApi;
         }
@@ -814,6 +833,7 @@ void main(void) {
                 if (!hitbox) continue;
                 const isTriggerArea = !!(obj.type === "triggerArea" || obj.isTriggerArea === true);
                 if (isTriggerArea && !includeTriggerAreas) continue;
+                const baseZ = isTriggerArea ? 0 : this.getObjectPickLayerBaseZ(obj);
                 const isCircle = (
                     hitbox.type === "circle" &&
                     Number.isFinite(hitbox.x) &&
@@ -822,7 +842,7 @@ void main(void) {
                 );
                 if (isCircle) {
                     g.lineStyle(2, isTriggerArea ? 0xffff00 : 0xffffff, 1);
-                    const center = camera.worldToScreen(hitbox.x, hitbox.y, 0);
+                    const center = camera.worldToScreen(hitbox.x, hitbox.y, baseZ);
                     const rx = hitbox.radius * camera.viewscale;
                     const ry = hitbox.radius * camera.viewscale * camera.xyratio;
                     g.drawEllipse(center.x, center.y, rx, ry);
@@ -835,7 +855,7 @@ void main(void) {
                     ? this.getClippedTriggerAreaScreenPolygon(camera, points)
                     : points.reduce((acc, point) => {
                         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return acc;
-                        const screenPoint = camera.worldToScreen(point.x, point.y, 0);
+                        const screenPoint = camera.worldToScreen(point.x, point.y, baseZ);
                         if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) return acc;
                         acc.push(screenPoint);
                         return acc;
@@ -950,6 +970,335 @@ void main(void) {
                 if (!existing || existing === obj) return id;
             }
             return 0;
+        }
+
+        getRoadTilePickSectionBounds(asset, map) {
+            const tileCoordKeys = Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+            const tileWorldW = (Number.isFinite(map && map.hexWidth) ? map.hexWidth : (1 / 0.866)) * 1.18;
+            const tileWorldH = (Number.isFinite(map && map.hexHeight) ? map.hexHeight : 1) * 1.18;
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < tileCoordKeys.length; i++) {
+                const [xRaw, yRaw] = String(tileCoordKeys[i]).split(",");
+                const x = Number(xRaw);
+                const y = Number(yRaw);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                const wx = x * 0.866;
+                const wy = y + (x % 2 === 0 ? 0.5 : 0);
+                minX = Math.min(minX, wx - tileWorldW * 0.5);
+                maxX = Math.max(maxX, wx + tileWorldW * 0.5);
+                minY = Math.min(minY, wy - tileWorldH * 0.5);
+                maxY = Math.max(maxY, wy + tileWorldH * 0.5);
+            }
+            if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+                return null;
+            }
+            return {
+                minX,
+                minY,
+                maxX,
+                maxY,
+                width: Math.max(0.001, maxX - minX),
+                height: Math.max(0.001, maxY - minY)
+            };
+        }
+
+        getRoadTilePickPolygon(road) {
+            const hitbox = road && road.groundPlaneHitbox ? road.groundPlaneHitbox : null;
+            if (hitbox && Array.isArray(hitbox.points) && hitbox.points.length >= 3) {
+                const out = [];
+                for (let i = 0; i < hitbox.points.length; i++) {
+                    const point = hitbox.points[i];
+                    const x = Number(point && point.x);
+                    const y = Number(point && point.y);
+                    if (Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
+                }
+                if (out.length >= 3) return out;
+            }
+            const x = Number(road && road.x);
+            const y = Number(road && road.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+            const radiusX = (Number(road && road.width) || 1) * 0.5;
+            const radiusY = (Number(road && road.height) || 1) * 0.5;
+            const points = [];
+            for (let i = 0; i < 6; i++) {
+                const angle = (i * Math.PI / 3) + Math.PI;
+                points.push({
+                    x: x + Math.cos(angle) * radiusX,
+                    y: y + Math.sin(angle) * radiusY
+                });
+            }
+            return points;
+        }
+
+        getRoadTileSectionKey(road, map = null) {
+            if (!road) return "";
+            const node = typeof road.getNode === "function" ? road.getNode() : road.node;
+            if (node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0) {
+                return node._prototypeSectionKey;
+            }
+            if (typeof road._prototypeOwnerSectionKey === "string" && road._prototypeOwnerSectionKey.length > 0) {
+                return road._prototypeOwnerSectionKey;
+            }
+            if (
+                map &&
+                typeof map.getPrototypeSectionKeyForWorldPoint === "function" &&
+                Number.isFinite(road.x) &&
+                Number.isFinite(road.y)
+            ) {
+                const pointSectionKey = map.getPrototypeSectionKeyForWorldPoint(road.x, road.y);
+                if (typeof pointSectionKey === "string" && pointSectionKey.length > 0) {
+                    return pointSectionKey;
+                }
+            }
+            return "";
+        }
+
+        collectRoadTilePickRoadsForSection(ctx, sectionKey) {
+            const map = ctx && ctx.map;
+            const state = map && map._prototypeSectionState;
+            const roads = [];
+            const seenRoads = new Set();
+            let candidates = 0;
+            const addRoad = (road) => {
+                if (!road || road.gone || road.vanishing || road.type !== "road" || seenRoads.has(road)) return;
+                candidates += 1;
+                const roadSectionKey = this.getRoadTileSectionKey(road, map);
+                if (roadSectionKey !== sectionKey) return;
+                seenRoads.add(road);
+                roads.push(road);
+            };
+            if (state && state.nodesBySectionKey instanceof Map) {
+                const nodes = state.nodesBySectionKey.get(sectionKey) || [];
+                for (let i = 0; i < nodes.length; i++) {
+                    const node = nodes[i];
+                    if (!node || !Array.isArray(node.objects)) continue;
+                    for (let j = 0; j < node.objects.length; j++) addRoad(node.objects[j]);
+                }
+            }
+            const objectState = map && map._prototypeObjectState ? map._prototypeObjectState : null;
+            if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+                for (const road of objectState.activeRuntimeObjectsByRecordId.values()) addRoad(road);
+            }
+            if (map && typeof map.getGameObjects === "function") {
+                const objects = map.getGameObjects({ refresh: false }) || [];
+                for (let i = 0; i < objects.length; i++) addRoad(objects[i]);
+            }
+            roads._candidateRoadCount = candidates;
+            return roads;
+        }
+
+        getRoadTilePickSignature(roads) {
+            if (!Array.isArray(roads) || roads.length === 0) return "";
+            const parts = [];
+            for (let i = 0; i < roads.length; i++) {
+                const road = roads[i];
+                const id = this.ensureObjectPickerId(road);
+                if (!id) continue;
+                parts.push([
+                    id,
+                    Number.isInteger(road._prototypeRecordId) ? Number(road._prototypeRecordId) : "",
+                    Math.round((Number(road.x) || 0) * 1000),
+                    Math.round((Number(road.y) || 0) * 1000),
+                    Math.round(this.getRoadTilePickRoadBaseZ(road) * 1000),
+                    Number.isFinite(road._roadLastGeometryMask) ? Number(road._roadLastGeometryMask) : "",
+                    String(road.fillTexturePath || "")
+                ].join(","));
+            }
+            parts.sort();
+            return parts.join(";");
+        }
+
+        getRoadTilePickLayerBaseZ(layer) {
+            const n = Number(layer);
+            if (!Number.isFinite(n)) return 0;
+            return Math.round(n) * PICK_FLOOR_LAYER_DEFAULT_HEIGHT_UNITS;
+        }
+
+        getObjectPickLayerIndex(item, fallback = 0) {
+            if (!item) return Number.isFinite(fallback) ? Math.round(Number(fallback)) : 0;
+            if (Number.isFinite(item._renderTraversalLayer)) return Math.round(Number(item._renderTraversalLayer));
+            if (Number.isFinite(item.traversalLayer)) return Math.round(Number(item.traversalLayer));
+            if (Number.isFinite(item.level)) return Math.round(Number(item.level));
+            return Number.isFinite(fallback) ? Math.round(Number(fallback)) : 0;
+        }
+
+        getObjectPickLayerBaseZ(item, fallback = 0) {
+            if (item && Number.isFinite(item._renderLayerBaseZ)) return Number(item._renderLayerBaseZ);
+            return this.getRoadTilePickLayerBaseZ(this.getObjectPickLayerIndex(item, fallback));
+        }
+
+        getRoadTilePickRoadBaseZ(road) {
+            if (road && Number.isFinite(road.z)) return Number(road.z);
+            const node = road
+                ? (typeof road.getNode === "function" ? road.getNode() : road.node)
+                : null;
+            if (node && Number.isFinite(node.baseZ)) return Number(node.baseZ);
+            if (road && Number.isFinite(road.traversalLayer)) return this.getRoadTilePickLayerBaseZ(road.traversalLayer);
+            if (road && Number.isFinite(road.level)) return this.getRoadTilePickLayerBaseZ(road.level);
+            if (node && Number.isFinite(node.traversalLayer)) return this.getRoadTilePickLayerBaseZ(node.traversalLayer);
+            if (node && Number.isFinite(node.level)) return this.getRoadTilePickLayerBaseZ(node.level);
+            return 0;
+        }
+
+        getRoadTilePickSurfaceBaseZ(roads) {
+            if (!Array.isArray(roads)) return 0;
+            for (let i = 0; i < roads.length; i++) {
+                const baseZ = this.getRoadTilePickRoadBaseZ(roads[i]);
+                if (Number.isFinite(baseZ)) return baseZ;
+            }
+            return 0;
+        }
+
+        getRoadTilePickSurface(ctx, sectionKey, asset) {
+            const map = ctx && ctx.map;
+            const state = map && map._prototypeSectionState;
+            if (!sectionKey || !state || !(state.nodesBySectionKey instanceof Map) || typeof document === "undefined") return null;
+            let cache = this.roadTilePickSurfaceCache.get(sectionKey) || null;
+            if (asset && asset._level0RoadSurfaceDirtyPending === true && cache && cache.texture && cache.bounds) {
+                if (this._roadTilePickStatsAccumulator) {
+                    this._roadTilePickStatsAccumulator.pending += 1;
+                }
+                return cache;
+            }
+            const roads = this.collectRoadTilePickRoadsForSection(ctx, sectionKey);
+            if (this._roadTilePickStatsAccumulator) {
+                this._roadTilePickStatsAccumulator.candidates += Number(roads._candidateRoadCount) || 0;
+            }
+            const roadSignature = this.getRoadTilePickSignature(roads);
+            if (!roadSignature) return null;
+            const signature = [
+                Number(asset && asset._level0RoadSurfaceVersion) || 0,
+                roadSignature
+            ].join(":");
+            if (cache && cache.signature === signature && cache.texture && cache.bounds) return cache;
+            const bounds = this.getRoadTilePickSectionBounds(asset, map);
+            if (!bounds) return null;
+            const scale = Math.max(8, Math.min(128, 4096 / Math.max(bounds.width, bounds.height)));
+            const widthPx = Math.max(1, Math.ceil(bounds.width * scale));
+            const heightPx = Math.max(1, Math.ceil(bounds.height * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = widthPx;
+            canvas.height = heightPx;
+            const ctx2d = canvas.getContext("2d", { alpha: true });
+            if (!ctx2d) return null;
+            ctx2d.clearRect(0, 0, widthPx, heightPx);
+            ctx2d.imageSmoothingEnabled = false;
+            for (let i = 0; i < roads.length; i++) {
+                const road = roads[i];
+                const id = this.ensureObjectPickerId(road);
+                if (!id) continue;
+                const rgb = this.idToRgb(id);
+                const points = this.getRoadTilePickPolygon(road);
+                if (points.length < 3) continue;
+                ctx2d.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                ctx2d.beginPath();
+                for (let p = 0; p < points.length; p++) {
+                    const point = points[p];
+                    const x = (point.x - bounds.minX) * scale;
+                    const y = (point.y - bounds.minY) * scale;
+                    if (p === 0) ctx2d.moveTo(x, y);
+                    else ctx2d.lineTo(x, y);
+                }
+                ctx2d.closePath();
+                ctx2d.fill();
+            }
+            const texture = PIXI.Texture.from(canvas);
+            if (!texture) return null;
+            if (texture.baseTexture) {
+                if (PIXI.SCALE_MODES) texture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
+                if (typeof texture.baseTexture.update === "function") texture.baseTexture.update();
+            }
+            const previous = cache;
+            cache = { signature, texture, bounds, widthPx, heightPx, roadCount: roads.length, baseZ: this.getRoadTilePickSurfaceBaseZ(roads) };
+            this.roadTilePickSurfaceCache.set(sectionKey, cache);
+            if (previous && previous.texture && previous.texture !== texture && typeof previous.texture.destroy === "function") {
+                previous.texture.destroy(true);
+            }
+            return cache;
+        }
+
+        renderRoadTilePickSurfaces(ctx) {
+            const map = (ctx && ctx.map) || (global.wizard && global.wizard.map) || global.map || null;
+            const state = map && map._prototypeSectionState;
+            const camera = this.pickLastCamera || (ctx && ctx.camera) || null;
+            const publishStats = (next) => {
+                this.roadTilePickStats = {
+                    called: true,
+                    version: "road-tile-pick-v2",
+                    reason: "ok",
+                    sections: 0,
+                    roads: 0,
+                    candidates: 0,
+                    pendingSections: 0,
+                    cacheMisses: 0,
+                    cacheSize: this.roadTilePickSurfaceCache instanceof Map ? this.roadTilePickSurfaceCache.size : 0,
+                    ...(next || {})
+                };
+                global.renderingScenePickerRoadTilePickStats = this.roadTilePickStats;
+            };
+            if (!state || !(state.sectionAssetsByKey instanceof Map)) {
+                publishStats({ reason: "missing-section-state" });
+                return 0;
+            }
+            if (!camera) {
+                publishStats({ reason: "missing-camera" });
+                return 0;
+            }
+            const activeKeys = new Set();
+            let rendered = 0;
+            let roadCount = 0;
+            this._roadTilePickStatsAccumulator = { candidates: 0, pending: 0 };
+            let cacheMisses = 0;
+            for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
+                const beforeCache = this.roadTilePickSurfaceCache.get(sectionKey) || null;
+                const surface = this.getRoadTilePickSurface({ ...(ctx || {}), map }, sectionKey, asset);
+                if (!surface || !surface.texture || !surface.bounds) continue;
+                const afterCache = this.roadTilePickSurfaceCache.get(sectionKey) || null;
+                if (afterCache && afterCache !== beforeCache) cacheMisses += 1;
+                roadCount += Number(surface.roadCount) || 0;
+                let sprite = this.roadTilePickSpriteBySectionKey.get(sectionKey) || null;
+                if (!sprite) {
+                    sprite = new PIXI.Sprite(surface.texture);
+                    sprite.name = "renderingPickerRoadTileSurface";
+                    sprite.interactive = false;
+                    sprite.blendMode = PIXI.BLEND_MODES.NORMAL;
+                    this.roadTilePickSpriteBySectionKey.set(sectionKey, sprite);
+                }
+                sprite.texture = surface.texture;
+                const baseZ = Number.isFinite(surface.baseZ) ? Number(surface.baseZ) : 0;
+                if (typeof camera.worldToScreen === "function") {
+                    const p = camera.worldToScreen(surface.bounds.minX, surface.bounds.minY, baseZ);
+                    sprite.position.set(p.x, p.y);
+                } else {
+                    const x = (surface.bounds.minX - (Number(camera.x) || 0)) * (Number(camera.viewscale) || 1);
+                    const y = (surface.bounds.minY - (Number(camera.y) || 0) - (baseZ - (Number(camera.z) || 0))) * (Number(camera.viewscale) || 1) * (Number(camera.xyratio) || 1);
+                    sprite.position.set(x, y);
+                }
+                sprite.width = surface.bounds.width * (Number(camera.viewscale) || 1);
+                sprite.height = surface.bounds.height * (Number(camera.viewscale) || 1) * (Number(camera.xyratio) || 1);
+                sprite.visible = true;
+                this.pickContainer.addChild(sprite);
+                activeKeys.add(sectionKey);
+                rendered += 1;
+            }
+            for (const [sectionKey, sprite] of this.roadTilePickSpriteBySectionKey.entries()) {
+                if (activeKeys.has(sectionKey)) continue;
+                if (sprite) sprite.visible = false;
+            }
+            publishStats({
+                reason: "ok",
+                sections: rendered,
+                roads: roadCount,
+                candidates: this._roadTilePickStatsAccumulator ? this._roadTilePickStatsAccumulator.candidates : 0,
+                pendingSections: this._roadTilePickStatsAccumulator ? this._roadTilePickStatsAccumulator.pending : 0,
+                cacheMisses,
+                cacheSize: this.roadTilePickSurfaceCache instanceof Map ? this.roadTilePickSurfaceCache.size : 0
+            });
+            this._roadTilePickStatsAccumulator = null;
+            return rendered;
         }
 
         ensureObjectPickerId(obj) {
@@ -1298,6 +1647,7 @@ void main(void) {
                 ? PIXI.Shader.from(useLocalDepthPositions ? PICK_LOCAL_DEPTH_MESH_VS : PICK_WORLD_MESH_VS, PICK_MESH_FS, {
                     uScreenSize: new Float32Array([1, 1]),
                     uCameraWorld: new Float32Array([0, 0]),
+                    uCameraZ: 0,
                     uViewScale: 1,
                     uXyRatio: 1,
                     uDepthRange: new Float32Array([0, 1]),
@@ -1305,6 +1655,7 @@ void main(void) {
                     uWorldSize: new Float32Array([0, 0]),
                     uWrapEnabled: new Float32Array([0, 0]),
                     uWrapAnchorWorld: new Float32Array([0, 0]),
+                    uLayerBaseZ: 0,
                     uSampler: PIXI.Texture.WHITE,
                     uPickColor: new Float32Array([1, 1, 1]),
                     uAlphaCutoff: 0.08
@@ -1406,6 +1757,7 @@ void main(void) {
             const proxy = record.proxy;
             if (record.type === "graphics") {
                 const camera = this.pickLastCamera || null;
+                const baseZ = record.isTriggerAreaBorder ? 0 : this.getObjectPickLayerBaseZ(item);
                 const points = (
                     item &&
                     item.groundPlaneHitbox &&
@@ -1419,7 +1771,7 @@ void main(void) {
                     ? this.getClippedTriggerAreaScreenPolygon(camera, points)
                     : points.reduce((acc, pt) => {
                         if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return acc;
-                        const sp = camera.worldToScreen(Number(pt.x), Number(pt.y), 0);
+                        const sp = camera.worldToScreen(Number(pt.x), Number(pt.y), baseZ);
                         if (!sp || !Number.isFinite(sp.x) || !Number.isFinite(sp.y)) return acc;
                         acc.push(sp);
                         return acc;
@@ -1593,6 +1945,7 @@ void main(void) {
                         record.shader.uniforms.uScreenSize[1] = Math.max(1, screenH);
                         record.shader.uniforms.uCameraWorld[0] = Number(camera && camera.x) || 0;
                         record.shader.uniforms.uCameraWorld[1] = Number(camera && camera.y) || 0;
+                        record.shader.uniforms.uCameraZ = Number(camera && camera.z) || 0;
                         record.shader.uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
                             ? Number(mapRef.worldWidth)
                             : 0;
@@ -1607,6 +1960,17 @@ void main(void) {
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
                         record.shader.uniforms.uDepthRange[1] = Number(depthRange && depthRange.invSpan) || 1;
+                        if (Number.isFinite(record.shader.uniforms.uLayerBaseZ)) {
+                            const sourceLayerBaseZ = Number(
+                                displayObj &&
+                                displayObj.shader &&
+                                displayObj.shader.uniforms &&
+                                displayObj.shader.uniforms.uLayerBaseZ
+                            );
+                            record.shader.uniforms.uLayerBaseZ = Number.isFinite(sourceLayerBaseZ)
+                                ? sourceLayerBaseZ
+                                : 0;
+                        }
                         if (
                             record.shader.uniforms.uModelOrigin &&
                             typeof record.shader.uniforms.uModelOrigin.length === "number" &&
@@ -1688,6 +2052,7 @@ void main(void) {
             this.pickBackgroundSprite.height = screenHeight;
             this.pickBackgroundSprite.visible = true;
             this.pickContainer.addChild(this.pickBackgroundSprite);
+            this.renderRoadTilePickSurfaces(ctx);
             const explicitDrawOrder = Array.isArray(ctx && ctx.pickRenderItems)
                 ? ctx.pickRenderItems
                 : null;
@@ -1830,6 +2195,7 @@ void main(void) {
         getHoveredObject(options = null) {
             const picked = this.latestPickObject || null;
             if (!picked) return null;
+            if (picked.gone || picked.vanishing) return null;
             const opts = options && typeof options === "object" ? options : {};
             if (opts && typeof opts.filter === "function" && !opts.filter(picked)) {
                 return null;
@@ -1860,6 +2226,7 @@ void main(void) {
             if (!hitbox) return false;
             const camera = ctx && ctx.camera;
             if (!camera || typeof camera.worldToScreen !== "function") return false;
+            const baseZ = this.getObjectPickLayerBaseZ(target);
 
             g.clear();
             g.lineStyle(2, 0x66c2ff, Math.max(0.2, 0.55 * pulse));
@@ -1872,7 +2239,7 @@ void main(void) {
                 Number.isFinite(hitbox.y) &&
                 Number.isFinite(hitbox.radius)
             ) {
-                const p = camera.worldToScreen(hitbox.x, hitbox.y, 0);
+                const p = camera.worldToScreen(hitbox.x, hitbox.y, baseZ);
                 g.drawEllipse(
                     p.x,
                     p.y,
@@ -1884,7 +2251,7 @@ void main(void) {
                 for (let i = 0; i < hitbox.points.length; i++) {
                     const pt = hitbox.points[i];
                     if (!pt) continue;
-                    const p = camera.worldToScreen(Number(pt.x) || 0, Number(pt.y) || 0, 0);
+                    const p = camera.worldToScreen(Number(pt.x) || 0, Number(pt.y) || 0, baseZ);
                     if (i === 0) g.moveTo(p.x, p.y);
                     else g.lineTo(p.x, p.y);
                 }

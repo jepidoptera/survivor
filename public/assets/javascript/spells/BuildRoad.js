@@ -44,6 +44,19 @@ class BuildRoad extends globalThis.Spell {
         const newRoad = new Road({x: targetNode.x, y: targetNode.y}, [], wizard.map, {
             fillTexturePath: selectedFlooring
         });
+        if (typeof globalThis.markPrototypeLevel0RoadSurfaceDirty === "function") {
+            globalThis.markPrototypeLevel0RoadSurfaceDirty(wizard.map, targetNode);
+        } else {
+            const sectionKey = targetNode && typeof targetNode._prototypeSectionKey === "string" ? targetNode._prototypeSectionKey : "";
+            const state = wizard && wizard.map ? wizard.map._prototypeSectionState : null;
+            const asset = sectionKey && state && state.sectionAssetsByKey instanceof Map
+                ? state.sectionAssetsByKey.get(sectionKey)
+                : null;
+            if (asset) {
+                asset._level0RoadSurfaceModelVersion = (Number(asset._level0RoadSurfaceModelVersion) || 0) + 1;
+                asset._level0RoadSurfaceVersion = (Number(asset._level0RoadSurfaceVersion) || 0) + 1;
+            }
+        }
         if (
             newRoad &&
             wizard &&

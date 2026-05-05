@@ -68,6 +68,19 @@
             const viewportW = viewportRef && Number.isFinite(viewportRef.width) ? viewportRef.width : 24;
             const viewportH = viewportRef && Number.isFinite(viewportRef.height) ? viewportRef.height : 24;
             const farDist = Math.max(viewportW, viewportH) * 1.5;
+            const projectionZ = Number.isFinite(state.viewerBaseZ)
+                ? Number(state.viewerBaseZ)
+                : (
+                    wizard && Number.isFinite(wizard.currentLayerBaseZ)
+                        ? Number(wizard.currentLayerBaseZ)
+                        : (
+                            rendering && typeof rendering.getLayerBaseZForLevel === "function"
+                                ? rendering.getLayerBaseZForLevel(
+                                    wizard && Number.isFinite(wizard.currentLayer) ? wizard.currentLayer : 0
+                                )
+                                : 0
+                        )
+                );
             if (!global.LOSSystem || typeof global.LOSSystem.buildPolygonWorldPoints !== "function") {
                 maskGraphics.visible = false;
                 return false;
@@ -91,7 +104,7 @@
             for (let i = 0; i < worldPoints.length; i++) {
                 const pt = worldPoints[i];
                 if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
-                const screen = camera.worldToScreen(pt.x, pt.y, 0);
+                const screen = camera.worldToScreen(pt.x, pt.y, projectionZ);
                 if (!started) {
                     maskGraphics.moveTo(screen.x, screen.y);
                     started = true;
@@ -113,6 +126,7 @@
                 if (layers.ground) layers.ground.mask = null;
                 if (layers.roadsFloor) layers.roadsFloor.mask = null;
                 if (layers.groundObjects) layers.groundObjects.mask = null;
+                if (rendering.floorVisualContainer) rendering.floorVisualContainer.mask = null;
                 if (this.blackBackdropGraphics) this.blackBackdropGraphics.visible = false;
                 if (this.occlusionMaskGraphics) this.occlusionMaskGraphics.visible = false;
                 if (typeof rendering.setFrameMetric === "function") {
@@ -133,6 +147,7 @@
             if (layers.ground) layers.ground.mask = hasMask ? occlusionMask : null;
             if (layers.roadsFloor) layers.roadsFloor.mask = hasMask ? occlusionMask : null;
             if (layers.groundObjects) layers.groundObjects.mask = hasMask ? occlusionMask : null;
+            if (rendering.floorVisualContainer) rendering.floorVisualContainer.mask = hasMask ? occlusionMask : null;
             this.active = true;
             return true;
         }

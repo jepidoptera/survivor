@@ -68,6 +68,43 @@ class Spell {
         return target.rotationAxis === "ground";
     }
 
+    static getLayerBaseZForLevel(level) {
+        const n = Number(level);
+        if (!Number.isFinite(n)) return 0;
+        return Math.round(n) * 3;
+    }
+
+    static getTargetWorldBaseZ(target) {
+        if (!target) return 0;
+        if (target.type === "wallSection" || target.type === "wall") {
+            if (Number.isFinite(target.bottomZ)) return Number(target.bottomZ);
+        }
+        if (target.type === "roof") {
+            if (Number.isFinite(target.z)) return Number(target.z);
+            if (Number.isFinite(target.heightFromGround)) return Number(target.heightFromGround);
+            if (Number.isFinite(target.baseZ)) return Number(target.baseZ);
+        }
+        if (target.type === "road" && Number.isFinite(target.z)) return Number(target.z);
+        if (Number.isFinite(target.currentLayerBaseZ)) {
+            return Number(target.currentLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        if (Number.isFinite(target._renderLayerBaseZ)) {
+            return Number(target._renderLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const node = target.node || (typeof target.getNode === "function" ? target.getNode() : null);
+        if (node && Number.isFinite(node.baseZ)) {
+            return Number(node.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const layer = Number.isFinite(target._renderTraversalLayer)
+            ? Number(target._renderTraversalLayer)
+            : (Number.isFinite(target.traversalLayer)
+                ? Number(target.traversalLayer)
+                : (Number.isFinite(target.level)
+                    ? Number(target.level)
+                    : (Number.isFinite(target.currentLayer) ? Number(target.currentLayer) : 0)));
+        return Spell.getLayerBaseZForLevel(layer) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+    }
+
     constructor(x, y) {
         this.x = x;
         this.y = y;
@@ -104,10 +141,19 @@ class Spell {
         if (resolver) {
             const aim = resolver((typeof wizard !== "undefined") ? wizard : null, target);
             if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                if (Number.isFinite(aim.z)) {
+                    this.visualTargetZ = Number(aim.z);
+                    return { x: Number(aim.x), y: Number(aim.y), z: Number(aim.z) };
+                }
                 return { x: Number(aim.x), y: Number(aim.y) };
             }
         }
         if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
+        const z = Spell.getTargetWorldBaseZ(target);
+        if (Number.isFinite(z)) {
+            this.visualTargetZ = Number(z);
+            return { x: Number(target.x), y: Number(target.y), z: Number(z) };
+        }
         return { x: Number(target.x), y: Number(target.y) };
     }
     retargetMovementTo(point, speedPerFrame = null) {
@@ -128,6 +174,9 @@ class Spell {
         this.visible = true;
         this.x = wizard.x;
         this.y = wizard.y;
+        const casterWorldZ = Spell.getTargetWorldBaseZ(wizard);
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = casterWorldZ;
         this.z = 0;
         
         let xdist = (targetX - this.x);

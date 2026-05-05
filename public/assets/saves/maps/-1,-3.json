@@ -18327,6 +18327,40 @@
       "chaseRadius": 14.610797439320763,
       "scriptingName": "fragglegod1",
       "id": 281
+    },
+    {
+      "type": "squirrel",
+      "x": -51.44040000000002,
+      "y": 16.200000000000017,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5501464597520629,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel74",
+      "id": 22
+    },
+    {
+      "type": "squirrel",
+      "x": -47.63,
+      "y": 15.333333333333336,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5634039094102289,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel173",
+      "id": 150
     }
   ],
   "powerups": []

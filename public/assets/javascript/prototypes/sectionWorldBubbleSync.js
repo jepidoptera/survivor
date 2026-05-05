@@ -437,6 +437,8 @@
                 rebuildLoadedMs: 0,
                 seamMs: 0,
                 clearanceMs: 0,
+                reactivateOverlapMs: 0,
+                reactivateOverlapCount: 0,
                 deactivatedNodeCount: 0,
                 activatedNodeCount: 0
             };
@@ -448,18 +450,130 @@
                 ? Array.from(transition.targetActiveKeys)
                 : [];
             let materializedNodeSections = 0;
-            if (targetActiveKeys.length > 0 && typeof map.materializePrototypeSectionNodes === "function") {
+            const unregBatchSize = 500;
+            if (deactivateKeys.length > 0 && typeof map.unregisterSectionFloorNodes === "function") {
+                for (let i = 0; i < deactivateKeys.length; i++) {
+                    const sectionKey = deactivateKeys[i];
+                    if (typeof map.prepareFloorSectionUnregisterForSection === "function") {
+                        tasks.push(createPrototypeTask("layout.floorUnregisterPlan", () => {
+                            const nodeCount = map.prepareFloorSectionUnregisterForSection(sectionKey);
+                            if (nodeCount === 0) {
+                                map.commitFloorSectionUnregisterForSection(sectionKey);
+                                return;
+                            }
+                            const unregTasks = [];
+                            for (let offset = 0; offset < nodeCount; offset += unregBatchSize) {
+                                const batchStart = offset;
+                                unregTasks.push(createPrototypeTask("layout.floorUnregisterBatch", () => {
+                                    map.unregisterFloorSectionNodeBatchForSection(sectionKey, batchStart, unregBatchSize);
+                                }));
+                            }
+                            unregTasks.push(createPrototypeTask("layout.floorUnregisterCommit", () => {
+                                map.commitFloorSectionUnregisterForSection(sectionKey);
+                            }));
+                            prependPrototypeTasks(session, unregTasks);
+                        }));
+                    } else {
+                        tasks.push(createPrototypeTask("layout.floorUnregister", () => {
+                            map.unregisterSectionFloorNodes(sectionKey);
+                        }));
+                    }
+                }
+            }
+            const buildBatchSize = 300;
+            const floorNodeBatchSize = 300;
+            const floorConnectBatchSize = 350;
+            const sparseConnectBatchSize = 500;
+            if (targetActiveKeys.length > 0) {
                 for (let i = 0; i < targetActiveKeys.length; i++) {
                     const sectionKey = targetActiveKeys[i];
-                    tasks.push(createPrototypeTask("layout.materializeNodes", () => {
-                        materializedNodeSections += map.materializePrototypeSectionNodes([sectionKey]);
-                    }));
-                }
-                tasks.push(createPrototypeTask("layout.materializeFinalize", () => {
-                    if (materializedNodeSections > 0 && typeof map.rebuildPrototypeFloorRuntime === "function") {
-                        map.rebuildPrototypeFloorRuntime();
+                    if (typeof map.startSparseNodeBuildForSection === "function") {
+                        tasks.push(createPrototypeTask("layout.materializePlan", () => {
+                            if (!map._prototypeSectionState || map._prototypeSectionState.useSparseNodes !== true) {
+                                materializedNodeSections += map.materializePrototypeSectionNodes([sectionKey]);
+                                return;
+                            }
+                            // Skip if already built
+                            const state = map._prototypeSectionState;
+                            if (state.nodesBySectionKey && state.nodesBySectionKey.has(sectionKey)) return;
+                            const asset = map.getPrototypeSectionAsset(sectionKey);
+                            if (!asset) {
+                                // Fallback: monolithic (section may not be hydrated yet)
+                                materializedNodeSections += map.materializePrototypeSectionNodes([sectionKey]);
+                                return;
+                            }
+                            const started = map.startSparseNodeBuildForSection(sectionKey);
+                            if (!started) {
+                                materializedNodeSections += 1;
+                                return;
+                            }
+                            const tileCount = map.getPrototypeTileKeyCount(sectionKey);
+                            const buildTasks = [];
+                            for (let offset = 0; offset < tileCount; offset += buildBatchSize) {
+                                const batchStart = offset;
+                                buildTasks.push(createPrototypeTask("layout.materializeBuildBatch", () => {
+                                    map.addSparseNodeBuildBatchForSection(sectionKey, batchStart, buildBatchSize);
+                                }));
+                            }
+                            buildTasks.push(createPrototypeTask("layout.materializeCommit", () => {
+                                map.commitSparseNodeBuildForSection(sectionKey);
+                                materializedNodeSections += 1;
+                            }));
+                            buildTasks.push(createPrototypeTask("layout.materializeConnectPlan", () => {
+                                const nodeCount = map.getSparseNodeCount(sectionKey);
+                                const connectTasks = [];
+                                for (let offset = 0; offset < nodeCount; offset += sparseConnectBatchSize) {
+                                    const batchStart = offset;
+                                    connectTasks.push(createPrototypeTask("layout.materializeConnect", () => {
+                                        map.connectSparseNodesForSectionBatch(sectionKey, batchStart, sparseConnectBatchSize);
+                                    }));
+                                }
+                                prependPrototypeTasks(session, connectTasks);
+                            }));
+                            prependPrototypeTasks(session, buildTasks);
+                        }));
+                    } else if (typeof map.materializePrototypeSectionNodes === "function") {
+                        tasks.push(createPrototypeTask("layout.materializeNodes", () => {
+                            materializedNodeSections += map.materializePrototypeSectionNodes([sectionKey]);
+                        }));
                     }
-                }));
+                    if (typeof map.prepareFloorSectionFragmentsForSection === "function") {
+                        tasks.push(createPrototypeTask("layout.floorPrepare", () => {
+                            const prepared = map.prepareFloorSectionFragmentsForSection(sectionKey);
+                            if (!prepared) return; // already registered or nothing to do
+                            const nodeCount = typeof map.getSectionNodeCount === "function"
+                                ? map.getSectionNodeCount(sectionKey) : 0;
+                            const batchTasks = [];
+                            for (let offset = 0; offset < nodeCount; offset += floorNodeBatchSize) {
+                                const batchStart = offset;
+                                batchTasks.push(createPrototypeTask("layout.floorBatch", () => {
+                                    map.addFloorSectionNodeBatchForSection(sectionKey, batchStart, floorNodeBatchSize);
+                                }));
+                            }
+                            // floorConnectPrepare will read actual node count and inject connect batches
+                            batchTasks.push(createPrototypeTask("layout.floorConnectPrepare", () => {
+                                const totalNodes = typeof map.prepareFloorSectionConnectionForSection === "function"
+                                    ? map.prepareFloorSectionConnectionForSection(sectionKey) : 0;
+                                const connectTasks = [];
+                                for (let offset = 0; offset < totalNodes; offset += floorConnectBatchSize) {
+                                    const batchStart = offset;
+                                    connectTasks.push(createPrototypeTask("layout.floorConnect", () => {
+                                        map.connectFloorSectionNodeBatchForSection(sectionKey, batchStart, floorConnectBatchSize);
+                                    }));
+                                }
+                                connectTasks.push(createPrototypeTask("layout.floorCommit", () => {
+                                    map.commitFloorSectionConnectionForSection(sectionKey);
+                                }));
+                                prependPrototypeTasks(session, connectTasks);
+                            }));
+                            prependPrototypeTasks(session, batchTasks);
+                        }));
+                    } else if (typeof map.registerSectionFloorNodes === "function") {
+                        tasks.push(createPrototypeTask("layout.floorRegister", () => {
+                            map.registerSectionFloorNodes(sectionKey);
+                        }));
+                    }
+                }
             }
             for (let s = 0; s < activateKeys.length; s++) {
                 const sectionKey = activateKeys[s];
@@ -526,46 +640,131 @@
             // later deactivates, it deactivates those shared nodes even though
             // the original owning section is still active.
             if (deactivateKeys.length > 0) {
-                tasks.push(createPrototypeTask("layout.reactivateOverlap", () => {
-                    const start = prototypeNow();
+                tasks.push(createPrototypeTask("layout.reactivateOverlapPlan", () => {
                     if (!(state.actualActiveSectionKeys instanceof Set)) return;
-                    let reactivated = 0;
+                    const overlapBatchSize = 500;
+                    const overlapTasks = [];
                     for (const sectionKey of state.actualActiveSectionKeys) {
-                        const nodes = state.nodesBySectionKey.get(sectionKey) || [];
-                        for (let n = 0; n < nodes.length; n++) {
-                            const node = nodes[n];
-                            if (!node || node._prototypeSectionActive === true) continue;
-                            node._prototypeSectionActive = true;
-                            node.blocked = false;
-                            const coordKey = `${node.xindex},${node.yindex}`;
-                            state.loadedNodesByCoordKey.set(coordKey, node);
-                            if (!state.loadedNodeKeySet.has(coordKey)) {
-                                state.loadedNodeKeySet.add(coordKey);
-                                state.loadedNodes.push(node);
-                            }
-                            reactivated += 1;
+                        const sectionNodes = state.nodesBySectionKey.get(sectionKey) || [];
+                        for (let offset = 0; offset < sectionNodes.length; offset += overlapBatchSize) {
+                            const batchStart = offset;
+                            overlapTasks.push(createPrototypeTask("layout.reactivateOverlapChunk", () => {
+                                const t0 = prototypeNow();
+                                const nodes = state.nodesBySectionKey.get(sectionKey) || [];
+                                const end = Math.min(batchStart + overlapBatchSize, nodes.length);
+                                for (let n = batchStart; n < end; n++) {
+                                    const node = nodes[n];
+                                    if (!node || node._prototypeSectionActive === true) continue;
+                                    node._prototypeSectionActive = true;
+                                    node.blocked = false;
+                                    const coordKey = `${node.xindex},${node.yindex}`;
+                                    state.loadedNodesByCoordKey.set(coordKey, node);
+                                    if (!state.loadedNodeKeySet.has(coordKey)) {
+                                        state.loadedNodeKeySet.add(coordKey);
+                                        state.loadedNodes.push(node);
+                                    }
+                                    stats.reactivateOverlapCount += 1;
+                                }
+                                stats.reactivateOverlapMs += prototypeNow() - t0;
+                            }));
                         }
                     }
-                    stats.reactivateOverlapMs = prototypeNow() - start;
-                    stats.reactivateOverlapCount = reactivated;
+                    prependPrototypeTasks(session, overlapTasks);
                 }));
             }
-            tasks.push(createPrototypeTask("layout.rebuildLoaded", () => {
-                const start = prototypeNow();
-                state.loadedNodes = state.loadedNodes.filter((node) => (
-                    node &&
-                    node._prototypeSectionActive === true &&
-                    state.loadedNodeKeySet.has(`${node.xindex},${node.yindex}`)
-                ));
-                if (typeof sortPrototypeLoadedNodes === "function") {
-                    sortPrototypeLoadedNodes(state.loadedNodes);
+            tasks.push(createPrototypeTask("layout.rebuildLoadedPlan", () => {
+                state._rebuildLoadedTemp = [];
+                const rebuildBatchSize = 500;
+                const activeKeys = Array.from(state.actualActiveSectionKeys instanceof Set ? state.actualActiveSectionKeys : []);
+                const rebuildTasks = [];
+                for (let ski = 0; ski < activeKeys.length; ski++) {
+                    const sk = activeKeys[ski];
+                    const sectionNodes = state.nodesBySectionKey.get(sk) || [];
+                    for (let offset = 0; offset < sectionNodes.length; offset += rebuildBatchSize) {
+                        const batchStart = offset;
+                        rebuildTasks.push(createPrototypeTask("layout.rebuildLoadedChunk", () => {
+                            const t0 = prototypeNow();
+                            const nodes = state.nodesBySectionKey.get(sk) || [];
+                            const end = Math.min(batchStart + rebuildBatchSize, nodes.length);
+                            for (let n = batchStart; n < end; n++) {
+                                const node = nodes[n];
+                                if (node && node._prototypeSectionActive === true) {
+                                    state._rebuildLoadedTemp.push(node);
+                                }
+                            }
+                            stats.rebuildLoadedMs += prototypeNow() - t0;
+                        }));
+                    }
                 }
-                stats.rebuildLoadedMs += prototypeNow() - start;
+                rebuildTasks.push(createPrototypeTask("layout.rebuildLoadedSort", () => {
+                    const t0 = prototypeNow();
+                    state.loadedNodes = state._rebuildLoadedTemp;
+                    state._rebuildLoadedTemp = null;
+                    if (typeof sortPrototypeLoadedNodes === "function") {
+                        sortPrototypeLoadedNodes(state.loadedNodes);
+                    }
+                    stats.rebuildLoadedMs += prototypeNow() - t0;
+                }));
+                prependPrototypeTasks(session, rebuildTasks);
             }));
-            tasks.push(createPrototypeTask("layout.seam", () => {
-                const start = prototypeNow();
-                updatePrototypeSeamSegmentsForSections(state, transition.changedSectionKeys instanceof Set ? transition.changedSectionKeys : new Set());
-                stats.seamMs += prototypeNow() - start;
+            tasks.push(createPrototypeTask("layout.seamPlan", () => {
+                const changedKeys = transition.changedSectionKeys instanceof Set ? transition.changedSectionKeys : new Set();
+                if (!(state.seamSegmentsByPairKey instanceof Map)) {
+                    state.seamSegmentsByPairKey = new Map();
+                }
+                // Remove stale entries for changed sections
+                for (const [pairKey, segment] of state.seamSegmentsByPairKey.entries()) {
+                    if (!segment) continue;
+                    if (changedKeys.has(segment._sectionKeyA) || changedKeys.has(segment._sectionKeyB)) {
+                        state.seamSegmentsByPairKey.delete(pairKey);
+                    }
+                }
+                // Inject per-section seam scan tasks
+                const seamTasks = [];
+                for (const sectionKey of changedKeys) {
+                    seamTasks.push(createPrototypeTask("layout.seamScanSection", () => {
+                        const t0 = prototypeNow();
+                        const adjacentDirections = [1, 3, 5, 7, 9, 11];
+                        const sectionNodes = state.nodesBySectionKey.get(sectionKey) || [];
+                        for (let i = 0; i < sectionNodes.length; i++) {
+                            const node = sectionNodes[i];
+                            if (!node || node._prototypeSectionActive !== true || !Array.isArray(node.neighbors)) continue;
+                            for (let d = 0; d < adjacentDirections.length; d++) {
+                                const neighbor = node.neighbors[adjacentDirections[d]];
+                                if (!neighbor || neighbor._prototypeSectionActive !== true) continue;
+                                if (!neighbor._prototypeSectionKey || neighbor._prototypeSectionKey === node._prototypeSectionKey) continue;
+                                const keyA = `${node.xindex},${node.yindex}`;
+                                const keyB = `${neighbor.xindex},${neighbor.yindex}`;
+                                const pairKey = keyA < keyB ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
+                                if (state.seamSegmentsByPairKey.has(pairKey)) continue;
+                                const dx = Number(neighbor.x) - Number(node.x);
+                                const dy = Number(neighbor.y) - Number(node.y);
+                                const length = Math.hypot(dx, dy);
+                                if (!(length > 1e-6)) continue;
+                                const mx = (Number(node.x) + Number(neighbor.x)) * 0.5;
+                                const my = (Number(node.y) + Number(neighbor.y)) * 0.5;
+                                const nx = -dy / length;
+                                const ny = dx / length;
+                                const halfSegmentLength = 0.32;
+                                state.seamSegmentsByPairKey.set(pairKey, {
+                                    x1: mx - nx * halfSegmentLength, y1: my - ny * halfSegmentLength,
+                                    x2: mx + nx * halfSegmentLength, y2: my + ny * halfSegmentLength,
+                                    _sectionKeyA: node._prototypeSectionKey,
+                                    _sectionKeyB: neighbor._prototypeSectionKey
+                                });
+                            }
+                        }
+                        stats.seamMs += prototypeNow() - t0;
+                    }));
+                }
+                seamTasks.push(createPrototypeTask("layout.seamCommit", () => {
+                    const t0 = prototypeNow();
+                    state.seamSegments = Array.from(state.seamSegmentsByPairKey.values()).map((seg) => ({
+                        x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2
+                    }));
+                    stats.seamMs += prototypeNow() - t0;
+                }));
+                prependPrototypeTasks(session, seamTasks);
             }));
             if (activateKeys.length > 0 && typeof map.applyPrototypeSectionClearance === "function") {
                 const clearanceChunkSize = 1200;
@@ -664,6 +863,13 @@
                 animalState.activeRecordSignature = "";
                 return removedRuntimeAnimals.length;
             };
+            const getPendingWallSyncSectionKeys = () => {
+                const state = map && map._prototypeSectionState;
+                const transition = state && state.pendingLayoutTransition;
+                if (!transition) return null;
+                const keys = Array.isArray(transition.keysToActivate) ? transition.keysToActivate : [];
+                return keys.filter((sectionKey) => typeof sectionKey === "string" && sectionKey.length > 0);
+            };
             map.updatePrototypeSectionBubble = function updatePrototypeSectionBubble(actor, options = {}) {
                 const totalStart = prototypeNow();
                 const previousCenterKey = this._prototypeSectionState && this._prototypeSectionState.activeCenterKey;
@@ -676,7 +882,8 @@
                     enqueuePrototypeAsyncPowerupSync(asyncSession);
                     enqueuePrototypeAsyncAnimalSync(asyncSession);
                     enqueuePrototypeAsyncObjectSync(asyncSession);
-                    enqueuePrototypeAsyncWallSync(asyncSession);
+                    const wallSectionKeys = getPendingWallSyncSectionKeys();
+                    enqueuePrototypeAsyncWallSync(asyncSession, wallSectionKeys ? { onlySectionKeys: wallSectionKeys } : undefined);
                     enqueuePrototypeAsyncLayoutSync(asyncSession);
                     this._prototypeBubbleShiftSession = asyncSession;
                 }
@@ -702,7 +909,8 @@
                 enqueuePrototypeAsyncPowerupSync(asyncSession);
                 enqueuePrototypeAsyncAnimalSync(asyncSession);
                 enqueuePrototypeAsyncObjectSync(asyncSession);
-                enqueuePrototypeAsyncWallSync(asyncSession);
+                const wallSectionKeys = getPendingWallSyncSectionKeys();
+                enqueuePrototypeAsyncWallSync(asyncSession, wallSectionKeys ? { onlySectionKeys: wallSectionKeys } : undefined);
                 this._prototypeBubbleShiftSession = asyncSession;
                 advancePrototypeAsyncBubbleShiftSession(asyncSession, options);
                 updatePrototypeGpuDebugStats(this);

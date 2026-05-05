@@ -29,6 +29,293 @@
             return (typeof type === "string" && type.length > 0) ? type : "unknown";
         };
 
+        const restoreActivePrototypeWallRegistry = (wallState) => {
+            const wallCtor = globalScope.WallSectionUnit;
+            const registry = (wallCtor && wallCtor._allSections instanceof Map)
+                ? wallCtor._allSections
+                : null;
+            if (!registry || !(wallState && wallState.activeRuntimeWallsByRecordId instanceof Map)) {
+                return 0;
+            }
+            let restoredCount = 0;
+            for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
+                if (!runtimeWall || runtimeWall.gone) continue;
+                const wallId = Number.isInteger(runtimeWall.id)
+                    ? Number(runtimeWall.id)
+                    : (Number.isInteger(recordId) ? Number(recordId) : null);
+                if (!Number.isInteger(wallId)) continue;
+                if (!Number.isInteger(runtimeWall.id)) {
+                    runtimeWall.id = wallId;
+                }
+                if (registry.get(wallId) === runtimeWall) continue;
+                registry.set(wallId, runtimeWall);
+                restoredCount += 1;
+            }
+            return restoredCount;
+        };
+
+        const chooseMountedWallReplacementId = (obj, replacementIds) => {
+            const ids = Array.isArray(replacementIds)
+                ? replacementIds.filter((id) => Number.isInteger(Number(id))).map((id) => Number(id))
+                : [];
+            if (ids.length === 0) return null;
+            if (ids.length === 1 || !obj || !Number.isFinite(obj.x) || !Number.isFinite(obj.y)) return ids[0];
+            const wallCtor = globalScope.WallSectionUnit;
+            const registry = wallCtor && wallCtor._allSections instanceof Map ? wallCtor._allSections : null;
+            if (!registry) return ids[0];
+            let bestId = ids[0];
+            let bestDist = Infinity;
+            for (let i = 0; i < ids.length; i++) {
+                const wall = registry.get(ids[i]);
+                if (!wall || !wall.startPoint || !wall.endPoint) continue;
+                const ax = Number(wall.startPoint.x);
+                const ay = Number(wall.startPoint.y);
+                const bx = Number(wall.endPoint.x);
+                const by = Number(wall.endPoint.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+                const dx = bx - ax;
+                const dy = by - ay;
+                const lenSq = dx * dx + dy * dy;
+                const t = lenSq > 1e-8
+                    ? Math.max(0, Math.min(1, (((Number(obj.x) - ax) * dx) + ((Number(obj.y) - ay) * dy)) / lenSq))
+                    : 0;
+                const cx = ax + dx * t;
+                const cy = ay + dy * t;
+                const ox = Number(obj.x) - cx;
+                const oy = Number(obj.y) - cy;
+                const dist = (ox * ox) + (oy * oy);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestId = ids[i];
+                }
+            }
+            return bestId;
+        };
+
+        const getMountedWallReferenceId = (entry) => {
+            if (!entry || typeof entry !== "object") return null;
+            const candidates = [
+                entry.mountedWallSectionUnitId,
+                entry.mountedWallLineGroupId,
+                entry.mountedSectionId
+            ];
+            for (let i = 0; i < candidates.length; i++) {
+                const id = Number(candidates[i]);
+                if (Number.isInteger(id)) return id;
+            }
+            return null;
+        };
+
+        const setMountedWallReferenceId = (entry, replacementId) => {
+            if (!entry || !Number.isInteger(replacementId)) return false;
+            entry.mountedWallSectionUnitId = replacementId;
+            entry.mountedWallLineGroupId = replacementId;
+            entry.mountedSectionId = replacementId;
+            return true;
+        };
+
+        const applyPendingMountedWallIdRemaps = (wallState) => {
+            const remaps = wallState && wallState.pendingMountedWallIdRemaps instanceof Map
+                ? wallState.pendingMountedWallIdRemaps
+                : null;
+            if (!remaps || remaps.size === 0) return [];
+            const remappedObjects = [];
+            const remapRecord = (record) => {
+                const oldId = getMountedWallReferenceId(record);
+                if (!Number.isInteger(oldId) || !remaps.has(oldId)) return false;
+                const nextId = chooseMountedWallReplacementId(record, remaps.get(oldId));
+                if (!Number.isInteger(nextId)) return false;
+                return setMountedWallReferenceId(record, nextId);
+            };
+            const sectionState = map && map._prototypeSectionState;
+            const assets = sectionState && Array.isArray(sectionState.orderedSectionAssets)
+                ? sectionState.orderedSectionAssets
+                : [];
+            for (let i = 0; i < assets.length; i++) {
+                const records = Array.isArray(assets[i] && assets[i].objects) ? assets[i].objects : [];
+                for (let j = 0; j < records.length; j++) {
+                    remapRecord(records[j]);
+                }
+            }
+            const objectState = map && map._prototypeObjectState;
+            const runtimeObjects = objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map
+                ? Array.from(objectState.activeRuntimeObjectsByRecordId.values())
+                : [];
+            for (let i = 0; i < runtimeObjects.length; i++) {
+                const obj = runtimeObjects[i];
+                if (!obj || obj.gone) continue;
+                const oldId = getMountedWallReferenceId(obj);
+                if (!Number.isInteger(oldId) || !remaps.has(oldId)) continue;
+                const nextId = chooseMountedWallReplacementId(obj, remaps.get(oldId));
+                if (!Number.isInteger(nextId)) continue;
+                setMountedWallReferenceId(obj, nextId);
+                let snapSucceeded = false;
+                if (typeof obj.snapToMountedWall === "function") {
+                    snapSucceeded = !!obj.snapToMountedWall();
+                }
+                if (!snapSucceeded) {
+                    const wallCtor = globalScope.WallSectionUnit;
+                    const wall = wallCtor && wallCtor._allSections instanceof Map
+                        ? wallCtor._allSections.get(nextId)
+                        : null;
+                    if (wall && typeof wall.attachObject === "function") {
+                        snapSucceeded = !!wall.attachObject(obj);
+                    }
+                }
+                if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                    obj.refreshIndexedNodesFromHitbox({ minExtent: 1.5, sampleSpacing: 1.0 });
+                }
+                if (isPrototypeSavableObject(obj)) {
+                    upsertPrototypeObjectRecord(obj);
+                }
+                remappedObjects.push(obj);
+            }
+            remaps.clear();
+            return remappedObjects;
+        };
+
+        const emitPrototypeWallSwapDiagnostic = (phase, wallState, sync, extra = {}) => {
+            const sectionState = map && map._prototypeSectionState;
+            const objectState = map && map._prototypeObjectState;
+            const wallCtor = globalScope.WallSectionUnit;
+            const registry = (wallCtor && wallCtor._allSections instanceof Map) ? wallCtor._allSections : null;
+            const activeWallEntries = (wallState && wallState.activeRuntimeWallsByRecordId instanceof Map)
+                ? Array.from(wallState.activeRuntimeWallsByRecordId.entries())
+                : [];
+            const activeObjects = (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map)
+                ? Array.from(objectState.activeRuntimeObjectsByRecordId.values())
+                : [];
+            const mapObjects = Array.isArray(map && map.objects) ? map.objects : [];
+            const activeKeys = sync && sync.activeSectionKeys instanceof Set
+                ? Array.from(sync.activeSectionKeys)
+                : (typeof map.getPrototypeActiveSectionKeys === "function" ? Array.from(map.getPrototypeActiveSectionKeys()) : []);
+            const mountedCategory = (obj) => {
+                const category = (typeof obj && obj && obj.category === "string") ? obj.category.trim().toLowerCase() : "";
+                const type = (typeof obj && obj && obj.type === "string") ? obj.type.trim().toLowerCase() : "";
+                return category === "doors" || category === "windows" || type === "door" || type === "window";
+            };
+            const objectSummary = (obj) => obj && typeof obj === "object" ? ({
+                id: Number.isInteger(Number(obj._prototypeRecordId)) ? Number(obj._prototypeRecordId) : (Number.isInteger(Number(obj.id)) ? Number(obj.id) : null),
+                type: typeof obj.type === "string" ? obj.type : "",
+                category: typeof obj.category === "string" ? obj.category : "",
+                gone: !!obj.gone,
+                mountedWallLineGroupId: Number.isInteger(Number(obj.mountedWallLineGroupId)) ? Number(obj.mountedWallLineGroupId) : null,
+                mountedSectionId: Number.isInteger(Number(obj.mountedSectionId)) ? Number(obj.mountedSectionId) : null,
+                mountedWallSectionUnitId: Number.isInteger(Number(obj.mountedWallSectionUnitId)) ? Number(obj.mountedWallSectionUnitId) : null,
+                ownerSectionKey: typeof obj._prototypeOwnerSectionKey === "string" ? obj._prototypeOwnerSectionKey : ""
+            }) : null;
+            const countActiveAssetRecords = () => {
+                const totals = { objects: 0, mounted: 0, roads: 0, walls: 0 };
+                for (let i = 0; i < activeKeys.length; i++) {
+                    const asset = typeof map.getPrototypeSectionAsset === "function"
+                        ? map.getPrototypeSectionAsset(activeKeys[i])
+                        : null;
+                    const objects = Array.isArray(asset && asset.objects) ? asset.objects : [];
+                    const walls = Array.isArray(asset && asset.walls) ? asset.walls : [];
+                    totals.objects += objects.length;
+                    totals.walls += walls.length;
+                    for (let j = 0; j < objects.length; j++) {
+                        const record = objects[j];
+                        const category = (typeof record && record && record.category === "string") ? record.category.trim().toLowerCase() : "";
+                        const type = (typeof record && record && record.type === "string") ? record.type.trim().toLowerCase() : "";
+                        if (type === "road") totals.roads += 1;
+                        if (category === "doors" || category === "windows" || type === "door" || type === "window") totals.mounted += 1;
+                    }
+                }
+                return totals;
+            };
+            let attachedCount = 0;
+            const attachedObjectSamples = [];
+            for (let i = 0; i < activeWallEntries.length; i++) {
+                const wall = activeWallEntries[i][1];
+                const attached = Array.isArray(wall && wall.attachedObjects) ? wall.attachedObjects : [];
+                attachedCount += attached.length;
+                for (let j = 0; j < attached.length && attachedObjectSamples.length < 12; j++) {
+                    attachedObjectSamples.push(objectSummary(attached[j] && attached[j].object));
+                }
+            }
+            const mountedActiveObjects = activeObjects.filter(mountedCategory);
+            const mountedMapObjects = mapObjects.filter(mountedCategory);
+            const roadActiveObjects = activeObjects.filter(obj => obj && obj.type === "road");
+            const roadMapObjects = mapObjects.filter(obj => obj && obj.type === "road");
+            const snapshot = {
+                phase,
+                atMs: Number((prototypeNow()).toFixed(2)),
+                centerKey: sectionState && typeof sectionState.activeCenterKey === "string" ? sectionState.activeCenterKey : "",
+                pendingCenterKey: sectionState && sectionState.pendingLayoutTransition && typeof sectionState.pendingLayoutTransition.targetCenterKey === "string"
+                    ? sectionState.pendingLayoutTransition.targetCenterKey
+                    : "",
+                activeSectionKeys: activeKeys,
+                desiredWalls: Array.isArray(sync && sync.desiredRecords) ? sync.desiredRecords.length : 0,
+                activeWalls: activeWallEntries.length,
+                registryWalls: registry ? registry.size : 0,
+                plannedUnloadWallIds: Array.isArray(sync && sync.removalEntries) ? sync.removalEntries.map(entry => Number(entry && entry.recordId)).filter(Number.isInteger).slice(0, 24) : [],
+                plannedLoadWallIds: Array.isArray(sync && sync.loadWallEntries) ? sync.loadWallEntries.map(entry => Number(entry && entry.record && entry.record.id)).filter(Number.isInteger).slice(0, 24) : [],
+                removedCount: Number(sync && sync.removedCount) || 0,
+                loadedCount: Number(sync && sync.loadedCount) || 0,
+                orphanedMountedCount: Array.isArray(sync && sync.orphanedMountedObjects) ? sync.orphanedMountedObjects.length : 0,
+                orphanedMountedSamples: Array.isArray(sync && sync.orphanedMountedObjects)
+                    ? sync.orphanedMountedObjects.slice(0, 12).map(objectSummary)
+                    : [],
+                attachedCount,
+                attachedObjectSamples,
+                runtimeObjects: {
+                    active: activeObjects.length,
+                    activeMounted: mountedActiveObjects.length,
+                    mapMounted: mountedMapObjects.length,
+                    activeRoads: roadActiveObjects.length,
+                    mapRoads: roadMapObjects.length,
+                    goneActive: activeObjects.filter(obj => obj && obj.gone).length,
+                    dirtyCount: objectState && objectState.dirtyRuntimeObjects instanceof Set ? objectState.dirtyRuntimeObjects.size : 0,
+                    captureScanNeeded: !!(objectState && objectState.captureScanNeeded)
+                },
+                activeAssetRecords: countActiveAssetRecords(),
+                extra: extra && typeof extra === "object" ? { ...extra } : {}
+            };
+            if (!Array.isArray(globalScope.prototypeWallSyncDiagnostics)) {
+                globalScope.prototypeWallSyncDiagnostics = [];
+            }
+            globalScope.prototypeWallSyncDiagnostics.push(snapshot);
+            if (globalScope.prototypeWallSyncDiagnostics.length > 200) {
+                globalScope.prototypeWallSyncDiagnostics.splice(0, globalScope.prototypeWallSyncDiagnostics.length - 200);
+            }
+            if (typeof globalScope.prototypeWallSyncDiagnosticHook === "function") {
+                try { globalScope.prototypeWallSyncDiagnosticHook(snapshot); } catch (_err) {}
+            }
+            if (typeof globalScope.onPrototypeWallSyncDiagnostic === "function") {
+                try { globalScope.onPrototypeWallSyncDiagnostic(snapshot); } catch (_err) {}
+            }
+            if (globalScope.DEBUG_PROTOTYPE_WALL_SYNC === true || globalScope.prototypeWallSyncDiagnosticsEnabled === true) {
+                console.log("[prototype wall sync]", snapshot);
+            }
+            return snapshot;
+        };
+
+        const markLevel0RoadSurfacesDirtyForNodes = (nodes) => {
+            if (!(nodes instanceof Set) || nodes.size === 0) return 0;
+            const markDirty = globalScope.markPrototypeLevel0RoadSurfaceDirty;
+            if (typeof markDirty !== "function") return 0;
+            const flushDirty = globalScope.flushPrototypeLevel0RoadSurfaceDirtyAsset;
+            const sectionState = map && map._prototypeSectionState;
+            const dirtyAssets = new Set();
+            let dirtyCount = 0;
+            nodes.forEach((node) => {
+                if (!node || typeof node !== "object") return;
+                if (markDirty(map, node, { immediate: typeof flushDirty !== "function" })) {
+                    dirtyCount += 1;
+                    const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                    const asset = sectionKey && sectionState && sectionState.sectionAssetsByKey instanceof Map
+                        ? sectionState.sectionAssetsByKey.get(sectionKey)
+                        : null;
+                    if (asset) dirtyAssets.add(asset);
+                }
+            });
+            if (typeof flushDirty === "function") {
+                dirtyAssets.forEach((asset) => flushDirty(asset));
+            }
+            return dirtyCount;
+        };
+
         const enqueuePrototypeAsyncObjectSync = (session) => {
             const objectState = map._prototypeObjectState;
             if (!objectState) return;
@@ -391,7 +678,11 @@
                                 if (entry && entry.record && entry.record.type === "roof") {
                                     if (globalScope.Roof && typeof globalScope.Roof.loadJson === "function") {
                                         const roofStart = prototypeNow();
-                                        runtimeObj = globalScope.Roof.loadJson(entry.record);
+                                        runtimeObj = globalScope.Roof.loadJson(entry.record, {
+                                            suppressAutoScriptingName: true,
+                                            trustLoadedScriptingName: true,
+                                            targetSectionKey: entry.sectionKey
+                                        });
                                         const roofMs = prototypeNow() - roofStart;
                                         sync.roofLoadMs += roofMs;
                                         if (runtimeObj) {
@@ -446,12 +737,19 @@
                         }));
                     }
                     phaseTasks.push(createPrototypeTask("objects.roadRefreshPlan", () => {
-                        if (sync.roadRefreshNodes.size === 0 || !globalScope.Road) return;
+                        if (sync.roadRefreshNodes.size === 0) return;
+                        const dirtyTask = createPrototypeTask("objects.roadSurfaceDirty", () => {
+                            markLevel0RoadSurfacesDirtyForNodes(sync.roadRefreshNodes);
+                        });
+                        if (!globalScope.Road) {
+                            prependPrototypeTasks(session, [dirtyTask]);
+                            return;
+                        }
                         const refreshRoads = (typeof globalScope.Road.collectRefreshRoadsFromNodes === "function")
                             ? globalScope.Road.collectRefreshRoadsFromNodes(sync.roadRefreshNodes)
                             : null;
                         if (Array.isArray(refreshRoads) && refreshRoads.length > 0 && typeof globalScope.Road.refreshTexturesForRoads === "function") {
-                            const roadRefreshChunkSize = 64;
+                            const roadRefreshChunkSize = 6;
                             sync.roadRefreshCount = refreshRoads.length;
                             const refreshTasks = [];
                             for (let i = 0; i < refreshRoads.length; i += roadRefreshChunkSize) {
@@ -462,6 +760,7 @@
                                     sync.roadRefreshMs += prototypeNow() - roadRefreshStart;
                                 }));
                             }
+                            refreshTasks.push(dirtyTask);
                             prependPrototypeTasks(session, refreshTasks);
                             return;
                         }
@@ -470,33 +769,58 @@
                                 const roadRefreshStart = prototypeNow();
                                 sync.roadRefreshCount = globalScope.Road.refreshTexturesAroundNodes(sync.roadRefreshNodes);
                                 sync.roadRefreshMs += prototypeNow() - roadRefreshStart;
-                            })]);
+                            }), dirtyTask]);
+                            return;
                         }
+                        prependPrototypeTasks(session, [dirtyTask]);
                     }));
-                    phaseTasks.push(createPrototypeTask("objects.treeFinalize", () => {
+                    phaseTasks.push(createPrototypeTask("objects.treeFinalizePlan", () => {
                         const deferredTrees = Array.isArray(sync.deferredTrees) ? sync.deferredTrees : [];
-                        if (deferredTrees.length > 0) {
-                            const treeFinalizeStart = prototypeNow();
-                            for (let i = 0; i < deferredTrees.length; i++) {
-                                const tree = deferredTrees[i];
-                                if (tree && typeof tree.finalizeDeferredLoad === "function") {
-                                    tree.finalizeDeferredLoad();
-                                }
-                            }
-                            sync.treeFinalizeMs += prototypeNow() - treeFinalizeStart;
-                        }
                         if (sync.treeDebugStarted === true && sync.treeDebugEnabled) {
                             sync.treeLoadDebug = globalScope.Tree.endPrototypeLoadDebugSession();
                             sync.treeDebugStarted = false;
                         }
-                        objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
-                        objectState.activeRecordSignature = sync.desiredSignature;
-                        objectState.captureScanNeeded = false;
-                        if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof globalScope.invalidateMinimap === "function") {
-                            const invalidateStart = prototypeNow();
-                            globalScope.invalidateMinimap();
-                            sync.invalidateMs += prototypeNow() - invalidateStart;
+                        if (deferredTrees.length === 0) {
+                            // Nothing to finalize — run commit inline.
+                            objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+                            objectState.activeRecordSignature = sync.desiredSignature;
+                            objectState.captureScanNeeded = false;
+                            if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof globalScope.invalidateMinimap === "function") {
+                                const invalidateStart = prototypeNow();
+                                globalScope.invalidateMinimap();
+                                sync.invalidateMs += prototypeNow() - invalidateStart;
+                            }
+                            return;
                         }
+                        const treeChunkSize = 50;
+                        const treeTasks = [];
+                        for (let i = 0; i < deferredTrees.length; i += treeChunkSize) {
+                            const batchStart = i;
+                            treeTasks.push(createPrototypeTask("objects.treeFinalizeChunk", () => {
+                                const t0 = prototypeNow();
+                                const end = Math.min(batchStart + treeChunkSize, deferredTrees.length);
+                                for (let t = batchStart; t < end; t++) {
+                                    const tree = deferredTrees[t];
+                                    if (tree && typeof tree.finalizeDeferredLoad === "function") {
+                                        tree.finalizeDeferredLoad();
+                                    }
+                                }
+                                sync.treeFinalizeMs += prototypeNow() - t0;
+                            }));
+                        }
+                        treeTasks.push(createPrototypeTask("objects.treeFinalizeCommit", () => {
+                            objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+                            objectState.activeRecordSignature = sync.desiredSignature;
+                            objectState.captureScanNeeded = false;
+                            if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof globalScope.invalidateMinimap === "function") {
+                                const invalidateStart = prototypeNow();
+                                globalScope.invalidateMinimap();
+                                sync.invalidateMs += prototypeNow() - invalidateStart;
+                            }
+                        }));
+                        prependPrototypeTasks(session, treeTasks);
+                    }));
+                    phaseTasks.push(createPrototypeTask("objects.finalizeStats", () => {
                         objectState.lastSyncStats = {
                             ms: Number((sync.captureMs + sync.collectMs + sync.stalePruneMs + sync.unloadMs + sync.loadMs + sync.invalidateMs).toFixed(2)),
                             desired: sync.desiredRecords.length,
@@ -544,12 +868,16 @@
             })]);
         };
 
-        const enqueuePrototypeAsyncWallSync = (session) => {
+        const enqueuePrototypeAsyncWallSync = (session, options = {}) => {
             const wallState = map._prototypeWallState;
             if (!wallState) return;
             if (!(wallState.pendingCapturedMountedObjects instanceof Set)) {
                 wallState.pendingCapturedMountedObjects = new Set();
             }
+            const scopedSectionKeys = Array.isArray(options && options.onlySectionKeys)
+                ? Array.from(new Set(options.onlySectionKeys.filter((sectionKey) => typeof sectionKey === "string" && sectionKey.length > 0)))
+                : null;
+            const requestedScopedToSections = Array.isArray(scopedSectionKeys);
             prependPrototypeTasks(session, [createPrototypeTask("walls.plan", () => {
                 const sync = {
                     captureMs: 0,
@@ -580,26 +908,39 @@
                     removedAny: false,
                     loadedAny: false,
                     desiredRecords: [],
+                    requestedScopedToSections,
+                    scopedToSections: requestedScopedToSections,
+                    scopedSectionKeys: scopedSectionKeys ? scopedSectionKeys.slice() : null,
+                    loadedRuntimeWalls: [],
                     changedClearanceNodes: new Set()
                 };
                 const captureStart = prototypeNow();
-                sync.capturedAny = !!map.capturePendingPrototypeWalls();
+                sync.capturedAny = !!map.capturePendingPrototypeWalls({
+                    allowRuntimeSignatureCapture: !requestedScopedToSections
+                });
                 sync.captureMs += prototypeNow() - captureStart;
+                if (sync.capturedAny && sync.scopedToSections) {
+                    sync.scopedToSections = false;
+                    sync.scopedSectionKeys = null;
+                }
                 const nextTasks = [];
                 nextTasks.push(createPrototypeTask("walls.collect", () => {
                     const collectStart = prototypeNow();
                     const activeSectionKeys = map.getPrototypeActiveSectionKeys();
+                    const collectSectionKeys = sync.scopedToSections ? new Set(scopedSectionKeys) : activeSectionKeys;
                     sync.activeSectionKeys = activeSectionKeys;
+                    sync.collectSectionKeys = collectSectionKeys;
                     if (typeof map.ensurePrototypeBlockedEdges === "function") {
-                        map.ensurePrototypeBlockedEdges(activeSectionKeys);
+                        map.ensurePrototypeBlockedEdges(collectSectionKeys);
                     }
                     const desiredRecords = [];
                     const blockedEdgesByRecordId = new Map();
                     // Load-time wall splitting disabled — walls are already split in
                     // saved section assets.  New walls placed at runtime are split by
                     // capturePrototypeWall when they are captured into section records.
-                    // Collect desired wall records from all active sections.
-                    activeSectionKeys.forEach((sectionKey) => {
+                    // Center-change sync scopes this to newly-entered sections;
+                    // full sync still reconciles all active sections.
+                    collectSectionKeys.forEach((sectionKey) => {
                         const asset = map.getPrototypeSectionAsset(sectionKey);
                         if (!asset) return;
                         const records = Array.isArray(asset.walls) ? asset.walls : null;
@@ -625,7 +966,8 @@
                         .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
                         .join("|");
                     sync.collectMs += prototypeNow() - collectStart;
-                    if (!sync.capturedAny && sync.desiredSignature === wallState.activeRecordSignature) {
+                    sync.restoredRegistryCount = restoreActivePrototypeWallRegistry(wallState);
+                    if (!sync.scopedToSections && !sync.capturedAny && sync.desiredSignature === wallState.activeRecordSignature && sync.restoredRegistryCount === 0) {
                         wallState.lastSyncStats = {
                             ms: Number((sync.captureMs + sync.collectMs).toFixed(2)),
                             desired: desiredRecords.length,
@@ -641,7 +983,9 @@
                             blockedEdgeRemoveMs: 0,
                             blockedEdgeAppliedLinks: 0,
                             blockedEdgeRemovedLinks: 0,
-                            joineryMs: 0
+                            joineryMs: 0,
+                            restoredRegistryCount: 0,
+                            scopedSectionKeys: null
                         };
                         session.wallsChanged = false;
                         return;
@@ -656,16 +1000,18 @@
                     }
                     sync.removeBlockedSectionKeys = [];
                     const blockedEdgeState = map._prototypeBlockedEdgeState;
-                    if (blockedEdgeState && blockedEdgeState.activeEntriesBySectionKey instanceof Map) {
+                    if (!sync.scopedToSections && blockedEdgeState && blockedEdgeState.activeEntriesBySectionKey instanceof Map) {
                         for (const sectionKey of blockedEdgeState.activeEntriesBySectionKey.keys()) {
                             if (!activeSectionKeys.has(sectionKey)) sync.removeBlockedSectionKeys.push(sectionKey);
                         }
                     }
                     sync.removalEntries = [];
                     sync.orphanedMountedObjects = [];
-                    for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
-                        if (desiredRecordIds.has(recordId)) continue;
-                        sync.removalEntries.push({ recordId, runtimeWall });
+                    if (!sync.scopedToSections) {
+                        for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
+                            if (desiredRecordIds.has(recordId)) continue;
+                            sync.removalEntries.push({ recordId, runtimeWall });
+                        }
                     }
                     sync.loadWallEntries = [];
                     for (let i = 0; i < desiredRecords.length; i++) {
@@ -675,7 +1021,7 @@
                         if (wallState.activeRuntimeWallsByRecordId.has(recordId)) continue;
                         sync.loadWallEntries.push(entry);
                     }
-                    sync.applyBlockedSectionKeys = Array.from(activeSectionKeys);
+                    sync.applyBlockedSectionKeys = Array.from(collectSectionKeys);
                     const phaseTasks = [];
                     for (let i = 0; i < sync.removeBlockedSectionKeys.length; i++) {
                         const sectionKey = sync.removeBlockedSectionKeys[i];
@@ -683,6 +1029,15 @@
                             const start = prototypeNow();
                             sync.blockedEdgeRemovedLinks += removePrototypeBlockedEdgesForSection(map, sectionKey, sync.changedClearanceNodes);
                             sync.blockedEdgeRemoveMs += prototypeNow() - start;
+                        }));
+                    }
+                    if (sync.removalEntries.length > 0 || sync.loadWallEntries.length > 0) {
+                        phaseTasks.push(createPrototypeTask("walls.diagnostic.beforeUnload", () => {
+                            emitPrototypeWallSwapDiagnostic("beforeUnload", wallState, sync, {
+                                queuedTasks: "before wall removal",
+                                unloadCount: sync.removalEntries.length,
+                                loadCount: sync.loadWallEntries.length
+                            });
                         }));
                     }
                     for (let i = 0; i < sync.removalEntries.length; i++) {
@@ -722,6 +1077,13 @@
                             sync.unloadMs += prototypeNow() - start;
                         }));
                     }
+                    if (sync.removalEntries.length > 0) {
+                        phaseTasks.push(createPrototypeTask("walls.diagnostic.afterUnload", () => {
+                            emitPrototypeWallSwapDiagnostic("afterUnload", wallState, sync, {
+                                queuedTasks: "after wall removal, before wall load"
+                            });
+                        }));
+                    }
                     for (let i = 0; i < sync.loadWallEntries.length; i++) {
                         const entry = sync.loadWallEntries[i];
                         phaseTasks.push(createPrototypeTask("walls.loadJson", () => {
@@ -758,8 +1120,16 @@
                             runtimeWall._prototypePersistenceSignature = buildPrototypeWallPersistenceSignature(entry.record);
                             runtimeWall._prototypeOwnerSectionKey = entry.sectionKey;
                             wallState.activeRuntimeWallsByRecordId.set(recordId, runtimeWall);
+                            sync.loadedRuntimeWalls.push(runtimeWall);
                             sync.loadedAny = true;
                             sync.loadedCount += 1;
+                        }));
+                    }
+                    if (sync.loadWallEntries.length > 0) {
+                        phaseTasks.push(createPrototypeTask("walls.diagnostic.afterLoad", () => {
+                            emitPrototypeWallSwapDiagnostic("afterLoad", wallState, sync, {
+                                queuedTasks: "after wall load, before blocked edges/joinery"
+                            });
                         }));
                     }
                     for (let i = 0; i < sync.applyBlockedSectionKeys.length; i++) {
@@ -775,11 +1145,21 @@
                         wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
                     }));
                     phaseTasks.push(createPrototypeTask("walls.joinery", () => {
-                        if (wallState.activeRuntimeWalls.length > 0 && globalScope.WallSectionUnit && typeof globalScope.WallSectionUnit.batchHandleJoinery === "function") {
+                        if (sync.removalEntries.length > 0 || sync.loadWallEntries.length > 0 || sync.orphanedMountedObjects.length > 0) {
+                            emitPrototypeWallSwapDiagnostic("beforeJoinery", wallState, sync, {
+                                queuedTasks: "before joinery and mounted-object resnap"
+                            });
+                        }
+                        const joineryWalls = sync.scopedToSections ? sync.loadedRuntimeWalls : wallState.activeRuntimeWalls;
+                        if (joineryWalls.length > 0 && globalScope.WallSectionUnit && typeof globalScope.WallSectionUnit.batchHandleJoinery === "function") {
                             const joineryStart = prototypeNow();
-                            globalScope.WallSectionUnit.batchHandleJoinery(wallState.activeRuntimeWalls);
+                            globalScope.WallSectionUnit.batchHandleJoinery(joineryWalls);
                             sync.joineryMs += prototypeNow() - joineryStart;
                         }
+                        const remappedMountedObjects = applyPendingMountedWallIdRemaps(wallState);
+                        sync.remappedMountedObjectCount = Array.isArray(remappedMountedObjects)
+                            ? remappedMountedObjects.length
+                            : 0;
                         // Re-snap doors/windows whose parent wall was removed
                         // due to re-splitting.
                         if (sync.orphanedMountedObjects.length > 0) {
@@ -827,6 +1207,11 @@
                                 }
                             }
                         }
+                        if (sync.removalEntries.length > 0 || sync.loadWallEntries.length > 0 || sync.orphanedMountedObjects.length > 0) {
+                            emitPrototypeWallSwapDiagnostic("afterJoinery", wallState, sync, {
+                                queuedTasks: "after joinery and mounted-object resnap"
+                            });
+                        }
                     }));
                     const needsClearanceRefresh = sync.changedClearanceNodes.size > 0 || (
                         map._prototypeSectionState &&
@@ -834,7 +1219,7 @@
                         map._prototypeSectionState.orderedSectionAssets.some((asset) => asset && asset._prototypeClearanceDirty === true)
                     );
                     if (needsClearanceRefresh && !map._suppressClearanceUpdates && typeof map.applyPrototypeSectionClearance === "function") {
-                        const activeKeysArray = Array.from(activeSectionKeys);
+                        const activeKeysArray = sync.scopedToSections ? sync.applyBlockedSectionKeys.slice() : Array.from(activeSectionKeys);
                         const clearanceChunkSize = 1200;
                         sync.clearanceNodeCount = 0;
                         for (let i = 0; i < activeKeysArray.length; i++) {
@@ -857,7 +1242,9 @@
                         sync.precomputedBlockMs = sync.blockedEdgeApplyMs;
                         sync.precomputedBlockedConnections = sync.blockedEdgeAppliedLinks;
                         wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
-                        wallState.activeRecordSignature = sync.desiredSignature;
+                        if (!sync.scopedToSections) {
+                            wallState.activeRecordSignature = sync.desiredSignature;
+                        }
                         if ((sync.capturedAny || sync.removedCount > 0 || sync.loadedCount > 0) && typeof globalScope.invalidateMinimap === "function") {
                             globalScope.invalidateMinimap();
                         }
@@ -888,7 +1275,11 @@
                             directionalCollectMs: Number(sync.directionalCollectMs.toFixed(2)),
                             directionalBlockMs: Number(sync.directionalBlockMs.toFixed(2)),
                             directionalBlockedConnections: sync.directionalBlockedConnections,
-                            joineryMs: Number(sync.joineryMs.toFixed(2))
+                            joineryMs: Number(sync.joineryMs.toFixed(2)),
+                            restoredRegistryCount: Number(sync.restoredRegistryCount) || 0,
+                            scopedSectionKeys: sync.scopedSectionKeys ? sync.scopedSectionKeys.slice() : null,
+                            requestedScopedSectionKeys: scopedSectionKeys ? scopedSectionKeys.slice() : null,
+                            widenedAfterCapture: !!(sync.capturedAny && sync.requestedScopedToSections)
                         };
                         session.wallsChanged = !!(sync.capturedAny || sync.removedCount > 0 || sync.loadedCount > 0);
                     }));

@@ -4,6 +4,7 @@
     const EPS = 1e-6;
     const WALL_DEPTH_NEAR_METRIC = -128;
     const WALL_DEPTH_FAR_METRIC = 256;
+    const WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT = 0.025;
     const WALL_DEPTH_VS = `
 precision highp float;
 attribute vec3 aWorldPosition;
@@ -12,6 +13,7 @@ attribute vec4 aColor;
 attribute float aTextureMix;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
+uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
@@ -22,7 +24,7 @@ varying float vWorldZ;
 void main(void) {
     float camDx = aWorldPosition.x - uCameraWorld.x;
     float camDy = aWorldPosition.y - uCameraWorld.y;
-    float camDz = aWorldPosition.z;
+    float camDz = aWorldPosition.z - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
@@ -231,6 +233,12 @@ void main(void) {
             this.height = Number.isFinite(options.height) ? Math.max(0, Number(options.height)) : 1;
             this.thickness = Number.isFinite(options.thickness) ? Math.max(0.001, Number(options.thickness)) : 0.1;
             this.bottomZ = Number.isFinite(options.bottomZ) ? Number(options.bottomZ) : 0;
+            this.traversalLayer = Number.isFinite(options.traversalLayer)
+                ? Math.round(Number(options.traversalLayer))
+                : (Number.isFinite(options.level)
+                    ? Math.round(Number(options.level))
+                    : Math.round((Number(this.bottomZ) || 0) / 3));
+            this.level = this.traversalLayer;
             this.wallTexturePath = (typeof options.wallTexturePath === "string" && options.wallTexturePath.length > 0)
                 ? options.wallTexturePath
                 : "/assets/images/walls/stonewall.png";
@@ -318,6 +326,19 @@ void main(void) {
             if (!a || !b) return false;
             if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
             return Math.abs(a.x - b.x) <= eps && Math.abs(a.y - b.y) <= eps;
+        }
+
+        static getTraversalLayerForSection(section, fallback = 0) {
+            if (!section) return Math.round(Number(fallback) || 0);
+            if (Number.isFinite(section.traversalLayer)) return Math.round(Number(section.traversalLayer));
+            if (Number.isFinite(section.level)) return Math.round(Number(section.level));
+            if (Number.isFinite(section.bottomZ)) return Math.round(Number(section.bottomZ) / 3);
+            return Math.round(Number(fallback) || 0);
+        }
+
+        static areSectionsOnSameTraversalLayer(sectionA, sectionB) {
+            if (!sectionA || !sectionB) return false;
+            return WallSectionUnit.getTraversalLayerForSection(sectionA) === WallSectionUnit.getTraversalLayerForSection(sectionB);
         }
 
         static normalizeEndpoint(endpoint, mapRef = null) {
@@ -551,6 +572,7 @@ void main(void) {
             for (const payload of section.connections.values()) {
                 const other = payload && payload.section;
                 if (!other || other.gone) continue;
+                if (!WallSectionUnit.areSectionsOnSameTraversalLayer(section, other)) continue;
                 if (excludeSet.has(other)) continue;
                 if (!other.startPoint || !other.endPoint) continue;
                 const sharesEndpoint = (
@@ -648,6 +670,13 @@ void main(void) {
             }
             if (sectionA.map !== sectionB.map) {
                 debugLog("different-map");
+                return false;
+            }
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(sectionA, sectionB)) {
+                debugLog("layer-mismatch", {
+                    a: WallSectionUnit.getTraversalLayerForSection(sectionA),
+                    b: WallSectionUnit.getTraversalLayerForSection(sectionB)
+                });
                 return false;
             }
             const endpoints = WallSectionUnit._resolveSharedAndOuterEndpoints(sectionA, sectionB);
@@ -835,6 +864,7 @@ void main(void) {
             if (!sectionA || !sectionB || sectionA === sectionB) return null;
             if (sectionA.gone || sectionB.gone || sectionA.vanishing || sectionB.vanishing) return null;
             if (sectionA.map !== sectionB.map) return null;
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(sectionA, sectionB)) return null;
 
             const dirA = WallSectionUnit._normalizeDirection(sectionA.direction);
             const dirB = WallSectionUnit._normalizeDirection(sectionB.direction);
@@ -959,9 +989,24 @@ void main(void) {
             if (!overlap || !overlap.mergedStart || !overlap.mergedEnd) return null;
             const applyDirectionalBlocking = options.applyDirectionalBlocking !== false;
             const deferVisualUpdate = options.deferVisualUpdate === true;
+            const absorbedAttachments = Array.isArray(absorbed.attachedObjects)
+                ? absorbed.attachedObjects.slice()
+                : [];
 
             survivor.setEndpoints(overlap.mergedStart, overlap.mergedEnd, survivor.map || absorbed.map || null);
             survivor.addToMapNodes({ applyDirectionalBlocking });
+
+            for (let i = 0; i < absorbedAttachments.length; i++) {
+                const entry = absorbedAttachments[i];
+                if (!entry || !entry.object) continue;
+                survivor.attachObject(entry.object, {
+                    direction: Number.isFinite(entry.direction) ? Number(entry.direction) : survivor.direction,
+                    offsetAlong: Number.isFinite(entry.offsetAlong) ? Number(entry.offsetAlong) : 0
+                });
+            }
+            if (Array.isArray(absorbed.attachedObjects)) {
+                absorbed.attachedObjects.length = 0;
+            }
 
             if (!deferVisualUpdate) {
                 if (typeof survivor.handleJoineryOnPlacement === "function") {
@@ -1141,6 +1186,7 @@ void main(void) {
                 for (let i = 0; i < candidates.length; i++) {
                     const candidate = candidates[i];
                     if (!candidate || candidate === seed) continue;
+                    if (!WallSectionUnit.areSectionsOnSameTraversalLayer(seed, candidate)) continue;
                     if (!WallSectionUnit.canAutoMergeContinuous(seed, candidate)) continue;
                     if (!donor) {
                         donor = candidate;
@@ -1570,6 +1616,7 @@ void main(void) {
                 for (let j = 0; j < candidateWalls.length; j++) {
                     const ew = candidateWalls[j];
                     if (!ew || ew.gone || !ew.startPoint || !ew.endPoint) continue;
+                    if (!WallSectionUnit.areSectionsOnSameTraversalLayer(ns, ew)) continue;
                     const pairKey = ns.id + "|" + ew.id;
                     if (seenPair.has(pairKey)) continue;
 
@@ -2090,6 +2137,11 @@ void main(void) {
                     height: Number.isFinite(options.height) ? Number(options.height) : 1,
                     thickness: Number.isFinite(options.thickness) ? Number(options.thickness) : 0.1,
                     bottomZ: Number.isFinite(options.bottomZ) ? Number(options.bottomZ) : 0,
+                    traversalLayer: Number.isFinite(options.traversalLayer)
+                        ? Math.round(Number(options.traversalLayer))
+                        : (Number.isFinite(options.level)
+                            ? Math.round(Number(options.level))
+                            : (Number.isFinite(options.bottomZ) ? Math.round(Number(options.bottomZ) / 3) : 0)),
                     wallTexturePath: (typeof options.wallTexturePath === "string" && options.wallTexturePath.length > 0)
                         ? options.wallTexturePath
                         : DEFAULT_WALL_TEXTURE,
@@ -2258,6 +2310,12 @@ void main(void) {
                     const ref = splitRefs[i];
                     if (!ref || !ref.wall || !ref.anchor) continue;
                     if (ref.wall.gone || ref.wall.map !== mapRef) continue;
+                    const splitLayerMatchesPlacement = mergedSections.some(section =>
+                        section &&
+                        !section.gone &&
+                        WallSectionUnit.areSectionsOnSameTraversalLayer(ref.wall, section)
+                    );
+                    if (!splitLayerMatchesPlacement) continue;
                     if (typeof ref.wall.splitAtAnchor !== "function") continue;
                     if (mergedSections.includes(ref.wall)) {
                         if (placementDebugEnabled) {
@@ -2373,6 +2431,7 @@ void main(void) {
 
         sharesEndpointWith(otherSection) {
             if (!otherSection || typeof otherSection.getEndpointArray !== "function") return false;
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, otherSection)) return false;
             const [a0, a1] = this.getEndpointArray();
             const [b0, b1] = otherSection.getEndpointArray();
             return (
@@ -2385,6 +2444,7 @@ void main(void) {
 
         connectTo(otherSection, metadata = {}) {
             if (!otherSection || otherSection === this || !Number.isInteger(otherSection.id)) return false;
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, otherSection)) return false;
             if (!this.sharesEndpointWith(otherSection)) return false;
             const payload = {
                 section: otherSection,
@@ -2925,7 +2985,7 @@ void main(void) {
                 Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
                 Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB).toFixed(6) : "nan",
                 wallTextureCfg.texturePath || this.wallTexturePath || DEFAULT_WALL_TEXTURE,
-                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (horizontalFaceOnly ? (topFaceOnly ? "topOnly" : "bottomOnly") : "full"),
+                clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (horizontalFaceOnly ? `${topFaceOnly ? "topOnly" : "bottomOnly"}:${WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT}` : "full"),
                 mazePrismKey
             ].join("|");
 
@@ -3185,7 +3245,9 @@ void main(void) {
                     const dstColor = dstVertex * 4;
                     expandedPositions[dstPos] = Number(vertices[srcPos]) || 0;
                     expandedPositions[dstPos + 1] = Number(vertices[srcPos + 1]) || 0;
-                    expandedPositions[dstPos + 2] = horizontalFaceOnly ? bottomZ : (Number(vertices[srcPos + 2]) || 0);
+                    expandedPositions[dstPos + 2] = horizontalFaceOnly
+                        ? bottomZ + WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT
+                        : (Number(vertices[srcPos + 2]) || 0);
                     const along = Number(alongStablePerVertex[srcVertex]) || 0;
                     const alongWorld = Number(alongWorldPerVertex[srcVertex]) || 0;
                     const across = Number(acrossPerVertex[srcVertex]) || 0;
@@ -3260,6 +3322,7 @@ void main(void) {
             const shader = PIXI.Shader.from(WALL_DEPTH_VS, WALL_DEPTH_FS, {
                 uScreenSize: new Float32Array([1, 1]),
                 uCameraWorld: new Float32Array([0, 0]),
+                uCameraZ: 0,
                 uViewScale: 1,
                 uXyRatio: 1,
                 uDepthRange: new Float32Array([0, 1]),
@@ -3329,6 +3392,7 @@ void main(void) {
             u.uScreenSize[1] = Math.max(1, screenH);
             u.uCameraWorld[0] = Number(camera && camera.x) || 0;
             u.uCameraWorld[1] = Number(camera && camera.y) || 0;
+            u.uCameraZ = Number(camera && camera.z) || 0;
             u.uViewScale = viewscale;
             u.uXyRatio = xyratio;
             u.uDepthRange[0] = farMetric;
@@ -4209,6 +4273,7 @@ void main(void) {
 
         _isCollinearWallForVisibility(otherSection, options = {}) {
             if (!otherSection || otherSection.type !== "wallSection") return false;
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, otherSection)) return false;
             const mapRef = this.map || otherSection.map || null;
 
             const sx = Number(this.startPoint && this.startPoint.x);
@@ -4236,7 +4301,7 @@ void main(void) {
             const collinearEps = Number.isFinite(options.collinearEps)
                 ? Math.max(EPS, Number(options.collinearEps))
                 : 1e-4;
-            const isPointOnLine = (point) => {
+            const projectPoint = (point) => {
                 if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
                 const relX = (mapRef && typeof mapRef.shortestDeltaX === "function")
                     ? mapRef.shortestDeltaX(sx, Number(point.x))
@@ -4245,15 +4310,26 @@ void main(void) {
                     ? mapRef.shortestDeltaY(sy, Number(point.y))
                     : (Number(point.y) - sy);
                 const perp = relX * vx + relY * vy;
-                return Math.abs(perp) <= collinearEps;
+                if (Math.abs(perp) > collinearEps) return null;
+                return relX * ux + relY * uy;
             };
 
-            return isPointOnLine(otherSection.startPoint) && isPointOnLine(otherSection.endPoint);
+            const otherStartAlong = projectPoint(otherSection.startPoint);
+            const otherEndAlong = projectPoint(otherSection.endPoint);
+            if (!Number.isFinite(otherStartAlong) || !Number.isFinite(otherEndAlong)) return false;
+
+            const otherMin = Math.min(otherStartAlong, otherEndAlong);
+            const otherMax = Math.max(otherStartAlong, otherEndAlong);
+            const maxGap = Number.isFinite(options.maxGap)
+                ? Math.max(0, Number(options.maxGap))
+                : collinearEps;
+            return otherMax >= -maxGap && otherMin <= (len + maxGap);
         }
 
         _isSameWallLineForVisibility(otherSection, endpointKey = null) {
             if (!otherSection || otherSection.type !== "wallSection") return false;
             if (otherSection === this) return true;
+            if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, otherSection)) return false;
 
             const canContinuous = (
                 WallSectionUnit.canAutoMergeContinuous(this, otherSection) ||
@@ -4834,6 +4910,7 @@ void main(void) {
             for (const payload of this.connections.values()) {
                 const other = payload && payload.section;
                 if (!other || !other.startPoint || !other.endPoint) continue;
+                if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, other)) continue;
                 if (WallSectionUnit._pointsMatch(endpoint, other.startPoint) || WallSectionUnit._pointsMatch(endpoint, other.endPoint)) {
                     return true;
                 }
@@ -4848,6 +4925,7 @@ void main(void) {
             for (const payload of this.connections.values()) {
                 const other = payload && payload.section;
                 if (!other || !other.startPoint || !other.endPoint) continue;
+                if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, other)) continue;
                 const sharesEndpoint =
                     WallSectionUnit._pointsMatch(endpoint, other.startPoint) ||
                     WallSectionUnit._pointsMatch(endpoint, other.endPoint);
@@ -4885,7 +4963,7 @@ void main(void) {
             const dy = ey - sy;
             const len = Math.hypot(dx, dy);
             if (len < EPS) return;
-            const z = (Number.isFinite(this.bottomZ) ? this.bottomZ : 0) + 0.001;
+            const z = (Number.isFinite(this.bottomZ) ? this.bottomZ : 0) + WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT;
             const profile = this.getWallProfile();
             const adjacentHeightA = this.getAdjacentCollinearWallHeightAtEndpoint("a");
             const adjacentHeightB = this.getAdjacentCollinearWallHeightAtEndpoint("b");
@@ -5058,20 +5136,25 @@ void main(void) {
                     { pt: wall.endPoint,   end: "end"   }
                 ];
                 for (let p = 0; p < pairs.length; p++) {
-                    const key = WallSectionUnit.endpointKey(pairs[p].pt);
-                    if (!key) continue;
-                    if (!endpointIndex.has(key)) endpointIndex.set(key, []);
-                    endpointIndex.get(key).push({
+                    const endpointKey = WallSectionUnit.endpointKey(pairs[p].pt);
+                    if (!endpointKey) continue;
+                    const layer = WallSectionUnit.getTraversalLayerForSection(wall);
+                    const indexKey = `${endpointKey}|layer:${layer}`;
+                    if (!endpointIndex.has(indexKey)) endpointIndex.set(indexKey, []);
+                    endpointIndex.get(indexKey).push({
                         wall,
                         sharedEnd: pairs[p].end,
-                        endpoint: pairs[p].pt
+                        endpoint: pairs[p].pt,
+                        endpointKey
                     });
                 }
             }
 
             // 2. Process each endpoint with ≥ 2 walls.  Total work across all
             //    endpoints is O(N) since each wall appears at most twice.
-            for (const [endpointKey, group] of endpointIndex) {
+            for (const [_indexKey, group] of endpointIndex) {
+                const endpointKey = group && group[0] ? group[0].endpointKey : "";
+                if (!endpointKey) continue;
                 const entries = [];
                 for (let g = 0; g < group.length; g++) {
                     const { wall, sharedEnd } = group[g];
@@ -5229,6 +5312,7 @@ void main(void) {
                 // Build local wall entries at this endpoint.
                 const entries = [];
                 for (const wall of WallSectionUnit._allSections.values()) {
+                    if (!WallSectionUnit.areSectionsOnSameTraversalLayer(this, wall)) continue;
                     const wallStartKey = WallSectionUnit.endpointKey(wall.startPoint);
                     const wallEndKey = WallSectionUnit.endpointKey(wall.endPoint);
                     let sharedEnd = null;
@@ -5427,13 +5511,14 @@ void main(void) {
             const ep = this.endPoint;
             const nodeKeySet = new Set();
             const registerNode = (node) => {
-                if (!WallSectionUnit._isMapNode(node)) return;
-                const key = this._nodeKey(node);
+                const resolvedNode = this._resolveNodeForWallLayer(node);
+                if (!WallSectionUnit._isMapNode(resolvedNode)) return;
+                const key = this._nodeKey(resolvedNode);
                 if (!key || nodeKeySet.has(key)) return;
                 nodeKeySet.add(key);
-                this.nodes.push(node);
-                if (typeof node.addObject === "function") {
-                    node.addObject(this);
+                this.nodes.push(resolvedNode);
+                if (typeof resolvedNode.addObject === "function") {
+                    resolvedNode.addObject(this);
                 }
             };
 
@@ -5445,6 +5530,13 @@ void main(void) {
             const centerlineMs = timerNow() - centerlineStart;
             for (let i = 0; i < centerlineNodes.length; i++) {
                 registerNode(centerlineNodes[i]);
+            }
+
+            const hitboxStart = timerNow();
+            const hitboxNodes = this._collectGroundHitboxMapNodes();
+            const hitboxMs = timerNow() - hitboxStart;
+            for (let i = 0; i < hitboxNodes.length; i++) {
+                registerNode(hitboxNodes[i]);
             }
 
             // Endpoint anchors as fallback (e.g. midpoint endpoint cases).
@@ -5471,15 +5563,76 @@ void main(void) {
                 ms: Number((timerNow() - addStart).toFixed(2)),
                 removeMs: Number(removeMs.toFixed(2)),
                 centerlineMs: Number(centerlineMs.toFixed(2)),
+                hitboxMs: Number(hitboxMs.toFixed(2)),
                 directionalMs: Number(directionalMs.toFixed(2)),
                 nodeCount: Array.isArray(this.nodes) ? this.nodes.length : 0,
-                centerlineCount: Array.isArray(centerlineNodes) ? centerlineNodes.length : 0
+                centerlineCount: Array.isArray(centerlineNodes) ? centerlineNodes.length : 0,
+                hitboxCount: Array.isArray(hitboxNodes) ? hitboxNodes.length : 0
             };
         }
 
         _nodeKey(node) {
             if (!WallSectionUnit._isMapNode(node)) return "";
-            return `${node.xindex},${node.yindex}`;
+            if (typeof node.id === "string" && node.id.length > 0) return node.id;
+            const layer = Number.isFinite(node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+            const surfaceId = (typeof node.surfaceId === "string") ? node.surfaceId : "";
+            const fragmentId = (typeof node.fragmentId === "string") ? node.fragmentId : "";
+            return `${node.xindex},${node.yindex},${layer},${surfaceId},${fragmentId}`;
+        }
+
+        _getWallTraversalLayer() {
+            if (Number.isFinite(this.traversalLayer)) return Math.round(Number(this.traversalLayer));
+            if (Number.isFinite(this.level)) return Math.round(Number(this.level));
+            return Math.round((Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0) / 3);
+        }
+
+        _resolveNodeForWallLayer(node) {
+            if (!WallSectionUnit._isMapNode(node)) return null;
+            const layer = this._getWallTraversalLayer();
+            const nodeLayer = Number.isFinite(node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+            if (nodeLayer === layer) return node;
+
+            const sourceNode = node.sourceNode && WallSectionUnit._isMapNode(node.sourceNode)
+                ? node.sourceNode
+                : node;
+            if (layer === 0) return sourceNode;
+
+            const mapRef = this.map || null;
+            if (!mapRef) return null;
+            if (typeof mapRef.getFloorNodeAtLayer === "function") {
+                const resolved = mapRef.getFloorNodeAtLayer(sourceNode.xindex, sourceNode.yindex, layer, {
+                    sectionKey: typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : ""
+                });
+                if (resolved) return resolved;
+            }
+            if (!(mapRef.floorNodesById instanceof Map)) return null;
+            let fallback = null;
+            const sectionKey = typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : "";
+            for (const nodes of mapRef.floorNodesById.values()) {
+                if (!Array.isArray(nodes)) continue;
+                for (let i = 0; i < nodes.length; i++) {
+                    const candidate = nodes[i];
+                    if (!candidate) continue;
+                    if (Number(candidate.xindex) !== Number(sourceNode.xindex) || Number(candidate.yindex) !== Number(sourceNode.yindex)) continue;
+                    const candidateLayer = Number.isFinite(candidate.traversalLayer)
+                        ? Math.round(Number(candidate.traversalLayer))
+                        : (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0);
+                    if (candidateLayer !== layer) continue;
+                    if (sectionKey && (
+                        candidate.ownerSectionKey === sectionKey ||
+                        candidate._prototypeSectionKey === sectionKey ||
+                        (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                    )) {
+                        return candidate;
+                    }
+                    if (!fallback) fallback = candidate;
+                }
+            }
+            return fallback;
         }
 
         _clearDirectionalBlocks() {
@@ -5784,17 +5937,53 @@ void main(void) {
             const seen = new Set();
             for (let i = 0; i < orderedAnchors.length; i++) {
                 const item = orderedAnchors[i] && orderedAnchors[i].anchor;
-                if (!WallSectionUnit._isMapNode(item)) continue;
-                const key = this._nodeKey(item);
+                const node = this._resolveNodeForWallLayer(item);
+                if (!WallSectionUnit._isMapNode(node)) continue;
+                const key = this._nodeKey(node);
                 if (!key || seen.has(key)) continue;
                 seen.add(key);
-                out.push(item);
+                out.push(node);
             }
             return out;
         }
 
-        _collectDirectionalBlockingTouchedNodes() {
-            const orderedAnchors = this._collectOrderedLineAnchors();
+        _collectGroundHitboxMapNodes() {
+            const mapRef = this.map || null;
+            const hitbox = this.groundPlaneHitbox || this._rebuildGroundPlaneHitboxFromBasePerimeter();
+            if (!mapRef || !hitbox || typeof hitbox.getBounds !== "function") return [];
+            const bounds = hitbox.getBounds();
+            if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+                !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+                return [];
+            }
+
+            const padding = Math.max(0.2, Number(this.thickness) || 0);
+            const samplePoints = [
+                { x: bounds.x - padding, y: bounds.y - padding },
+                { x: bounds.x - padding, y: bounds.y + bounds.height + padding },
+                { x: bounds.x + bounds.width + padding, y: bounds.y - padding },
+                { x: bounds.x + bounds.width + padding, y: bounds.y + bounds.height + padding },
+                { x: bounds.x + bounds.width * 0.5, y: bounds.y + bounds.height * 0.5 }
+            ];
+            const baseNodes = [];
+            const baseSeen = new Set();
+            if (typeof mapRef.worldToNode === "function") {
+                for (let i = 0; i < samplePoints.length; i++) {
+                    const point = samplePoints[i];
+                    const node = mapRef.worldToNode(point.x, point.y);
+                    if (!WallSectionUnit._isMapNode(node)) continue;
+                    const key = `${Number(node.xindex)},${Number(node.yindex)}`;
+                    if (baseSeen.has(key)) continue;
+                    baseSeen.add(key);
+                    baseNodes.push(node);
+                }
+            }
+            if (baseNodes.length === 0) return [];
+
+            const xIndices = baseNodes.map(node => Number(node.xindex)).filter(Number.isFinite);
+            const yIndices = baseNodes.map(node => Number(node.yindex)).filter(Number.isFinite);
+            if (xIndices.length === 0 || yIndices.length === 0) return [];
+
             const out = [];
             const seen = new Set();
             const pushNode = (node) => {
@@ -5803,6 +5992,49 @@ void main(void) {
                 if (!key || seen.has(key)) return;
                 seen.add(key);
                 out.push(node);
+            };
+            const xStart = Math.min(...xIndices) - 1;
+            const xEnd = Math.max(...xIndices) + 1;
+            const yStart = Math.min(...yIndices) - 1;
+            const yEnd = Math.max(...yIndices) + 1;
+
+            if (typeof mapRef.getNodesInIndexWindow === "function") {
+                const nearbyNodes = mapRef.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
+                if (Array.isArray(nearbyNodes)) {
+                    for (let i = 0; i < nearbyNodes.length; i++) {
+                        pushNode(nearbyNodes[i]);
+                    }
+                }
+            } else if (Array.isArray(mapRef.nodes)) {
+                const mapWidth = Number.isFinite(mapRef.width) ? Math.max(0, Math.floor(mapRef.width)) : mapRef.nodes.length;
+                const mapHeight = Number.isFinite(mapRef.height) ? Math.max(0, Math.floor(mapRef.height)) : 0;
+                const minX = Math.max(0, Math.floor(xStart));
+                const maxX = Math.min(Math.max(0, mapWidth - 1), Math.ceil(xEnd));
+                const minY = Math.max(0, Math.floor(yStart));
+                const maxY = Math.min(Math.max(0, mapHeight - 1), Math.ceil(yEnd));
+                for (let x = minX; x <= maxX; x++) {
+                    const column = mapRef.nodes[x];
+                    if (!Array.isArray(column)) continue;
+                    for (let y = minY; y <= maxY; y++) {
+                        pushNode(column[y]);
+                    }
+                }
+            }
+
+            return out;
+        }
+
+        _collectDirectionalBlockingTouchedNodes() {
+            const orderedAnchors = this._collectOrderedLineAnchors();
+            const out = [];
+            const seen = new Set();
+            const pushNode = (node) => {
+                const resolvedNode = this._resolveNodeForWallLayer(node);
+                if (!WallSectionUnit._isMapNode(resolvedNode)) return;
+                const key = this._nodeKey(resolvedNode);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                out.push(resolvedNode);
             };
             const pushAnchorNodes = (anchor) => {
                 if (WallSectionUnit._isMapNode(anchor)) {
@@ -5935,17 +6167,49 @@ void main(void) {
                 blockedConnectionCount: blockedConnections.length,
                 blockedLinkCount: Array.isArray(this.blockedLinks) ? this.blockedLinks.length : 0
             };
+            // Refresh floor tiles on/near this wall's centerline nodes so they
+            // pick up the new clip planes from _computeWallClipPlanesForNode.
+            if (typeof Road !== 'undefined' && Array.isArray(this.nodes) && this.nodes.length > 0) {
+                const _refreshNodes = new Set();
+                for (let _i = 0; _i < this.nodes.length; _i++) {
+                    const _n = this.nodes[_i];
+                    if (!_n) continue;
+                    _refreshNodes.add(_n);
+                    for (let _di = 0; _di < Road._oddDirections.length; _di++) {
+                        const _nb = _n.neighbors && _n.neighbors[Road._oddDirections[_di]];
+                        if (_nb) _refreshNodes.add(_nb);
+                    }
+                }
+                Road.refreshTexturesAroundNodes(_refreshNodes);
+            }
         }
 
         removeFromMapNodes() {
+            // Capture nodes now; we need them after the wall is removed from node.objects
+            // so that _computeWallClipPlanesForNode no longer sees this wall.
+            const _prevNodes = Array.isArray(this.nodes) ? this.nodes.slice() : [];
             this._clearDirectionalBlocks();
-            for (let i = 0; i < this.nodes.length; i++) {
-                const node = this.nodes[i];
+            for (let i = 0; i < _prevNodes.length; i++) {
+                const node = _prevNodes[i];
                 if (node && typeof node.removeObject === "function") {
                     node.removeObject(this);
                 }
             }
             this.nodes = [];
+            // Refresh AFTER wall is removed from node.objects so tiles see the wall-free state.
+            if (typeof Road !== 'undefined' && _prevNodes.length > 0) {
+                const _refreshNodes = new Set();
+                for (let _i = 0; _i < _prevNodes.length; _i++) {
+                    const _n = _prevNodes[_i];
+                    if (!_n) continue;
+                    _refreshNodes.add(_n);
+                    for (let _di = 0; _di < Road._oddDirections.length; _di++) {
+                        const _nb = _n.neighbors && _n.neighbors[Road._oddDirections[_di]];
+                        if (_nb) _refreshNodes.add(_nb);
+                    }
+                }
+                Road.refreshTexturesAroundNodes(_refreshNodes);
+            }
         }
 
         _buildVanishChunkSplitPlan(vanishPoint, removeWidthWorld = 1) {
@@ -6172,6 +6436,8 @@ void main(void) {
                 height: Number(this.height),
                 thickness: Number(this.thickness),
                 bottomZ: Number(this.bottomZ),
+                traversalLayer: this._getWallTraversalLayer(),
+                level: this._getWallTraversalLayer(),
                 wallTexturePath: this.wallTexturePath,
                 texturePhaseA: this.texturePhaseA,
                 texturePhaseB: this.texturePhaseB
@@ -6927,6 +7193,8 @@ void main(void) {
                 height: Number(this.height),
                 thickness: Number(this.thickness),
                 bottomZ: Number(this.bottomZ),
+                traversalLayer: this._getWallTraversalLayer(),
+                level: this._getWallTraversalLayer(),
                 wallTexturePath: this.wallTexturePath,
                 texturePhaseA: this.texturePhaseA,
                 texturePhaseB: this.texturePhaseB
@@ -7177,6 +7445,8 @@ void main(void) {
                 height: Number(this.height),
                 thickness: Number(this.thickness),
                 bottomZ: Number(this.bottomZ),
+                traversalLayer: this._getWallTraversalLayer(),
+                level: this._getWallTraversalLayer(),
                 wallTexturePath: this.wallTexturePath,
                 texturePhaseA: this.texturePhaseA,
                 texturePhaseB: this.texturePhaseB
@@ -7343,6 +7613,8 @@ void main(void) {
                 height: Number(this.height),
                 thickness: Number(this.thickness),
                 bottomZ: Number(this.bottomZ),
+                traversalLayer: this._getWallTraversalLayer(),
+                level: this._getWallTraversalLayer(),
                 wallTexturePath: this.wallTexturePath,
                 texturePhaseA: this.texturePhaseA,
                 texturePhaseB: this.texturePhaseB
@@ -7615,6 +7887,8 @@ void main(void) {
                 height: Number(this.height),
                 thickness: Number(this.thickness),
                 bottomZ: Number(this.bottomZ),
+                traversalLayer: this._getWallTraversalLayer(),
+                level: this._getWallTraversalLayer(),
                 wallTexturePath: (typeof this.wallTexturePath === "string" && this.wallTexturePath.length > 0)
                     ? this.wallTexturePath
                     : DEFAULT_WALL_TEXTURE,
@@ -7678,6 +7952,11 @@ void main(void) {
                     height: Number.isFinite(data.height) ? Number(data.height) : 1,
                     thickness: Number.isFinite(data.thickness) ? Number(data.thickness) : 0.1,
                     bottomZ: Number.isFinite(data.bottomZ) ? Number(data.bottomZ) : 0,
+                    traversalLayer: Number.isFinite(data.traversalLayer)
+                        ? Math.round(Number(data.traversalLayer))
+                        : (Number.isFinite(data.level)
+                            ? Math.round(Number(data.level))
+                            : (Number.isFinite(data.bottomZ) ? Math.round(Number(data.bottomZ) / 3) : 0)),
                     wallTexturePath: (typeof data.wallTexturePath === "string" && data.wallTexturePath.length > 0)
                         ? data.wallTexturePath
                         : DEFAULT_WALL_TEXTURE,

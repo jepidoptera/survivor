@@ -37,7 +37,11 @@
         assignNodesToSections: sectionRuntimeAssignNodesToSections,
         buildPrototypeSeamSegmentEntriesForSections: sectionRuntimeBuildPrototypeSeamSegmentEntriesForSections,
         buildPrototypeSeamSegments: sectionRuntimeBuildPrototypeSeamSegments,
-        updatePrototypeSeamSegmentsForSections: sectionRuntimeUpdatePrototypeSeamSegmentsForSections
+        updatePrototypeSeamSegmentsForSections: sectionRuntimeUpdatePrototypeSeamSegmentsForSections,
+        startSparseNodeBuildStaging: sectionRuntimeStartSparseNodeBuildStaging,
+        addSparseNodeBuildBatch: sectionRuntimeAddSparseNodeBuildBatch,
+        commitSparseNodeBuildStaging: sectionRuntimeCommitSparseNodeBuildStaging,
+        connectSparseNodesForSectionBatch: sectionRuntimeConnectSparseNodesForSectionBatch
     } = sectionWorldSectionRuntime;
 
     const sectionWorldLayout = resolveSectionWorldModule(
@@ -210,6 +214,8 @@
         clonePrototypeBlockedEdges,
         clonePrototypeClearanceByTile,
         clonePrototypeFloorRecords,
+        clonePrototypeFloorHoleRecords,
+        clonePrototypeFloorVoidRecords,
         clonePrototypeFloorTransitions,
         createPrototypeImplicitGroundFloorFragment,
         getPrototypeGroundTextureCount,
@@ -224,6 +230,7 @@
         comparePrototypeTileCoordKeys,
         clonePrototypeFloorTransitions,
         computeSectionCenterAxial,
+        createPrototypeImplicitGroundFloorFragment,
         evenQOffsetToAxial,
         getSectionBasisVectors,
         getSectionCoordsInRingRange,
@@ -361,6 +368,32 @@
             normalizePrototypeGroundTiles,
             pickPrototypeGroundTextureId
         });
+    }
+
+    const _sparseChunkDeps = () => ({
+        globalScope,
+        getNeighborOffsetsForColumn,
+        getPrototypeGroundTextureCount,
+        normalizePrototypeGroundTiles,
+        pickPrototypeGroundTextureId
+    });
+
+    function startSparseNodeBuildForSection(state, sectionKey) {
+        const asset = (state.sectionAssetsByKey instanceof Map) ? state.sectionAssetsByKey.get(sectionKey) : null;
+        if (!asset) return false;
+        return sectionRuntimeStartSparseNodeBuildStaging(state, asset);
+    }
+
+    function addSparseNodeBuildBatchForSection(map, state, sectionKey, start, count) {
+        return sectionRuntimeAddSparseNodeBuildBatch(map, state, sectionKey, start, count, _sparseChunkDeps());
+    }
+
+    function commitSparseNodeBuildForSection(map, state, sectionKey) {
+        return sectionRuntimeCommitSparseNodeBuildStaging(map, state, sectionKey, _sparseChunkDeps());
+    }
+
+    function connectSparseNodesForSectionBatch(state, sectionKey, start, count) {
+        return sectionRuntimeConnectSparseNodesForSectionBatch(state, sectionKey, start, count);
     }
 
     function ensurePrototypeSectionExists(map, prototypeState, sectionCoord) {
@@ -683,10 +716,13 @@
             _prototypeDirty: false,
             pixiSprite: createPrototypeTriggerDisplaySprite(),
             removeFromGame() {
-                this.gone = true;
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
             },
             remove() {
-                this.gone = true;
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
+            },
+            delete() {
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
             },
             saveJson() {
                 const currentDef = this._prototypeTriggerDef || null;
@@ -805,6 +841,58 @@
             return displayObj;
         }
         return syncPrototypeTriggerDisplayObject(map, displayObj, def);
+    }
+
+    function removePrototypeTriggerDefinition(map, triggerId) {
+        if (!map || !map._prototypeTriggerState) return false;
+        const triggerState = map._prototypeTriggerState;
+        const recordId = Number(triggerId);
+        if (!Number.isInteger(recordId)) return false;
+        if (!(triggerState.triggerDefsById instanceof Map) || !triggerState.triggerDefsById.has(recordId)) {
+            return false;
+        }
+
+        const def = triggerState.triggerDefsById.get(recordId);
+        if (def && typeof def === "object") {
+            def.gone = true;
+            def._scriptDeactivated = true;
+        }
+        triggerState.triggerDefsById.delete(recordId);
+
+        if (triggerState.displayObjectsById instanceof Map) {
+            const displayObj = triggerState.displayObjectsById.get(recordId) || null;
+            if (displayObj && typeof displayObj === "object") {
+                displayObj.gone = true;
+                displayObj._scriptDeactivated = true;
+                if (displayObj.pixiSprite && displayObj.pixiSprite.parent) {
+                    displayObj.pixiSprite.parent.removeChild(displayObj.pixiSprite);
+                }
+            }
+            triggerState.displayObjectsById.delete(recordId);
+        }
+
+        if (typeof map.rebuildPrototypeTriggerRegistry === "function") {
+            map.rebuildPrototypeTriggerRegistry();
+        } else {
+            rebuildPrototypeTriggerRegistryState(map);
+        }
+        return true;
+    }
+
+    function attachPrototypeTriggerDefinitionRemoval(map, def) {
+        if (!map || !def || typeof def !== "object") return def;
+        const removeSelf = function removeSelf() {
+            return removePrototypeTriggerDefinition(map, this.id);
+        };
+        for (const methodName of ["delete", "remove", "removeFromGame"]) {
+            Object.defineProperty(def, methodName, {
+                configurable: true,
+                enumerable: false,
+                writable: true,
+                value: removeSelf
+            });
+        }
+        return def;
     }
 
     function collectUsedPrototypeObjectRecordIds(orderedSectionAssets) {
@@ -927,6 +1015,7 @@
                 ? Array.from(new Set(def.coverageSectionKeys.filter((key) => typeof key === "string" && key.length > 0))).sort()
                 : buildPrototypeTriggerCoverageSectionKeys(map._prototypeSectionState, def.points);
             def._prototypeTriggerHitbox = buildPrototypeTriggerTraversalHitbox(def.points);
+            attachPrototypeTriggerDefinitionRemoval(map, def);
             triggerState.triggerDefsById.set(recordId, def);
             for (let keyIndex = 0; keyIndex < def.coverageSectionKeys.length; keyIndex++) {
                 const sectionKey = def.coverageSectionKeys[keyIndex];
@@ -1570,6 +1659,12 @@
             refreshSparseNodesForSectionAsset,
             rebuildPrototypeAssetObjectNameRegistry,
             rebuildPrototypeFloorRuntime,
+            createPrototypeImplicitGroundFloorFragment,
+            doesPrototypeNodeBelongToFloorFragment,
+            startSparseNodeBuildForSection,
+            addSparseNodeBuildBatchForSection,
+            commitSparseNodeBuildForSection,
+            connectSparseNodesForSectionBatch,
             normalizePrototypeScriptingName: normalizeSectionWorldScriptingName,
             generatePrototypeBubbleUniqueObjectName,
             resolvePrototypeActiveNamedObject,
@@ -1578,6 +1673,8 @@
             applyPrototypeSectionClearanceToNodes,
             rebuildPrototypeSectionClearance,
             clonePrototypeFloorRecords,
+            clonePrototypeFloorHoleRecords,
+            clonePrototypeFloorVoidRecords,
             clonePrototypeBlockedEdges,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorTransitions,

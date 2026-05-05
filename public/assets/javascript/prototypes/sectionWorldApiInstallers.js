@@ -16,6 +16,12 @@
             refreshSparseNodesForSectionAsset,
             rebuildPrototypeAssetObjectNameRegistry,
             rebuildPrototypeFloorRuntime,
+            createPrototypeImplicitGroundFloorFragment,
+            doesPrototypeNodeBelongToFloorFragment,
+            startSparseNodeBuildForSection,
+            addSparseNodeBuildBatchForSection,
+            commitSparseNodeBuildForSection,
+            connectSparseNodesForSectionBatch,
             normalizePrototypeScriptingName,
             generatePrototypeBubbleUniqueObjectName,
             resolvePrototypeActiveNamedObject,
@@ -24,6 +30,8 @@
             applyPrototypeSectionClearanceToNodes,
             rebuildPrototypeSectionClearance,
             clonePrototypeFloorRecords,
+            clonePrototypeFloorHoleRecords,
+            clonePrototypeFloorVoidRecords,
             clonePrototypeBlockedEdges,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorTransitions,
@@ -118,6 +126,91 @@
             if (!state) return 0;
             rebuildPrototypeFloorRuntime(this, state);
             return 1;
+        };
+        map.registerSectionFloorNodes = function registerSectionFloorNodes(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return this.registerFloorSection(sectionKey, state, {
+                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+                doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
+            });
+        };
+        map.prepareFloorSectionFragmentsForSection = function prepareFloorSectionFragmentsForSection(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return null;
+            return this.prepareFloorSectionFragments(sectionKey, state, {
+                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+                doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
+            });
+        };
+        map.addFloorSectionNodeBatchForSection = function addFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            const sectionNodes = (state.nodesBySectionKey instanceof Map)
+                ? (state.nodesBySectionKey.get(sectionKey) || []) : [];
+            return this.addFloorSectionNodeBatch(sectionKey, state, sectionNodes, start, count, doesPrototypeNodeBelongToFloorFragment);
+        };
+        map.finalizeFloorSectionNodesForSection = function finalizeFloorSectionNodesForSection(sectionKey) {
+            return this.finalizeFloorSectionNodes(sectionKey);
+        };
+        map.getSectionNodeCount = function getSectionNodeCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.nodesBySectionKey instanceof Map)) return 0;
+            const nodes = state.nodesBySectionKey.get(sectionKey);
+            return Array.isArray(nodes) ? nodes.length : 0;
+        };
+        map.getPrototypeTileKeyCount = function getPrototypeTileKeyCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.sectionAssetsByKey instanceof Map)) return 0;
+            const asset = state.sectionAssetsByKey.get(sectionKey);
+            return Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys.length : 0;
+        };
+        map.getSparseNodeCount = function getSparseNodeCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.nodesBySectionKey instanceof Map)) return 0;
+            const nodes = state.nodesBySectionKey.get(sectionKey);
+            return Array.isArray(nodes) ? nodes.length : 0;
+        };
+        map.startSparseNodeBuildForSection = function startSparseNodeBuildForSection_(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return false;
+            return startSparseNodeBuildForSection(state, sectionKey);
+        };
+        map.addSparseNodeBuildBatchForSection = function addSparseNodeBuildBatchForSection_(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return addSparseNodeBuildBatchForSection(this, state, sectionKey, start, count);
+        };
+        map.commitSparseNodeBuildForSection = function commitSparseNodeBuildForSection_(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return commitSparseNodeBuildForSection(this, state, sectionKey);
+        };
+        map.connectSparseNodesForSectionBatch = function connectSparseNodesForSectionBatch_(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return connectSparseNodesForSectionBatch(state, sectionKey, start, count);
+        };
+        map.prepareFloorSectionUnregisterForSection = function prepareFloorSectionUnregisterForSection(sectionKey) {
+            return this.prepareFloorSectionUnregister(sectionKey);
+        };
+        map.unregisterFloorSectionNodeBatchForSection = function unregisterFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            return this.unregisterFloorSectionNodeBatch(sectionKey, start, count);
+        };
+        map.commitFloorSectionUnregisterForSection = function commitFloorSectionUnregisterForSection(sectionKey) {
+            return this.commitFloorSectionUnregister(sectionKey);
+        };
+        map.prepareFloorSectionConnectionForSection = function prepareFloorSectionConnectionForSection(sectionKey) {
+            return this.prepareFloorSectionConnection(sectionKey);
+        };
+        map.connectFloorSectionNodeBatchForSection = function connectFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            return this.connectFloorSectionNodeBatch(sectionKey, start, count);
+        };
+        map.commitFloorSectionConnectionForSection = function commitFloorSectionConnectionForSection(sectionKey) {
+            return this.commitFloorSectionConnection(sectionKey);
+        };
+        map.unregisterSectionFloorNodes = function unregisterSectionFloorNodes(sectionKey) {
+            return this.unregisterFloorSection(sectionKey);
         };
         map.getPrototypeHydratedSectionKeys = function getPrototypeHydratedSectionKeys() {
             const state = this._prototypeSectionState;
@@ -373,6 +466,8 @@
                     groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
                     groundTiles: (asset.groundTiles && typeof asset.groundTiles === "object") ? { ...asset.groundTiles } : {},
                     floors: clonePrototypeFloorRecords(asset.floors, asset.key),
+                    floorHoles: typeof clonePrototypeFloorHoleRecords === "function" ? clonePrototypeFloorHoleRecords(asset.floorHoles) : [],
+                    floorVoids: typeof clonePrototypeFloorVoidRecords === "function" ? clonePrototypeFloorVoidRecords(asset.floorVoids) : [],
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     blockedEdges: clonePrototypeBlockedEdges(asset.blockedEdges),
                     clearanceByTile: clonePrototypeClearanceByTile(asset.clearanceByTile),
@@ -461,10 +556,38 @@
             if (!activityNode || activityNode._prototypeVoid === true) return "#000000";
             return activityNode._prototypeSectionActive === true ? "#007700" : "#000000";
         };
-        map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY) {
-            const node = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
+        map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY, actor = null, options = {}) {
+            const baseNode = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
+            const resolveActorLayer = () => {
+                const candidates = [
+                    options && options.traversalLayer,
+                    options && options.currentLayer,
+                    actor && actor.currentLayer,
+                    actor && actor.traversalLayer,
+                    actor && actor.level,
+                    actor && actor.node && actor.node.traversalLayer,
+                    actor && actor.node && actor.node.level
+                ];
+                for (let i = 0; i < candidates.length; i++) {
+                    const value = Number(candidates[i]);
+                    if (Number.isFinite(value)) return Math.round(value);
+                }
+                return 0;
+            };
+            const layer = resolveActorLayer();
+            let node = baseNode;
+            if (layer !== 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+                const sectionKey = typeof baseNode._prototypeSectionKey === "string" ? baseNode._prototypeSectionKey : "";
+                node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                    sectionKey,
+                    allowScan: false
+                }) || null;
+            }
             const activityNode = this.getPrototypeActivityNode(node);
-            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !node.isBlocked());
+            const isBlocked = node && typeof node.isBlocked === "function"
+                ? node.isBlocked()
+                : !!(node && (node.blocked || node.blockedByObjects > 0));
+            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !isBlocked);
         };
         map.getNodesInIndexWindow = function getNodesInIndexWindow(xStart, xEnd, yStart, yEnd) {
             const state = this._prototypeSectionState;

@@ -46,8 +46,10 @@
         constructor() {
             this.x = 0;
             this.y = 0;
+            this.z = 0;
             this.prevX = 0;
             this.prevY = 0;
+            this.prevZ = 0;
             this.viewscale = 1;
             this.xyratio = 0.66;
             this.map = null;
@@ -62,10 +64,13 @@
             if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.y)) {
                 const prevX = Number.isFinite(camera.prevX) ? camera.prevX : camera.x;
                 const prevY = Number.isFinite(camera.prevY) ? camera.prevY : camera.y;
+                const prevZ = Number.isFinite(camera.prevZ) ? camera.prevZ : (Number.isFinite(camera.z) ? camera.z : 0);
                 this.x = RenderingCamera.interpolateWrappedValue(this.map, prevX, camera.x, alpha, "x");
                 this.y = RenderingCamera.interpolateWrappedValue(this.map, prevY, camera.y, alpha, "y");
+                this.z = prevZ + ((Number.isFinite(camera.z) ? camera.z : prevZ) - prevZ) * alpha;
                 this.prevX = prevX;
                 this.prevY = prevY;
+                this.prevZ = prevZ;
                 return;
             }
 
@@ -74,8 +79,10 @@
                 const height = viewport && Number.isFinite(viewport.height) ? viewport.height : 30;
                 this.x = wizard.x - width * 0.5;
                 this.y = wizard.y - height * 0.5;
+                this.z = 0;
                 this.prevX = this.x;
                 this.prevY = this.y;
+                this.prevZ = this.z;
             }
         }
 
@@ -87,7 +94,7 @@
             const dyBase = (mapRef && typeof mapRef.shortestDeltaY === "function")
                 ? mapRef.shortestDeltaY(this.y, worldY)
                 : (worldY - this.y);
-            const dy = dyBase - worldZ;
+            const dy = dyBase - (worldZ - (Number.isFinite(this.z) ? this.z : 0));
             return {
                 x: dx * this.viewscale,
                 y: dy * this.viewscale * this.xyratio

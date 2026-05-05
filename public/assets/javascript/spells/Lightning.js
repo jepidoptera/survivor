@@ -24,6 +24,9 @@ class LightningBoltProjectile {
         this.x = Number(config.x) || 0;
         this.y = Number(config.y) || 0;
         this.z = 0.55;
+        this.visualBaseZ = Number.isFinite(config.visualBaseZ) ? Number(config.visualBaseZ) : 0;
+        this.visualStartZ = Number.isFinite(config.visualStartZ) ? Number(config.visualStartZ) : this.visualBaseZ;
+        this.visualTargetZ = Number.isFinite(config.visualTargetZ) ? Number(config.visualTargetZ) : NaN;
         this.dirX = Number(config.dirX) || 1;
         this.dirY = Number(config.dirY) || 0;
         this.source = config.source || null;
@@ -166,10 +169,21 @@ class LightningBoltProjectile {
         if (typeof globalThis.getSpellTargetAimPoint === "function") {
             const aim = globalThis.getSpellTargetAimPoint(globalThis.wizard || null, this.forcedTarget);
             if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                if (Number.isFinite(aim.z)) {
+                    this.visualTargetZ = Number(aim.z);
+                    return { x: Number(aim.x), y: Number(aim.y), z: Number(aim.z) };
+                }
                 return { x: Number(aim.x), y: Number(aim.y) };
             }
         }
         if (Number.isFinite(this.forcedTarget.x) && Number.isFinite(this.forcedTarget.y)) {
+            const z = (globalThis.Spell && typeof globalThis.Spell.getTargetWorldBaseZ === "function")
+                ? globalThis.Spell.getTargetWorldBaseZ(this.forcedTarget)
+                : 0;
+            if (Number.isFinite(z)) {
+                this.visualTargetZ = Number(z);
+                return { x: Number(this.forcedTarget.x), y: Number(this.forcedTarget.y), z: Number(z) };
+            }
             return { x: Number(this.forcedTarget.x), y: Number(this.forcedTarget.y) };
         }
         return null;
@@ -347,7 +361,10 @@ class Lightning extends globalThis.Spell {
             dirY,
             source: caster,
             map: caster.map,
-            forcedTarget: this.forcedTarget || null
+            forcedTarget: this.forcedTarget || null,
+            visualBaseZ: Number.isFinite(this.visualBaseZ) ? Number(this.visualBaseZ) : 0,
+            visualStartZ: Number.isFinite(this.visualStartZ) ? Number(this.visualStartZ) : (Number.isFinite(this.visualBaseZ) ? Number(this.visualBaseZ) : 0),
+            visualTargetZ: Number.isFinite(this.visualTargetZ) ? Number(this.visualTargetZ) : NaN
         });
 
         if (Array.isArray(globalThis.projectiles)) {

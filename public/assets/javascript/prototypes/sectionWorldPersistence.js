@@ -55,6 +55,8 @@
                 height: Number.isFinite(data.height) ? Number(data.height) : null,
                 thickness: Number.isFinite(data.thickness) ? Number(data.thickness) : null,
                 bottomZ: Number.isFinite(data.bottomZ) ? Number(data.bottomZ) : null,
+                traversalLayer: Number.isFinite(data.traversalLayer) ? Number(data.traversalLayer) : null,
+                level: Number.isFinite(data.level) ? Number(data.level) : null,
                 wallTexturePath: (typeof data.wallTexturePath === "string") ? data.wallTexturePath : "",
                 texturePhaseA: Number.isFinite(data.texturePhaseA) ? Number(data.texturePhaseA) : null,
                 texturePhaseB: Number.isFinite(data.texturePhaseB) ? Number(data.texturePhaseB) : null,

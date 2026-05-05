@@ -39,12 +39,17 @@
                     : (item.prevY + (item.y - item.prevY) * alpha)
             )
             : item.y;
+        const worldZ = (item && Number.isFinite(item.prevZ) && Number.isFinite(item.z))
+            ? (item.prevZ + (item.z - item.prevZ) * alpha)
+            : (item && Number.isFinite(item.z) ? item.z : 0);
+        const cameraZ = Number.isFinite(camera && camera.z) ? Number(camera.z) : 0;
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(camera.x, worldX)
             : (worldX - camera.x);
-        const dy = (map && typeof map.shortestDeltaY === "function")
+        const dyBase = (map && typeof map.shortestDeltaY === "function")
             ? map.shortestDeltaY(camera.y, worldY)
             : (worldY - camera.y);
+        const dy = dyBase - (worldZ - cameraZ);
         return {
             x: dx * viewscale,
             y: dy * viewscale * xyratio

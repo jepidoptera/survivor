@@ -12,6 +12,7 @@ attribute vec3 aDepthWorld;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
+uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
@@ -37,7 +38,7 @@ void main(void) {
     float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWrappedY, uWorldSize.y, uWrapEnabled.y);
 
     float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
-    float screenY = (anchorCamDy - uModelOrigin.z) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
+    float screenY = (anchorCamDy - uModelOrigin.z + uCameraZ) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
 
     float worldX = uModelOrigin.x + aDepthWorld.x;
     float worldY = uModelOrigin.y + aDepthWorld.y;
@@ -47,7 +48,7 @@ void main(void) {
     float wrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, worldY, uWorldSize.y, uWrapEnabled.y);
 
     float camDy = shortestDelta(uCameraWorld.y, wrappedY, uWorldSize.y, uWrapEnabled.y);
-    float camDz = worldZ;
+    float camDz = worldZ - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float depthMetric = camDy + camDz;
@@ -369,7 +370,211 @@ void main(void) {
         return null;
     }
 
-    static findConvexWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = 12) {
+    static _pickRightmostCandidate(candidates, exitKey, inDir, mapRef, wallCtor) {
+        if (candidates.length === 1) return candidates[0];
+        let bestCandidate = null;
+        let bestAngle = Infinity;
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            const outDir = Roof._getVectorFromEndpointToOther(candidate, exitKey, mapRef, wallCtor);
+            if (!outDir) continue;
+            // atan2(cross, dot): positive = CCW (left), negative = CW (right).
+            // Smallest angle = most clockwise = rightmost turn, tracing outer boundary.
+            const dot = inDir.x * outDir.x + inDir.y * outDir.y;
+            const cross = inDir.x * outDir.y - inDir.y * outDir.x;
+            const angle = Math.atan2(cross, dot);
+            if (angle < bestAngle) {
+                bestAngle = angle;
+                bestCandidate = candidate;
+            }
+        }
+        return bestCandidate;
+    }
+
+    static _greedyOuterWallLoopTraversal(startSection, entryKey, mapRef, wallCtor, maxDepth) {
+        let current = startSection;
+        let entryEndpointKey = entryKey;
+        const path = [startSection];
+        const visitedIds = new Set([startSection.id]);
+        for (let step = 0; step < maxDepth; step++) {
+            const exitKey = Roof._getOtherEndpointKey(current, entryEndpointKey, wallCtor);
+            if (!exitKey) return null;
+            const allCandidates = Roof._getConnectedSectionsAtEndpoint(current, exitKey, wallCtor)
+                .filter(c => c && c !== current);
+            if (allCandidates.length === 0) return null;
+            const inDir = Roof._getVectorFromEndpointToOther(current, entryEndpointKey, mapRef, wallCtor);
+            if (!inDir) return null;
+            const closingCandidates = allCandidates.filter(c => c === startSection);
+            const forwardCandidates = allCandidates.filter(c => c !== startSection && !visitedIds.has(c.id));
+            // If we can close the loop and have at least 3 sections total, check if rightmost leads back.
+            if (closingCandidates.length > 0 && path.length >= 3) {
+                const best = Roof._pickRightmostCandidate(
+                    allCandidates.filter(c => c === startSection || (!visitedIds.has(c.id) && c !== startSection)),
+                    exitKey, inDir, mapRef, wallCtor
+                );
+                if (best === startSection) return path.slice();
+                if (best && !visitedIds.has(best.id)) {
+                    path.push(best);
+                    visitedIds.add(best.id);
+                    entryEndpointKey = exitKey;
+                    current = best;
+                    continue;
+                }
+                // Closing is the only option
+                return path.slice();
+            }
+            if (forwardCandidates.length === 0) return null;
+            const best = Roof._pickRightmostCandidate(forwardCandidates, exitKey, inDir, mapRef, wallCtor);
+            if (!best) return null;
+            path.push(best);
+            visitedIds.add(best.id);
+            entryEndpointKey = exitKey;
+            current = best;
+        }
+        return null;
+    }
+
+    // Like findConvexWallLoopFromStartSection but allows non-convex (mixed turn-sign) loops.
+    // Uses a greedy rightmost-turn traversal to trace one enclosed face of the wall graph.
+    static findWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null) {
+        const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
+        if (!startSection || !wallCtor || typeof wallCtor.endpointKey !== "function") return null;
+        const startKeys = Roof._getSectionEndpointKeys(startSection, wallCtor);
+        for (let ki = 0; ki < startKeys.length; ki++) {
+            const result = Roof._greedyOuterWallLoopTraversal(
+                startSection, startKeys[ki], mapRef, wallCtor, resolvedMaxDepth
+            );
+            if (Array.isArray(result) && result.length >= 3) return result;
+        }
+        return null;
+    }
+
+    // Given an ordered list of wall sections forming a closed loop, return the
+    // ordered polygon vertices tracing the OUTER edge of the wall (not the centerline).
+    // Emits 2 outer-face corners per section (entry + exit), capturing miter geometry at
+    // junctions. Deduplicates collinear/identical consecutive points. Picks the orientation
+    // (left vs right face) that yields the larger area polygon, making the result independent
+    // of coordinate-system winding conventions.
+    static extractWallLoopPolygonPoints(loopSections, mapRef, wallCtor) {
+        if (!Array.isArray(loopSections) || loopSections.length < 3 || !wallCtor) return null;
+        const N = loopSections.length;
+
+        // junction[i] = shared endpoint between loopSections[i] and loopSections[(i+1)%N]
+        const junctionKeys = [];
+        const junctionPts = [];
+        let refPoint = null;
+        for (let i = 0; i < N; i++) {
+            const curr = loopSections[i];
+            const next = loopSections[(i + 1) % N];
+            const sharedKey = Roof._getSharedEndpointKey(curr, next, wallCtor);
+            if (!sharedKey) return null;
+            const pt = Roof._getSectionEndpointByKey(curr, sharedKey, wallCtor);
+            if (!pt) return null;
+            const ptX = Number(pt.x), ptY = Number(pt.y);
+            if (!Number.isFinite(ptX) || !Number.isFinite(ptY)) return null;
+            junctionKeys.push(sharedKey);
+            if (!refPoint) {
+                refPoint = { x: ptX, y: ptY };
+                junctionPts.push({ x: ptX, y: ptY });
+            } else {
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(refPoint.x, ptX) : (ptX - refPoint.x);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(refPoint.y, ptY) : (ptY - refPoint.y);
+                junctionPts.push({ x: refPoint.x + dx, y: refPoint.y + dy });
+            }
+        }
+
+        // Signed area (shoelace) of the centerline polygon — sign encodes winding.
+        let signedArea = 0;
+        for (let i = 0; i < N; i++) {
+            const a = junctionPts[i], b = junctionPts[(i + 1) % N];
+            signedArea += a.x * b.y - b.x * a.y;
+        }
+        const isCW = signedArea > 0; // CW in Y-down screen coords
+
+        const anchor = junctionPts[0];
+        const wrapPt = (pt) => {
+            if (!pt || !Number.isFinite(Number(pt.x)) || !Number.isFinite(Number(pt.y))) return null;
+            const px = Number(pt.x), py = Number(pt.y);
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(anchor.x, px) : (px - anchor.x);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(anchor.y, py) : (py - anchor.y);
+            return { x: anchor.x + dx, y: anchor.y + dy };
+        };
+
+        // Build outer polygon. outerIsLeftForCW: when the loop is CW, is outer the Left face?
+        // We try both values and pick the polygon with larger area.
+        const buildOuterPolygon = (outerIsLeftForCW) => {
+            const pts = [];
+            for (let i = 0; i < N; i++) {
+                const section = loopSections[i];
+                // entryKey: junction between section[i-1] and section[i]
+                const entryKey = junctionKeys[(i - 1 + N) % N];
+                const isForward = (entryKey === wallCtor.endpointKey(section.startPoint));
+                const profile = (typeof section.getWallProfile === "function") ? section.getWallProfile() : null;
+                if (!profile) return null;
+
+                // Outer face relative to the loop's winding:
+                // CW loop → outer = (outerIsLeftForCW ? Left : Right) of traversal
+                // CCW loop → outer = (!outerIsLeftForCW ? Left : Right) of traversal
+                const outerIsLeft = isCW ? outerIsLeftForCW : !outerIsLeftForCW;
+
+                // Per-section traversal direction flips Left/Right relative to the section's own coordinates.
+                // Forward (start→end): Left of traversal = profile.aLeft/bLeft; Right = aRight/bRight
+                // Backward (end→start): Left of traversal = profile.bRight/aRight; Right = bLeft/aLeft
+                let entryCorner, exitCorner;
+                if (isForward) {
+                    entryCorner = outerIsLeft ? profile.aLeft : profile.aRight;
+                    exitCorner  = outerIsLeft ? profile.bLeft : profile.bRight;
+                } else {
+                    entryCorner = outerIsLeft ? profile.bRight : profile.bLeft;
+                    exitCorner  = outerIsLeft ? profile.aRight : profile.aLeft;
+                }
+
+                const p1 = wrapPt(entryCorner);
+                const p2 = wrapPt(exitCorner);
+                if (!p1 || !p2) return null;
+                pts.push(p1, p2);
+            }
+            // Deduplicate consecutive near-identical points.
+            const EPS = 1e-4;
+            const deduped = [];
+            for (let j = 0; j < pts.length; j++) {
+                const p = pts[j];
+                if (!deduped.length) { deduped.push(p); continue; }
+                const prev = deduped[deduped.length - 1];
+                if (Math.abs(p.x - prev.x) < EPS && Math.abs(p.y - prev.y) < EPS) continue;
+                deduped.push(p);
+            }
+            if (deduped.length > 1) {
+                const f = deduped[0], l = deduped[deduped.length - 1];
+                if (Math.abs(f.x - l.x) < EPS && Math.abs(f.y - l.y) < EPS) deduped.pop();
+            }
+            return deduped.length >= 3 ? deduped : null;
+        };
+
+        const polygonAbsArea = (pts) => {
+            if (!pts) return -Infinity;
+            let a = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i], q = pts[(i + 1) % pts.length];
+                a += p.x * q.y - q.x * p.y;
+            }
+            return Math.abs(a) * 0.5;
+        };
+
+        // Try both orientations — the outer boundary is always larger than the centerline.
+        const poly0 = buildOuterPolygon(true);
+        const poly1 = buildOuterPolygon(false);
+        const area0 = polygonAbsArea(poly0);
+        const area1 = polygonAbsArea(poly1);
+        return area0 >= area1 ? (poly0 || poly1) : (poly1 || poly0);
+    }
+
+    static findConvexWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null) {
+        const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
         if (!startSection || !wallCtor) return null;
         const startNeighbors = Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.startPoint), wallCtor)
             .concat(Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.endPoint), wallCtor));
@@ -383,7 +588,7 @@ void main(void) {
         }
 
         const dfs = (currentSection, entryEndpointKey, turnSign, pathSections, depth) => {
-            if (!currentSection || depth > maxDepth) return null;
+            if (!currentSection || depth > resolvedMaxDepth) return null;
             const exitEndpointKey = Roof._getOtherEndpointKey(currentSection, entryEndpointKey, wallCtor);
             if (!exitEndpointKey) return null;
             const candidates = Roof._getConnectedSectionsAtEndpoint(currentSection, exitEndpointKey, wallCtor);
@@ -427,14 +632,14 @@ void main(void) {
         const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY);
         if (!hoveredSection) return null;
 
-        const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Number(options.maxDepth)) : 12;
+        const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Number(options.maxDepth)) : null;
         const loopSections = Roof.findConvexWallLoopFromStartSection(hoveredSection, mapRef, wallCtor, maxDepth);
         if (!Array.isArray(loopSections) || loopSections.length < 3) return null;
 
         let baseCenter = null;
         let sumX = 0;
         let sumY = 0;
-        let sumZ = 0;
+        let maxZ = 0;
         let count = 0;
         for (let i = 0; i < loopSections.length; i++) {
             const section = loopSections[i];
@@ -469,14 +674,14 @@ void main(void) {
                 sumX += relX;
                 sumY += relY;
             }
-            sumZ += topZ;
+            if (topZ > maxZ) maxZ = topZ;
             count += 1;
         }
         if (count <= 0) return null;
 
         let previewX = sumX / count;
         let previewY = sumY / count;
-        const previewZ = sumZ / count;
+        const previewZ = maxZ;
         if (mapRef && typeof mapRef.wrapWorldX === "function") previewX = mapRef.wrapWorldX(previewX);
         if (mapRef && typeof mapRef.wrapWorldY === "function") previewY = mapRef.wrapWorldY(previewY);
 
@@ -537,7 +742,7 @@ void main(void) {
         let baseMid = null;
         let sumMidX = 0;
         let sumMidY = 0;
-        let sumMidZ = 0;
+        let maxMidZ = 0;
         let midCount = 0;
         const endpointAggByKey = new Map();
 
@@ -566,7 +771,7 @@ void main(void) {
             if (unwrappedMid) {
                 sumMidX += unwrappedMid.x;
                 sumMidY += unwrappedMid.y;
-                sumMidZ += topZ;
+                if (topZ > maxMidZ) maxMidZ = topZ;
                 midCount += 1;
             }
 
@@ -578,7 +783,7 @@ void main(void) {
                     const agg = endpointAggByKey.get(startKey) || { x: 0, y: 0, z: 0, count: 0 };
                     agg.x += startPt.x;
                     agg.y += startPt.y;
-                    agg.z += topZ;
+                    if (topZ > agg.z) agg.z = topZ;
                     agg.count += 1;
                     endpointAggByKey.set(startKey, agg);
                 }
@@ -589,7 +794,7 @@ void main(void) {
                     const agg = endpointAggByKey.get(endKey) || { x: 0, y: 0, z: 0, count: 0 };
                     agg.x += endPt.x;
                     agg.y += endPt.y;
-                    agg.z += topZ;
+                    if (topZ > agg.z) agg.z = topZ;
                     agg.count += 1;
                     endpointAggByKey.set(endKey, agg);
                 }
@@ -599,8 +804,7 @@ void main(void) {
         if (midCount <= 0 || endpointAggByKey.size < 2) return null;
         const meanMidX = sumMidX / midCount;
         const meanMidY = sumMidY / midCount;
-        const meanMidZ = sumMidZ / midCount;
-        const peakWorldZ = meanMidZ + peakOffsetZ;
+        const peakWorldZ = maxMidZ + peakOffsetZ;
 
         // Build loop corner order from pairwise shared endpoints between adjacent
         // loop sections. Stable ordering avoids self-intersecting roof footprints.
@@ -636,7 +840,7 @@ void main(void) {
                 x: (agg.x / agg.count) - meanMidX,
                 y: (agg.y / agg.count) - meanMidY,
                 // Store local z relative to roof base; world base is roofRef.z.
-                z: (agg.z / agg.count) - meanMidZ
+                z: agg.z - maxMidZ
             });
         }
         if (vertices.length < 2) return null;
@@ -714,7 +918,7 @@ void main(void) {
         }
 
         const peakIndex = vertices.length;
-        vertices.push({ x: 0, y: 0, z: peakWorldZ - meanMidZ });
+        vertices.push({ x: 0, y: 0, z: peakWorldZ - maxMidZ });
 
         const faces = [];
         for (let i = 0; i < wallSections.length; i++) {
@@ -735,7 +939,7 @@ void main(void) {
         return {
             centerX,
             centerY,
-            baseZ: meanMidZ,
+            baseZ: maxMidZ,
             peakZ: peakWorldZ,
             vertices,
             faces,
@@ -905,7 +1109,7 @@ void main(void) {
         return lower.concat(upper);
     }
 
-    constructor(x, y, heightFromGround) {
+    constructor(x, y, heightFromGround, options = {}) {
         this.type = "roof";
         this.x = x;
         this.y = y;
@@ -961,10 +1165,11 @@ void main(void) {
         this.faces = this.buildFaces(this.numEaves, this.numHexRing);
         this.updateGroundPlaneHitbox();
 
+        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
         const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
             ? globalThis.Scripting
             : null;
-        if (scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+        if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
             scriptingApi.ensureObjectScriptingName(this, { map: this.map || null });
         }
     }
@@ -1162,6 +1367,7 @@ void main(void) {
                 const uniforms = {
                     uScreenSize: new Float32Array([1, 1]),
                     uCameraWorld: new Float32Array([0, 0]),
+                    uCameraZ: 0,
                     uViewScale: 1,
                     uXyRatio: 1,
                     uDepthRange: new Float32Array([0, 1]),
@@ -1340,14 +1546,21 @@ void main(void) {
         return data;
     }
 
-    static loadJson(data) {
+    static loadJson(data, options = {}) {
         if (!data || data.type !== 'roof') return null;
 
         const x = Number.isFinite(data.x) ? data.x : 0;
         const y = Number.isFinite(data.y) ? data.y : 0;
         const heightFromGround = Number.isFinite(data.heightFromGround) ? data.heightFromGround : 0;
         const z = Number.isFinite(data.z) ? Number(data.z) : heightFromGround;
-        const roof = new Roof(x, y, heightFromGround);
+        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+        const trustLoadedScriptingName = !!(options && options.trustLoadedScriptingName);
+        const targetSectionKey = (typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
+            ? options.targetSectionKey
+            : "";
+        const roof = new Roof(x, y, heightFromGround, {
+            suppressAutoScriptingName
+        });
         roof.z = z;
         roof.heightFromGround = z;
 
@@ -1375,7 +1588,12 @@ void main(void) {
                 : null;
             const restoredName = data.scriptingName.trim();
             if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
-                    scriptingApi.setObjectScriptingName(roof, restoredName, { map: roof.map || null, restoreFromSave: true });
+                scriptingApi.setObjectScriptingName(roof, restoredName, {
+                    map: roof.map || null,
+                    restoreFromSave: true,
+                    targetSectionKey,
+                    skipBubbleEnsureOnRestore: trustLoadedScriptingName
+                });
             } else {
                 roof.scriptingName = restoredName;
             }

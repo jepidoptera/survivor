@@ -1034,7 +1034,7 @@
         if (!mountedSection) return 0;
 
         const loopSections = roofApi.findConvexWallLoopFromStartSection(
-            mountedSection, mapRef, wallCtor, 12);
+            mountedSection, mapRef, wallCtor, null);
         if (!Array.isArray(loopSections) || loopSections.length < 3) return 0;
 
         // Compute centroid of the loop vertices (one startPoint per section).

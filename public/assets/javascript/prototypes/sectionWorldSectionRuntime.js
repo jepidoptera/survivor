@@ -116,6 +116,12 @@
 
         prototypeState.nodesBySectionKey.set(asset.key, sectionNodes);
 
+        // Pre-sort by draw order so bubble-shift rebuildLoaded emits sorted runs.
+        sectionNodes.sort((a, b) => {
+            const dy = (a.yindex || 0) - (b.yindex || 0);
+            return dy !== 0 ? dy : (a.xindex || 0) - (b.xindex || 0);
+        });
+
         for (let i = 0; i < sectionNodes.length; i++) {
             const node = sectionNodes[i];
             const offsets = getNeighborOffsetsForColumn(node.xindex);
@@ -385,6 +391,137 @@
         return state.seamSegments;
     }
 
+    // Initialize staging state for a chunked sparse node build. Returns false if already built/staged.
+    function startSparseNodeBuildStaging(prototypeState, asset) {
+        if (!prototypeState || !asset) return false;
+        if (!(prototypeState.nodesBySectionKey instanceof Map)) prototypeState.nodesBySectionKey = new Map();
+        if (prototypeState.nodesBySectionKey.has(asset.key)) return false;
+        if (!(prototypeState._sparseBuildStaging instanceof Map)) prototypeState._sparseBuildStaging = new Map();
+        if (prototypeState._sparseBuildStaging.has(asset.key)) return false;
+        if (!(prototypeState.allNodesByCoordKey instanceof Map)) prototypeState.allNodesByCoordKey = new Map();
+        if (!Array.isArray(prototypeState.allNodes)) prototypeState.allNodes = [];
+        const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+        // Pre-compute groundTiles once for all batches
+        const groundTiles = (asset.groundTiles && typeof asset.groundTiles === "object")
+            ? asset.groundTiles : null;
+        prototypeState._sparseBuildStaging.set(asset.key, { asset, nodes: [], groundTiles, tileCount: tileCoordKeys.length });
+        return true;
+    }
+
+    // Process tileCoordKeys[start..start+count] for a section whose staging was initialized.
+    function addSparseNodeBuildBatch(map, prototypeState, sectionKey, start, count, deps) {
+        const {
+            globalScope: runtimeGlobalScope,
+            getNeighborOffsetsForColumn,
+            getPrototypeGroundTextureCount,
+            normalizePrototypeGroundTiles,
+            pickPrototypeGroundTextureId
+        } = deps;
+        if (!(prototypeState._sparseBuildStaging instanceof Map)) return 0;
+        const staging = prototypeState._sparseBuildStaging.get(sectionKey);
+        if (!staging) return 0;
+        const { asset, nodes: stagingNodes } = staging;
+        const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+        const NodeCtor = runtimeGlobalScope.MapNode
+            || (map && map.nodes && map.nodes[0] && map.nodes[0][0] && map.nodes[0][0].constructor);
+        if (typeof NodeCtor !== "function") return 0;
+        const end = Math.min(start + count, tileCoordKeys.length);
+        const textureCount = getPrototypeGroundTextureCount(map);
+        if (!staging.groundTiles) {
+            staging.groundTiles = normalizePrototypeGroundTiles(null, tileCoordKeys, textureCount);
+            asset.groundTiles = staging.groundTiles;
+        }
+        const groundTiles = staging.groundTiles;
+        for (let i = start; i < end; i++) {
+            const coordKey = tileCoordKeys[i];
+            if (typeof coordKey !== "string" || coordKey.length === 0) continue;
+            const [xRaw, yRaw] = coordKey.split(",");
+            const offset = { x: Number(xRaw), y: Number(yRaw) };
+            let node = prototypeState.allNodesByCoordKey.get(coordKey);
+            if (!node) {
+                node = new NodeCtor(offset.x, offset.y, 1, 1);
+                node.xindex = offset.x;
+                node.yindex = offset.y;
+                node.x = offset.x * 0.866;
+                node.y = offset.y + (offset.x % 2 === 0 ? 0.5 : 0);
+                node.neighbors = new Array(12).fill(null);
+                node.neighborOffsets = getNeighborOffsetsForColumn(offset.x);
+                node.blockedNeighbors = new Map();
+                node.objects = [];
+                node.visibilityObjects = [];
+                node.blockedByObjects = 0;
+                node.blocked = false;
+                node.clearance = Infinity;
+                node._prototypeVoid = false;
+                prototypeState.allNodes.push(node);
+                prototypeState.allNodesByCoordKey.set(coordKey, node);
+            }
+            const sectionOwns = sectionOwnsPrototypeNode(node, asset.key);
+            if (sectionOwns) {
+                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
+                    ? Number(groundTiles[coordKey])
+                    : pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
+                if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
+                    const rawClearance = asset.clearanceByTile[coordKey];
+                    node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
+                }
+            }
+            node._prototypeSectionActive = false;
+            stagingNodes.push(node);
+        }
+        return end - start;
+    }
+
+    // Commit staged nodes → nodesBySectionKey, run texture refresh, clean up staging.
+    function commitSparseNodeBuildStaging(map, prototypeState, sectionKey, deps) {
+        if (!(prototypeState._sparseBuildStaging instanceof Map)) return 0;
+        const staging = prototypeState._sparseBuildStaging.get(sectionKey);
+        if (!staging) return 0;
+        prototypeState._sparseBuildStaging.delete(sectionKey);
+        const { asset, nodes } = staging;
+        if (!(prototypeState.nodesBySectionKey instanceof Map)) prototypeState.nodesBySectionKey = new Map();
+        // Pre-sort by draw order (y then x) so bubble-shift rebuildLoadedSort only needs to merge sorted runs.
+        nodes.sort((a, b) => {
+            const dy = (a.yindex || 0) - (b.yindex || 0);
+            return dy !== 0 ? dy : (a.xindex || 0) - (b.xindex || 0);
+        });
+        prototypeState.nodesBySectionKey.set(sectionKey, nodes);
+        // Ground textures and clearance were already set in addSparseNodeBuildBatch; skip redundant refresh.
+        return nodes.length;
+    }
+
+    // Connect neighbors for sectionNodes[start..start+count]. Does not require deps.
+    function connectSparseNodesForSectionBatch(prototypeState, sectionKey, start, count) {
+        if (!(prototypeState.nodesBySectionKey instanceof Map)) return 0;
+        const sectionNodes = prototypeState.nodesBySectionKey.get(sectionKey) || [];
+        const allNodesByCoordKey = prototypeState.allNodesByCoordKey;
+        if (!(allNodesByCoordKey instanceof Map)) return 0;
+        const end = Math.min(start + count, sectionNodes.length);
+        for (let i = start; i < end; i++) {
+            const node = sectionNodes[i];
+            if (!node || !Array.isArray(node.neighborOffsets)) continue;
+            const offsets = node.neighborOffsets;
+            for (let d = 0; d < offsets.length; d++) {
+                const offset = offsets[d];
+                if (!offset) continue;
+                const neighborKey = `${node.xindex + offset.x},${node.yindex + offset.y}`;
+                const neighbor = allNodesByCoordKey.get(neighborKey) || null;
+                node.neighbors[d] = neighbor;
+                if (!neighbor || !Array.isArray(neighbor.neighborOffsets)) continue;
+                const revOffsets = neighbor.neighborOffsets;
+                for (let rd = 0; rd < revOffsets.length; rd++) {
+                    const ro = revOffsets[rd];
+                    if (!ro) continue;
+                    if ((neighbor.xindex + ro.x) === node.xindex && (neighbor.yindex + ro.y) === node.yindex) {
+                        neighbor.neighbors[rd] = node;
+                        break;
+                    }
+                }
+            }
+        }
+        return end - start;
+    }
+
     globalScope.__sectionWorldSectionRuntime = {
         refreshSparseNodesForSectionAsset,
         addSparseNodesForSection,
@@ -393,7 +530,11 @@
         assignNodesToSections,
         buildPrototypeSeamSegmentEntriesForSections,
         buildPrototypeSeamSegments,
-        updatePrototypeSeamSegmentsForSections
+        updatePrototypeSeamSegmentsForSections,
+        startSparseNodeBuildStaging,
+        addSparseNodeBuildBatch,
+        commitSparseNodeBuildStaging,
+        connectSparseNodesForSectionBatch
     };
     globalScope.__twoSectionPrototypeSectionRuntime = globalScope.__sectionWorldSectionRuntime;
 })(typeof globalThis !== "undefined" ? globalThis : window);

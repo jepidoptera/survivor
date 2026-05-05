@@ -224,3 +224,262 @@ test("wizard still discovers nearby doors on sparse section maps when one padded
     assert.equal(context.nearbyDoors[0].obj, door);
     assert.equal(context.nearbyDoors[0].canTraverse, true);
 });
+
+test("wizard movement discovers blockers on the wizard's current floor layer", () => {
+    const baseNode = {
+        xindex: 100,
+        yindex: 100,
+        x: 86.6,
+        y: 100.5,
+        traversalLayer: 0,
+        objects: []
+    };
+    const upperNode = {
+        xindex: 100,
+        yindex: 100,
+        x: 86.6,
+        y: 100.5,
+        traversalLayer: 1,
+        baseZ: 3,
+        sourceNode: baseNode,
+        objects: []
+    };
+    const map = {
+        width: 1,
+        height: 1,
+        nodes: [[baseNode]],
+        worldToNode() {
+            return baseNode;
+        },
+        getNodesInIndexWindow() {
+            return [baseNode];
+        },
+        getFloorNodeAtLayer(xindex, yindex, layer) {
+            return Number(xindex) === 100 && Number(yindex) === 100 && Number(layer) === 1
+                ? upperNode
+                : null;
+        }
+    };
+    const groundWall = {
+        gone: false,
+        isPassable: false,
+        traversalLayer: 0,
+        bottomZ: 0,
+        height: 3,
+        groundPlaneHitbox: createRectHitbox(baseNode.x - 0.5, baseNode.y - 0.5, baseNode.x + 0.5, baseNode.y + 0.5)
+    };
+    const upperWall = {
+        gone: false,
+        isPassable: false,
+        traversalLayer: 1,
+        bottomZ: 3,
+        height: 3,
+        groundPlaneHitbox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
+    };
+    baseNode.objects.push(groundWall);
+    upperNode.objects.push(upperWall);
+
+    const wizard = Object.create(Wizard.prototype);
+    wizard.map = map;
+    wizard.z = 0;
+    wizard.currentLayer = 1;
+    wizard.currentLayerBaseZ = 3;
+    wizard._movementNearbyObjects = [];
+    wizard._movementNearbyDoors = [];
+    wizard._movementForceTouchedObjects = new Set();
+
+    const context = wizard.prepareVectorMovementContext(upperNode.x, upperNode.y, 0.5, {});
+
+    assert.equal(context.nearbyObjects.length, 1);
+    assert.equal(context.nearbyObjects[0], upperWall);
+});
+
+test("wizard can jump over short blockers on upper floor layers", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.currentLayer = 1;
+    wizard.currentLayerBaseZ = 3;
+    wizard.z = 0.5;
+
+    const shortUpperWall = {
+        gone: false,
+        isPassable: false,
+        traversalLayer: 1,
+        bottomZ: 3,
+        height: 0.5,
+        groundPlaneHitbox: createRectHitbox(0, 0, 1, 1)
+    };
+    const tallerUpperWall = {
+        gone: false,
+        isPassable: false,
+        traversalLayer: 1,
+        bottomZ: 3,
+        height: 1,
+        groundPlaneHitbox: createRectHitbox(0, 0, 1, 1)
+    };
+
+    assert.equal(wizard.doesObjectBlockVectorMovement(shortUpperWall), false);
+    assert.equal(wizard.doesObjectBlockVectorMovement(tallerUpperWall), true);
+});
+
+test("wizard movement only collision-tests each upper-layer blocker once", () => {
+    const baseNode = {
+        xindex: 100,
+        yindex: 100,
+        x: 86.6,
+        y: 100.5,
+        traversalLayer: 0,
+        objects: []
+    };
+    const upperNode = {
+        xindex: 100,
+        yindex: 100,
+        x: 86.6,
+        y: 100.5,
+        traversalLayer: 1,
+        baseZ: 3,
+        sourceNode: baseNode,
+        objects: []
+    };
+    const map = {
+        width: 1,
+        height: 1,
+        nodes: [[baseNode]],
+        worldToNode() {
+            return baseNode;
+        },
+        getNodesInIndexWindow() {
+            return [baseNode, baseNode];
+        },
+        getFloorNodeAtLayer(xindex, yindex, layer) {
+            return Number(xindex) === 100 && Number(yindex) === 100 && Number(layer) === 1
+                ? upperNode
+                : null;
+        }
+    };
+    const upperWall = {
+        gone: false,
+        isPassable: false,
+        traversalLayer: 1,
+        bottomZ: 3,
+        height: 3,
+        groundPlaneHitbox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
+    };
+    upperNode.objects.push(upperWall, upperWall);
+
+    const wizard = Object.create(Wizard.prototype);
+    wizard.map = map;
+    wizard.z = 0;
+    wizard.currentLayer = 1;
+    wizard.currentLayerBaseZ = 3;
+    wizard._movementNearbyObjects = [];
+    wizard._movementNearbyDoors = [];
+    wizard._movementForceTouchedObjects = new Set();
+
+    const context = wizard.prepareVectorMovementContext(upperNode.x, upperNode.y, 0.5, {});
+
+    assert.equal(context.nearbyObjects.length, 1);
+    assert.equal(context.nearbyObjects[0], upperWall);
+});
+
+test("wizard collision resolver pushes back from zero-vector wall overlaps", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.x = 0;
+    wizard.y = 0;
+    wizard.movementVector = { x: 1, y: 0 };
+    wizard.frameRate = 1;
+
+    const wall = {
+        groundPlaneHitbox: {
+            getBounds() {
+                return { x: 0.9, y: -1, width: 0.2, height: 2 };
+            },
+            intersects() {
+                return { pushX: 0, pushY: 0 };
+            }
+        }
+    };
+
+    const result = wizard._resolveStaticVectorMovementCandidate(1, 0, 0.25, {
+        nearbyObjects: [wall],
+        forceTouchedObjects: new Set()
+    });
+
+    assert.equal(result.collided, true);
+    assert.ok(result.x < 1);
+});
+
+test("wizard collision resolver blocks movement swept through thin walls", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.x = 0;
+    wizard.y = 0;
+    wizard.movementVector = { x: 1.4, y: 0 };
+    wizard.frameRate = 1;
+
+    const wall = {
+        groundPlaneHitbox: new PolygonHitbox([
+            { x: 0.9, y: -1 },
+            { x: 1.1, y: -1 },
+            { x: 1.1, y: 1 },
+            { x: 0.9, y: 1 }
+        ])
+    };
+
+    const result = wizard._resolveStaticVectorMovementCandidate(1.4, 0, 0.25, {
+        nearbyObjects: [wall],
+        forceTouchedObjects: new Set()
+    });
+
+    assert.equal(result.collided, true);
+    assert.ok(result.x < 0.9);
+    assert.ok(wizard.movementVector.x <= 0.01);
+});
+
+test("wizard collision resolver does not push through a wall from an inside overlap", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.x = 0.6;
+    wizard.y = 0;
+    wizard.movementVector = { x: 1, y: 0 };
+    wizard.frameRate = 1;
+
+    const wall = {
+        groundPlaneHitbox: new PolygonHitbox([
+            { x: 0.9, y: -1 },
+            { x: 1.1, y: -1 },
+            { x: 1.1, y: 1 },
+            { x: 0.9, y: 1 }
+        ])
+    };
+
+    const result = wizard._resolveStaticVectorMovementCandidate(1, 0, 0.25, {
+        nearbyObjects: [wall],
+        forceTouchedObjects: new Set()
+    });
+
+    assert.equal(result.collided, true);
+    assert.ok(result.x < 0.9);
+    assert.ok(wizard.movementVector.x <= 0.01);
+});
+
+test("wizard can carry airborne movement over unsupported upper-floor positions", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.x = 0;
+    wizard.y = 0;
+    wizard.movementVector = { x: 1, y: 0 };
+    wizard.updateHitboxes = () => {};
+    let occupyChecks = 0;
+    wizard.map = {
+        canOccupyWorldPosition() {
+            occupyChecks += 1;
+            return false;
+        }
+    };
+
+    assert.equal(wizard._applyVectorMovementPosition(1, 0), false);
+    assert.equal(wizard.x, 0);
+    assert.equal(occupyChecks, 1);
+
+    assert.equal(wizard._applyVectorMovementPosition(1, 0, { allowUnsupportedPosition: true }), true);
+    assert.equal(wizard.x, 1);
+    assert.equal(wizard.y, 0);
+    assert.equal(occupyChecks, 1);
+});

@@ -30,6 +30,12 @@
                     const record = wallRecords[i];
                     const recordId = Number(record && record.id);
                     if (!record || !Number.isInteger(recordId)) continue;
+                    const existingRegistryWall = (
+                        globalScope.WallSectionUnit._allSections instanceof Map &&
+                        globalScope.WallSectionUnit._allSections.has(recordId)
+                    )
+                        ? globalScope.WallSectionUnit._allSections.get(recordId)
+                        : null;
                     const runtimeWall = globalScope.WallSectionUnit.loadJson(record, mapRef, { deferSetup: true });
                     if (!runtimeWall) continue;
                     try {
@@ -44,8 +50,22 @@
                             const nodeA = connection && connection.a;
                             const nodeB = connection && connection.b;
                             if (!nodeA || !nodeB) continue;
-                            const aKey = `${Number(nodeA.xindex)},${Number(nodeA.yindex)}`;
-                            const bKey = `${Number(nodeB.xindex)},${Number(nodeB.yindex)}`;
+                            const wallLayer = Number.isFinite(runtimeWall.traversalLayer)
+                                ? Math.round(Number(runtimeWall.traversalLayer))
+                                : (Number.isFinite(runtimeWall.level)
+                                    ? Math.round(Number(runtimeWall.level))
+                                    : (Number.isFinite(runtimeWall.bottomZ) ? Math.round(Number(runtimeWall.bottomZ) / 3) : 0));
+                            const pointKey = (node) => `${Number(node.xindex)},${Number(node.yindex)},${wallLayer},${typeof node.surfaceId === "string" ? node.surfaceId : ""},${typeof node.fragmentId === "string" ? node.fragmentId : ""}`;
+                            const serializePoint = (node) => ({
+                                xindex: Number(node.xindex),
+                                yindex: Number(node.yindex),
+                                traversalLayer: wallLayer,
+                                level: wallLayer,
+                                surfaceId: (typeof node.surfaceId === "string") ? node.surfaceId : "",
+                                fragmentId: (typeof node.fragmentId === "string") ? node.fragmentId : ""
+                            });
+                            const aKey = pointKey(nodeA);
+                            const bKey = pointKey(nodeB);
                             const edgeKey = aKey <= bKey
                                 ? `${recordId}|${aKey}|${bKey}`
                                 : `${recordId}|${bKey}|${aKey}`;
@@ -53,8 +73,10 @@
                             seenEdgeKeys.add(edgeKey);
                             blockedEdges.push({
                                 recordId,
-                                a: { xindex: Number(nodeA.xindex), yindex: Number(nodeA.yindex) },
-                                b: { xindex: Number(nodeB.xindex), yindex: Number(nodeB.yindex) }
+                                traversalLayer: wallLayer,
+                                level: wallLayer,
+                                a: serializePoint(nodeA),
+                                b: serializePoint(nodeB)
                             });
                         }
                     } finally {
@@ -62,7 +84,12 @@
                             runtimeWall.removeFromMapNodes();
                         }
                         if (globalScope.WallSectionUnit._allSections instanceof Map) {
-                            globalScope.WallSectionUnit._allSections.delete(runtimeWall.id);
+                            if (globalScope.WallSectionUnit._allSections.get(runtimeWall.id) === runtimeWall) {
+                                globalScope.WallSectionUnit._allSections.delete(runtimeWall.id);
+                            }
+                            if (existingRegistryWall && !existingRegistryWall.gone) {
+                                globalScope.WallSectionUnit._allSections.set(recordId, existingRegistryWall);
+                            }
                         }
                         runtimeWall.gone = true;
                         if (typeof runtimeWall.destroy === "function") {
@@ -337,12 +364,37 @@
             const blockedEdgeState = ensurePrototypeBlockedEdgeState(mapRef);
             const links = [];
             let appliedCount = 0;
+            const resolveBlockedEdgeNode = (endpoint, fallbackLayer) => {
+                if (!endpoint) return null;
+                const xindex = Number(endpoint.xindex);
+                const yindex = Number(endpoint.yindex);
+                if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+                const endpointLayer = Number.isFinite(endpoint.traversalLayer)
+                    ? Math.round(Number(endpoint.traversalLayer))
+                    : (Number.isFinite(endpoint.level)
+                        ? Math.round(Number(endpoint.level))
+                        : (Number.isFinite(fallbackLayer) ? Math.round(Number(fallbackLayer)) : 0));
+                if (endpointLayer !== 0 && typeof mapRef.getFloorNodeAtLayer === "function") {
+                    const floorNode = mapRef.getFloorNodeAtLayer(xindex, yindex, endpointLayer, {
+                        surfaceId: typeof endpoint.surfaceId === "string" ? endpoint.surfaceId : "",
+                        fragmentId: typeof endpoint.fragmentId === "string" ? endpoint.fragmentId : "",
+                        sectionKey
+                    });
+                    if (floorNode) return floorNode;
+                }
+                return endpointLayer === 0 && typeof mapRef.getNodeByIndex === "function"
+                    ? mapRef.getNodeByIndex(xindex, yindex)
+                    : null;
+            };
             for (let i = 0; i < asset.blockedEdges.length; i++) {
                 const edge = asset.blockedEdges[i];
                 const recordId = Number(edge && edge.recordId);
                 if (!Number.isInteger(recordId)) continue;
-                const nodeA = edge && edge.a ? mapRef.getNodeByIndex(edge.a.xindex, edge.a.yindex) : null;
-                const nodeB = edge && edge.b ? mapRef.getNodeByIndex(edge.b.xindex, edge.b.yindex) : null;
+                const edgeLayer = Number.isFinite(edge && edge.traversalLayer)
+                    ? Math.round(Number(edge.traversalLayer))
+                    : (Number.isFinite(edge && edge.level) ? Math.round(Number(edge.level)) : 0);
+                const nodeA = resolveBlockedEdgeNode(edge && edge.a, edgeLayer);
+                const nodeB = resolveBlockedEdgeNode(edge && edge.b, edgeLayer);
                 if (!nodeA || !nodeB || !Array.isArray(nodeA.neighbors) || !Array.isArray(nodeB.neighbors)) continue;
                 const dirA = nodeA.neighbors.indexOf(nodeB);
                 const dirB = nodeB.neighbors.indexOf(nodeA);
