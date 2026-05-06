@@ -11,12 +11,16 @@ const port = process.env.PORT || 8080;
 // const apiKey = process.env.APIKEY || "no_api_key";
 const authtokens = {};
 const players = [];
+// Large world saves can exceed Express defaults, so keep generous parser limits.
+const defaultJsonBodyLimit = '100mb';
+const sectionWorldJsonBodyLimit = '200mb';
 
 // Serve static files
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
 app.use(express.static(__dirname + '/public'));
-app.use(bodyParser.urlencoded({ extended: false, limit: '25mb' }));
-app.use(bodyParser.json({ limit: '25mb' }));
+app.use('/api/sectionworld', bodyParser.json({ limit: sectionWorldJsonBodyLimit }));
+app.use(bodyParser.urlencoded({ extended: false, limit: defaultJsonBodyLimit }));
+app.use(bodyParser.json({ limit: defaultJsonBodyLimit }));
 app.set('view engine', 'ejs');
 
 app.get('/', (req, res) => {
@@ -363,10 +367,12 @@ if (require.main === module) {
 
 module.exports = {
     app,
+    defaultJsonBodyLimit,
     loadSectionWorldSlot,
     normalizeSaveSlotName,
     resolveSectionWorldDirForSlot,
-    saveSectionWorldSlot
+    saveSectionWorldSlot,
+    sectionWorldJsonBodyLimit
 };
 
 function generateToken() {
