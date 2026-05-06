@@ -30,6 +30,7 @@ class FakeSprite {
         this.texture = texture;
         this.parent = null;
         this.destroyed = false;
+        this.destroyCalls = 0;
         this.alpha = 1;
         this.tint = 0xffffff;
         this.width = 0;
@@ -49,6 +50,8 @@ class FakeSprite {
     }
 
     destroy() {
+        this.destroyCalls += 1;
+        if (this.destroyed) throw new Error("FakeSprite destroyed twice");
         this.destroyed = true;
     }
 }
@@ -270,6 +273,42 @@ test("flowers burn into falling fragments and remove themselves from the game", 
     assert.equal(map.objects.includes(flower), false);
     assert.equal(node.objects.includes(flower), false);
     assert.equal(globalThis.activeSimObjects.has(flower), false);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("removeFromGame does not double-destroy renderer display object aliases", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const node = new TestNode();
+    const map = {
+        objects: [],
+        worldToNode() {
+            return node;
+        }
+    };
+
+    const object = new globalThis.StaticObject(
+        "rock",
+        { x: 0, y: 0 },
+        1,
+        1,
+        [new globalThis.PIXI.Texture()],
+        map
+    );
+    map.objects.push(object);
+
+    const sprite = object.pixiSprite;
+    object._renderingDisplayObject = sprite;
+
+    assert.doesNotThrow(() => object.removeFromGame());
+    assert.equal(sprite.destroyCalls, 1);
+    assert.equal(sprite.destroyed, true);
+    assert.equal(object._renderingDisplayObject, null);
 
     delete require.cache[STATIC_OBJECTS_MODULE_PATH];
     restoreGlobals();

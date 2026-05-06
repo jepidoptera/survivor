@@ -144,6 +144,33 @@ test("spell target aim point resolves placed object layer base plus local z", ()
     assert.equal(aim.z, 3.25);
 });
 
+test("spell target point uses depth billboard projected quad coordinates", () => {
+    const context = loadSpellContext();
+    const aim = context.getSpellTargetAimPoint(
+        { map: null },
+        {
+            type: "placedObject",
+            x: 4,
+            y: 5,
+            z: 0.25,
+            width: 1,
+            height: 1,
+            traversalLayer: 1,
+            spellTargetPoint: [0.5, 0.5],
+            _depthBillboardWorldPositions: [
+                3, 5, 0.25,
+                5, 5, 0.25,
+                5, 5, 1.75,
+                3, 5, 1.75
+            ]
+        }
+    );
+
+    assert.equal(aim.x, 4);
+    assert.equal(aim.y, 5);
+    assert.equal(aim.z, 4.0);
+});
+
 test("spell forced target aim updates projectile visual target z", () => {
     const context = loadSpellContext();
     const spell = new context.Spell(0, 0);

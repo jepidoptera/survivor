@@ -543,6 +543,47 @@ test("loadPrototypeSectionWorld canonicalizes section and tile draw order to y-t
     );
 });
 
+test("prototype viewport visible node lookup scans only the sorted y band in draw order", () => {
+    const map = createPrototypeMap();
+    const state = createEmptyPrototypeState();
+    attachPrototypeApis(map, state);
+
+    let offscreenCoordinateReads = 0;
+    const sentinelLoadedNode = { xindex: -100, yindex: -100 };
+    Object.defineProperty(sentinelLoadedNode, "x", {
+        get() {
+            offscreenCoordinateReads += 1;
+            return -100;
+        }
+    });
+    Object.defineProperty(sentinelLoadedNode, "y", {
+        get() {
+            offscreenCoordinateReads += 1;
+            return -100;
+        }
+    });
+
+    const nodeA = new TestNode(1, 0);
+    const nodeB = new TestNode(2, 0);
+    const nodeC = new TestNode(0, 1);
+    const hiddenNode = new TestNode(12, 12);
+    state.loadedNodes = [sentinelLoadedNode, nodeA, nodeB, nodeC, hiddenNode];
+    state.loadedNodesByCoordKey = new Map([
+        [`${nodeB.xindex},${nodeB.yindex}`, nodeB],
+        [`${nodeA.xindex},${nodeA.yindex}`, nodeA],
+        [`${nodeC.xindex},${nodeC.yindex}`, nodeC],
+        [`${hiddenNode.xindex},${hiddenNode.yindex}`, hiddenNode]
+    ]);
+
+    const visible = map.getVisibleNodesInViewport({ x: 0, y: 0, width: 3, height: 2 }, 0, 0);
+
+    assert.equal(offscreenCoordinateReads, 0);
+    assert.deepEqual(
+        visible.map((node) => `${node.xindex},${node.yindex}`),
+        ["1,0", "2,0", "0,1"]
+    );
+});
+
 test("synthesized level 0 section floor footprint reaches the outer hex edge midpoints", () => {
     const helpers = createSectionWorldAssetHelpers({
         hashCoordinatePair: () => 0,

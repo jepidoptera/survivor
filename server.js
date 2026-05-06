@@ -19,9 +19,6 @@ app.use(bodyParser.urlencoded({ extended: false, limit: '25mb' }));
 app.use(bodyParser.json({ limit: '25mb' }));
 app.set('view engine', 'ejs');
 
-// Serve app
-console.log('Listening on: http://localhost:' + port);
-
 app.get('/', (req, res) => {
     res.render('sectionworld')
 })
@@ -101,6 +98,106 @@ function formatTimestampToSecond(date = new Date()) {
     const mm = String(date.getMinutes()).padStart(2, '0');
     const ss = String(date.getSeconds()).padStart(2, '0');
     return `${y}-${m}-${d}_${hh}-${mm}-${ss}`;
+}
+
+function saveSectionWorldSlot(requestedSlot, payload) {
+    const slotDir = resolveSectionWorldDirForSlot(requestedSlot);
+    if (!slotDir) {
+        return { status: 400, body: { ok: false, reason: 'invalid-slot' } };
+    }
+    const sections = Array.isArray(payload && payload.sections) ? payload.sections : null;
+    if (!sections) {
+        return { status: 400, body: { ok: false, reason: 'invalid-payload' } };
+    }
+    const manifest = (payload && payload.manifest && typeof payload.manifest === 'object')
+        ? payload.manifest
+        : {};
+    const hasTriggers = Object.prototype.hasOwnProperty.call(payload || {}, 'triggers');
+    const triggers = Array.isArray(payload && payload.triggers) ? payload.triggers : [];
+
+    fs.mkdirSync(slotDir, { recursive: true });
+    const manifestPath = path.join(slotDir, 'manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    if (hasTriggers) {
+        const triggersPath = path.join(slotDir, 'triggers.json');
+        fs.writeFileSync(triggersPath, JSON.stringify(triggers, null, 2), 'utf8');
+    }
+    const validSections = sections.filter(isValidSectionCoordRecord);
+    for (let i = 0; i < validSections.length; i++) {
+        const section = validSections[i];
+        const fileName = buildSectionFileName(section);
+        const filePath = path.join(slotDir, fileName);
+        fs.writeFileSync(filePath, JSON.stringify(section, null, 2), 'utf8');
+    }
+
+    return {
+        status: 200,
+        body: {
+            ok: true,
+            slot: requestedSlot,
+            count: validSections.length,
+            path: `/assets/saves/${encodeURIComponent(requestedSlot)}/`
+        }
+    };
+}
+
+function loadSectionWorldSlot(requestedSlot) {
+    const slotDir = resolveSectionWorldDirForSlot(requestedSlot);
+    if (!slotDir) {
+        return { status: 400, body: { ok: false, reason: 'invalid-slot' } };
+    }
+    if (!fs.existsSync(slotDir)) {
+        return { status: 404, body: { ok: false, reason: 'missing' } };
+    }
+
+    const sectionFiles = fs.readdirSync(slotDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json') && entry.name !== 'manifest.json' && entry.name !== 'triggers.json')
+        .map(entry => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+
+    const manifestPath = path.join(slotDir, 'manifest.json');
+    let manifest = {};
+    if (fs.existsSync(manifestPath)) {
+        const rawManifest = fs.readFileSync(manifestPath, 'utf8');
+        const parsedManifest = JSON.parse(rawManifest);
+        if (parsedManifest && typeof parsedManifest === 'object' && !Array.isArray(parsedManifest)) {
+            manifest = parsedManifest;
+        }
+    }
+
+    const triggersPath = path.join(slotDir, 'triggers.json');
+    let triggers = [];
+    if (fs.existsSync(triggersPath)) {
+        const rawTriggers = fs.readFileSync(triggersPath, 'utf8');
+        const parsedTriggers = JSON.parse(rawTriggers);
+        if (Array.isArray(parsedTriggers)) {
+            triggers = parsedTriggers;
+        }
+    } else if (Array.isArray(manifest.triggers)) {
+        triggers = manifest.triggers;
+    }
+
+    const sections = [];
+    for (let i = 0; i < sectionFiles.length; i++) {
+        const fileName = sectionFiles[i];
+        const filePath = path.join(slotDir, fileName);
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (isValidSectionCoordRecord(parsed)) {
+            sections.push(parsed);
+        }
+    }
+
+    return {
+        status: 200,
+        body: {
+            ok: true,
+            slot: requestedSlot,
+            manifest,
+            triggers,
+            sections
+        }
+    };
 }
 
 app.post('/api/savefile', (req, res) => {
@@ -184,36 +281,8 @@ app.get('/api/savefile', (req, res) => {
 app.post('/api/sectionworld', (req, res) => {
     try {
         const requestedSlot = (typeof req.query.slot === 'string') ? req.query.slot : '';
-        const slotDir = resolveSectionWorldDirForSlot(requestedSlot);
-        if (!slotDir) {
-            return res.status(400).json({ ok: false, reason: 'invalid-slot' });
-        }
-        const payload = req.body;
-        const sections = Array.isArray(payload && payload.sections) ? payload.sections : null;
-        if (!sections) {
-            return res.status(400).json({ ok: false, reason: 'invalid-payload' });
-        }
-        const manifest = (payload && payload.manifest && typeof payload.manifest === 'object')
-            ? payload.manifest
-            : {};
-
-        fs.mkdirSync(slotDir, { recursive: true });
-        const manifestPath = path.join(slotDir, 'manifest.json');
-        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-        const validSections = sections.filter(isValidSectionCoordRecord);
-        for (let i = 0; i < validSections.length; i++) {
-            const section = validSections[i];
-            const fileName = buildSectionFileName(section);
-            const filePath = path.join(slotDir, fileName);
-            fs.writeFileSync(filePath, JSON.stringify(section, null, 2), 'utf8');
-        }
-
-        return res.json({
-            ok: true,
-            slot: requestedSlot,
-            count: validSections.length,
-            path: `/assets/saves/${encodeURIComponent(requestedSlot)}/`
-        });
+        const result = saveSectionWorldSlot(requestedSlot, req.body);
+        return res.status(result.status).json(result.body);
     } catch (e) {
         console.error('Failed to write section world:', e);
         return res.status(500).json({ ok: false, reason: 'write-failed' });
@@ -223,46 +292,8 @@ app.post('/api/sectionworld', (req, res) => {
 app.get('/api/sectionworld', (req, res) => {
     try {
         const requestedSlot = (typeof req.query.slot === 'string') ? req.query.slot : '';
-        const slotDir = resolveSectionWorldDirForSlot(requestedSlot);
-        if (!slotDir) {
-            return res.status(400).json({ ok: false, reason: 'invalid-slot' });
-        }
-        if (!fs.existsSync(slotDir)) {
-            return res.status(404).json({ ok: false, reason: 'missing' });
-        }
-
-        const sectionFiles = fs.readdirSync(slotDir, { withFileTypes: true })
-            .filter(entry => entry.isFile() && entry.name.endsWith('.json') && entry.name !== 'manifest.json')
-            .map(entry => entry.name)
-            .sort((a, b) => a.localeCompare(b));
-
-        const manifestPath = path.join(slotDir, 'manifest.json');
-        let manifest = {};
-        if (fs.existsSync(manifestPath)) {
-            const rawManifest = fs.readFileSync(manifestPath, 'utf8');
-            const parsedManifest = JSON.parse(rawManifest);
-            if (parsedManifest && typeof parsedManifest === 'object' && !Array.isArray(parsedManifest)) {
-                manifest = parsedManifest;
-            }
-        }
-
-        const sections = [];
-        for (let i = 0; i < sectionFiles.length; i++) {
-            const fileName = sectionFiles[i];
-            const filePath = path.join(slotDir, fileName);
-            const raw = fs.readFileSync(filePath, 'utf8');
-            const parsed = JSON.parse(raw);
-            if (isValidSectionCoordRecord(parsed)) {
-                sections.push(parsed);
-            }
-        }
-
-        return res.json({
-            ok: true,
-            slot: requestedSlot,
-            manifest,
-            sections
-        });
+        const result = loadSectionWorldSlot(requestedSlot);
+        return res.status(result.status).json(result.body);
     } catch (e) {
         console.error('Failed to read section world:', e);
         return res.status(500).json({ ok: false, reason: 'read-failed' });
@@ -324,7 +355,19 @@ app.get('/api/placeables', (req, res) => {
     }
 });
 
-app.listen(port);
+if (require.main === module) {
+    app.listen(port, () => {
+        console.log('Listening on: http://localhost:' + port);
+    });
+}
+
+module.exports = {
+    app,
+    loadSectionWorldSlot,
+    normalizeSaveSlotName,
+    resolveSectionWorldDirForSlot,
+    saveSectionWorldSlot
+};
 
 function generateToken() {
     let chars = "abcdefghijklmnopqrstuvwxyz1234567890";

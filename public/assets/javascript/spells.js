@@ -2696,6 +2696,46 @@ const SpellSystem = (() => {
             }
             return Number.isFinite(target.z) ? Number(target.z) : 0;
         };
+        const resolveSpellTargetPoint = () => {
+            const spec = target && target.spellTargetPoint;
+            if (!Array.isArray(spec) || spec.length < 2) return null;
+            const rawU = Number(spec[0]);
+            const rawV = Number(spec[1]);
+            if (!Number.isFinite(rawU) || !Number.isFinite(rawV)) return null;
+            return {
+                u: Math.max(0, Math.min(1, rawU)),
+                v: Math.max(0, Math.min(1, rawV))
+            };
+        };
+        const spellTargetPoint = resolveSpellTargetPoint();
+        const worldPositions = target && target._depthBillboardWorldPositions;
+        if (spellTargetPoint && worldPositions && worldPositions.length >= 12) {
+            const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
+            const u = spellTargetPoint.u;
+            const v = spellTargetPoint.v;
+            const bl = { x: Number(worldPositions[0]), y: Number(worldPositions[1]), z: Number(worldPositions[2]) };
+            const br = { x: Number(worldPositions[3]), y: Number(worldPositions[4]), z: Number(worldPositions[5]) };
+            const tr = { x: Number(worldPositions[6]), y: Number(worldPositions[7]), z: Number(worldPositions[8]) };
+            const tl = { x: Number(worldPositions[9]), y: Number(worldPositions[10]), z: Number(worldPositions[11]) };
+            const allFinite = [bl, br, tr, tl].every(pt =>
+                Number.isFinite(pt.x) && Number.isFinite(pt.y) && Number.isFinite(pt.z)
+            );
+            if (allFinite) {
+                const invU = 1 - u;
+                const invV = 1 - v;
+                let x = (bl.x * invU * invV) + (br.x * u * invV) + (tr.x * u * v) + (tl.x * invU * v);
+                let y = (bl.y * invU * invV) + (br.y * u * invV) + (tr.y * u * v) + (tl.y * invU * v);
+                const localZ = (bl.z * invU * invV) + (br.z * u * invV) + (tr.z * u * v) + (tl.z * invU * v);
+                const localBottomZ = (bl.z + br.z) * 0.5;
+                if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+                if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+                return {
+                    x,
+                    y,
+                    z: resolveTargetZ() + (localZ - localBottomZ)
+                };
+            }
+        }
         if (
             target.type === "wallSection" &&
             target.startPoint && target.endPoint &&
@@ -2731,7 +2771,6 @@ const SpellSystem = (() => {
                 Math.abs(Number(target.rotation) || 0) > 1e-4
             )
         );
-        const worldPositions = target && target._depthBillboardWorldPositions;
         if (useDeformedTreeBillboardCenter && worldPositions && worldPositions.length >= 12) {
             let centerX = 0;
             let centerY = 0;

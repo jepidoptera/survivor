@@ -308,6 +308,108 @@ void main(void) {
         return polygon.length >= 3 ? polygon : [];
     }
 
+    function getFloorVisualPolygonClippingApi() {
+        return (global && global.polygonClipping) ? global.polygonClipping : null;
+    }
+
+    function floorVisualPointsToClipRing(points) {
+        const normalized = normalizeFloorVisualPointList(points);
+        if (normalized.length < 3) return null;
+        const ring = normalized.map(point => [point.x, point.y]);
+        const first = ring[0];
+        const last = ring[ring.length - 1];
+        if (!last || Math.abs(first[0] - last[0]) > 1e-9 || Math.abs(first[1] - last[1]) > 1e-9) {
+            ring.push([first[0], first[1]]);
+        }
+        return ring;
+    }
+
+    function floorVisualClipRingToPoints(ring) {
+        if (!Array.isArray(ring)) return [];
+        const points = [];
+        for (let i = 0; i < ring.length; i++) {
+            const pair = ring[i];
+            const x = Number(pair && pair[0]);
+            const y = Number(pair && pair[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (
+                i === ring.length - 1 &&
+                points.length > 0 &&
+                Math.abs(points[0].x - x) <= 1e-9 &&
+                Math.abs(points[0].y - y) <= 1e-9
+            ) {
+                continue;
+            }
+            points.push({ x, y });
+        }
+        return points;
+    }
+
+    function floorVisualClipMultiPolygonFromRings(outer, holes) {
+        const outerRing = floorVisualPointsToClipRing(outer);
+        if (!outerRing) return [];
+        const polygon = [outerRing];
+        const normalizedHoles = Array.isArray(holes) ? holes : [];
+        for (let i = 0; i < normalizedHoles.length; i++) {
+            const holeRing = floorVisualPointsToClipRing(normalizedHoles[i]);
+            if (holeRing) polygon.push(holeRing);
+        }
+        return [polygon];
+    }
+
+    function floorVisualClipGeometryFromRect(rect) {
+        if (!rect) return [];
+        const minX = Number(rect.minX);
+        const minY = Number(rect.minY);
+        const maxX = Number(rect.maxX);
+        const maxY = Number(rect.maxY);
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return [];
+        if (!(maxX > minX) || !(maxY > minY)) return [];
+        return floorVisualClipMultiPolygonFromRings([
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ], []);
+    }
+
+    function collectFloorVisualClippedPolygonsForRect(outer, holes, rect) {
+        const normalizedHoles = Array.isArray(holes) ? holes : [];
+        if (normalizedHoles.length === 0) {
+            const clippedOuter = clipFloorVisualPolygonToRect(outer, rect);
+            return clippedOuter.length >= 3 ? [{ outer: clippedOuter, holes: [] }] : [];
+        }
+        const api = getFloorVisualPolygonClippingApi();
+        if (!api || typeof api.intersection !== "function") return null;
+        const subject = floorVisualClipMultiPolygonFromRings(outer, normalizedHoles);
+        const clip = floorVisualClipGeometryFromRect(rect);
+        if (!Array.isArray(subject) || subject.length === 0 || !Array.isArray(clip) || clip.length === 0) return [];
+        let intersection = [];
+        try {
+            intersection = api.intersection(subject, clip);
+        } catch (err) {
+            if (global && global.renderingDiagnostics && global.renderingDiagnostics.floorChunkClipLogging === true) {
+                console.warn("[level0 floor chunk clip failed]", err);
+            }
+            return null;
+        }
+        if (!Array.isArray(intersection) || intersection.length === 0) return [];
+        const out = [];
+        for (let i = 0; i < intersection.length; i++) {
+            const polygon = intersection[i];
+            if (!Array.isArray(polygon) || polygon.length === 0) continue;
+            const clippedOuter = floorVisualClipRingToPoints(polygon[0]);
+            if (clippedOuter.length < 3) continue;
+            const clippedHoles = [];
+            for (let h = 1; h < polygon.length; h++) {
+                const hole = floorVisualClipRingToPoints(polygon[h]);
+                if (hole.length >= 3) clippedHoles.push(hole);
+            }
+            out.push({ outer: clippedOuter, holes: clippedHoles });
+        }
+        return out;
+    }
+
     function isFloorEditIsolationActive() {
         return false;
     }
@@ -666,6 +768,8 @@ void main(void) {
             this.level0GroundSurfaceChunkCache = new Map();
             this.level0GroundSurfaceChunkTick = 0;
             this.level0GroundSurfaceChunkBuildsThisFrame = 0;
+            this.floorVisualChunkClipCache = new Map();
+            this.floorVisualChunkClipTick = 0;
             this.bakedLevel0SectionKeys = new Set();
             this.bakedLevel0SectionSignature = "";
             this.level0GroundSurfacePendingLoads = new Set();
@@ -2976,6 +3080,17 @@ void main(void) {
         collectVisibleNodes(ctx, xPadding = 0, yPadding = 0) {
             const map = ctx.map;
             if (!map || !Array.isArray(map.nodes)) return [];
+            const prototypeState = map._prototypeSectionState || null;
+            this.setFrameMetric(
+                "visibleLoadedNodes",
+                prototypeState && Array.isArray(prototypeState.loadedNodes) ? prototypeState.loadedNodes.length : 0
+            );
+            this.setFrameMetric(
+                "visibleNodeCoordIndexSize",
+                prototypeState && prototypeState.loadedNodesByCoordKey instanceof Map
+                    ? prototypeState.loadedNodesByCoordKey.size
+                    : 0
+            );
             const nodes = [];
             const seenNodeKeys = new Set();
             const shouldRenderNode = (typeof map.shouldRenderNode === "function")
@@ -4282,16 +4397,29 @@ void main(void) {
             for (const item of this.activeDepthBillboardItems) {
                 if (currentItems.has(item)) continue;
                 if (item && item.pixiSprite) {
-                    const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
-                    const isSpatialDoorOrWindow = !!(
-                        item.rotationAxis === "spatial" &&
-                        (category === "doors" || category === "windows" || item.type === "door" || item.type === "window")
-                    );
-                    const shouldShowSprite = isSpatialDoorOrWindow ? false : this.isScriptVisible(item);
-                    item.pixiSprite.visible = shouldShowSprite;
-                    item.pixiSprite.alpha = shouldShowSprite ? this.getScriptDisplayAlpha(item) : 1;
-                    if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
-                        item.pixiSprite.renderable = shouldShowSprite;
+                    // When a flower transitions to fragment-crumble mode, its fragment
+                    // container takes over rendering. Keep the underlying pixiSprite
+                    // hidden so it does not ghost on top of the fragments.
+                    const hasActiveFragments = !!(item._flowerBurnFragmentContainer &&
+                        Array.isArray(item._flowerBurnFragments) &&
+                        item._flowerBurnFragments.length > 0);
+                    if (hasActiveFragments) {
+                        item.pixiSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = false;
+                        }
+                    } else {
+                        const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+                        const isSpatialDoorOrWindow = !!(
+                            item.rotationAxis === "spatial" &&
+                            (category === "doors" || category === "windows" || item.type === "door" || item.type === "window")
+                        );
+                        const shouldShowSprite = isSpatialDoorOrWindow ? false : this.isScriptVisible(item);
+                        item.pixiSprite.visible = shouldShowSprite;
+                        item.pixiSprite.alpha = shouldShowSprite ? this.getScriptDisplayAlpha(item) : 1;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = shouldShowSprite;
+                        }
                     }
                 }
                 if (item && item._renderingDepthMesh) {
@@ -4927,13 +5055,64 @@ void main(void) {
             return removed;
         }
 
+        trimFloorVisualChunkClipCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
+            if (!(this.floorVisualChunkClipCache instanceof Map)) return 0;
+            const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
+            if (this.floorVisualChunkClipCache.size <= safeLimit) return 0;
+            const entries = Array.from(this.floorVisualChunkClipCache.entries())
+                .sort((a, b) => {
+                    const aTick = Number(a[1] && a[1].lastUsedTick) || 0;
+                    const bTick = Number(b[1] && b[1].lastUsedTick) || 0;
+                    return aTick - bTick;
+                });
+            const removeCount = Math.max(0, entries.length - safeLimit);
+            for (let i = 0; i < removeCount; i++) {
+                this.floorVisualChunkClipCache.delete(entries[i][0]);
+            }
+            return removeCount;
+        }
+
+        getCachedFloorVisualClippedPolygonsForChunk(fragmentId, renderOuter, holes, chunkBounds, chunkX, chunkY, shapeSignature) {
+            const normalizedHoles = Array.isArray(holes) ? holes : [];
+            if (normalizedHoles.length === 0) {
+                return collectFloorVisualClippedPolygonsForRect(renderOuter, normalizedHoles, chunkBounds);
+            }
+            if (!(this.floorVisualChunkClipCache instanceof Map)) {
+                this.floorVisualChunkClipCache = new Map();
+            }
+            const signature = typeof shapeSignature === "string" && shapeSignature.length > 0
+                ? shapeSignature
+                : buildFloorVisualSignature(renderOuter, normalizedHoles);
+            const cacheKey = `${fragmentId || ""}:chunk:${Math.floor(Number(chunkX) || 0)},${Math.floor(Number(chunkY) || 0)}:${signature}`;
+            const cached = this.floorVisualChunkClipCache.get(cacheKey);
+            if (cached && Array.isArray(cached.polygons)) {
+                cached.lastUsedTick = ++this.floorVisualChunkClipTick;
+                if (this.currentFrameMetrics) {
+                    this.currentFrameMetrics.floorVisualChunkClipCacheHits = (this.currentFrameMetrics.floorVisualChunkClipCacheHits || 0) + 1;
+                }
+                return cached.polygons;
+            }
+            const clippedPolygons = collectFloorVisualClippedPolygonsForRect(renderOuter, normalizedHoles, chunkBounds);
+            if (clippedPolygons === null) return null;
+            this.floorVisualChunkClipCache.set(cacheKey, {
+                polygons: Array.isArray(clippedPolygons) ? clippedPolygons : [],
+                lastUsedTick: ++this.floorVisualChunkClipTick
+            });
+            if (this.currentFrameMetrics) {
+                this.currentFrameMetrics.floorVisualChunkClipCacheMisses = (this.currentFrameMetrics.floorVisualChunkClipCacheMisses || 0) + 1;
+            }
+            return clippedPolygons;
+        }
+
         collectLevel0ChunkFloorVisualEntries(ctx, fragmentId, fragment, asset, outer, holes, baseZ, alpha) {
             if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) return null;
-            if (Array.isArray(holes) && holes.length > 0) return null;
             const map = ctx && ctx.map;
             const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
             if (!map || !sectionKey || !asset) return [];
             const renderOuter = expandFloorVisualPolygonFromCentroid(outer, FLOOR_LEVEL0_SEAM_BLEED_UNITS);
+            const shapeSignature = Array.isArray(holes) && holes.length > 0
+                ? buildFloorVisualSignature(renderOuter, holes)
+                : "";
             const polygonBounds = getFloorVisualPointBounds(renderOuter);
             if (!polygonBounds) return [];
             const chunkCoords = this.getLevel0GroundSurfaceChunkCoordsForBounds(polygonBounds);
@@ -4967,25 +5146,43 @@ void main(void) {
                 ) {
                     continue;
                 }
+                const clippedPolygons = this.getCachedFloorVisualClippedPolygonsForChunk(
+                    fragmentId,
+                    renderOuter,
+                    holes,
+                    chunkBounds,
+                    coord.chunkX,
+                    coord.chunkY,
+                    shapeSignature
+                );
+                if (clippedPolygons === null) return null;
+                if (!Array.isArray(clippedPolygons) || clippedPolygons.length === 0) continue;
                 const chunk = this.getLevel0GroundSurfaceChunkTexture(ctx, sectionKey, asset, coord.chunkX, coord.chunkY);
                 if (!chunk || !chunk.texture || !chunk.bounds) continue;
-                const clippedOuter = clipFloorVisualPolygonToRect(renderOuter, chunk.bounds);
-                if (clippedOuter.length < 3) continue;
-                out.push({
-                    key: `fragment:${fragmentId}:chunk:${coord.chunkX},${coord.chunkY}`,
-                    level: 0,
-                    baseZ,
-                    outer: clippedOuter,
-                    holes: [],
-                    texture: chunk.texture,
-                    textureBounds: chunk.bounds,
-                    textureRepeat: null,
-                    texturePath: `level0chunk:${sectionKey}:${coord.chunkX},${coord.chunkY}`,
-                    tint: 0xffffff,
-                    alpha,
-                    depthBias: FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005,
-                    isHoleOverlay: false
-                });
+                for (let p = 0; p < clippedPolygons.length; p++) {
+                    const clipped = clippedPolygons[p];
+                    if (!clipped || !Array.isArray(clipped.outer) || clipped.outer.length < 3) continue;
+                    const polygonKeySuffix = (
+                        p === 0 &&
+                        clippedPolygons.length === 1 &&
+                        (!Array.isArray(holes) || holes.length === 0)
+                    ) ? "" : `:poly:${p}`;
+                    out.push({
+                        key: `fragment:${fragmentId}:chunk:${coord.chunkX},${coord.chunkY}${polygonKeySuffix}`,
+                        level: 0,
+                        baseZ,
+                        outer: clipped.outer,
+                        holes: Array.isArray(clipped.holes) ? clipped.holes : [],
+                        texture: chunk.texture,
+                        textureBounds: chunk.bounds,
+                        textureRepeat: null,
+                        texturePath: `level0chunk:${sectionKey}:${coord.chunkX},${coord.chunkY}`,
+                        tint: 0xffffff,
+                        alpha,
+                        depthBias: FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005,
+                        isHoleOverlay: false
+                    });
+                }
             }
             return out;
         }
@@ -6230,28 +6427,44 @@ void main(void) {
         renderFloorVisualPolygons(ctx) {
             const container = this.ensureFloorVisualContainer();
             if (!container) return;
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const now = () => (
+                typeof performance !== "undefined" && performance && typeof performance.now === "function"
+                    ? performance.now()
+                    : Date.now()
+            );
             this.level0GroundSurfaceChunkBuildsThisFrame = 0;
             this.updateFloorVisualContainerTransform(container);
+            const collectStartMs = diagnosticsEnabled ? now() : 0;
             const entries = this.collectFloorVisualEntries(ctx);
+            const collectMs = diagnosticsEnabled ? (now() - collectStartMs) : 0;
             const visibleKeys = new Set();
             let rendered = 0;
             let meshesCreated = 0;
             let geometryUploads = 0;
             let visibleVertices = 0;
             let visibleTriangles = 0;
+            let meshLookupMs = 0;
+            let meshCreateMs = 0;
+            let meshGeometryMs = 0;
+            let meshAssignMs = 0;
+            let meshUpdateMs = 0;
             for (let i = 0; i < entries.length; i++) {
                 const source = entries[i];
+                const lookupStartMs = diagnosticsEnabled ? now() : 0;
                 const outer = normalizeFloorVisualPointList(source.outer);
                 if (outer.length < 3) continue;
                 const signature = buildFloorVisualSignature(outer, source.holes);
                 const cacheKey = source.key;
                 let entry = this.floorVisualMeshByKey.get(cacheKey);
+                if (diagnosticsEnabled) meshLookupMs += (now() - lookupStartMs);
                 if (
                     !entry ||
                     entry.signature !== signature ||
                     entry.isHoleOverlay !== source.isHoleOverlay ||
                     entry.texturePath !== (source.texturePath || "")
                 ) {
+                    const createStartMs = diagnosticsEnabled ? now() : 0;
                     if (entry && entry.mesh) {
                         if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
                         if (typeof entry.mesh.destroy === "function") {
@@ -6280,12 +6493,18 @@ void main(void) {
                     };
                     entry.mesh = this.createFloorVisualMesh(entry);
                     if (!entry.mesh) continue;
+                    if (diagnosticsEnabled) meshCreateMs += (now() - createStartMs);
+                    const uploadStartMs = diagnosticsEnabled ? now() : 0;
                     this.uploadFloorVisualMeshGeometry(entry);
+                    if (diagnosticsEnabled) meshGeometryMs += (now() - uploadStartMs);
                     geometryUploads += 1;
                     container.addChild(entry.mesh);
                     this.floorVisualMeshByKey.set(cacheKey, entry);
                     meshesCreated += 1;
+                } else if (diagnosticsEnabled) {
+                    meshCreateMs += 0;
                 }
+                const assignStartMs = diagnosticsEnabled ? now() : 0;
                 entry.tint = source.tint;
                 entry.alpha = source.alpha;
                 entry.baseZ = Number.isFinite(source.baseZ) ? Number(source.baseZ) : this.getLayerBaseZForLevel(source.level);
@@ -6308,34 +6527,61 @@ void main(void) {
                     entry.uploadedTextureBoundsSignature !== this.getFloorVisualTextureBoundsSignature(entry.textureBounds) ||
                     entry.uploadedTextureRepeatSignature !== this.getFloorVisualTextureRepeatSignature(entry.textureRepeat)
                 ) {
+                    const uploadStartMs = diagnosticsEnabled ? now() : 0;
                     this.uploadFloorVisualMeshGeometry(entry);
+                    if (diagnosticsEnabled) meshGeometryMs += (now() - uploadStartMs);
                     geometryUploads += 1;
                 }
+                if (diagnosticsEnabled) meshAssignMs += (now() - assignStartMs);
+                const updateStartMs = diagnosticsEnabled ? now() : 0;
                 if (this.updateFloorVisualMesh(entry)) {
+                    if (diagnosticsEnabled) meshUpdateMs += (now() - updateStartMs);
                     visibleKeys.add(cacheKey);
                     rendered += 1;
                     if (entry.triangulation) {
                         visibleVertices += Number(entry.triangulation.vertexCount) || 0;
                         visibleTriangles += entry.triangulation.indices ? Math.floor(entry.triangulation.indices.length / 3) : 0;
                     }
+                } else if (diagnosticsEnabled) {
+                    meshUpdateMs += (now() - updateStartMs);
                 }
             }
+            const hideStartMs = diagnosticsEnabled ? now() : 0;
             let cachedMeshes = 0;
             for (const [key, entry] of this.floorVisualMeshByKey.entries()) {
                 cachedMeshes += 1;
                 if (visibleKeys.has(key)) continue;
                 if (entry && entry.mesh) entry.mesh.visible = false;
             }
+            const hideMs = diagnosticsEnabled ? (now() - hideStartMs) : 0;
+            const trimStartMs = diagnosticsEnabled ? now() : 0;
             this.floorVisualVisibleKeys = visibleKeys;
             const trimmedLevel0Chunks = this.trimLevel0GroundSurfaceChunkCache(
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT, visibleKeys.size)
             );
+            const trimmedChunkClips = this.trimFloorVisualChunkClipCache(
+                Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
+            );
+            const trimMs = diagnosticsEnabled ? (now() - trimStartMs) : 0;
             this.setFrameMetric("floorVisualPolygons", rendered);
             this.setFrameMetric("floorVisualMeshesCreated", meshesCreated);
             this.setFrameMetric("floorVisualGeometryUploads", geometryUploads);
+            this.setFrameMetric("floorVisualCollectMs", collectMs);
+            this.setFrameMetric("floorVisualMeshLookupMs", meshLookupMs);
+            this.setFrameMetric("floorVisualMeshCreateMs", meshCreateMs);
+            this.setFrameMetric("floorVisualGeometryMs", meshGeometryMs);
+            this.setFrameMetric("floorVisualMeshAssignMs", meshAssignMs);
+            this.setFrameMetric("floorVisualMeshUpdateMs", meshUpdateMs);
+            this.setFrameMetric("floorVisualHideMs", hideMs);
+            this.setFrameMetric("floorVisualTrimMs", trimMs);
             this.setFrameMetric("floorVisualVertices", visibleVertices);
             this.setFrameMetric("floorVisualTriangles", visibleTriangles);
             this.setFrameMetric("floorVisualMeshCacheSize", cachedMeshes);
+            this.setFrameMetric(
+                "floorVisualChunkClipCacheSize",
+                this.floorVisualChunkClipCache instanceof Map ? this.floorVisualChunkClipCache.size : 0
+            );
+            this.setFrameMetric("floorVisualChunkClipsTrimmed", trimmedChunkClips);
             this.setFrameMetric(
                 "floorLevel0ChunkCacheSize",
                 this.level0GroundSurfaceChunkCache instanceof Map ? this.level0GroundSurfaceChunkCache.size : 0
@@ -10533,9 +10779,21 @@ void main(void) {
                     floorVisualPolygons: getMetric("floorVisualPolygons"),
                     floorVisualMeshesCreated: getMetric("floorVisualMeshesCreated"),
                     floorVisualGeometryUploads: getMetric("floorVisualGeometryUploads"),
+                    floorVisualCollectMs: getMetric("floorVisualCollectMs"),
+                    floorVisualMeshLookupMs: getMetric("floorVisualMeshLookupMs"),
+                    floorVisualMeshCreateMs: getMetric("floorVisualMeshCreateMs"),
+                    floorVisualGeometryMs: getMetric("floorVisualGeometryMs"),
+                    floorVisualMeshAssignMs: getMetric("floorVisualMeshAssignMs"),
+                    floorVisualMeshUpdateMs: getMetric("floorVisualMeshUpdateMs"),
+                    floorVisualHideMs: getMetric("floorVisualHideMs"),
+                    floorVisualTrimMs: getMetric("floorVisualTrimMs"),
                     floorVisualVertices: getMetric("floorVisualVertices"),
                     floorVisualTriangles: getMetric("floorVisualTriangles"),
                     floorVisualMeshCacheSize: getMetric("floorVisualMeshCacheSize"),
+                    floorVisualChunkClipCacheHits: getMetric("floorVisualChunkClipCacheHits"),
+                    floorVisualChunkClipCacheMisses: getMetric("floorVisualChunkClipCacheMisses"),
+                    floorVisualChunkClipCacheSize: getMetric("floorVisualChunkClipCacheSize"),
+                    floorVisualChunkClipsTrimmed: getMetric("floorVisualChunkClipsTrimmed"),
                     groundTilesSkippedForLevel0Chunks: getMetric("groundTilesSkippedForLevel0Chunks"),
                     groundTileSpritesVisible: getMetric("groundTileSpritesVisible"),
                     depthCandidates: getMetric("depthCandidates"),

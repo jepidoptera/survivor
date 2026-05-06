@@ -320,6 +320,17 @@ function valueOr(value, fallback) {
     return Number.isFinite(value) ? Number(value) : fallback;
 }
 
+function normalizeSpellTargetPoint(spec, fallback = null) {
+    if (!Array.isArray(spec) || spec.length < 2) return fallback;
+    const x = Number(spec[0]);
+    const y = Number(spec[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+    return [
+        Math.max(0, Math.min(1, x)),
+        Math.max(0, Math.min(1, y))
+    ];
+}
+
 function shouldScaleHitboxWithItem(spec) {
     if (!spec || typeof spec !== "object") return true;
     if (typeof spec.scaleWithItem === "boolean") return spec.scaleWithItem;
@@ -2407,6 +2418,9 @@ void main(void) {
         if (this.gone) return;
         this.gone = true;
         this.vanishing = false;
+        const pixiSprite = this.pixiSprite || null;
+        const fireSprite = this.fireSprite || null;
+        const depthBillboardMesh = this._depthBillboardMesh || null;
         if (this._vanishFinalizeTimeout) {
             clearTimeout(this._vanishFinalizeTimeout);
             this._vanishFinalizeTimeout = null;
@@ -2418,26 +2432,26 @@ void main(void) {
             const idx = this.map.objects.indexOf(this);
             if (idx >= 0) this.map.objects.splice(idx, 1);
         }
-        if (this.pixiSprite && this.pixiSprite.parent) {
-            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        if (pixiSprite && pixiSprite.parent) {
+            pixiSprite.parent.removeChild(pixiSprite);
         }
-        if (this.pixiSprite && typeof this.pixiSprite.destroy === "function") {
-            this.pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
+        if (pixiSprite && pixiSprite.destroyed !== true && typeof pixiSprite.destroy === "function") {
+            pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
         }
         this.pixiSprite = null;
         this._destroyFlowerBurnFragments();
-        if (this.fireSprite && this.fireSprite.parent) {
-            this.fireSprite.parent.removeChild(this.fireSprite);
+        if (fireSprite && fireSprite.parent) {
+            fireSprite.parent.removeChild(fireSprite);
         }
-        if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
-            this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+        if (fireSprite && fireSprite.destroyed !== true && typeof fireSprite.destroy === "function") {
+            fireSprite.destroy({ children: true, texture: false, baseTexture: false });
         }
         this.fireSprite = null;
-        if (this._depthBillboardMesh && this._depthBillboardMesh.parent) {
-            this._depthBillboardMesh.parent.removeChild(this._depthBillboardMesh);
+        if (depthBillboardMesh && depthBillboardMesh.parent) {
+            depthBillboardMesh.parent.removeChild(depthBillboardMesh);
         }
-        if (this._depthBillboardMesh && typeof this._depthBillboardMesh.destroy === "function") {
-            this._depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
+        if (depthBillboardMesh && depthBillboardMesh.destroyed !== true && typeof depthBillboardMesh.destroy === "function") {
+            depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
         }
         this._depthBillboardMesh = null;
         this._depthBillboardWorldPositions = null;
@@ -2445,9 +2459,9 @@ void main(void) {
         this._depthBillboardMeshMode = "";
         const extraDisplayObject = (
             this._renderingDisplayObject &&
-            this._renderingDisplayObject !== this.pixiSprite &&
-            this._renderingDisplayObject !== this.fireSprite &&
-            this._renderingDisplayObject !== this._depthBillboardMesh
+            this._renderingDisplayObject !== pixiSprite &&
+            this._renderingDisplayObject !== fireSprite &&
+            this._renderingDisplayObject !== depthBillboardMesh
         ) ? this._renderingDisplayObject : null;
         const roadTextureLifecycleDiagnostics = !!(
             typeof globalThis !== "undefined" &&
@@ -2469,7 +2483,7 @@ void main(void) {
         if (extraDisplayObject && extraDisplayObject.parent) {
             extraDisplayObject.parent.removeChild(extraDisplayObject);
         }
-        if (extraDisplayObject && typeof extraDisplayObject.destroy === "function") {
+        if (extraDisplayObject && extraDisplayObject.destroyed !== true && typeof extraDisplayObject.destroy === "function") {
             extraDisplayObject.destroy({ children: false, texture: false, baseTexture: false });
         }
         this._renderingDisplayObject = null;
@@ -2702,7 +2716,10 @@ void main(void) {
         const sourceScreenX = Number(_anchorPt && _anchorPt.x) || 0;
         const sourceScreenY = Number(_anchorPt && _anchorPt.y) || 0;
         const sourceScreenWidth = Math.max(1, (Number(this.width) || 1) * _vs);
-        const sourceScreenHeight = Math.max(1, (Number(this.height) || 1) * _vs * _xyR);
+        // Height: the depth billboard renders upright sprites with screen height =
+        // worldHeightZ * viewscale * xyratio = (sprite.height / (viewscale * xyratio)) * viewscale * xyratio
+        // = sprite.height = flower.height * viewscale (no xyratio factor).  Match that here.
+        const sourceScreenHeight = Math.max(1, (Number(this.height) || 1) * _vs);
         const canFragment = !!(
             pixiRef &&
             sprite &&
@@ -2737,7 +2754,10 @@ void main(void) {
         const pieceWorldWidth = worldWidth / cols;
         const pieceWorldHeight = worldHeight / rows;
         const anchorX = (sprite.anchor && Number.isFinite(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0.5;
-        const anchorY = (sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
+        // Depth billboards always anchor vertically at the bottom (bottomZ = worldZ), regardless of
+        // sprite.anchor.y. Flowers have anchor.y = 0.5 (center) but the billboard bottom is still at
+        // ground level. Force anchorY = 1 so the fragment grid aligns with the billboard's visual extent.
+        const anchorY = 1;
         const sourceScreenLeft = sourceScreenX - (anchorX * sourceScreenWidth);
         const sourceScreenTop = sourceScreenY - (anchorY * sourceScreenHeight);
         const sourceScreenBottom = sourceScreenTop + sourceScreenHeight;
@@ -3089,6 +3109,7 @@ void main(void) {
                             : (Number.isFinite(data.traversalLayer) ? Math.round(Number(data.traversalLayer)) : undefined),
                         placeableAnchorX: Number.isFinite(data.placeableAnchorX) ? Number(data.placeableAnchorX) : undefined,
                         placeableAnchorY: Number.isFinite(data.placeableAnchorY) ? Number(data.placeableAnchorY) : undefined,
+                        spellTargetPoint: normalizeSpellTargetPoint(data.spellTargetPoint, undefined),
                         mountedWallLineGroupId: Number.isInteger(data.mountedWallLineGroupId)
                             ? data.mountedWallLineGroupId
                             : (Number.isInteger(data.mountedSectionId) ? data.mountedSectionId : null),
@@ -4259,6 +4280,7 @@ class PlacedObject extends StaticObject {
         this.placeableAnchorY = Number.isFinite(options.placeableAnchorY)
             ? Number(options.placeableAnchorY)
             : defaultAnchorY;
+        this.spellTargetPoint = normalizeSpellTargetPoint(options.spellTargetPoint, null);
         this.groundPlaneHitboxOverridePoints = Array.isArray(options.groundPlaneHitboxOverridePoints)
             ? options.groundPlaneHitboxOverridePoints
                 .map(p => ({ x: Number(p && p.x), y: Number(p && p.y) }))
@@ -4346,6 +4368,12 @@ class PlacedObject extends StaticObject {
         }
         data.placeableAnchorX = Number.isFinite(this.placeableAnchorX) ? this.placeableAnchorX : 0.5;
         data.placeableAnchorY = Number.isFinite(this.placeableAnchorY) ? this.placeableAnchorY : 1;
+        if (Array.isArray(this.spellTargetPoint) && this.spellTargetPoint.length >= 2) {
+            data.spellTargetPoint = [
+                Number(this.spellTargetPoint[0]),
+                Number(this.spellTargetPoint[1])
+            ];
+        }
         if (typeof this.castsLosShadows === "boolean") {
             data.castsLosShadows = this.castsLosShadows;
         }
@@ -4742,6 +4770,8 @@ class PlacedObject extends StaticObject {
             this.placeableAnchorX = currentAnchor.x;
             this.placeableAnchorY = currentAnchor.y;
         }
+        const metaSpellTargetPoint = normalizeSpellTargetPoint(metaEntry.spellTargetPoint, null);
+        this.spellTargetPoint = metaSpellTargetPoint;
         if (this.pixiSprite && this.pixiSprite.anchor) {
             this.pixiSprite.anchor.set(this.placeableAnchorX, this.placeableAnchorY);
         }

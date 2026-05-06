@@ -13,6 +13,7 @@
         "x": 0.5,
         "y": 0.5
       },
+    "spellTargetPoint": [0.5, 0.5],
     "groundPlaneHitbox": {
       "type": "none"
     },

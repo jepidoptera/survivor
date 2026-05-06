@@ -620,6 +620,36 @@
             const minY = Number(cameraRef.y) - padYWorld;
             const maxY = Number(cameraRef.y) + cameraHeight + padYWorld;
             const visible = [];
+            if (
+                Number.isFinite(minX) &&
+                Number.isFinite(maxX) &&
+                Number.isFinite(minY) &&
+                Number.isFinite(maxY)
+            ) {
+                const minYi = Math.floor(minY) - 1;
+                const maxYi = Math.ceil(maxY) + 1;
+                let low = 0;
+                let high = loadedNodes.length;
+                while (low < high) {
+                    const mid = (low + high) >> 1;
+                    const nodeYIndex = Number(loadedNodes[mid] && loadedNodes[mid].yindex) || 0;
+                    if (nodeYIndex < minYi) {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
+                    }
+                }
+                for (let i = low; i < loadedNodes.length; i++) {
+                    const node = loadedNodes[i];
+                    if (!node) continue;
+                    const nodeYIndex = Number(node.yindex) || 0;
+                    if (nodeYIndex > maxYi) break;
+                    if (node.x < minX || node.x > maxX) continue;
+                    if (node.y < minY || node.y > maxY) continue;
+                    visible.push(node);
+                }
+                return visible;
+            }
             for (let i = 0; i < loadedNodes.length; i++) {
                 const node = loadedNodes[i];
                 if (!node) continue;
