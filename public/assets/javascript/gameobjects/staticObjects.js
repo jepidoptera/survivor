@@ -4063,6 +4063,7 @@ class Tree extends StaticObject {
         const br = { x: baseCenterX + localBR.x, y: baseY, z: baseBottomZ + localBR.z };
         const tr = { x: baseCenterX + localTR.x, y: baseY, z: baseBottomZ + localTR.z };
         const tl = { x: baseCenterX + localTL.x, y: baseY, z: baseBottomZ + localTL.z };
+        const bottomEdgeDepthLift = Math.max(0, -(Math.min(localBL.z, localBR.z)));
 
         const signature = [
             bl.x, bl.z, br.x, br.z, tr.x, tr.z, tl.x, tl.z,
@@ -4107,6 +4108,14 @@ class Tree extends StaticObject {
         uniforms.uWrapEnabled[1] = (mapRef && mapRef.wrapY !== false) ? 1 : 0;
         uniforms.uWrapAnchorWorld[0] = worldX;
         uniforms.uWrapAnchorWorld[1] = worldY;
+        uniforms.uCameraZ = Number.isFinite(camera.z) ? Number(camera.z) : 0;
+        uniforms.uLayerBaseZ = Number.isFinite(this._renderLayerBaseZ) ? Number(this._renderLayerBaseZ) : 0;
+        // Depth-only correction: keep fallen trunk from testing behind the ground
+        // without altering world-space coordinates.
+        const baseDepthBias = Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0;
+        const fallenDepthSafety = Math.max(0.02, Math.min(0.25, worldHeightZ * 0.04));
+        uniforms.uDepthBias = baseDepthBias + bottomEdgeDepthLift + fallenDepthSafety;
+        uniforms.uZOffset = 0.0;
         uniforms.uViewScale = Number(camera.viewscale) || 1;
         uniforms.uXyRatio = Number(camera.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;

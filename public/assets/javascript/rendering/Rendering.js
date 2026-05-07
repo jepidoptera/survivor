@@ -560,7 +560,7 @@ void main(void) {
             const current = stack.pop();
             if (!current) continue;
             const texture = current.texture;
-            if (Object.prototype.hasOwnProperty.call(current, "texture") && texture && !isRenderablePixiTexture(texture)) {
+            if (Object.prototype.hasOwnProperty.call(current, "texture") && !isRenderablePixiTexture(texture)) {
                 if (samples.length < maxSamples) {
                     samples.push({
                         name: typeof current.name === "string" ? current.name : "",
@@ -661,7 +661,7 @@ void main(void) {
     }
 
     function installPixiSpriteRenderDiagnostics() {
-        if (!PIXI || !PIXI.Sprite || !PIXI.Sprite.prototype) return;
+        if (typeof PIXI === "undefined" || !PIXI || !PIXI.Sprite || !PIXI.Sprite.prototype) return;
         if (PIXI.Sprite.prototype._survivorTextureDiagInstalled === true) return;
         PIXI.Sprite.prototype._survivorTextureDiagInstalled = true;
         const loggedCrashSignatures = new Set();
@@ -672,13 +672,10 @@ void main(void) {
                 try {
                     return originalCalculateVertices.apply(this, args);
                 } catch (err) {
-                    if (!isPixiSpriteCrashDiagnosticsEnabled()) {
-                        throw err;
-                    }
                     const message = err && err.message ? String(err.message) : "";
                     const textureState = summarizePixiDisplayObject(this);
                     const signature = buildPixiDisplayObjectCrashSignature(textureState);
-                    if (!loggedCrashSignatures.has(signature)) {
+                    if (isPixiSpriteCrashDiagnosticsEnabled() && !loggedCrashSignatures.has(signature)) {
                         loggedCrashSignatures.add(signature);
                         console.error("[pixi sprite calculateVertices crash]", {
                             message,
@@ -711,6 +708,7 @@ void main(void) {
 
     class RenderingImpl {
         constructor() {
+            installPixiSpriteRenderDiagnostics();
             const CameraCtor = global.RenderingCamera;
             const LayersCtor = global.RenderingLayers;
             const MazeModeCtor = global.RenderingMazeMode;
@@ -891,6 +889,9 @@ void main(void) {
         }
 
         getLayerBaseZForObject(item, fallback = 0) {
+            if (this.isCharacterRenderItem(item)) {
+                return 0;
+            }
             return this.getLayerBaseZForLevel(this.getLayerIndexForObject(item, fallback));
         }
 
@@ -3041,9 +3042,11 @@ void main(void) {
                     continue;
                 }
                 if (seen.has(animal)) continue;
-                animal._renderTraversalLayer = Number.isFinite(animal.currentLayer)
-                    ? Number(animal.currentLayer)
-                    : 0;
+                animal._renderTraversalLayer = Number.isFinite(animal.traversalLayer)
+                    ? Number(animal.traversalLayer)
+                    : (Number.isFinite(animal.currentLayer)
+                        ? Number(animal.currentLayer)
+                        : 0);
                 seen.add(animal);
                 out.push(animal);
                 animalsAdded += 1;
@@ -7294,7 +7297,9 @@ void main(void) {
                 }
                 const layerAlpha = this.getLayerFadeMultiplier(itemLayer, renderNowMs);
                 item._renderLayerAlpha = layerAlpha;
-                item._renderLayerBaseZ = this.getLayerBaseZForLevel(itemLayer);
+                item._renderLayerBaseZ = this.isCharacterRenderItem(item)
+                    ? 0
+                    : this.getLayerBaseZForLevel(itemLayer);
                 if (!(layerAlpha > 0.001)) {
                     return false;
                 }
@@ -9532,6 +9537,10 @@ void main(void) {
                     ? roofDiagnostics.wallSections.slice()
                     : [roofDiagnostics.hoveredSection];
                 previewItem.centerSnapGuide = null;
+                previewItem.traversalLayer = placementLayer;
+                previewItem.level = placementLayer;
+                previewItem._renderTraversalLayer = placementLayer;
+                previewItem._renderLayerBaseZ = placementLayerBaseZ;
                 return previewItem;
             }
             const useSnapPlacement = !!(snapPlacement && snapPlacement.targetWall);
@@ -9765,7 +9774,12 @@ void main(void) {
                     if (!section || typeof section.getWallProfile !== "function") continue;
                     const profile = section.getWallProfile();
                     if (!profile) continue;
-                    const topZ = Math.max(0, Number(section.bottomZ) || 0) + Math.max(0, Number(section.height) || 0);
+                    const layerBaseZ = Number.isFinite(previewItem && previewItem._renderLayerBaseZ)
+                        ? Number(previewItem._renderLayerBaseZ)
+                        : null;
+                    const topZ = (typeof global !== "undefined" && global.Roof && typeof global.Roof.getWallSectionTopZForLayer === "function")
+                        ? global.Roof.getWallSectionTopZForLayer(section, layerBaseZ)
+                        : ((Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0) + Math.max(0, Number(section.height) || 0));
                     const topFace = [
                         this.camera.worldToScreen(Number(profile.aLeft.x), Number(profile.aLeft.y), topZ),
                         this.camera.worldToScreen(Number(profile.bLeft.x), Number(profile.bLeft.y), topZ),

@@ -349,7 +349,10 @@ class Wizard extends Character {
         this._doorTraversalStateById = new Map();
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
-        this.currentLayer = 0; // Floor layer the wizard is currently standing on (0 = ground)
+        const initialTraversalLayer = Number.isFinite(this.traversalLayer)
+            ? Math.round(Number(this.traversalLayer))
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        this.currentLayer = initialTraversalLayer; // Floor layer the wizard is currently standing on (0 = ground)
         Object.defineProperty(this, "selectedFloorEditLevel", {
             configurable: true,
             enumerable: true,
@@ -361,7 +364,18 @@ class Wizard extends Character {
             set: (value) => {
                 const normalized = Number.isFinite(value) ? Math.round(Number(value)) : 0;
                 this.currentLayer = normalized;
-                this.currentLayerBaseZ = normalized * 3;
+                this.traversalLayer = normalized;
+                let layerBaseZ = normalized * 3;
+                const nodeLayer = Number.isFinite(this.node && this.node.traversalLayer)
+                    ? Math.round(Number(this.node.traversalLayer))
+                    : (Number.isFinite(this.node && this.node.level) ? Math.round(Number(this.node.level)) : null);
+                if (this.node && nodeLayer === normalized) {
+                    const nodeZ = this.getNodeStandingZ(this.node);
+                    if (Number.isFinite(nodeZ)) {
+                        layerBaseZ = Number(nodeZ);
+                    }
+                }
+                this.currentLayerBaseZ = layerBaseZ;
             }
         });
         this.selectedFloorEditLevel = this.currentLayer;

@@ -5708,6 +5708,9 @@
                 const typeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "type")) ? namedArgs.type : args[0];
                 const sizeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "size")) ? namedArgs.size : args[1];
                 const locationValue = (Object.prototype.hasOwnProperty.call(namedArgs, "location")) ? namedArgs.location : args[2];
+                const layerValue = Object.prototype.hasOwnProperty.call(namedArgs, "traversalLayer")
+                    ? namedArgs.traversalLayer
+                    : (Object.prototype.hasOwnProperty.call(namedArgs, "level") ? namedArgs.level : undefined);
                 const hasNamedLocation = Object.prototype.hasOwnProperty.call(namedArgs, "location");
                 const hasNamedX = Object.prototype.hasOwnProperty.call(namedArgs, "x");
                 const hasNamedY = Object.prototype.hasOwnProperty.call(namedArgs, "y");
@@ -5735,7 +5738,27 @@
                 if (typeof mapRef.wrapWorldX === "function") spawnX = mapRef.wrapWorldX(spawnX);
                 if (typeof mapRef.wrapWorldY === "function") spawnY = mapRef.wrapWorldY(spawnY);
 
-                const spawnNode = mapRef.worldToNode(spawnX, spawnY);
+                const sourceLayer = Number.isFinite(target && target.traversalLayer)
+                    ? Math.round(Number(target.traversalLayer))
+                    : (Number.isFinite(target && target.currentLayer)
+                        ? Math.round(Number(target.currentLayer))
+                        : (Number.isFinite(wizardRef && wizardRef.traversalLayer)
+                            ? Math.round(Number(wizardRef.traversalLayer))
+                            : (Number.isFinite(wizardRef && wizardRef.currentLayer) ? Math.round(Number(wizardRef.currentLayer)) : 0)));
+                const spawnLayer = Number.isFinite(Number(layerValue)) ? Math.round(Number(layerValue)) : sourceLayer;
+                const baseNode = mapRef.worldToNode(spawnX, spawnY);
+                let spawnNode = baseNode;
+                if (baseNode && spawnLayer !== 0 && typeof mapRef.getFloorNodeAtLayer === "function") {
+                    const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                        ? baseNode._prototypeSectionKey
+                        : ((typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function")
+                            ? mapRef.getPrototypeSectionKeyForWorldPoint(spawnX, spawnY)
+                            : "");
+                    spawnNode = mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, spawnLayer, {
+                        sectionKey,
+                        allowScan: true
+                    });
+                }
                 if (!spawnNode) return false;
 
                 const CreatureCtor = getCreatureCtor(typeName);
@@ -5752,6 +5775,17 @@
                 applyCreatureSizeScale(creature, Number.isFinite(Number(sizeValue)) ? Number(sizeValue) : 1);
                 creature.x = spawnX;
                 creature.y = spawnY;
+                creature.node = spawnNode;
+                if (typeof creature.syncTraversalLayerFromNode === "function") {
+                    creature.syncTraversalLayerFromNode(spawnNode);
+                } else {
+                    creature.traversalLayer = spawnLayer;
+                    creature.currentLayer = spawnLayer;
+                    creature.currentLayerBaseZ = Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : spawnLayer * 3;
+                }
+                creature.z = typeof creature.getNodeStandingZ === "function"
+                    ? creature.getNodeStandingZ(spawnNode)
+                    : (Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : 0);
                 if (typeof creature.updateHitboxes === "function") {
                     creature.updateHitboxes();
                 }

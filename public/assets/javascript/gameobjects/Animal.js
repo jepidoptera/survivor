@@ -955,7 +955,9 @@ class Animal extends Character {
             }
         }
         if (this.map && typeof this.map.worldToNode === "function") {
-            const worldNode = this.map.worldToNode(this.x, this.y);
+            const worldNode = (typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(this.x, this.y)
+                : this.map.worldToNode(this.x, this.y);
             if (worldNode) return worldNode;
         }
         return this.node || this.nextNode || null;
@@ -969,6 +971,50 @@ class Animal extends Character {
             SpellSystem.isPlayerInvisibleToEnemies(target)
         );
     }
+    getTargetTraversalLayer(target, fallback = null) {
+        if (Number.isFinite(target && target.traversalLayer)) {
+            return Math.round(Number(target.traversalLayer));
+        }
+        if (Number.isFinite(target && target.currentLayer)) {
+            return Math.round(Number(target.currentLayer));
+        }
+        if (Number.isFinite(target && target.node && target.node.traversalLayer)) {
+            return Math.round(Number(target.node.traversalLayer));
+        }
+        if (Number.isFinite(target && target.node && target.node.level)) {
+            return Math.round(Number(target.node.level));
+        }
+        if (target && typeof target.getNodeTraversalLayer === "function") {
+            const targetLayer = target.getNodeTraversalLayer();
+            if (Number.isFinite(targetLayer)) {
+                return Math.round(Number(targetLayer));
+            }
+        }
+        return Number.isFinite(fallback) ? Math.round(Number(fallback)) : this.getNodeTraversalLayer();
+    }
+    isTargetOnSameTraversalLayer(target) {
+        if (!target) return false;
+        return this.getTargetTraversalLayer(target, this.getNodeTraversalLayer()) === this.getNodeTraversalLayer();
+    }
+    clearPlayerInteractionAcrossTraversalLayer(target, now = Date.now()) {
+        if (this.isTargetOnSameTraversalLayer(target)) return false;
+        if (
+            this.attackTarget === target ||
+            (this._closeCombatState && this._closeCombatState.target === target) ||
+            this.attacking ||
+            this.attackState !== "idle" ||
+            this._hasAggro(now) ||
+            this._committedToAttack ||
+            this._corneredAttackPending
+        ) {
+            this._clearPursuit();
+        }
+        this._aggroUntilMs = 0;
+        this._committedToAttack = false;
+        this._corneredAttackPending = false;
+        this._playerVisibleLastAiTick = false;
+        return true;
+    }
     isActivelyInteractingWithPlayer(now = Date.now()) {
         const closeCombatTarget = this._closeCombatState && this._closeCombatState.target;
         return !!(
@@ -981,10 +1027,14 @@ class Animal extends Character {
     }
     hasAttackLineOfSight(target, startNode = null) {
         if (this.isTargetHiddenByInvisibilityAura(target)) return false;
+        if (!this.isTargetOnSameTraversalLayer(target)) return false;
         if (!target || !this.map || typeof this.map.worldToNode !== "function") return true;
         if (typeof this.map.hasLineOfSight !== "function") return true;
         const originNode = startNode || this._getPathStartNode();
-        const targetNode = this.map.worldToNode(target.x, target.y);
+        const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
+        const targetNode = (typeof this.resolveNodeForTraversalLayer === "function")
+            ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
+            : this.map.worldToNode(target.x, target.y);
         if (!originNode || !targetNode) return true;
         return !!this.map.hasLineOfSight(originNode, targetNode);
     }
@@ -1074,7 +1124,11 @@ class Animal extends Character {
         const firstStep = this.getPathItemDestinationNode(route.path[0]);
         if (!firstStep || firstStep === startNode) return false;
 
-        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!this.isTargetOnSameTraversalLayer(target)) return false;
+        const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
+        const targetNode = (typeof this.resolveNodeForTraversalLayer === "function")
+            ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
+            : this.map.worldToNode(target.x, target.y);
         if (!targetNode) return false;
         if (typeof this.map.hasLineOfSight === "function" && !this.map.hasLineOfSight(startNode, targetNode)) {
             return false;
@@ -1152,10 +1206,15 @@ class Animal extends Character {
 
         let snappedNode = this.node || null;
         if (this.map && typeof this.map.worldToNode === "function") {
-            snappedNode = this.map.worldToNode(this.x, this.y) || snappedNode;
+            snappedNode = ((typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(this.x, this.y)
+                : this.map.worldToNode(this.x, this.y)) || snappedNode;
         }
         if (snappedNode) {
             this.node = snappedNode;
+            if (typeof this.syncTraversalLayerFromNode === "function") {
+                this.syncTraversalLayerFromNode(snappedNode);
+            }
             this.x = snappedNode.x;
             this.y = snappedNode.y;
             this.prevX = this.x;
@@ -1267,8 +1326,12 @@ class Animal extends Character {
     }
     updatePursuitDestination(target) {
         if (!target) return;
+        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) return;
         const now = Date.now();
-        const targetNode = this.map.worldToNode(target.x, target.y);
+        const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
+        const targetNode = (typeof this.resolveNodeForTraversalLayer === "function")
+            ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
+            : this.map.worldToNode(target.x, target.y);
         if (!targetNode) return;
         const preserveStep = this._isMidTraversalStep();
 
@@ -1285,18 +1348,25 @@ class Animal extends Character {
         const route = this.getCombatRouteToTarget(target, {
             startNode,
             targetNode,
-            preserveCurrentStep: preserveStep
+            preserveCurrentStep: preserveStep,
+            allowBlockedDestination: true
         });
         const path = route ? route.path : null;
         this._lastPursuitPathMs = now;
-        this._applyPursuitPath(path, targetNode, preserveStep);
+        this._applyPursuitPath(path, route && route.targetNode ? route.targetNode : targetNode, preserveStep);
     }
 
     getCombatRouteToTarget(target, options = {}) {
         if (!target || !this.map) return null;
+        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) return null;
 
         const startNode = options.startNode || this._getPathStartNode(options.preserveCurrentStep === true);
-        const targetNode = options.targetNode || (this.map.worldToNode ? this.map.worldToNode(target.x, target.y) : null);
+        const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
+        const targetNode = options.targetNode || (this.map.worldToNode
+            ? ((typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
+                : this.map.worldToNode(target.x, target.y))
+            : null);
         if (!startNode || !targetNode) return null;
 
         const maxPathLength = Object.prototype.hasOwnProperty.call(options, "maxPathLength")
@@ -1358,12 +1428,16 @@ class Animal extends Character {
 
         const now = Date.now();
         let playerVisibleThisTick = false;
+        const playerSeparatedByLayer = this.clearPlayerInteractionAcrossTraversalLayer(wizard, now);
         if (Number.isFinite(this._pauseUntilMs) && now < this._pauseUntilMs) {
             this._playerVisibleLastAiTick = false;
             return;
         }
         if (Number.isFinite(this._pauseUntilMs) && now >= this._pauseUntilMs) {
             this._pauseUntilMs = null;
+            if (playerSeparatedByLayer) {
+                return;
+            }
             // Clean up the retreat state from the tree knock so we go straight back
             // into attack mode rather than wandering or extending the retreat.
             this.resetAttackState();
@@ -1381,7 +1455,7 @@ class Animal extends Character {
             return;
         }
 
-        const playerHiddenByInvisibility = this.isTargetHiddenByInvisibilityAura(wizard);
+        const playerHiddenByInvisibility = playerSeparatedByLayer || this.isTargetHiddenByInvisibilityAura(wizard);
         if (playerHiddenByInvisibility && this.isActivelyInteractingWithPlayer(now)) {
             this._clearPursuit();
             this._aggroUntilMs = 0;
@@ -1491,7 +1565,9 @@ class Animal extends Character {
         if (Number.isFinite(this.x) && Number.isFinite(this.y) && !this.moving) {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
-            const wanderNode = this.map.worldToNode(wanderX, wanderY);
+            const wanderNode = (typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                : this.map.worldToNode(wanderX, wanderY);
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
         }
@@ -1500,6 +1576,10 @@ class Animal extends Character {
     updateSeePlayerState() {
         if (typeof wizard === "undefined" || !wizard) {
             this._playerVisibleLastAiTick = false;
+            return false;
+        }
+        if (!this.isTargetOnSameTraversalLayer(wizard)) {
+            this.clearPlayerInteractionAcrossTraversalLayer(wizard);
             return false;
         }
         if (this.isTargetHiddenByInvisibilityAura(wizard)) {
@@ -1512,7 +1592,12 @@ class Animal extends Character {
             return false;
         }
         const animalNode = this._getPathStartNode();
-        const wizardNode = this.map && this.map.worldToNode ? this.map.worldToNode(wizard.x, wizard.y) : null;
+        const wizardLayer = this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer());
+        const wizardNode = this.map && this.map.worldToNode
+            ? ((typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(wizard.x, wizard.y, { traversalLayer: wizardLayer })
+                : this.map.worldToNode(wizard.x, wizard.y))
+            : null;
         const hasLOS = (animalNode && wizardNode && typeof this.map.hasLineOfSight === "function")
             ? this.map.hasLineOfSight(animalNode, wizardNode)
             : true;
@@ -1575,7 +1660,9 @@ class Animal extends Character {
         if (this.dead || this.gone) return;
         if (this._movementSuspendedByStreaming === true) {
             const resolvedNode = (this.map && typeof this.map.worldToNode === "function")
-                ? this.map.worldToNode(this.x, this.y)
+                ? ((typeof this.resolveNodeForTraversalLayer === "function")
+                    ? this.resolveNodeForTraversalLayer(this.x, this.y)
+                    : this.map.worldToNode(this.x, this.y))
                 : null;
             if (!resolvedNode) {
                 this.moving = false;
@@ -1819,7 +1906,9 @@ class Animal extends Character {
             ? (a, b) => this.map.shortestDeltaY(a, b) : (a, b) => b - a;
 
         // 1. Check live objects via BFS over nearby nodes
-        const start = this.map.worldToNode(this.x, this.y);
+        const start = (typeof this.resolveNodeForTraversalLayer === "function")
+            ? this.resolveNodeForTraversalLayer(this.x, this.y)
+            : this.map.worldToNode(this.x, this.y);
         let best = null;
         let bestDist = Infinity;
 
@@ -1926,8 +2015,13 @@ class Animal extends Character {
                 : (obstacle.y - this.y)
         };
 
+        const obstacleLayer = Number.isFinite(obstacle && obstacle.traversalLayer)
+            ? Math.round(Number(obstacle.traversalLayer))
+            : this.getNodeTraversalLayer();
         const obstacleNode = this.map && typeof this.map.worldToNode === "function"
-            ? this.map.worldToNode(obstacle.x, obstacle.y)
+            ? ((typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(obstacle.x, obstacle.y, { traversalLayer: obstacleLayer })
+                : this.map.worldToNode(obstacle.x, obstacle.y))
             : null;
         if (!obstacleNode) return true;
 
@@ -2054,6 +2148,12 @@ class Animal extends Character {
             this._playerVisibleLastAiTick = false;
             return;
         }
+        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) {
+            this._clearPursuit();
+            this._aggroUntilMs = 0;
+            this._playerVisibleLastAiTick = false;
+            return;
+        }
         const now = Date.now();
         const cooldownMs = Math.max(0, Number(this.attackCooldown) || 0) * 1000;
         this._refreshAggro(now);
@@ -2103,7 +2203,8 @@ class Animal extends Character {
 
         const preserveStep = this._isMidTraversalStep();
         const route = this.getCombatRouteToTarget(target, {
-            preserveCurrentStep: preserveStep
+            preserveCurrentStep: preserveStep,
+            allowBlockedDestination: true
         });
         const routeBlocker = this.getPriorityBlockerFromRoute(route);
         if (routeBlocker) {
@@ -2344,6 +2445,18 @@ class Animal extends Character {
         if (typeof this.visible === "boolean") {
             data.visible = this.visible;
         }
+        const traversalLayer = Number.isFinite(this.traversalLayer)
+            ? Math.round(Number(this.traversalLayer))
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        if (traversalLayer !== 0) {
+            data.traversalLayer = traversalLayer;
+        }
+        if (typeof this.surfaceId === "string" && this.surfaceId.length > 0) {
+            data.surfaceId = this.surfaceId;
+        }
+        if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) {
+            data.fragmentId = this.fragmentId;
+        }
         if (Number.isFinite(this.brightness)) {
             data.brightness = Number(this.brightness);
         }
@@ -2403,7 +2516,26 @@ class Animal extends Character {
         const nodeLookupStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
             ? performance.now()
             : Date.now();
-        const node = map.worldToNode(data.x, data.y);
+        const baseNode = map.worldToNode(data.x, data.y);
+        const traversalLayer = Number.isFinite(data.traversalLayer)
+            ? Math.round(Number(data.traversalLayer))
+            : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0);
+        let node = baseNode;
+        if (baseNode && traversalLayer !== 0 && typeof map.getFloorNodeAtLayer === "function") {
+            const sectionKey = targetSectionKey || (
+                typeof baseNode._prototypeSectionKey === "string"
+                    ? baseNode._prototypeSectionKey
+                    : ((typeof map.getPrototypeSectionKeyForWorldPoint === "function")
+                        ? map.getPrototypeSectionKeyForWorldPoint(data.x, data.y)
+                        : "")
+            );
+            node = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, traversalLayer, {
+                sectionKey,
+                surfaceId: typeof data.surfaceId === "string" ? data.surfaceId : "",
+                fragmentId: typeof data.fragmentId === "string" ? data.fragmentId : "",
+                allowScan: true
+            });
+        }
         const nodeLookupMs = (
             ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
                 ? performance.now()
@@ -2472,6 +2604,17 @@ class Animal extends Character {
                 let resizeMs = 0;
                 animalInstance.x = data.x;
                 animalInstance.y = data.y;
+                animalInstance.node = node;
+                if (typeof animalInstance.syncTraversalLayerFromNode === "function") {
+                    animalInstance.syncTraversalLayerFromNode(node);
+                } else {
+                    animalInstance.traversalLayer = traversalLayer;
+                    animalInstance.currentLayer = traversalLayer;
+                    animalInstance.currentLayerBaseZ = Number.isFinite(node.baseZ) ? Number(node.baseZ) : traversalLayer * 3;
+                }
+                animalInstance.z = typeof animalInstance.getNodeStandingZ === "function"
+                    ? animalInstance.getNodeStandingZ(node)
+                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
                 if (data.hp !== undefined) animalInstance.hp = data.hp;
                 if (data.maxHp !== undefined) animalInstance.maxHp = data.maxHp;
                 animalInstance.ensureMagicPointsInitialized(true);
@@ -2841,9 +2984,14 @@ class Squirrel extends Animal {
         this.moving = false;
         this._playerSummonLaunchState = null;
         if (this.map && typeof this.map.worldToNode === "function") {
-            const resolvedNode = this.map.worldToNode(this.x, this.y);
+            const resolvedNode = (typeof this.resolveNodeForTraversalLayer === "function")
+                ? this.resolveNodeForTraversalLayer(this.x, this.y)
+                : this.map.worldToNode(this.x, this.y);
             if (resolvedNode) {
                 this.node = resolvedNode;
+                if (typeof this.syncTraversalLayerFromNode === "function") {
+                    this.syncTraversalLayerFromNode(resolvedNode);
+                }
             }
         }
         if (typeof this.updateHitboxes === "function") {
@@ -3049,7 +3197,12 @@ class Squirrel extends Animal {
                 let followY = caster.y + Math.sin(this._playerSummonOrbitAngle) * 1.1;
                 if (typeof this.map.wrapWorldX === "function") followX = this.map.wrapWorldX(followX);
                 if (typeof this.map.wrapWorldY === "function") followY = this.map.wrapWorldY(followY);
-                const followNode = this.map.worldToNode(followX, followY);
+                const casterLayer = Number.isFinite(caster && caster.traversalLayer)
+                    ? Math.round(Number(caster.traversalLayer))
+                    : (Number.isFinite(caster && caster.currentLayer) ? Math.round(Number(caster.currentLayer)) : this.getNodeTraversalLayer());
+                const followNode = (typeof this.resolveNodeForTraversalLayer === "function")
+                    ? this.resolveNodeForTraversalLayer(followX, followY, { traversalLayer: casterLayer })
+                    : this.map.worldToNode(followX, followY);
                 if (followNode) {
                     this.speed = this.runSpeed;
                     this.goto(followNode);
@@ -3623,6 +3776,9 @@ class Blodia extends Animal {
             if (this.nextNode) {
                 const arrivalPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1);
                 this.node = this.nextNode;
+                if (typeof this.syncTraversalLayerFromNode === "function") {
+                    this.syncTraversalLayerFromNode(this.node);
+                }
                 this.x = arrivalPosition && Number.isFinite(arrivalPosition.x) ? arrivalPosition.x : this.node.x;
                 this.y = arrivalPosition && Number.isFinite(arrivalPosition.y) ? arrivalPosition.y : this.node.y;
                 this.z = arrivalPosition && Number.isFinite(arrivalPosition.z) ? arrivalPosition.z : this.getNodeStandingZ(this.node);
@@ -3694,6 +3850,12 @@ class Blodia extends Animal {
         // Suppress base-class pause/flee machinery unconditionally.
         this._pauseUntilMs = null;
         this._committedToAttack = false;
+        if (this.clearPlayerInteractionAcrossTraversalLayer(wizard)) {
+            this._lockedOnWizard = false;
+            this._lastPathDist = Infinity;
+            this._lastAStarMs = 0;
+            return;
+        }
 
         // Aggro: lock on once wizard enters chase radius.
         if (!this._lockedOnWizard) {
@@ -3705,10 +3867,11 @@ class Blodia extends Animal {
         if (!this._lockedOnWizard) {
             // Not yet aggro'd — wander slowly.
             if (!this.moving) {
-                const wNode = this.map.worldToNode(
-                    this.x + (Math.random() - 0.5) * 10,
-                    this.y + (Math.random() - 0.5) * 10
-                );
+                const wanderX = this.x + (Math.random() - 0.5) * 10;
+                const wanderY = this.y + (Math.random() - 0.5) * 10;
+                const wNode = (typeof this.resolveNodeForTraversalLayer === "function")
+                    ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                    : this.map.worldToNode(wanderX, wanderY);
                 if (wNode) this.goto(wNode);
                 this.speed = this.walkSpeed;
             }
@@ -3736,7 +3899,10 @@ class Blodia extends Animal {
         // While a movement step is in progress, queue the new path from the
         // already-committed next node so we don't stitch a fresh path onto the
         // wrong side of the current edge and cut through walls.
-        const targetNode = this.map.worldToNode(wizard.x, wizard.y);
+        const wizardLayer = this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer());
+        const targetNode = (typeof this.resolveNodeForTraversalLayer === "function")
+            ? this.resolveNodeForTraversalLayer(wizard.x, wizard.y, { traversalLayer: wizardLayer })
+            : this.map.worldToNode(wizard.x, wizard.y);
 
         // ── Retreat phase: briefly back off after a successful hit ──────────────────
         if (this.attackState === "retreat") {

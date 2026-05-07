@@ -17,6 +17,10 @@ function resolvePlaceObjectLayerInfo(wizardRef) {
     return { layer, baseZ };
 }
 
+function resolveEditorLayerInfo(wizardRef) {
+    return resolvePlaceObjectLayerInfo(wizardRef);
+}
+
 function resolvePlaceObjectWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options = {}) {
     const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
     const screenX = Number.isFinite(options && options.screenX)
@@ -70,6 +74,38 @@ function resolvePlaceObjectWorldPointOnLayer(wizardRef, fallbackX, fallbackY, op
     }
     const layerInfo = resolvePlaceObjectLayerInfo(wizardRef);
     return { x: fallbackX, y: fallbackY, layer: layerInfo.layer, baseZ: layerInfo.baseZ };
+}
+
+function resolveEditorWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options = {}) {
+    return resolvePlaceObjectWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options);
+}
+
+function resolveEditorNodeOnLayer(mapRef, worldX, worldY, layer = 0, options = {}) {
+    if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
+    const baseNode = mapRef.worldToNode(worldX, worldY);
+    if (!baseNode) return null;
+    const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+    if (targetLayer === 0) return baseNode;
+    if (typeof mapRef.getFloorNodeAtLayer !== "function") return null;
+    const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
+        ? options.sectionKey
+        : (typeof baseNode._prototypeSectionKey === "string"
+            ? baseNode._prototypeSectionKey
+            : ((typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function")
+                ? mapRef.getPrototypeSectionKeyForWorldPoint(worldX, worldY)
+                : ""));
+    return mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+        sectionKey,
+        allowScan: !(options && options.allowScan === false)
+    });
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.resolveEditorLayerInfo = resolveEditorLayerInfo;
+    globalThis.resolveEditorWorldPointOnLayer = resolveEditorWorldPointOnLayer;
+    globalThis.resolveEditorNodeOnLayer = resolveEditorNodeOnLayer;
+    globalThis.resolvePlaceObjectLayerInfo = resolvePlaceObjectLayerInfo;
+    globalThis.resolvePlaceObjectWorldPointOnLayer = resolvePlaceObjectWorldPointOnLayer;
 }
 
 class PlaceObject extends globalThis.Spell {

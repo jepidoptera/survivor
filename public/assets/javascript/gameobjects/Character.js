@@ -188,7 +188,15 @@ class Character {
 
         // Try to get node - if coords look like array indices (integers in map range), use them directly
         let node;
-        if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
+        if (
+            location &&
+            Number.isFinite(location.xindex) &&
+            Number.isFinite(location.yindex) &&
+            Number.isFinite(location.x) &&
+            Number.isFinite(location.y)
+        ) {
+            node = location;
+        } else if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
             // Treat as array indices
             node = map.nodes[location.x][location.y];
         } else {
@@ -197,6 +205,7 @@ class Character {
         }
         
         this.node = node;
+        this.syncTraversalLayerFromNode(this.node);
         this.x = this.node.x;
         this.y = this.node.y;
         this.z = this.getNodeStandingZ(this.node);
@@ -233,6 +242,59 @@ class Character {
         if (!this.useExternalScheduler && constructorOptions.startMoveLoop !== false) {
             this.moveTimeout = this.nextMove();
         }
+    }
+
+    getNodeTraversalLayer(node = this.node) {
+        if (Number.isFinite(node && node.traversalLayer)) {
+            return Math.round(Number(node.traversalLayer));
+        }
+        if (Number.isFinite(node && node.level)) {
+            return Math.round(Number(node.level));
+        }
+        if (Number.isFinite(this.traversalLayer)) {
+            return Math.round(Number(this.traversalLayer));
+        }
+        if (Number.isFinite(this.currentLayer)) {
+            return Math.round(Number(this.currentLayer));
+        }
+        return 0;
+    }
+
+    syncTraversalLayerFromNode(node = this.node) {
+        const layer = this.getNodeTraversalLayer(node);
+        this.traversalLayer = layer;
+        this.currentLayer = layer;
+        const baseZ = this.getNodeStandingZ(node);
+        this.currentLayerBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : layer * 3;
+        if (node && typeof node.surfaceId === "string") {
+            this.surfaceId = node.surfaceId;
+        }
+        if (node && typeof node.fragmentId === "string") {
+            this.fragmentId = node.fragmentId;
+        }
+        return layer;
+    }
+
+    resolveNodeForTraversalLayer(x, y, options = {}) {
+        if (!this.map || typeof this.map.worldToNode !== "function") return null;
+        const baseNode = this.map.worldToNode(x, y);
+        if (!baseNode) return null;
+        const layer = Number.isFinite(options && options.traversalLayer)
+            ? Math.round(Number(options.traversalLayer))
+            : this.getNodeTraversalLayer();
+        if (layer === 0) return baseNode;
+        if (typeof this.map.getFloorNodeAtLayer !== "function") return null;
+        const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
+            ? options.sectionKey
+            : (typeof baseNode._prototypeSectionKey === "string"
+                ? baseNode._prototypeSectionKey
+                : ((typeof this.map.getPrototypeSectionKeyForWorldPoint === "function")
+                    ? this.map.getPrototypeSectionKeyForWorldPoint(x, y)
+                    : ""));
+        return this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+            sectionKey,
+            allowScan: !(options && options.allowScan === false)
+        });
     }
 
     dropPowerup(powerupType, options = {}) {
@@ -2518,7 +2580,7 @@ class Character {
     goto(destinationNode) {
         if (!destinationNode) return;
         
-        this.node = this.map.worldToNode(this.x, this.y);
+        this.node = this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y);
         this.destination = destinationNode;
         const pathOptions = {};
         if (this.pathfindingClearance > 0) {
@@ -2584,7 +2646,7 @@ class Character {
             : !!this.node;
         if (!currentNodeIsActive) {
             this.node = (this.map && typeof this.map.worldToNode === "function")
-                ? this.map.worldToNode(this.x, this.y)
+                ? (this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y))
                 : this.node;
         }
         if (!this.node) {
@@ -2611,6 +2673,7 @@ class Character {
             if (this.nextNode) {
                 const arrivalPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1);
                 this.node = this.nextNode;
+                this.syncTraversalLayerFromNode(this.node);
                 this.x = arrivalPosition && Number.isFinite(arrivalPosition.x) ? arrivalPosition.x : this.node.x;
                 this.y = arrivalPosition && Number.isFinite(arrivalPosition.y) ? arrivalPosition.y : this.node.y;
                 this.z = arrivalPosition && Number.isFinite(arrivalPosition.z) ? arrivalPosition.z : this.getNodeStandingZ(this.node);

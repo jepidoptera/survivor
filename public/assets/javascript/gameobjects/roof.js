@@ -257,7 +257,49 @@ void main(void) {
         return null;
     }
 
-    static _getConnectedSectionsAtEndpoint(section, endpointKey, wallCtor) {
+    static _getPlacementLayerBaseZ(wizardRef) {
+        if (wizardRef && Number.isFinite(wizardRef.currentLayerBaseZ)) {
+            return Number(wizardRef.currentLayerBaseZ);
+        }
+        const candidates = [
+            wizardRef && wizardRef.currentLayer,
+            wizardRef && wizardRef.selectedFloorEditLevel,
+            wizardRef && wizardRef.traversalLayer
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const layer = Number(candidates[i]);
+            if (Number.isFinite(layer)) return Math.round(layer) * 3;
+        }
+        return 0;
+    }
+
+    static _getWallSectionBottomZ(section) {
+        if (!section) return 0;
+        if (Number.isFinite(section.bottomZ)) return Number(section.bottomZ);
+        if (Number.isFinite(section.traversalLayer)) return Math.round(Number(section.traversalLayer)) * 3;
+        if (Number.isFinite(section.level)) return Math.round(Number(section.level)) * 3;
+        return 0;
+    }
+
+    static getWallSectionTopZForLayer(section, layerBaseZ = null) {
+        const bottomZ = Roof._getWallSectionBottomZ(section);
+        const height = Math.max(0, Number(section && section.height) || 0);
+        const rawTopZ = bottomZ + height;
+        const hasLayerBaseZ = layerBaseZ !== null && layerBaseZ !== undefined && Number.isFinite(Number(layerBaseZ));
+        if (!hasLayerBaseZ) return rawTopZ;
+        const baseZ = Number(layerBaseZ);
+        if (bottomZ >= baseZ) return rawTopZ;
+        const heightAboveLayer = height - (baseZ - bottomZ);
+        return baseZ + heightAboveLayer;
+    }
+
+    static _wallSectionRisesAboveLayer(section, layerBaseZ, eps = 1e-6) {
+        if (!section || section.gone || section.vanishing) return false;
+        const topZ = Roof.getWallSectionTopZForLayer(section, layerBaseZ);
+        return Number.isFinite(topZ) && topZ > Number(layerBaseZ) + eps;
+    }
+
+    static _getConnectedSectionsAtEndpoint(section, endpointKey, wallCtor, sectionFilter = null) {
         if (
             !section ||
             !(section.connections instanceof Map) ||
@@ -271,6 +313,7 @@ void main(void) {
         for (const payload of section.connections.values()) {
             const candidate = payload && payload.section;
             if (!candidate || candidate.gone || candidate.vanishing || candidate === section) continue;
+            if (typeof sectionFilter === "function" && !sectionFilter(candidate)) continue;
             const sharedKey = Roof._getSharedEndpointKey(section, candidate, wallCtor);
             if (sharedKey !== endpointKey) continue;
             out.push(candidate);
@@ -311,31 +354,35 @@ void main(void) {
         return cross > 0 ? 1 : -1;
     }
 
-    static _getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio) {
+    static _getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio, options = {}) {
         if (!section || !mouseScreen || typeof worldToScreenFn !== "function") return null;
         const profile = (typeof section.getWallProfile === "function") ? section.getWallProfile() : null;
         if (!profile) return null;
-        const wallHeight = Math.max(0, Number(section.height) || 0);
+        const clipMinZ = Number.isFinite(options.clipMinZ) ? Number(options.clipMinZ) : null;
+        const sectionBottomZ = Roof._getWallSectionBottomZ(section);
+        const wallTopZ = Roof.getWallSectionTopZForLayer(section, clipMinZ);
+        const wallBaseZ = Number.isFinite(clipMinZ) ? Math.max(sectionBottomZ, clipMinZ) : sectionBottomZ;
+        if (!(wallTopZ > wallBaseZ + 1e-6)) return null;
         const toScreen = (pt, z) => {
             const s = worldToScreenFn(pt);
             return { x: s.x, y: s.y - z * viewScale * xyRatio };
         };
-        const longFaceA = [toScreen(profile.aLeft, 0), toScreen(profile.bLeft, 0), toScreen(profile.bLeft, wallHeight), toScreen(profile.aLeft, wallHeight)];
-        const longFaceB = [toScreen(profile.aRight, 0), toScreen(profile.bRight, 0), toScreen(profile.bRight, wallHeight), toScreen(profile.aRight, wallHeight)];
+        const longFaceA = [toScreen(profile.aLeft, wallBaseZ), toScreen(profile.bLeft, wallBaseZ), toScreen(profile.bLeft, wallTopZ), toScreen(profile.aLeft, wallTopZ)];
+        const longFaceB = [toScreen(profile.aRight, wallBaseZ), toScreen(profile.bRight, wallBaseZ), toScreen(profile.bRight, wallTopZ), toScreen(profile.aRight, wallTopZ)];
         const capBaseA = Number.isFinite(section.getAdjacentCollinearWallHeightAtEndpoint && section.getAdjacentCollinearWallHeightAtEndpoint("a"))
-            ? Math.max(0, Math.min(wallHeight, Number(section.getAdjacentCollinearWallHeightAtEndpoint("a"))))
-            : 0;
+            ? Math.max(wallBaseZ, Math.min(wallTopZ, sectionBottomZ + Number(section.getAdjacentCollinearWallHeightAtEndpoint("a"))))
+            : wallBaseZ;
         const capBaseB = Number.isFinite(section.getAdjacentCollinearWallHeightAtEndpoint && section.getAdjacentCollinearWallHeightAtEndpoint("b"))
-            ? Math.max(0, Math.min(wallHeight, Number(section.getAdjacentCollinearWallHeightAtEndpoint("b"))))
-            : 0;
-        const capFaceStart = [toScreen(profile.aRight, capBaseA), toScreen(profile.aLeft, capBaseA), toScreen(profile.aLeft, wallHeight), toScreen(profile.aRight, wallHeight)];
-        const capFaceEnd = [toScreen(profile.bLeft, capBaseB), toScreen(profile.bRight, capBaseB), toScreen(profile.bRight, wallHeight), toScreen(profile.bLeft, wallHeight)];
-        const topFace = [toScreen(profile.aLeft, wallHeight), toScreen(profile.bLeft, wallHeight), toScreen(profile.bRight, wallHeight), toScreen(profile.aRight, wallHeight)];
+            ? Math.max(wallBaseZ, Math.min(wallTopZ, sectionBottomZ + Number(section.getAdjacentCollinearWallHeightAtEndpoint("b"))))
+            : wallBaseZ;
+        const capFaceStart = [toScreen(profile.aRight, capBaseA), toScreen(profile.aLeft, capBaseA), toScreen(profile.aLeft, wallTopZ), toScreen(profile.aRight, wallTopZ)];
+        const capFaceEnd = [toScreen(profile.bLeft, capBaseB), toScreen(profile.bRight, capBaseB), toScreen(profile.bRight, wallTopZ), toScreen(profile.bLeft, wallTopZ)];
+        const topFace = [toScreen(profile.aLeft, wallTopZ), toScreen(profile.bLeft, wallTopZ), toScreen(profile.bRight, wallTopZ), toScreen(profile.aRight, wallTopZ)];
         const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / Math.max(1, pts.length);
         const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
         const startCapFront = faceDepth(capFaceStart) >= faceDepth(capFaceEnd);
-        const showStartCap = capBaseA < wallHeight - 1e-5;
-        const showEndCap = capBaseB < wallHeight - 1e-5;
+        const showStartCap = capBaseA < wallTopZ - 1e-5;
+        const showEndCap = capBaseB < wallTopZ - 1e-5;
         const visiblePolygons = [];
         visiblePolygons.push(longAFront ? longFaceA : longFaceB);
         visiblePolygons.push(topFace);
@@ -348,7 +395,7 @@ void main(void) {
         return { profile };
     }
 
-    static getHoveredWallSectionAtPoint(wizardRef, worldX, worldY) {
+    static getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, options = {}) {
         if (!wizardRef || !wizardRef.map || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
         const worldToScreenFn = (typeof globalThis.worldToScreen === "function") ? globalThis.worldToScreen : null;
         if (!worldToScreenFn) return null;
@@ -361,9 +408,11 @@ void main(void) {
         if (!wallCtor || !wallCtor._allSections || wallCtor._allSections.size === 0) return null;
         const viewScale = Number.isFinite(globalThis.viewscale) ? globalThis.viewscale : 1;
         const xyRatio = Number.isFinite(globalThis.xyratio) ? globalThis.xyratio : 0.66;
+        const sectionFilter = typeof options.sectionFilter === "function" ? options.sectionFilter : null;
         for (const section of wallCtor._allSections.values()) {
             if (!section || section.gone || section.vanishing || !section.startPoint || !section.endPoint) continue;
-            if (Roof._getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio)) {
+            if (sectionFilter && !sectionFilter(section)) continue;
+            if (Roof._getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio, options)) {
                 return section;
             }
         }
@@ -391,7 +440,7 @@ void main(void) {
         return bestCandidate;
     }
 
-    static _greedyOuterWallLoopTraversal(startSection, entryKey, mapRef, wallCtor, maxDepth) {
+    static _greedyOuterWallLoopTraversal(startSection, entryKey, mapRef, wallCtor, maxDepth, sectionFilter = null) {
         let current = startSection;
         let entryEndpointKey = entryKey;
         const path = [startSection];
@@ -399,7 +448,7 @@ void main(void) {
         for (let step = 0; step < maxDepth; step++) {
             const exitKey = Roof._getOtherEndpointKey(current, entryEndpointKey, wallCtor);
             if (!exitKey) return null;
-            const allCandidates = Roof._getConnectedSectionsAtEndpoint(current, exitKey, wallCtor)
+            const allCandidates = Roof._getConnectedSectionsAtEndpoint(current, exitKey, wallCtor, sectionFilter)
                 .filter(c => c && c !== current);
             if (allCandidates.length === 0) return null;
             const inDir = Roof._getVectorFromEndpointToOther(current, entryEndpointKey, mapRef, wallCtor);
@@ -436,13 +485,14 @@ void main(void) {
 
     // Like findConvexWallLoopFromStartSection but allows non-convex (mixed turn-sign) loops.
     // Uses a greedy rightmost-turn traversal to trace one enclosed face of the wall graph.
-    static findWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null) {
+    static findWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null, sectionFilter = null) {
         const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
         if (!startSection || !wallCtor || typeof wallCtor.endpointKey !== "function") return null;
+        if (typeof sectionFilter === "function" && !sectionFilter(startSection)) return null;
         const startKeys = Roof._getSectionEndpointKeys(startSection, wallCtor);
         for (let ki = 0; ki < startKeys.length; ki++) {
             const result = Roof._greedyOuterWallLoopTraversal(
-                startSection, startKeys[ki], mapRef, wallCtor, resolvedMaxDepth
+                startSection, startKeys[ki], mapRef, wallCtor, resolvedMaxDepth, sectionFilter
             );
             if (Array.isArray(result) && result.length >= 3) return result;
         }
@@ -573,11 +623,12 @@ void main(void) {
         return area0 >= area1 ? (poly0 || poly1) : (poly1 || poly0);
     }
 
-    static findConvexWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null) {
+    static findConvexWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null, sectionFilter = null) {
         const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
         if (!startSection || !wallCtor) return null;
-        const startNeighbors = Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.startPoint), wallCtor)
-            .concat(Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.endPoint), wallCtor));
+        if (typeof sectionFilter === "function" && !sectionFilter(startSection)) return null;
+        const startNeighbors = Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.startPoint), wallCtor, sectionFilter)
+            .concat(Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.endPoint), wallCtor, sectionFilter));
         const dedupNeighbors = [];
         const neighborIds = new Set();
         for (let i = 0; i < startNeighbors.length; i++) {
@@ -591,7 +642,7 @@ void main(void) {
             if (!currentSection || depth > resolvedMaxDepth) return null;
             const exitEndpointKey = Roof._getOtherEndpointKey(currentSection, entryEndpointKey, wallCtor);
             if (!exitEndpointKey) return null;
-            const candidates = Roof._getConnectedSectionsAtEndpoint(currentSection, exitEndpointKey, wallCtor);
+            const candidates = Roof._getConnectedSectionsAtEndpoint(currentSection, exitEndpointKey, wallCtor, sectionFilter);
             for (let i = 0; i < candidates.length; i++) {
                 const next = candidates[i];
                 if (!next || next === currentSection) continue;
@@ -629,11 +680,17 @@ void main(void) {
         const mapRef = wizardRef.map;
         const wallCtor = globalThis.WallSectionUnit || null;
         if (!wallCtor || !wallCtor._allSections || wallCtor._allSections.size === 0) return null;
-        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY);
+        const layerBaseZ = Roof._getPlacementLayerBaseZ(wizardRef);
+        const sectionFilter = section => Roof._wallSectionRisesAboveLayer(section, layerBaseZ);
+        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, {
+            clipMinZ: layerBaseZ,
+            sectionFilter
+        });
         if (!hoveredSection) return null;
+        if (!sectionFilter(hoveredSection)) return null;
 
         const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Number(options.maxDepth)) : null;
-        const loopSections = Roof.findConvexWallLoopFromStartSection(hoveredSection, mapRef, wallCtor, maxDepth);
+        const loopSections = Roof.findConvexWallLoopFromStartSection(hoveredSection, mapRef, wallCtor, maxDepth, sectionFilter);
         if (!Array.isArray(loopSections) || loopSections.length < 3) return null;
 
         let baseCenter = null;
@@ -659,7 +716,7 @@ void main(void) {
                 Number(profile.bRight.y)
             ) * 0.25;
             if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-            const topZ = Math.max(0, Number(section.bottomZ) || 0) + Math.max(0, Number(section.height) || 0);
+            const topZ = Roof.getWallSectionTopZForLayer(section, layerBaseZ);
             if (!baseCenter) {
                 baseCenter = { x: cx, y: cy };
                 sumX += cx;
@@ -689,6 +746,7 @@ void main(void) {
             valid: true,
             targetWall: hoveredSection,
             wallSections: loopSections.slice(),
+            layerBaseZ,
             previewX,
             previewY,
             previewZ
@@ -706,7 +764,12 @@ void main(void) {
                 candidate
             };
         }
-        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY);
+        const layerBaseZ = Roof._getPlacementLayerBaseZ(wizardRef);
+        const sectionFilter = section => Roof._wallSectionRisesAboveLayer(section, layerBaseZ);
+        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, {
+            clipMinZ: layerBaseZ,
+            sectionFilter
+        });
         return {
             active: !!hoveredSection,
             valid: false,
@@ -762,7 +825,10 @@ void main(void) {
                 ? mapRef.shortestDeltaY(sy, ey)
                 : (ey - sy);
             const midpoint = { x: sx + dx * 0.5, y: sy + dy * 0.5 };
-            const topZ = Math.max(0, Number(section.bottomZ) || 0) + Math.max(0, Number(section.height) || 0);
+            const topZ = Roof.getWallSectionTopZForLayer(
+                section,
+                Number.isFinite(options.layerBaseZ) ? Number(options.layerBaseZ) : null
+            );
 
             if (!baseMid) {
                 baseMid = { x: midpoint.x, y: midpoint.y };
@@ -839,8 +905,8 @@ void main(void) {
             vertices.push({
                 x: (agg.x / agg.count) - meanMidX,
                 y: (agg.y / agg.count) - meanMidY,
-                // Store local z relative to roof base; world base is roofRef.z.
-                z: agg.z - maxMidZ
+                // Keep the full eave at the highest wall top in the loop.
+                z: 0
             });
         }
         if (vertices.length < 2) return null;
@@ -1048,7 +1114,11 @@ void main(void) {
 
     static applyWallLoopCandidateToRoof(roofRef, candidate, mapRef, options = {}) {
         if (!roofRef || !candidate || !Array.isArray(candidate.wallSections)) return false;
-        let meshData = Roof.buildWallLoopMeshData(candidate.wallSections, mapRef, options);
+        const meshOptions = Object.assign({}, options);
+        if (Number.isFinite(candidate.layerBaseZ) && !Number.isFinite(meshOptions.layerBaseZ)) {
+            meshOptions.layerBaseZ = Number(candidate.layerBaseZ);
+        }
+        let meshData = Roof.buildWallLoopMeshData(candidate.wallSections, mapRef, meshOptions);
         if (!meshData) return false;
         if (Number(meshData.numEaves) === 12) {
             const legacyMeshData = Roof.buildLegacyMeshDataFromWallLoopMesh(meshData);

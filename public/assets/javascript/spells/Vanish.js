@@ -114,12 +114,22 @@ function getVanishTargetWorldZ(projectile, fallbackZ) {
     return Number.isFinite(fallbackZ) ? Number(fallbackZ) : 0;
 }
 
+function isVanishProtectedPlayerTarget(target, wizardRef = null) {
+    if (!target) return false;
+    if (wizardRef && target === wizardRef) return true;
+    const globalWizard = (typeof globalThis !== "undefined" && globalThis.wizard)
+        ? globalThis.wizard
+        : (typeof wizard !== "undefined" ? wizard : null);
+    return !!(globalWizard && target === globalWizard);
+}
+
 
 class Vanish extends globalThis.Spell {
     static supportsObjectTargeting = true;
 
-    static isValidObjectTarget(target, _wizardRef = null) {
+    static isValidObjectTarget(target, wizardRef = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (isVanishProtectedPlayerTarget(target, wizardRef)) return false;
         if (
             globalThis.Spell.isGroundLayerTarget(target) &&
             this.allowGroundLayerDirectTargeting !== true
@@ -249,6 +259,7 @@ class Vanish extends globalThis.Spell {
 
     beginTargetVanish(target, impactPoint = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (isVanishProtectedPlayerTarget(target)) return false;
         if (typeof target.triggerVanishDieEventIfAdventureMode === "function") {
             target.triggerVanishDieEventIfAdventureMode({ cause: "vanish" });
         }
@@ -417,6 +428,7 @@ class EditorVanish extends Vanish {
 
     vanishTarget(target, impactPoint = null) {
         if (!target || target.gone || target.vanishing) return;
+        if (isVanishProtectedPlayerTarget(target)) return;
         if (target.type === "wallSection" && target._vanishAsWholeSection) {
             target._disableChunkSplitOnVanish = true;
         }
@@ -454,3 +466,4 @@ class EditorVanish extends Vanish {
 
 globalThis.Vanish = Vanish;
 globalThis.EditorVanish = EditorVanish;
+globalThis.isVanishProtectedPlayerTarget = isVanishProtectedPlayerTarget;

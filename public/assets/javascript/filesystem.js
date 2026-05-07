@@ -2359,10 +2359,29 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         Array.isArray(map._prototypeSectionState.sectionCoords) &&
         typeof map.hydratePrototypeSectionAssets === "function"
     ) {
+        // Protect sections that have active runtime walls from being overwritten by
+        // stale server data during hydration.  A section with active runtime walls is
+        // locally authoritative: the player has built or loaded walls there and the
+        // in-memory asset.walls reflects the current game state.  If we allowed
+        // hydratePrototypeSectionAssets to run for such a section it could fetch an
+        // older server snapshot and clobber the local walls before they are saved.
+        if (map._prototypeWallState && map._prototypeWallState.activeRuntimeWallsByRecordId instanceof Map) {
+            for (const runtimeWall of map._prototypeWallState.activeRuntimeWallsByRecordId.values()) {
+                if (!runtimeWall || runtimeWall.gone) continue;
+                const sectionKey = typeof runtimeWall._prototypeOwnerSectionKey === "string"
+                    ? runtimeWall._prototypeOwnerSectionKey : null;
+                if (!sectionKey) continue;
+                const asset = typeof map.getPrototypeSectionAsset === "function"
+                    ? map.getPrototypeSectionAsset(sectionKey) : null;
+                if (asset && asset._prototypeSectionHydrated !== true) {
+                    asset._prototypeSectionHydrated = true;
+                }
+            }
+        }
         const allSectionKeys = map._prototypeSectionState.sectionCoords
             .map((coord) => `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`);
         try {
-            await map.hydratePrototypeSectionAssets(allSectionKeys);
+            await map.hydratePrototypeSectionAssets(allSectionKeys, { materialize: false });
         } catch (error) {
             return { ok: false, reason: "prototype-hydration-failed", error };
         }

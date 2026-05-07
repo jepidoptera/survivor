@@ -112,16 +112,33 @@ class SpawnAnimal extends globalThis.Spell {
         }
     }
 
-    cast(targetX, targetY) {
+    cast(targetX, targetY, options = {}) {
         const mapRef = wizard.map;
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
             message("Cannot spawn animal here!");
             return this;
         }
 
-        const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(targetX) : targetX;
-        const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(targetY) : targetY;
-        const targetNode = mapRef.worldToNode(wrappedX, wrappedY);
+        const layerPoint = (typeof globalThis.resolveEditorWorldPointOnLayer === "function")
+            ? globalThis.resolveEditorWorldPointOnLayer(wizard, targetX, targetY, options)
+            : {
+                x: targetX,
+                y: targetY,
+                layer: Number.isFinite(wizard && wizard.selectedFloorEditLevel)
+                    ? Math.round(Number(wizard.selectedFloorEditLevel))
+                    : 0,
+                baseZ: Number.isFinite(wizard && wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : 0
+            };
+        const placementX = Number.isFinite(layerPoint && layerPoint.x) ? Number(layerPoint.x) : targetX;
+        const placementY = Number.isFinite(layerPoint && layerPoint.y) ? Number(layerPoint.y) : targetY;
+        const targetLayer = Number.isFinite(layerPoint && layerPoint.layer) ? Math.round(Number(layerPoint.layer)) : 0;
+        const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(placementX) : placementX;
+        const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(placementY) : placementY;
+        const targetNode = (typeof globalThis.resolveEditorNodeOnLayer === "function")
+            ? globalThis.resolveEditorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer)
+            : mapRef.worldToNode(wrappedX, wrappedY);
 
         if (!targetNode) {
             message("Cannot spawn animal there!");
@@ -144,6 +161,15 @@ class SpawnAnimal extends globalThis.Spell {
 
         const AnimalClass = typeDef.ctor();
         const animal = new AnimalClass(targetNode, mapRef);
+        if (typeof animal.syncTraversalLayerFromNode === "function") {
+            animal.syncTraversalLayerFromNode(targetNode);
+        } else {
+            animal.traversalLayer = targetLayer;
+            animal.currentLayer = targetLayer;
+            animal.currentLayerBaseZ = Number.isFinite(targetNode.baseZ)
+                ? Number(targetNode.baseZ)
+                : (Number.isFinite(layerPoint && layerPoint.baseZ) ? Number(layerPoint.baseZ) : targetLayer * 3);
+        }
         const naturalSize = SpawnAnimal.getPendingPlacementNaturalSize(wizard);
         SpawnAnimal.clearPendingPlacementState(wizard);
 
@@ -178,6 +204,13 @@ class SpawnAnimal extends globalThis.Spell {
         // Place at the exact click location
         animal.x = wrappedX;
         animal.y = wrappedY;
+        animal.z = typeof animal.getNodeStandingZ === "function"
+            ? animal.getNodeStandingZ(targetNode)
+            : (Number.isFinite(targetNode.baseZ) ? Number(targetNode.baseZ) : 0);
+        animal.node = targetNode;
+        if (typeof animal.updateHitboxes === "function") {
+            animal.updateHitboxes();
+        }
 
         // Add to the global animals array
         if (Array.isArray(animals)) {
