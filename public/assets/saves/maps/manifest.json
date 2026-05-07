@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -40.89295968671905,
-    "y": 131.18888504129674,
+    "x": -41.88550757974696,
+    "y": 127.16981954989498,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -49,7 +49,7 @@
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 0
     },
-    "selectedPlaceableScale": 1.654,
+    "selectedPlaceableScale": 1.932,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -57,7 +57,7 @@
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
       "/assets/images/furniture/circlerug.png": 4,
-      "/assets/images/doors/door2.png": 1.654,
+      "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
       "/assets/images/flowers/thornflowers.png": 5,
@@ -127,15 +127,15 @@
     "selectedPowerupPlacementScale": 1,
     "selectedEditorCategory": "doors",
     "selectedFloorEditLevel": 0,
-    "selectedWallHeight": 1,
-    "selectedWallThickness": 0.5,
+    "selectedWallHeight": 3,
+    "selectedWallThickness": 0.25,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
     "selectedRoofOverhang": 0.1875,
     "selectedRoofPeakHeight": 1.5,
     "selectedRoofTextureRepeat": 0.46875,
     "showEditorPanel": false,
-    "showPerfReadout": false,
+    "showPerfReadout": true,
     "spells": [],
     "inventory": {
       "spellCredits": 4,
@@ -145,8 +145,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -56.39430771211057,
-      "y": 117.6847462233504
+      "x": -57.38550757974696,
+      "y": 105.23542708152193
     }
   },
   "los": {
