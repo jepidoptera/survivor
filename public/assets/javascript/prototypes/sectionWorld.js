@@ -442,6 +442,9 @@
                     continue;
                 }
                 usedIds.add(recordId);
+                if (recordId >= nextIdRef.value) {
+                    nextIdRef.value = recordId + 1;
+                }
             }
             if (typeof options.afterRemap === "function" && remappedIds.size > 0) {
                 options.afterRemap(remappedIds);
