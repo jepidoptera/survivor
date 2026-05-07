@@ -60,6 +60,7 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
+  height-aware LOS shadows
   make omnivision use a floating eye
   see over short walls or objects
 / incremental, non-lagging load
@@ -109,6 +110,10 @@ X trigger areas disappear
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
   level editing (and probably other stuff) shouldn't be in spells.js
   powerups come back once you leave the area
+  doors on lower levels don't work
+  walls on level != 0 don't merge
+  character can't be placed on levels != 0
+  section loading is too slow
 
 large trigger area architecture checklist:
   [ ] add stable trigger ids to saved trigger-area records
