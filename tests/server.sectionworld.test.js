@@ -4,10 +4,18 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+    app,
+    defaultJsonBodyLimit,
     loadSectionWorldSlot,
     resolveSectionWorldDirForSlot,
-    saveSectionWorldSlot
+    saveSectionWorldSlot,
+    sectionWorldJsonBodyLimit
 } = require("../server.js");
+
+function parseMegabyteLimit(limit) {
+    const match = /^(\d+)mb$/i.exec(String(limit || "").trim());
+    return match ? Number(match[1]) : NaN;
+}
 
 test("sectionworld API preserves top-level trigger definitions after a save/load round trip", async () => {
     const slot = `test_triggers_${process.pid}_${Date.now()}`;
@@ -67,4 +75,32 @@ test("sectionworld API preserves top-level trigger definitions after a save/load
     } finally {
         fs.rmSync(slotDir, { recursive: true, force: true });
     }
+});
+
+test("sectionworld API installs its larger JSON body parser before the default parser", () => {
+    assert.ok(parseMegabyteLimit(sectionWorldJsonBodyLimit) > parseMegabyteLimit(defaultJsonBodyLimit));
+
+    const stack = app._router.stack;
+    const sectionWorldParserIndex = stack.findIndex(layer => (
+        layer.handle &&
+        layer.handle.name === "jsonParser" &&
+        String(layer.regexp).includes("\\/api\\/sectionworld")
+    ));
+    const defaultJsonParserIndex = stack.findIndex(layer => (
+        layer.handle &&
+        layer.handle.name === "jsonParser" &&
+        String(layer.regexp) === "/^\\/?(?=\\/|$)/i"
+    ));
+    const sectionWorldPostIndex = stack.findIndex(layer => (
+        layer.route &&
+        layer.route.path === "/api/sectionworld" &&
+        layer.route.methods &&
+        layer.route.methods.post
+    ));
+
+    assert.notEqual(sectionWorldParserIndex, -1);
+    assert.notEqual(defaultJsonParserIndex, -1);
+    assert.notEqual(sectionWorldPostIndex, -1);
+    assert.ok(sectionWorldParserIndex < defaultJsonParserIndex);
+    assert.ok(sectionWorldParserIndex < sectionWorldPostIndex);
 });

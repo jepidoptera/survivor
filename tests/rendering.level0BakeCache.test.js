@@ -28,6 +28,7 @@ function loadRenderingImpl(options = {}) {
         isFinite,
         performance: { now: () => 0 },
         polygonClipping: options.polygonClipping || require("polygon-clipping"),
+        Character: class {},
         RenderingCamera: class {},
         RenderingLayers: class {}
     };
@@ -43,6 +44,7 @@ function loadRenderingImpl(options = {}) {
         "    global.__RenderingImpl = RenderingImpl;\n\n    let singleton = null;"
     );
     vm.runInContext(source, context, { filename: "Rendering.js" });
+    context.__RenderingImpl.__testContext = context;
     return context.__RenderingImpl;
 }
 
@@ -104,6 +106,27 @@ test("evicting a level 0 ground texture also evicts its bake-node cache", () => 
 
     assert.equal(renderer.level0GroundSurfaceCache.has("old"), false);
     assert.equal(renderer.level0GroundSurfaceBakeNodeCache.has("old"), false);
+});
+
+test("character render items use absolute world z instead of adding layer base", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const { Character } = RenderingImpl.__testContext;
+    const actor = new Character();
+    actor.traversalLayer = -2;
+    actor.z = -6;
+
+    assert.equal(renderer.getLayerIndexForObject(actor), -2);
+    assert.equal(renderer.getLayerBaseZForObject(actor), 0);
+});
+
+test("non-character render items still use local z plus layer base", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const item = { traversalLayer: -2, z: 0 };
+
+    assert.equal(renderer.getLayerIndexForObject(item), -2);
+    assert.equal(renderer.getLayerBaseZForObject(item), -6);
 });
 
 test("level 0 surface chunks map world bounds to stable 1024px tiles", () => {

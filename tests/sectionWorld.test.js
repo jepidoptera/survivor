@@ -2740,6 +2740,256 @@ test("savePrototypeSectionWorldToServerSlot keeps a rehomed mounted door active 
     }
 });
 
+test("savePrototypeSectionWorldToServerSlot re-materializes newly placed walls after capture", async () => {
+    const previousFetch = globalThis.fetch;
+    const previousWizard = globalThis.wizard;
+    const previousWallSectionUnit = globalThis.WallSectionUnit;
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const loadedWallIds = [];
+
+    globalThis.WallSectionUnit = {
+        _allSections: new Map(),
+        endpointKey(pt) { return `${Number(pt && pt.x) || 0},${Number(pt && pt.y) || 0}`; },
+        _serializeEndpoint(anchor) { return { x: Number(anchor && anchor.x) || 0, y: Number(anchor && anchor.y) || 0 }; },
+        _pointsMatch() { return false; },
+        loadJson(record, mapRef) {
+            const rw = {
+                id: Number(record.id),
+                gone: false,
+                addToMapNodes() {},
+                removeFromGame() { this.gone = true; },
+                remove() { this.gone = true; },
+                _removeWallPreserving() { this.gone = true; }
+            };
+            globalThis.WallSectionUnit._allSections.set(rw.id, rw);
+            loadedWallIds.push(Number(record.id));
+            return rw;
+        },
+        batchHandleJoinery() {}
+    };
+
+    try {
+        assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle()), true);
+
+        // Drain any async tasks that loadPrototypeSectionWorld enqueued (e.g. the
+        // initial bubble-shift wall sync). The newly-placed wall is added AFTER this
+        // flush so that only the save function — not the async sync — can
+        // re-materialize it.
+        if (typeof map.flushPrototypeBubbleShiftSession === "function") {
+            map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 });
+        }
+
+        map.getPrototypeSectionKeyForWorldPoint = () => "0,0";
+
+        // Newly placed wall: not _prototypeRuntimeRecord, not yet in any save record.
+        const newWall = {
+            id: 601,
+            gone: false,
+            vanishing: false,
+            _prototypeRuntimeRecord: false,
+            _prototypeWallManaged: false,
+            _prototypeRecordId: null,
+            startPoint: null,
+            endPoint: null,
+            attachedObjects: [],
+            removeFromGame() { this.gone = true; },
+            _removeWallPreserving() { this.gone = true; },
+            _collectOrderedLineAnchors() {
+                return [
+                    { anchor: { x: 0, y: 0 }, key: "0,0", isEndpoint: false, t: 0 },
+                    { anchor: { x: 1, y: 0 }, key: "1,0", isEndpoint: false, t: 1 }
+                ];
+            },
+            saveJson() {
+                return { type: "wallSection", height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 };
+            }
+        };
+        globalThis.WallSectionUnit._allSections.set(601, newWall);
+
+        // Reset the tracking array so only loadJson calls made during save are counted.
+        loadedWallIds.length = 0;
+
+        globalThis.wizard = { x: 0, y: 0, saveJson() { return { x: 0, y: 0 }; } };
+        globalThis.fetch = async () => ({
+            ok: true,
+            async json() { return { ok: true, path: "/tmp/slot-walls.json", slot: "slot-walls" }; }
+        });
+
+        const result = await filesystem.savePrototypeSectionWorldToServerSlot("slot-walls");
+
+        assert.equal(result.ok, true);
+
+        // The wall should have been captured (removed from game)
+        assert.equal(newWall.gone, true, "original wall object should be removed after capture");
+
+        // The captured wall record should be in asset.walls
+        const sectionAsset = map.getPrototypeSectionAsset("0,0");
+        assert.ok(
+            Array.isArray(sectionAsset.walls) && sectionAsset.walls.length > 0,
+            "captured wall should be stored in asset.walls"
+        );
+
+        // syncPrototypeWalls should have re-materialized the wall from the asset record
+        assert.ok(
+            loadedWallIds.length > 0,
+            "a replacement runtime wall should have been created for the captured record"
+        );
+
+        const capturedRecordId = Number(sectionAsset.walls[0].id);
+        assert.ok(
+            loadedWallIds.includes(capturedRecordId),
+            "the re-materialized wall should use the captured record ID"
+        );
+    } finally {
+        globalThis.fetch = previousFetch;
+        globalThis.wizard = previousWizard;
+        globalThis.WallSectionUnit = previousWallSectionUnit;
+    }
+});
+
+test("savePrototypeSectionWorldToServerSlot preserves walls after trigger area creation", async () => {
+    const previousFetch = globalThis.fetch;
+    const previousWizard = globalThis.wizard;
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const loadedWallIds = [];
+    globalThis.WallSectionUnit = {
+        _allSections: new Map(),
+        endpointKey(pt) { return `${Number(pt && pt.x) || 0},${Number(pt && pt.y) || 0}`; },
+        _serializeEndpoint(a) { return { x: Number(a && a.x) || 0, y: Number(a && a.y) || 0 }; },
+        _pointsMatch() { return false; },
+        loadJson(record, mapRef) {
+            const rw = {
+                id: Number(record.id),
+                gone: false,
+                addToMapNodes() {},
+                removeFromGame() { this.gone = true; },
+                remove() { this.gone = true; },
+                _removeWallPreserving() { this.gone = true; }
+            };
+            globalThis.WallSectionUnit._allSections.set(rw.id, rw);
+            loadedWallIds.push(Number(record.id));
+            return rw;
+        },
+        batchHandleJoinery() {}
+    };
+
+    try {
+        // Load a world with multiple walls in section "0,0"
+        assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+            sections: [{
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [
+                    { id: 10, type: "wallSection", startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                    { id: 11, type: "wallSection", startPoint: { x: 1, y: 0 }, endPoint: { x: 2, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                    { id: 12, type: "wallSection", startPoint: { x: 2, y: 0 }, endPoint: { x: 3, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 }
+                ],
+                objects: [],
+                animals: [],
+                powerups: []
+            }]
+        })), true);
+
+        // Flush async tasks and sync walls so walls are runtime records
+        if (typeof map.flushPrototypeBubbleShiftSession === "function") {
+            map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 });
+        }
+        map.syncPrototypeWalls();
+
+        // Verify walls are in the registry before creating the trigger area
+        const wallsBefore = Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.keys());
+        assert.ok(wallsBefore.length >= 3, `walls should be in registry before trigger area, found: ${wallsBefore}`);
+
+        // Simulate creating a trigger area: register it in the trigger system
+        // (This mirrors what finalizeTriggerAreaPlacement + capturePendingPrototypeObjects does)
+        const triggerDef = {
+            id: 50,
+            type: "triggerArea",
+            objectType: "triggerArea",
+            isTriggerArea: true,
+            x: 0.5,
+            y: 0.5,
+            points: [
+                { x: 0.0, y: 0.0 },
+                { x: 1.0, y: 0.0 },
+                { x: 1.0, y: 1.0 },
+                { x: 0.0, y: 1.0 }
+            ],
+            bounds: { minX: 0, maxX: 1, minY: 0, maxY: 1 }
+        };
+        map._prototypeTriggerState.triggerDefsById.set(50, triggerDef);
+        map.rebuildPrototypeTriggerRegistry();
+
+        // Also add the runtime trigger area to objects + active registry
+        // (mirrors the TriggerArea object that finalizeTriggerAreaPlacement creates)
+        const triggerRuntimeObj = {
+            id: 50,
+            type: "triggerArea",
+            objectType: "triggerArea",
+            isTriggerArea: true,
+            gone: false,
+            vanishing: false,
+            _prototypeObjectManaged: true,
+            _prototypeRuntimeRecord: true,
+            _prototypeRecordId: 50,
+            _prototypeOwnerSectionKey: "",
+            x: 0.5,
+            y: 0.5,
+            polygonPoints: triggerDef.points,
+            saveJson() {
+                return { type: "triggerArea", x: this.x, y: this.y, points: this.polygonPoints.map(p => ({ ...p })) };
+            },
+            getNode() { return map.nodes[0][0]; },
+            removeFromGame() { this.gone = true; }
+        };
+        map.objects.push(triggerRuntimeObj);
+        map._prototypeObjectState.activeRuntimeObjectsByRecordId.set(50, triggerRuntimeObj);
+
+        loadedWallIds.length = 0;
+
+        globalThis.wizard = { x: 0, y: 0, saveJson() { return { x: 0, y: 0 }; } };
+        globalThis.fetch = async () => ({
+            ok: true,
+            async json() { return { ok: true, path: "/tmp/trigger-test.json", slot: "trigger-test" }; }
+        });
+
+        const result = await filesystem.savePrototypeSectionWorldToServerSlot("trigger-test");
+        assert.equal(result.ok, true, "save should succeed");
+
+        // All original wall records should still be in asset.walls
+        const sectionAsset = map.getPrototypeSectionAsset("0,0");
+        assert.ok(Array.isArray(sectionAsset && sectionAsset.walls), "asset.walls should be an array");
+
+        const exportedWallIds = (sectionAsset.walls || []).map(w => Number(w.id));
+        assert.ok(
+            exportedWallIds.includes(10) && exportedWallIds.includes(11) && exportedWallIds.includes(12),
+            `all original walls should survive save after trigger area creation; found wall IDs: ${exportedWallIds}`
+        );
+    } finally {
+        globalThis.fetch = previousFetch;
+        globalThis.wizard = previousWizard;
+    }
+});
+
 test("syncPrototypeWalls restores active runtime walls into the global wall registry", () => {
     delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
     require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
@@ -3139,4 +3389,161 @@ test("prototype trigger display objects come from the registry and keep a stable
         { x: 1, y: 1 },
         { x: -1, y: 1 }
     ]);
+});
+
+test("savePrototypeSectionWorldToServerSlot does not lose locally built walls when hydratePrototypeSectionAssets runs with stale server data", async () => {
+    // Reproduces the bug: when a section is unhydrated (_prototypeSectionHydrated = false)
+    // and the player has already built walls there, saving causes hydratePrototypeSectionAssets
+    // to fetch OLD server data (without the new walls) and overwrite asset.walls.
+    // The new walls then disappear from the save.
+    //
+    // Real-world trigger: player moves to a freshly-created section, builds walls, creates a
+    // trigger area, then saves before the async per-section hydration has completed.
+    // During save, hydratePrototypeSectionAssets awaits (or starts) the fetch, the server
+    // returns stale data, and asset.walls is overwritten — wall 100 is lost.
+
+    const previousFetch = globalThis.fetch;
+    const previousWizard = globalThis.wizard;
+    const previousWallSectionUnit = globalThis.WallSectionUnit;
+
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    globalThis.WallSectionUnit = {
+        _allSections: new Map(),
+        endpointKey(pt) { return `${Number(pt && pt.x) || 0},${Number(pt && pt.y) || 0}`; },
+        _serializeEndpoint(a) { return { x: Number(a && a.x) || 0, y: Number(a && a.y) || 0 }; },
+        _pointsMatch() { return false; },
+        loadJson(record) {
+            const rw = {
+                id: Number(record.id),
+                gone: false,
+                addToMapNodes() {},
+                removeFromGame() { this.gone = true; },
+                remove() { this.gone = true; },
+                _removeWallPreserving() { this.gone = true; }
+            };
+            globalThis.WallSectionUnit._allSections.set(rw.id, rw);
+            return rw;
+        },
+        batchHandleJoinery() {}
+    };
+
+    try {
+        // Load bundle — applyRawPrototypeSectionAssetToStateAsset is called during load,
+        // so _prototypeSectionHydrated starts as true after loadPrototypeSectionWorld.
+        assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+            sections: [{
+                id: "section-0,0", key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [
+                    { id: 10, type: "wallSection", startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                    { id: 11, type: "wallSection", startPoint: { x: 1, y: 0 }, endPoint: { x: 2, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                    { id: 12, type: "wallSection", startPoint: { x: 2, y: 0 }, endPoint: { x: 3, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 }
+                ],
+                objects: [], animals: [], powerups: []
+            }]
+        })), true);
+
+        if (typeof map.flushPrototypeBubbleShiftSession === "function") {
+            map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 });
+        }
+        map.syncPrototypeWalls();
+
+        const sectionAsset = map.getPrototypeSectionAsset("0,0");
+        assert.ok(sectionAsset, "section asset should exist");
+
+        // Simulate the section being unhydrated — this matches a freshly-created section
+        // (via ensurePrototypeSectionExists) that the sectionAssetLoader has not yet
+        // finished fetching.  Bundle-loaded sections normally start hydrated, but a newly
+        // activated section starts with _prototypeSectionHydrated = false.
+        sectionAsset._prototypeSectionHydrated = false;
+
+        // Simulate the player building a new wall (ID 100) that gets captured into
+        // asset.walls and registered as an active runtime wall.
+        const newWallRecord = {
+            id: 100, type: "wallSection",
+            startPoint: { x: 3, y: 0 }, endPoint: { x: 4, y: 0 },
+            height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0
+        };
+        sectionAsset.walls.push(newWallRecord);
+
+        const rw100 = {
+            id: 100, gone: false,
+            _prototypeRuntimeRecord: true,
+            _prototypeRecordId: 100,
+            _prototypePersistenceSignature: "",
+            _prototypeOwnerSectionKey: "0,0",
+            addToMapNodes() {},
+            removeFromGame() { this.gone = true; },
+            remove() { this.gone = true; },
+            _removeWallPreserving() { this.gone = true; }
+        };
+        globalThis.WallSectionUnit._allSections.set(100, rw100);
+        map._prototypeWallState.activeRuntimeWallsByRecordId.set(100, rw100);
+        // Update activeRecordSignature to reflect the newly captured wall.
+        map._prototypeWallState.activeRecordSignature = "10|11|12|100";
+
+        // Install a sectionAssetLoader that returns STALE server data: walls 10-12 only,
+        // without wall 100 (which the player just built but hasn't saved to server yet).
+        map.setPrototypeSectionAssetLoader(async (sectionKeys) => sectionKeys.map(() => ({
+            id: "section-0,0", key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [
+                { id: 10, type: "wallSection", startPoint: { x: 0, y: 0 }, endPoint: { x: 1, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                { id: 11, type: "wallSection", startPoint: { x: 1, y: 0 }, endPoint: { x: 2, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 },
+                { id: 12, type: "wallSection", startPoint: { x: 2, y: 0 }, endPoint: { x: 3, y: 0 }, height: 1, thickness: 0.1, bottomZ: 0, traversalLayer: 0, level: 0 }
+            ],
+            objects: [], animals: [], powerups: []
+        })));
+
+        // Create a trigger area (as per the bug report: trigger area creation + save = wall loss).
+        map._prototypeTriggerState.triggerDefsById.set(50, {
+            id: 50, type: "triggerArea", isTriggerArea: true,
+            x: 0.5, y: 0.5,
+            points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+            bounds: { minX: 0, maxX: 1, minY: 0, maxY: 1 }
+        });
+        map.rebuildPrototypeTriggerRegistry();
+
+        globalThis.wizard = { x: 0, y: 0, saveJson() { return { x: 0, y: 0 }; } };
+        globalThis.fetch = async () => ({
+            ok: true,
+            async json() { return { ok: true, path: "/tmp/wall-hydration-test.json", slot: "wall-test" }; }
+        });
+
+        const result = await filesystem.savePrototypeSectionWorldToServerSlot("wall-test");
+        assert.ok(result.ok, `save failed: ${result.reason}`);
+
+        // Wall 100 (locally built, not yet on server) must survive the save.
+        // BUG: hydratePrototypeSectionAssets fires because _prototypeSectionHydrated = false,
+        // loads stale server data (walls 10-12 only), overwrites asset.walls, and then
+        // syncPrototypeWalls removes the runtime wall for 100 because it is no longer in
+        // desiredRecords — wall 100 disappears from the exported save.
+        const wallIds = (sectionAsset.walls || []).map(w => Number(w.id));
+        assert.ok(
+            wallIds.includes(100),
+            `wall 100 (locally built, unhydrated section) should survive save with stale server data; got wall IDs: [${wallIds}]`
+        );
+    } finally {
+        globalThis.fetch = previousFetch;
+        globalThis.wizard = previousWizard;
+        globalThis.WallSectionUnit = previousWallSectionUnit;
+    }
 });

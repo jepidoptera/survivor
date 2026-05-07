@@ -48,6 +48,8 @@ function loadWizardClass() {
         renderNowMs: 0,
         showPerfReadout: false,
         wizardFrames: Array.from({ length: 36 }, (_, index) => ({ frame: index })),
+        wizardMouseTurnZeroDistanceUnits: 1,
+        wizardMouseTurnFullDistanceUnits: 10,
         setTimeout: () => 1,
         clearTimeout() {},
         setInterval: () => 1,
@@ -75,8 +77,13 @@ function loadWizardClass() {
                 clear() {}
                 lineStyle() {}
                 drawCircle() {}
+                drawEllipse() {}
+                drawRect() {}
                 beginFill() {}
                 endFill() {}
+                moveTo() {}
+                lineTo() {}
+                closePath() {}
             },
             State: class State {},
             Geometry: class Geometry {
@@ -115,6 +122,22 @@ function loadWizardClass() {
 
 const { Wizard, PolygonHitbox, wizardFrames } = loadWizardClass();
 
+function createWizardMap(node) {
+    return {
+        width: 1,
+        height: 1,
+        nodes: [[node]],
+        worldToNode() {
+            return node;
+        },
+        registerGameObject() {},
+        unregisterGameObject() {},
+        findPath() {
+            return [];
+        }
+    };
+}
+
 function createDoorEntry(hitbox, canTraverse = true) {
     return {
         obj: {
@@ -126,6 +149,30 @@ function createDoorEntry(hitbox, canTraverse = true) {
         canTraverse
     };
 }
+
+test("wizard selected floor keeps traversal layer synchronized for enemy targeting", () => {
+    const floorNode = {
+        xindex: 0,
+        yindex: 0,
+        x: 0,
+        y: 0,
+        traversalLayer: -2,
+        baseZ: -6,
+        neighbors: [],
+        objects: []
+    };
+    const wizard = new Wizard({ x: 0, y: 0 }, createWizardMap(floorNode));
+
+    assert.equal(wizard.currentLayer, -2);
+    assert.equal(wizard.traversalLayer, -2);
+    assert.equal(wizard.currentLayerBaseZ, -6);
+
+    wizard.selectedFloorEditLevel = 1;
+
+    assert.equal(wizard.currentLayer, 1);
+    assert.equal(wizard.traversalLayer, 1);
+    assert.equal(wizard.currentLayerBaseZ, 3);
+});
 
 test("wizard does not bypass wall collisions just because the current position is inside a door", () => {
     const wallHitbox = new PolygonHitbox([

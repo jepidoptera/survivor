@@ -133,7 +133,7 @@ function loadTraversalClasses() {
     return context.__testExports;
 }
 
-const { GameMap, Character, Blodia } = loadTraversalClasses();
+const { GameMap, Character, Animal, Blodia } = loadTraversalClasses();
 
 function createNode(xindex, yindex, overrides = {}) {
     return {
@@ -392,6 +392,127 @@ test("Blodia.move uses traversal-step interpolation like Character.move", () => 
     assert.equal(blodia.x, 2);
     assert.equal(blodia.z, 6);
     assert.equal(blodia.destination, null);
+});
+
+test("Animal.attack allows blocked player destination for large monster pursuit", () => {
+    const animal = Object.create(Animal.prototype);
+    const startNode = createNode(0, 0, { x: 0, y: 0 });
+    const targetNode = createNode(1, 0, { x: 1, y: 0 });
+    let routeOptions = null;
+    let appliedDestination = null;
+
+    Object.assign(animal, {
+        map: {},
+        node: startNode,
+        x: 0,
+        y: 0,
+        z: 0,
+        size: 4,
+        speed: 1,
+        runSpeed: 2,
+        walkSpeed: 1,
+        lungeRadius: 0.25,
+        lungeSpeed: 5,
+        attackCooldown: 1,
+        lastAttackTimeMs: -Infinity,
+        attackState: "idle",
+        attacking: false,
+        spriteCols: 1,
+        travelFrames: 0,
+        moving: false,
+        path: [],
+        destination: null,
+        nextNode: null,
+        _closeCombatState: null,
+        _aggroUntilMs: 0,
+        getCombatRouteToTarget(target, options) {
+            routeOptions = options;
+            return { path: [targetNode], targetNode };
+        },
+        getPriorityBlockerFromRoute() {
+            return null;
+        },
+        _applyPursuitPath(_path, destination) {
+            appliedDestination = destination;
+        },
+        shouldReengageCloseCombat() {
+            return false;
+        },
+        distanceToPoint() {
+            return 5;
+        },
+        updateHitboxes() {}
+    });
+
+    animal.attack({ x: 1, y: 0, hp: 100 });
+
+    assert.equal(routeOptions.allowBlockedDestination, true);
+    assert.equal(appliedDestination, targetNode);
+    assert.equal(animal.attackState, "approach");
+});
+
+test("Animal line of sight is blocked across traversal layers", () => {
+    const animal = Object.create(Animal.prototype);
+    const startNode = createNode(0, 0, { x: 0, y: 0, traversalLayer: -2 });
+    Object.assign(animal, {
+        node: startNode,
+        x: 0,
+        y: 0,
+        traversalLayer: -2,
+        map: {
+            worldToNode() {
+                return createNode(1, 0, { x: 1, y: 0, traversalLayer: 0 });
+            },
+            hasLineOfSight() {
+                return true;
+            }
+        }
+    });
+
+    const hasLos = animal.hasAttackLineOfSight({ x: 1, y: 0, traversalLayer: 0 });
+
+    assert.equal(hasLos, false);
+});
+
+test("Animal.attack clears pursuit instead of interacting across traversal layers", () => {
+    const animal = Object.create(Animal.prototype);
+    const startNode = createNode(0, 0, { x: 0, y: 0, traversalLayer: -2 });
+    Object.assign(animal, {
+        node: startNode,
+        x: 0,
+        y: 0,
+        traversalLayer: -2,
+        attackTarget: null,
+        attackState: "approach",
+        attacking: true,
+        _closeCombatState: null,
+        _aggroUntilMs: Date.now() + 1000,
+        _committedToAttack: true,
+        _corneredAttackPending: true,
+        path: [createNode(1, 0, { x: 1, y: 0, traversalLayer: -2 })],
+        destination: createNode(1, 0, { x: 1, y: 0, traversalLayer: -2 }),
+        nextNode: createNode(1, 0, { x: 1, y: 0, traversalLayer: -2 }),
+        travelFrames: 3,
+        spriteCols: 1,
+        map: {
+            worldToNode() {
+                return startNode;
+            }
+        }
+    });
+
+    animal.attack({ x: 1, y: 0, traversalLayer: 0, hp: 100 });
+
+    assert.equal(animal.attackState, "idle");
+    assert.equal(animal.attacking, false);
+    assert.equal(animal.attackTarget, null);
+    assert.equal(Array.isArray(animal.path), true);
+    assert.equal(animal.path.length, 0);
+    assert.equal(animal.destination, null);
+    assert.equal(animal.nextNode, null);
+    assert.equal(animal.travelFrames, 0);
+    assert.equal(animal._committedToAttack, false);
+    assert.equal(animal._corneredAttackPending, false);
 });
 
 test("GameMap traversal helpers sample positions and preserve edge metadata", () => {

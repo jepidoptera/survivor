@@ -106,6 +106,89 @@ function loadVanishContext() {
     return context;
 }
 
+function loadSpawnAnimalContext() {
+    const messages = [];
+    const context = {
+        console,
+        Math,
+        Number,
+        String,
+        Boolean,
+        Array,
+        Object,
+        Map,
+        Set,
+        WeakMap,
+        Date,
+        JSON,
+        RegExp,
+        Error,
+        Infinity,
+        NaN,
+        isFinite,
+        parseInt,
+        parseFloat,
+        performance: { now: () => 0 },
+        document: { createElement: () => ({ src: "" }) },
+        PIXI: {},
+        animals: [],
+        paused: false,
+        frameRate: 60,
+        setInterval: () => 1,
+        clearInterval() {},
+        setTimeout: () => 1,
+        clearTimeout() {},
+        message(text) {
+            messages.push(String(text));
+        }
+    };
+    context.globalThis = context;
+    context.window = context;
+    context.Squirrel = class {
+        constructor(node, map) {
+            this.type = "squirrel";
+            this.node = node;
+            this.map = map;
+            this.size = 1;
+            this.width = 1;
+            this.height = 1;
+            this.radius = 1;
+            this.groundRadius = 1;
+            this.visualRadius = 1;
+        }
+        syncTraversalLayerFromNode(node) {
+            this.traversalLayer = Number.isFinite(node && node.traversalLayer) ? Number(node.traversalLayer) : 0;
+            this.currentLayer = this.traversalLayer;
+            this.currentLayerBaseZ = Number.isFinite(node && node.baseZ) ? Number(node.baseZ) : this.traversalLayer * 3;
+        }
+        getNodeStandingZ(node) {
+            return Number.isFinite(node && node.baseZ) ? Number(node.baseZ) : 0;
+        }
+        updateHitboxes() {}
+    };
+    ["Goat", "Deer", "Bear", "Eagleman", "Fragglegod", "Yeti", "Blodia"].forEach((name) => {
+        context[name] = context.Squirrel;
+    });
+    context.wizard = {
+        selectedAnimalType: "squirrel",
+        selectedAnimalSizeScale: 1,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        selectedFloorEditLevel: 1,
+        map: null
+    };
+    vm.createContext(context);
+    const files = [
+        path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/PlaceObject.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/SpawnAnimal.js")
+    ];
+    for (const filePath of files) {
+        vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
+    }
+    return { context, messages };
+}
+
 test("spell target aim point carries wall traversal height", () => {
     const context = loadSpellContext();
     const aim = context.getSpellTargetAimPoint(
@@ -122,6 +205,65 @@ test("spell target aim point carries wall traversal height", () => {
     assert.equal(aim.x, 1);
     assert.equal(aim.y, 0);
     assert.equal(aim.z, 3);
+});
+
+test("spawn animal resolves placement to selected nonzero floor layer", () => {
+    const { context } = loadSpawnAnimalContext();
+    const baseNode = { xindex: 4, yindex: 5, x: 10, y: 20, traversalLayer: 0, baseZ: 0, _prototypeSectionKey: "section-a" };
+    const floorNode = {
+        xindex: 4,
+        yindex: 5,
+        x: 10,
+        y: 20,
+        traversalLayer: 1,
+        level: 1,
+        baseZ: 3,
+        surfaceId: "upper",
+        fragmentId: "upper-fragment",
+        sourceNode: baseNode,
+        ownerSectionKey: "section-a"
+    };
+    context.wizard.map = {
+        worldToNode(x, y) {
+            assert.equal(x, 10);
+            assert.equal(y, 20);
+            return baseNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 4);
+            assert.equal(y, 5);
+            assert.equal(layer, 1);
+            assert.equal(options.sectionKey, "section-a");
+            return floorNode;
+        }
+    };
+
+    const spell = new context.SpawnAnimal();
+    spell.cast(10, 20);
+
+    assert.equal(context.animals.length, 1);
+    assert.equal(context.animals[0].node, floorNode);
+    assert.equal(context.animals[0].traversalLayer, 1);
+    assert.equal(context.animals[0].z, 3);
+});
+
+test("spawn animal refuses nonzero layer placement without a floor node", () => {
+    const { context, messages } = loadSpawnAnimalContext();
+    const baseNode = { xindex: 4, yindex: 5, x: 10, y: 20, traversalLayer: 0, baseZ: 0, _prototypeSectionKey: "section-a" };
+    context.wizard.map = {
+        worldToNode() {
+            return baseNode;
+        },
+        getFloorNodeAtLayer() {
+            return null;
+        }
+    };
+
+    const spell = new context.SpawnAnimal();
+    spell.cast(10, 20);
+
+    assert.equal(context.animals.length, 0);
+    assert.deepEqual(messages, ["Cannot spawn animal there!"]);
 });
 
 test("spell target aim point resolves placed object layer base plus local z", () => {
@@ -206,6 +348,28 @@ test("vanish projectile starts at wizard world z and stores target world z", () 
     assert.equal(vanish.visualStartZ, 6);
     assert.equal(vanish.z, 6);
     assert.equal(vanish.targetWorldZ, 6);
+});
+
+test("vanish cannot target or remove the player wizard", () => {
+    const context = loadVanishContext();
+    const otherTarget = { type: "road", gone: false, vanishing: false };
+
+    assert.equal(context.Vanish.isValidObjectTarget(context.wizard, context.wizard), false);
+    assert.equal(context.EditorVanish.isValidObjectTarget(context.wizard, context.wizard), false);
+    assert.equal(context.EditorVanish.isValidObjectTarget(otherTarget, context.wizard), true);
+
+    const vanish = new context.EditorVanish();
+    let removed = false;
+    context.wizard.removeFromGame = () => {
+        removed = true;
+        context.wizard.gone = true;
+    };
+
+    vanish.vanishTarget(context.wizard, { x: context.wizard.x, y: context.wizard.y });
+
+    assert.equal(removed, false);
+    assert.equal(context.wizard.gone, undefined);
+    assert.equal(context.wizard.vanishing, undefined);
 });
 
 test("floor polygon paint applies selected texture to nonzero fragment and asset record", () => {

@@ -110,6 +110,30 @@ test("external scheduler characters do not create orphan movement timers", () =>
     assert.equal(scheduled.length, 0);
 });
 
+test("Character can be constructed directly on a nonzero floor node", () => {
+    const { Character } = loadCharacterHarness();
+    const floorNode = {
+        xindex: 2,
+        yindex: 3,
+        x: 5,
+        y: 7,
+        traversalLayer: 1,
+        baseZ: 3,
+        neighbors: []
+    };
+    const map = makeMap();
+    map.getNodeBaseZ = node => Number.isFinite(node && node.baseZ) ? Number(node.baseZ) : 0;
+
+    const actor = new Character("test", floorNode, 1, map, {
+        useExternalScheduler: true
+    });
+
+    assert.equal(actor.node, floorNode);
+    assert.equal(actor.traversalLayer, 1);
+    assert.equal(actor.currentLayerBaseZ, 3);
+    assert.equal(actor.z, 3);
+});
+
 test("externally scheduled characters can regenerate health without movement timers", () => {
     const { Character, scheduled } = loadCharacterHarness();
     const actor = new Character("test", { x: 0, y: 0 }, 1, makeMap(), {
