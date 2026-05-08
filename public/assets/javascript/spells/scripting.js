@@ -397,6 +397,76 @@
         return getObjectTouchRuntimeId(obj);
     }
 
+    function resolveTraversalContext(entity) {
+        if (!entity || typeof entity !== "object") {
+            return {
+                layer: null,
+                surfaceId: "",
+                fragmentId: ""
+            };
+        }
+
+        const node = (entity.node && typeof entity.node === "object") ? entity.node : null;
+        const layerCandidates = [
+            entity.traversalLayer,
+            entity.currentLayer,
+            entity.level,
+            node && node.traversalLayer,
+            node && node.level
+        ];
+        let layer = null;
+        for (let i = 0; i < layerCandidates.length; i++) {
+            const candidate = Number(layerCandidates[i]);
+            if (!Number.isFinite(candidate)) continue;
+            layer = Math.round(candidate);
+            break;
+        }
+
+        const surfaceId = (typeof entity.surfaceId === "string" && entity.surfaceId.length > 0)
+            ? entity.surfaceId
+            : ((node && typeof node.surfaceId === "string") ? node.surfaceId : "");
+        const fragmentId = (typeof entity.fragmentId === "string" && entity.fragmentId.length > 0)
+            ? entity.fragmentId
+            : ((node && typeof node.fragmentId === "string") ? node.fragmentId : "");
+
+        return {
+            layer,
+            surfaceId,
+            fragmentId
+        };
+    }
+
+    function isOnSameFloorFragment(actor, target) {
+        const actorContext = resolveTraversalContext(actor);
+        const targetContext = resolveTraversalContext(target);
+
+        if (
+            Number.isFinite(actorContext.layer) &&
+            Number.isFinite(targetContext.layer) &&
+            actorContext.layer !== targetContext.layer
+        ) {
+            return false;
+        }
+
+        if (actorContext.fragmentId || targetContext.fragmentId) {
+            return !!(
+                actorContext.fragmentId &&
+                targetContext.fragmentId &&
+                actorContext.fragmentId === targetContext.fragmentId
+            );
+        }
+
+        if (actorContext.surfaceId || targetContext.surfaceId) {
+            return !!(
+                actorContext.surfaceId &&
+                targetContext.surfaceId &&
+                actorContext.surfaceId === targetContext.surfaceId
+            );
+        }
+
+        return true;
+    }
+
     function getNamedObjectRuntimeId(obj) {
         if (!obj || typeof obj !== "object") return "named:invalid";
         if (!obj._scriptNamedObjectRuntimeId) {
@@ -2809,6 +2879,7 @@
                 if (!obj || obj.gone || !hitbox) continue;
                 if (isDoorPlacedObject(obj)) continue;
                 if (isTriggerAreaObject(obj)) continue;
+                if (!isOnSameFloorFragment(wizardRef, obj)) continue;
                 if (!hasEventScriptForTarget(obj, PLAYER_TOUCH_EVENT_NAME) &&
                     !hasEventScriptForTarget(obj, PLAYER_UNTOUCH_EVENT_NAME)) continue;
 
@@ -2836,6 +2907,10 @@
 
             const touchedObj = touched && touched.obj;
             if (!touchedObj || touchedObj.gone) {
+                touchedByObjectId.delete(objectId);
+                continue;
+            }
+            if (!isOnSameFloorFragment(wizardRef, touchedObj)) {
                 touchedByObjectId.delete(objectId);
                 continue;
             }
@@ -2892,6 +2967,10 @@
                 stateByDoorId.delete(doorId);
                 continue;
             }
+            if (!isOnSameFloorFragment(wizardRef, trackedDoor)) {
+                stateByDoorId.delete(doorId);
+                continue;
+            }
             const trackedHitbox = trackedDoor.groundPlaneHitbox || trackedDoor.visualHitbox || trackedDoor.hitbox || state.hitbox || null;
             if (!trackedHitbox) continue;
             appendDoorEntry(trackedDoor, trackedHitbox);
@@ -2912,6 +2991,7 @@
             const door = entry && entry.obj;
             const hitbox = entry && entry.hitbox;
             if (!isDoorPlacedObject(door) || !hitbox) continue;
+            if (!isOnSameFloorFragment(wizardRef, door)) continue;
 
             const doorId = entry && entry.doorId ? entry.doorId : getDoorRuntimeId(door);
             activeIds.add(doorId);
@@ -3014,6 +3094,7 @@
                 const area = entry && entry.obj;
                 const hitbox = entry && entry.hitbox;
                 if (!isTriggerAreaObject(area) || !hitbox) continue;
+                if (!isOnSameFloorFragment(wizardRef, area)) continue;
                 if (
                     !hasEventScriptForTarget(area, "playerTouches") &&
                     !hasEventScriptForTarget(area, "playerUntouches") &&
@@ -3049,11 +3130,11 @@
                         insideTo: true,
                         reason: "load-enter"
                     });
-                    stateById.set(areaId, { inside: true });
+                    stateById.set(areaId, { inside: true, area });
                     continue;
                 }
                 if (prevInside === nextInside) {
-                    stateById.set(areaId, { inside: nextInside });
+                    stateById.set(areaId, { inside: nextInside, area });
                     continue;
                 }
                 const preferredEventName = nextInside
@@ -3068,12 +3149,17 @@
                     insideFrom: prevInside,
                     insideTo: nextInside
                 });
-                stateById.set(areaId, { inside: nextInside });
+                stateById.set(areaId, { inside: nextInside, area });
             }
         }
 
         for (const [areaId, state] of stateById.entries()) {
             if (activeIds.has(areaId)) continue;
+            const trackedArea = state && state.area;
+            if (trackedArea && !isOnSameFloorFragment(wizardRef, trackedArea)) {
+                stateById.delete(areaId);
+                continue;
+            }
             if (!state || !state.inside) {
                 stateById.delete(areaId);
             }
