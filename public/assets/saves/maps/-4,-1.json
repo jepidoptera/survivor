@@ -22216,6 +22216,24 @@
   "blockedEdges": [],
   "clearanceByTile": {},
   "objects": [],
-  "animals": [],
+  "animals": [
+    {
+      "type": "squirrel",
+      "x": -187.74880000000002,
+      "y": 115.9,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5173306524452105,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel143",
+      "id": 7
+    }
+  ],
   "powerups": []
 }
