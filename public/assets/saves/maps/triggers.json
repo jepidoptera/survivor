@@ -1,1 +1,33 @@
-[]
+[
+  {
+    "id": 10925,
+    "type": "triggerArea",
+    "x": 117.5015530460945,
+    "y": 104.09214380505274,
+    "points": [
+      {
+        "x": 115.98165013347314,
+        "y": 100.53521529666793
+      },
+      {
+        "x": 121.12825207522071,
+        "y": 103.544924034532
+      },
+      {
+        "x": 119.5632035315314,
+        "y": 107.64907231343756
+      },
+      {
+        "x": 113.87485401696829,
+        "y": 104.27455039522633
+      }
+    ],
+    "coverageSectionKeys": [
+      "0,-1"
+    ],
+    "script": {
+      "playerEnters": "blodia3.freeze(3);\n   crumblewall.crumble(x=-1, y=4);\n   camera.pan(blodia3, seconds=2);\n   camera.zoom(2, seconds=2)\n   pause(3);\n   camera.reset(seconds=1)"
+    },
+    "scriptingName": "triggerarea1"
+  }
+]

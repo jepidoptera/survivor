@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -41.88550757974696,
-    "y": 127.16981954989498,
+    "x": -44.03682721509853,
+    "y": 124.94772228473177,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -128,11 +128,11 @@
     "selectedEditorCategory": "doors",
     "selectedFloorEditLevel": 0,
     "selectedWallHeight": 3,
-    "selectedWallThickness": 0.25,
+    "selectedWallThickness": 0.375,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
-    "selectedRoofOverhang": 0.1875,
-    "selectedRoofPeakHeight": 1.5,
+    "selectedRoofOverhang": 0.3125,
+    "selectedRoofPeakHeight": 2.25,
     "selectedRoofTextureRepeat": 0.46875,
     "showEditorPanel": false,
     "showPerfReadout": true,
@@ -145,12 +145,12 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -57.38550757974696,
-      "y": 105.23542708152193
+      "x": -59.53209735192132,
+      "y": 111.43540875424068
     }
   },
   "los": {
-    "mazeMode": true
+    "mazeMode": false
   },
   "activeCenterKey": "-2,-1"
 }
