@@ -74,6 +74,7 @@ function loadTraversalClasses() {
         powerups: [],
         roof: null,
         roofs: [],
+        polygonClipping: require("polygon-clipping"),
         wizard: null,
         player: null,
         objectLayer: [],
@@ -795,6 +796,77 @@ test("GameMap.getNode skips full floor scans for missing nonzero layer nodes", (
 
     assert.equal(map.getFloorNodeAtLayer(0, 0, 1), upperNode);
     assert.equal(map.getNode(0, 0, 1), null);
+});
+
+test("GameMap groups overlapping upper floor fragments into buildings", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    const makeFragment = (fragmentId, level, minX, minY, maxX, maxY) => ({
+        fragmentId,
+        surfaceId: fragmentId,
+        level,
+        outerPolygon: [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ],
+        visibilityPolygon: [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ],
+        visibilityHoles: []
+    });
+
+    const lower = map.registerFloorFragment(makeFragment("lower", 1, 0, 0, 10, 10));
+    const upper = map.registerFloorFragment(makeFragment("upper", 2, 5, 5, 12, 12));
+    const neighbor = map.registerFloorFragment(makeFragment("neighbor", 1, 30, 0, 40, 10));
+    const buildings = map.ensureFloorBuildings();
+
+    assert.equal(buildings.size, 2);
+    assert.equal(lower.buildingId, upper.buildingId);
+    assert.notEqual(lower.buildingId, neighbor.buildingId);
+    assert.equal(map.floorBuildingByFragmentId.get("upper"), lower.buildingId);
+    const building = buildings.get(lower.buildingId);
+    assert.ok(building.fragmentGraph instanceof Map);
+    assert.deepEqual(Array.from(building.fragmentGraph.get("lower").above), ["upper"]);
+    assert.deepEqual(Array.from(building.fragmentGraph.get("upper").below), ["lower"]);
+});
+
+test("GameMap building fragment graph links multiple direct upper fragments after clipping covered area", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    const makeFragment = (fragmentId, level, minX, minY, maxX, maxY) => ({
+        fragmentId,
+        surfaceId: fragmentId,
+        level,
+        outerPolygon: [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ],
+        visibilityPolygon: [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ],
+        visibilityHoles: []
+    });
+
+    map.registerFloorFragment(makeFragment("base", 1, 0, 0, 10, 10));
+    map.registerFloorFragment(makeFragment("left-tower", 2, 0, 0, 4, 10));
+    map.registerFloorFragment(makeFragment("right-tower", 2, 6, 0, 10, 10));
+    map.registerFloorFragment(makeFragment("left-top", 3, 0, 0, 4, 10));
+
+    const building = Array.from(map.ensureFloorBuildings().values())[0];
+    const graph = building.fragmentGraph;
+    assert.deepEqual(Array.from(graph.get("base").above).sort(), ["left-tower", "right-tower"]);
+    assert.deepEqual(Array.from(graph.get("left-tower").above), ["left-top"]);
+    assert.deepEqual(Array.from(graph.get("right-tower").above), []);
 });
 
 test("GameMap.findPathAStar handles improved paths after stale queue entries", () => {
