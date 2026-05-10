@@ -99,6 +99,10 @@ Common values for object `type` property:
 - `/assets/images/flowers/*.jpg` → `.png`
 - `/assets/images/windows/*.jpg` → `.png`
 
+## Error Handling Convention
+
+Do not add silent fallback paths for rendering, cache, building, save/load, or other correctness-critical invariants. If a state is not supposed to happen, throw a specific error or emit a hard diagnostic rather than quietly returning `null`, reusing stale cached data, or drawing an approximate substitute. The project preference is to surface the real failure immediately instead of creating a mysterious visual bug.
+
 ## IDs
 
 WallSectionUnit IDs are integers, tracked in `WallSectionUnit._allSections Map<id, unit>` and `WallSectionUnit._nextId`.
