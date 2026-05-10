@@ -65,6 +65,8 @@ test("object playerTouches fires for non-door scripted objects", () => {
         category: "furniture",
         x: 0,
         y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
         gone: false,
         script: {
             playerTouches: "healPlayer(1)"
@@ -76,6 +78,8 @@ test("object playerTouches fires for non-door scripted objects", () => {
     const wizard = {
         x: 0,
         y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
         map: null,
         _scriptTouchedObjectsById: new Map()
     };
@@ -89,6 +93,46 @@ test("object playerTouches fires for non-door scripted objects", () => {
     assert.equal(events.length, 1);
     assert.equal(events[0].target, statue);
     assert.equal(events[0].eventName, "playerTouches");
+});
+
+test("object playerTouches does not fire across floor fragments", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.groundPlaneHitbox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-b",
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
 });
 
 test("door exit still fires after the door drops out of the nearby query", () => {
