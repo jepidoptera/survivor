@@ -249,7 +249,7 @@
                     objects: sectionObjects,
                     groundTiles: normalizePrototypeGroundTiles(rawAsset.groundTiles, rawAsset.tileCoordKeys, textureCount),
                     animals: dedupePrototypeAnimalRecords(rawAsset.animals)
-                }, map);
+                }, map, basis);
                 asset._prototypeBlockedEdgesDirty = blockedEdgesNeedCompute;
                 asset._prototypeClearanceDirty = Object.keys(asset.clearanceByTile).length !== asset.tileCoordKeys.length;
             }

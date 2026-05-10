@@ -1400,6 +1400,55 @@ class Wizard extends Character {
     moveDirection(vector, options = {}) {
         return super.moveDirection(vector, options);
     }
+
+    collectNearbyBlockingObjects(newX, newY, radius, options = {}) {
+        const nearbyObjects = super.collectNearbyBlockingObjects(newX, newY, radius, options);
+        const layer = Number.isFinite(this.currentLayer) ? Math.round(this.currentLayer) : 0;
+        if (layer >= 0) return nearbyObjects;
+        if (!this.map || !(this.map.floorsById instanceof Map) || this.map.floorsById.size === 0) return nearbyObjects;
+        const _g = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : null);
+        const circleVsPolygon = _g && typeof _g.checkCircleVsPolygon === "function" ? _g.checkCircleVsPolygon : null;
+        if (!circleVsPolygon) return nearbyObjects;
+
+        for (const fragment of this.map.floorsById.values()) {
+            if (!fragment) continue;
+            const fragLevel = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (fragLevel !== layer) continue;
+            const polygon = fragment.outerPolygon;
+            if (!Array.isArray(polygon) || polygon.length < 3) continue;
+
+            // Cached barrier object per fragment (reads outerPolygon live to handle edits).
+            if (!fragment._floorBarrierObject) {
+                fragment._floorBarrierObject = {
+                    _fragment: fragment,
+                    gone: false,
+                    isPassable: false,
+                    groundPlaneHitbox: {
+                        getBounds() { return { x: NaN, y: NaN, width: NaN, height: NaN }; },
+                        intersects(otherHitbox) {
+                            if (!otherHitbox || otherHitbox.type !== "circle") return null;
+                            const poly = fragment.outerPolygon;
+                            if (!Array.isArray(poly) || poly.length < 3) return null;
+                            const result = circleVsPolygon(otherHitbox, { points: poly });
+                            if (!result) return null;
+                            let inside = false;
+                            const cx = otherHitbox.x, cy = otherHitbox.y;
+                            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                                const intersect = ((poly[i].y > cy) !== (poly[j].y > cy)) &&
+                                    (cx < (poly[j].x - poly[i].x) * (cy - poly[i].y) /
+                                        (poly[j].y - poly[i].y + 1e-7) + poly[i].x);
+                                if (intersect) inside = !inside;
+                            }
+                            if (inside) return null;
+                            return { pushX: -result.pushX, pushY: -result.pushY };
+                        }
+                    }
+                };
+            }
+            nearbyObjects.push(fragment._floorBarrierObject);
+        }
+        return nearbyObjects;
+    }
     
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates

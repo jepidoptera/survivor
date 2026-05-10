@@ -5577,6 +5577,22 @@ const SpellSystem = (() => {
         return best;
     }
 
+    function getFloorEditorSnapVertexWorldPoint(wizardRef, screenX, screenY) {
+        if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
+        const hit = findFloorEditorVertexAtScreenPoint(wizardRef, screenX, screenY);
+        if (!hit) return null;
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        const fragment = mapRef && mapRef.floorsById instanceof Map
+            ? mapRef.floorsById.get(hit.fragmentId)
+            : null;
+        if (!fragment) return null;
+        const ring = getFloorEditorRingFromFragment(fragment, hit.ringKind, hit.holeIndex);
+        if (!Array.isArray(ring)) return null;
+        const point = ring[hit.vertexIndex];
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+        return { x: Number(point.x), y: Number(point.y) };
+    }
+
     function getClosestScreenSegmentInfo(screenX, screenY, ax, ay, bx, by) {
         const abx = bx - ax;
         const aby = by - ay;
@@ -6008,11 +6024,106 @@ const SpellSystem = (() => {
         return applyFloorEditorRingToFragment(wizardRef, selection, nextRing, { rematerialize: false });
     }
 
+    function removeFloorEditClipGeometryCollinearVertices(geometry) {
+        if (!Array.isArray(geometry)) return geometry;
+        const result = [];
+        for (let pi = 0; pi < geometry.length; pi++) {
+            const polygon = geometry[pi];
+            if (!Array.isArray(polygon)) { result.push(polygon); continue; }
+            const cleanPolygon = [];
+            for (let ri = 0; ri < polygon.length; ri++) {
+                const ring = polygon[ri];
+                if (!Array.isArray(ring) || ring.length < 4) { cleanPolygon.push(ring); continue; }
+                const n = ring.length - 1; // unique vertices (ring is closed: first == last)
+                if (n < 3) { cleanPolygon.push(ring); continue; }
+                const kept = [];
+                for (let i = 0; i < n; i++) {
+                    const prev = ring[(i + n - 1) % n];
+                    const curr = ring[i];
+                    const next = ring[(i + 1) % n];
+                    const ax = curr[0] - prev[0];
+                    const ay = curr[1] - prev[1];
+                    const bx = next[0] - curr[0];
+                    const by = next[1] - curr[1];
+                    if (Math.abs(ax * by - ay * bx) > 1e-9) kept.push(curr);
+                }
+                if (kept.length < 3) { cleanPolygon.push(ring); continue; }
+                kept.push([kept[0][0], kept[0][1]]);
+                cleanPolygon.push(kept);
+            }
+            if (cleanPolygon.length > 0 && Array.isArray(cleanPolygon[0]) && cleanPolygon[0].length >= 4) {
+                result.push(cleanPolygon);
+            }
+        }
+        return result;
+    }
+
+    function sliceFloorEditorFragmentAtSectionBoundaries(wizardRef, selection) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef) return false;
+        const state = mapRef._prototypeSectionState || null;
+        if (!state || !(state.sectionAssetsByKey instanceof Map)) return false;
+        const fragment = selection && (selection.fragment || (
+            mapRef.floorsById instanceof Map ? mapRef.floorsById.get(selection.fragmentId) : null
+        ));
+        if (!fragment) return false;
+        const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        const ownerSectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
+        const fragmentTexturePath = (typeof fragment.texturePath === "string" && fragment.texturePath.length > 0)
+            ? fragment.texturePath : null;
+        const outerRing = floorEditPointsToClipRing(fragment.outerPolygon);
+        if (!outerRing) {
+            rematerializeSelectedFloorEditorFragment(wizardRef, selection);
+            return true;
+        }
+        const drawnPolygon = [outerRing];
+        const fragmentHoles = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let h = 0; h < fragmentHoles.length; h++) {
+            const holeRing = floorEditPointsToClipRing(fragmentHoles[h]);
+            if (holeRing) drawnPolygon.push(holeRing);
+        }
+        const drawnGeometry = [drawnPolygon];
+        if (isFloorEditClipGeometryEmpty(drawnGeometry)) {
+            rematerializeSelectedFloorEditorFragment(wizardRef, selection);
+            return true;
+        }
+        const changedSectionKeys = new Set();
+        for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
+            const sectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset, state.basis));
+            if (isFloorEditClipGeometryEmpty(sectionGeometry)) continue;
+            if (sectionKey === ownerSectionKey) {
+                const currentGeometry = getFloorEditAssetAreaGeometry(asset, level, state.basis);
+                const clipped = removeFloorEditClipGeometryCollinearVertices(
+                    floorEditSafeBoolean("intersection", currentGeometry, sectionGeometry)
+                );
+                setFloorEditAssetAreaGeometry(asset, level, clipped);
+                changedSectionKeys.add(sectionKey);
+            } else {
+                const overlap = floorEditSafeBoolean("intersection", sectionGeometry, drawnGeometry);
+                if (!isFloorEditClipGeometryEmpty(overlap)) {
+                    const currentGeometry = getFloorEditAssetAreaGeometry(asset, level, state.basis);
+                    const nextGeometry = removeFloorEditClipGeometryCollinearVertices(
+                        floorEditSafeBoolean("union", currentGeometry, overlap)
+                    );
+                    setFloorEditAssetAreaGeometry(asset, level, nextGeometry,
+                        fragmentTexturePath ? { texturePath: fragmentTexturePath } : null);
+                    changedSectionKeys.add(sectionKey);
+                }
+            }
+        }
+        rematerializeFloorEditSections(mapRef, changedSectionKeys);
+        selection.dirty = false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+        return true;
+    }
+
     function endFloorEditorVertexDrag(wizardRef) {
         const selection = getFloorEditorVertexSelection(wizardRef);
         if (!selection || !selection.dragging) return false;
         selection.dragging = false;
-        if (selection.dirty) rematerializeSelectedFloorEditorFragment(wizardRef, selection);
+        if (selection.dirty) sliceFloorEditorFragmentAtSectionBoundaries(wizardRef, selection);
         return true;
     }
 
@@ -6585,23 +6696,13 @@ const SpellSystem = (() => {
         return lower.concat(upper);
     }
 
-    function getFloorEditSectionPolygon(asset) {
+    function getFloorEditSectionPolygon(asset, basis) {
         if (!asset || typeof asset !== "object") return [];
-        if (Array.isArray(asset._floorEditSectionPolygon) && asset._floorEditSectionPolygon.length >= 3) {
-            return asset._floorEditSectionPolygon;
-        }
-        const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
-        const points = [];
-        for (let i = 0; i < tileCoordKeys.length; i++) {
-            const point = floorEditWorldFromTileKey(tileCoordKeys[i]);
-            if (point) points.push(point);
-        }
-        const hull = floorEditConvexHull(points);
-        asset._floorEditSectionPolygon = hull.length >= 3 ? hull : [];
-        return asset._floorEditSectionPolygon;
+        const sectionGeometryApi = (typeof globalThis !== "undefined") ? globalThis.__sectionGeometry : null;
+        return sectionGeometryApi.getSectionHexagonCorners(asset.centerAxial, basis);
     }
 
-    function getFloorEditAssetAreaGeometry(asset, level) {
+    function getFloorEditAssetAreaGeometry(asset, level, basis) {
         const normalizedLevel = normalizeFloorEditLevel(level);
         const floorGeometries = [];
         const floors = Array.isArray(asset && asset.floors) ? asset.floors : [];
@@ -6622,7 +6723,7 @@ const SpellSystem = (() => {
             ? floorEditSafeBoolean("union", ...floorGeometries)
             : [];
         if (floorGeometries.length === 0 && normalizedLevel === 0) {
-            area = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset));
+            area = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset, basis));
         }
         const legacyHoles = Array.isArray(asset && asset.floorHoles) ? asset.floorHoles : [];
         for (let i = 0; i < legacyHoles.length; i++) {
@@ -6675,10 +6776,26 @@ const SpellSystem = (() => {
         return out;
     }
 
-    function setFloorEditAssetAreaGeometry(asset, level, geometry) {
+    function setFloorEditAssetAreaGeometry(asset, level, geometry, options = null) {
         if (!asset) return { fragments: 0, tiles: 0, voids: 0 };
         const normalizedLevel = normalizeFloorEditLevel(level);
         const existingFloors = Array.isArray(asset.floors) ? asset.floors : [];
+        // Inherit texture from the first existing fragment at this level so boolean edits
+        // and slices don't silently reset the texture. An explicit options.texturePath
+        // overrides this (used when creating fragments in a section with no prior geometry).
+        let texturePath = (options && typeof options.texturePath === "string" && options.texturePath.length > 0)
+            ? options.texturePath
+            : null;
+        if (!texturePath) {
+            for (let i = 0; i < existingFloors.length; i++) {
+                const f = existingFloors[i];
+                if (!f || normalizeFloorEditLevel(f.level) !== normalizedLevel) continue;
+                if (typeof f.texturePath === "string" && f.texturePath.length > 0) {
+                    texturePath = f.texturePath;
+                    break;
+                }
+            }
+        }
         const nextFloors = existingFloors.filter(floor => !floor || normalizeFloorEditLevel(floor.level) !== normalizedLevel);
         const surfaceId = `floor_area:${asset.key}:${normalizedLevel}`;
         let fragments = 0;
@@ -6696,7 +6813,7 @@ const SpellSystem = (() => {
                 }
                 const tileCoordKeys = getFloorEditTileCoordKeysForPolygon(asset, outer, holes);
                 tiles += tileCoordKeys.length;
-                nextFloors.push({
+                const record = {
                     fragmentId: `${surfaceId}:${i}`,
                     surfaceId,
                     ownerSectionKey: asset.key,
@@ -6708,7 +6825,9 @@ const SpellSystem = (() => {
                     visibilityPolygon: outer.map(p => ({ ...p })),
                     visibilityHoles: holes.map(hole => hole.map(p => ({ ...p }))),
                     tileCoordKeys
-                });
+                };
+                if (texturePath) record.texturePath = texturePath;
+                nextFloors.push(record);
                 fragments += 1;
             }
         }
@@ -6805,11 +6924,10 @@ const SpellSystem = (() => {
         let totalFragments = 0;
         let totalTiles = 0;
         for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
-            const sectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset));
+            const sectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset, state.basis));
             if (isFloorEditClipGeometryEmpty(sectionGeometry)) continue;
             const editGeometry = floorEditSafeBoolean("intersection", sectionGeometry, drawnGeometry);
-            if (isFloorEditClipGeometryEmpty(editGeometry)) continue;
-            const currentGeometry = getFloorEditAssetAreaGeometry(asset, level);
+            const currentGeometry = getFloorEditAssetAreaGeometry(asset, level, state.basis);
             const nextGeometry = operation === "subtract"
                 ? floorEditSafeBoolean("difference", currentGeometry, editGeometry)
                 : floorEditSafeBoolean("union", currentGeometry, editGeometry);
@@ -7142,6 +7260,9 @@ const SpellSystem = (() => {
         const wrappedX = (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
         const wrappedY = (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
         if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return;
+        const snapped = getFloorEditorSnapVertexWorldPoint(wizardRef, options.screenX, options.screenY);
+        const finalX = snapped ? snapped.x : wrappedX;
+        const finalY = snapped ? snapped.y : wrappedY;
         const clickCount = Number.isFinite(options.clickCount) ? Math.max(1, Math.floor(Number(options.clickCount))) : 1;
         const level = getSelectedFloorEditLevel(wizardRef);
 
@@ -7185,28 +7306,28 @@ const SpellSystem = (() => {
 
         if (draft.points.length >= 3) {
             const start = draft.points[0];
-            const click = { x: wrappedX, y: wrappedY };
+            const click = { x: finalX, y: finalY };
             const closeDistancePx = getScreenDistancePxBetweenWorldPoints(start, click);
             if (closeDistancePx <= TRIGGER_AREA_CLOSE_DISTANCE_PX) {
                 recordFloorEditDiagnostic("vertex.floorshape.finish.proximity", {
                     level,
                     pointsBeforeFinish: draft.points.length,
                     closeDistancePx,
-                    worldX: wrappedX,
-                    worldY: wrappedY
+                    worldX: finalX,
+                    worldY: finalY
                 });
                 finalizeFloorShapePlacement(wizardRef);
                 return;
             }
         }
 
-        draft.points.push({ x: wrappedX, y: wrappedY });
+        draft.points.push({ x: finalX, y: finalY });
         recordFloorEditDiagnostic("vertex.floorshape.add", {
             level,
             clickCount,
             pointsAfterAdd: draft.points.length,
-            worldX: wrappedX,
-            worldY: wrappedY
+            worldX: finalX,
+            worldY: finalY
         });
     }
 
@@ -7216,6 +7337,9 @@ const SpellSystem = (() => {
         const wrappedX = (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
         const wrappedY = (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
         if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return;
+        const snapped = getFloorEditorSnapVertexWorldPoint(wizardRef, options.screenX, options.screenY);
+        const finalX = snapped ? snapped.x : wrappedX;
+        const finalY = snapped ? snapped.y : wrappedY;
         const clickCount = Number.isFinite(options.clickCount) ? Math.max(1, Math.floor(Number(options.clickCount))) : 1;
         const level = getSelectedFloorEditLevel(wizardRef);
 
@@ -7232,8 +7356,8 @@ const SpellSystem = (() => {
                 clickCount,
                 level,
                 pointsBeforeFinish: draft.points.length,
-                worldX: wrappedX,
-                worldY: wrappedY
+                worldX: finalX,
+                worldY: finalY
             });
             finalizeFloorHolePlacement(wizardRef);
             return;
@@ -7241,28 +7365,28 @@ const SpellSystem = (() => {
 
         if (draft.points.length >= 3) {
             const start = draft.points[0];
-            const click = { x: wrappedX, y: wrappedY };
+            const click = { x: finalX, y: finalY };
             const closeDistancePx = getScreenDistancePxBetweenWorldPoints(start, click);
             if (closeDistancePx <= TRIGGER_AREA_CLOSE_DISTANCE_PX) {
                 recordFloorEditDiagnostic("vertex.floorhole.finish.proximity", {
                     level,
                     pointsBeforeFinish: draft.points.length,
                     closeDistancePx,
-                    worldX: wrappedX,
-                    worldY: wrappedY
+                    worldX: finalX,
+                    worldY: finalY
                 });
                 finalizeFloorHolePlacement(wizardRef);
                 return;
             }
         }
 
-        draft.points.push({ x: wrappedX, y: wrappedY });
+        draft.points.push({ x: finalX, y: finalY });
         recordFloorEditDiagnostic("vertex.floorhole.add", {
             level,
             clickCount,
             pointsAfterAdd: draft.points.length,
-            worldX: wrappedX,
-            worldY: wrappedY
+            worldX: finalX,
+            worldY: finalY
         });
     }
 
@@ -7279,7 +7403,17 @@ const SpellSystem = (() => {
             });
         }
         if (typeof wizardRef.isFrozen === "function" && wizardRef.isFrozen()) return;
-        if (Number(castOptions.clickCount) >= 2 && paintFloorPolygonAtWorldPoint(wizardRef, worldX, worldY)) {
+        const hasActiveFloorDraft = (
+            (wizardRef.currentSpell === "floorshape" &&
+                wizardRef._floorShapePlacementDraft &&
+                Array.isArray(wizardRef._floorShapePlacementDraft.points) &&
+                wizardRef._floorShapePlacementDraft.points.length > 0) ||
+            (wizardRef.currentSpell === "floorhole" &&
+                wizardRef._floorHolePlacementDraft &&
+                Array.isArray(wizardRef._floorHolePlacementDraft.points) &&
+                wizardRef._floorHolePlacementDraft.points.length > 0)
+        );
+        if (Number(castOptions.clickCount) >= 2 && !hasActiveFloorDraft && isFloorEditorDebugEditEnabled(wizardRef) && paintFloorPolygonAtWorldPoint(wizardRef, worldX, worldY)) {
             return;
         }
 

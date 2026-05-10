@@ -206,7 +206,8 @@
     const assetHelpers = createSectionWorldAssetHelpers({
         hashCoordinatePair,
         hashToUnitFloat,
-        offsetToWorld
+        offsetToWorld,
+        getSectionHexagonCorners: sectionGeometry.getSectionHexagonCorners
     });
     const {
         applyRawPrototypeSectionAssetToStateAsset,
@@ -1061,7 +1062,7 @@
     function rebuildPrototypeFloorRuntime(map, state) {
         if (map && typeof map.rebuildFloorRuntimeFromSectionState === "function") {
             return map.rebuildFloorRuntimeFromSectionState(state, {
-                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
                 doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment,
                 transitions: Array.isArray(state && state.floorTransitions) ? state.floorTransitions : []
             });

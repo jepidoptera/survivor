@@ -785,6 +785,9 @@
                             objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
                             objectState.activeRecordSignature = sync.desiredSignature;
                             objectState.captureScanNeeded = false;
+                            if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof map.markBuildingRenderCacheDirty === "function") {
+                                map.markBuildingRenderCacheDirty();
+                            }
                             if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof globalScope.invalidateMinimap === "function") {
                                 const invalidateStart = prototypeNow();
                                 globalScope.invalidateMinimap();
@@ -812,6 +815,9 @@
                             objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
                             objectState.activeRecordSignature = sync.desiredSignature;
                             objectState.captureScanNeeded = false;
+                            if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof map.markBuildingRenderCacheDirty === "function") {
+                                map.markBuildingRenderCacheDirty();
+                            }
                             if ((sync.capturedAny || sync.removedAny || sync.loadedAny) && typeof globalScope.invalidateMinimap === "function") {
                                 const invalidateStart = prototypeNow();
                                 globalScope.invalidateMinimap();
@@ -1244,6 +1250,12 @@
                         wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
                         if (!sync.scopedToSections) {
                             wallState.activeRecordSignature = sync.desiredSignature;
+                        }
+                        if (
+                            (sync.capturedAny || sync.removedCount > 0 || sync.loadedCount > 0 || (Number(sync.restoredRegistryCount) || 0) > 0) &&
+                            typeof map.markBuildingRenderCacheDirty === "function"
+                        ) {
+                            map.markBuildingRenderCacheDirty();
                         }
                         if ((sync.capturedAny || sync.removedCount > 0 || sync.loadedCount > 0) && typeof globalScope.invalidateMinimap === "function") {
                             globalScope.invalidateMinimap();

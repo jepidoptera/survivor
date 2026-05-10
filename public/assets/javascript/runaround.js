@@ -996,6 +996,9 @@ function onAssetsLoaded() {
         spellCursor.lineTo(fivepoints[i].x, fivepoints[i].y);
         spellCursor.lineTo(tenpoints[i*2+1].x, tenpoints[i*2+1].y);
     }
+    spellCursor.beginFill(0x44aaff, 1);
+    spellCursor.drawRect(-0.5, -0.5, 1, 1);
+    spellCursor.endFill();
 
     // Initialize spacebar glow behind the spell cursor
     spellCursorGlow = new PIXI.Graphics();
@@ -3773,6 +3776,10 @@ jQuery(() => {
                     wizardRef.x = prevX;
                     wizardRef.y = prevY;
                 }
+                if (wizardRef.movementVector && typeof wizardRef.movementVector === "object") {
+                    wizardRef.movementVector.x = 0;
+                    wizardRef.movementVector.y = 0;
+                }
                 wizardRef.path = [];
                 wizardRef.nextNode = null;
                 wizardRef.z = 0;
@@ -5133,7 +5140,20 @@ jQuery(() => {
                 suppressNextTriggerAreaToolClick = true;
                 return;
             }
+            const hasActiveFloorDraftForDrag = (
+                ((wizard.currentSpell === "floorshape" || wizard.currentSpell === "floorhole") &&
+                    keysPressed[" "]) ||
+                (wizard.currentSpell === "floorshape" &&
+                    wizard._floorShapePlacementDraft &&
+                    Array.isArray(wizard._floorShapePlacementDraft.points) &&
+                    wizard._floorShapePlacementDraft.points.length > 0) ||
+                (wizard.currentSpell === "floorhole" &&
+                    wizard._floorHolePlacementDraft &&
+                    Array.isArray(wizard._floorHolePlacementDraft.points) &&
+                    wizard._floorHolePlacementDraft.points.length > 0)
+            );
             if (
+                !hasActiveFloorDraftForDrag &&
                 typeof SpellSystem.beginFloorEditorVertexDrag === "function" &&
                 SpellSystem.beginFloorEditorVertexDrag(wizard, screenX, screenY)
             ) {

@@ -610,6 +610,12 @@
                 clearanceMs = prototypeNow() - clearanceStart;
             }
 
+            if (
+                (capturedAny || removedRuntimeWalls.length > 0 || loadedWalls.length > 0 || restoredRegistryCount > 0) &&
+                typeof this.markBuildingRenderCacheDirty === "function"
+            ) {
+                this.markBuildingRenderCacheDirty();
+            }
             if ((capturedAny || removedRuntimeWalls.length > 0 || loadedWalls.length > 0) && typeof globalScope.invalidateMinimap === "function") {
                 globalScope.invalidateMinimap();
             }
@@ -1004,6 +1010,9 @@
                 objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
                 objectState.activeRecordSignature = desiredSignature;
                 objectState.captureScanNeeded = false;
+                if ((capturedAny || removedAny || loadedAny) && typeof this.markBuildingRenderCacheDirty === "function") {
+                    this.markBuildingRenderCacheDirty();
+                }
 
                 let invalidateMs = 0;
                 if ((capturedAny || removedAny || loadedAny) && typeof globalScope.invalidateMinimap === "function") {

@@ -220,6 +220,9 @@ class PlaceObject extends globalThis.Spell {
             if (wizard.map && Array.isArray(wizard.map.objects)) {
                 wizard.map.objects.push(targetRoof);
             }
+            if (wizard.map && typeof wizard.map.markBuildingRenderCacheDirty === "function") {
+                wizard.map.markBuildingRenderCacheDirty();
+            }
             if (
                 typeof globalThis !== "undefined" &&
                 globalThis.Scripting &&
@@ -372,13 +375,18 @@ class PlaceObject extends globalThis.Spell {
         ) {
             placedY = wrappedY;
         }
+        const placementNode = (
+            wizard &&
+            wizard.map &&
+            typeof resolveEditorNodeOnLayer === "function"
+        ) ? resolveEditorNodeOnLayer(wizard.map, placedX, placedY, placementLayer, { allowScan: true }) : null;
 
         const resolvedPlacementRotation = (
             useWallSnapPlacement &&
             Number.isFinite(wallSnapPlacement.snappedRotationDeg)
         ) ? Number(wallSnapPlacement.snappedRotationDeg) : effectivePlacementRotation;
 
-        const placedObject = new PlacedObject({ x: placedX, y: placedY }, wizard.map, {
+        const placedObject = new PlacedObject(placementNode || { x: placedX, y: placedY }, wizard.map, {
             texturePath: selectedTexturePath,
             category: selectedCategory,
             renderDepthOffset,
@@ -416,6 +424,11 @@ class PlaceObject extends globalThis.Spell {
             placedObject.level = placementLayer;
             placedObject._renderTraversalLayer = placementLayer;
             placedObject._renderLayerBaseZ = placementLayerBaseZ;
+            if (placementNode) {
+                placedObject.node = placementNode;
+                placedObject.surfaceId = typeof placementNode.surfaceId === "string" ? placementNode.surfaceId : "";
+                placedObject.fragmentId = typeof placementNode.fragmentId === "string" ? placementNode.fragmentId : "";
+            }
         }
         if (
             placedObject &&
@@ -456,6 +469,9 @@ class PlaceObject extends globalThis.Spell {
             }
             wizard.map._prototypeObjectState.dirtyRuntimeObjects.add(placedObject);
             wizard.map._prototypeObjectState.captureScanNeeded = true;
+        }
+        if (placedObject && wizard && wizard.map && typeof wizard.map.markBuildingRenderCacheDirty === "function") {
+            wizard.map.markBuildingRenderCacheDirty();
         }
 
         this.visible = false;

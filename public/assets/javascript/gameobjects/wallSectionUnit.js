@@ -384,17 +384,31 @@ void main(void) {
                     xindex: Number(endpoint.xindex),
                     yindex: Number(endpoint.yindex),
                     x: Number(endpoint.x),
-                    y: Number(endpoint.y)
+                    y: Number(endpoint.y),
+                    traversalLayer: Number.isFinite(endpoint.traversalLayer)
+                        ? Math.round(Number(endpoint.traversalLayer))
+                        : (Number.isFinite(endpoint.level) ? Math.round(Number(endpoint.level)) : 0),
+                    surfaceId: typeof endpoint.surfaceId === "string" ? endpoint.surfaceId : "",
+                    fragmentId: typeof endpoint.fragmentId === "string" ? endpoint.fragmentId : ""
                 };
             }
             if (WallSectionUnit._isNodeMidpoint(endpoint) && endpoint.nodeA && endpoint.nodeB) {
                 const a = endpoint.nodeA;
                 const b = endpoint.nodeB;
                 if (WallSectionUnit._isMapNode(a) && WallSectionUnit._isMapNode(b)) {
+                    const serializeNodeRef = (node) => ({
+                        xindex: Number(node.xindex),
+                        yindex: Number(node.yindex),
+                        traversalLayer: Number.isFinite(node.traversalLayer)
+                            ? Math.round(Number(node.traversalLayer))
+                            : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0),
+                        surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+                        fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : ""
+                    });
                     return {
                         kind: "midpoint",
-                        a: { xindex: Number(a.xindex), yindex: Number(a.yindex) },
-                        b: { xindex: Number(b.xindex), yindex: Number(b.yindex) },
+                        a: serializeNodeRef(a),
+                        b: serializeNodeRef(b),
                         x: Number(endpoint.x),
                         y: Number(endpoint.y)
                     };
@@ -429,9 +443,28 @@ void main(void) {
         static _resolveSerializedEndpoint(endpointData, mapRef = null) {
             if (!endpointData || typeof endpointData !== "object") return null;
             const kind = (typeof endpointData.kind === "string") ? endpointData.kind : "";
+            const resolveNodeRef = (nodeData) => {
+                if (!nodeData) return null;
+                const layer = Number.isFinite(nodeData.traversalLayer)
+                    ? Math.round(Number(nodeData.traversalLayer))
+                    : (Number.isFinite(nodeData.level) ? Math.round(Number(nodeData.level)) : 0);
+                if (
+                    layer !== 0 &&
+                    mapRef &&
+                    typeof mapRef.getFloorNodeAtLayer === "function"
+                ) {
+                    const floorNode = mapRef.getFloorNodeAtLayer(nodeData.xindex, nodeData.yindex, layer, {
+                        surfaceId: typeof nodeData.surfaceId === "string" ? nodeData.surfaceId : "",
+                        fragmentId: typeof nodeData.fragmentId === "string" ? nodeData.fragmentId : "",
+                        allowScan: true
+                    });
+                    if (floorNode) return floorNode;
+                }
+                return WallSectionUnit._lookupMapNodeByIndex(mapRef, nodeData.xindex, nodeData.yindex);
+            };
 
             if (kind === "node") {
-                const node = WallSectionUnit._lookupMapNodeByIndex(mapRef, endpointData.xindex, endpointData.yindex);
+                const node = resolveNodeRef(endpointData);
                 if (node) return node;
 
             }
@@ -439,8 +472,8 @@ void main(void) {
             if (kind === "midpoint") {
                 const aData = endpointData.a;
                 const bData = endpointData.b;
-                const nodeA = aData ? WallSectionUnit._lookupMapNodeByIndex(mapRef, aData.xindex, aData.yindex) : null;
-                const nodeB = bData ? WallSectionUnit._lookupMapNodeByIndex(mapRef, bData.xindex, bData.yindex) : null;
+                const nodeA = aData ? resolveNodeRef(aData) : null;
+                const nodeB = bData ? resolveNodeRef(bData) : null;
                 if (
                     nodeA &&
                     nodeB &&
@@ -3195,6 +3228,7 @@ void main(void) {
             const expandedColors = new Float32Array(triCount * 3 * 4);
             const expandedTextureMix = new Float32Array(triCount * 3);
             const expandedIndices = new Uint16Array(triCount * 3);
+            let expandedVertexCount = 0;
             const topLighten = 1.25;
 
             for (let tri = 0; tri < triCount; tri++) {
@@ -3239,7 +3273,7 @@ void main(void) {
                 for (let c = 0; c < 3; c++) {
                     const srcVertex = Number(indices[tri * 3 + c]) || 0;
                     const srcPos = srcVertex * 3;
-                    const dstVertex = tri * 3 + c;
+                    const dstVertex = expandedVertexCount++;
                     const dstPos = dstVertex * 3;
                     const dstUv = dstVertex * 2;
                     const dstColor = dstVertex * 4;
@@ -3271,6 +3305,23 @@ void main(void) {
                     expandedIndices[dstVertex] = dstVertex;
                 }
             }
+            if (expandedVertexCount <= 0) return null;
+            const usedVertexSlots = triCount * 3;
+            const geometryPositions = expandedVertexCount === usedVertexSlots
+                ? expandedPositions
+                : expandedPositions.slice(0, expandedVertexCount * 3);
+            const geometryUvs = expandedVertexCount === usedVertexSlots
+                ? expandedUvs
+                : expandedUvs.slice(0, expandedVertexCount * 2);
+            const geometryColors = expandedVertexCount === usedVertexSlots
+                ? expandedColors
+                : expandedColors.slice(0, expandedVertexCount * 4);
+            const geometryTextureMix = expandedVertexCount === usedVertexSlots
+                ? expandedTextureMix
+                : expandedTextureMix.slice(0, expandedVertexCount);
+            const geometryIndices = expandedVertexCount === usedVertexSlots
+                ? expandedIndices
+                : expandedIndices.slice(0, expandedVertexCount);
 
             let texture = null;
             if (typeof PIXI !== "undefined" && PIXI.Texture) {
@@ -3281,11 +3332,11 @@ void main(void) {
                 }
             }
             const geometry = {
-                positions: expandedPositions,
-                uvs: expandedUvs,
-                colors: expandedColors,
-                textureMix: expandedTextureMix,
-                indices: expandedIndices,
+                positions: geometryPositions,
+                uvs: geometryUvs,
+                colors: geometryColors,
+                textureMix: geometryTextureMix,
+                indices: geometryIndices,
                 texture,
                 alphaCutoff: 0.02
             };
@@ -3308,9 +3359,8 @@ void main(void) {
             return state;
         }
 
-        _ensureDepthDisplayMesh() {
+        _createDepthDisplayMesh(name = "wallSectionUnitDepthMesh") {
             if (typeof PIXI === "undefined" || !PIXI.Geometry || !PIXI.Shader || !PIXI.Mesh) return null;
-            if (this._depthDisplayMesh && !this._depthDisplayMesh.destroyed) return this._depthDisplayMesh;
             const state = WallSectionUnit._ensureDepthMeshState();
             if (!state) return null;
             const geometry = new PIXI.Geometry()
@@ -3333,16 +3383,20 @@ void main(void) {
                 uSampler: PIXI.Texture.WHITE
             });
             const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
-            mesh.name = "wallSectionUnitDepthMesh";
+            mesh.name = name;
             mesh.interactive = false;
             mesh.roundPixels = false;
             mesh.visible = false;
-            this._depthDisplayMesh = mesh;
             return mesh;
         }
 
-        getDepthMeshDisplayObject(options = {}) {
-            const mesh = this._ensureDepthDisplayMesh();
+        _ensureDepthDisplayMesh() {
+            if (this._depthDisplayMesh && !this._depthDisplayMesh.destroyed) return this._depthDisplayMesh;
+            this._depthDisplayMesh = this._createDepthDisplayMesh();
+            return this._depthDisplayMesh;
+        }
+
+        updateDepthMeshDisplayObject(mesh, options = {}) {
             if (!mesh || !mesh.geometry || !mesh.shader || !mesh.shader.uniforms) return null;
             const geometry = this._buildDepthGeometry(options);
             if (!geometry) return null;
@@ -3409,6 +3463,15 @@ void main(void) {
             u.uSampler = geometry.texture || (PIXI.Texture ? PIXI.Texture.WHITE : null);
             mesh.visible = true;
             return mesh;
+        }
+
+        createDepthMeshDisplayObject(options = {}) {
+            const mesh = this._createDepthDisplayMesh(options.name || "wallSectionUnitOverlayDepthMesh");
+            return this.updateDepthMeshDisplayObject(mesh, options);
+        }
+
+        getDepthMeshDisplayObject(options = {}) {
+            return this.updateDepthMeshDisplayObject(this._ensureDepthDisplayMesh(), options);
         }
 
         _getBaseWallProfileWithoutJoinery() {

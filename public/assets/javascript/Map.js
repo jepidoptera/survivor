@@ -12,6 +12,134 @@ function pointInPolygon2D(x, y, points) {
     return inside;
 }
 
+function getPolygonBounds2D(points) {
+    if (!Array.isArray(points) || points.length < 3) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+        const x = Number(points[i] && points[i].x);
+        const y = Number(points[i] && points[i].y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+    return { minX, minY, maxX, maxY };
+}
+
+function polygonBoundsOverlap2D(a, b) {
+    if (!a || !b) return false;
+    return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+}
+
+function pointOnSegment2D(px, py, ax, ay, bx, by, eps = 1e-7) {
+    const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+    if (Math.abs(cross) > eps) return false;
+    const dot = (px - ax) * (bx - ax) + (py - ay) * (by - ay);
+    if (dot < -eps) return false;
+    const len2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+    return dot <= len2 + eps;
+}
+
+function segmentsIntersect2D(a, b, c, d) {
+    if (!a || !b || !c || !d) return false;
+    const ax = Number(a.x), ay = Number(a.y);
+    const bx = Number(b.x), by = Number(b.y);
+    const cx = Number(c.x), cy = Number(c.y);
+    const dx = Number(d.x), dy = Number(d.y);
+    if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+    const orient = (px, py, qx, qy, rx, ry) => {
+        const v = (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
+        if (Math.abs(v) <= 1e-7) return 0;
+        return v > 0 ? 1 : 2;
+    };
+    const o1 = orient(ax, ay, bx, by, cx, cy);
+    const o2 = orient(ax, ay, bx, by, dx, dy);
+    const o3 = orient(cx, cy, dx, dy, ax, ay);
+    const o4 = orient(cx, cy, dx, dy, bx, by);
+    if (o1 !== o2 && o3 !== o4) return true;
+    if (o1 === 0 && pointOnSegment2D(cx, cy, ax, ay, bx, by)) return true;
+    if (o2 === 0 && pointOnSegment2D(dx, dy, ax, ay, bx, by)) return true;
+    if (o3 === 0 && pointOnSegment2D(ax, ay, cx, cy, dx, dy)) return true;
+    if (o4 === 0 && pointOnSegment2D(bx, by, cx, cy, dx, dy)) return true;
+    return false;
+}
+
+function polygonsOverlap2D(aPoints, bPoints) {
+    const a = Array.isArray(aPoints) ? aPoints : [];
+    const b = Array.isArray(bPoints) ? bPoints : [];
+    if (a.length < 3 || b.length < 3) return false;
+    if (!polygonBoundsOverlap2D(getPolygonBounds2D(a), getPolygonBounds2D(b))) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (pointInPolygon2D(Number(a[i].x), Number(a[i].y), b)) return true;
+    }
+    for (let i = 0; i < b.length; i++) {
+        if (pointInPolygon2D(Number(b[i].x), Number(b[i].y), a)) return true;
+    }
+    for (let i = 0; i < a.length; i++) {
+        const a0 = a[i];
+        const a1 = a[(i + 1) % a.length];
+        for (let j = 0; j < b.length; j++) {
+            if (segmentsIntersect2D(a0, a1, b[j], b[(j + 1) % b.length])) return true;
+        }
+    }
+    return false;
+}
+
+function getPolygonClippingApi2D() {
+    return (typeof globalThis !== "undefined" && globalThis.polygonClipping)
+        ? globalThis.polygonClipping
+        : null;
+}
+
+function polygonToClipRing2D(points) {
+    if (!Array.isArray(points) || points.length < 3) return null;
+    const ring = [];
+    for (let i = 0; i < points.length; i++) {
+        const x = Number(points[i] && points[i].x);
+        const y = Number(points[i] && points[i].y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        ring.push([x, y]);
+    }
+    if (ring.length < 3) return null;
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (!last || Math.abs(first[0] - last[0]) > 1e-9 || Math.abs(first[1] - last[1]) > 1e-9) {
+        ring.push([first[0], first[1]]);
+    }
+    return ring;
+}
+
+function floorFragmentToClipGeometry2D(fragment, getPolygonFn) {
+    const outer = typeof getPolygonFn === "function"
+        ? getPolygonFn(fragment)
+        : (fragment && (fragment.visibilityPolygon || fragment.outerPolygon));
+    const outerRing = polygonToClipRing2D(outer);
+    if (!outerRing) return [];
+    const polygon = [outerRing];
+    const holes = Array.isArray(fragment && fragment.visibilityHoles) && fragment.visibilityHoles.length > 0
+        ? fragment.visibilityHoles
+        : (Array.isArray(fragment && fragment.holes) ? fragment.holes : []);
+    for (let i = 0; i < holes.length; i++) {
+        const ring = polygonToClipRing2D(holes[i]);
+        if (ring) polygon.push(ring);
+    }
+    return [polygon];
+}
+
+function clipGeometryIsEmpty2D(geometry) {
+    if (!Array.isArray(geometry) || geometry.length === 0) return true;
+    for (let i = 0; i < geometry.length; i++) {
+        const polygon = geometry[i];
+        if (Array.isArray(polygon) && Array.isArray(polygon[0]) && polygon[0].length >= 4) return false;
+    }
+    return true;
+}
+
 function distanceToSegment2D(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
@@ -331,6 +459,16 @@ class MapNode {
             }
         }
         const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+        const shouldDirtyBuildingCache = !!(
+            obj &&
+            obj !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
+            obj.type !== "powerup" &&
+            !(animalCtor && obj instanceof animalCtor)
+        );
+        if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
         if (
             typeof globalThis !== "undefined" &&
             typeof globalThis.invalidateMinimap === "function" &&
@@ -368,6 +506,16 @@ class MapNode {
             }
         }
         const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+        const shouldDirtyBuildingCache = !!(
+            removed &&
+            removed !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
+            removed.type !== "powerup" &&
+            !(animalCtor && removed instanceof animalCtor)
+        );
+        if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
         if (
             typeof globalThis !== "undefined" &&
             typeof globalThis.invalidateMinimap === "function" &&
@@ -538,7 +686,13 @@ class GameMap {
         this.groundPalette = [
             "forest0", "forest1", "forest2", "forest3",
             "forest4", "forest5", "forest6", "forest7", "forest8", "forest9",
-            "forest10", "forest11", "forest12"
+            "forest10", "forest11", "forest12",
+            "forest13", "forest14", "forest15", "forest16", "forest17", "forest18",
+            "forest19", "forest20", "forest21", "forest22", "forest23", "forest24", "forest25",
+            "forest26", "forest27", "forest28", "forest29", "forest30", "forest31",
+            "forest32", "forest33", "forest34", "forest35", "forest36", "forest37", "forest38",
+            "forest39", "forest40", "forest41", "forest42", "forest43", "forest44",
+            "forest45", "forest46", "forest47", "forest48", "forest49", "forest50", "forest51"
         ];
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
         this.groundPalette.forEach((name, idx) => {
@@ -727,6 +881,7 @@ class GameMap {
         if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
         if (!this.gameObjects.includes(obj)) {
             this.gameObjects.push(obj);
+            this.markBuildingRenderCacheDirty();
             return true;
         }
         return false;
@@ -737,6 +892,7 @@ class GameMap {
         const idx = this.gameObjects.indexOf(obj);
         if (idx < 0) return false;
         this.gameObjects.splice(idx, 1);
+        this.markBuildingRenderCacheDirty();
         return true;
     }
 
@@ -847,6 +1003,11 @@ class GameMap {
         this.floorNodesById = new Map();
         this.floorNodeIndex = new Map();
         this.floorNodeLayerIndex = new Map();
+        this.buildingsById = new Map();
+        this.floorBuildingByFragmentId = new Map();
+        this._floorBuildingsDirty = true;
+        this._floorBuildingVersion = 0;
+        this._buildingRenderCacheVersion = 0;
         this.transitionsById = new Map();
     }
 
@@ -966,7 +1127,254 @@ class GameMap {
             this.floorFragmentsBySectionKey.get(ownerSectionKey).add(fragmentId);
         }
 
+        this.markFloorBuildingsDirty();
         return normalized;
+    }
+
+    markFloorBuildingsDirty() {
+        this._floorBuildingsDirty = true;
+        this.markBuildingRenderCacheDirty();
+    }
+
+    markBuildingRenderCacheDirty() {
+        this._buildingRenderCacheVersion = (Number(this._buildingRenderCacheVersion) || 0) + 1;
+    }
+
+    getFloorFragmentOverlapPolygon(fragment) {
+        if (!fragment) return [];
+        return Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length >= 3
+            ? fragment.visibilityPolygon
+            : (Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : []);
+    }
+
+    doFloorFragmentsOverlapXY(fragmentA, fragmentB) {
+        if (!fragmentA || !fragmentB || fragmentA === fragmentB) return false;
+        const levelA = Number.isFinite(fragmentA.level) ? Math.round(Number(fragmentA.level)) : 0;
+        const levelB = Number.isFinite(fragmentB.level) ? Math.round(Number(fragmentB.level)) : 0;
+        if (levelA === levelB) return false;
+        const polygonA = this.getFloorFragmentOverlapPolygon(fragmentA);
+        const polygonB = this.getFloorFragmentOverlapPolygon(fragmentB);
+        return polygonsOverlap2D(polygonA, polygonB);
+    }
+
+    buildFloorBuildingFragmentGraph(fragmentIds) {
+        const graph = new Map();
+        const ids = Array.isArray(fragmentIds) ? fragmentIds : [];
+        const fragments = ids
+            .map(id => this.floorsById instanceof Map ? this.floorsById.get(id) : null)
+            .filter(fragment => fragment && typeof fragment.fragmentId === "string");
+        for (let i = 0; i < fragments.length; i++) {
+            graph.set(fragments[i].fragmentId, {
+                fragmentId: fragments[i].fragmentId,
+                above: new Set(),
+                below: new Set()
+            });
+        }
+
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.intersection !== "function" || typeof api.difference !== "function") {
+            for (let i = 0; i < fragments.length; i++) {
+                const source = fragments[i];
+                const sourceLevel = Number.isFinite(source.level) ? Math.round(Number(source.level)) : 0;
+                let nearestLevel = Infinity;
+                const direct = [];
+                for (let j = 0; j < fragments.length; j++) {
+                    const candidate = fragments[j];
+                    if (!candidate || candidate === source) continue;
+                    const candidateLevel = Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0;
+                    if (candidateLevel <= sourceLevel || candidateLevel > nearestLevel) continue;
+                    if (!this.doFloorFragmentsOverlapXY(source, candidate)) continue;
+                    if (candidateLevel < nearestLevel) {
+                        nearestLevel = candidateLevel;
+                        direct.length = 0;
+                    }
+                    direct.push(candidate.fragmentId);
+                }
+                const node = graph.get(source.fragmentId);
+                for (let j = 0; node && j < direct.length; j++) {
+                    node.above.add(direct[j]);
+                    const aboveNode = graph.get(direct[j]);
+                    if (aboveNode) aboveNode.below.add(source.fragmentId);
+                }
+            }
+            return graph;
+        }
+
+        const sortedSources = fragments.slice().sort((a, b) => {
+            const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+            if (levelDelta !== 0) return levelDelta;
+            return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+        });
+        for (let i = 0; i < sortedSources.length; i++) {
+            const source = sortedSources[i];
+            const sourceLevel = Number.isFinite(source.level) ? Math.round(Number(source.level)) : 0;
+            let remaining = floorFragmentToClipGeometry2D(source, this.getFloorFragmentOverlapPolygon.bind(this));
+            if (clipGeometryIsEmpty2D(remaining)) continue;
+            const higher = fragments
+                .filter(candidate => candidate && candidate !== source && (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0) > sourceLevel)
+                .sort((a, b) => {
+                    const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+                    if (levelDelta !== 0) return levelDelta;
+                    return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+                });
+            const node = graph.get(source.fragmentId);
+            for (let j = 0; node && j < higher.length; j++) {
+                const candidate = higher[j];
+                const candidateGeometry = floorFragmentToClipGeometry2D(candidate, this.getFloorFragmentOverlapPolygon.bind(this));
+                if (clipGeometryIsEmpty2D(candidateGeometry)) continue;
+                let intersection = [];
+                try {
+                    intersection = api.intersection(remaining, candidateGeometry);
+                } catch (_err) {
+                    intersection = [];
+                }
+                if (clipGeometryIsEmpty2D(intersection)) continue;
+                node.above.add(candidate.fragmentId);
+                const aboveNode = graph.get(candidate.fragmentId);
+                if (aboveNode) aboveNode.below.add(source.fragmentId);
+                try {
+                    remaining = api.difference(remaining, candidateGeometry);
+                } catch (_err) {
+                    remaining = [];
+                }
+                if (clipGeometryIsEmpty2D(remaining)) break;
+            }
+        }
+        return graph;
+    }
+
+    rebuildFloorBuildings() {
+        if (!(this.floorsById instanceof Map)) {
+            this.buildingsById = new Map();
+            this.floorBuildingByFragmentId = new Map();
+            this._floorBuildingsDirty = false;
+            return this.buildingsById;
+        }
+
+        const fragments = Array.from(this.floorsById.values())
+            .filter(fragment => (
+                fragment &&
+                Number.isFinite(fragment.level) &&
+                Math.round(Number(fragment.level)) > 0 &&
+                Array.isArray(this.getFloorFragmentOverlapPolygon(fragment)) &&
+                this.getFloorFragmentOverlapPolygon(fragment).length >= 3
+            ));
+        const adjacency = new Map();
+        for (let i = 0; i < fragments.length; i++) {
+            const id = fragments[i].fragmentId;
+            if (typeof id === "string" && id.length > 0) adjacency.set(id, new Set());
+        }
+        for (let i = 0; i < fragments.length; i++) {
+            const a = fragments[i];
+            const aId = a.fragmentId;
+            for (let j = i + 1; j < fragments.length; j++) {
+                const b = fragments[j];
+                const bId = b.fragmentId;
+                if (!this.doFloorFragmentsOverlapXY(a, b)) continue;
+                adjacency.get(aId).add(bId);
+                adjacency.get(bId).add(aId);
+            }
+        }
+
+        const buildingsById = new Map();
+        const floorBuildingByFragmentId = new Map();
+        const visited = new Set();
+        let nextIndex = 1;
+        const sortedFragments = fragments.slice().sort((a, b) => {
+            const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+            if (levelDelta !== 0) return levelDelta;
+            return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+        });
+        for (let i = 0; i < sortedFragments.length; i++) {
+            const start = sortedFragments[i];
+            const startId = start.fragmentId;
+            if (!startId || visited.has(startId)) continue;
+            const stack = [startId];
+            const fragmentIds = [];
+            const surfaceIds = new Set();
+            const levels = new Set();
+            let minLevel = Infinity;
+            let maxLevel = -Infinity;
+            while (stack.length > 0) {
+                const id = stack.pop();
+                if (!id || visited.has(id)) continue;
+                visited.add(id);
+                const fragment = this.floorsById.get(id);
+                if (!fragment) continue;
+                fragmentIds.push(id);
+                if (typeof fragment.surfaceId === "string" && fragment.surfaceId.length > 0) surfaceIds.add(fragment.surfaceId);
+                const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                levels.add(level);
+                minLevel = Math.min(minLevel, level);
+                maxLevel = Math.max(maxLevel, level);
+                const neighbors = adjacency.get(id);
+                if (!(neighbors instanceof Set)) continue;
+                for (const nextId of neighbors) {
+                    if (!visited.has(nextId)) stack.push(nextId);
+                }
+            }
+            if (fragmentIds.length === 0) continue;
+            fragmentIds.sort();
+            const fragmentGraph = this.buildFloorBuildingFragmentGraph(fragmentIds);
+            const buildingId = `building:${nextIndex++}:${fragmentIds[0]}`;
+            const building = {
+                buildingId,
+                fragmentIds: new Set(fragmentIds),
+                fragmentGraph,
+                surfaceIds,
+                levels,
+                minLevel: Number.isFinite(minLevel) ? minLevel : 0,
+                maxLevel: Number.isFinite(maxLevel) ? maxLevel : 0
+            };
+            buildingsById.set(buildingId, building);
+            for (let j = 0; j < fragmentIds.length; j++) {
+                const fragmentId = fragmentIds[j];
+                const fragment = this.floorsById.get(fragmentId);
+                if (fragment) fragment.buildingId = buildingId;
+                floorBuildingByFragmentId.set(fragmentId, buildingId);
+            }
+        }
+
+        for (const fragment of this.floorsById.values()) {
+            if (!fragment) continue;
+            if (!floorBuildingByFragmentId.has(fragment.fragmentId)) {
+                delete fragment.buildingId;
+            }
+        }
+
+        this.buildingsById = buildingsById;
+        this.floorBuildingByFragmentId = floorBuildingByFragmentId;
+        this._floorBuildingsDirty = false;
+        this._floorBuildingVersion = (Number(this._floorBuildingVersion) || 0) + 1;
+        this.markBuildingRenderCacheDirty();
+        return buildingsById;
+    }
+
+    ensureFloorBuildings() {
+        const hasBuildableFragments = () => {
+            if (!(this.floorsById instanceof Map)) return false;
+            for (const fragment of this.floorsById.values()) {
+                if (
+                    fragment &&
+                    Number.isFinite(fragment.level) &&
+                    Math.round(Number(fragment.level)) > 0 &&
+                    Array.isArray(this.getFloorFragmentOverlapPolygon(fragment)) &&
+                    this.getFloorFragmentOverlapPolygon(fragment).length >= 3
+                ) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (
+            this._floorBuildingsDirty !== true &&
+            this.buildingsById instanceof Map &&
+            this.floorBuildingByFragmentId instanceof Map &&
+            (this.buildingsById.size > 0 || !hasBuildableFragments())
+        ) {
+            return this.buildingsById;
+        }
+        return this.rebuildFloorBuildings();
     }
 
     registerFloorNode(node, fragment = null) {
@@ -1428,6 +1836,7 @@ class GameMap {
             if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
         }
         if (this.floorFragmentsBySectionKey instanceof Map) this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorBuildingsDirty();
         return nodes.length;
     }
 
@@ -1494,6 +1903,7 @@ class GameMap {
             if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
         }
         this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorBuildingsDirty();
         return removedCount;
     }
 

@@ -97,6 +97,9 @@
         }
 
         function buildPrototypeSectionAssets(sectionRecords, radius) {
+            const basis = (sectionRecords && sectionRecords.basis)
+                ? sectionRecords.basis
+                : getSectionBasisVectors(radius);
             const sectionsByKey = sectionRecords && sectionRecords.sectionsByKey instanceof Map
                 ? sectionRecords.sectionsByKey
                 : new Map();
@@ -152,7 +155,7 @@
                     powerups: []
                 };
                 const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
-                    ? createPrototypeImplicitGroundFloorFragment(asset)
+                    ? createPrototypeImplicitGroundFloorFragment(asset, basis)
                     : null;
                 if (groundFloor) asset.floors.push(groundFloor);
                 asset._prototypeBlockedEdgesDirty = false;
@@ -223,7 +226,7 @@
                 powerups: []
             };
             const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
-                ? createPrototypeImplicitGroundFloorFragment(asset)
+                ? createPrototypeImplicitGroundFloorFragment(asset, basis)
                 : null;
             if (groundFloor) asset.floors.push(groundFloor);
             asset._prototypeBlockedEdgesDirty = false;

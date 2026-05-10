@@ -641,7 +641,7 @@
         if (uiGameCursorOverlayElement || typeof document === "undefined" || !document.body) return uiGameCursorOverlayElement;
         const el = document.createElement("img");
         el.id = "uiGameCursorOverlay";
-        el.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-24 -24 48 48'%3E%3Cg stroke='%2344aaff' stroke-width='2' fill='none' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M 20 0 L 8.090169943749475 5.877852522924732 L 6.180339887498949 19.02113032590307 L -3.0901699437494736 9.510565162951536 L -16.180339887498945 11.755705045849465 L -10 0.0000000000000012246467991473533 L -16.180339887498953 -11.75570504584946 L -3.0901699437494754 -9.510565162951535 L 6.180339887498945 -19.021130325903073 L 8.090169943749473 -5.877852522924734 Z'/%3E%3C/g%3E%3C/svg%3E";
+        el.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-24 -24 48 48'%3E%3Cg stroke='%2344aaff' stroke-width='2' fill='none' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M 20 0 L 8.090169943749475 5.877852522924732 L 6.180339887498949 19.02113032590307 L -3.0901699437494736 9.510565162951536 L -16.180339887498945 11.755705045849465 L -10 0.0000000000000012246467991473533 L -16.180339887498953 -11.75570504584946 L -3.0901699437494754 -9.510565162951535 L 6.180339887498945 -19.021130325903073 L 8.090169943749473 -5.877852522924734 Z'/%3E%3C/g%3E%3Crect x='-0.5' y='-0.5' width='1' height='1' fill='%2344aaff'/%3E%3C/svg%3E";
         el.alt = "";
         el.style.position = "fixed";
         el.style.left = "0px";

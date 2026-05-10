@@ -131,7 +131,7 @@
             const state = this._prototypeSectionState;
             if (!state) return 0;
             return this.registerFloorSection(sectionKey, state, {
-                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
                 doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
             });
         };
@@ -139,7 +139,7 @@
             const state = this._prototypeSectionState;
             if (!state) return null;
             return this.prepareFloorSectionFragments(sectionKey, state, {
-                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
                 doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
             });
         };
@@ -278,7 +278,7 @@
                             asset = this.getPrototypeSectionAsset(sectionKey);
                         }
                         if (!asset) continue;
-                        applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, this);
+                        applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, this, state.basis);
                         reassignHydratedPrototypeAssetRecordIds(this, asset);
                         if (materialize && state.useSparseNodes === true) {
                             addSparseNodesForSection(this, state, asset);
@@ -582,6 +582,31 @@
                     sectionKey,
                     allowScan: false
                 }) || null;
+            }
+            if (layer !== 0 && node) {
+                // Grid-tile check can return a floor node for tiles whose center is inside the
+                // polygon even when the exact world position is just outside the boundary.
+                // Do the continuous polygon check to close that gap.
+                let insidePolygon = false;
+                if (this.floorsById instanceof Map && typeof pointInPolygon2D === "function") {
+                    for (const fragment of this.floorsById.values()) {
+                        if (!fragment) continue;
+                        const fragLevel = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                        if (fragLevel !== layer) continue;
+                        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                        if (!pointInPolygon2D(worldX, worldY, fragment.outerPolygon)) continue;
+                        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                        let inHole = false;
+                        for (let h = 0; h < holes.length; h++) {
+                            if (Array.isArray(holes[h]) && holes[h].length >= 3 && pointInPolygon2D(worldX, worldY, holes[h])) {
+                                inHole = true;
+                                break;
+                            }
+                        }
+                        if (!inHole) { insidePolygon = true; break; }
+                    }
+                }
+                if (!insidePolygon) return false;
             }
             const activityNode = this.getPrototypeActivityNode(node);
             const isBlocked = node && typeof node.isBlocked === "function"

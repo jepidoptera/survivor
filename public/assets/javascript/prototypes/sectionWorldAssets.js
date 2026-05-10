@@ -5,7 +5,8 @@
         const {
             hashCoordinatePair,
             hashToUnitFloat,
-            offsetToWorld
+            offsetToWorld,
+            getSectionHexagonCorners
         } = deps;
 
         function getPrototypeGroundTextureCount(map) {
@@ -256,24 +257,9 @@
             return lower.concat(upper);
         }
 
-        function getPrototypeSectionFloorPolygon(asset) {
+        function getPrototypeSectionFloorPolygon(asset, basis) {
             if (!asset || typeof asset !== "object") return [];
-            if (Array.isArray(asset._prototypeSectionFloorPolygon) && asset._prototypeSectionFloorPolygon.length >= 3) {
-                return asset._prototypeSectionFloorPolygon;
-            }
-            const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
-            const points = [];
-            for (let i = 0; i < tileCoordKeys.length; i++) {
-                const centerPoint = prototypeFloorWorldFromTileKey(tileCoordKeys[i]);
-                if (!centerPoint) continue;
-                const edgeMidpoints = getPrototypeFloorHexEdgeMidpoints(centerPoint);
-                for (let j = 0; j < edgeMidpoints.length; j++) {
-                    points.push(edgeMidpoints[j]);
-                }
-            }
-            const hull = buildPrototypeFloorConvexHull(points);
-            asset._prototypeSectionFloorPolygon = hull.length >= 3 ? hull : [];
-            return asset._prototypeSectionFloorPolygon;
+            return getSectionHexagonCorners(asset.centerAxial, basis);
         }
 
         function normalizePrototypeGroundTiles(rawGroundTiles, tileCoordKeys, textureCount) {
@@ -495,9 +481,9 @@
             return cloned;
         }
 
-        function createPrototypeImplicitGroundFloorFragment(asset) {
+        function createPrototypeImplicitGroundFloorFragment(asset, basis) {
             if (!asset || typeof asset !== "object") return null;
-            const outerPolygon = getPrototypeSectionFloorPolygon(asset).map(point => ({ ...point }));
+            const outerPolygon = getPrototypeSectionFloorPolygon(asset, basis).map(point => ({ ...point }));
             return {
                 fragmentId: `section:${asset.key}:ground`,
                 surfaceId: "overworld_ground_surface",
@@ -513,7 +499,7 @@
             };
         }
 
-        function ensurePrototypeLevel0FloorRecord(asset) {
+        function ensurePrototypeLevel0FloorRecord(asset, basis) {
             if (!asset || typeof asset !== "object") return false;
             if (!Array.isArray(asset.floors)) asset.floors = [];
             const sectionTileCoordKeys = sortPrototypeTileCoordKeys(asset.tileCoordKeys);
@@ -532,7 +518,7 @@
                     || fragment._prototypeGroundFloor === true
                     || coversWholeSection
                     || outer.length < 3) {
-                    const ground = createPrototypeImplicitGroundFloorFragment(asset);
+                    const ground = createPrototypeImplicitGroundFloorFragment(asset, basis);
                     if (!ground) continue;
                     fragment.fragmentId = fragment.fragmentId || ground.fragmentId;
                     fragment.surfaceId = fragment.surfaceId || ground.surfaceId;
@@ -549,15 +535,19 @@
                 }
             }
             if (hasLevel0) return changed;
-            const ground = createPrototypeImplicitGroundFloorFragment(asset);
+            const ground = createPrototypeImplicitGroundFloorFragment(asset, basis);
             if (!ground) return false;
             asset.floors.unshift(ground);
             return true;
         }
 
-        function applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, map) {
+        function applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, map, basis) {
             if (!asset || !rawAsset || typeof rawAsset !== "object") return false;
             const textureCount = getPrototypeGroundTextureCount(map);
+            if (!basis) {
+                basis = (map && map._prototypeSectionState && map._prototypeSectionState.basis)
+                    ? map._prototypeSectionState.basis : null;
+            }
             asset.id = (typeof rawAsset.id === "string" && rawAsset.id.length > 0) ? rawAsset.id : asset.id;
             asset.coord = rawAsset.coord && typeof rawAsset.coord === "object"
                 ? { q: Number(rawAsset.coord.q) || 0, r: Number(rawAsset.coord.r) || 0 }
@@ -576,7 +566,7 @@
             asset.groundTextureId = Number.isFinite(rawAsset.groundTextureId) ? Number(rawAsset.groundTextureId) : asset.groundTextureId;
             asset.groundTiles = normalizePrototypeGroundTiles(rawAsset.groundTiles, asset.tileCoordKeys, textureCount);
             asset.floors = clonePrototypeFloorRecords(rawAsset.floors, asset.key);
-            ensurePrototypeLevel0FloorRecord(asset);
+            ensurePrototypeLevel0FloorRecord(asset, basis);
             asset.floorHoles = clonePrototypeFloorHoleRecords(rawAsset.floorHoles);
             asset.floorVoids = clonePrototypeFloorVoidRecords(rawAsset.floorVoids);
             bakePrototypeFloorFragmentTileCoordKeys(asset);

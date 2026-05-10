@@ -621,10 +621,18 @@ function resolveExpandedNodeIndexNodes(mapRef, hitbox, options = {}) {
         if (!point) continue;
         const node = mapRef.worldToNode(point.x, point.y);
         if (!node) continue;
-        const key = `${Number(node.xindex)}:${Number(node.yindex)}:${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : traversalLayer}:${String(node.surfaceId || "")}:${String(node.fragmentId || "")}`;
+        const resolvedNode = (
+            traversalLayer !== 0 &&
+            typeof mapRef.getFloorNodeAtLayer === "function"
+        ) ? (mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, traversalLayer, {
+            surfaceId: typeof options.surfaceId === "string" ? options.surfaceId : "",
+            fragmentId: typeof options.fragmentId === "string" ? options.fragmentId : "",
+            allowScan: true
+        }) || node) : node;
+        const key = `${Number(resolvedNode.xindex)}:${Number(resolvedNode.yindex)}:${Number.isFinite(resolvedNode.traversalLayer) ? Number(resolvedNode.traversalLayer) : traversalLayer}:${String(resolvedNode.surfaceId || "")}:${String(resolvedNode.fragmentId || "")}`;
         if (nodeKeys.has(key)) continue;
         nodeKeys.add(key);
-        nodes.push(node);
+        nodes.push(resolvedNode);
     }
     return nodes;
 }
@@ -1123,8 +1131,23 @@ function resolveMountedWallThickness(item) {
 
 function resolveStaticObjectLoadNode(map, data, options = {}) {
     if (!map || !data) return null;
+    const traversalLayer = Number.isFinite(data.traversalLayer)
+        ? Math.round(Number(data.traversalLayer))
+        : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : 0);
     if (typeof map.worldToNode === "function") {
         const directNode = map.worldToNode(data.x, data.y);
+        if (
+            directNode &&
+            traversalLayer !== 0 &&
+            typeof map.getFloorNodeAtLayer === "function"
+        ) {
+            const floorNode = map.getFloorNodeAtLayer(directNode.xindex, directNode.yindex, traversalLayer, {
+                surfaceId: typeof data.surfaceId === "string" ? data.surfaceId : "",
+                fragmentId: typeof data.fragmentId === "string" ? data.fragmentId : "",
+                allowScan: true
+            });
+            if (floorNode) return floorNode;
+        }
         if (directNode) return directNode;
     }
     const sectionKey = (typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
@@ -1454,6 +1477,20 @@ void main(void) {
         this.node = this.map && typeof this.map.worldToNode === "function"
             ? this.map.worldToNode(this.x, this.y)
             : null;
+        if (
+            this.node &&
+            Number.isFinite(explicitTraversalLayer) &&
+            explicitTraversalLayer !== 0 &&
+            this.map &&
+            typeof this.map.getFloorNodeAtLayer === "function"
+        ) {
+            const floorNode = this.map.getFloorNodeAtLayer(this.node.xindex, this.node.yindex, explicitTraversalLayer, {
+                surfaceId: typeof loc.surfaceId === "string" ? loc.surfaceId : "",
+                fragmentId: typeof loc.fragmentId === "string" ? loc.fragmentId : "",
+                allowScan: true
+            });
+            if (floorNode) this.node = floorNode;
+        }
         if (!Number.isFinite(explicitTraversalLayer) && this.node) {
             const nodeLayer = Number.isFinite(this.node.traversalLayer)
                 ? Math.round(Number(this.node.traversalLayer))
@@ -1463,6 +1500,12 @@ void main(void) {
                 this.level = nodeLayer;
             }
         }
+        this.surfaceId = typeof (this.node && this.node.surfaceId) === "string"
+            ? this.node.surfaceId
+            : (typeof loc.surfaceId === "string" ? loc.surfaceId : "");
+        this.fragmentId = typeof (this.node && this.node.fragmentId) === "string"
+            ? this.node.fragmentId
+            : (typeof loc.fragmentId === "string" ? loc.fragmentId : "");
         if (isTree) {
             recordTreePrototypeLoadDebug("staticCtorNodeResolveMs", getTreeDebugNow() - nodeResolveStart);
         }
@@ -2362,6 +2405,10 @@ void main(void) {
 
         this._indexedNodes = nextNodes;
         this.node = primaryNode || nextNodes[0] || null;
+        if (this.node) {
+            this.surfaceId = typeof this.node.surfaceId === "string" ? this.node.surfaceId : "";
+            this.fragmentId = typeof this.node.fragmentId === "string" ? this.node.fragmentId : "";
+        }
 
         for (let i = 0; i < nextNodes.length; i++) {
             const node = nextNodes[i];
@@ -2385,7 +2432,16 @@ void main(void) {
             : (Number.isFinite(this.traversalLayer)
                 ? Math.round(Number(this.traversalLayer))
                 : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0));
-        const primaryNode = mapRef.worldToNode(this.x, this.y);
+        const basePrimaryNode = mapRef.worldToNode(this.x, this.y);
+        const primaryNode = (
+            basePrimaryNode &&
+            traversalLayer !== 0 &&
+            typeof mapRef.getFloorNodeAtLayer === "function"
+        ) ? (mapRef.getFloorNodeAtLayer(basePrimaryNode.xindex, basePrimaryNode.yindex, traversalLayer, {
+            surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
+            fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
+            allowScan: true
+        }) || basePrimaryNode) : basePrimaryNode;
         if (!hitbox || !shouldUseExpandedNodeIndexing(hitbox, options)) {
             this.setIndexedNodes(primaryNode ? [primaryNode] : [], primaryNode);
             return;
@@ -2397,6 +2453,8 @@ void main(void) {
             centerX: this.x,
             centerY: this.y,
             traversalLayer,
+            surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
+            fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
             extraPoints: options.extraPoints
         });
         if (nodes.length === 0) {
@@ -2997,6 +3055,14 @@ void main(void) {
             data.traversalLayer = savedTraversalLayer;
             data.level = savedTraversalLayer;
         }
+        const surfaceId = typeof this.surfaceId === "string" && this.surfaceId.length > 0
+            ? this.surfaceId
+            : (typeof (this.node && this.node.surfaceId) === "string" ? this.node.surfaceId : "");
+        const fragmentId = typeof this.fragmentId === "string" && this.fragmentId.length > 0
+            ? this.fragmentId
+            : (typeof (this.node && this.node.fragmentId) === "string" ? this.node.fragmentId : "");
+        if (surfaceId) data.surfaceId = surfaceId;
+        if (fragmentId) data.fragmentId = fragmentId;
         if (this.falling) data.falling = true;
         if (typeof this.fallDirection === "string") data.fallDirection = this.fallDirection;
         if (typeof this.script !== "undefined") {

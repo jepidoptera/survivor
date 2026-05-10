@@ -1143,6 +1143,9 @@ void main(void) {
         roofRef.setInteriorHideHitboxFromLocalPoints(meshData.interiorLocalPoints);
         roofRef.updateGroundPlaneHitbox();
         roofRef.createPixiMesh();
+        if (mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
         return true;
     }
 
@@ -1583,7 +1586,10 @@ void main(void) {
                 : null,
             interiorHideHitbox: this.interiorHideHitbox && Array.isArray(this.interiorHideHitbox.points)
                 ? { points: this.interiorHideHitbox.points.map(p => ({ x: p.x, y: p.y })) }
-                : null
+                : null,
+            wallLoopSectionIds: Array.isArray(this.wallLoopSectionIds)
+                ? this.wallLoopSectionIds.filter(id => Number.isInteger(id))
+                : []
         };
         if (typeof this.visible === "boolean") {
             data.visible = this.visible;
@@ -1686,6 +1692,11 @@ void main(void) {
             }
         }
         roof.placed = !!data.placed;
+        roof.wallLoopSectionIds = Array.isArray(data.wallLoopSectionIds)
+            ? data.wallLoopSectionIds
+                .map(id => Number(id))
+                .filter(id => Number.isInteger(id))
+            : [];
 
         if (Array.isArray(data.vertices) && data.vertices.length >= 3) {
             roof.vertices = data.vertices.map(v => ({
