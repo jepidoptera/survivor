@@ -1180,6 +1180,37 @@ function resolveStaticObjectLoadNode(map, data, options = {}) {
     return fallbackNode;
 }
 
+function attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data) {
+    if (!map || !obj || !data || data.type !== "placedObject") return false;
+    const layer = Number.isFinite(obj.traversalLayer)
+        ? Math.round(Number(obj.traversalLayer))
+        : (Number.isFinite(data.traversalLayer)
+            ? Math.round(Number(data.traversalLayer))
+            : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : 0));
+    if (layer <= 0) return false;
+    const fragmentId = typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+        ? obj.fragmentId
+        : (typeof data.fragmentId === "string" ? data.fragmentId : "");
+    const surfaceId = typeof obj.surfaceId === "string" && obj.surfaceId.length > 0
+        ? obj.surfaceId
+        : (typeof data.surfaceId === "string" ? data.surfaceId : "");
+    if (!fragmentId) {
+        throw new Error("Cannot restore upper-floor placed object without a saved floor fragment id.");
+    }
+    if (typeof map.addObjectToFloorBuildingManifest !== "function") {
+        throw new Error("Cannot restore upper-floor placed object because floor building manifests are unavailable.");
+    }
+    const attached = map.addObjectToFloorBuildingManifest(obj, {
+        fragmentId,
+        surfaceId,
+        level: layer
+    });
+    if (!attached) {
+        throw new Error(`Unable to restore placed object floor building manifest entry for fragment: ${fragmentId}`);
+    }
+    return true;
+}
+
 function getMountedWallFaceCentersForObject(item) {
     const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
         ? Number(item.mountedWallLineGroupId)
@@ -1392,6 +1423,12 @@ uniform vec4 uTint;
 uniform float uBrightness;
 uniform float uAlphaCutoff;
 uniform float uClipMinZ;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
+uniform sampler2D uBuildingCutawayDataSampler;
+uniform float uBuildingCutawayUseDataAlpha;
+uniform float uBuildingCutawayCurrentFloorZ;
+uniform float uBuildingCutawayUpperAlpha;
 void main(void) {
     vec4 tex = texture2D(uSampler, vUvs) * uTint;
     float b = clamp(uBrightness, -1.0, 1.0);
@@ -1402,6 +1439,24 @@ void main(void) {
     }
     if (vWorldZ < uClipMinZ) discard;
     if (tex.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    if (uBuildingCutawayUseDataAlpha > 0.5) {
+        vec4 data = texture2D(uBuildingCutawayDataSampler, vUvs);
+        if (data.a > 0.5) {
+            float minZ = uBuildingCutawayDataZRange.x;
+            float span = 1.0 / max(1e-6, uBuildingCutawayDataZRange.y);
+            float pixelZ = minZ + data.r * span;
+            if (pixelZ > uBuildingCutawayCurrentFloorZ + 0.001) {
+                tex.a *= clamp(uBuildingCutawayUpperAlpha, 0.0, 1.0);
+            }
+        }
+    }
     gl_FragColor = tex;
 }
 `;
@@ -1786,6 +1841,12 @@ void main(void) {
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
             uClipMinZ: -1000000,
             uZOffset: 0.0,
+            uBuildingCutawayDataPass: 0,
+            uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
+            uBuildingCutawayDataSampler: pixi.Texture.WHITE,
+            uBuildingCutawayUseDataAlpha: 0,
+            uBuildingCutawayCurrentFloorZ: 0,
+            uBuildingCutawayUpperAlpha: 1,
             uSampler: pixi.Texture.WHITE
         });
         const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
@@ -1890,6 +1951,12 @@ void main(void) {
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
             uClipMinZ: -1000000,
             uZOffset: 0.0,
+            uBuildingCutawayDataPass: 0,
+            uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
+            uBuildingCutawayDataSampler: pixi.Texture.WHITE,
+            uBuildingCutawayUseDataAlpha: 0,
+            uBuildingCutawayCurrentFloorZ: 0,
+            uBuildingCutawayUpperAlpha: 1,
             uSampler: pixi.Texture.WHITE
         });
 
@@ -1967,6 +2034,7 @@ void main(void) {
         let faceCenters = null;
         let useDualWallPlanes = wantsDualWallPlanes;
         let mazeKeepSide = null;
+        let drawOnlyMountedWallSide = false;
         if (useDualWallPlanes) {
             const explicitFaceCenters = (
                 this &&
@@ -2005,6 +2073,11 @@ void main(void) {
                 } else if (forcedSide === "center") {
                     mazeKeepSide = "center";
                 }
+                drawOnlyMountedWallSide = !!(
+                    options &&
+                    options.drawOnlyMountedWallSide === true &&
+                    (mazeKeepSide === "front" || mazeKeepSide === "back" || mazeKeepSide === "center")
+                );
                 if (mazeMode) {
                     const playerRef = (options && options.player && Number.isFinite(options.player.x) && Number.isFinite(options.player.y))
                         ? { x: Number(options.player.x), y: Number(options.player.y) }
@@ -2016,6 +2089,11 @@ void main(void) {
                         mazeKeepSide = selectedSide;
                     }
                 }
+                drawOnlyMountedWallSide = drawOnlyMountedWallSide || !!(
+                    options &&
+                    options.drawOnlyMountedWallSide === true &&
+                    (mazeKeepSide === "front" || mazeKeepSide === "back" || mazeKeepSide === "center")
+                );
             }
         }
         const fallbackTexture = (typeof this.texturePath === "string" && this.texturePath.length > 0)
@@ -2105,23 +2183,43 @@ void main(void) {
                 backBR = { ...centerBR };
                 backTR = { ...centerTR };
                 backTL = { ...centerTL };
+                if (drawOnlyMountedWallSide) {
+                    backBR = { ...centerBL };
+                    backTR = { ...centerBL };
+                    backTL = { ...centerBL };
+                }
             } else if (mazeKeepSide === "front") {
-                backBL = { ...frontBL };
-                backBR = { ...frontBR };
-                backTR = { ...frontTR };
-                backTL = { ...frontTL };
+                if (drawOnlyMountedWallSide) {
+                    backBL = { ...frontBL };
+                    backBR = { ...frontBL };
+                    backTR = { ...frontBL };
+                    backTL = { ...frontBL };
+                } else {
+                    backBL = { ...frontBL };
+                    backBR = { ...frontBR };
+                    backTR = { ...frontTR };
+                    backTL = { ...frontTL };
+                }
             } else if (mazeKeepSide === "back") {
-                frontBL = { ...backBL };
-                frontBR = { ...backBR };
-                frontTR = { ...backTR };
-                frontTL = { ...backTL };
+                if (drawOnlyMountedWallSide) {
+                    frontBL = { ...backBL };
+                    frontBR = { ...backBL };
+                    frontTR = { ...backBL };
+                    frontTL = { ...backBL };
+                } else {
+                    frontBL = { ...backBL };
+                    frontBR = { ...backBR };
+                    frontTR = { ...backTR };
+                    frontTL = { ...backTL };
+                }
             }
             signature = [
                 frontBL.x, frontBL.y, frontBR.x, frontBR.y,
                 backBL.x, backBL.y, backBR.x, backBR.y,
                 zBottom, zTop, width, verticalWorldHeight, angleDeg,
-                mazeKeepSide || "both"
-            ].map(v => Number(v).toFixed(4)).join("|");
+                mazeKeepSide || "both",
+                drawOnlyMountedWallSide ? "single" : "dual"
+            ].map(v => Number.isFinite(Number(v)) ? Number(v).toFixed(4) : String(v)).join("|");
             if (signature !== this._depthBillboardLastSignature && this._depthBillboardWorldPositions) {
                 const positions = this._depthBillboardWorldPositions;
                 positions[0] = frontBL.x; positions[1] = frontBL.y; positions[2] = frontBL.z;
@@ -2474,6 +2572,9 @@ void main(void) {
 
     removeFromGame() {
         if (this.gone) return;
+        if (this.map && typeof this.map.removeObjectFromFloorBuildingManifest === "function") {
+            this.map.removeObjectFromFloorBuildingManifest(this);
+        }
         this.gone = true;
         this.vanishing = false;
         const pixiSprite = this.pixiSprite || null;
@@ -3260,6 +3361,13 @@ void main(void) {
                         obj.z = Number(inferredMountedCenterZ);
                     }
                 }
+                if (typeof data.surfaceId === "string" && data.surfaceId.length > 0) {
+                    obj.surfaceId = data.surfaceId;
+                }
+                if (typeof data.fragmentId === "string" && data.fragmentId.length > 0) {
+                    obj.fragmentId = data.fragmentId;
+                }
+                attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data);
                 if (data.hp !== undefined) obj.hp = data.hp;
                 if (typeof data.burned === "boolean") obj.burned = data.burned;
                 if (typeof data._wasOnFire === "boolean") obj._wasOnFire = data._wasOnFire;

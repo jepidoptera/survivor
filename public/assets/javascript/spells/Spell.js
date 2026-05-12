@@ -74,6 +74,35 @@ class Spell {
         return Math.round(n) * 3;
     }
 
+    static isWizardWorldZTarget(target) {
+        if (!target) return false;
+        if (typeof globalThis !== "undefined" && globalThis.wizard && target === globalThis.wizard) return true;
+        if (typeof wizard !== "undefined" && wizard && target === wizard) return true;
+        return false;
+    }
+
+    static isCharacterWorldZTarget(target) {
+        if (!target || Spell.isWizardWorldZTarget(target)) return false;
+        if (Array.isArray(globalThis.animals) && globalThis.animals.includes(target)) return true;
+        if (typeof target.getInterpolatedPosition !== "function") return false;
+        if (target.type === "human") return true;
+        if (typeof target.moveDirection === "function") return true;
+        if (typeof target.move === "function") return true;
+        if (Array.isArray(target.path)) return true;
+        return false;
+    }
+
+    static getCharacterWorldZ(target) {
+        if (!target) return NaN;
+        if (typeof target.getInterpolatedPosition === "function") {
+            const interpolated = target.getInterpolatedPosition();
+            if (interpolated && Number.isFinite(interpolated.z)) {
+                return Number(interpolated.z);
+            }
+        }
+        return Number.isFinite(target.z) ? Number(target.z) : NaN;
+    }
+
     static getTargetWorldBaseZ(target) {
         if (!target) return 0;
         if (target.type === "wallSection" || target.type === "wall") {
@@ -85,6 +114,10 @@ class Spell {
             if (Number.isFinite(target.baseZ)) return Number(target.baseZ);
         }
         if (target.type === "road" && Number.isFinite(target.z)) return Number(target.z);
+        if (Spell.isCharacterWorldZTarget(target)) {
+            const characterZ = Spell.getCharacterWorldZ(target);
+            if (Number.isFinite(characterZ)) return characterZ;
+        }
         if (Number.isFinite(target.currentLayerBaseZ)) {
             return Number(target.currentLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
         }

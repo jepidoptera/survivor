@@ -139,6 +139,12 @@ class Fireball extends globalThis.Spell {
         this.x = wizard.x;
         this.y = wizard.y;
         this.z = Fireball.FLIGHT_Z;
+        const casterWorldZ = (globalThis.Spell && typeof globalThis.Spell.getTargetWorldBaseZ === "function")
+            ? globalThis.Spell.getTargetWorldBaseZ(wizard)
+            : (Number.isFinite(wizard.currentLayerBaseZ) ? Number(wizard.currentLayerBaseZ) : 0);
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = this.visualStartZ;
+        if (this.forcedTarget && !Number.isFinite(this.visualTargetZ)) this.getForcedTargetAimPoint();
         
         let xdist = targetX - this.x;
         let ydist = targetY - this.y;

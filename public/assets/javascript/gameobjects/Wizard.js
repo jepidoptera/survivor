@@ -1014,7 +1014,6 @@ class Wizard extends Character {
             overlayContainer.addChild(this.shieldGraphics);
         }
         const screenScale = Math.max(1e-6, Number(viewscale) || 1);
-        const screenRatio = Math.max(1e-6, Number(xyratio) || 1);
         const fade = Math.max(0, Math.min(1, (burstUntilMs - nowMs) / 150));
         this.shieldGraphics.clear();
         this.shieldGraphics.visible = true;
@@ -1022,10 +1021,10 @@ class Wizard extends Character {
         for (let i = 0; i < burstSegments.length; i++) {
             const seg = burstSegments[i];
             if (!seg || !seg.start || !seg.end) continue;
-            const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y });
-            const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y });
-            this.shieldGraphics.moveTo(screenA.x, screenA.y - (seg.start.z * screenScale * screenRatio));
-            this.shieldGraphics.lineTo(screenB.x, screenB.y - (seg.end.z * screenScale * screenRatio));
+            const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y, z: seg.start.z });
+            const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y, z: seg.end.z });
+            this.shieldGraphics.moveTo(screenA.x, screenA.y);
+            this.shieldGraphics.lineTo(screenB.x, screenB.y);
         }
         if (overlayContainer.children.indexOf(this.shieldGraphics) !== overlayContainer.children.length - 1) {
             overlayContainer.setChildIndex(this.shieldGraphics, overlayContainer.children.length - 1);
@@ -1046,7 +1045,6 @@ class Wizard extends Character {
         }
 
         const screenScale = Math.max(1e-6, Number(viewscale) || 1);
-        const screenRatio = Math.max(1e-6, Number(xyratio) || 1);
         const activeParticles = [];
 
         for (let i = 0; i < particles.length; i++) {
@@ -1084,11 +1082,11 @@ class Wizard extends Character {
             );
             if (!clipped) continue;
 
-            const screenA = worldToScreen({ x: clipped.start.x, y: clipped.start.y });
-            const screenB = worldToScreen({ x: clipped.end.x, y: clipped.end.y });
+            const screenA = worldToScreen({ x: clipped.start.x, y: clipped.start.y, z: clipped.start.z });
+            const screenB = worldToScreen({ x: clipped.end.x, y: clipped.end.y, z: clipped.end.z });
             this.shieldDebrisGraphics.lineStyle(Math.max(1.25, screenScale * 0.018 * fade), 0xFFFFFF, 0.9 * fade);
-            this.shieldDebrisGraphics.moveTo(screenA.x, screenA.y - (clipped.start.z * screenScale * screenRatio));
-            this.shieldDebrisGraphics.lineTo(screenB.x, screenB.y - (clipped.end.z * screenScale * screenRatio));
+            this.shieldDebrisGraphics.moveTo(screenA.x, screenA.y);
+            this.shieldDebrisGraphics.lineTo(screenB.x, screenB.y);
             activeParticles.push(particle);
         }
 
@@ -1558,7 +1556,11 @@ class Wizard extends Character {
         const cameraX = Number.isFinite(viewport && viewport.x) ? Number(viewport.x) : Number(renderWorld.x) || 0;
         const cameraY = Number.isFinite(viewport && viewport.y) ? Number(viewport.y) : Number(renderWorld.y) || 0;
         const scale = Math.max(0.65, Number(this.visualRadius) || 0.5) * 0.95;
-        const centerZ = 0.45 + ((Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0)) * 0.55);
+        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        const jumpZ = Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0);
+        const centerZ = layerBaseZ + 0.45 + (jumpZ * 0.55);
         const edgeThicknessPx = Math.max(1.25, (Number(viewscale) || 1) * 0.016);
         const model = getWizardShieldDodecahedronModel();
         const animationTime = (Number.isFinite(renderNowMs) ? Number(renderNowMs) : performance.now()) / 1000;
@@ -1590,7 +1592,7 @@ class Wizard extends Character {
             const [startIndex, endIndex] = model.edges[edgeIndex];
             const edgeStart = transformedVertices[startIndex];
             const edgeEnd = transformedVertices[endIndex];
-            const fullClipped = clipShieldSegmentToMinZ(edgeStart, edgeEnd, 0);
+            const fullClipped = clipShieldSegmentToMinZ(edgeStart, edgeEnd, layerBaseZ);
             if (fullClipped) {
                 fullOverlaySegments.push({ start: fullClipped.start, end: fullClipped.end });
             }
@@ -1601,7 +1603,7 @@ class Wizard extends Character {
                 if (segmentEndT <= cycleStartT + 1e-4) continue;
                 const rawA = interpolateShieldPoint(edgeStart, edgeEnd, cycleStartT);
                 const rawB = interpolateShieldPoint(edgeStart, edgeEnd, segmentEndT);
-                const clipped = clipShieldSegmentToMinZ(rawA, rawB, 0);
+                const clipped = clipShieldSegmentToMinZ(rawA, rawB, layerBaseZ);
                 if (!clipped) continue;
                 const a = clipped.start;
                 const b = clipped.end;
@@ -1709,10 +1711,10 @@ class Wizard extends Character {
             this.shieldGraphics.lineStyle(overlayLineWidth, overlayColor, overlayAlpha);
             for (let edgeIndex = 0; edgeIndex < overlaySegments.length; edgeIndex++) {
                 const seg = overlaySegments[edgeIndex];
-                const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y });
-                const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y });
-                this.shieldGraphics.moveTo(screenA.x, screenA.y - (seg.start.z * screenScale * (Number(xyratio) || 1)));
-                this.shieldGraphics.lineTo(screenB.x, screenB.y - (seg.end.z * screenScale * (Number(xyratio) || 1)));
+                const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y, z: seg.start.z });
+                const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y, z: seg.end.z });
+                this.shieldGraphics.moveTo(screenA.x, screenA.y);
+                this.shieldGraphics.lineTo(screenB.x, screenB.y);
             }
             if (overlayContainer && overlayContainer.children.indexOf(this.shieldGraphics) !== overlayContainer.children.length - 1) {
                 overlayContainer.setChildIndex(this.shieldGraphics, overlayContainer.children.length - 1);

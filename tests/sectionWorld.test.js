@@ -3095,6 +3095,157 @@ test("overlapping wall merge preserves mounted doors on the survivor wall", () =
     assert.equal(door.mountedWallSectionUnitId, 30);
 });
 
+test("overlapping wall placement merges with same-floor upper walls", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const RealWallSectionUnit = globalThis.WallSectionUnit;
+    RealWallSectionUnit._allSections.clear();
+
+    const map = createPrototypeMap();
+    map.shortestDeltaX = (fromX, toX) => Number(toX) - Number(fromX);
+    map.shortestDeltaY = (fromY, toY) => Number(toY) - Number(fromY);
+    map.getHexDirection = () => 0;
+
+    const baseNodes = [0, 1, 2].map((x) => {
+        const node = new TestNode(x, 0);
+        node.x = x;
+        node.y = 0;
+        node.map = map;
+        node._prototypeSectionKey = "0,0";
+        return node;
+    });
+    const upperNodes = baseNodes.map((sourceNode) => {
+        const node = new TestNode(sourceNode.xindex, sourceNode.yindex);
+        node.x = sourceNode.x;
+        node.y = sourceNode.y;
+        node.map = map;
+        node.sourceNode = sourceNode;
+        node.traversalLayer = 1;
+        node.level = 1;
+        node.baseZ = 3;
+        node.surfaceId = "upper_surface";
+        node.fragmentId = "upper";
+        node.ownerSectionKey = "0,0";
+        return node;
+    });
+    map.getFloorNodeAtLayer = (x, y, layer) => (
+        Number(layer) === 1
+            ? upperNodes.find(node => Number(node.xindex) === Number(x) && Number(node.yindex) === Number(y)) || null
+            : null
+    );
+
+    const groundWall = new RealWallSectionUnit(baseNodes[0], baseNodes[2], {
+        id: 40,
+        map,
+        deferSetup: true,
+        bottomZ: 0,
+        traversalLayer: 0
+    });
+    groundWall.addToMapNodes();
+
+    const upperWall = new RealWallSectionUnit(baseNodes[0], baseNodes[1], {
+        id: 41,
+        map,
+        deferSetup: true,
+        bottomZ: 3,
+        traversalLayer: 1
+    });
+    upperWall.addToMapNodes();
+
+    const result = RealWallSectionUnit.createPlacementFromWorldPoints(map, baseNodes[0], baseNodes[2], {
+        preResolvedSegments: [{ start: baseNodes[0], end: baseNodes[2], direction: 0 }],
+        bottomZ: 3,
+        traversalLayer: 1,
+        level: 1,
+        height: 1,
+        thickness: 0.1,
+        autoMergeContinuous: false,
+        applyCrossSplits: false
+    });
+
+    assert.equal(result.sections.includes(upperWall), true);
+    assert.equal(!!upperWall.gone, false);
+    assert.equal(!!groundWall.gone, false);
+    assert.equal(upperWall.startPoint.x, 0);
+    assert.equal(upperWall.endPoint.x, 2);
+    assert.equal(RealWallSectionUnit._allSections.size, 2);
+});
+
+test("continuous wall placement merges with same-floor upper walls", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const RealWallSectionUnit = globalThis.WallSectionUnit;
+    RealWallSectionUnit._allSections.clear();
+
+    const map = createPrototypeMap();
+    map.shortestDeltaX = (fromX, toX) => Number(toX) - Number(fromX);
+    map.shortestDeltaY = (fromY, toY) => Number(toY) - Number(fromY);
+    map.getHexDirection = () => 0;
+
+    const baseNodes = [0, 1, 2].map((x) => {
+        const node = new TestNode(x, 0);
+        node.x = x;
+        node.y = 0;
+        node.map = map;
+        node._prototypeSectionKey = "0,0";
+        return node;
+    });
+    const upperNodes = baseNodes.map((sourceNode) => {
+        const node = new TestNode(sourceNode.xindex, sourceNode.yindex);
+        node.x = sourceNode.x;
+        node.y = sourceNode.y;
+        node.map = map;
+        node.sourceNode = sourceNode;
+        node.traversalLayer = 1;
+        node.level = 1;
+        node.baseZ = 3;
+        node.surfaceId = "upper_surface";
+        node.fragmentId = "upper";
+        node.ownerSectionKey = "0,0";
+        return node;
+    });
+    map.getFloorNodeAtLayer = (x, y, layer) => (
+        Number(layer) === 1
+            ? upperNodes.find(node => Number(node.xindex) === Number(x) && Number(node.yindex) === Number(y)) || null
+            : null
+    );
+
+    const groundWall = new RealWallSectionUnit(baseNodes[1], baseNodes[2], {
+        id: 50,
+        map,
+        deferSetup: true,
+        bottomZ: 0,
+        traversalLayer: 0
+    });
+    groundWall.addToMapNodes();
+
+    const upperWall = new RealWallSectionUnit(baseNodes[0], baseNodes[1], {
+        id: 51,
+        map,
+        deferSetup: true,
+        bottomZ: 3,
+        traversalLayer: 1
+    });
+    upperWall.addToMapNodes();
+
+    const result = RealWallSectionUnit.createPlacementFromWorldPoints(map, baseNodes[1], baseNodes[2], {
+        preResolvedSegments: [{ start: baseNodes[1], end: baseNodes[2], direction: 0 }],
+        bottomZ: 3,
+        traversalLayer: 1,
+        level: 1,
+        height: 1,
+        thickness: 0.1,
+        applyCrossSplits: false
+    });
+
+    assert.equal(result.sections.includes(upperWall), true);
+    assert.equal(!!upperWall.gone, false);
+    assert.equal(!!groundWall.gone, false);
+    assert.equal(upperWall.startPoint.x, 0);
+    assert.equal(upperWall.endPoint.x, 2);
+    assert.equal(RealWallSectionUnit._allSections.size, 2);
+});
+
 test("syncPrototypeObjects persists dirty placed objects using indexed section ownership when point lookup misses", () => {
     const map = createPrototypeMap();
     attachPrototypeApis(map, createEmptyPrototypeState());

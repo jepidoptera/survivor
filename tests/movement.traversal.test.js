@@ -37,10 +37,27 @@ function createPixiStub() {
         }
     }
 
+    class Graphics {
+        constructor() {
+            this.parent = null;
+            this.visible = true;
+            this.x = 0;
+            this.y = 0;
+            this.name = "";
+            this.interactive = false;
+        }
+
+        clear() {}
+        beginFill() {}
+        drawRoundedRect() {}
+        endFill() {}
+    }
+
     return {
         Texture,
         Sprite,
-        Rectangle
+        Rectangle,
+        Graphics
     };
 }
 
@@ -516,6 +533,50 @@ test("Animal.attack clears pursuit instead of interacting across traversal layer
     assert.equal(animal._corneredAttackPending, false);
 });
 
+test("Animal health bar projects from interpolated world z", () => {
+    const start = createNode(0, 0, { x: 2, y: 3, baseZ: 6, traversalLayer: 2 });
+    const map = createMovementMap([start]);
+    const animal = createCharacterHarness(Animal, map, start, {
+        x: 2,
+        y: 3,
+        z: 6,
+        prevX: 2,
+        prevY: 3,
+        prevZ: 6,
+        height: 1,
+        width: 1,
+        size: 1,
+        maxHp: 10,
+        hp: 7,
+        _healthBarVisibleUntilMs: Date.now() + 10000,
+        getInterpolatedPosition() {
+            return { x: 2, y: 3, z: 6 };
+        }
+    });
+    const worldToScreenCalls = [];
+    const camera = {
+        viewscale: 10,
+        worldToScreen(x, y, z = 0) {
+            worldToScreenCalls.push({ x, y, z });
+            return { x: x * 10, y: (y - z) * 10 };
+        }
+    };
+    const container = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+    };
+
+    animal.updateHealthBarOverlay(camera, container);
+
+    assert.equal(worldToScreenCalls.length, 1);
+    assert.deepEqual(worldToScreenCalls[0], { x: 2, y: 3, z: 6 });
+    assert.equal(animal._healthBarGraphics.visible, true);
+    assert.equal(container.children[0], animal._healthBarGraphics);
+});
+
 test("GameMap traversal helpers sample positions and preserve edge metadata", () => {
     const map = Object.create(GameMap.prototype);
     map.shortestDeltaX = (fromX, toX) => toX - fromX;
@@ -798,6 +859,69 @@ test("GameMap.getNode skips full floor scans for missing nonzero layer nodes", (
     assert.equal(map.getNode(0, 0, 1), null);
 });
 
+test("GameMap.getFloorNodeAtLayer resolves upper floor node from placement base node", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 3;
+    map.height = 3;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.nodes = [
+        [
+            createNode(0, 0, { x: 0, y: 0 }),
+            createNode(0, 1, { x: 0, y: 1 }),
+            createNode(0, 2, { x: 0, y: 2 })
+        ],
+        [
+            createNode(1, 0, { x: 0.866, y: 0.5 }),
+            createNode(1, 1, { x: 0.866, y: 1.5 }),
+            createNode(1, 2, { x: 0.866, y: 2.5 })
+        ],
+        [
+            createNode(2, 0, { x: 1.732, y: 0 }),
+            createNode(2, 1, { x: 1.732, y: 1 }),
+            createNode(2, 2, { x: 1.732, y: 2 })
+        ]
+    ];
+    map.resetFloorRuntimeState();
+
+    const upperFragment = map.registerFloorFragment({
+        fragmentId: "upper-fragment",
+        surfaceId: "upper-surface",
+        ownerSectionKey: "section-a",
+        level: 2,
+        outerPolygon: [
+            { x: 0.25, y: 0.75 },
+            { x: 1.25, y: 0.75 },
+            { x: 1.25, y: 1.75 },
+            { x: 0.25, y: 1.75 }
+        ],
+        visibilityPolygon: [
+            { x: 0.25, y: 0.75 },
+            { x: 1.25, y: 0.75 },
+            { x: 1.25, y: 1.75 },
+            { x: 0.25, y: 1.75 }
+        ]
+    });
+    const baseNode = map.nodes[1][1];
+    const upperNode = map.createFloorNodeFromSource(baseNode, upperFragment, {
+        baseZ: 6,
+        traversalLayer: 2
+    });
+
+    const placementBaseNode = map.worldToNode(baseNode.x, baseNode.y);
+    assert.equal(placementBaseNode, baseNode);
+    assert.equal(map.getFloorNodeAtLayer(placementBaseNode.xindex, placementBaseNode.yindex, 2), upperNode);
+    assert.equal(map.getFloorNodeAtLayer(placementBaseNode.xindex, placementBaseNode.yindex, 2, {
+        surfaceId: "upper-surface",
+        fragmentId: "upper-fragment",
+        allowScan: true
+    }), upperNode);
+    assert.equal(map.getFloorNodeAtLayer(placementBaseNode.xindex, placementBaseNode.yindex, 2, {
+        sectionKey: "section-a",
+        allowScan: true
+    }), upperNode);
+});
+
 test("GameMap groups overlapping upper floor fragments into buildings", () => {
     const map = Object.create(GameMap.prototype);
     map.resetFloorRuntimeState();
@@ -833,6 +957,111 @@ test("GameMap groups overlapping upper floor fragments into buildings", () => {
     assert.ok(building.fragmentGraph instanceof Map);
     assert.deepEqual(Array.from(building.fragmentGraph.get("lower").above), ["upper"]);
     assert.deepEqual(Array.from(building.fragmentGraph.get("upper").below), ["lower"]);
+});
+
+test("GameMap attaches placed upper-floor scenery to the owning building manifest", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    const fragment = map.registerFloorFragment({
+        fragmentId: "upper",
+        surfaceId: "upper-surface",
+        level: 1,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        visibilityPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        visibilityHoles: []
+    });
+    const item = {
+        type: "furniture",
+        fragmentId: fragment.fragmentId,
+        surfaceId: fragment.surfaceId,
+        traversalLayer: 1
+    };
+
+    const versionBeforeAdd = map._buildingRenderCacheVersion;
+    assert.equal(map.addObjectToFloorBuildingManifest(item), true);
+    assert.equal(map._buildingRenderCacheVersion > versionBeforeAdd, true);
+
+    const buildingId = map.floorBuildingByFragmentId.get(fragment.fragmentId);
+    const building = map.buildingsById.get(buildingId);
+    assert.ok(building);
+    assert.equal(Array.isArray(building.staticObjects), true);
+    assert.equal(building.staticObjects.length, 1);
+    assert.equal(building.staticObjects[0].item, item);
+    assert.equal(building.staticObjects[0].refs.length, 1);
+    assert.equal(building.staticObjects[0].refs[0].surfaceId, "upper-surface");
+    assert.equal(building.staticObjects[0].refs[0].fragmentId, "upper");
+    assert.equal(building.staticObjectsByFragment instanceof Map, true);
+    assert.equal(building.staticObjectsByFragment.get("upper").length, 1);
+    assert.equal(building.staticObjectsByFragment.get("upper")[0].item, item);
+    assert.equal(map.getFloorBuildingStaticObjectsForFragment(building, "upper").length, 1);
+    assert.equal(map.getFloorBuildingStaticObjectsForFragment(building, "upper")[0].item, item);
+    assert.equal(item._floorBuildingManifestId, building.buildingId);
+
+    const versionBeforeRemove = map._buildingRenderCacheVersion;
+    assert.equal(map.removeObjectFromFloorBuildingManifest(item), true);
+    assert.equal(map._buildingRenderCacheVersion, versionBeforeRemove + 1);
+    assert.equal(building.staticObjects.length, 0);
+    assert.equal(building.staticObjectsByFragment.get("upper"), undefined);
+    assert.equal(building._staticObjectManifestSet.has(item), false);
+    assert.equal(item._floorBuildingManifestId, undefined);
+});
+
+test("GameMap prunes stale gone objects from building manifests", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    const fragment = map.registerFloorFragment({
+        fragmentId: "upper",
+        surfaceId: "upper-surface",
+        level: 1,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        visibilityPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        visibilityHoles: []
+    });
+    const oldItem = {
+        type: "furniture",
+        fragmentId: fragment.fragmentId,
+        surfaceId: fragment.surfaceId,
+        traversalLayer: 1
+    };
+    const liveItem = {
+        type: "furniture",
+        fragmentId: fragment.fragmentId,
+        surfaceId: fragment.surfaceId,
+        traversalLayer: 1
+    };
+
+    assert.equal(map.addObjectToFloorBuildingManifest(oldItem), true);
+    oldItem.gone = true;
+    assert.equal(map.addObjectToFloorBuildingManifest(liveItem), true);
+
+    const buildingId = map.floorBuildingByFragmentId.get(fragment.fragmentId);
+    const building = map.buildingsById.get(buildingId);
+    assert.equal(building.staticObjects.length, 1);
+    assert.equal(building.staticObjects[0].item, liveItem);
+    assert.equal(building.staticObjectsByFragment.get("upper").length, 1);
+    assert.equal(building.staticObjectsByFragment.get("upper")[0].item, liveItem);
+    assert.equal(building._staticObjectManifestSet.has(oldItem), false);
+    assert.equal(building._staticObjectManifestSet.has(liveItem), true);
 });
 
 test("GameMap building fragment graph links multiple direct upper fragments after clipping covered area", () => {

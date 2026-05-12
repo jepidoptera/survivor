@@ -610,11 +610,14 @@ class Animal extends Character {
 
         const interp = (typeof this.getInterpolatedPosition === "function")
             ? this.getInterpolatedPosition()
-            : { x: this.x, y: this.y };
+            : { x: this.x, y: this.y, z: this.z };
+        const worldZ = Number.isFinite(interp && interp.z)
+            ? Number(interp.z)
+            : (Number.isFinite(this.z) ? Number(this.z) : 0);
         const pos = camera.worldToScreen(
             Number.isFinite(interp && interp.x) ? interp.x : this.x,
             Number.isFinite(interp && interp.y) ? interp.y : this.y,
-            0
+            worldZ
         );
         if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
             g.visible = false;

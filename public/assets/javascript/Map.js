@@ -1140,6 +1140,162 @@ class GameMap {
         this._buildingRenderCacheVersion = (Number(this._buildingRenderCacheVersion) || 0) + 1;
     }
 
+    rebuildFloorBuildingStaticObjectIndex(building) {
+        if (!building) return null;
+        const byFragment = new Map();
+        const entries = Array.isArray(building.staticObjects) ? building.staticObjects : [];
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (!entry || !entry.item) continue;
+            const refs = Array.isArray(entry.refs) ? entry.refs : [];
+            let added = false;
+            for (let r = 0; r < refs.length; r++) {
+                const fragmentId = refs[r] && typeof refs[r].fragmentId === "string" ? refs[r].fragmentId : "";
+                if (!fragmentId) continue;
+                if (!byFragment.has(fragmentId)) byFragment.set(fragmentId, []);
+                byFragment.get(fragmentId).push(entry);
+                added = true;
+            }
+            if (!added && typeof entry.item.fragmentId === "string" && entry.item.fragmentId.length > 0) {
+                if (!byFragment.has(entry.item.fragmentId)) byFragment.set(entry.item.fragmentId, []);
+                byFragment.get(entry.item.fragmentId).push(entry);
+            }
+        }
+        building.staticObjectsByFragment = byFragment;
+        return byFragment;
+    }
+
+    getFloorBuildingStaticObjectsForFragment(building, fragmentId) {
+        if (!building || typeof fragmentId !== "string" || fragmentId.length === 0) return [];
+        if (!(building.staticObjectsByFragment instanceof Map)) {
+            this.rebuildFloorBuildingStaticObjectIndex(building);
+        }
+        const entries = building.staticObjectsByFragment instanceof Map
+            ? building.staticObjectsByFragment.get(fragmentId)
+            : null;
+        return Array.isArray(entries) ? entries : [];
+    }
+
+    pruneFloorBuildingManifest(building) {
+        if (!building) return false;
+        if (!Array.isArray(building.staticObjects)) {
+            building.staticObjects = [];
+            building._staticObjectManifestSet = new Set();
+            building.staticObjectsByFragment = new Map();
+            return false;
+        }
+        const next = [];
+        const manifestSet = new Set();
+        let changed = false;
+        for (let i = 0; i < building.staticObjects.length; i++) {
+            const entry = building.staticObjects[i];
+            const item = entry && entry.item;
+            if (!item || item.gone || item.vanishing || manifestSet.has(item)) {
+                changed = true;
+                continue;
+            }
+            next.push(entry);
+            manifestSet.add(item);
+        }
+        if (changed) {
+            building.staticObjects = next;
+            this.markBuildingRenderCacheDirty();
+        }
+        building._staticObjectManifestSet = manifestSet;
+        this.rebuildFloorBuildingStaticObjectIndex(building);
+        return changed;
+    }
+
+    addObjectToFloorBuildingManifest(obj, options = {}) {
+        if (!obj || typeof obj !== "object") return false;
+        const fragmentId = typeof options.fragmentId === "string" && options.fragmentId.length > 0
+            ? options.fragmentId
+            : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : ""));
+        if (!fragmentId) return false;
+
+        const targetLevel = Number.isFinite(options.level)
+            ? Math.round(Number(options.level))
+            : (Number.isFinite(obj.traversalLayer)
+                ? Math.round(Number(obj.traversalLayer))
+                : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0));
+        const buildings = this.ensureFloorBuildings();
+        const buildingId = this.floorBuildingByFragmentId instanceof Map
+            ? this.floorBuildingByFragmentId.get(fragmentId)
+            : "";
+        const building = buildingId && buildings instanceof Map ? buildings.get(buildingId) : null;
+        if (!building) {
+            if (targetLevel > 0) {
+                throw new Error(`Unable to attach object to floor building manifest for upper-floor fragment: ${fragmentId}`);
+            }
+            return false;
+        }
+
+        this.pruneFloorBuildingManifest(building);
+        if (building._staticObjectManifestSet.has(obj)) return true;
+
+        const surfaceId = typeof options.surfaceId === "string" && options.surfaceId.length > 0
+            ? options.surfaceId
+            : (typeof obj.surfaceId === "string" && obj.surfaceId.length > 0
+                ? obj.surfaceId
+                : (typeof obj.node?.surfaceId === "string" ? obj.node.surfaceId : ""));
+        const entry = {
+            item: obj,
+            level: targetLevel,
+            refs: [{ surfaceId, fragmentId }]
+        };
+
+        building._staticObjectManifestSet.add(obj);
+        if (!Array.isArray(building.staticObjects)) building.staticObjects = [];
+        building.staticObjects.push(entry);
+        this.rebuildFloorBuildingStaticObjectIndex(building);
+        obj._floorBuildingManifestId = building.buildingId || buildingId;
+        obj._floorBuildingManifestFragmentId = fragmentId;
+        this.markBuildingRenderCacheDirty();
+        return true;
+    }
+
+    removeObjectFromFloorBuildingManifest(obj) {
+        if (!obj || typeof obj !== "object") return false;
+        const buildings = this.ensureFloorBuildings();
+        if (!(buildings instanceof Map) || buildings.size === 0) return false;
+        const candidateIds = new Set();
+        if (typeof obj._floorBuildingManifestId === "string" && obj._floorBuildingManifestId.length > 0) {
+            candidateIds.add(obj._floorBuildingManifestId);
+        }
+        const fragmentId = typeof obj._floorBuildingManifestFragmentId === "string" && obj._floorBuildingManifestFragmentId.length > 0
+            ? obj._floorBuildingManifestFragmentId
+            : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : ""));
+        if (fragmentId && this.floorBuildingByFragmentId instanceof Map) {
+            const buildingId = this.floorBuildingByFragmentId.get(fragmentId);
+            if (buildingId) candidateIds.add(buildingId);
+        }
+        if (candidateIds.size === 0) {
+            for (const buildingId of buildings.keys()) candidateIds.add(buildingId);
+        }
+
+        let removed = false;
+        for (const buildingId of candidateIds) {
+            const building = buildings.get(buildingId);
+            if (!building || !Array.isArray(building.staticObjects)) continue;
+            const before = building.staticObjects.length;
+            building.staticObjects = building.staticObjects.filter(entry => entry && entry.item !== obj);
+            if (!(building._staticObjectManifestSet instanceof Set)) building._staticObjectManifestSet = new Set();
+            building._staticObjectManifestSet.delete(obj);
+            this.pruneFloorBuildingManifest(building);
+            if (building.staticObjects.length !== before) removed = true;
+        }
+        if (removed) {
+            delete obj._floorBuildingManifestId;
+            delete obj._floorBuildingManifestFragmentId;
+            this.markBuildingRenderCacheDirty();
+        }
+        return removed;
+    }
+
     getFloorFragmentOverlapPolygon(fragment) {
         if (!fragment) return [];
         return Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length >= 3

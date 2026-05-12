@@ -17,6 +17,38 @@ function resolvePlaceObjectLayerInfo(wizardRef) {
     return { layer, baseZ };
 }
 
+function isPlaceObjectDebugLoggingEnabled() {
+    if (typeof globalThis === "undefined") return false;
+    return globalThis.debugPlaceObjectPlacement === true;
+}
+
+function logPlaceObjectDebug(eventName, payload = {}) {
+    if (!isPlaceObjectDebugLoggingEnabled()) return;
+    const consoleRef = (typeof globalThis !== "undefined" && globalThis.console) ? globalThis.console : console;
+    if (!consoleRef || typeof consoleRef.log !== "function") return;
+    consoleRef.log("[PlaceObject]", eventName, payload);
+}
+
+function describePlaceObjectNode(node) {
+    if (!node) return null;
+    return {
+        xindex: Number.isFinite(node.xindex) ? Number(node.xindex) : node.xindex,
+        yindex: Number.isFinite(node.yindex) ? Number(node.yindex) : node.yindex,
+        x: Number.isFinite(node.x) ? Number(node.x) : node.x,
+        y: Number.isFinite(node.y) ? Number(node.y) : node.y,
+        traversalLayer: Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : node.traversalLayer,
+        level: Number.isFinite(node.level) ? Number(node.level) : node.level,
+        baseZ: Number.isFinite(node.baseZ) ? Number(node.baseZ) : node.baseZ,
+        surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+        fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+        ownerSectionKey: typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "",
+        prototypeSectionKey: typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "",
+        sourcePrototypeSectionKey: node.sourceNode && typeof node.sourceNode._prototypeSectionKey === "string"
+            ? node.sourceNode._prototypeSectionKey
+            : ""
+    };
+}
+
 function resolveEditorLayerInfo(wizardRef) {
     return resolvePlaceObjectLayerInfo(wizardRef);
 }
@@ -81,12 +113,44 @@ function resolveEditorWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options
 }
 
 function resolveEditorNodeOnLayer(mapRef, worldX, worldY, layer = 0, options = {}) {
-    if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
+    if (!mapRef || typeof mapRef.worldToNode !== "function") {
+        logPlaceObjectDebug("resolve-node-abort-no-map", {
+            hasMap: !!mapRef,
+            hasWorldToNode: !!(mapRef && typeof mapRef.worldToNode === "function"),
+            worldX,
+            worldY,
+            layer
+        });
+        return null;
+    }
     const baseNode = mapRef.worldToNode(worldX, worldY);
-    if (!baseNode) return null;
+    if (!baseNode) {
+        logPlaceObjectDebug("resolve-node-abort-no-base-node", {
+            worldX,
+            worldY,
+            layer
+        });
+        return null;
+    }
     const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
-    if (targetLayer === 0) return baseNode;
-    if (typeof mapRef.getFloorNodeAtLayer !== "function") return null;
+    if (targetLayer === 0) {
+        logPlaceObjectDebug("resolve-node-layer-0", {
+            worldX,
+            worldY,
+            targetLayer,
+            baseNode: describePlaceObjectNode(baseNode)
+        });
+        return baseNode;
+    }
+    if (typeof mapRef.getFloorNodeAtLayer !== "function") {
+        logPlaceObjectDebug("resolve-node-abort-no-floor-lookup", {
+            worldX,
+            worldY,
+            targetLayer,
+            baseNode: describePlaceObjectNode(baseNode)
+        });
+        return null;
+    }
     const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
         ? options.sectionKey
         : (typeof baseNode._prototypeSectionKey === "string"
@@ -94,13 +158,25 @@ function resolveEditorNodeOnLayer(mapRef, worldX, worldY, layer = 0, options = {
             : ((typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function")
                 ? mapRef.getPrototypeSectionKeyForWorldPoint(worldX, worldY)
                 : ""));
-    return mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+    const resolvedNode = mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
         sectionKey,
         allowScan: !(options && options.allowScan === false)
     });
+    logPlaceObjectDebug("resolve-node-floor-lookup", {
+        worldX,
+        worldY,
+        targetLayer,
+        sectionKey,
+        allowScan: !(options && options.allowScan === false),
+        baseNode: describePlaceObjectNode(baseNode),
+        resultNode: describePlaceObjectNode(resolvedNode)
+    });
+    return resolvedNode;
 }
 
 if (typeof globalThis !== "undefined") {
+    globalThis.describePlaceObjectNode = describePlaceObjectNode;
+    globalThis.logPlaceObjectDebug = logPlaceObjectDebug;
     globalThis.resolveEditorLayerInfo = resolveEditorLayerInfo;
     globalThis.resolveEditorWorldPointOnLayer = resolveEditorWorldPointOnLayer;
     globalThis.resolveEditorNodeOnLayer = resolveEditorNodeOnLayer;
@@ -140,6 +216,25 @@ class PlaceObject extends globalThis.Spell {
         const layerPoint = resolvePlaceObjectWorldPointOnLayer(wizard, targetX, targetY, options);
         const placementTargetX = Number.isFinite(layerPoint.x) ? Number(layerPoint.x) : targetX;
         const placementTargetY = Number.isFinite(layerPoint.y) ? Number(layerPoint.y) : targetY;
+        logPlaceObjectDebug("cast-start", {
+            selectedCategory,
+            selectedCategoryKey,
+            targetX,
+            targetY,
+            options: {
+                screenX: Number.isFinite(options && options.screenX) ? Number(options.screenX) : null,
+                screenY: Number.isFinite(options && options.screenY) ? Number(options.screenY) : null
+            },
+            wizard: wizard ? {
+                x: Number.isFinite(wizard.x) ? Number(wizard.x) : wizard.x,
+                y: Number.isFinite(wizard.y) ? Number(wizard.y) : wizard.y,
+                currentLayer: Number.isFinite(wizard.currentLayer) ? Number(wizard.currentLayer) : wizard.currentLayer,
+                selectedFloorEditLevel: Number.isFinite(wizard.selectedFloorEditLevel) ? Number(wizard.selectedFloorEditLevel) : wizard.selectedFloorEditLevel,
+                traversalLayer: Number.isFinite(wizard.traversalLayer) ? Number(wizard.traversalLayer) : wizard.traversalLayer,
+                currentLayerBaseZ: Number.isFinite(wizard.currentLayerBaseZ) ? Number(wizard.currentLayerBaseZ) : wizard.currentLayerBaseZ
+            } : null,
+            layerPoint
+        });
 
         const wrappedX = (wizard.map && typeof wizard.map.wrapWorldX === "function")
             ? wizard.map.wrapWorldX(placementTargetX)
@@ -380,13 +475,40 @@ class PlaceObject extends globalThis.Spell {
             wizard.map &&
             typeof resolveEditorNodeOnLayer === "function"
         ) ? resolveEditorNodeOnLayer(wizard.map, placedX, placedY, placementLayer, { allowScan: true }) : null;
+        logPlaceObjectDebug("placement-target", {
+            selectedCategory,
+            selectedTexturePath,
+            wrappedX,
+            wrappedY,
+            placedX,
+            placedY,
+            placementLayer,
+            placementLayerBaseZ,
+            rotationAxis,
+            useWallSnapPlacement,
+            wallSnapPlacement: wallSnapPlacement ? {
+                hasTargetWall: !!wallSnapPlacement.targetWall,
+                snappedX: Number.isFinite(wallSnapPlacement.snappedX) ? Number(wallSnapPlacement.snappedX) : wallSnapPlacement.snappedX,
+                snappedY: Number.isFinite(wallSnapPlacement.snappedY) ? Number(wallSnapPlacement.snappedY) : wallSnapPlacement.snappedY,
+                snappedZ: Number.isFinite(wallSnapPlacement.snappedZ) ? Number(wallSnapPlacement.snappedZ) : wallSnapPlacement.snappedZ,
+                mountedSectionId: Number.isInteger(wallSnapPlacement.mountedSectionId) ? Number(wallSnapPlacement.mountedSectionId) : null,
+                mountedWallSectionUnitId: Number.isInteger(wallSnapPlacement.mountedWallSectionUnitId) ? Number(wallSnapPlacement.mountedWallSectionUnitId) : null
+            } : null,
+            placementNode: describePlaceObjectNode(placementNode)
+        });
 
         const resolvedPlacementRotation = (
             useWallSnapPlacement &&
             Number.isFinite(wallSnapPlacement.snappedRotationDeg)
         ) ? Number(wallSnapPlacement.snappedRotationDeg) : effectivePlacementRotation;
 
-        const placedObject = new PlacedObject(placementNode || { x: placedX, y: placedY }, wizard.map, {
+        const placementLocation = {
+            x: placedX,
+            y: placedY,
+            surfaceId: typeof placementNode?.surfaceId === "string" ? placementNode.surfaceId : "",
+            fragmentId: typeof placementNode?.fragmentId === "string" ? placementNode.fragmentId : ""
+        };
+        const placedObject = new PlacedObject(placementLocation, wizard.map, {
             texturePath: selectedTexturePath,
             category: selectedCategory,
             renderDepthOffset,
@@ -412,6 +534,13 @@ class PlaceObject extends globalThis.Spell {
             ) ? Number(wallSnapPlacement.mountedWallFacingSign) : null,
             groundPlaneHitboxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallGroundHitboxPoints : undefined
         });
+        if (placedObject && isPlaceObjectDebugLoggingEnabled()) {
+            const debugNow = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            placedObject._placeObjectDebugId = `placed-${Math.round(debugNow)}-${Math.floor(Math.random() * 100000)}`;
+            placedObject._placeObjectDebugTraceUntilMs = debugNow + 5000;
+        }
         if (
             useWallSnapPlacement &&
             Number.isFinite(wallSnapPlacement.snappedZ) &&
@@ -430,6 +559,26 @@ class PlaceObject extends globalThis.Spell {
                 placedObject.fragmentId = typeof placementNode.fragmentId === "string" ? placementNode.fragmentId : "";
             }
         }
+        logPlaceObjectDebug("object-created", {
+            created: !!placedObject,
+            category: selectedCategory,
+            texturePath: selectedTexturePath,
+            object: placedObject ? {
+                x: Number.isFinite(placedObject.x) ? Number(placedObject.x) : placedObject.x,
+                y: Number.isFinite(placedObject.y) ? Number(placedObject.y) : placedObject.y,
+                z: Number.isFinite(placedObject.z) ? Number(placedObject.z) : placedObject.z,
+                traversalLayer: Number.isFinite(placedObject.traversalLayer) ? Number(placedObject.traversalLayer) : placedObject.traversalLayer,
+                level: Number.isFinite(placedObject.level) ? Number(placedObject.level) : placedObject.level,
+                renderLayerBaseZ: Number.isFinite(placedObject._renderLayerBaseZ) ? Number(placedObject._renderLayerBaseZ) : placedObject._renderLayerBaseZ,
+                surfaceId: typeof placedObject.surfaceId === "string" ? placedObject.surfaceId : "",
+                fragmentId: typeof placedObject.fragmentId === "string" ? placedObject.fragmentId : "",
+                gone: !!placedObject.gone,
+                node: describePlaceObjectNode(placedObject.node)
+            } : null,
+            mapObjectsLength: wizard && wizard.map && Array.isArray(wizard.map.objects) ? wizard.map.objects.length : null,
+            prototypeDirty: !!(placedObject && placedObject._prototypeDirty),
+            captureScanNeeded: !!(wizard && wizard.map && wizard.map._prototypeObjectState && wizard.map._prototypeObjectState.captureScanNeeded)
+        });
         if (
             placedObject &&
             typeof globalThis !== "undefined" &&
@@ -470,9 +619,39 @@ class PlaceObject extends globalThis.Spell {
             wizard.map._prototypeObjectState.dirtyRuntimeObjects.add(placedObject);
             wizard.map._prototypeObjectState.captureScanNeeded = true;
         }
+        if (
+            placedObject &&
+            wizard &&
+            wizard.map &&
+            typeof wizard.map.addObjectToFloorBuildingManifest === "function"
+        ) {
+            wizard.map.addObjectToFloorBuildingManifest(placedObject, {
+                fragmentId: placedObject.fragmentId,
+                surfaceId: placedObject.surfaceId,
+                level: placementLayer
+            });
+        }
         if (placedObject && wizard && wizard.map && typeof wizard.map.markBuildingRenderCacheDirty === "function") {
             wizard.map.markBuildingRenderCacheDirty();
         }
+        logPlaceObjectDebug("cast-finish", {
+            created: !!placedObject,
+            category: selectedCategory,
+            texturePath: selectedTexturePath,
+            node: placedObject ? describePlaceObjectNode(placedObject.node) : null,
+            traversalLayer: placedObject && Number.isFinite(placedObject.traversalLayer) ? Number(placedObject.traversalLayer) : (placedObject ? placedObject.traversalLayer : null),
+            level: placedObject && Number.isFinite(placedObject.level) ? Number(placedObject.level) : (placedObject ? placedObject.level : null),
+            surfaceId: placedObject && typeof placedObject.surfaceId === "string" ? placedObject.surfaceId : "",
+            fragmentId: placedObject && typeof placedObject.fragmentId === "string" ? placedObject.fragmentId : "",
+            prototypeDirty: !!(placedObject && placedObject._prototypeDirty),
+            captureScanNeeded: !!(wizard && wizard.map && wizard.map._prototypeObjectState && wizard.map._prototypeObjectState.captureScanNeeded),
+            dirtyRuntimeObjectsSize: (
+                wizard &&
+                wizard.map &&
+                wizard.map._prototypeObjectState &&
+                wizard.map._prototypeObjectState.dirtyRuntimeObjects instanceof Set
+            ) ? wizard.map._prototypeObjectState.dirtyRuntimeObjects.size : null
+        });
 
         this.visible = false;
         this.detachPixiSprite();

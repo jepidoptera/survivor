@@ -20,7 +20,9 @@ uniform vec3 uModelOrigin;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
+uniform float uBuildingCutawayProjectionPass;
 varying vec2 vUvs;
+varying float vWorldZ;
 
 float shortestDelta(float fromV, float toV, float sizeV, float wrapEnabled) {
     if (wrapEnabled < 0.5 || sizeV <= 0.0) return toV - fromV;
@@ -37,18 +39,23 @@ void main(void) {
     float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWrappedX, uWorldSize.x, uWrapEnabled.x);
     float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWrappedY, uWorldSize.y, uWrapEnabled.y);
 
-    float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
-    float screenY = (anchorCamDy - uModelOrigin.z + uCameraZ) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
-
     float worldX = uModelOrigin.x + aDepthWorld.x;
     float worldY = uModelOrigin.y + aDepthWorld.y;
     float worldZ = uModelOrigin.z + aDepthWorld.z;
 
     float wrappedX = uWrapAnchorWorld.x + shortestDelta(uWrapAnchorWorld.x, worldX, uWorldSize.x, uWrapEnabled.x);
     float wrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, worldY, uWorldSize.y, uWrapEnabled.y);
-
+    float camDx = shortestDelta(uCameraWorld.x, wrappedX, uWorldSize.x, uWrapEnabled.x);
     float camDy = shortestDelta(uCameraWorld.y, wrappedY, uWorldSize.y, uWrapEnabled.y);
     float camDz = worldZ - uCameraZ;
+
+    float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
+    float screenY = (anchorCamDy - uModelOrigin.z + uCameraZ) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
+    if (uBuildingCutawayProjectionPass > 0.5) {
+        screenX = camDx * uViewScale;
+        screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    }
+
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float depthMetric = camDy + camDz;
@@ -62,18 +69,29 @@ void main(void) {
     );
     gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
     vUvs = aUvs;
+    vWorldZ = worldZ;
 }
 `;
 
     static _depthFs = `
 precision mediump float;
 varying vec2 vUvs;
+varying float vWorldZ;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
 void main(void) {
     vec4 tex = texture2D(uSampler, vUvs) * uTint;
     if (tex.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
     gl_FragColor = tex;
 }
 `;
@@ -1448,8 +1466,11 @@ void main(void) {
                     uWorldSize: new Float32Array([0, 0]),
                     uWrapEnabled: new Float32Array([0, 0]),
                     uWrapAnchorWorld: new Float32Array([this.x || 0, this.y || 0]),
+                    uBuildingCutawayProjectionPass: 0,
                     uTint: new Float32Array([tintR, tintG, tintB, 1]),
                     uAlphaCutoff: 0.02,
+                    uBuildingCutawayDataPass: 0,
+                    uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
                     uSampler: shinglesTexture || PIXI.Texture.WHITE
                 };
                 try {

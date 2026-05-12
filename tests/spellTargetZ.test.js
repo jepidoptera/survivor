@@ -106,6 +106,84 @@ function loadVanishContext() {
     return context;
 }
 
+function loadProjectileSpellContext() {
+    const context = {
+        console,
+        Math,
+        Number,
+        String,
+        Boolean,
+        Array,
+        Object,
+        Map,
+        Set,
+        WeakMap,
+        Date,
+        JSON,
+        RegExp,
+        Error,
+        Infinity,
+        NaN,
+        isFinite,
+        parseInt,
+        parseFloat,
+        performance: { now: () => 0 },
+        document: { createElement: () => ({ src: "" }) },
+        PIXI: {
+            Loader: { shared: { resources: {} } },
+            Texture: { from: () => ({ baseTexture: { valid: false } }) }
+        },
+        animals: [],
+        onscreenObjects: [],
+        projectiles: [],
+        paused: false,
+        frameRate: 60,
+        setInterval: () => 1,
+        clearInterval() {},
+        setTimeout(fn) {
+            fn();
+            return 1;
+        },
+        clearTimeout() {},
+        message() {},
+        distance: (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by)
+    };
+    context.CircleHitbox = class {
+        constructor(x, y, radius) {
+            this.type = "circle";
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+        }
+        intersects() {
+            return false;
+        }
+    };
+    context.globalThis = context;
+    context.window = context;
+    context.wizard = {
+        x: 10,
+        y: 12,
+        z: 0,
+        magic: 100,
+        currentLayer: 2,
+        currentLayerBaseZ: 6,
+        direction: { x: 1, y: 0 },
+        map: {}
+    };
+    vm.createContext(context);
+
+    const files = [
+        path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/Fireball.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/Spikes.js")
+    ];
+    for (const filePath of files) {
+        vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
+    }
+    return context;
+}
+
 function loadSpawnAnimalContext() {
     const messages = [];
     const context = {
@@ -286,6 +364,27 @@ test("spell target aim point resolves placed object layer base plus local z", ()
     assert.equal(aim.z, 3.25);
 });
 
+test("spell target aim point uses character absolute interpolated z", () => {
+    const context = loadSpellContext();
+    const aim = context.getSpellTargetAimPoint(
+        { map: null },
+        {
+            type: "human",
+            x: 4,
+            y: 5,
+            z: 6,
+            currentLayerBaseZ: 6,
+            getInterpolatedPosition() {
+                return { x: 4.25, y: 5.5, z: 6.75 };
+            }
+        }
+    );
+
+    assert.equal(aim.x, 4.25);
+    assert.equal(aim.y, 5.5);
+    assert.equal(aim.z, 6.75);
+});
+
 test("spell target point uses depth billboard projected quad coordinates", () => {
     const context = loadSpellContext();
     const aim = context.getSpellTargetAimPoint(
@@ -348,6 +447,63 @@ test("vanish projectile starts at wizard world z and stores target world z", () 
     assert.equal(vanish.visualStartZ, 6);
     assert.equal(vanish.z, 6);
     assert.equal(vanish.targetWorldZ, 6);
+});
+
+test("vanish character target uses absolute character z", () => {
+    const context = loadVanishContext();
+    const vanish = new context.Vanish();
+    vanish.forcedTarget = {
+        type: "human",
+        x: 14,
+        y: 12,
+        z: 6.5,
+        currentLayerBaseZ: 6,
+        getInterpolatedPosition() {
+            return { x: 14, y: 12, z: 6.5 };
+        }
+    };
+
+    vanish.cast(14, 12);
+
+    assert.equal(vanish.visualStartZ, 6);
+    assert.equal(vanish.targetWorldZ, 6.5);
+});
+
+test("fireball cast initializes floor-relative visual z", () => {
+    const context = loadProjectileSpellContext();
+    const fireball = new context.Fireball();
+    fireball.forcedTarget = {
+        type: "human",
+        x: 14,
+        y: 12,
+        z: 6.5,
+        currentLayerBaseZ: 6,
+        getInterpolatedPosition() {
+            return { x: 14, y: 12, z: 6.5 };
+        }
+    };
+
+    fireball.cast(14, 12);
+
+    assert.equal(fireball.visualStartZ, 6);
+    assert.equal(fireball.visualBaseZ, 6);
+    assert.equal(fireball.visualTargetZ, 6.5);
+    assert.equal(fireball.z, context.Fireball.FLIGHT_Z);
+});
+
+test("spikes propagate caster floor z to spawned projectiles", () => {
+    const context = loadProjectileSpellContext();
+    const spikes = new context.Spikes();
+
+    spikes.cast(13, 12);
+
+    assert.equal(context.projectiles.length, 5);
+    for (const projectile of context.projectiles) {
+        assert.equal(projectile.visualBaseZ, 6);
+        assert.equal(projectile.visualStartZ, 6);
+        assert.equal(projectile.currentLayer, 2);
+        assert.equal(projectile.z, 0.2);
+    }
 });
 
 test("vanish cannot target or remove the player wizard", () => {

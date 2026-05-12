@@ -55,6 +55,8 @@ uniform vec4 uTint;
 uniform float uBrightness;
 uniform float uAlphaCutoff;
 uniform float uClipMinZ;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
 
 vec3 adjustSaturation(vec3 color, float saturation) {
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -82,6 +84,13 @@ void main(void) {
     }
     if (vWorldZ < uClipMinZ) discard;
     if (outColor.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
     gl_FragColor = outColor;
 }
 `;
@@ -339,6 +348,16 @@ void main(void) {
         static areSectionsOnSameTraversalLayer(sectionA, sectionB) {
             if (!sectionA || !sectionB) return false;
             return WallSectionUnit.getTraversalLayerForSection(sectionA) === WallSectionUnit.getTraversalLayerForSection(sectionB);
+        }
+
+        static _mapNodeLayerKey(node) {
+            if (!WallSectionUnit._isMapNode(node)) return "";
+            const layer = Number.isFinite(node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+            const surfaceId = (typeof node.surfaceId === "string") ? node.surfaceId : "";
+            const fragmentId = (typeof node.fragmentId === "string") ? node.fragmentId : "";
+            return `${Number(node.xindex)},${Number(node.yindex)},${layer},${surfaceId},${fragmentId}`;
         }
 
         static normalizeEndpoint(endpoint, mapRef = null) {
@@ -1070,19 +1089,28 @@ void main(void) {
             const pushNode = (node) => {
                 if (!WallSectionUnit._isMapNode(node)) return;
                 if (mapRef && node.map && node.map !== mapRef) return;
-                const key = `${node.xindex},${node.yindex}`;
+                const key = WallSectionUnit._mapNodeLayerKey(node);
                 if (nodesByKey.has(key)) return;
                 nodesByKey.set(key, node);
             };
-            const pushEndpointNodes = (endpoint) => {
+            const pushEndpointNodes = (section, endpoint) => {
                 if (!endpoint) return;
                 if (WallSectionUnit._isMapNode(endpoint)) {
-                    pushNode(endpoint);
+                    const resolved = section && typeof section._resolveNodeForWallLayer === "function"
+                        ? section._resolveNodeForWallLayer(endpoint)
+                        : endpoint;
+                    pushNode(resolved);
                     return;
                 }
                 if (!WallSectionUnit._isNodeMidpoint(endpoint)) return;
-                pushNode(endpoint.nodeA);
-                pushNode(endpoint.nodeB);
+                const resolvedA = section && typeof section._resolveNodeForWallLayer === "function"
+                    ? section._resolveNodeForWallLayer(endpoint.nodeA)
+                    : endpoint.nodeA;
+                const resolvedB = section && typeof section._resolveNodeForWallLayer === "function"
+                    ? section._resolveNodeForWallLayer(endpoint.nodeB)
+                    : endpoint.nodeB;
+                pushNode(resolvedA);
+                pushNode(resolvedB);
             };
 
             for (let i = 0; i < seeds.length; i++) {
@@ -1091,8 +1119,8 @@ void main(void) {
                 for (let n = 0; n < nodes.length; n++) {
                     pushNode(nodes[n]);
                 }
-                pushEndpointNodes(section.startPoint);
-                pushEndpointNodes(section.endPoint);
+                pushEndpointNodes(section, section.startPoint);
+                pushEndpointNodes(section, section.endPoint);
             }
 
             if (includeNeighborNodes) {
@@ -1151,19 +1179,28 @@ void main(void) {
             const pushNode = (node) => {
                 if (!WallSectionUnit._isMapNode(node)) return;
                 if (mapRef && node.map && node.map !== mapRef) return;
-                const key = `${node.xindex},${node.yindex}`;
+                const key = WallSectionUnit._mapNodeLayerKey(node);
                 if (nodesByKey.has(key)) return;
                 nodesByKey.set(key, node);
             };
             const pushEndpoint = (endpoint) => {
                 if (!endpoint) return;
                 if (WallSectionUnit._isMapNode(endpoint)) {
-                    pushNode(endpoint);
+                    const resolved = typeof section._resolveNodeForWallLayer === "function"
+                        ? section._resolveNodeForWallLayer(endpoint)
+                        : endpoint;
+                    pushNode(resolved);
                     return;
                 }
                 if (!WallSectionUnit._isNodeMidpoint(endpoint)) return;
-                pushNode(endpoint.nodeA);
-                pushNode(endpoint.nodeB);
+                const resolvedA = typeof section._resolveNodeForWallLayer === "function"
+                    ? section._resolveNodeForWallLayer(endpoint.nodeA)
+                    : endpoint.nodeA;
+                const resolvedB = typeof section._resolveNodeForWallLayer === "function"
+                    ? section._resolveNodeForWallLayer(endpoint.nodeB)
+                    : endpoint.nodeB;
+                pushNode(resolvedA);
+                pushNode(resolvedB);
             };
             pushEndpoint(section.startPoint);
             pushEndpoint(section.endPoint);
@@ -3380,6 +3417,8 @@ void main(void) {
                 uBrightness: 0,
                 uAlphaCutoff: 0.02,
                 uClipMinZ: -1000000,
+                uBuildingCutawayDataPass: 0,
+                uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
                 uSampler: PIXI.Texture.WHITE
             });
             const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);

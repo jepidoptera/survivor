@@ -2709,6 +2709,26 @@ const SpellSystem = (() => {
         };
         const spellTargetPoint = resolveSpellTargetPoint();
         const worldPositions = target && target._depthBillboardWorldPositions;
+        if (
+            globalThis.Spell &&
+            typeof globalThis.Spell.isCharacterWorldZTarget === "function" &&
+            globalThis.Spell.isCharacterWorldZTarget(target) &&
+            typeof target.getInterpolatedPosition === "function"
+        ) {
+            const interpolated = target.getInterpolatedPosition();
+            if (
+                interpolated &&
+                Number.isFinite(interpolated.x) &&
+                Number.isFinite(interpolated.y)
+            ) {
+                const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
+                let x = Number(interpolated.x);
+                let y = Number(interpolated.y);
+                if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+                if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+                return { x, y, z: resolveTargetZ() };
+            }
+        }
         if (spellTargetPoint && worldPositions && worldPositions.length >= 12) {
             const mapRef = (wizardRef && wizardRef.map) || (target && target.map) || null;
             const u = spellTargetPoint.u;

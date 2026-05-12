@@ -85,6 +85,54 @@ class FakeContainer {
     }
 }
 
+class FakeBuffer {
+    constructor(data) {
+        this.data = data;
+        this.updateCalls = 0;
+    }
+
+    update() {
+        this.updateCalls += 1;
+    }
+}
+
+class FakeGeometry {
+    constructor() {
+        this.buffers = new Map();
+        this.index = null;
+    }
+
+    addAttribute(name, data) {
+        this.buffers.set(name, new FakeBuffer(data));
+        return this;
+    }
+
+    addIndex(index) {
+        this.index = index;
+        return this;
+    }
+
+    getBuffer(name) {
+        return this.buffers.get(name) || null;
+    }
+}
+
+class FakeMesh {
+    constructor(geometry, shader, state, drawMode) {
+        this.geometry = geometry;
+        this.shader = shader;
+        this.state = state;
+        this.drawMode = drawMode;
+        this.parent = null;
+        this.visible = false;
+        this.destroyed = false;
+    }
+
+    destroy() {
+        this.destroyed = true;
+    }
+}
+
 class TestNode {
     constructor() {
         this.objects = [];
@@ -136,6 +184,14 @@ function installTestGlobals() {
         Texture: FakeTexture,
         Sprite: FakeSprite,
         Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: {
+            from(_vs, _fs, uniforms) {
+                return { uniforms };
+            }
+        },
+        State: class State {},
         Rectangle: class Rectangle {
             constructor(x, y, width, height) {
                 this.x = x;
@@ -146,6 +202,9 @@ function installTestGlobals() {
         },
         BLEND_MODES: {
             ADD: "ADD"
+        },
+        DRAW_MODES: {
+            TRIANGLES: "TRIANGLES"
         },
         Loader: {
             shared: {
@@ -309,6 +368,134 @@ test("removeFromGame does not double-destroy renderer display object aliases", (
     assert.equal(sprite.destroyCalls, 1);
     assert.equal(sprite.destroyed, true);
     assert.equal(object._renderingDisplayObject, null);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("wall-mounted preview depth billboard draws only the camera-side wall plane", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const obj = Object.create(globalThis.StaticObject.prototype);
+    obj.type = "door";
+    obj.category = "doors";
+    obj.rotationAxis = "spatial";
+    obj.mountedWallSectionUnitId = 10;
+    obj.map = null;
+    obj.x = 0;
+    obj.y = 0;
+    obj.z = 0;
+    obj.width = 4;
+    obj.height = 6;
+    obj.placeableAnchorX = 0.5;
+    obj.placeableAnchorY = 1;
+    obj.placementRotation = 0;
+    obj.pixiSprite = new globalThis.PIXI.Sprite(new globalThis.PIXI.Texture());
+    obj.depthBillboardFaceCenters = {
+        front: { x: 0, y: 1 },
+        back: { x: 0, y: -1 }
+    };
+
+    const mesh = obj.updateDepthBillboardMesh(
+        { app: { screen: { width: 800, height: 600 } } },
+        { x: -10, y: -10, z: 0, viewscale: 100, xyratio: 1 },
+        {
+            alphaCutoff: 0.08,
+            drawOnlyMountedWallSide: true,
+            forceMountedWallSide: "front"
+        }
+    );
+
+    assert.ok(mesh);
+    const positions = Array.from(mesh.geometry.getBuffer("aWorldPosition").data);
+    assert.deepEqual(positions.slice(0, 12), [
+        -2, 1, 0,
+        2, 1, 0,
+        2, 1, 6,
+        -2, 1, 6
+    ]);
+    assert.deepEqual(positions.slice(12, 24), [
+        -2, 1, 0,
+        -2, 1, 0,
+        -2, 1, 0,
+        -2, 1, 0
+    ]);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("placed object load restores upper-floor building manifest membership", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const groundNode = new TestNode();
+    groundNode.xindex = 4;
+    groundNode.yindex = 5;
+    groundNode.x = 4;
+    groundNode.y = 5;
+    const upperNode = new TestNode();
+    upperNode.xindex = 4;
+    upperNode.yindex = 5;
+    upperNode.x = 4;
+    upperNode.y = 5;
+    upperNode.traversalLayer = 1;
+    upperNode.level = 1;
+    upperNode.surfaceId = "upper-surface";
+    upperNode.fragmentId = "upper-fragment";
+
+    const manifestCalls = [];
+    const map = {
+        objects: [],
+        scenery: {},
+        worldToNode() {
+            return groundNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 4);
+            assert.equal(y, 5);
+            assert.equal(layer, 1);
+            assert.equal(options.surfaceId, "upper-surface");
+            assert.equal(options.fragmentId, "upper-fragment");
+            return upperNode;
+        },
+        addObjectToFloorBuildingManifest(obj, options) {
+            manifestCalls.push({ obj, options });
+            return true;
+        }
+    };
+
+    const obj = globalThis.StaticObject.loadJson({
+        type: "placedObject",
+        category: "furniture",
+        texturePath: "/assets/images/furniture/chair.png",
+        x: 4,
+        y: 5,
+        z: 3,
+        traversalLayer: 1,
+        level: 1,
+        surfaceId: "upper-surface",
+        fragmentId: "upper-fragment"
+    }, map);
+
+    assert.ok(obj);
+    assert.equal(obj.node, upperNode);
+    assert.equal(obj.surfaceId, "upper-surface");
+    assert.equal(obj.fragmentId, "upper-fragment");
+    assert.equal(upperNode.objects.includes(obj), true);
+    assert.equal(groundNode.objects.includes(obj), false);
+    assert.equal(manifestCalls.length, 1);
+    assert.equal(manifestCalls[0].obj, obj);
+    assert.deepEqual(manifestCalls[0].options, {
+        fragmentId: "upper-fragment",
+        surfaceId: "upper-surface",
+        level: 1
+    });
 
     delete require.cache[STATIC_OBJECTS_MODULE_PATH];
     restoreGlobals();

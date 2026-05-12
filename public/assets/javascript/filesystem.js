@@ -360,6 +360,22 @@ function collectNodeSourcesForSave(mapRef, options = {}) {
             sources.push({ type: "prototype", nodes: prototypeNodes });
         }
     }
+    if (mapRef && mapRef.floorNodesById instanceof Map) {
+        const floorNodes = [];
+        const seenNodes = new Set();
+        for (const nodes of mapRef.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                if (!node || seenNodes.has(node)) continue;
+                seenNodes.add(node);
+                floorNodes.push(node);
+            }
+        }
+        if (floorNodes.length > 0) {
+            sources.push({ type: "floor", nodes: floorNodes });
+        }
+    }
     return sources;
 }
 
@@ -1329,7 +1345,7 @@ function saveGameState(options = {}) {
     for (let sourceIndex = 0; sourceIndex < nodeSources.length; sourceIndex++) {
         const source = nodeSources[sourceIndex];
         if (!source) continue;
-        if (source.type === "prototype" && Array.isArray(source.nodes)) {
+        if (Array.isArray(source.nodes)) {
             for (let i = 0; i < source.nodes.length; i++) {
                 const node = source.nodes[i];
                 if (!node || !node.objects || node.objects.length === 0) continue;
@@ -1857,7 +1873,7 @@ function loadGameState(saveData) {
         for (let sourceIndex = 0; sourceIndex < clearNodeSources.length; sourceIndex++) {
             const source = clearNodeSources[sourceIndex];
             if (!source) continue;
-            if (source.type === "prototype" && Array.isArray(source.nodes)) {
+            if (Array.isArray(source.nodes)) {
                 for (let i = 0; i < source.nodes.length; i++) {
                     const node = source.nodes[i];
                     if (!node || !node.objects || node.objects.length === 0) continue;
