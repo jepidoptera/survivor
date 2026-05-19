@@ -14904,33 +14904,6 @@
         }
       ],
       "holes": [],
-      "visibilityPolygon": [
-        {
-          "x": 44.74333333333333,
-          "y": 175
-        },
-        {
-          "x": 2.0206666666666657,
-          "y": 150
-        },
-        {
-          "x": -40.99066666666666,
-          "y": 174.5
-        },
-        {
-          "x": -41.279333333333334,
-          "y": 224
-        },
-        {
-          "x": 1.4433333333333327,
-          "y": 249
-        },
-        {
-          "x": 44.45466666666666,
-          "y": 224.5
-        }
-      ],
-      "visibilityHoles": [],
       "tileCoordKeys": [
         "2,150",
         "0,151",
@@ -22283,8 +22256,7 @@
         "1,248",
         "2,248",
         "3,248"
-      ],
-      "_prototypeGroundFloor": true
+      ]
     },
     {
       "fragmentId": "floor_area:-2,0:1:0",
@@ -22320,33 +22292,6 @@
         }
       ],
       "holes": [],
-      "visibilityPolygon": [
-        {
-          "x": -38.3601265098976,
-          "y": 189.06862889146169
-        },
-        {
-          "x": -34.70863063494298,
-          "y": 182.7438669833417
-        },
-        {
-          "x": -28.87373873011405,
-          "y": 186.11274221707663
-        },
-        {
-          "x": -28.361495236772953,
-          "y": 187
-        },
-        {
-          "x": -31.47173873011405,
-          "y": 192.38725778292337
-        },
-        {
-          "x": -32.042,
-          "y": 192.71650793874667
-        }
-      ],
-      "visibilityHoles": [],
       "tileCoordKeys": [
         "-40,183",
         "-40,184",
@@ -22409,6 +22354,104 @@
         "-36,191",
         "-37,192"
       ]
+    },
+    {
+      "fragmentId": "floor_area:-2,0:2:0",
+      "surfaceId": "floor_area:-2,0:2",
+      "ownerSectionKey": "-2,0",
+      "level": 2,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 6,
+      "outerPolygon": [
+        {
+          "x": -38.3601265098976,
+          "y": 189.06862889146169
+        },
+        {
+          "x": -34.70863063494298,
+          "y": 182.7438669833417
+        },
+        {
+          "x": -28.87373873011405,
+          "y": 186.11274221707663
+        },
+        {
+          "x": -28.361495236772953,
+          "y": 187
+        },
+        {
+          "x": -31.47173873011405,
+          "y": 192.38725778292337
+        },
+        {
+          "x": -32.042,
+          "y": 192.71650793874667
+        }
+      ],
+      "holes": [],
+      "tileCoordKeys": [
+        "-40,183",
+        "-40,184",
+        "-39,184",
+        "-38,184",
+        "-41,185",
+        "-40,185",
+        "-39,185",
+        "-38,185",
+        "-37,185",
+        "-36,185",
+        "-42,186",
+        "-41,186",
+        "-40,186",
+        "-39,186",
+        "-38,186",
+        "-37,186",
+        "-36,186",
+        "-35,186",
+        "-34,186",
+        "-42,187",
+        "-41,187",
+        "-40,187",
+        "-39,187",
+        "-38,187",
+        "-37,187",
+        "-36,187",
+        "-35,187",
+        "-34,187",
+        "-33,187",
+        "-43,188",
+        "-42,188",
+        "-41,188",
+        "-40,188",
+        "-39,188",
+        "-38,188",
+        "-37,188",
+        "-36,188",
+        "-35,188",
+        "-34,188",
+        "-43,189",
+        "-42,189",
+        "-41,189",
+        "-40,189",
+        "-39,189",
+        "-38,189",
+        "-37,189",
+        "-36,189",
+        "-35,189",
+        "-41,190",
+        "-40,190",
+        "-39,190",
+        "-38,190",
+        "-37,190",
+        "-36,190",
+        "-35,190",
+        "-39,191",
+        "-38,191",
+        "-37,191",
+        "-36,191",
+        "-37,192"
+      ],
+      "texturePath": "/assets/images/flooring/cave.jpg"
     }
   ],
   "floorHoles": [],
@@ -22725,6 +22768,318 @@
       "tint": 16777215,
       "scriptingName": "wallsection45",
       "_prototypeManagedRecordId": 5408
+    },
+    {
+      "type": "wallSection",
+      "id": 5505,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 4,
+      "lineAxis": 4,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -44,
+          "yindex": 189,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -44,
+          "yindex": 188,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -38.104,
+        "y": 189
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -40,
+          "yindex": 183,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -40,
+          "yindex": 182,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -34.64,
+        "y": 183
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection46",
+      "_prototypeManagedRecordId": 5506
+    },
+    {
+      "type": "wallSection",
+      "id": 5506,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 7,
+      "lineAxis": 1,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -40,
+          "yindex": 183,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -40,
+          "yindex": 182,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -34.64,
+        "y": 183
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -34,
+          "yindex": 186,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -33,
+          "yindex": 186,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -29.011,
+        "y": 186.25
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection47",
+      "_prototypeManagedRecordId": 5507
+    },
+    {
+      "type": "wallSection",
+      "id": 5507,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 8,
+      "lineAxis": 2,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -34,
+          "yindex": 186,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -33,
+          "yindex": 186,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -29.011,
+        "y": 186.25
+      },
+      "endPoint": {
+        "kind": "node",
+        "xindex": -33,
+        "yindex": 187,
+        "x": -28.578,
+        "y": 187,
+        "traversalLayer": 0,
+        "surfaceId": "",
+        "fragmentId": ""
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection51",
+      "_prototypeManagedRecordId": 5508
+    },
+    {
+      "type": "wallSection",
+      "id": 5508,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 10,
+      "lineAxis": 4,
+      "startPoint": {
+        "kind": "node",
+        "xindex": -33,
+        "yindex": 187,
+        "x": -28.578,
+        "y": 187,
+        "traversalLayer": 0,
+        "surfaceId": "",
+        "fragmentId": ""
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -36,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -37,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -31.609,
+        "y": 192.25
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection52",
+      "_prototypeManagedRecordId": 5509
+    },
+    {
+      "type": "wallSection",
+      "id": 5509,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 11,
+      "lineAxis": 5,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -36,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -37,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -31.609,
+        "y": 192.25
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -37,
+          "yindex": 193,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -37,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -32.042,
+        "y": 192.5
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection53",
+      "_prototypeManagedRecordId": 5510
+    },
+    {
+      "type": "wallSection",
+      "id": 5510,
+      "height": 3,
+      "thickness": 0.375,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "level": 1,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "texturePhaseA": null,
+      "texturePhaseB": null,
+      "direction": 1,
+      "lineAxis": 1,
+      "startPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -37,
+          "yindex": 193,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -37,
+          "yindex": 192,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -32.042,
+        "y": 192.5
+      },
+      "endPoint": {
+        "kind": "midpoint",
+        "a": {
+          "xindex": -44,
+          "yindex": 189,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "b": {
+          "xindex": -44,
+          "yindex": 188,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
+        },
+        "x": -38.104,
+        "y": 189
+      },
+      "tint": 16777215,
+      "scriptingName": "wallsection54",
+      "_prototypeManagedRecordId": 5511
     }
   ],
   "blockedEdges": [
@@ -25311,6 +25666,248 @@
       "b": {
         "xindex": -37,
         "yindex": 192
+      }
+    },
+    {
+      "recordId": 5507,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 187
+      }
+    },
+    {
+      "recordId": 5507,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 186
+      }
+    },
+    {
+      "recordId": 5507,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 188
+      }
+    },
+    {
+      "recordId": 5507,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 187
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 187
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 186
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -33,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 187
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -34,
+        "yindex": 187
+      },
+      "b": {
+        "xindex": -34,
+        "yindex": 188
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -34,
+        "yindex": 188
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 188
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -34,
+        "yindex": 188
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 187
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -34,
+        "yindex": 188
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 189
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -34,
+        "yindex": 188
+      },
+      "b": {
+        "xindex": -36,
+        "yindex": 188
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -35,
+        "yindex": 189
+      },
+      "b": {
+        "xindex": -35,
+        "yindex": 190
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -35,
+        "yindex": 190
+      },
+      "b": {
+        "xindex": -36,
+        "yindex": 188
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -35,
+        "yindex": 190
+      },
+      "b": {
+        "xindex": -36,
+        "yindex": 189
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -35,
+        "yindex": 190
+      },
+      "b": {
+        "xindex": -36,
+        "yindex": 190
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -35,
+        "yindex": 190
+      },
+      "b": {
+        "xindex": -37,
+        "yindex": 190
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -36,
+        "yindex": 190
+      },
+      "b": {
+        "xindex": -36,
+        "yindex": 191
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -36,
+        "yindex": 191
+      },
+      "b": {
+        "xindex": -37,
+        "yindex": 190
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -36,
+        "yindex": 191
+      },
+      "b": {
+        "xindex": -37,
+        "yindex": 191
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -36,
+        "yindex": 191
+      },
+      "b": {
+        "xindex": -37,
+        "yindex": 192
+      }
+    },
+    {
+      "recordId": 5508,
+      "a": {
+        "xindex": -36,
+        "yindex": 191
+      },
+      "b": {
+        "xindex": -38,
+        "yindex": 191
       }
     }
   ],
@@ -39616,8 +40213,190 @@
       ],
       "castsLosShadows": false,
       "id": 10423
+    },
+    {
+      "type": "placedObject",
+      "x": -29.93111904599239,
+      "y": 189.71874793744706,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "scriptingName": "door6",
+      "texturePath": "/assets/images/doors/door2.png",
+      "category": "doors",
+      "width": 1.4489999999999998,
+      "height": 1.932,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 119.99927222984702,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "learnedEnterSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "castsLosShadows": true,
+      "mountedWallLineGroupId": 5402,
+      "mountedSectionId": 5402,
+      "mountedWallSectionUnitId": 5402,
+      "mountedWallFacingSign": -1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -29.789129675681114,
+          "y": 188.685290593761
+        },
+        {
+          "x": -30.755108423135628,
+          "y": 190.35846394385544
+        },
+        {
+          "x": -30.397870324318884,
+          "y": 190.564709406239
+        },
+        {
+          "x": -29.43189157686437,
+          "y": 188.89153605614456
+        }
+      ],
+      "id": 11115
+    },
+    {
+      "type": "placedObject",
+      "x": -31.919252062568063,
+      "y": 184.78737857236788,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "scriptingName": "door7",
+      "texturePath": "/assets/images/doors/door2.png",
+      "category": "doors",
+      "width": 1.4489999999999998,
+      "height": 1.932,
+      "renderDepthOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 30.00072778082737,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "learnedEnterSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "castsLosShadows": true,
+      "mountedWallLineGroupId": 5404,
+      "mountedSectionId": 5404,
+      "mountedWallSectionUnitId": 5404,
+      "mountedWallFacingSign": 1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -32.76520167366423,
+          "y": 184.320605803254
+        },
+        {
+          "x": -31.092052863985508,
+          "y": 185.28662705595536
+        },
+        {
+          "x": -30.885798326335767,
+          "y": 184.929394196746
+        },
+        {
+          "x": -32.55894713601449,
+          "y": 183.96337294404464
+        }
+      ],
+      "id": 11116
     }
   ],
-  "animals": [],
+  "animals": [
+    {
+      "type": "deer",
+      "x": -10.305400000000002,
+      "y": 182.45000000000005,
+      "hp": 12.478005004486818,
+      "maxHp": 12.478005004486818,
+      "mp": 12.478005004486818,
+      "maxMp": 12.478005004486818,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 1.2474293143074289,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer3",
+      "id": 13
+    },
+    {
+      "type": "deer",
+      "x": 5.795538461538458,
+      "y": 174.53846153846143,
+      "hp": 12.496235785799826,
+      "maxHp": 12.496235785799826,
+      "mp": 12.496235785799826,
+      "maxMp": 12.496235785799826,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.8859030680811175,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer26",
+      "id": 16
+    },
+    {
+      "type": "deer",
+      "x": 42.866999999999976,
+      "y": 220.74999999999991,
+      "hp": 12.493560232657002,
+      "maxHp": 12.493560232657002,
+      "mp": 12.493560232657002,
+      "maxMp": 12.493560232657002,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 1.0876961300715955,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer67",
+      "id": 34
+    },
+    {
+      "type": "squirrel",
+      "x": 34.64,
+      "y": 185.5,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5262784184956953,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel56",
+      "id": 136
+    },
+    {
+      "type": "deer",
+      "x": 16.870346153846157,
+      "y": 235.72115384615392,
+      "hp": 12.493529844035702,
+      "maxHp": 12.493529844035702,
+      "mp": 12.493529844035702,
+      "maxMp": 12.493529844035702,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.7661742366421225,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer43",
+      "id": 67
+    }
+  ],
   "powerups": []
 }

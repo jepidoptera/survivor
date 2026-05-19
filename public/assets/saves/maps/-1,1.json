@@ -24805,6 +24805,23 @@
       "chaseRadius": -1,
       "scriptingName": "squirrel10",
       "id": 262
+    },
+    {
+      "type": "squirrel",
+      "x": 169.70269230769244,
+      "y": 251,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.4898897326537922,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel79",
+      "id": 169
     }
   ],
   "powerups": []

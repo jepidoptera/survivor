@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -147.46228529122507,
-    "y": 204.23255353403687,
+    "x": -109.89050847154762,
+    "y": 154.99310833447137,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -18,10 +18,11 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "placeobject",
+    "currentSpell": "teleport",
     "activeAura": "speed",
     "activeAuras": [
-      "speed"
+      "speed",
+      "omnivision"
     ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/cave.jpg",
@@ -30,9 +31,9 @@
     "selectedPlaceableTexturePath": "/assets/images/doors/door2.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/thornflowers.png",
-      "windows": "/assets/images/windows/window.png",
+      "windows": "/assets/images/windows/pointy%20arch%20window.png",
       "doors": "/assets/images/doors/door2.png",
-      "furniture": "/assets/images/furniture/crystal%20ball.png",
+      "furniture": "/assets/images/furniture/hexrug.png",
       "signs": "/assets/images/signs/princess.png",
       "roof": "/assets/images/roofs/slate.png"
     },
@@ -49,7 +50,8 @@
       "/assets/images/flowers/fireflower.png": 0,
       "/assets/images/flowers/thornflowers.png": 0,
       "/assets/images/furniture/hexrug.png": 0,
-      "/assets/images/furniture/crystal%20ball.png": 0
+      "/assets/images/furniture/crystal%20ball.png": 0,
+      "/assets/images/windows/pointy%20arch%20window.png": 0
     },
     "selectedPlaceableScale": 1.932,
     "selectedPlaceableScaleByTexture": {
@@ -63,10 +65,11 @@
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
       "/assets/images/flowers/thornflowers.png": 5,
-      "/assets/images/furniture/hexrug.png": 19.818,
-      "/assets/images/furniture/crystal%20ball.png": 1.979
+      "/assets/images/furniture/hexrug.png": 5.413,
+      "/assets/images/furniture/crystal%20ball.png": 1.979,
+      "/assets/images/windows/pointy%20arch%20window.png": 1.468
     },
-    "selectedPlaceableRotation": 0,
+    "selectedPlaceableRotation": 5,
     "selectedPlaceableRotationByTexture": {
       "/assets/images/doors/door5.png": 0,
       "/assets/images/windows/window.png": 0,
@@ -74,12 +77,13 @@
       "/assets/images/roofs/slate.png": 0,
       "/assets/images/furniture/chair.png": 0,
       "/assets/images/furniture/circlerug.png": 0,
-      "/assets/images/doors/door2.png": 0,
+      "/assets/images/doors/door2.png": 5,
       "/assets/images/flowers/red%20flower.png": 0,
       "/assets/images/flowers/fireflower.png": 0,
       "/assets/images/flowers/thornflowers.png": 0,
-      "/assets/images/furniture/hexrug.png": 30,
-      "/assets/images/furniture/crystal%20ball.png": 30
+      "/assets/images/furniture/hexrug.png": 0,
+      "/assets/images/furniture/crystal%20ball.png": 30,
+      "/assets/images/windows/pointy%20arch%20window.png": 0
     },
     "selectedPlaceableRotationAxis": "spatial",
     "selectedPlaceableRotationAxisByTexture": {
@@ -94,7 +98,8 @@
       "/assets/images/flowers/fireflower.png": "none",
       "/assets/images/flowers/thornflowers.png": "none",
       "/assets/images/furniture/hexrug.png": "ground",
-      "/assets/images/furniture/crystal%20ball.png": "visual"
+      "/assets/images/furniture/crystal%20ball.png": "visual",
+      "/assets/images/windows/pointy%20arch%20window.png": "spatial"
     },
     "selectedPlaceableAnchorX": 0.5,
     "selectedPlaceableAnchorY": 1,
@@ -110,7 +115,8 @@
       "/assets/images/flowers/fireflower.png": 0.5,
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
-      "/assets/images/furniture/crystal%20ball.png": 0.5
+      "/assets/images/furniture/crystal%20ball.png": 0.5,
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -124,7 +130,8 @@
       "/assets/images/flowers/fireflower.png": 0.5,
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
-      "/assets/images/furniture/crystal%20ball.png": 0.5
+      "/assets/images/furniture/crystal%20ball.png": 0.5,
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
     "selectedEditorCategory": "doors",
@@ -208,12 +215,12 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -162.96016937260035,
-      "y": 182.2981610656638
+      "x": -125.39658397627066,
+      "y": 133.06805861110905
     }
   },
   "los": {
     "mazeMode": false
   },
-  "activeCenterKey": "-4,0"
+  "activeCenterKey": "-3,-1"
 }
