@@ -135,6 +135,88 @@ test("object playerTouches does not fire across floor fragments", () => {
     assert.equal(events.length, 0);
 });
 
+test("trigger area playerEnters fires for registry trigger without fragment id", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 41,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        fragmentId: "section:0,0:ground",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+
+    scripting.processTriggerAreaTraversalEvents(
+        wizard,
+        -2,
+        0,
+        0,
+        0,
+        [{ obj: triggerArea, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, triggerArea);
+    assert.equal(events[0].eventName, "playerEnters");
+});
+
+test("trigger area playerEnters does not fire when default ground layer differs from actor layer", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 42,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "section:0,0:upper",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+
+    scripting.processTriggerAreaTraversalEvents(
+        wizard,
+        -2,
+        0,
+        0,
+        0,
+        [{ obj: triggerArea, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
+});
+
 test("door exit still fires after the door drops out of the nearby query", () => {
     const scripting = loadScripting();
     const events = [];

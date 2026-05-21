@@ -467,6 +467,24 @@
         return true;
     }
 
+    function isOnSameTriggerAreaTraversalPlane(actor, area) {
+        if (!isTriggerAreaObject(area)) return false;
+        const actorContext = resolveTraversalContext(actor);
+        const areaContext = resolveTraversalContext(area);
+        const actorLayer = Number.isFinite(actorContext.layer) ? actorContext.layer : 0;
+        const areaLayer = Number.isFinite(areaContext.layer) ? areaContext.layer : 0;
+
+        if (actorLayer !== areaLayer) {
+            return false;
+        }
+
+        if (areaContext.fragmentId || areaContext.surfaceId) {
+            return isOnSameFloorFragment(actor, area);
+        }
+
+        return true;
+    }
+
     function getNamedObjectRuntimeId(obj) {
         if (!obj || typeof obj !== "object") return "named:invalid";
         if (!obj._scriptNamedObjectRuntimeId) {
@@ -3094,7 +3112,7 @@
                 const area = entry && entry.obj;
                 const hitbox = entry && entry.hitbox;
                 if (!isTriggerAreaObject(area) || !hitbox) continue;
-                if (!isOnSameFloorFragment(wizardRef, area)) continue;
+                if (!isOnSameTriggerAreaTraversalPlane(wizardRef, area)) continue;
                 if (
                     !hasEventScriptForTarget(area, "playerTouches") &&
                     !hasEventScriptForTarget(area, "playerUntouches") &&
@@ -3156,7 +3174,7 @@
         for (const [areaId, state] of stateById.entries()) {
             if (activeIds.has(areaId)) continue;
             const trackedArea = state && state.area;
-            if (trackedArea && !isOnSameFloorFragment(wizardRef, trackedArea)) {
+            if (trackedArea && !isOnSameTriggerAreaTraversalPlane(wizardRef, trackedArea)) {
                 stateById.delete(areaId);
                 continue;
             }
