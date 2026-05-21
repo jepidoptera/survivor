@@ -1641,6 +1641,7 @@
             applyPrototypeBlockedEdgesForSection,
             applyPrototypeSectionClearanceChunk,
             applyPrototypeSectionClearanceToNodes,
+            backfillWallBlockedEdgesIntoAsset,
             ensurePrototypeBlockedEdgeState,
             ensurePrototypeBlockedEdges,
             markPrototypeBlockedEdgesDirty,
@@ -1882,6 +1883,7 @@
         });
         installSectionWorldEntitySyncApis(map, {
             applyPrototypeBlockedEdgesForSection,
+            backfillWallBlockedEdgesIntoAsset,
             buildPrototypeObjectPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
             canReusePrototypeParkedRuntimeObject: canReuseSectionWorldParkedRuntimeObject,

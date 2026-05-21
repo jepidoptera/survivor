@@ -4906,6 +4906,7 @@ const SpellSystem = (() => {
     let collisionQueryStamp = 1;
     const collisionNearbyObjectsScratch = [];
     const collisionTargetsScratch = [];
+    const _touchScriptObjectsByArray = new WeakMap();
 
     function getNearbyObjects(mapRef, hitbox, outArray = null, options = {}) {
         if (!mapRef || !hitbox || typeof hitbox.getBounds !== "function") return [];
@@ -5085,6 +5086,7 @@ const SpellSystem = (() => {
         wizardRef._scriptPrevX = toX;
         wizardRef._scriptPrevY = toY;
 
+        const _t0 = performance.now();
         const nearbyAll = getNearbyObjectsAroundWizard(
             wizardRef.map,
             wizardRef,
@@ -5106,6 +5108,7 @@ const SpellSystem = (() => {
             nearbyScriptEntries.push({ obj, hitbox, forceTouch });
             nearbyScriptObjects.add(obj);
         }
+        const _t1 = performance.now();
 
         const mapPowerups = (
             typeof globalThis !== "undefined" &&
@@ -5121,28 +5124,42 @@ const SpellSystem = (() => {
             nearbyScriptEntries.push({ obj, hitbox, forceTouch: false });
             nearbyScriptObjects.add(obj);
         }
+        const _t2 = performance.now();
 
         const runtimeScriptObjects = (wizardRef.map && typeof wizardRef.map.getGameObjects === "function")
             ? (wizardRef.map.getGameObjects({ refresh: false }) || [])
             : [];
-        for (let i = 0; i < runtimeScriptObjects.length; i++) {
-            const obj = runtimeScriptObjects[i];
+        let touchScriptObjects = _touchScriptObjectsByArray.get(runtimeScriptObjects);
+        if (!touchScriptObjects) {
+            touchScriptObjects = [];
+            for (let i = 0; i < runtimeScriptObjects.length; i++) {
+                const obj = runtimeScriptObjects[i];
+                if (!obj) continue;
+                if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
+                const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                if (!hitbox) continue;
+                const hasTouchScript = (
+                    (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
+                        ? (globalThis.Scripting.hasEventScriptForTarget(obj, "playerTouches") || globalThis.Scripting.hasEventScriptForTarget(obj, "playerUntouches"))
+                        : false
+                );
+                if (!hasTouchScript) continue;
+                touchScriptObjects.push(obj);
+            }
+            _touchScriptObjectsByArray.set(runtimeScriptObjects, touchScriptObjects);
+        }
+        for (let i = 0; i < touchScriptObjects.length; i++) {
+            const obj = touchScriptObjects[i];
             if (!obj || obj === wizardRef || obj.gone || obj.vanishing) continue;
-            if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
             if (nearbyScriptObjects.has(obj)) continue;
             if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
             const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
             if (!hitbox) continue;
-            const hasTouchScript = (
-                (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
-                    ? (globalThis.Scripting.hasEventScriptForTarget(obj, "playerTouches") || globalThis.Scripting.hasEventScriptForTarget(obj, "playerUntouches"))
-                    : false
-            );
-            if (!hasTouchScript) continue;
             const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
             nearbyScriptEntries.push({ obj, hitbox, forceTouch });
             nearbyScriptObjects.add(obj);
         }
+        const _t3 = performance.now();
 
         if (wizardRef.map && typeof wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor === "function") {
             const triggerEntries = wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor(wizardRef);
@@ -5165,6 +5182,7 @@ const SpellSystem = (() => {
                 nearbyScriptEntries.push({ obj, hitbox });
             }
         }
+        const _t4 = performance.now();
 
         scriptingApi.processDoorTraversalEvents(
             wizardRef,
@@ -5189,6 +5207,15 @@ const SpellSystem = (() => {
             nearbyScriptEntries,
             Number(wizardRef.groundRadius) || 0
         );
+        const _t5 = performance.now();
+
+        if (typeof simPerfBreakdown !== "undefined") {
+            simPerfBreakdown.spellNearbyMs += _t1 - _t0;
+            simPerfBreakdown.spellPowerupsMs += _t2 - _t1;
+            simPerfBreakdown.spellRuntimeMs += _t3 - _t2;
+            simPerfBreakdown.spellTriggerMs += _t4 - _t3;
+            simPerfBreakdown.spellProcessMs += _t5 - _t4;
+        }
     }
 
     function getObjectTargetAt(wizardRef, worldX, worldY) {
@@ -5597,9 +5624,135 @@ const SpellSystem = (() => {
         return best;
     }
 
-    function getFloorEditorSnapVertexWorldPoint(wizardRef, screenX, screenY) {
+    function getFloorEditSectionGeometryApi() {
+        const api = (typeof globalThis !== "undefined") ? globalThis.__sectionGeometry : null;
+        if (!api || typeof api.resolvePrototypeSectionCoordForWorldPosition !== "function" || typeof api.makeSectionKey !== "function") {
+            return null;
+        }
+        return api;
+    }
+
+    function getFloorEditSectionKeyForWorldPoint(mapRef, worldX, worldY) {
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        if (!state || !(state.sectionAssetsByKey instanceof Map)) return "";
+        const sectionGeometryApi = getFloorEditSectionGeometryApi();
+        if (!sectionGeometryApi) return "";
+        const coord = sectionGeometryApi.resolvePrototypeSectionCoordForWorldPosition(state, worldX, worldY);
+        const sectionKey = coord ? sectionGeometryApi.makeSectionKey(coord) : "";
+        return sectionKey && state.sectionAssetsByKey.has(sectionKey) ? sectionKey : "";
+    }
+
+    function getClosestFloorEditSegmentPoint(point, a, b) {
+        const px = Number(point && point.x);
+        const py = Number(point && point.y);
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+            return null;
+        }
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+        if (!(lenSq > 0)) {
+            return { x: ax, y: ay, distanceSq: ((px - ax) * (px - ax)) + ((py - ay) * (py - ay)) };
+        }
+        const t = Math.max(0, Math.min(1, (((px - ax) * dx) + ((py - ay) * dy)) / lenSq));
+        const x = ax + dx * t;
+        const y = ay + dy * t;
+        return { x, y, distanceSq: ((px - x) * (px - x)) + ((py - y) * (py - y)) };
+    }
+
+    function getClosestFloorEditPolygonBoundaryPoint(point, polygon) {
+        if (!Array.isArray(polygon) || polygon.length < 2) return null;
+        let best = null;
+        for (let i = 0; i < polygon.length; i++) {
+            const candidate = getClosestFloorEditSegmentPoint(point, polygon[i], polygon[(i + 1) % polygon.length]);
+            if (!candidate) continue;
+            if (!best || candidate.distanceSq < best.distanceSq) best = candidate;
+        }
+        return best;
+    }
+
+    function getFloorEditSectionBoundaryEpsilon() {
+        return 1e-5;
+    }
+
+    function isFloorEditPointOnSectionBoundary(asset, state, point, epsilon = getFloorEditSectionBoundaryEpsilon()) {
+        if (!asset || !state || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+        const polygon = getFloorEditSectionPolygon(asset, state.basis);
+        if (!Array.isArray(polygon) || polygon.length < 3) return false;
+        const closest = getClosestFloorEditPolygonBoundaryPoint(point, polygon);
+        return !!closest && closest.distanceSq <= epsilon * epsilon;
+    }
+
+    function clampFloorEditPointToSection(asset, state, point) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!asset || !state || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const polygon = getFloorEditSectionPolygon(asset, state.basis);
+        if (!Array.isArray(polygon) || polygon.length < 3) return null;
+        if (pointInOrOnFloorEditPolygon2D(x, y, polygon)) return { x, y };
+        const closest = getClosestFloorEditPolygonBoundaryPoint({ x, y }, polygon);
+        return closest ? { x: closest.x, y: closest.y } : null;
+    }
+
+    function getFloorEditBoundarySectionKeysForPoint(mapRef, point) {
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        const out = [];
+        if (!state || !(state.sectionAssetsByKey instanceof Map) || !point) return out;
+        for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
+            if (isFloorEditPointOnSectionBoundary(asset, state, point)) out.push(sectionKey);
+        }
+        return out;
+    }
+
+    function getFloorEditSectionAsset(mapRef, sectionKey) {
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        if (!sectionKey || !state || !(state.sectionAssetsByKey instanceof Map)) return null;
+        return state.sectionAssetsByKey.get(sectionKey) || null;
+    }
+
+    function getFloorEditorSnapVertexAtScreenPoint(wizardRef, screenX, screenY, options = {}) {
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
-        const hit = findFloorEditorVertexAtScreenPoint(wizardRef, screenX, screenY);
+        const exclude = options && options.exclude ? options.exclude : null;
+        const fragments = getEditableFloorEditorFragments(wizardRef);
+        let hit = null;
+        let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
+        for (let i = 0; i < fragments.length; i++) {
+            const fragment = fragments[i];
+            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const rings = getFloorEditorRingsForFragment(fragment);
+            for (let r = 0; r < rings.length; r++) {
+                const ring = rings[r];
+                for (let j = 0; j < ring.points.length; j++) {
+                    if (
+                        exclude &&
+                        exclude.fragmentId === fragment.fragmentId &&
+                        exclude.ringKind === ring.ringKind &&
+                        Number(exclude.holeIndex) === Number(ring.holeIndex) &&
+                        Number(exclude.vertexIndex) === j
+                    ) {
+                        continue;
+                    }
+                    const screenPoint = floorEditorWorldToScreen(ring.points[j], baseZ);
+                    if (!screenPoint || !Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
+                    const dx = Number(screenPoint.x) - Number(screenX);
+                    const dy = Number(screenPoint.y) - Number(screenY);
+                    const distanceSq = (dx * dx) + (dy * dy);
+                    if (distanceSq > bestDistanceSq) continue;
+                    bestDistanceSq = distanceSq;
+                    hit = {
+                        fragmentId: fragment.fragmentId,
+                        ringKind: ring.ringKind,
+                        holeIndex: ring.holeIndex,
+                        vertexIndex: j,
+                        distanceSq
+                    };
+                }
+            }
+        }
         if (!hit) return null;
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         const fragment = mapRef && mapRef.floorsById instanceof Map
@@ -5610,7 +5763,22 @@ const SpellSystem = (() => {
         if (!Array.isArray(ring)) return null;
         const point = ring[hit.vertexIndex];
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
-        return { x: Number(point.x), y: Number(point.y) };
+        const snapPoint = { x: Number(point.x), y: Number(point.y) };
+        return {
+            ...hit,
+            x: snapPoint.x,
+            y: snapPoint.y,
+            fragment,
+            surfaceId: typeof fragment.surfaceId === "string" ? fragment.surfaceId : "",
+            ownerSectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+            level: Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0,
+            boundarySectionKeys: getFloorEditBoundarySectionKeysForPoint(mapRef, snapPoint)
+        };
+    }
+
+    function getFloorEditorSnapVertexWorldPoint(wizardRef, screenX, screenY, options = {}) {
+        const snap = getFloorEditorSnapVertexAtScreenPoint(wizardRef, screenX, screenY, options);
+        return snap ? { x: snap.x, y: snap.y } : null;
     }
 
     function getClosestScreenSegmentInfo(screenX, screenY, ax, ay, bx, by) {
@@ -5815,17 +5983,18 @@ const SpellSystem = (() => {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         if (!mapRef || !(mapRef.floorsById instanceof Map)) return null;
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
-        const includeHidden = !!(options && options.includeHidden === true);
-        const currentVisibleLevel = wizardRef && Number.isFinite(wizardRef.currentLayer)
-            ? normalizeFloorEditLevel(wizardRef.currentLayer)
-            : getSelectedFloorEditLevel(wizardRef);
+        const maxLevel = Number.isFinite(options && options.maxLevel)
+            ? normalizeFloorEditLevel(options.maxLevel)
+            : Infinity;
+        const includeGround = !!(options && options.includeGround === true);
         let best = null;
         for (const fragment of mapRef.floorsById.values()) {
             if (!fragment) continue;
             const level = Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0;
-            if (level === 0) continue;
-            if (!includeHidden && level > currentVisibleLevel) continue;
-            if (fragment._prototypeGroundFloor === true || fragment._floorEditEmpty === true) continue;
+            if (level === 0 && !includeGround) continue;
+            if (level > maxLevel) continue;
+            if (fragment._prototypeGroundFloor === true && !(includeGround && level === 0)) continue;
+            if (fragment._floorEditEmpty === true) continue;
             if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
             const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (level * 3);
             const point = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
@@ -5840,6 +6009,98 @@ const SpellSystem = (() => {
             }
         }
         return best;
+    }
+
+    function getSpellCastScreenPoint(options = {}) {
+        const screenX = Number.isFinite(options && options.screenX)
+            ? Number(options.screenX)
+            : ((typeof globalThis !== "undefined" && globalThis.mousePos && Number.isFinite(globalThis.mousePos.screenX))
+                ? Number(globalThis.mousePos.screenX)
+                : NaN);
+        const screenY = Number.isFinite(options && options.screenY)
+            ? Number(options.screenY)
+            : ((typeof globalThis !== "undefined" && globalThis.mousePos && Number.isFinite(globalThis.mousePos.screenY))
+                ? Number(globalThis.mousePos.screenY)
+                : NaN);
+        return { screenX, screenY };
+    }
+
+    function isTeleportInteriorViewActive(wizardRef, mapRef) {
+        const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
+        if (!renderingApi || typeof renderingApi.isBuildingInteriorPresentationActive !== "function") return false;
+        return !!renderingApi.isBuildingInteriorPresentationActive({ wizard: wizardRef || null, map: mapRef || null });
+    }
+
+    function resolveTeleportNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
+        if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
+        const baseNode = mapRef.worldToNode(worldX, worldY);
+        if (!baseNode) return null;
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        if (targetLayer === 0) return baseNode;
+        if (typeof mapRef.getFloorNodeAtLayer !== "function") return null;
+        const fragment = floorTarget && floorTarget.fragment ? floorTarget.fragment : null;
+        const sectionKey = (fragment && typeof fragment.ownerSectionKey === "string" && fragment.ownerSectionKey.length > 0)
+            ? fragment.ownerSectionKey
+            : (typeof baseNode._prototypeSectionKey === "string"
+                ? baseNode._prototypeSectionKey
+                : ((typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function")
+                    ? mapRef.getPrototypeSectionKeyForWorldPoint(worldX, worldY)
+                    : ""));
+        return mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+            sectionKey,
+            surfaceId: fragment && typeof fragment.surfaceId === "string" ? fragment.surfaceId : "",
+            fragmentId: fragment && typeof fragment.fragmentId === "string" ? fragment.fragmentId : "",
+            allowScan: true
+        });
+    }
+
+    function resolveTeleportVisualTarget(wizardRef, worldX, worldY, options = {}) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        const screenPoint = getSpellCastScreenPoint(options);
+        let targetPoint = null;
+        let targetLayer = 0;
+        let targetBaseZ = 0;
+        let floorTarget = null;
+
+        if (Number.isFinite(screenPoint.screenX) && Number.isFinite(screenPoint.screenY)) {
+            const visibleFloorOptions = { includeGround: true };
+            if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
+                visibleFloorOptions.maxLevel = Number.isFinite(wizardRef && wizardRef.currentLayer)
+                    ? Number(wizardRef.currentLayer)
+                    : (Number.isFinite(wizardRef && wizardRef.traversalLayer) ? Number(wizardRef.traversalLayer) : 0);
+            }
+            floorTarget = getVisibleFloorPolygonTargetAtScreenPoint(wizardRef, screenPoint.screenX, screenPoint.screenY, {
+                ...visibleFloorOptions
+            });
+            if (floorTarget && floorTarget.point) {
+                targetPoint = floorTarget.point;
+                targetLayer = Number.isFinite(floorTarget.level) ? Math.round(Number(floorTarget.level)) : 0;
+                targetBaseZ = Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : targetLayer * 3;
+            } else {
+                targetPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
+            }
+        }
+
+        const resolvedX = Number.isFinite(targetPoint && targetPoint.x) ? Number(targetPoint.x) : worldX;
+        const resolvedY = Number.isFinite(targetPoint && targetPoint.y) ? Number(targetPoint.y) : worldY;
+        const wrappedX = mapRef && typeof mapRef.wrapWorldX === "function" && Number.isFinite(resolvedX)
+            ? mapRef.wrapWorldX(resolvedX)
+            : resolvedX;
+        const wrappedY = mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(resolvedY)
+            ? mapRef.wrapWorldY(resolvedY)
+            : resolvedY;
+        const destinationNode = resolveTeleportNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+
+        return {
+            x: wrappedX,
+            y: wrappedY,
+            layer: targetLayer,
+            baseZ: targetBaseZ,
+            node: destinationNode,
+            floorTarget,
+            screenX: screenPoint.screenX,
+            screenY: screenPoint.screenY
+        };
     }
 
     function resolveFloorEditorPaintWorldPoint(wizardRef, worldX, worldY, options = {}) {
@@ -5915,12 +6176,9 @@ const SpellSystem = (() => {
                 const holeIndex = Math.floor(Number(selection.holeIndex));
                 if (holeIndex < 0) return false;
                 if (!Array.isArray(target.holes)) target.holes = [];
-                if (!Array.isArray(target.visibilityHoles)) target.visibilityHoles = [];
                 target.holes[holeIndex] = ring.map(point => ({ ...point }));
-                target.visibilityHoles[holeIndex] = ring.map(point => ({ ...point }));
             } else {
                 target.outerPolygon = ring.map(point => ({ ...point }));
-                target.visibilityPolygon = ring.map(point => ({ ...point }));
             }
         }
         if (assetMatch.asset && assetMatch.floor) {
@@ -5956,6 +6214,112 @@ const SpellSystem = (() => {
             rematerializeFloorEditSections(wizardRef.map, new Set([sectionKey]));
         }
         activeSelection.dirty = false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+        return true;
+    }
+
+    function cloneFloorEditorFragmentRecord(record) {
+        if (!record || typeof record !== "object") return null;
+        const cloned = { ...record };
+        cloned.outerPolygon = cloneFloorEditorRing(record.outerPolygon);
+        cloned.holes = Array.isArray(record.holes)
+            ? record.holes.map(cloneFloorEditorRing).filter(ring => ring.length >= 3)
+            : [];
+        cloned.tileCoordKeys = Array.isArray(record.tileCoordKeys) ? record.tileCoordKeys.slice() : [];
+        return cloned;
+    }
+
+    function isFloorEditorFragmentContainedInOwnerSection(wizardRef, selection) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        const fragment = selection && (selection.fragment || (
+            mapRef && mapRef.floorsById instanceof Map ? mapRef.floorsById.get(selection.fragmentId) : null
+        ));
+        const ownerSectionKey = fragment && typeof fragment.ownerSectionKey === "string"
+            ? fragment.ownerSectionKey
+            : "";
+        if (!fragment || !ownerSectionKey || !state || !(state.sectionAssetsByKey instanceof Map)) return false;
+        const ownerAsset = state.sectionAssetsByKey.get(ownerSectionKey);
+        if (!ownerAsset) return false;
+        const outerRing = floorEditPointsToClipRing(fragment.outerPolygon);
+        if (!outerRing) return false;
+        const polygon = [outerRing];
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let h = 0; h < holes.length; h++) {
+            const holeRing = floorEditPointsToClipRing(holes[h]);
+            if (holeRing) polygon.push(holeRing);
+        }
+        const fragmentGeometry = [polygon];
+        const ownerSectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(ownerAsset, state.basis));
+        if (isFloorEditClipGeometryEmpty(ownerSectionGeometry)) return false;
+        const clipApi = getFloorBooleanApi();
+        if (!clipApi || typeof clipApi.difference !== "function") return false;
+        const outsideOwner = floorEditSafeBoolean("difference", fragmentGeometry, ownerSectionGeometry);
+        return isFloorEditClipGeometryEmpty(outsideOwner);
+    }
+
+    function rematerializeSelectedFloorEditorFragmentFast(wizardRef, selection) {
+        const activeSelection = selection || getFloorEditorVertexSelection(wizardRef);
+        if (!wizardRef || !wizardRef.map || !activeSelection) return false;
+        if (!isFloorEditorFragmentContainedInOwnerSection(wizardRef, activeSelection)) return false;
+        const mapRef = wizardRef.map;
+        const fragment = activeSelection.fragment || (
+            mapRef.floorsById instanceof Map ? mapRef.floorsById.get(activeSelection.fragmentId) : null
+        );
+        if (!fragment) return false;
+        const assetMatch = findAssetFloorForFloorEditorFragment(mapRef, fragment);
+        if (!assetMatch.asset || !assetMatch.floor) return false;
+        refreshFloorEditorFloorTileKeys(assetMatch.asset, assetMatch.floor);
+        const fragmentRecord = cloneFloorEditorFragmentRecord(assetMatch.floor);
+        if (!fragmentRecord || typeof fragmentRecord.fragmentId !== "string" || fragmentRecord.fragmentId.length === 0) return false;
+        const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
+        if (!sectionKey) return false;
+        rematerializeFloorEditFragmentChanges(mapRef, new Map([[
+            sectionKey,
+            {
+                removedFragmentIds: [fragmentRecord.fragmentId],
+                fragmentRecords: [fragmentRecord]
+            }
+        ]]));
+        activeSelection.dirty = false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+        return true;
+    }
+
+    function mergeSelectedFloorEditorFragmentOverlaps(wizardRef, selection) {
+        const activeSelection = selection || getFloorEditorVertexSelection(wizardRef);
+        if (!wizardRef || !wizardRef.map || !activeSelection) return false;
+        if (!isFloorEditorFragmentContainedInOwnerSection(wizardRef, activeSelection)) return false;
+        const mapRef = wizardRef.map;
+        const fragment = activeSelection.fragment || (
+            mapRef.floorsById instanceof Map ? mapRef.floorsById.get(activeSelection.fragmentId) : null
+        );
+        if (!fragment || typeof fragment.fragmentId !== "string" || fragment.fragmentId.length === 0) return false;
+        const assetMatch = findAssetFloorForFloorEditorFragment(mapRef, fragment);
+        if (!assetMatch.asset || !assetMatch.floor) return false;
+        const level = Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0;
+        const result = getFloorFragmentEditApi().mergeOverlappingFragment(assetMatch.asset, level, assetMatch.floor.fragmentId, {
+            basis: mapRef._prototypeSectionState ? mapRef._prototypeSectionState.basis : null,
+            getSectionPolygon: getFloorEditSectionPolygon
+        });
+        if (!result || !result.changed) return false;
+        const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
+        if (!sectionKey) return false;
+        rematerializeFloorEditFragmentChanges(mapRef, new Map([[
+            sectionKey,
+            {
+                removedFragmentIds: result.removedFragmentIds,
+                fragmentRecords: result.fragmentRecords
+            }
+        ]]));
+        activeSelection.dirty = false;
+        if (result.fragmentRecords && result.fragmentRecords[0] && typeof result.fragmentRecords[0].fragmentId === "string") {
+            activeSelection.fragmentId = result.fragmentRecords[0].fragmentId;
+        }
         if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
             globalThis.presentGameFrame();
         }
@@ -6026,7 +6390,17 @@ const SpellSystem = (() => {
         return true;
     }
 
-    function updateFloorEditorVertexDrag(wizardRef, worldX, worldY) {
+    function setFloorEditorFragmentSurfaceId(wizardRef, fragment, surfaceId) {
+        if (!wizardRef || !wizardRef.map || !fragment || typeof surfaceId !== "string" || surfaceId.length === 0) return false;
+        if (fragment.surfaceId === surfaceId) return true;
+        const assetMatch = findAssetFloorForFloorEditorFragment(wizardRef.map, fragment);
+        fragment.surfaceId = surfaceId;
+        if (assetMatch.floor && assetMatch.floor !== fragment) assetMatch.floor.surfaceId = surfaceId;
+        else if (assetMatch.floor) assetMatch.floor.surfaceId = surfaceId;
+        return true;
+    }
+
+    function updateFloorEditorVertexDrag(wizardRef, worldX, worldY, options = {}) {
         if (!isFloorEditorDebugEditEnabled(wizardRef)) return false;
         const selection = getFloorEditorVertexSelection(wizardRef);
         if (!selection || !selection.dragging) return false;
@@ -6034,11 +6408,42 @@ const SpellSystem = (() => {
         const wrappedX = (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
         const wrappedY = (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
         if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return false;
+        const snap = getFloorEditorSnapVertexAtScreenPoint(wizardRef, Number(options && options.screenX), Number(options && options.screenY), {
+            exclude: selection
+        });
+        let nextPoint = snap ? { x: snap.x, y: snap.y } : { x: wrappedX, y: wrappedY };
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        const ownerSectionKey = selection.fragment && typeof selection.fragment.ownerSectionKey === "string"
+            ? selection.fragment.ownerSectionKey
+            : "";
+        const ownerAsset = ownerSectionKey && state && state.sectionAssetsByKey instanceof Map
+            ? state.sectionAssetsByKey.get(ownerSectionKey)
+            : null;
+        if (ownerAsset) {
+            const clamped = clampFloorEditPointToSection(ownerAsset, state, nextPoint);
+            if (!clamped) return false;
+            nextPoint = clamped;
+        }
+        if (
+            snap &&
+            snap.fragment &&
+            selection.fragment &&
+            snap.surfaceId &&
+            snap.fragment.fragmentId !== selection.fragment.fragmentId &&
+            ownerAsset &&
+            isFloorEditPointOnSectionBoundary(ownerAsset, state, nextPoint)
+        ) {
+            const snapAsset = getFloorEditSectionAsset(mapRef, snap.ownerSectionKey);
+            if (snapAsset && isFloorEditPointOnSectionBoundary(snapAsset, state, nextPoint)) {
+                setFloorEditorFragmentSurfaceId(wizardRef, selection.fragment, snap.surfaceId);
+                selection.dirty = true;
+            }
+        }
         const ring = getFloorEditorRingFromFragment(selection.fragment, selection.ringKind, selection.holeIndex);
         if (!Array.isArray(ring) || ring.length < 3) return false;
         const nextRing = ring.map((point, index) => (
             index === selection.vertexIndex
-                ? { x: wrappedX, y: wrappedY }
+                ? { x: nextPoint.x, y: nextPoint.y }
                 : { x: Number(point.x), y: Number(point.y) }
         ));
         return applyFloorEditorRingToFragment(wizardRef, selection, nextRing, { rematerialize: false });
@@ -6143,7 +6548,13 @@ const SpellSystem = (() => {
         const selection = getFloorEditorVertexSelection(wizardRef);
         if (!selection || !selection.dragging) return false;
         selection.dragging = false;
-        if (selection.dirty) sliceFloorEditorFragmentAtSectionBoundaries(wizardRef, selection);
+        if (
+            selection.dirty &&
+            !mergeSelectedFloorEditorFragmentOverlaps(wizardRef, selection) &&
+            !rematerializeSelectedFloorEditorFragmentFast(wizardRef, selection)
+        ) {
+            sliceFloorEditorFragmentAtSectionBoundaries(wizardRef, selection);
+        }
         return true;
     }
 
@@ -6183,6 +6594,42 @@ const SpellSystem = (() => {
         if (!draft || !Array.isArray(draft.points) || draft.points.length === 0) return false;
         clearFloorHolePlacementDraft(wizardRef);
         return true;
+    }
+
+    function getFloorStairsTool() {
+        return (typeof globalThis !== "undefined" && globalThis.FloorStairs)
+            ? globalThis.FloorStairs
+            : null;
+    }
+
+    function beginFloorStairPlacement(wizardRef, screenX, screenY, options = {}) {
+        const tool = getFloorStairsTool();
+        if (!tool || typeof tool.beginPlacement !== "function") return false;
+        return tool.beginPlacement(wizardRef, screenX, screenY, options);
+    }
+
+    function updateFloorStairPlacement(wizardRef, worldX, worldY, options = {}) {
+        const tool = getFloorStairsTool();
+        if (!tool || typeof tool.updatePlacement !== "function") return false;
+        return tool.updatePlacement(wizardRef, worldX, worldY, options);
+    }
+
+    function endFloorStairPlacement(wizardRef) {
+        const tool = getFloorStairsTool();
+        if (!tool || typeof tool.endPlacement !== "function") return false;
+        return tool.endPlacement(wizardRef);
+    }
+
+    function cancelFloorStairPlacement(wizardRef) {
+        const tool = getFloorStairsTool();
+        if (!tool || typeof tool.cancelPlacement !== "function") return false;
+        return tool.cancelPlacement(wizardRef);
+    }
+
+    function getFloorStairPlacementPreview(wizardRef) {
+        const tool = getFloorStairsTool();
+        if (!tool || typeof tool.getPlacementPreview !== "function") return null;
+        return tool.getPlacementPreview(wizardRef);
     }
 
     function getTriggerAreaHelpMarkup() {
@@ -6387,7 +6834,69 @@ const SpellSystem = (() => {
         if (typeof roofApi.extractWallLoopPolygonPoints !== "function") return null;
         const polygonPoints = roofApi.extractWallLoopPolygonPoints(loopSections, mapRef, wallCtor);
         if (!polygonPoints || polygonPoints.length < 3) return null;
+        if (floorShapeWallLoopOverlapsExistingFloor(wizardRef, polygonPoints)) return null;
         return { wallSections: loopSections, polygonPoints };
+    }
+
+    function floorEditFragmentToClipGeometry(fragment) {
+        if (!fragment || fragment._floorEditEmpty === true) return [];
+        const outerRing = floorEditPointsToClipRing(fragment.outerPolygon);
+        if (!outerRing) return [];
+        const polygon = [outerRing];
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            const holeRing = floorEditPointsToClipRing(holes[i]);
+            if (holeRing) polygon.push(holeRing);
+        }
+        return [polygon];
+    }
+
+    function floorEditRingBounds(points) {
+        if (!Array.isArray(points) || points.length === 0) return null;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+        return { minX, minY, maxX, maxY };
+    }
+
+    function floorEditBoundsOverlap(a, b) {
+        if (!a || !b) return false;
+        return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+    }
+
+    function floorShapeWallLoopOverlapsExistingFloor(wizardRef, polygonPoints) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef || !(mapRef.floorsById instanceof Map) || mapRef.floorsById.size === 0) return false;
+        const loopGeometry = floorEditClipMultiPolygonFromPoints(polygonPoints);
+        if (isFloorEditClipGeometryEmpty(loopGeometry)) return false;
+        const loopBounds = floorEditRingBounds(polygonPoints);
+        if (!loopBounds) return false;
+        const api = getFloorBooleanApi();
+        if (!api || typeof api.intersection !== "function") {
+            throw new Error("floor shape wall-loop occupancy check requires polygonClipping.intersection");
+        }
+        const level = getSelectedFloorEditLevel(wizardRef);
+        for (const fragment of mapRef.floorsById.values()) {
+            if (!fragment || normalizeFloorEditLevel(fragment.level) !== level) continue;
+            const fragmentBounds = floorEditRingBounds(fragment.outerPolygon);
+            if (!floorEditBoundsOverlap(loopBounds, fragmentBounds)) continue;
+            const fragmentGeometry = floorEditFragmentToClipGeometry(fragment);
+            if (isFloorEditClipGeometryEmpty(fragmentGeometry)) continue;
+            const overlap = api.intersection(loopGeometry, fragmentGeometry);
+            if (!isFloorEditClipGeometryEmpty(overlap)) return true;
+        }
+        return false;
     }
 
     function getScreenDistancePxBetweenWorldPoints(a, b) {
@@ -6523,25 +7032,19 @@ const SpellSystem = (() => {
         return true;
     }
 
-    function filterCoveredFloorEditHolePairs(holes, visibilityHoles, coveringPolygon) {
+    function filterCoveredFloorEditHolePairs(holes, coveringPolygon) {
         const sourceHoles = Array.isArray(holes) ? holes : [];
-        const sourceVisibilityHoles = Array.isArray(visibilityHoles) ? visibilityHoles : [];
         const nextHoles = [];
-        const nextVisibilityHoles = [];
         let removed = 0;
-        const count = Math.max(sourceHoles.length, sourceVisibilityHoles.length);
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < sourceHoles.length; i++) {
             const hole = sourceHoles[i];
-            const visibilityHole = sourceVisibilityHoles[i];
-            const ring = Array.isArray(visibilityHole) && visibilityHole.length >= 3 ? visibilityHole : hole;
-            if (floorEditPolygonContainsRing(coveringPolygon, ring)) {
+            if (floorEditPolygonContainsRing(coveringPolygon, hole)) {
                 removed += 1;
                 continue;
             }
             if (Array.isArray(hole)) nextHoles.push(hole);
-            if (Array.isArray(visibilityHole)) nextVisibilityHoles.push(visibilityHole);
         }
-        return { holes: nextHoles, visibilityHoles: nextVisibilityHoles, removed };
+        return { holes: nextHoles, removed };
     }
 
     function clearCoveredFloorEditHiddenKeys(mapRef, level, tileCoordKeysBySection) {
@@ -6566,10 +7069,9 @@ const SpellSystem = (() => {
         if (mapRef.floorsById instanceof Map) {
             for (const fragment of mapRef.floorsById.values()) {
                 if (!fragment || normalizeFloorEditLevel(fragment.level) !== normalizedLevel) continue;
-                const filtered = filterCoveredFloorEditHolePairs(fragment.holes, fragment.visibilityHoles, coveringPolygon);
+                const filtered = filterCoveredFloorEditHolePairs(fragment.holes, coveringPolygon);
                 if (filtered.removed <= 0) continue;
                 fragment.holes = filtered.holes;
-                fragment.visibilityHoles = filtered.visibilityHoles;
                 removedHoles += filtered.removed;
             }
         }
@@ -6597,10 +7099,9 @@ const SpellSystem = (() => {
                 for (let i = 0; i < asset.floors.length; i++) {
                     const floor = asset.floors[i];
                     if (!floor || normalizeFloorEditLevel(floor.level) !== normalizedLevel) continue;
-                    const filtered = filterCoveredFloorEditHolePairs(floor.holes, floor.visibilityHoles, coveringPolygon);
+                    const filtered = filterCoveredFloorEditHolePairs(floor.holes, coveringPolygon);
                     if (filtered.removed <= 0) continue;
                     floor.holes = filtered.holes;
-                    floor.visibilityHoles = filtered.visibilityHoles;
                     removedHoles += filtered.removed;
                 }
             }
@@ -6612,6 +7113,12 @@ const SpellSystem = (() => {
         return (typeof globalThis !== "undefined" && globalThis.polygonClipping)
             ? globalThis.polygonClipping
             : null;
+    }
+
+    function getFloorFragmentEditApi() {
+        const api = (typeof globalThis !== "undefined") ? globalThis.FloorFragmentEdit : null;
+        if (!api) throw new Error("floor editing requires FloorFragmentEdit");
+        return api;
     }
 
     function floorEditPointsToClipRing(points) {
@@ -6816,8 +7323,15 @@ const SpellSystem = (() => {
                 }
             }
         }
+        // Collect the existing fragments at this level in order so their
+        // fragmentId/surfaceId can be reused for the replacement records.
+        // Preserving these IDs keeps blocked-edge records (which reference
+        // nodes by fragmentId) valid across boolean edits.
+        const existingAtLevel = existingFloors.filter(
+            f => f && normalizeFloorEditLevel(f.level) === normalizedLevel
+        );
         const nextFloors = existingFloors.filter(floor => !floor || normalizeFloorEditLevel(floor.level) !== normalizedLevel);
-        const surfaceId = `floor_area:${asset.key}:${normalizedLevel}`;
+        const fallbackSurfaceId = `floor_area:${asset.key}:${normalizedLevel}`;
         let fragments = 0;
         let tiles = 0;
         if (Array.isArray(geometry)) {
@@ -6833,8 +7347,13 @@ const SpellSystem = (() => {
                 }
                 const tileCoordKeys = getFloorEditTileCoordKeysForPolygon(asset, outer, holes);
                 tiles += tileCoordKeys.length;
+                // Reuse the existing fragment's IDs when available so that
+                // blocked-edge records (keyed by fragmentId) remain valid.
+                const existing = existingAtLevel[i] || null;
+                const surfaceId = (existing && existing.surfaceId) ? existing.surfaceId : fallbackSurfaceId;
+                const fragmentId = (existing && existing.fragmentId) ? existing.fragmentId : `${fallbackSurfaceId}:${i}`;
                 const record = {
-                    fragmentId: `${surfaceId}:${i}`,
+                    fragmentId,
                     surfaceId,
                     ownerSectionKey: asset.key,
                     level: normalizedLevel,
@@ -6842,8 +7361,6 @@ const SpellSystem = (() => {
                     nodeBaseZ: normalizedLevel * 3,
                     outerPolygon: outer,
                     holes,
-                    visibilityPolygon: outer.map(p => ({ ...p })),
-                    visibilityHoles: holes.map(hole => hole.map(p => ({ ...p }))),
                     tileCoordKeys
                 };
                 if (texturePath) record.texturePath = texturePath;
@@ -6853,16 +7370,14 @@ const SpellSystem = (() => {
         }
         if (fragments === 0 && normalizedLevel === 0) {
             nextFloors.push({
-                fragmentId: `${surfaceId}:empty`,
-                surfaceId,
+                fragmentId: `${fallbackSurfaceId}:empty`,
+                surfaceId: fallbackSurfaceId,
                 ownerSectionKey: asset.key,
                 level: 0,
                 nodeBaseZOffset: 0,
                 nodeBaseZ: 0,
                 outerPolygon: [],
                 holes: [],
-                visibilityPolygon: [],
-                visibilityHoles: [],
                 tileCoordKeys: [],
                 _floorEditEmpty: true
             });
@@ -6907,9 +7422,177 @@ const SpellSystem = (() => {
             if (typeof mapRef.registerSectionFloorNodes === "function") {
                 mapRef.registerSectionFloorNodes(sectionKey);
             }
+            const blockedEdgeState = mapRef._prototypeBlockedEdgeState;
+            if (blockedEdgeState && blockedEdgeState.activeEntriesBySectionKey instanceof Map) {
+                blockedEdgeState.activeEntriesBySectionKey.delete(sectionKey);
+            }
+            // Re-apply wall blocked edges directly to the freshly-registered floor
+            // nodes.  syncPrototypeWalls (called below) may not correctly re-apply
+            // blocking when runtime wall objects hold stale references to the old
+            // nodes that were just destroyed.  Applying here, immediately after
+            // registration, ensures the new nodes pick up the correct blockedNeighbors.
+            const blockingModule = (typeof globalThis !== "undefined") && globalThis.__sectionWorldBlocking;
+            if (blockingModule && typeof blockingModule.createSectionWorldBlockingHelpers === "function") {
+                const { applyPrototypeBlockedEdgesForSection } =
+                    blockingModule.createSectionWorldBlockingHelpers(mapRef, {});
+                applyPrototypeBlockedEdgesForSection(mapRef, sectionKey);
+            }
+            refreshManagedWallNodeRegistrationsAfterFloorEdit(mapRef, new Set([sectionKey]));
             count += 1;
         }
+        const wallState = mapRef._prototypeWallState;
+        if (count > 0 && wallState && typeof wallState === "object") {
+            wallState.activeRecordSignature = null;
+        }
+        if (count > 0 && typeof mapRef.syncPrototypeWalls === "function") {
+            mapRef.syncPrototypeWalls();
+        }
         return count;
+    }
+
+    function rematerializeFloorEditFragmentChanges(mapRef, changesBySectionKey) {
+        return getFloorFragmentEditApi().rematerializeFragmentChanges(mapRef, changesBySectionKey, {
+            rematerializeSections: rematerializeFloorEditSections,
+            refreshManagedWallNodeRegistrations: refreshManagedWallNodeRegistrationsAfterFloorEdit
+        });
+    }
+
+    function refreshManagedWallNodeRegistrationsAfterFloorEdit(mapRef, sectionKeys) {
+        return getFloorFragmentEditApi().refreshManagedWallNodeRegistrations(mapRef, sectionKeys);
+    }
+
+    function getFloorShapeDraftCandidateSectionKeys(mapRef, draft) {
+        if (!draft || !Array.isArray(draft.boundarySectionKeys)) return [];
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        if (!state || !(state.sectionAssetsByKey instanceof Map)) return [];
+        const out = [];
+        for (let i = 0; i < draft.boundarySectionKeys.length; i++) {
+            const key = draft.boundarySectionKeys[i];
+            if (typeof key === "string" && state.sectionAssetsByKey.has(key) && !out.includes(key)) out.push(key);
+        }
+        return out;
+    }
+
+    function chooseFloorShapeDraftSectionForPoint(mapRef, draft, point) {
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        if (!state || !(state.sectionAssetsByKey instanceof Map) || !point) return "";
+        const candidateKeys = getFloorShapeDraftCandidateSectionKeys(mapRef, draft);
+        const keys = candidateKeys.length > 0 ? candidateKeys : Array.from(state.sectionAssetsByKey.keys());
+        const containing = [];
+        for (let i = 0; i < keys.length; i++) {
+            const asset = state.sectionAssetsByKey.get(keys[i]);
+            const polygon = getFloorEditSectionPolygon(asset, state.basis);
+            if (pointInOrOnFloorEditPolygon2D(point.x, point.y, polygon)) containing.push(keys[i]);
+        }
+        if (containing.length === 1) return containing[0];
+        if (candidateKeys.length > 0 && containing.length > 1) {
+            let boundaryCount = 0;
+            for (let i = 0; i < containing.length; i++) {
+                const asset = state.sectionAssetsByKey.get(containing[i]);
+                if (isFloorEditPointOnSectionBoundary(asset, state, point)) boundaryCount += 1;
+            }
+            if (boundaryCount === containing.length) return "";
+        }
+        const resolved = getFloorEditSectionKeyForWorldPoint(mapRef, point.x, point.y);
+        if (resolved && keys.includes(resolved)) return resolved;
+        let bestKey = "";
+        let bestDistanceSq = Infinity;
+        for (let i = 0; i < keys.length; i++) {
+            const asset = state.sectionAssetsByKey.get(keys[i]);
+            const closest = getClosestFloorEditPolygonBoundaryPoint(point, getFloorEditSectionPolygon(asset, state.basis));
+            if (!closest) continue;
+            if (closest.distanceSq < bestDistanceSq) {
+                bestDistanceSq = closest.distanceSq;
+                bestKey = keys[i];
+            }
+        }
+        return bestKey;
+    }
+
+    function resolveFloorShapeDraftPoint(wizardRef, draft, rawPoint, snap = null) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        if (!draft || !mapRef || !state || !(state.sectionAssetsByKey instanceof Map)) return rawPoint;
+        let point = rawPoint;
+        if (draft.points.length === 0) {
+            const boundarySectionKeys = snap && Array.isArray(snap.boundarySectionKeys)
+                ? snap.boundarySectionKeys.slice()
+                : getFloorEditBoundarySectionKeysForPoint(mapRef, point);
+            if (snap && snap.surfaceId && boundarySectionKeys.length >= 2) {
+                draft.preferredSurfaceId = snap.surfaceId;
+                draft.boundarySectionKeys = boundarySectionKeys;
+            } else {
+                draft.boundarySectionKeys = boundarySectionKeys.length >= 2 ? boundarySectionKeys : [];
+                draft.sectionKey = getFloorEditSectionKeyForWorldPoint(mapRef, point.x, point.y);
+            }
+        }
+        if (!draft.sectionKey) {
+            const chosen = chooseFloorShapeDraftSectionForPoint(mapRef, draft, point);
+            if (chosen) draft.sectionKey = chosen;
+        }
+        if (draft.sectionKey) {
+            const asset = state.sectionAssetsByKey.get(draft.sectionKey);
+            const clamped = clampFloorEditPointToSection(asset, state, point);
+            if (clamped) point = clamped;
+        }
+        return point;
+    }
+
+    function applyFloorBooleanEditToDraftSection(wizardRef, operation) {
+        if (!wizardRef || !wizardRef.map || operation !== "add") return false;
+        const draft = wizardRef._floorShapePlacementDraft;
+        if (!draft || !Array.isArray(draft.points) || draft.points.length < 3) return false;
+        const mapRef = wizardRef.map;
+        const state = mapRef._prototypeSectionState || null;
+        if (!state || !(state.sectionAssetsByKey instanceof Map)) return false;
+        const level = getSelectedFloorEditLevel(wizardRef);
+        const points = normalizeFloorEditPolygonRing(draft.points);
+        if (points.length < 3) return false;
+        const sectionKey = draft.sectionKey || chooseFloorShapeDraftSectionForPoint(mapRef, draft, points[0]);
+        if (!sectionKey) {
+            if (typeof message === "function") message("Floor polygon needs one point inside a section before it can be added.");
+            return false;
+        }
+        const asset = state.sectionAssetsByKey.get(sectionKey);
+        if (!asset) return false;
+        const drawnGeometry = floorEditClipMultiPolygonFromPoints(points);
+        if (isFloorEditClipGeometryEmpty(drawnGeometry)) return false;
+        const sectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset, state.basis));
+        if (isFloorEditClipGeometryEmpty(sectionGeometry)) return false;
+        const editGeometry = floorEditSafeBoolean("intersection", sectionGeometry, drawnGeometry);
+        if (isFloorEditClipGeometryEmpty(editGeometry)) return false;
+        const result = getFloorFragmentEditApi().applyAssetGeometryDelta(asset, level, editGeometry, operation, {
+            basis: state.basis,
+            getSectionPolygon: getFloorEditSectionPolygon,
+            preferredSurfaceId: typeof draft.preferredSurfaceId === "string" ? draft.preferredSurfaceId : ""
+        });
+        if (!result.changed) return false;
+        if (mapRef._floorEditHiddenTileKeysByLevel instanceof Map) {
+            mapRef._floorEditHiddenTileKeysByLevel.delete(level);
+        }
+        rematerializeFloorEditFragmentChanges(mapRef, new Map([[
+            sectionKey,
+            {
+                removedFragmentIds: result.removedFragmentIds,
+                fragmentRecords: result.fragmentRecords
+            }
+        ]]));
+        wizardRef._floorShapePlacementDraft = null;
+        if (typeof message === "function") {
+            message(`Added floor level ${level > 0 ? `+${level}` : level}: ${result.tiles} tiles across ${result.fragments} fragment${result.fragments === 1 ? "" : "s"}.`);
+        }
+        recordFloorEditDiagnostic("boolean.apply.section.finish", {
+            operation,
+            level,
+            sectionKey,
+            totalFragments: result.fragments,
+            totalTiles: result.tiles,
+            preferredSurfaceId: typeof draft.preferredSurfaceId === "string" ? draft.preferredSurfaceId : ""
+        });
+        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+            globalThis.presentGameFrame();
+        }
+        return true;
     }
 
     function applyFloorBooleanEdit(wizardRef, operation) {
@@ -6941,25 +7624,31 @@ const SpellSystem = (() => {
         const drawnGeometry = floorEditClipMultiPolygonFromPoints(points);
         if (isFloorEditClipGeometryEmpty(drawnGeometry)) return false;
         const changedSectionKeys = new Set();
+        const fragmentChangesBySectionKey = new Map();
         let totalFragments = 0;
         let totalTiles = 0;
         for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
             const sectionGeometry = floorEditClipMultiPolygonFromPoints(getFloorEditSectionPolygon(asset, state.basis));
             if (isFloorEditClipGeometryEmpty(sectionGeometry)) continue;
             const editGeometry = floorEditSafeBoolean("intersection", sectionGeometry, drawnGeometry);
-            const currentGeometry = getFloorEditAssetAreaGeometry(asset, level, state.basis);
-            const nextGeometry = operation === "subtract"
-                ? floorEditSafeBoolean("difference", currentGeometry, editGeometry)
-                : floorEditSafeBoolean("union", currentGeometry, editGeometry);
-            const result = setFloorEditAssetAreaGeometry(asset, level, nextGeometry);
+            if (isFloorEditClipGeometryEmpty(editGeometry)) continue;
+            const result = getFloorFragmentEditApi().applyAssetGeometryDelta(asset, level, editGeometry, operation, {
+                basis: state.basis,
+                getSectionPolygon: getFloorEditSectionPolygon
+            });
+            if (!result.changed) continue;
             changedSectionKeys.add(sectionKey);
+            fragmentChangesBySectionKey.set(sectionKey, {
+                removedFragmentIds: result.removedFragmentIds,
+                fragmentRecords: result.fragmentRecords
+            });
             totalFragments += result.fragments;
             totalTiles += result.tiles;
         }
         if (mapRef._floorEditHiddenTileKeysByLevel instanceof Map) {
             mapRef._floorEditHiddenTileKeysByLevel.delete(level);
         }
-        rematerializeFloorEditSections(mapRef, changedSectionKeys);
+        rematerializeFloorEditFragmentChanges(mapRef, fragmentChangesBySectionKey);
         if (operation === "subtract") {
             wizardRef._floorHolePlacementDraft = null;
             message(`Subtracted from floor level ${level > 0 ? `+${level}` : level}: updated ${changedSectionKeys.size} section${changedSectionKeys.size === 1 ? "" : "s"}.`);
@@ -6999,6 +7688,11 @@ const SpellSystem = (() => {
     }
 
     function finalizeFloorShapePlacement(wizardRef) {
+        const draft = wizardRef && wizardRef._floorShapePlacementDraft;
+        if (draft && draft.sectionKey) return applyFloorBooleanEditToDraftSection(wizardRef, "add");
+        if (draft && Array.isArray(draft.boundarySectionKeys) && draft.boundarySectionKeys.length > 0) {
+            return applyFloorBooleanEditToDraftSection(wizardRef, "add");
+        }
         return applyFloorBooleanEdit(wizardRef, "add");
         /*
         if (!wizardRef || !wizardRef.map) return false;
@@ -7050,8 +7744,6 @@ const SpellSystem = (() => {
                 nodeBaseZ: level,
                 outerPolygon: points,
                 holes: [],
-                visibilityPolygon: points,
-                visibilityHoles: [],
                 tileCoordKeys
             };
             const fragment = mapRef.registerFloorFragment(floorRecord);
@@ -7062,7 +7754,7 @@ const SpellSystem = (() => {
                 : null;
             if (asset) {
                 if (!Array.isArray(asset.floors)) asset.floors = [];
-                asset.floors.push({ ...floorRecord, outerPolygon: points.map(p => ({ ...p })), visibilityPolygon: points.map(p => ({ ...p })) });
+                asset.floors.push({ ...floorRecord, outerPolygon: points.map(p => ({ ...p })) });
             }
             fragmentCount += 1;
             for (let i = 0; i < sectionNodes.length; i++) {
@@ -7124,9 +7816,7 @@ const SpellSystem = (() => {
                 const floor = asset.floors[i];
                 if (!floor || Number(floor.level) !== Number(level)) continue;
                 if (!Array.isArray(floor.holes)) floor.holes = [];
-                if (!Array.isArray(floor.visibilityHoles)) floor.visibilityHoles = [];
                 floor.holes.push(points.map(p => ({ x: Number(p.x), y: Number(p.y) })));
-                floor.visibilityHoles.push(points.map(p => ({ x: Number(p.x), y: Number(p.y) })));
                 if (Array.isArray(floor.tileCoordKeys) && tileCoordKeys.length > 0) {
                     const removeKeys = new Set(tileCoordKeys);
                     floor.tileCoordKeys = floor.tileCoordKeys.filter(key => !removeKeys.has(key));
@@ -7170,9 +7860,7 @@ const SpellSystem = (() => {
                 const fragment = mapRef.floorsById instanceof Map ? mapRef.floorsById.get(fragmentId) : null;
                 if (fragment) {
                     if (!Array.isArray(fragment.holes)) fragment.holes = [];
-                    if (!Array.isArray(fragment.visibilityHoles)) fragment.visibilityHoles = [];
                     fragment.holes.push(points.map(p => ({ x: Number(p.x), y: Number(p.y) })));
-                    fragment.visibilityHoles.push(points.map(p => ({ x: Number(p.x), y: Number(p.y) })));
                     if (Array.isArray(fragment.tileCoordKeys) && removeTileKeys.length > 0) {
                         const removeKeys = new Set(removeTileKeys);
                         fragment.tileCoordKeys = fragment.tileCoordKeys.filter(key => !removeKeys.has(key));
@@ -7280,16 +7968,15 @@ const SpellSystem = (() => {
         const wrappedX = (typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(worldX) : worldX;
         const wrappedY = (typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(worldY) : worldY;
         if (!Number.isFinite(wrappedX) || !Number.isFinite(wrappedY)) return;
-        const snapped = getFloorEditorSnapVertexWorldPoint(wizardRef, options.screenX, options.screenY);
-        const finalX = snapped ? snapped.x : wrappedX;
-        const finalY = snapped ? snapped.y : wrappedY;
+        const snapped = getFloorEditorSnapVertexAtScreenPoint(wizardRef, options.screenX, options.screenY);
+        let finalPoint = snapped ? { x: snapped.x, y: snapped.y } : { x: wrappedX, y: wrappedY };
         const clickCount = Number.isFinite(options.clickCount) ? Math.max(1, Math.floor(Number(options.clickCount))) : 1;
         const level = getSelectedFloorEditLevel(wizardRef);
 
         const draft = (
             wizardRef._floorShapePlacementDraft &&
             Array.isArray(wizardRef._floorShapePlacementDraft.points)
-        )
+        ) 
             ? wizardRef._floorShapePlacementDraft
             : { points: [] };
         wizardRef._floorShapePlacementDraft = draft;
@@ -7311,6 +7998,9 @@ const SpellSystem = (() => {
                 return;
             }
         }
+        finalPoint = resolveFloorShapeDraftPoint(wizardRef, draft, finalPoint, snapped);
+        const finalX = finalPoint.x;
+        const finalY = finalPoint.y;
 
         if (clickCount >= 2 && draft.points.length >= 3) {
             recordFloorEditDiagnostic("vertex.floorshape.finish.click", {
@@ -7477,8 +8167,14 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell === "teleport") {
             const projectile = new globalThis.Teleport();
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
+            const teleportTarget = resolveTeleportVisualTarget(wizardRef, worldX, worldY, castOptions);
             wizardRef.castDelay = true;
-            projectiles.push(projectile.cast(worldX, worldY));
+            projectiles.push(projectile.cast(teleportTarget.x, teleportTarget.y, {
+                ...castOptions,
+                destinationNode: teleportTarget.node,
+                destinationLayer: teleportTarget.layer,
+                destinationBaseZ: teleportTarget.baseZ
+            }));
             wizardRef.casting = true;
             setTimeout(() => {
                 wizardRef.castDelay = false;
@@ -7504,17 +8200,26 @@ const SpellSystem = (() => {
 
         if (wizardRef.currentSpell === "blackdiamond") {
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
-            const placeX = mapRef && typeof mapRef.wrapWorldX === "function"
+            const placeBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
+                ? Number(wizardRef.currentLayerBaseZ)
+                : 0;
+            const placeLayer = Number.isFinite(wizardRef.currentLayer)
+                ? Math.round(Number(wizardRef.currentLayer))
+                : 0;
+            const rawX = mapRef && typeof mapRef.wrapWorldX === "function"
                 ? mapRef.wrapWorldX(worldX)
                 : worldX;
-            const placeY = mapRef && typeof mapRef.wrapWorldY === "function"
+            const rawY = mapRef && typeof mapRef.wrapWorldY === "function"
                 ? mapRef.wrapWorldY(worldY)
                 : worldY;
+            const placeX = rawX;
+            const placeY = rawY;
             const powerupPlacement = getPowerupPlacementPreviewConfig(wizardRef);
             if (Number.isFinite(placeX) && Number.isFinite(placeY) && typeof addPowerup === "function") {
-                addPowerup(powerupPlacement.fileName, {
+                const placed = addPowerup(powerupPlacement.fileName, {
                     x: placeX,
                     y: placeY,
+                    z: placeBaseZ,
                     map: mapRef,
                     size: powerupPlacement.scale,
                     imagePath: powerupPlacement.imagePath,
@@ -7522,6 +8227,10 @@ const SpellSystem = (() => {
                     height: powerupPlacement.height,
                     radius: powerupPlacement.radius
                 });
+                if (placed) {
+                    placed.traversalLayer = placeLayer;
+                    placed._floorBaseZ = placeBaseZ;
+                }
             }
             const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
             wizardRef.castDelay = true;
@@ -7570,14 +8279,16 @@ const SpellSystem = (() => {
             // worldToNode may snap to a wall tile when the wizard is
             // standing right against a wall.  If that happens, search
             // the 12 neighbours for the closest free tile instead.
+            // Floor nodes don't have hasBlockingObject(), so guard the call.
             const nearestFreeNode = (candidate, wx, wy) => {
                 if (!candidate) return null;
-                if (!candidate.blocked && !candidate.hasBlockingObject()) return candidate;
+                const isNodeFree = (n) => !n.blocked && (typeof n.hasBlockingObject !== "function" || !n.hasBlockingObject());
+                if (isNodeFree(candidate)) return candidate;
                 let best = null;
                 let bestDist = Infinity;
                 for (let d = 0; d < 12; d++) {
                     const nb = candidate.neighbors[d];
-                    if (!nb || nb.blocked || nb.hasBlockingObject()) continue;
+                    if (!nb || !isNodeFree(nb)) continue;
                     const dx = typeof mapRef.shortestDeltaX === "function"
                         ? mapRef.shortestDeltaX(nb.x, wx) : (nb.x - wx);
                     const dy = typeof mapRef.shortestDeltaY === "function"
@@ -7589,11 +8300,11 @@ const SpellSystem = (() => {
             };
 
             const startNode = nearestFreeNode(
-                mapRef.worldToNode(wizardRef.x, wizardRef.y),
+                mapRef.screenWorldToNode(wizardRef.x, wizardRef.y),
                 wizardRef.x, wizardRef.y
             );
             const destinationNode = nearestFreeNode(
-                mapRef.worldToNode(wrappedX, wrappedY),
+                mapRef.screenWorldToNode(wrappedX, wrappedY),
                 wrappedX, wrappedY
             );
 
@@ -7669,7 +8380,7 @@ const SpellSystem = (() => {
             for (let i = 0; i < nodesAlongPath.length; i++) {
                 const node = nodesAlongPath[i];
                 if (!node) continue;
-                const key = `${node.xindex},${node.yindex}`;
+                const key = `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Math.round(node.traversalLayer) : 0}`;
                 if (seenNodes.has(key)) continue;
                 seenNodes.add(key);
 
@@ -7687,11 +8398,15 @@ const SpellSystem = (() => {
                 }
 
                 if (shouldPlacePowerup && typeof addPowerup === "function") {
-                    addPowerup(POWERUP_PLACEMENT_FILE_NAME, {
+                    const marker = addPowerup(POWERUP_PLACEMENT_FILE_NAME, {
                         x: node.x,
                         y: node.y,
                         map: mapRef
                     });
+                    if (marker) {
+                        marker.traversalLayer = Number.isFinite(node.traversalLayer)
+                            ? Math.round(Number(node.traversalLayer)) : 0;
+                    }
                 }
 
                 previousUniqueNode = node;
@@ -9760,6 +10475,10 @@ const SpellSystem = (() => {
         cancelTriggerAreaPlacement,
         cancelFloorShapePlacement,
         cancelFloorHolePlacement,
+        beginFloorStairPlacement,
+        updateFloorStairPlacement,
+        endFloorStairPlacement,
+        cancelFloorStairPlacement,
         insertTriggerAreaVertexOnEdge,
         beginTriggerAreaVertexDrag,
         updateTriggerAreaVertexDrag,
@@ -9791,8 +10510,10 @@ const SpellSystem = (() => {
         getFloorShapePlacementPreview,
         getFloorShapeWallLoopCandidate,
         getFloorHolePlacementPreview,
+        getFloorStairPlacementPreview,
         paintFloorPolygonAtWorldPoint,
         getVisibleFloorPolygonTargetAtScreenPoint,
+        resolveTeleportVisualTarget,
         getDragStartSnapTargetForSpell,
         getPlaceObjectPlacementCandidate,
         getAdjustedWallDragWorldPoint,

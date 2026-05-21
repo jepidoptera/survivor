@@ -45,6 +45,39 @@ function pointOnSegment2D(px, py, ax, ay, bx, by, eps = 1e-7) {
     return dot <= len2 + eps;
 }
 
+function getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lenSq = abx * abx + aby * aby;
+    if (!(lenSq > 1e-12)) {
+        const dx = px - ax;
+        const dy = py - ay;
+        return dx * dx + dy * dy;
+    }
+    const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+    const cx = ax + abx * t;
+    const cy = ay + aby * t;
+    const dx = px - cx;
+    const dy = py - cy;
+    return dx * dx + dy * dy;
+}
+
+function getPointPolygonBoundaryDistanceSq2D(px, py, points) {
+    if (!Array.isArray(points) || points.length < 3) return Infinity;
+    let best = Infinity;
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+        best = Math.min(best, getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by));
+    }
+    return best;
+}
+
 function segmentsIntersect2D(a, b, c, d) {
     if (!a || !b || !c || !d) return false;
     const ax = Number(a.x), ay = Number(a.y);
@@ -117,13 +150,11 @@ function polygonToClipRing2D(points) {
 function floorFragmentToClipGeometry2D(fragment, getPolygonFn) {
     const outer = typeof getPolygonFn === "function"
         ? getPolygonFn(fragment)
-        : (fragment && (fragment.visibilityPolygon || fragment.outerPolygon));
+        : (fragment && fragment.outerPolygon);
     const outerRing = polygonToClipRing2D(outer);
     if (!outerRing) return [];
     const polygon = [outerRing];
-    const holes = Array.isArray(fragment && fragment.visibilityHoles) && fragment.visibilityHoles.length > 0
-        ? fragment.visibilityHoles
-        : (Array.isArray(fragment && fragment.holes) ? fragment.holes : []);
+    const holes = Array.isArray(fragment && fragment.holes) ? fragment.holes : [];
     for (let i = 0; i < holes.length; i++) {
         const ring = polygonToClipRing2D(holes[i]);
         if (ring) polygon.push(ring);
@@ -1009,6 +1040,7 @@ class GameMap {
         this._floorBuildingVersion = 0;
         this._buildingRenderCacheVersion = 0;
         this.transitionsById = new Map();
+        this.stairsById = new Map();
     }
 
     getFloorNodeKey(nodeOrX, y = null, surfaceId = "", fragmentId = "") {
@@ -1099,13 +1131,7 @@ class GameMap {
             nodeBaseZOffset: resolvedOffset,
             nodeBaseZ: canonicalBaseZ + resolvedOffset,
             outerPolygon: Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : [],
-            holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : [],
-            visibilityPolygon: Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length > 0
-                ? fragment.visibilityPolygon.slice()
-                : (Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : []),
-            visibilityHoles: Array.isArray(fragment.visibilityHoles)
-                ? fragment.visibilityHoles.slice()
-                : (Array.isArray(fragment.holes) ? fragment.holes.slice() : [])
+            holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : []
         };
 
         this.floorsById.set(fragmentId, normalized);
@@ -1298,9 +1324,7 @@ class GameMap {
 
     getFloorFragmentOverlapPolygon(fragment) {
         if (!fragment) return [];
-        return Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length >= 3
-            ? fragment.visibilityPolygon
-            : (Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : []);
+        return Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : [];
     }
 
     doFloorFragmentsOverlapXY(fragmentA, fragmentB) {
@@ -1407,6 +1431,17 @@ class GameMap {
             return this.buildingsById;
         }
 
+        const previousStaticObjectEntries = [];
+        if (this.buildingsById instanceof Map) {
+            for (const building of this.buildingsById.values()) {
+                const entries = Array.isArray(building && building.staticObjects) ? building.staticObjects : [];
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    if (entry && entry.item) previousStaticObjectEntries.push(entry);
+                }
+            }
+        }
+
         const fragments = Array.from(this.floorsById.values())
             .filter(fragment => (
                 fragment &&
@@ -1482,6 +1517,39 @@ class GameMap {
                 minLevel: Number.isFinite(minLevel) ? minLevel : 0,
                 maxLevel: Number.isFinite(maxLevel) ? maxLevel : 0
             };
+            const holeVisibleFragments = new Map();
+            const holeApi = getPolygonClippingApi2D();
+            if (holeApi && typeof holeApi.intersection === "function") {
+                for (let j = 0; j < fragmentIds.length; j++) {
+                    const fragId = fragmentIds[j];
+                    const frag = this.floorsById.get(fragId);
+                    if (!frag || !Array.isArray(frag.holes) || frag.holes.length === 0) continue;
+                    const graphNode = fragmentGraph.get(fragId);
+                    if (!graphNode || graphNode.below.size === 0) continue;
+                    const visibleBelow = new Set();
+                    for (let h = 0; h < frag.holes.length; h++) {
+                        const holeRing = polygonToClipRing2D(frag.holes[h]);
+                        if (!holeRing) continue;
+                        const holeGeom = [[holeRing]];
+                        for (const belowId of graphNode.below) {
+                            if (visibleBelow.has(belowId)) continue;
+                            const belowFrag = this.floorsById.get(belowId);
+                            if (!belowFrag) continue;
+                            const belowGeom = floorFragmentToClipGeometry2D(belowFrag, null);
+                            if (clipGeometryIsEmpty2D(belowGeom)) continue;
+                            let result = [];
+                            try {
+                                result = holeApi.intersection(holeGeom, belowGeom);
+                            } catch (_e) {
+                                result = [];
+                            }
+                            if (!clipGeometryIsEmpty2D(result)) visibleBelow.add(belowId);
+                        }
+                    }
+                    if (visibleBelow.size > 0) holeVisibleFragments.set(fragId, visibleBelow);
+                }
+            }
+            building.holeVisibleFragments = holeVisibleFragments;
             buildingsById.set(buildingId, building);
             for (let j = 0; j < fragmentIds.length; j++) {
                 const fragmentId = fragmentIds[j];
@@ -1495,6 +1563,66 @@ class GameMap {
             if (!fragment) continue;
             if (!floorBuildingByFragmentId.has(fragment.fragmentId)) {
                 delete fragment.buildingId;
+            }
+        }
+
+        if (previousStaticObjectEntries.length > 0) {
+            const addRefForBuilding = (refsByBuildingId, ref) => {
+                if (!ref || typeof ref !== "object") return;
+                const fragmentId = typeof ref.fragmentId === "string" && ref.fragmentId.length > 0
+                    ? ref.fragmentId
+                    : "";
+                if (!fragmentId) return;
+                const buildingId = floorBuildingByFragmentId.get(fragmentId);
+                if (!buildingId || !buildingsById.has(buildingId)) return;
+                if (!refsByBuildingId.has(buildingId)) refsByBuildingId.set(buildingId, []);
+                refsByBuildingId.get(buildingId).push({
+                    surfaceId: typeof ref.surfaceId === "string" ? ref.surfaceId : "",
+                    fragmentId
+                });
+            };
+
+            for (let i = 0; i < previousStaticObjectEntries.length; i++) {
+                const entry = previousStaticObjectEntries[i];
+                const item = entry && entry.item;
+                if (!item || item.gone || item.vanishing) continue;
+                const refsByBuildingId = new Map();
+                const refs = Array.isArray(entry.refs) ? entry.refs : [];
+                for (let r = 0; r < refs.length; r++) addRefForBuilding(refsByBuildingId, refs[r]);
+                if (refsByBuildingId.size === 0) {
+                    addRefForBuilding(refsByBuildingId, {
+                        surfaceId: typeof item.surfaceId === "string" ? item.surfaceId : "",
+                        fragmentId: typeof item.fragmentId === "string" ? item.fragmentId : ""
+                    });
+                }
+                for (const [buildingId, buildingRefs] of refsByBuildingId.entries()) {
+                    const building = buildingsById.get(buildingId);
+                    if (!building || !Array.isArray(buildingRefs) || buildingRefs.length === 0) continue;
+                    if (!(building._staticObjectManifestSet instanceof Set)) {
+                        building._staticObjectManifestSet = new Set();
+                    }
+                    if (building._staticObjectManifestSet.has(item)) continue;
+                    if (!Array.isArray(building.staticObjects)) building.staticObjects = [];
+                    const preservedEntry = {
+                        item,
+                        level: Number.isFinite(entry.level)
+                            ? Math.round(Number(entry.level))
+                            : (Number.isFinite(item.traversalLayer)
+                                ? Math.round(Number(item.traversalLayer))
+                                : (Number.isFinite(item.level) ? Math.round(Number(item.level)) : 0)),
+                        refs: buildingRefs
+                    };
+                    building.staticObjects.push(preservedEntry);
+                    building._staticObjectManifestSet.add(item);
+                    item._floorBuildingManifestId = building.buildingId || buildingId;
+                    item._floorBuildingManifestFragmentId = buildingRefs[0].fragmentId;
+                }
+            }
+
+            for (const building of buildingsById.values()) {
+                if (Array.isArray(building.staticObjects) && building.staticObjects.length > 0) {
+                    this.pruneFloorBuildingManifest(building);
+                }
             }
         }
 
@@ -1635,6 +1763,599 @@ class GameMap {
         };
         this.transitionsById.set(transitionId, normalized);
         return normalized;
+    }
+
+    isStraightStairTransition(transition) {
+        if (!transition || transition.type !== "stairs") return false;
+        if (transition.stairKind === "straight") return true;
+        const metadata = transition.metadata && typeof transition.metadata === "object" ? transition.metadata : null;
+        if (metadata && metadata.stairKind === "straight") return true;
+        const stair = metadata && metadata.straightStair && typeof metadata.straightStair === "object"
+            ? metadata.straightStair
+            : null;
+        return !!stair;
+    }
+
+    getStraightStairDefinition(transition) {
+        const metadata = transition && transition.metadata && typeof transition.metadata === "object"
+            ? transition.metadata
+            : {};
+        const stair = metadata.straightStair && typeof metadata.straightStair === "object"
+            ? metadata.straightStair
+            : {};
+        return {
+            ...stair,
+            stairKind: "straight",
+            width: Number.isFinite(stair.width)
+                ? Number(stair.width)
+                : (Number.isFinite(transition.width) ? Number(transition.width) : 1.2),
+            stepCount: Number.isFinite(stair.stepCount)
+                ? Math.max(1, Math.round(Number(stair.stepCount)))
+                : (Number.isFinite(transition.stepCount) ? Math.max(1, Math.round(Number(transition.stepCount))) : null),
+            texturePath: (typeof stair.texturePath === "string" && stair.texturePath.length > 0)
+                ? stair.texturePath
+                : ((typeof transition.texturePath === "string" && transition.texturePath.length > 0)
+                    ? transition.texturePath
+                    : "")
+        };
+    }
+
+    normalizeStraightStairPoint(point, label, transitionId) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`straight stair transition ${transitionId} has invalid ${label}`);
+        }
+        return { x, y };
+    }
+
+    buildStraightStairRuntimeRecord(transition, fromNode, toNode) {
+        if (!transition || !fromNode || !toNode) return null;
+        const transitionId = typeof transition.id === "string" ? transition.id : "";
+        if (!transitionId) throw new Error("straight stair transition missing id");
+        const definition = this.getStraightStairDefinition(transition);
+        const lowerZ = Math.min(this.getNodeBaseZ(fromNode), this.getNodeBaseZ(toNode));
+        const higherZ = Math.max(this.getNodeBaseZ(fromNode), this.getNodeBaseZ(toNode));
+        if (!Number.isFinite(lowerZ) || !Number.isFinite(higherZ)) {
+            throw new Error(`straight stair transition ${transitionId} has invalid endpoint baseZ`);
+        }
+        const fromZ = this.getNodeBaseZ(fromNode);
+        const toZ = this.getNodeBaseZ(toNode);
+        const lowerNode = fromZ <= toZ ? fromNode : toNode;
+        const higherNode = fromZ <= toZ ? toNode : fromNode;
+        const lowerPoint = this.normalizeStraightStairPoint(
+            definition.lowerPoint || { x: lowerNode.x, y: lowerNode.y },
+            "lowerPoint",
+            transitionId
+        );
+        const higherPoint = this.normalizeStraightStairPoint(
+            definition.higherPoint || { x: higherNode.x, y: higherNode.y },
+            "higherPoint",
+            transitionId
+        );
+        const dx = this.shortestDeltaX(lowerPoint.x, higherPoint.x);
+        const dy = this.shortestDeltaY(lowerPoint.y, higherPoint.y);
+        const length = Math.hypot(dx, dy);
+        if (!(length > 1e-6)) {
+            throw new Error(`straight stair transition ${transitionId} has zero-length footprint`);
+        }
+        const width = Number.isFinite(definition.width) ? Math.max(0.05, Number(definition.width)) : 1.2;
+        const stepCount = Number.isFinite(definition.stepCount)
+            ? Math.max(1, Math.round(Number(definition.stepCount)))
+            : Math.max(2, Math.ceil(length / 0.55), Math.ceil(Math.abs(higherZ - lowerZ) / 0.35));
+        const ux = dx / length;
+        const uy = dy / length;
+        const px = -uy * width * 0.5;
+        const py = ux * width * 0.5;
+        const footprint = Array.isArray(definition.footprint) && definition.footprint.length >= 3
+            ? definition.footprint.map((point, index) => this.normalizeStraightStairPoint(point, `footprint[${index}]`, transitionId))
+            : [
+                { x: lowerPoint.x + px, y: lowerPoint.y + py },
+                { x: higherPoint.x + px, y: higherPoint.y + py },
+                { x: higherPoint.x - px, y: higherPoint.y - py },
+                { x: lowerPoint.x - px, y: lowerPoint.y - py }
+            ];
+        const treads = [];
+        for (let i = 0; i < stepCount; i++) {
+            const t0 = i / stepCount;
+            const t1 = (i + 1) / stepCount;
+            const ax = lowerPoint.x + dx * t0;
+            const ay = lowerPoint.y + dy * t0;
+            const bx = lowerPoint.x + dx * t1;
+            const by = lowerPoint.y + dy * t1;
+            treads.push({
+                index: i,
+                baseZ: lowerZ + (higherZ - lowerZ) * t1,
+                outer: [
+                    { x: ax + px, y: ay + py },
+                    { x: bx + px, y: by + py },
+                    { x: bx - px, y: by - py },
+                    { x: ax - px, y: ay - py }
+                ]
+            });
+        }
+        return {
+            id: transitionId,
+            transitionId,
+            type: "stairs",
+            stairKind: "straight",
+            lowerNodeId: lowerNode.id || this.getNodeKey(lowerNode),
+            higherNodeId: higherNode.id || this.getNodeKey(higherNode),
+            lowerFragmentId: typeof lowerNode.fragmentId === "string" ? lowerNode.fragmentId : "",
+            higherFragmentId: typeof higherNode.fragmentId === "string" ? higherNode.fragmentId : "",
+            lowerSurfaceId: typeof lowerNode.surfaceId === "string" ? lowerNode.surfaceId : "",
+            higherSurfaceId: typeof higherNode.surfaceId === "string" ? higherNode.surfaceId : "",
+            lowerLevel: Number.isFinite(lowerNode.level) ? Number(lowerNode.level) : 0,
+            higherLevel: Number.isFinite(higherNode.level) ? Number(higherNode.level) : 0,
+            lowerZ,
+            higherZ,
+            lowerPoint,
+            higherPoint,
+            width,
+            length,
+            stepCount,
+            footprint,
+            treads,
+            texturePath: definition.texturePath
+        };
+    }
+
+    isPointSupportedByFloorFragment(fragment, x, y) {
+        if (!fragment || fragment._floorEditEmpty === true) return false;
+        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) return false;
+        if (!pointInPolygon2D(Number(x), Number(y), fragment.outerPolygon)) return false;
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            if (Array.isArray(holes[i]) && holes[i].length >= 3 && pointInPolygon2D(Number(x), Number(y), holes[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    isCircleSupportedByFloorFragment(fragment, x, y, radius = 0) {
+        const cx = Number(x);
+        const cy = Number(y);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+        if (!this.isPointSupportedByFloorFragment(fragment, cx, cy)) return false;
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!(resolvedRadius > 0)) return true;
+        const radiusSq = resolvedRadius * resolvedRadius;
+        if (getPointPolygonBoundaryDistanceSq2D(cx, cy, fragment.outerPolygon) < radiusSq - 1e-9) {
+            return false;
+        }
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            const hole = holes[i];
+            if (!Array.isArray(hole) || hole.length < 3) continue;
+            if (pointInPolygon2D(cx, cy, hole)) return false;
+            if (getPointPolygonBoundaryDistanceSq2D(cx, cy, hole) < radiusSq - 1e-9) return false;
+        }
+        return true;
+    }
+
+    isActorFootprintSupportedAtWorldPosition(x, y, layer = 0, actor = null, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        let hasFragmentsAtLayer = false;
+        if (this.floorsById instanceof Map) {
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) continue;
+                if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                hasFragmentsAtLayer = true;
+                if (this.isCircleSupportedByFloorFragment(fragment, x, y, radius)) return true;
+            }
+        }
+        return !hasFragmentsAtLayer && targetLayer === 0;
+    }
+
+    getFloorSupportAtWorldPosition(x, y, layer = 0, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const baseNode = typeof this.worldToNode === "function" ? this.worldToNode(x, y) : null;
+        let best = null;
+        let bestArea = Infinity;
+        if (this.floorsById instanceof Map) {
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) continue;
+                if (!this.isPointSupportedByFloorFragment(fragment, x, y)) continue;
+                const area = Math.abs(this.getPolygonSignedArea2D(fragment.outerPolygon));
+                if (!best || area < bestArea) {
+                    best = fragment;
+                    bestArea = area;
+                }
+            }
+        }
+        if (!best && targetLayer !== 0) return null;
+        if (!best && targetLayer === 0 && this.floorsById instanceof Map) {
+            let hasGroundFragments = false;
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer === 0 && Array.isArray(fragment.outerPolygon) && fragment.outerPolygon.length >= 3) {
+                    hasGroundFragments = true;
+                    break;
+                }
+            }
+            if (hasGroundFragments) return null;
+        }
+        if (!best && !baseNode) return null;
+        let node = baseNode;
+        if (best && targetLayer !== 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+            node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                fragmentId: best.fragmentId,
+                surfaceId: best.surfaceId,
+                sectionKey: best.ownerSectionKey || "",
+                allowScan: true
+            }) || null;
+        }
+        if (best && targetLayer === 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+            node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                fragmentId: best.fragmentId,
+                surfaceId: best.surfaceId,
+                sectionKey: best.ownerSectionKey || "",
+                allowScan: true
+            }) || baseNode;
+        }
+        const baseZ = best && Number.isFinite(best.nodeBaseZ)
+            ? Number(best.nodeBaseZ)
+            : this.getNodeBaseZ(node);
+        return {
+            type: "floor",
+            layer: targetLayer,
+            baseZ,
+            fragment: best,
+            fragmentId: best && typeof best.fragmentId === "string" ? best.fragmentId : "",
+            surfaceId: best && typeof best.surfaceId === "string" ? best.surfaceId : "",
+            node
+        };
+    }
+
+    getPolygonSignedArea2D(points) {
+        if (!Array.isArray(points) || points.length < 3) return 0;
+        let sum = 0;
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            sum += ax * by - bx * ay;
+        }
+        return sum * 0.5;
+    }
+
+    getStraightStairTreadAtWorldPosition(x, y) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) return null;
+        let best = null;
+        let bestArea = Infinity;
+        for (const stair of this.stairsById.values()) {
+            if (!stair || stair.stairKind !== "straight") continue;
+            if (!Array.isArray(stair.treads) || stair.treads.length === 0) {
+                throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing treads`);
+            }
+            for (let i = 0; i < stair.treads.length; i++) {
+                const tread = stair.treads[i];
+                if (!tread || !Array.isArray(tread.outer) || tread.outer.length < 3) {
+                    throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} has invalid tread ${i}`);
+                }
+                if (!Number.isFinite(tread.baseZ)) {
+                    throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} tread ${i} is missing baseZ`);
+                }
+                if (!pointInPolygon2D(Number(x), Number(y), tread.outer)) continue;
+                const area = Math.abs(this.getPolygonSignedArea2D(tread.outer));
+                if (!best || area < bestArea) {
+                    best = {
+                        type: "stair",
+                        stair,
+                        stairId: stair.id,
+                        tread,
+                        treadIndex: i,
+                        baseZ: Number(tread.baseZ)
+                    };
+                    bestArea = area;
+                }
+            }
+        }
+        return best;
+    }
+
+    getStraightStairTreadSupport(stair, treadIndex) {
+        if (!stair || stair.stairKind !== "straight") return null;
+        if (!Array.isArray(stair.treads) || stair.treads.length === 0) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing treads`);
+        }
+        const resolvedIndex = Math.round(Number(treadIndex));
+        const tread = stair.treads[resolvedIndex];
+        if (!tread || !Array.isArray(tread.outer) || tread.outer.length < 3) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} has invalid tread ${resolvedIndex}`);
+        }
+        if (!Number.isFinite(tread.baseZ)) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} tread ${resolvedIndex} is missing baseZ`);
+        }
+        return {
+            type: "stair",
+            stair,
+            stairId: stair.id,
+            tread,
+            treadIndex: resolvedIndex,
+            baseZ: Number(tread.baseZ)
+        };
+    }
+
+    getActorStairSupportFromState(actor) {
+        const state = actor && actor._stairSupport && typeof actor._stairSupport === "object"
+            ? actor._stairSupport
+            : null;
+        if (!state) return null;
+        const stairId = typeof state.stairId === "string" ? state.stairId : "";
+        if (!stairId) throw new Error("actor stair support is missing stairId");
+        if (!(this.stairsById instanceof Map)) throw new Error("actor stair support exists without stair runtime records");
+        const stair = this.stairsById.get(stairId);
+        if (!stair) throw new Error(`actor stair support references missing stair ${stairId}`);
+        return this.getStraightStairTreadSupport(stair, state.treadIndex);
+    }
+
+    getActorTraversalLayer(actor = null, options = {}) {
+        const candidates = [
+            options && options.traversalLayer,
+            options && options.currentLayer,
+            actor && actor.currentLayer,
+            actor && actor.traversalLayer,
+            actor && actor.level,
+            actor && actor.node && actor.node.traversalLayer,
+            actor && actor.node && actor.node.level
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const value = Number(candidates[i]);
+            if (Number.isFinite(value)) return Math.round(value);
+        }
+        return 0;
+    }
+
+    actorUsesLocalMovementZ(actor) {
+        if (!actor || typeof actor !== "object") return false;
+        if (actor.type === "wizard") return true;
+        if (actor.constructor && actor.constructor.name === "Wizard") return true;
+        return typeof actor.drawHat === "function" && typeof actor.drawShield === "function";
+    }
+
+    getActorMovementSupportRadius(actor = null, options = {}) {
+        if (Number.isFinite(options && options.supportRadius)) return Math.max(0, Number(options.supportRadius));
+        if (actor && typeof actor.getVectorMovementCollisionRadius === "function") {
+            const radius = actor.getVectorMovementCollisionRadius(options);
+            if (Number.isFinite(radius)) return Math.max(0, Number(radius));
+        }
+        if (actor && Number.isFinite(actor.groundRadius)) return Math.max(0, Number(actor.groundRadius));
+        return 0;
+    }
+
+    actorFitsWithinStairSideBounds(stair, x, y, actor = null, options = {}) {
+        if (!stair || stair.stairKind !== "straight") return false;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        if (!(radius > 0)) return true;
+        const lowerPoint = stair.lowerPoint;
+        const higherPoint = stair.higherPoint;
+        const width = Number(stair.width);
+        if (!lowerPoint || !higherPoint || !Number.isFinite(width)) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing side-bound geometry`);
+        }
+        const dx = this.shortestDeltaX(lowerPoint.x, higherPoint.x);
+        const dy = this.shortestDeltaY(lowerPoint.y, higherPoint.y);
+        const length = Math.hypot(dx, dy);
+        if (!(length > 1e-6)) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} has zero-length side-bound geometry`);
+        }
+        const relX = this.shortestDeltaX(lowerPoint.x, Number(x));
+        const relY = this.shortestDeltaY(lowerPoint.y, Number(y));
+        const ux = dx / length;
+        const uy = dy / length;
+        const sideDistance = Math.abs((relX * -uy) + (relY * ux));
+        return sideDistance <= (width * 0.5) - radius + 1e-6;
+    }
+
+    getActiveLayerForStairSupport(support) {
+        if (!support || support.type !== "stair" || !support.stair) return null;
+        const stair = support.stair;
+        const thresholdZ = Number(stair.higherZ) - 1;
+        if (!Number.isFinite(thresholdZ)) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing higherZ`);
+        }
+        return Number(support.baseZ) >= thresholdZ
+            ? Math.round(Number(stair.higherLevel) || 0)
+            : Math.round(Number(stair.lowerLevel) || 0);
+    }
+
+    getActiveBaseZForStairSupport(support) {
+        if (!support || support.type !== "stair" || !support.stair) return null;
+        const stair = support.stair;
+        const activeLayer = this.getActiveLayerForStairSupport(support);
+        return activeLayer === Math.round(Number(stair.higherLevel) || 0)
+            ? Number(stair.higherZ)
+            : Number(stair.lowerZ);
+    }
+
+    resolveActorMovementSupportAtWorldPosition(x, y, actor = null, options = {}) {
+        const layer = this.getActorTraversalLayer(actor, options);
+        return this.getFloorSupportAtWorldPosition(x, y, layer, options);
+    }
+
+    isFloorSupportConnectedToStair(floorSupport, stair) {
+        if (!floorSupport || !stair) return false;
+        return this.getStairEndpointForFloorSupport(floorSupport, stair) !== null;
+    }
+
+    getStairEndpointForFloorSupport(floorSupport, stair) {
+        if (!floorSupport || !stair) return null;
+        const floorFragmentId = typeof floorSupport.fragmentId === "string" ? floorSupport.fragmentId : "";
+        const floorSurfaceId = typeof floorSupport.surfaceId === "string" ? floorSupport.surfaceId : "";
+        const floorLayer = Number.isFinite(floorSupport.layer) ? Math.round(Number(floorSupport.layer)) : 0;
+        const floorBaseZ = Number.isFinite(floorSupport.baseZ) ? Number(floorSupport.baseZ) : NaN;
+        const lowerLayer = Number.isFinite(stair.lowerLevel) ? Math.round(Number(stair.lowerLevel)) : 0;
+        const higherLayer = Number.isFinite(stair.higherLevel) ? Math.round(Number(stair.higherLevel)) : 0;
+        const lowerBaseZ = Number(stair.lowerZ);
+        const higherBaseZ = Number(stair.higherZ);
+        const matchesLowerSurface = floorSurfaceId.length > 0 &&
+            typeof stair.lowerSurfaceId === "string" &&
+            stair.lowerSurfaceId.length > 0 &&
+            floorSurfaceId === stair.lowerSurfaceId;
+        const matchesHigherSurface = floorSurfaceId.length > 0 &&
+            typeof stair.higherSurfaceId === "string" &&
+            stair.higherSurfaceId.length > 0 &&
+            floorSurfaceId === stair.higherSurfaceId;
+        if (
+            floorLayer === lowerLayer &&
+            Number.isFinite(floorBaseZ) &&
+            Number.isFinite(lowerBaseZ) &&
+            Math.abs(floorBaseZ - lowerBaseZ) <= 1e-6 &&
+            (floorFragmentId === stair.lowerFragmentId || matchesLowerSurface)
+        ) {
+            return "lower";
+        }
+        if (
+            floorLayer === higherLayer &&
+            Number.isFinite(floorBaseZ) &&
+            Number.isFinite(higherBaseZ) &&
+            Math.abs(floorBaseZ - higherBaseZ) <= 1e-6 &&
+            (floorFragmentId === stair.higherFragmentId || matchesHigherSurface)
+        ) {
+            return "higher";
+        }
+        return null;
+    }
+
+    areActorMovementSupportsAdjacent(currentSupport, nextSupport) {
+        if (!currentSupport || !nextSupport) return false;
+        if (currentSupport.type === "floor" && nextSupport.type === "floor") {
+            return currentSupport.layer === nextSupport.layer;
+        }
+        if (currentSupport.type === "stair" && nextSupport.type === "stair") {
+            if (currentSupport.stairId !== nextSupport.stairId) return false;
+            return Math.abs(Number(currentSupport.treadIndex) - Number(nextSupport.treadIndex)) <= 1;
+        }
+        const stairSupport = currentSupport.type === "stair" ? currentSupport : nextSupport;
+        const floorSupport = currentSupport.type === "floor" ? currentSupport : nextSupport;
+        const stair = stairSupport && stairSupport.stair;
+        if (!stair || !floorSupport) return false;
+        const endpoint = this.getStairEndpointForFloorSupport(floorSupport, stair);
+        if (Number(stairSupport.treadIndex) === 0 && endpoint === "lower") return true;
+        if (Number(stairSupport.treadIndex) === stair.treads.length - 1 && endpoint === "higher") return true;
+        return false;
+    }
+
+    resolveActorStairMovementOccupancy(worldX, worldY, actor = null, options = {}) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) {
+            return { handled: false, allowed: false, support: null };
+        }
+        const currentStairSupport = this.getActorStairSupportFromState(actor);
+        const currentLayer = this.getActorTraversalLayer(actor, options);
+        const currentFloorSupport = currentStairSupport
+            ? null
+            : this.getFloorSupportAtWorldPosition(Number(actor && actor.x), Number(actor && actor.y), currentLayer, options);
+        const nextStairSupport = this.getStraightStairTreadAtWorldPosition(worldX, worldY);
+        const nextLayer = currentStairSupport
+            ? this.getActiveLayerForStairSupport(currentStairSupport)
+            : currentLayer;
+        const nextFloorSupport = this.getFloorSupportAtWorldPosition(worldX, worldY, nextLayer, options);
+
+        if (currentStairSupport) {
+            if (nextStairSupport) {
+                const allowed = this.areActorMovementSupportsAdjacent(currentStairSupport, nextStairSupport) &&
+                    this.actorFitsWithinStairSideBounds(nextStairSupport.stair, worldX, worldY, actor, options);
+                return { handled: true, allowed, support: allowed ? nextStairSupport : null, currentSupport: currentStairSupport };
+            }
+            if (nextFloorSupport) {
+                const allowed = this.areActorMovementSupportsAdjacent(currentStairSupport, nextFloorSupport);
+                return { handled: true, allowed, support: allowed ? nextFloorSupport : null, currentSupport: currentStairSupport };
+            }
+            return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport };
+        }
+
+        if (nextStairSupport) {
+            const allowed = this.areActorMovementSupportsAdjacent(currentFloorSupport, nextStairSupport) &&
+                this.actorFitsWithinStairSideBounds(nextStairSupport.stair, worldX, worldY, actor, options);
+            if (allowed) {
+                return { handled: true, allowed: true, support: nextStairSupport, currentSupport: currentFloorSupport };
+            }
+            if (this.isFloorSupportConnectedToStair(currentFloorSupport, nextStairSupport.stair)) {
+                return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport };
+            }
+            return { handled: false, allowed: false, support: null, currentSupport: currentFloorSupport };
+        }
+
+        return { handled: false, allowed: false, support: null, currentSupport: currentFloorSupport };
+    }
+
+    applyActorResolvedMovementSupport(actor, worldX, worldY, options = {}) {
+        if (!actor) return null;
+        let support = actor._pendingVectorMovementSupport || null;
+        actor._pendingVectorMovementSupport = null;
+        if (!support) {
+            const occupancy = this.resolveActorStairMovementOccupancy(worldX, worldY, actor, options);
+            if (occupancy && occupancy.handled === true && occupancy.allowed === true) {
+                support = occupancy.support || null;
+            }
+        }
+        if (!support) {
+            support = this.resolveActorMovementSupportAtWorldPosition(worldX, worldY, actor, options);
+        }
+        if (!support) return null;
+
+        const previousLayer = Number.isFinite(actor.currentLayer)
+            ? Math.round(Number(actor.currentLayer))
+            : (Number.isFinite(actor.traversalLayer) ? Math.round(Number(actor.traversalLayer)) : 0);
+        const previousBaseZ = Number.isFinite(actor.currentLayerBaseZ)
+            ? Number(actor.currentLayerBaseZ)
+            : previousLayer * 3;
+        let nextLayer = previousLayer;
+        let nextBaseZ = previousBaseZ;
+
+        if (support.type === "stair") {
+            nextLayer = this.getActiveLayerForStairSupport(support);
+            nextBaseZ = this.getActiveBaseZForStairSupport(support);
+            const localZ = Number(support.baseZ) - Number(nextBaseZ);
+            actor._stairSupport = {
+                stairId: support.stairId,
+                treadIndex: support.treadIndex,
+                baseZ: support.baseZ,
+                localZ
+            };
+            actor.z = this.actorUsesLocalMovementZ(actor) ? localZ : support.baseZ;
+        } else if (support.type === "floor") {
+            nextLayer = support.layer;
+            nextBaseZ = support.baseZ;
+            actor._stairSupport = null;
+            actor.z = this.actorUsesLocalMovementZ(actor) ? 0 : (Number.isFinite(nextBaseZ) ? nextBaseZ : 0);
+        }
+
+        actor.currentLayer = nextLayer;
+        actor.traversalLayer = nextLayer;
+        actor.currentLayerBaseZ = Number.isFinite(nextBaseZ) ? Number(nextBaseZ) : nextLayer * 3;
+        if (support.node) actor.node = support.node;
+        if (support.surfaceId) actor.surfaceId = support.surfaceId;
+        if (support.fragmentId) actor.fragmentId = support.fragmentId;
+
+        const isGlobalWizard = typeof globalThis !== "undefined" && actor === globalThis.wizard;
+        if (previousLayer !== nextLayer && isGlobalWizard) {
+            actor._pendingLayerTransition = {
+                active: true,
+                fromLevel: previousLayer,
+                toLevel: nextLayer,
+                fromBaseZ: previousBaseZ,
+                toBaseZ: actor.currentLayerBaseZ,
+                startedAtMs: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now(),
+                durationMs: 500
+            };
+        }
+        actor._previousLayerBaseZForTransition = actor.currentLayerBaseZ;
+        return support;
     }
 
     getFloorNodeBySurface(surfaceId, x, y) {
@@ -1929,6 +2650,135 @@ class GameMap {
         return nodes.length;
     }
 
+    unregisterFloorFragments(fragmentIds) {
+        const ids = fragmentIds instanceof Set
+            ? Array.from(fragmentIds)
+            : (Array.isArray(fragmentIds) ? fragmentIds.slice() : []);
+        if (ids.length === 0) return 0;
+        let removedCount = 0;
+        for (let idIndex = 0; idIndex < ids.length; idIndex++) {
+            const fragmentId = ids[idIndex];
+            if (typeof fragmentId !== "string" || fragmentId.length === 0) continue;
+            const floorNodes = (this.floorNodesById instanceof Map)
+                ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < floorNodes.length; i++) {
+                const floorNode = floorNodes[i];
+                if (!floorNode) continue;
+                this._unindexFloorNodeByLayer(floorNode);
+                if (this.floorNodeIndex instanceof Map) {
+                    this.floorNodeIndex.delete(floorNode.id);
+                }
+                if (Array.isArray(floorNode.neighbors)) {
+                    for (let d = 0; d < floorNode.neighbors.length; d++) {
+                        const neighbor = floorNode.neighbors[d];
+                        if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                        for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                            if (neighbor.neighbors[rd] === floorNode) {
+                                neighbor.neighbors[rd] = null;
+                            }
+                        }
+                    }
+                }
+                removedCount += 1;
+            }
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                if (frag && this.floorFragmentsBySectionKey instanceof Map) {
+                    const sectionSet = this.floorFragmentsBySectionKey.get(frag.ownerSectionKey);
+                    if (sectionSet instanceof Set) {
+                        sectionSet.delete(fragmentId);
+                        if (sectionSet.size === 0) this.floorFragmentsBySectionKey.delete(frag.ownerSectionKey);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        if (removedCount > 0 || ids.length > 0) this.markFloorBuildingsDirty();
+        return removedCount;
+    }
+
+    registerFloorFragmentsForSection(sectionKey, sectionState, fragmentRecords, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return { fragmentCount: 0, nodeCount: 0 };
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return { fragmentCount: 0, nodeCount: 0 };
+        if (!Array.isArray(fragmentRecords) || fragmentRecords.length === 0) return { fragmentCount: 0, nodeCount: 0 };
+        const sectionNodes = (sectionState.nodesBySectionKey instanceof Map)
+            ? (sectionState.nodesBySectionKey.get(sectionKey) || []) : [];
+        const nodesByCoordKey = (sectionState.allNodesByCoordKey instanceof Map)
+            ? sectionState.allNodesByCoordKey : null;
+        const doesNodeBelongToFragment = (typeof options.doesNodeBelongToFragment === "function")
+            ? options.doesNodeBelongToFragment : null;
+        const newNodes = [];
+        let fragmentCount = 0;
+        let nodeCount = 0;
+
+        const getSourceNode = (tileKey) => {
+            if (nodesByCoordKey && nodesByCoordKey.has(tileKey)) return nodesByCoordKey.get(tileKey);
+            const [xRaw, yRaw] = String(tileKey || "").split(",");
+            const x = Number(xRaw);
+            const y = Number(yRaw);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            if (typeof this.getNodeByIndex === "function") return this.getNodeByIndex(x, y);
+            for (let i = 0; i < sectionNodes.length; i++) {
+                const node = sectionNodes[i];
+                if (node && Number(node.xindex) === x && Number(node.yindex) === y) return node;
+            }
+            return null;
+        };
+
+        for (let i = 0; i < fragmentRecords.length; i++) {
+            const registeredFragment = this.registerFloorFragment(fragmentRecords[i]);
+            if (!registeredFragment) continue;
+            fragmentCount += 1;
+            const materializedNodeKeys = [];
+            const tileCoordKeys = Array.isArray(registeredFragment.tileCoordKeys)
+                ? registeredFragment.tileCoordKeys : [];
+            if (tileCoordKeys.length > 0) {
+                for (let t = 0; t < tileCoordKeys.length; t++) {
+                    const sourceNode = getSourceNode(tileCoordKeys[t]);
+                    if (!sourceNode) continue;
+                    const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                        baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                        traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                    });
+                    if (!floorNode) continue;
+                    newNodes.push(floorNode);
+                    nodeCount += 1;
+                    materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
+                }
+            } else if (doesNodeBelongToFragment) {
+                for (let n = 0; n < sectionNodes.length; n++) {
+                    const sourceNode = sectionNodes[n];
+                    if (!doesNodeBelongToFragment(sourceNode, registeredFragment)) continue;
+                    const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                        baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                        traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                    });
+                    if (!floorNode) continue;
+                    newNodes.push(floorNode);
+                    nodeCount += 1;
+                    materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
+                }
+            }
+            registeredFragment.materializedNodeKeys = materializedNodeKeys;
+        }
+
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < newNodes.length; i++) {
+            if (newNodes[i] && newNodes[i].id) newNodeIdSet.add(newNodes[i].id);
+        }
+        this._connectFloorNodesIncremental(newNodes, newNodeIdSet);
+        if (fragmentCount > 0 || nodeCount > 0) this.markFloorBuildingsDirty();
+        return { fragmentCount, nodeCount };
+    }
+
     // Collect all floor nodes for a section into staging for chunked removal. Returns node count.
     prepareFloorSectionUnregister(sectionKey) {
         if (!(this.floorFragmentsBySectionKey instanceof Map)) return 0;
@@ -2095,12 +2945,18 @@ class GameMap {
 
     connectFloorTransitions() {
         if (!(this.transitionsById instanceof Map)) return 0;
+        this.stairsById = new Map();
         let connectionCount = 0;
         for (const transition of this.transitionsById.values()) {
             if (!transition) continue;
             const fromNode = this.resolveFloorTransitionEndpoint(transition.from);
             const toNode = this.resolveFloorTransitionEndpoint(transition.to);
             if (!fromNode || !toNode) continue;
+            let stairRecord = null;
+            if (this.isStraightStairTransition(transition)) {
+                stairRecord = this.buildStraightStairRuntimeRecord(transition, fromNode, toNode);
+                this.stairsById.set(stairRecord.id, stairRecord);
+            }
 
             const attachEdge = (sourceNode, targetNode) => {
                 if (!sourceNode || !targetNode) return false;
@@ -2124,6 +2980,7 @@ class GameMap {
                         ...(transition.metadata && typeof transition.metadata === "object" ? transition.metadata : {}),
                         kind: transition.type || "portal",
                         transitionId: transition.id,
+                        stairId: stairRecord ? stairRecord.id : undefined,
                         edgeId
                     }
                 });
@@ -2267,6 +3124,33 @@ class GameMap {
         return null;
     }
 
+    findLiveTraversalEdgeForWorkerEdge(fromNode, toNode, workerEdgeId = "") {
+        if (!fromNode || !toNode) return null;
+        const outgoingEdges = this.getOutgoingEdges(fromNode, {
+            includeBlocked: true,
+            traversalOptions: {
+                destinationNode: toNode,
+                allowBlockedDestination: true,
+                requiredClearance: 0,
+                clearanceReferenceNode: toNode
+            }
+        });
+        if (!Array.isArray(outgoingEdges) || outgoingEdges.length === 0) return null;
+        const exact = outgoingEdges.find(edge => edge && edge.id === workerEdgeId && edge.toNode === toNode);
+        if (exact) return exact;
+        const transitionMatch = (typeof workerEdgeId === "string" && workerEdgeId.includes("->portal:"))
+            ? outgoingEdges.find(edge => (
+                edge &&
+                edge.toNode === toNode &&
+                edge.metadata &&
+                typeof edge.metadata.transitionId === "string" &&
+                workerEdgeId.endsWith(`:${edge.metadata.transitionId}`)
+            ))
+            : null;
+        if (transitionMatch) return transitionMatch;
+        return outgoingEdges.find(edge => edge && edge.toNode === toNode) || null;
+    }
+
     // Convert a pathfinding worker path result into live traversal path items
     // (same format as findPathAStar).  Returns null when reconciliation fails
     // (e.g. map version changed between request and response).
@@ -2283,13 +3167,15 @@ class GameMap {
                 ? this.resolveNodeByKey(result.startNodeKey || "")
                 : this.resolveNodeByKey(result.pathNodeKeys[i - 1]);
             if (fromNode && options.returnPathSteps === true) {
-                const edge = this.createTraversalEdge(fromNode, toNode, {
-                    type: "async",
-                    allowed: true,
-                    penalty: 0,
-                    blockers: [],
-                    movementCost: 1
-                });
+                const workerEdgeId = Array.isArray(result.pathEdgeIds) ? (result.pathEdgeIds[i - 1] || "") : "";
+                const edge = this.findLiveTraversalEdgeForWorkerEdge(fromNode, toNode, workerEdgeId) ||
+                    this.createTraversalEdge(fromNode, toNode, {
+                        type: "async",
+                        allowed: true,
+                        penalty: 0,
+                        blockers: [],
+                        movementCost: 1
+                    });
                 path.push(this.createPathStep(edge, options));
             } else {
                 path.push(toNode);
@@ -2329,6 +3215,10 @@ class GameMap {
     sampleTraversalEdgePosition(edge, progress = 1) {
         if (!edge || !edge.fromNode || !edge.toNode) return null;
         const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        const stairId = edge.metadata && typeof edge.metadata.stairId === "string" ? edge.metadata.stairId : "";
+        if (stairId) {
+            return this.sampleStraightStairPosition(stairId, edge.fromNode, t);
+        }
         const fromNode = edge.fromNode;
         const toNode = edge.toNode;
         const x = fromNode.x + this.shortestDeltaX(fromNode.x, toNode.x) * t;
@@ -2337,6 +3227,27 @@ class GameMap {
         const toZ = this.getNodeBaseZ(toNode);
         const z = fromZ + (toZ - fromZ) * t;
         return { x, y, z };
+    }
+
+    sampleStraightStairPosition(stairId, fromNode, progress = 1) {
+        if (!(this.stairsById instanceof Map)) {
+            throw new Error(`missing straight stair runtime map for ${stairId}`);
+        }
+        const stair = this.stairsById.get(stairId);
+        if (!stair) {
+            throw new Error(`missing straight stair runtime record ${stairId}`);
+        }
+        const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        const fromId = fromNode ? (fromNode.id || this.getNodeKey(fromNode)) : "";
+        const lowerToHigher = fromId === stair.lowerNodeId;
+        const s = lowerToHigher ? t : (1 - t);
+        const dx = this.shortestDeltaX(stair.lowerPoint.x, stair.higherPoint.x);
+        const dy = this.shortestDeltaY(stair.lowerPoint.y, stair.higherPoint.y);
+        return {
+            x: stair.lowerPoint.x + dx * s,
+            y: stair.lowerPoint.y + dy * s,
+            z: stair.lowerZ + (stair.higherZ - stair.lowerZ) * s
+        };
     }
 
     createPathStep(edge, options = {}) {
@@ -4174,6 +5085,60 @@ class GameMap {
         }
         
         return best;
+    }
+
+    // Like worldToNode but layer-aware for oblique-projection inputs.
+    //
+    // screenToWorld() always projects onto the ground plane (z = 0), so the
+    // worldY it returns is offset by -baseZ relative to any upper floor.
+    // This method corrects for that: for each registered floor fragment it
+    // adds fragment.baseZ to the incoming worldY before the polygon test, then
+    // returns the closest node in the first (topmost-level) fragment that
+    // contains the projected point.  Falls back to worldToNode when no
+    // fragment matches (i.e. the click is on the ground).
+    //
+    // Use this anywhere you want to map a raw screen click to the correct
+    // floor node regardless of which floor the player is targeting.
+    screenWorldToNode(worldX, worldY) {
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const wx = typeof this.wrapWorldX === "function" ? this.wrapWorldX(worldX) : worldX;
+        const wy = typeof this.wrapWorldY === "function" ? this.wrapWorldY(worldY) : worldY;
+        if (this.floorsById instanceof Map && this.floorsById.size > 0) {
+            const sorted = Array.from(this.floorsById.values())
+                .filter(f => f && Array.isArray(f.outerPolygon) && f.outerPolygon.length >= 3 && f._floorEditEmpty !== true)
+                .sort((a, b) => (Number(b.level) || 0) - (Number(a.level) || 0));
+            for (let fi = 0; fi < sorted.length; fi++) {
+                const fragment = sorted[fi];
+                const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ)
+                    : (Number.isFinite(fragment.baseZ) ? Number(fragment.baseZ) : 0);
+                const projY = wy + baseZ;
+                if (!pointInPolygon2D(wx, projY, fragment.outerPolygon)) continue;
+                const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                let inHole = false;
+                for (let hi = 0; hi < holes.length; hi++) {
+                    if (Array.isArray(holes[hi]) && holes[hi].length >= 3 && pointInPolygon2D(wx, projY, holes[hi])) {
+                        inHole = true;
+                        break;
+                    }
+                }
+                if (inHole) continue;
+                const nodes = this.floorNodesById instanceof Map
+                    ? (this.floorNodesById.get(fragment.fragmentId) || [])
+                    : [];
+                let best = null;
+                let bestDist = Infinity;
+                for (let ni = 0; ni < nodes.length; ni++) {
+                    const n = nodes[ni];
+                    if (!n) continue;
+                    const dx = n.x - wx;
+                    const dy = n.y - projY;
+                    const dist = dx * dx + dy * dy;
+                    if (dist < bestDist) { bestDist = dist; best = n; }
+                }
+                if (best) return best;
+            }
+        }
+        return this.worldToNode(wx, wy);
     }
 
     worldToNodeOrMidpoint(worldX, worldY) {

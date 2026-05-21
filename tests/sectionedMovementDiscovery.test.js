@@ -460,7 +460,7 @@ test("wizard collision resolver does not push through a wall from an inside over
     assert.ok(wizard.movementVector.x <= 0.01);
 });
 
-test("wizard can carry airborne movement over unsupported upper-floor positions", () => {
+test("wizard bypasses hex-node occupancy check (always in geometry mode)", () => {
     const wizard = Object.create(Wizard.prototype);
     wizard.x = 0;
     wizard.y = 0;
@@ -474,12 +474,76 @@ test("wizard can carry airborne movement over unsupported upper-floor positions"
         }
     };
 
-    assert.equal(wizard._applyVectorMovementPosition(1, 0), false);
-    assert.equal(wizard.x, 0);
+    assert.equal(wizard._applyVectorMovementPosition(1, 0), true);
+    assert.equal(wizard.x, 1);
+    assert.equal(occupyChecks, 0);
+});
+
+test("wizard bypasses pre-movement floor footprint check (boundary enforced post-hoc by checkWizardFloorFall)", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.x = 0;
+    wizard.y = 0;
+    wizard.currentLayer = 1;
+    wizard.groundRadius = 0.3;
+    wizard.movementVector = { x: 1, y: 0 };
+    wizard.updateHitboxes = () => {};
+    let supportChecks = 0;
+    wizard.map = {
+        isActorFootprintSupportedAtWorldPosition() { supportChecks += 1; return false; },
+        canOccupyWorldPosition() { throw new Error("wizard must not use hex occupancy"); }
+    };
+
+    assert.equal(wizard._applyVectorMovementPosition(1, 0), true);
+    assert.equal(wizard.x, 1);
+    assert.equal(supportChecks, 0);
+});
+
+test("hitbox NPC on upper floors is blocked pre-movement by floor footprint check", () => {
+    const npc = Object.create(Character.prototype);
+    npc.x = 0;
+    npc.y = 0;
+    npc.currentLayer = 1;
+    npc.groundRadius = 0.3;
+    npc.movementVector = { x: 1, y: 0 };
+    npc._closeCombatState = { target: {} };
+    npc.updateHitboxes = () => {};
+    let supportChecks = 0;
+    npc.map = {
+        isActorFootprintSupportedAtWorldPosition(x, y, layer, actor) {
+            supportChecks += 1;
+            assert.equal(layer, 1);
+            assert.equal(actor, npc);
+            return false;
+        },
+        canOccupyWorldPosition() { throw new Error("hitbox NPC must not use hex occupancy"); }
+    };
+
+    assert.equal(npc._applyVectorMovementPosition(1, 0), false);
+    assert.equal(npc.x, 0);
+    assert.equal(npc.movementVector.x, 0);
+    assert.equal(supportChecks, 1);
+});
+
+test("hex-grid character is blocked by canOccupyWorldPosition", () => {
+    const character = Object.create(Character.prototype);
+    character.x = 0;
+    character.y = 0;
+    character.movementVector = { x: 1, y: 0 };
+    character._closeCombatState = null;
+    character.updateHitboxes = () => {};
+    let occupyChecks = 0;
+    character.map = {
+        canOccupyWorldPosition() {
+            occupyChecks += 1;
+            return false;
+        }
+    };
+
+    assert.equal(character._applyVectorMovementPosition(1, 0), false);
+    assert.equal(character.x, 0);
     assert.equal(occupyChecks, 1);
 
-    assert.equal(wizard._applyVectorMovementPosition(1, 0, { allowUnsupportedPosition: true }), true);
-    assert.equal(wizard.x, 1);
-    assert.equal(wizard.y, 0);
+    assert.equal(character._applyVectorMovementPosition(1, 0, { allowUnsupportedPosition: true }), true);
+    assert.equal(character.x, 1);
     assert.equal(occupyChecks, 1);
 });

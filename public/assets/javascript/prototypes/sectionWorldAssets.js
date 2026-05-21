@@ -259,7 +259,20 @@
 
         function getPrototypeSectionFloorPolygon(asset, basis) {
             if (!asset || typeof asset !== "object") return [];
-            return getSectionHexagonCorners(asset.centerAxial, basis);
+            if (typeof getSectionHexagonCorners === "function") {
+                return getSectionHexagonCorners(asset.centerAxial, basis);
+            }
+            const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+            const boundaryPoints = [];
+            for (let i = 0; i < tileCoordKeys.length; i++) {
+                const center = prototypeFloorWorldFromTileKey(tileCoordKeys[i]);
+                if (!center) continue;
+                const edgeMidpoints = getPrototypeFloorHexEdgeMidpoints(center);
+                for (let j = 0; j < edgeMidpoints.length; j++) {
+                    boundaryPoints.push(edgeMidpoints[j]);
+                }
+            }
+            return buildPrototypeFloorConvexHull(boundaryPoints);
         }
 
         function normalizePrototypeGroundTiles(rawGroundTiles, tileCoordKeys, textureCount) {
@@ -429,12 +442,6 @@
                     nodeBaseZ: canonicalBaseZ + resolvedOffset,
                     outerPolygon: clonePrototypePointList(record.outerPolygon),
                     holes: clonePrototypePolygonList(record.holes),
-                    visibilityPolygon: Array.isArray(record.visibilityPolygon) && record.visibilityPolygon.length > 0
-                        ? clonePrototypePointList(record.visibilityPolygon)
-                        : clonePrototypePointList(record.outerPolygon),
-                    visibilityHoles: Array.isArray(record.visibilityHoles)
-                        ? clonePrototypePolygonList(record.visibilityHoles)
-                        : clonePrototypePolygonList(record.holes),
                     tileCoordKeys: sortPrototypeTileCoordKeys(record.tileCoordKeys)
                 });
             }
@@ -493,8 +500,6 @@
                 tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
                 outerPolygon,
                 holes: [],
-                visibilityPolygon: outerPolygon.map(point => ({ ...point })),
-                visibilityHoles: [],
                 _prototypeGroundFloor: true
             };
         }
@@ -527,8 +532,6 @@
                     fragment.tileCoordKeys = ground.tileCoordKeys.slice();
                     fragment.outerPolygon = ground.outerPolygon.map(point => ({ ...point }));
                     fragment.holes = Array.isArray(fragment.holes) ? fragment.holes : [];
-                    fragment.visibilityPolygon = ground.visibilityPolygon.map(point => ({ ...point }));
-                    fragment.visibilityHoles = Array.isArray(fragment.visibilityHoles) ? fragment.visibilityHoles : [];
                     fragment._prototypeGroundFloor = true;
                     delete fragment._prototypeSynthesizedGround;
                     changed = true;

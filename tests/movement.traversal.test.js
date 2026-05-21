@@ -808,6 +808,406 @@ test("GameMap.findPathAStar routes from a ground source node onto a floor transi
     assert.equal(path[0].getWorldPositionAt(0.5).z, 1.5);
 });
 
+test("straight stair transitions materialize treads and sample endpoint baseZ values", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 5;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.resetFloorRuntimeState();
+
+    const lowerSource = createNode(0, 0, { x: 0, y: 0, baseZ: 1 });
+    const higherSource = createNode(4, 0, { x: 4, y: 0, baseZ: 0 });
+    const lowerFragment = map.registerFloorFragment({
+        fragmentId: "custom_lower",
+        surfaceId: "custom_lower_surface",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 1
+    });
+    const higherFragment = map.registerFloorFragment({
+        fragmentId: "custom_higher",
+        surfaceId: "custom_higher_surface",
+        ownerSectionKey: "0,0",
+        level: 2,
+        nodeBaseZ: 8
+    });
+    const lowerNode = map.createFloorNodeFromSource(lowerSource, lowerFragment, {
+        baseZ: 1,
+        traversalLayer: 0
+    });
+    const higherNode = map.createFloorNodeFromSource(higherSource, higherFragment, {
+        baseZ: 8,
+        traversalLayer: 2
+    });
+
+    map.registerFloorTransition({
+        id: "custom_stairs",
+        type: "stairs",
+        stairKind: "straight",
+        from: { x: 0, y: 0, floorId: "custom_lower" },
+        to: { x: 4, y: 0, floorId: "custom_higher" },
+        bidirectional: true,
+        metadata: {
+            straightStair: {
+                lowerPoint: { x: 0, y: 0 },
+                higherPoint: { x: 4, y: 0 },
+                width: 1,
+                stepCount: 4,
+                texturePath: "/assets/images/flooring/woodfloor.png"
+            }
+        }
+    });
+    map.connectFloorTransitions();
+
+    const stair = map.stairsById.get("custom_stairs");
+    assert.ok(stair);
+    assert.equal(stair.lowerZ, 1);
+    assert.equal(stair.higherZ, 8);
+    assert.equal(stair.treads.length, 4);
+    assert.equal(stair.treads[3].baseZ, 8);
+
+    const edge = map.getOutgoingEdges(lowerNode).find(e => e && e.toNode === higherNode);
+    assert.ok(edge);
+    assert.equal(edge.type, "stairs");
+    assert.equal(edge.metadata.stairId, "custom_stairs");
+    assert.equal(map.createPathStep(edge).getWorldPositionAt(0.5).z, 4.5);
+
+    const reverseEdge = map.getOutgoingEdges(higherNode).find(e => e && e.toNode === lowerNode);
+    assert.ok(reverseEdge);
+    assert.equal(map.createPathStep(reverseEdge).getWorldPositionAt(0.5).z, 4.5);
+});
+
+test("straight stair occupancy only allows adjacent treads and endpoint floors", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 6;
+    map.height = 3;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.nodes = [[
+        createNode(0, 0, { x: -0.5, y: 0 }),
+        createNode(1, 0, { x: 0.5, y: 0 }),
+        createNode(2, 0, { x: 1.5, y: 0 }),
+        createNode(3, 0, { x: 2.5, y: 0 }),
+        createNode(4, 0, { x: 3.5, y: 0 }),
+        createNode(5, 0, { x: 4.5, y: 0 })
+    ]];
+    map.worldToNode = (x) => {
+        const index = Math.max(0, Math.min(5, Math.round(Number(x) + 0.5)));
+        return map.nodes[0][index];
+    };
+    map.resetFloorRuntimeState();
+
+    const lowerFragment = map.registerFloorFragment({
+        fragmentId: "lower",
+        surfaceId: "lower_surface",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 4, y: -1 },
+            { x: 4, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const higherFragment = map.registerFloorFragment({
+        fragmentId: "higher",
+        surfaceId: "higher_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 3, y: -1 },
+            { x: 5, y: -1 },
+            { x: 5, y: 1 },
+            { x: 3, y: 1 }
+        ],
+        holes: []
+    });
+    const lowerNode = map.createFloorNodeFromSource(map.nodes[0][0], lowerFragment, { baseZ: 0, traversalLayer: 0 });
+    const higherNode = map.createFloorNodeFromSource(map.nodes[0][4], higherFragment, { baseZ: 3, traversalLayer: 1 });
+    map.registerFloorTransition({
+        id: "walkable_stairs",
+        type: "stairs",
+        stairKind: "straight",
+        from: { x: lowerNode.xindex, y: lowerNode.yindex, floorId: "lower" },
+        to: { x: higherNode.xindex, y: higherNode.yindex, floorId: "higher" },
+        bidirectional: true,
+        metadata: {
+            straightStair: {
+                lowerPoint: { x: 0, y: 0 },
+                higherPoint: { x: 3, y: 0 },
+                width: 1,
+                stepCount: 3
+            }
+        }
+    });
+    map.connectFloorTransitions();
+
+    const actor = {
+        x: -0.5,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+
+    assert.equal(map.resolveActorStairMovementOccupancy(0.5, 0, actor).allowed, true);
+    assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0, actor).allowed, false);
+
+    actor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, actor).support;
+    map.applyActorResolvedMovementSupport(actor, 0.5, 0);
+    actor.x = 0.5;
+    actor.y = 0;
+    assert.equal(actor.z, 1);
+    assert.equal(actor.currentLayer, 0);
+    assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0, actor).allowed, true);
+
+    actor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(1.5, 0, actor).support;
+    map.applyActorResolvedMovementSupport(actor, 1.5, 0);
+    actor.x = 1.5;
+    actor.y = 0;
+    assert.equal(actor.z, 2);
+    assert.equal(actor.currentLayer, 1);
+    assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0.75, actor).allowed, false);
+    assert.equal(map.resolveActorStairMovementOccupancy(3.5, 0, actor).allowed, false);
+
+    actor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(2.5, 0, actor).support;
+    map.applyActorResolvedMovementSupport(actor, 2.5, 0);
+    actor.x = 2.5;
+    actor.y = 0;
+    assert.equal(actor.z, 3);
+    assert.equal(actor.currentLayer, 1);
+    assert.equal(map.resolveActorStairMovementOccupancy(3.5, 0, actor).allowed, true);
+
+    const topActor = {
+        x: 3.5,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        node: higherNode
+    };
+    assert.equal(map.resolveActorStairMovementOccupancy(2.5, 0, topActor).allowed, true);
+
+    const sideActor = {
+        x: 1.5,
+        y: 0.75,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+    const sideEntry = map.resolveActorStairMovementOccupancy(1.5, 0.25, sideActor);
+    assert.equal(sideEntry.handled, true);
+    assert.equal(sideEntry.allowed, false);
+
+    const wideActor = {
+        x: -0.5,
+        y: 0,
+        z: 0,
+        groundRadius: 0.3,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+    assert.equal(map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).allowed, true);
+    const bottomSideEntry = map.resolveActorStairMovementOccupancy(0.5, 0.25, wideActor);
+    assert.equal(bottomSideEntry.handled, true);
+    assert.equal(bottomSideEntry.allowed, false);
+
+    wideActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).support;
+    map.applyActorResolvedMovementSupport(wideActor, 0.5, 0);
+    wideActor.x = 0.5;
+    wideActor.y = 0;
+    const stairSideExit = map.resolveActorStairMovementOccupancy(0.5, 0.25, wideActor);
+    assert.equal(stairSideExit.handled, true);
+    assert.equal(stairSideExit.allowed, false);
+
+    const higherSplitFragment = map.registerFloorFragment({
+        fragmentId: "higher_split",
+        surfaceId: "higher_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 3.25, y: -0.5 },
+            { x: 3.75, y: -0.5 },
+            { x: 3.75, y: 0.5 },
+            { x: 3.25, y: 0.5 }
+        ],
+        holes: []
+    });
+    const higherSplitNode = map.createFloorNodeFromSource(map.nodes[0][4], higherSplitFragment, { baseZ: 3, traversalLayer: 1 });
+    const splitTopActor = {
+        x: 3.5,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        node: higherSplitNode
+    };
+    assert.equal(map.resolveActorStairMovementOccupancy(2.5, 0, splitTopActor).allowed, true);
+
+    const overheadFragment = map.registerFloorFragment({
+        fragmentId: "overhead",
+        surfaceId: "overhead_surface",
+        ownerSectionKey: "0,0",
+        level: 2,
+        nodeBaseZ: 6,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 5, y: -1 },
+            { x: 5, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const overheadNode = map.createFloorNodeFromSource(map.nodes[0][1], overheadFragment, { baseZ: 6, traversalLayer: 2 });
+    const overheadActor = {
+        x: 0.25,
+        y: 0,
+        z: 0,
+        currentLayer: 2,
+        traversalLayer: 2,
+        currentLayerBaseZ: 6,
+        node: overheadNode
+    };
+    const overheadOccupancy = map.resolveActorStairMovementOccupancy(0.5, 0, overheadActor);
+    assert.equal(overheadOccupancy.handled, false);
+    overheadActor.x = 0.5;
+    map.applyActorResolvedMovementSupport(overheadActor, 0.5, 0);
+    assert.equal(overheadActor._stairSupport, null);
+    assert.equal(overheadActor.currentLayer, 2);
+    assert.equal(overheadActor.currentLayerBaseZ, 6);
+    assert.equal(overheadActor.z, 0);
+
+    const wizardActor = {
+        type: "wizard",
+        x: -0.5,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+    wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, wizardActor).support;
+    map.applyActorResolvedMovementSupport(wizardActor, 0.5, 0);
+    wizardActor.x = 0.5;
+    wizardActor.y = 0;
+    assert.equal(wizardActor._stairSupport.baseZ, 1);
+    assert.equal(wizardActor._stairSupport.localZ, 1);
+    assert.equal(wizardActor.z, 1);
+    assert.equal(wizardActor.currentLayerBaseZ, 0);
+
+    wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(1.5, 0, wizardActor).support;
+    map.applyActorResolvedMovementSupport(wizardActor, 1.5, 0);
+    assert.equal(wizardActor._stairSupport.baseZ, 2);
+    assert.equal(wizardActor._stairSupport.localZ, -1);
+    assert.equal(wizardActor.z, -1);
+    assert.equal(wizardActor.currentLayerBaseZ, 3);
+});
+
+test("upper floor support rejects actor footprints that clip holes or edges", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.resetFloorRuntimeState();
+    map.registerFloorFragment({
+        fragmentId: "roof",
+        surfaceId: "roof_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 5, y: 0 },
+            { x: 5, y: 5 },
+            { x: 0, y: 5 }
+        ],
+        holes: [[
+            { x: 2, y: 2 },
+            { x: 3, y: 2 },
+            { x: 3, y: 3 },
+            { x: 2, y: 3 }
+        ]]
+    });
+    const actor = { groundRadius: 0.3 };
+
+    assert.equal(map.isActorFootprintSupportedAtWorldPosition(1, 1, 1, actor), true);
+    assert.equal(map.isActorFootprintSupportedAtWorldPosition(1.9, 2.5, 1, actor), false);
+    assert.equal(map.isActorFootprintSupportedAtWorldPosition(2.5, 2.5, 1, actor), false);
+    assert.equal(map.isActorFootprintSupportedAtWorldPosition(0.15, 1, 1, actor), false);
+    assert.equal(map.isActorFootprintSupportedAtWorldPosition(1.9, 2.5, 1, { groundRadius: 0 }), true);
+});
+
+test("worker path reconciliation preserves live stair portal metadata", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.resetFloorRuntimeState();
+
+    const lower = createNode(0, 0, { x: 0, y: 0, baseZ: 0, traversalLayer: 0 });
+    lower.id = map.getFloorNodeKey(0, 0, "lower_surface", "lower");
+    lower.surfaceId = "lower_surface";
+    lower.fragmentId = "lower";
+    const higher = createNode(0, 1, { x: 0, y: 2, baseZ: 5, traversalLayer: 1 });
+    higher.id = map.getFloorNodeKey(0, 1, "higher_surface", "higher");
+    higher.surfaceId = "higher_surface";
+    higher.fragmentId = "higher";
+    map.floorNodeIndex.set(lower.id, lower);
+    map.floorNodeIndex.set(higher.id, higher);
+    map.stairsById.set("async_stairs", {
+        id: "async_stairs",
+        lowerNodeId: lower.id,
+        higherNodeId: higher.id,
+        lowerPoint: { x: 0, y: 0 },
+        higherPoint: { x: 0, y: 2 },
+        lowerZ: 0,
+        higherZ: 5
+    });
+    lower.portalEdges = [{
+        fromNode: lower,
+        toNode: higher,
+        type: "stairs",
+        metadata: { transitionId: "async_stairs", stairId: "async_stairs" }
+    }];
+
+    const path = map.resolveWorkerPathResult({
+        ok: true,
+        startNodeKey: lower.id,
+        pathNodeKeys: [higher.id],
+        pathEdgeIds: [`${lower.id}->portal:${higher.id}:async_stairs`]
+    }, { returnPathSteps: true });
+
+    assert.equal(Array.isArray(path), true);
+    assert.equal(path.length, 1);
+    assert.equal(path[0].type, "stairs");
+    assert.equal(path[0].metadata.stairId, "async_stairs");
+    assert.equal(path[0].getWorldPositionAt(0.5).z, 2.5);
+});
+
 test("GameMap.getNode resolves materialized floor nodes for nonzero traversal layers", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 1;
@@ -895,12 +1295,6 @@ test("GameMap.getFloorNodeAtLayer resolves upper floor node from placement base 
             { x: 1.25, y: 1.75 },
             { x: 0.25, y: 1.75 }
         ],
-        visibilityPolygon: [
-            { x: 0.25, y: 0.75 },
-            { x: 1.25, y: 0.75 },
-            { x: 1.25, y: 1.75 },
-            { x: 0.25, y: 1.75 }
-        ]
     });
     const baseNode = map.nodes[1][1];
     const upperNode = map.createFloorNodeFromSource(baseNode, upperFragment, {
@@ -935,13 +1329,6 @@ test("GameMap groups overlapping upper floor fragments into buildings", () => {
             { x: maxX, y: maxY },
             { x: minX, y: maxY }
         ],
-        visibilityPolygon: [
-            { x: minX, y: minY },
-            { x: maxX, y: minY },
-            { x: maxX, y: maxY },
-            { x: minX, y: maxY }
-        ],
-        visibilityHoles: []
     });
 
     const lower = map.registerFloorFragment(makeFragment("lower", 1, 0, 0, 10, 10));
@@ -972,13 +1359,6 @@ test("GameMap attaches placed upper-floor scenery to the owning building manifes
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     });
     const item = {
         type: "furniture",
@@ -1016,6 +1396,49 @@ test("GameMap attaches placed upper-floor scenery to the owning building manifes
     assert.equal(item._floorBuildingManifestId, undefined);
 });
 
+test("GameMap preserves upper-floor scenery manifests when floor buildings rebuild", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    const fragment = map.registerFloorFragment({
+        fragmentId: "upper",
+        surfaceId: "upper-surface",
+        level: 1,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+    });
+    const item = {
+        type: "furniture",
+        fragmentId: fragment.fragmentId,
+        surfaceId: fragment.surfaceId,
+        traversalLayer: 1
+    };
+
+    assert.equal(map.addObjectToFloorBuildingManifest(item), true);
+    const originalBuildingId = item._floorBuildingManifestId;
+    assert.ok(originalBuildingId);
+
+    map._floorBuildingsDirty = true;
+    const rebuiltBuildings = map.rebuildFloorBuildings();
+    const rebuiltBuildingId = map.floorBuildingByFragmentId.get(fragment.fragmentId);
+    const rebuiltBuilding = rebuiltBuildings.get(rebuiltBuildingId);
+
+    assert.ok(rebuiltBuilding);
+    assert.equal(Array.isArray(rebuiltBuilding.staticObjects), true);
+    assert.equal(rebuiltBuilding.staticObjects.length, 1);
+    assert.equal(rebuiltBuilding.staticObjects[0].item, item);
+    assert.equal(rebuiltBuilding.staticObjects[0].refs.length, 1);
+    assert.equal(rebuiltBuilding.staticObjects[0].refs[0].surfaceId, "upper-surface");
+    assert.equal(rebuiltBuilding.staticObjects[0].refs[0].fragmentId, "upper");
+    assert.equal(rebuiltBuilding.staticObjectsByFragment.get("upper").length, 1);
+    assert.equal(rebuiltBuilding.staticObjectsByFragment.get("upper")[0].item, item);
+    assert.equal(item._floorBuildingManifestId, rebuiltBuildingId);
+    assert.equal(item._floorBuildingManifestFragmentId, "upper");
+});
+
 test("GameMap prunes stale gone objects from building manifests", () => {
     const map = Object.create(GameMap.prototype);
     map.resetFloorRuntimeState();
@@ -1029,13 +1452,6 @@ test("GameMap prunes stale gone objects from building manifests", () => {
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     });
     const oldItem = {
         type: "furniture",
@@ -1077,13 +1493,6 @@ test("GameMap building fragment graph links multiple direct upper fragments afte
             { x: maxX, y: maxY },
             { x: minX, y: maxY }
         ],
-        visibilityPolygon: [
-            { x: minX, y: minY },
-            { x: maxX, y: minY },
-            { x: maxX, y: maxY },
-            { x: minX, y: maxY }
-        ],
-        visibilityHoles: []
     });
 
     map.registerFloorFragment(makeFragment("base", 1, 0, 0, 10, 10));

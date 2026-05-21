@@ -782,6 +782,23 @@ class Character {
         return !!(this._closeCombatState && typeof this._closeCombatState === "object" && !this.gone && !this.dead);
     }
 
+    shouldConstrainHitboxMovementToFloorSupport(options = {}) {
+        if (!this.isUsingHitboxMovement()) return false;
+        if (options.allowUnsupportedPosition === true) return false;
+        if (this.isJumping === true) return false;
+        if (this._floorFallState && this._floorFallState.active === true) return false;
+        const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        return layer > 0;
+    }
+
+    getCurrentMovementLayer(_options = {}) {
+        if (Number.isFinite(this.currentLayer)) return Math.round(Number(this.currentLayer));
+        if (Number.isFinite(this.traversalLayer)) return Math.round(Number(this.traversalLayer));
+        if (this.node && Number.isFinite(this.node.traversalLayer)) return Math.round(Number(this.node.traversalLayer));
+        if (this.node && Number.isFinite(this.node.level)) return Math.round(Number(this.node.level));
+        return 0;
+    }
+
     getCharacterVectorMovementCandidates() {
         const candidates = [];
         const seen = new Set();
@@ -1352,13 +1369,36 @@ class Character {
         return resolved;
     }
 
+    _checkOccupancy(targetX, targetY, options) {
+        if (!this.map) return true;
+        if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
+            if (stairOccupancy && stairOccupancy.handled === true) {
+                if (stairOccupancy.allowed === true) {
+                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                }
+                return stairOccupancy.allowed === true;
+            }
+        }
+        if (this.shouldConstrainHitboxMovementToFloorSupport(options)) {
+            if (typeof this.map.isActorFootprintSupportedAtWorldPosition !== "function") {
+                throw new Error("hitbox floor movement requires isActorFootprintSupportedAtWorldPosition");
+            }
+            return this.map.isActorFootprintSupportedAtWorldPosition(
+                targetX,
+                targetY,
+                this.getCurrentMovementLayer(options),
+                this,
+                options
+            ) === true;
+        }
+        if (this.isUsingHitboxMovement()) return true;
+        return typeof this.map.canOccupyWorldPosition !== "function" ||
+            this.map.canOccupyWorldPosition(targetX, targetY, this, options) === true;
+    }
+
     _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
-        if (
-            options.allowUnsupportedPosition !== true &&
-            this.map &&
-            typeof this.map.canOccupyWorldPosition === "function" &&
-            this.map.canOccupyWorldPosition(targetX, targetY, this, options) !== true
-        ) {
+        if (options.allowUnsupportedPosition !== true && !this._checkOccupancy(targetX, targetY, options)) {
             if (this.movementVector && typeof this.movementVector === "object") {
                 this.movementVector.x = 0;
                 this.movementVector.y = 0;
@@ -1366,6 +1406,9 @@ class Character {
             return false;
         }
         const position = this._setVectorMovementPositionRaw(targetX, targetY);
+        if (this.map && typeof this.map.applyActorResolvedMovementSupport === "function") {
+            this.map.applyActorResolvedMovementSupport(this, position.wrappedX, position.wrappedY, options);
+        }
         this.onVectorMovementApplied({
             previousX: this.prevX,
             previousY: this.prevY,
@@ -2536,13 +2579,6 @@ class Character {
             this.hatGraphics.destroy();
         }
         this.hatGraphics = null;
-        if (this.shadowGraphics && this.shadowGraphics.parent) {
-            this.shadowGraphics.parent.removeChild(this.shadowGraphics);
-        }
-        if (this.shadowGraphics && typeof this.shadowGraphics.destroy === "function") {
-            this.shadowGraphics.destroy();
-        }
-        this.shadowGraphics = null;
         if (this._healthBarGraphics && this._healthBarGraphics.parent) {
             this._healthBarGraphics.parent.removeChild(this._healthBarGraphics);
         }

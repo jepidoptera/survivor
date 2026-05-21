@@ -60,6 +60,8 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
+  when a building is created, make a new floor fragment at the ground level.
+  stairs
   height-aware LOS shadows
   make omnivision use a floating eye
   see over short walls or objects
@@ -106,14 +108,24 @@ X creatures escape from walls when their section leaves the active bubble
 X walls disappear when their section leaves the active bubble (separate problem)
 X built walls disappear on save
 X trigger areas disappear
+X doors on lower levels don't work
+X walls on level != 0 don't merge
+X character can't be placed on levels != 0
+X spells don't aim correctly
+X wizard draws on top of hat
   yetis don't stay aggro or knock down doors
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
   level editing (and probably other stuff) shouldn't be in spells.js
   powerups come back once you leave the area
-  doors on lower levels don't work
-  walls on level != 0 don't merge
-  character can't be placed on levels != 0
-  section loading is too slow
+/ section loading is too slow
+  npcs can't cross fragments
+  partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
+X cutting a hole in a floor causes walls to stop working
+X floor fragment edges slow but don't stop movement
+  trees can't place within building footprint rectangle
+X rugs on an upper floor are visible in the building overlay
+  
+
 
 large trigger area architecture checklist:
   [ ] add stable trigger ids to saved trigger-area records

@@ -141,6 +141,7 @@
     function installSectionWorldEntitySyncApis(map, deps) {
         const {
             applyPrototypeBlockedEdgesForSection,
+            backfillWallBlockedEdgesIntoAsset,
             buildPrototypeObjectPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
             canReusePrototypeParkedRuntimeObject,
@@ -379,6 +380,9 @@
                 .join("|");
             const collectMs = prototypeNow() - collectStart;
             const restoredRegistryCount = restoreActivePrototypeWallRegistry(wallState);
+            if (desiredSignature !== wallState.activeRecordSignature) {
+                this._prototypeBlockingPending = true;
+            }
 
             if (!capturedAny && desiredSignature === wallState.activeRecordSignature && restoredRegistryCount === 0) {
                 wallState.lastSyncStats = {
@@ -518,6 +522,10 @@
                         directionalBlockMs += Number(directionalStats.blockMs) || 0;
                         directionalBlockedConnections += Number(directionalStats.blockedConnectionCount) || 0;
                     }
+                    if (!usesSectionBlockedEdges && typeof backfillWallBlockedEdgesIntoAsset === "function") {
+                        const sectionAsset = this.getPrototypeSectionAsset(entry.sectionKey);
+                        if (sectionAsset) backfillWallBlockedEdgesIntoAsset(sectionAsset, runtimeWall, recordId);
+                    }
                 }
                 runtimeWall._prototypeUsesSectionBlockedEdges = usesSectionBlockedEdges;
                 runtimeWall._prototypeRuntimeRecord = true;
@@ -528,8 +536,10 @@
                 loadedWalls.push(runtimeWall);
             }
 
+            let blockingWasPending = false;
             activeSectionKeys.forEach((sectionKey) => {
                 if (blockedEdgeState.activeEntriesBySectionKey.has(sectionKey)) return;
+                blockingWasPending = true;
                 const sectionApplyStart = prototypeNow();
                 const appliedLinks = applyPrototypeBlockedEdgesForSection(this, sectionKey, changedClearanceNodes);
                 blockedEdgeApplyMs += (prototypeNow() - sectionApplyStart);
@@ -537,6 +547,9 @@
             });
             precomputedBlockMs = blockedEdgeApplyMs;
             precomputedBlockedConnections = blockedEdgeAppliedLinks;
+            if (blockingWasPending || loadedWalls.length > 0) {
+                this._prototypeBlockingPending = false;
+            }
 
             wallState.activeRuntimeWalls = Array.from(wallState.activeRuntimeWallsByRecordId.values());
             wallState.activeRecordSignature = desiredSignature;

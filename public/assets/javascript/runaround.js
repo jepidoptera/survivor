@@ -72,6 +72,10 @@ let triggerAreaCameraDetachWasActive = false;
 const TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC = 10;
 const DETACHED_CAMERA_PAN_SPEED_UNITS_PER_SEC = 18;
 
+function getFloorStairPlacementCameraContext() {
+    return { viewport, viewscale, xyratio };
+}
+
 if (typeof globalThis !== "undefined") {
     globalThis.getSimulationTimeScale = function getSimulationTimeScale() {
         const scale = Number(simulationTimeScale);
@@ -2803,7 +2807,21 @@ jQuery(() => {
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.updateFloorEditorVertexDrag === "function"
         ) {
-            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY, {
+                screenX: mousePos.screenX,
+                screenY: mousePos.screenY
+            });
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateFloorStairPlacement === "function"
+        ) {
+            SpellSystem.updateFloorStairPlacement(wizard, mousePos.worldX, mousePos.worldY, {
+                screenX: mousePos.screenX,
+                screenY: mousePos.screenY,
+                ...getFloorStairPlacementCameraContext()
+            });
         }
     }
 
@@ -3757,40 +3775,210 @@ jQuery(() => {
             ) {
                 return;
             }
+            // In god mode, suppress boundary enforcement unless the floor editor panel is open.
+            // Editor mode = the wizard needs real walls to test fragment boundaries.
+            if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode() && !wizardRef.editorMode) return;
             // Don't trigger while the wizard is mid-jump (airborne intentionally).
             if (wizardRef.isJumping) return;
             if (!(mapRef && mapRef.floorsById instanceof Map && mapRef.floorsById.size > 0)) return;
 
             const wx = wizardRef.x;
             const wy = wizardRef.y;
-            const layer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
+            const prevX = Number.isFinite(wizardRef.prevX) ? Number(wizardRef.prevX) : wx;
+            const prevY = Number.isFinite(wizardRef.prevY) ? Number(wizardRef.prevY) : wy;
 
-            if (isPositionSupportedAtLayer(wx, wy, layer, mapRef)) return;
+            // Use wizard.currentLayer to restrict the scan to fragments at the wizard's
+            // actual layer. Without this, a building floor polygon (level 1-3) that
+            // overlaps the underground cave's XY footprint would be found first in the
+            // Map iteration order, making checkWizardFloorFall think the wizard is
+            // "supported" and skip the boundary snap entirely.
+            const wizardLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
 
-            // Underground layers should behave as enclosed spaces: outside the level
-            // polygons is blocked, not a lethal bottomless fall.
-            if (layer < 0) {
-                const prevX = Number.isFinite(wizardRef.prevX) ? Number(wizardRef.prevX) : wx;
-                const prevY = Number.isFinite(wizardRef.prevY) ? Number(wizardRef.prevY) : wy;
-                if (isPositionSupportedAtLayer(prevX, prevY, layer, mapRef)) {
-                    wizardRef.x = prevX;
-                    wizardRef.y = prevY;
+            let contextFragment = null;
+            for (const fragment of mapRef.floorsById.values()) {
+                if (!fragment) continue;
+                const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
+                if (fragLevel === 0) continue;
+                if (fragLevel !== wizardLayer) continue;
+                if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                if (pointInPolygon2D(wx, wy, fragment.outerPolygon)) { contextFragment = fragment; break; }
+            }
+            if (contextFragment) {
+                wizardRef._activeFloorFragment = contextFragment;
+            } else {
+                // Not currently inside any non-zero polygon. Try last-known fragment before
+                // resorting to prevPos scan — once we know the wizard is underground we want
+                // to keep enforcing that fragment's boundary until they explicitly leave.
+                const cachedFrag = wizardRef._activeFloorFragment;
+                const cachedLevel = cachedFrag
+                    ? (Number.isFinite(cachedFrag.level) ? Math.round(cachedFrag.level) : 0)
+                    : 0;
+                contextFragment = (cachedFrag &&
+                    wizardLayer !== 0 &&
+                    cachedLevel === wizardLayer &&
+                    mapRef.floorsById.has(cachedFrag.fragmentId || cachedFrag.id || ""))
+                    ? cachedFrag
+                    : null;
+                // If the cached fragment is gone (section unloaded), fall back to prevPos scan.
+                if (!contextFragment && wizardLayer !== 0) {
+                    for (const fragment of mapRef.floorsById.values()) {
+                        if (!fragment) continue;
+                        const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
+                        if (fragLevel === 0) continue;
+                        if (fragLevel !== wizardLayer) continue;
+                        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                        if (pointInPolygon2D(prevX, prevY, fragment.outerPolygon)) { contextFragment = fragment; break; }
+                    }
+                    if (contextFragment) wizardRef._activeFloorFragment = contextFragment;
                 }
-                if (wizardRef.movementVector && typeof wizardRef.movementVector === "object") {
-                    wizardRef.movementVector.x = 0;
-                    wizardRef.movementVector.y = 0;
+            }
+
+            const contextLayer = contextFragment
+                ? (Number.isFinite(contextFragment.level) ? Math.round(contextFragment.level) : 0)
+                : 0;
+
+            // If the wizard is on a non-zero layer but we couldn't resolve a context
+            // fragment (cache miss, section gap), skip rather than falling through to the
+            // layer-0 paths — the ground polygon covers everything so isPositionSupported
+            // at layer 0 always returns true, which would let the wizard roam freely.
+            if (wizardLayer !== 0 && !contextFragment) return;
+
+            // Clear the cached fragment once the wizard is confirmed back at ground level.
+            // Use wizardLayer (not contextLayer) so an underground wizard whose scan came
+            // up empty doesn't accidentally clear the cache and lose boundary enforcement.
+            if (wizardLayer === 0 && wizardRef._activeFloorFragment) {
+                if (isPositionSupportedAtLayer(wx, wy, 0, mapRef)) {
+                    wizardRef._activeFloorFragment = null;
                 }
+            }
+
+            // Supported = wizard's current position is inside their own fragment's polygon.
+            if (contextLayer === 0) {
+                if (isPositionSupportedAtLayer(wx, wy, 0, mapRef)) return;
+            } else {
+                const holes = Array.isArray(contextFragment.holes) ? contextFragment.holes : [];
+                if (pointInPolygon2D(wx, wy, contextFragment.outerPolygon)) {
+                    let inHole = false;
+                    for (const hole of holes) {
+                        if (Array.isArray(hole) && hole.length >= 3 && pointInPolygon2D(wx, wy, hole)) { inHole = true; break; }
+                    }
+                    if (!inHole) return;
+                }
+            }
+
+            // Non-zero layer: wizard stepped outside the floor fragment polygon,
+            // or stepped into a hole inside it. Two-pass move-and-slide: find the
+            // crossed edge, project movement onto its tangent in the same frame.
+            if (contextLayer !== 0) {
+                const outerPoly = contextFragment.outerPolygon;
+                const holes = Array.isArray(contextFragment.holes) ? contextFragment.holes : [];
+                const movDx = wx - prevX, movDy = wy - prevY;
+
+                // Which boundary did the wizard cross?
+                // If wx is still inside the outer polygon, it must have entered a hole.
+                let searchPoly, holeCase = false;
+                if (pointInPolygon2D(wx, wy, outerPoly)) {
+                    searchPoly = null;
+                    for (const hole of holes) {
+                        if (Array.isArray(hole) && hole.length >= 3 && pointInPolygon2D(wx, wy, hole)) {
+                            searchPoly = hole; holeCase = true; break;
+                        }
+                    }
+                } else {
+                    searchPoly = outerPoly;
+                }
+
+                // A valid resting position is inside the outer polygon and outside all holes.
+                function isSupported(x, y) {
+                    if (!pointInPolygon2D(x, y, outerPoly)) return false;
+                    for (const hole of holes) {
+                        if (Array.isArray(hole) && hole.length >= 3 && pointInPolygon2D(x, y, hole)) return false;
+                    }
+                    return true;
+                }
+
+                // Find the outward normal of the first edge in searchPoly crossed by
+                // (fromX, fromY) → (fromX+dx, fromY+dy). For holes the normal is flipped
+                // to point toward the walkable area (away from hole interior).
+                function crossedNormal(fromX, fromY, dx, dy) {
+                    if (!searchPoly) return null;
+                    for (let _i = 0, _j = searchPoly.length - 1; _i < searchPoly.length; _j = _i++) {
+                        const ax = searchPoly[_j].x, ay = searchPoly[_j].y;
+                        const bx = searchPoly[_i].x, by = searchPoly[_i].y;
+                        const ex = bx - ax, ey = by - ay;
+                        const den = dx * ey - dy * ex;
+                        if (Math.abs(den) < 1e-12) continue;
+                        const t = ((ax - fromX) * ey - (ay - fromY) * ex) / den;
+                        const u = ((ax - fromX) * dy - (ay - fromY) * dx) / den;
+                        if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) continue;
+                        const len = Math.hypot(ex, ey);
+                        if (len < 1e-12) continue;
+                        const nx = -ey / len, ny = ex / len;
+                        const fwd = nx * dx + ny * dy;
+                        // Outer polygon: fwd >= 0 means nx faces outward (toward wizard). ✓
+                        // Hole: movement goes inward, so fwd >= 0 means nx faces inward; flip it.
+                        if (holeCase) {
+                            return fwd >= 0 ? { x: -nx, y: -ny } : { x: nx, y: ny };
+                        }
+                        return fwd >= 0 ? { x: nx, y: ny } : { x: -nx, y: -ny };
+                    }
+                    return null;
+                }
+
                 wizardRef.path = [];
                 wizardRef.nextNode = null;
                 wizardRef.z = 0;
+
+                if (!searchPoly) { wizardRef.x = prevX; wizardRef.y = prevY; return; }
+
+                const n1 = crossedNormal(prevX, prevY, movDx, movDy);
+                if (!n1) { wizardRef.x = prevX; wizardRef.y = prevY; return; }
+
+                const out1 = movDx * n1.x + movDy * n1.y;
+                const s1x = prevX + (movDx - out1 * n1.x);
+                const s1y = prevY + (movDy - out1 * n1.y);
+
+                let finalX, finalY, n2 = null;
+                if (isSupported(s1x, s1y)) {
+                    finalX = s1x; finalY = s1y;
+                } else {
+                    // First slide also exits valid area (concave corner): second pass.
+                    const sl1dx = s1x - prevX, sl1dy = s1y - prevY;
+                    n2 = crossedNormal(prevX, prevY, sl1dx, sl1dy);
+                    if (n2) {
+                        const out2 = sl1dx * n2.x + sl1dy * n2.y;
+                        const s2x = prevX + (sl1dx - out2 * n2.x);
+                        const s2y = prevY + (sl1dy - out2 * n2.y);
+                        finalX = isSupported(s2x, s2y) ? s2x : prevX;
+                        finalY = isSupported(s2x, s2y) ? s2y : prevY;
+                    } else {
+                        finalX = prevX; finalY = prevY;
+                    }
+                }
+                wizardRef.x = finalX;
+                wizardRef.y = finalY;
+
+                // Cancel outward velocity for each wall hit.
+                if (wizardRef.movementVector && typeof wizardRef.movementVector === "object") {
+                    let vx = Number(wizardRef.movementVector.x) || 0;
+                    let vy = Number(wizardRef.movementVector.y) || 0;
+                    const d1 = vx * n1.x + vy * n1.y;
+                    if (d1 > 0) { vx -= d1 * n1.x; vy -= d1 * n1.y; }
+                    if (n2) {
+                        const d2 = vx * n2.x + vy * n2.y;
+                        if (d2 > 0) { vx -= d2 * n2.x; vy -= d2 * n2.y; }
+                    }
+                    wizardRef.movementVector.x = vx;
+                    wizardRef.movementVector.y = vy;
+                }
                 return;
             }
 
-            // Walk downward through layers to find where the wizard will land.
+            // Ground level: walk downward through layers to find where the wizard will land.
             // null = no floor below → death.
             let targetLayer = null;
             const lowestLayer = getLowestRegisteredFloorLayer(mapRef);
-            let checkLayer = layer;
+            let checkLayer = 0;
             while (checkLayer > lowestLayer) {
                 checkLayer -= 1;
                 if (isPositionSupportedAtLayer(wx, wy, checkLayer, mapRef)) {
@@ -3807,7 +3995,11 @@ jQuery(() => {
             if (typeof updatePowerupsForWizard === "function") {
                 updatePowerupsForWizard(wizard, 1 / frameRate);
             }
+            const _animalStart = performance.now();
             advanceAnimalsSimulation();
+            simPerfBreakdown.animalMs += performance.now() - _animalStart;
+            simPerfBreakdown.activeAnimals = (animalVisibilitySnapshot && Array.isArray(animalVisibilitySnapshot.active))
+                ? animalVisibilitySnapshot.active.length : 0;
             for (const obj of activeSimObjects) {
                 if (!obj || obj.gone) {
                     activeSimObjects.delete(obj);
@@ -3985,6 +4177,7 @@ jQuery(() => {
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
             }
+            simPerfBreakdown.spellMs += performance.now() - collisionStartMs;
             const currentSimulationTimeScale = (
                 typeof globalThis !== "undefined" &&
                 typeof globalThis.getSimulationTimeScale === "function"
@@ -4059,7 +4252,9 @@ jQuery(() => {
             const frameDeltaMs = Math.min(250, Math.max(0, nowMs - lastFrameMs));
             lastFrameMs = nowMs;
             const simStartMs = performance.now();
+            const _refreshStart = performance.now();
             refreshAnimalVisibilitySnapshot();
+            perfStats.simRefreshMs = performance.now() - _refreshStart;
 
             if (paused) {
                 perfStats.simSteps = 0;
@@ -4102,6 +4297,14 @@ jQuery(() => {
                         maxMovementMs: simPerfBreakdown.maxMovementMs,
                         maxCollisionMs: simPerfBreakdown.maxCollisionMs,
                         maxPointerPostMs: simPerfBreakdown.maxPointerPostMs,
+                        spellMs: simPerfBreakdown.spellMs,
+                        animalMs: simPerfBreakdown.animalMs,
+                        activeAnimals: simPerfBreakdown.activeAnimals,
+                        spellNearbyMs: simPerfBreakdown.spellNearbyMs,
+                        spellPowerupsMs: simPerfBreakdown.spellPowerupsMs,
+                        spellRuntimeMs: simPerfBreakdown.spellRuntimeMs,
+                        spellTriggerMs: simPerfBreakdown.spellTriggerMs,
+                        spellProcessMs: simPerfBreakdown.spellProcessMs,
                         accumulatorMs: simAccumulatorMs
                     };
                 }
@@ -4118,6 +4321,14 @@ jQuery(() => {
                 simPerfBreakdown.maxMovementMs = 0;
                 simPerfBreakdown.maxCollisionMs = 0;
                 simPerfBreakdown.maxPointerPostMs = 0;
+                simPerfBreakdown.spellMs = 0;
+                simPerfBreakdown.animalMs = 0;
+                simPerfBreakdown.activeAnimals = 0;
+                simPerfBreakdown.spellNearbyMs = 0;
+                simPerfBreakdown.spellPowerupsMs = 0;
+                simPerfBreakdown.spellRuntimeMs = 0;
+                simPerfBreakdown.spellTriggerMs = 0;
+                simPerfBreakdown.spellProcessMs = 0;
                 renderAlpha = Math.max(0, Math.min(1, simAccumulatorMs / simStepMs));
                 perfStats.simMs = performance.now() - simStartMs;
             }
@@ -4136,6 +4347,7 @@ jQuery(() => {
             perfStats.fps = presentedDeltaMs > 0 ? 1000 / presentedDeltaMs : 0;
             const drawStart = performance.now();
             renderNowMs = nowMs;
+            const _tZoom = performance.now();
             updateSmoothViewportZoom(frameDeltaMs);
             updateScriptedCameraZoom(nowMs);
             updateScriptedCameraPan(nowMs);
@@ -4147,10 +4359,16 @@ jQuery(() => {
                     clampVirtualCursorToCanvas(1);
                 }
             }
+            const _tPreview = performance.now();
+            perfStats.drawZoomMs = _tPreview - _tZoom;
             updateAnimalPreview();
             updateTreeGrowPreview();
+            const _tPresent = performance.now();
+            perfStats.drawPreviewMs = _tPresent - _tPreview;
             presentGameFrame(animalVisibilitySnapshot.active);
-            perfStats.drawMs = performance.now() - drawStart;
+            const _tDrawEnd = performance.now();
+            perfStats.drawPresentMs = _tDrawEnd - _tPresent;
+            perfStats.drawMs = _tDrawEnd - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
             const perfInstrumentationActive = typeof isPerfInstrumentationEnabled === "function"
                 ? isPerfInstrumentationEnabled()
@@ -4286,6 +4504,7 @@ jQuery(() => {
                     ? (
                         `\ndraww g ${Number(drawBreakdown.passWorldGroundMs || 0).toFixed(2)}` +
                         ` r ${Number(drawBreakdown.passWorldRoadsMs || 0).toFixed(2)}` +
+                        ` fp ${Number(drawBreakdown.passWorldFloorPolygonsMs || 0).toFixed(2)}` +
                         ` h ${Number(drawBreakdown.passWorldHexMs || 0).toFixed(2)}` +
                         ` s ${Number(drawBreakdown.passWorldSeamsMs || 0).toFixed(2)}` +
                         ` c ${Number(drawBreakdown.passWorldClearanceMs || 0).toFixed(2)}` +
@@ -4441,6 +4660,24 @@ jQuery(() => {
                     )
                     : "";
                 const wwDebug = debugMode ? formatWindowWallLinkDebugSummary() : "";
+                const simBreakdown = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                    ? (
+                        `\nsimc sp ${Number(globalThis.simPerfBreakdown.spellMs || 0).toFixed(2)}` +
+                        ` an ${Number(globalThis.simPerfBreakdown.animalMs || 0).toFixed(2)}` +
+                        ` n ${Number(globalThis.simPerfBreakdown.activeAnimals || 0)}` +
+                        `\nsp.nb ${Number(globalThis.simPerfBreakdown.spellNearbyMs || 0).toFixed(2)}` +
+                        ` pw ${Number(globalThis.simPerfBreakdown.spellPowerupsMs || 0).toFixed(2)}` +
+                        ` rt ${Number(globalThis.simPerfBreakdown.spellRuntimeMs || 0).toFixed(2)}` +
+                        ` tr ${Number(globalThis.simPerfBreakdown.spellTriggerMs || 0).toFixed(2)}` +
+                        ` pr ${Number(globalThis.simPerfBreakdown.spellProcessMs || 0).toFixed(2)}`
+                    )
+                    : "";
+                const frameBreakdown = (
+                    `\nframe rf ${(perfStats.simRefreshMs || 0).toFixed(2)}` +
+                    ` zo ${(perfStats.drawZoomMs || 0).toFixed(2)}` +
+                    ` pv ${(perfStats.drawPreviewMs || 0).toFixed(2)}` +
+                    ` pr ${(perfStats.drawPresentMs || 0).toFixed(2)}`
+                );
                 const perfReadoutText = (
                     `FPS ${perfStats.fps.toFixed(1)}\n` +
                     `cpu ${cpuMs.toFixed(1)} ms\n` +
@@ -4448,6 +4685,7 @@ jQuery(() => {
                     `draw ${perfStats.drawMs.toFixed(1)} ms\n` +
                     `idle ${perfStats.idleMs.toFixed(1)} ms\n` +
                     `sim ${perfStats.simSteps}\n` +
+                    simBreakdown +
                     drawBuckets +
                     drawPasses +
                     drawWorldBuckets +
@@ -4465,6 +4703,7 @@ jQuery(() => {
                     drawObjectHidden +
                     drawCacheCounts +
                     drawLayerCounts +
+                    frameBreakdown +
                     losSummary +
                     wwDebug
                 );
@@ -4472,7 +4711,8 @@ jQuery(() => {
                     `FPS ${perfStats.fps.toFixed(1)}`,
                     `cpu ${cpuMs.toFixed(1)} ms`,
                     `draw ${perfStats.drawMs.toFixed(1)} ms`,
-                    `idle ${perfStats.idleMs.toFixed(1)} ms`
+                    `idle ${perfStats.idleMs.toFixed(1)} ms`,
+                    `sim ${perfStats.simMs.toFixed(1)} rf ${(perfStats.simRefreshMs || 0).toFixed(2)} pr ${(perfStats.drawPresentMs || 0).toFixed(1)}`
                 ].join("\n");
                 const showPerfDetails = !!(
                     (typeof showPerfReadoutDetails !== "undefined" && showPerfReadoutDetails) ||
@@ -4985,7 +5225,21 @@ jQuery(() => {
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.updateFloorEditorVertexDrag === "function"
         ) {
-            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY);
+            SpellSystem.updateFloorEditorVertexDrag(wizard, mousePos.worldX, mousePos.worldY, {
+                screenX: mousePos.screenX,
+                screenY: mousePos.screenY
+            });
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.updateFloorStairPlacement === "function"
+        ) {
+            SpellSystem.updateFloorStairPlacement(wizard, mousePos.worldX, mousePos.worldY, {
+                screenX: mousePos.screenX,
+                screenY: mousePos.screenY,
+                ...getFloorStairPlacementCameraContext()
+            });
         }
     })
 
@@ -5118,6 +5372,15 @@ jQuery(() => {
                 ? { x: mousePos.worldX, y: mousePos.worldY }
                 : screenToWorld(screenX, screenY);
             if (
+                wizard.currentSpell === "floorstair" &&
+                typeof SpellSystem.beginFloorStairPlacement === "function" &&
+                SpellSystem.beginFloorStairPlacement(wizard, screenX, screenY, getFloorStairPlacementCameraContext())
+            ) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
+            if (
                 event.shiftKey &&
                 typeof SpellSystem.insertTriggerAreaVertexOnEdge === "function" &&
                 SpellSystem.insertTriggerAreaVertexOnEdge(wizard, screenX, screenY, worldCoors.x, worldCoors.y)
@@ -5215,6 +5478,16 @@ jQuery(() => {
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.endTriggerAreaVertexDrag === "function" &&
             SpellSystem.endTriggerAreaVertexDrag(wizard)
+        ) {
+            event.preventDefault();
+            suppressNextTriggerAreaToolClick = true;
+            return;
+        }
+        if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.endFloorStairPlacement === "function" &&
+            SpellSystem.endFloorStairPlacement(wizard)
         ) {
             event.preventDefault();
             suppressNextTriggerAreaToolClick = true;
@@ -5500,6 +5773,17 @@ jQuery(() => {
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.cancelFloorHolePlacement === "function" &&
             SpellSystem.cancelFloorHolePlacement(wizard)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelFloorStairPlacement === "function" &&
+            SpellSystem.cancelFloorStairPlacement(wizard)
         ) {
             event.preventDefault();
             return;

@@ -129,7 +129,15 @@ let simPerfBreakdown = {
     maxFacingMs: 0,
     maxMovementMs: 0,
     maxCollisionMs: 0,
-    maxPointerPostMs: 0
+    maxPointerPostMs: 0,
+    spellMs: 0,
+    animalMs: 0,
+    activeAnimals: 0,
+    spellNearbyMs: 0,
+    spellPowerupsMs: 0,
+    spellRuntimeMs: 0,
+    spellTriggerMs: 0,
+    spellProcessMs: 0,
 };
 const PERF_ACCUM_TOP_SPIKES = 10;
 const PERF_INSTRUMENTATION_HELP_LINES = [

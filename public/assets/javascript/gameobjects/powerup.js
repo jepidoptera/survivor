@@ -517,10 +517,11 @@
             if (this.gone || this.collected) return false;
             const delta = Number.isFinite(dt) && dt > 0 ? Number(dt) : 0;
             if (!(delta > 0)) return false;
+            const floorZ = Number.isFinite(this._floorBaseZ) ? Number(this._floorBaseZ) : 0;
             const currentZ = Number.isFinite(this.z) ? Number(this.z) : 0;
             const currentVz = Number.isFinite(this.vz) ? Number(this.vz) : 0;
-            if (currentZ <= 0 && Math.abs(currentVz) <= 1e-6) {
-                this.z = 0;
+            if (currentZ <= floorZ && Math.abs(currentVz) <= 1e-6) {
+                this.z = floorZ;
                 this.vz = 0;
                 return false;
             }
@@ -528,8 +529,8 @@
             const gravity = Number.isFinite(this.gravity) ? Math.max(0, Number(this.gravity)) : 0;
             const nextVz = currentVz - gravity * delta;
             const nextZ = currentZ + nextVz * delta;
-            if (nextZ <= 0) {
-                this.z = 0;
+            if (nextZ <= floorZ) {
+                this.z = floorZ;
                 this.vz = 0;
                 return true;
             }
@@ -541,7 +542,8 @@
 
         collect(wizard) {
             if (this.gone || this.collected) return false;
-            if (Number.isFinite(this.z) && Number(this.z) > 0.01) return false;
+            const _collectFloorZ = Number.isFinite(this._floorBaseZ) ? Number(this._floorBaseZ) : 0;
+            if (Number.isFinite(this.z) && Number(this.z) > _collectFloorZ + 0.01) return false;
             const scriptingApi = (typeof global.Scripting === "object" && global.Scripting)
                 ? global.Scripting
                 : null;
@@ -593,6 +595,8 @@
                 y: this.y,
                 z: this.z,
                 vz: this.vz,
+                traversalLayer: Number.isFinite(this.traversalLayer) ? Number(this.traversalLayer) : undefined,
+                _floorBaseZ: Number.isFinite(this._floorBaseZ) && this._floorBaseZ !== 0 ? Number(this._floorBaseZ) : undefined,
                 gravity: this.gravity,
                 size: this.size,
                 imagePath: this.imagePath,
@@ -649,6 +653,12 @@
                 script: data.script,
                 scriptingName: data.scriptingName
             });
+            if (powerup && Number.isFinite(data.traversalLayer)) {
+                powerup.traversalLayer = Number(data.traversalLayer);
+            }
+            if (powerup && Number.isFinite(data._floorBaseZ)) {
+                powerup._floorBaseZ = Number(data._floorBaseZ);
+            }
             if (powerup && Array.isArray(data._scriptMessages)) {
                 powerup._scriptMessages = data._scriptMessages
                     .map(msg => ({

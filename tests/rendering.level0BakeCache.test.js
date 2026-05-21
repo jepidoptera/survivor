@@ -32,6 +32,8 @@ function loadRenderingImpl(options = {}) {
         RenderingCamera: class {},
         RenderingLayers: class {}
     };
+    if (options.PIXI) context.PIXI = options.PIXI;
+    if (options.app) context.app = options.app;
     context.window = context;
     context.globalThis = context;
 
@@ -165,6 +167,22 @@ test("upper layer fade does not globally hide layers above the wizard", () => {
     renderer._lastRenderedWizardLayer = 0;
 
     assert.equal(renderer.getLayerFadeMultiplier(1, 0), 1);
+});
+
+test("upward layer transitions fade the upper layer into view", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._layerFadeTransition = {
+        fromLayer: 0,
+        toLayer: 1,
+        fadingLayer: 1,
+        startedAtMs: 1000,
+        durationMs: 500
+    };
+
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1000), 0);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1250), 0.5);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1500), 1);
 });
 
 test("visible object collection includes objects attached to upper floor nodes", () => {
@@ -447,6 +465,136 @@ test("building interior overlay floor clips real floor texture entries", () => {
     ]));
 });
 
+test("floor visual mesh updates when a non-sampled vertex moves", () => {
+    class FakeBuffer {
+        constructor(data) {
+            this.data = data;
+            this.updateCount = 0;
+        }
+        update() {
+            this.updateCount += 1;
+        }
+    }
+    class FakeGeometry {
+        constructor() {
+            this.buffers = new Map();
+            this.index = null;
+        }
+        addAttribute(name, data) {
+            this.buffers.set(name, new FakeBuffer(data));
+            return this;
+        }
+        addIndex(data) {
+            this.index = new FakeBuffer(data);
+            return this;
+        }
+        getBuffer(name) {
+            return this.buffers.get(name) || null;
+        }
+    }
+    class FakeContainer {
+        constructor() {
+            this.children = [];
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+        addChildAt(child) {
+            this.addChild(child);
+        }
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    }
+    class FakeMesh {
+        constructor(geometry, shader) {
+            this.geometry = geometry;
+            this.shader = shader;
+            this.parent = null;
+            this.visible = false;
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        destroy() {}
+    }
+    const fakePixi = {
+        Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: { from: (_vs, _fs, uniforms) => ({ uniforms }) },
+        State: class {},
+        Texture: {
+            WHITE: { id: "white" },
+            from: (path) => ({ id: path, baseTexture: {} })
+        },
+        utils: {
+            earcut(vertices) {
+                const count = Math.floor(vertices.length / 2);
+                const indices = [];
+                for (let i = 1; i < count - 1; i++) indices.push(0, i, i + 1);
+                return indices;
+            }
+        }
+    };
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: fakePixi,
+        app: { screen: { width: 800, height: 600 } }
+    });
+    const renderer = new RenderingImpl();
+    renderer.layers = { depthObjects: new FakeContainer() };
+    renderer.camera = { x: 0, y: 0, z: 0, viewscale: 1, xyratio: 1 };
+    const baseEntry = {
+        key: "fragment:basement",
+        level: -1,
+        baseZ: -3,
+        holes: [],
+        texture: null,
+        textureBounds: null,
+        textureRepeat: { x: 1, y: 1 },
+        texturePath: "/assets/images/flooring/cave.jpg",
+        tint: 0xffffff,
+        alpha: 1,
+        depthBias: 0.001,
+        isHoleOverlay: false
+    };
+    renderer.collectFloorVisualEntries = () => [{
+        ...baseEntry,
+        outer: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 5, y: 12 },
+            { x: 0, y: 10 }
+        ]
+    }];
+    renderer.renderFloorVisualPolygons({});
+    const firstEntry = renderer.floorVisualMeshByKey.get("fragment:basement");
+    assert.ok(firstEntry);
+
+    renderer.collectFloorVisualEntries = () => [{
+        ...baseEntry,
+        outer: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 7, y: 12 },
+            { x: 0, y: 10 }
+        ]
+    }];
+    renderer.renderFloorVisualPolygons({});
+
+    const secondEntry = renderer.floorVisualMeshByKey.get("fragment:basement");
+    assert.ok(secondEntry);
+    const positionData = Array.from(secondEntry.mesh.geometry.getBuffer("aVertexPosition").data);
+    assert.equal(positionData[6], 7);
+    assert.notEqual(secondEntry.signature, firstEntry.signature);
+});
+
 test("interior presentation foreground promotes spell and selection overlays", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -512,9 +660,55 @@ test("interior presentation foreground promotes spell and selection overlays", (
     assert.equal(projectileSprite.zIndex, 2147483650);
     assert.equal(highlightGraphics.zIndex, 2147483650);
     assert.equal(wizardBody.zIndex, 2147483650);
-    assert.equal(wizardHat.zIndex, 2147483650);
+    assert.equal(wizardHat.zIndex, 2147483651);
     assert.equal(tintedDisplay.zIndex, originalTintZ);
     assert.equal(hiddenHighlight.zIndex, 0);
+});
+
+test("interior presentation keeps wizard hat above body when body is promoted later", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const makeContainer = () => ({
+        children: [],
+        sortableChildren: false,
+        sortDirty: false,
+        addChild(child) {
+            if (child.parent && child.parent !== this && typeof child.parent.removeChild === "function") {
+                child.parent.removeChild(child);
+            }
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        },
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    });
+    const ui = makeContainer();
+    const entities = makeContainer();
+    renderer.layers = { ui };
+    renderer.getLayerCutawayState = () => ({ active: true, triggers: [{ activeInteriorRegion: { id: "inside" } }] });
+
+    const wizardHat = { name: "wizardHat", visible: true, renderable: true, zIndex: 0, parent: null };
+    const wizardBody = { name: "wizardBody", visible: true, renderable: true, zIndex: 0, parent: null };
+    ui.addChild(wizardHat);
+    entities.addChild(wizardBody);
+
+    const promoted = renderer.promoteInteriorPresentationForeground({
+        wizard: {
+            _renderingDepthMesh: wizardBody,
+            pixiSprite: { name: "hiddenWizardSprite", visible: false, renderable: false },
+            hatGraphics: wizardHat
+        }
+    });
+
+    assert.equal(promoted, 2);
+    assert.equal(wizardBody.parent, ui);
+    assert.equal(wizardHat.parent, ui);
+    assert.equal(wizardBody.zIndex, 2147483650);
+    assert.equal(wizardHat.zIndex, 2147483651);
+    assert.equal(wizardHat.zIndex > wizardBody.zIndex, true);
 });
 
 test("place object center snap guide promotes with render context", () => {
@@ -655,7 +849,7 @@ test("building interior promotion submits real display objects to the picker", (
     const cutawayState = {
         triggers: [{
             activeInteriorRegion: region,
-            renderCache: { interiorRegions: [region] }
+            renderCache: { interiorRegions: [region], renderItems: [] }
         }]
     };
     const picked = [];
@@ -731,6 +925,630 @@ test("building interior render plan includes active-floor dynamic characters", (
     assert.equal(plan.items.has(animal), true);
     assert.equal(plan.items.has(otherFloorAnimal), false);
     assert.equal(plan.items.has(wizard), false);
+});
+
+test("building interior render plan keeps active-floor doors visible", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const mountedWall = {
+        type: "wallSection",
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[42, mountedWall]])
+    };
+    const activeDoor = {
+        type: "door",
+        category: "doors",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 42
+    };
+    const upperDoor = {
+        type: "door",
+        category: "doors",
+        traversalLayer: 2
+    };
+    const activeRegion = {
+        id: "fragment:house-l1",
+        fragmentId: "house-l1",
+        surfaceId: "house",
+        level: 1,
+        polygon: { outer: [], holes: [] },
+        staticObjects: []
+    };
+    const cutawayState = {
+        triggers: [{
+            activeInteriorRegion: activeRegion,
+            renderCache: {
+                interiorRegions: [activeRegion],
+                renderItems: [
+                    { item: activeDoor, level: 0 },
+                    { item: upperDoor, level: 2 }
+                ]
+            }
+        }]
+    };
+
+    const plan = renderer.buildBuildingInteriorRenderPlan({}, cutawayState);
+
+    assert.equal(plan.items.has(activeDoor), true);
+    assert.equal(plan.items.has(upperDoor), false);
+});
+
+test("building render cache discovers mounted interior doors without floor refs", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const mountedWall = {
+        id: 42,
+        type: "wallSection",
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[42, mountedWall]])
+    };
+    const activeDoor = {
+        type: "door",
+        category: "doors",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 42,
+        x: 5,
+        y: 5
+    };
+    const fragment = {
+        fragmentId: "house-l1",
+        surfaceId: "house",
+        level: 1,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ]
+    };
+    const building = {
+        buildingId: "building:house",
+        fragmentIds: new Set(["house-l1"]),
+        surfaceIds: new Set(["house"])
+    };
+    const map = {
+        floorsById: new Map([["house-l1", fragment]]),
+        getGameObjects: () => [activeDoor],
+        shortestDeltaX: (fromX, toX) => toX - fromX,
+        shortestDeltaY: (fromY, toY) => toY - fromY
+    };
+
+    const cache = renderer.getCompiledBuildingRenderCache({ map, roofs: [] }, map, building);
+    const activeRegion = cache.interiorRegions.find(region => region.fragmentId === "house-l1");
+    const plan = renderer.buildBuildingInteriorRenderPlan({ map }, {
+        triggers: [{
+            activeInteriorRegion: activeRegion,
+            renderCache: cache
+        }]
+    });
+
+    assert.equal(cache.renderItems.some(entry => entry.item === activeDoor && entry.level === 1), true);
+    assert.equal(plan.items.has(activeDoor), true);
+});
+
+test("building interior rendering draws active-floor doors even when their wall is collapsed", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        }
+    });
+    const depthObjects = makeContainer("renderingDepthObjects");
+    renderer.layers = {
+        objects3d: makeContainer("renderingObjects3d"),
+        depthObjects,
+        groundObjects: makeContainer("renderingGroundObjects"),
+        characters: makeContainer("renderingCharacters")
+    };
+    renderer.getCharacterLayer = () => renderer.layers.characters;
+    renderer.clearBuildingInteriorForegroundPromotions = () => {};
+    renderer.isOmnivisionActive = () => false;
+    renderer.isLosMazeModeEnabled = () => true;
+    renderer.isScriptVisible = () => true;
+    renderer.getRoofsList = () => [];
+    renderer.isBuildingCutawayCompositeCacheUsable = () => false;
+    renderer.updateSinkAnimation = () => {};
+    renderer.renderGroundObjects = () => new Set();
+    renderer.renderBuildingCutawayGroundMasks = () => [];
+    renderer.renderBuildingCutawayComposites = () => null;
+    renderer.renderActiveBuildingInteriorOverlay = () => 0;
+    renderer.promoteActiveBuildingInteriorRegions = () => 0;
+    renderer.applyScriptBrightness = () => {};
+    renderer.applyFrozenTint = () => {};
+    renderer.applyLayerDarknessForItem = () => {};
+    renderer.applySinkClip = () => true;
+    renderer.addPickRenderItem = () => {};
+    renderer.logPlaceObjectRenderDebug = () => {};
+    renderer.currentLosState = { visibleObjects: [] };
+
+    const mountedWall = {
+        id: 42,
+        type: "wallSection",
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[42, mountedWall]])
+    };
+    const mesh = { visible: false, renderable: false, alpha: 0, parent: null };
+    let updateCalls = 0;
+    let depthOptions = null;
+    const activeDoor = {
+        type: "door",
+        category: "doors",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 42,
+        x: 5,
+        y: 5,
+        depthBillboardFaceCenters: {
+            front: { x: 11, y: 5 },
+            back: { x: 5, y: 5 }
+        },
+        pixiSprite: { visible: true, renderable: true, alpha: 1 },
+        texturePath: "/assets/images/doors/door2.png",
+        updateDepthBillboardMesh(_ctx, _camera, options) {
+            updateCalls += 1;
+            depthOptions = options;
+            return mesh;
+        }
+    };
+    const activeRegion = {
+        id: "fragment:house-l1",
+        fragmentId: "house-l1",
+        surfaceId: "house",
+        level: 1,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        },
+        staticObjects: []
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            activeInteriorRegion: activeRegion,
+            renderCache: {
+                interiorRegions: [activeRegion],
+                renderItems: [{ item: activeDoor, level: 0 }]
+            }
+        }]
+    };
+    renderer.prepareLayerCutawayFrame = () => cutawayState;
+
+    renderer.renderObjects3D({
+        wizard: { currentLayer: 1 },
+        map: {},
+        app: { screen: { width: 800, height: 600 } },
+        renderNowMs: 1000
+    }, [], []);
+
+    assert.equal(updateCalls, 1);
+    assert.equal(depthOptions.forceMountedWallSide, "back");
+    assert.equal(depthOptions.drawOnlyMountedWallSide, true);
+    assert.equal(mesh.visible, true);
+    assert.equal(mesh.renderable, true);
+    assert.equal(mesh.parent, depthObjects);
+});
+
+test("building doorway transition latches interior presentation until threshold is cleared", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const mountedWall = {
+        id: 42,
+        type: "wallSection",
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 10, y: 0 },
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[42, mountedWall]])
+    };
+    const door = {
+        type: "door",
+        category: "doors",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 42,
+        x: 5,
+        y: 0,
+        width: 2,
+        depthBillboardFaceCenters: {
+            front: { x: 5, y: 0.25 },
+            back: { x: 5, y: -0.25 }
+        }
+    };
+    const activeRegion = {
+        id: "fragment:house-l1",
+        level: 1,
+        polygon: { outer: [], holes: [] }
+    };
+    const activeState = {
+        active: true,
+        wizardLayer: 1,
+        wizardBaseZ: 3,
+        wizardX: 5,
+        wizardY: -0.2,
+        triggers: [{
+            building: { buildingId: "building:house" },
+            buildingId: "building:house",
+            activeInteriorRegion: activeRegion,
+            renderCache: {
+                interiorRegions: [activeRegion],
+                renderItems: [{ item: door, level: 1 }]
+            }
+        }],
+        hiddenFromLevel: 1,
+        hiddenSurfaceIds: new Set(["house"]),
+        hiddenFragmentIds: new Set(["house-l1"])
+    };
+    const latched = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        activeState,
+        { shortestDeltaX: (fromX, toX) => toX - fromX, shortestDeltaY: (fromY, toY) => toY - fromY },
+        { x: 5, y: -0.2, currentLayer: 1 },
+        1000
+    );
+
+    assert.equal(!!latched._doorwayPresentationTransition, true);
+    assert.equal(latched._doorwayPresentationTransition.presentationWizard.y, -0.2);
+
+    const currentOutsideState = {
+        active: false,
+        wizardLayer: 1,
+        wizardBaseZ: 3,
+        wizardX: 5,
+        wizardY: 0.6,
+        triggers: [],
+        hiddenFromLevel: Infinity,
+        hiddenSurfaceIds: new Set(),
+        hiddenFragmentIds: new Set()
+    };
+    const stillLatched = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        currentOutsideState,
+        { shortestDeltaX: (fromX, toX) => toX - fromX, shortestDeltaY: (fromY, toY) => toY - fromY },
+        { x: 5, y: 0.6, currentLayer: 1 },
+        1100
+    );
+
+    assert.equal(stillLatched.active, true);
+    assert.equal(stillLatched.triggers.length, 1);
+    assert.equal(stillLatched._doorwayPresentationTransition.presentationWizard.y, -0.2);
+
+    const clearedState = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        { ...currentOutsideState, wizardY: 1.2 },
+        { shortestDeltaX: (fromX, toX) => toX - fromX, shortestDeltaY: (fromY, toY) => toY - fromY },
+        { x: 5, y: 1.2, currentLayer: 1 },
+        1200
+    );
+
+    assert.equal(clearedState.active, false);
+    assert.equal(!!clearedState._doorwayPresentationTransition, false);
+});
+
+test("building doorway transition latches exterior presentation when entering", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const mountedWall = {
+        id: 42,
+        type: "wallSection",
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 10, y: 0 },
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[42, mountedWall]])
+    };
+    const door = {
+        type: "door",
+        category: "doors",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 42,
+        x: 5,
+        y: 0,
+        width: 2,
+        depthBillboardFaceCenters: {
+            front: { x: 5, y: 0.25 },
+            back: { x: 5, y: -0.25 }
+        }
+    };
+    const map = {
+        shortestDeltaX: (fromX, toX) => toX - fromX,
+        shortestDeltaY: (fromY, toY) => toY - fromY
+    };
+    const exteriorState = {
+        active: false,
+        wizardLayer: 1,
+        wizardBaseZ: 3,
+        wizardX: 5,
+        wizardY: 0.2,
+        triggers: [],
+        hiddenFromLevel: Infinity,
+        hiddenSurfaceIds: new Set(),
+        hiddenFragmentIds: new Set()
+    };
+    assert.equal(renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        exteriorState,
+        map,
+        { x: 5, y: 0.2, currentLayer: 1 },
+        1000
+    ), exteriorState);
+
+    const activeRegion = {
+        id: "fragment:house-l1",
+        level: 1,
+        polygon: { outer: [], holes: [] }
+    };
+    const interiorState = {
+        active: true,
+        wizardLayer: 1,
+        wizardBaseZ: 3,
+        wizardX: 5,
+        wizardY: -0.2,
+        triggers: [{
+            building: { buildingId: "building:house" },
+            buildingId: "building:house",
+            activeInteriorRegion: activeRegion,
+            renderCache: {
+                interiorRegions: [activeRegion],
+                renderItems: [{ item: door, level: 1 }]
+            }
+        }],
+        hiddenFromLevel: 1,
+        hiddenSurfaceIds: new Set(["house"]),
+        hiddenFragmentIds: new Set(["house-l1"])
+    };
+    const latchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        interiorState,
+        map,
+        { x: 5, y: -0.2, currentLayer: 1 },
+        1100
+    );
+
+    assert.equal(latchedExterior.active, false);
+    assert.equal(latchedExterior.triggers.length, 0);
+    assert.equal(!!latchedExterior._doorwayPresentationTransition, true);
+    assert.equal(latchedExterior._doorwayPresentationTransition.presentationWizard.y, 0.2);
+
+    const stillLatchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        { ...interiorState, wizardY: -0.6 },
+        map,
+        { x: 5, y: -0.6, currentLayer: 1 },
+        1200
+    );
+
+    assert.equal(stillLatchedExterior.active, false);
+    assert.equal(stillLatchedExterior.triggers.length, 0);
+
+    const committedInterior = renderer.updateBuildingDoorwayPresentationTransition(
+        {},
+        { ...interiorState, wizardY: -1.2 },
+        map,
+        { x: 5, y: -1.2, currentLayer: 1 },
+        1300
+    );
+
+    assert.equal(committedInterior.active, true);
+    assert.equal(committedInterior.triggers.length, 1);
+    assert.equal(!!committedInterior._doorwayPresentationTransition, false);
+});
+
+test("outside building cutaway renders only exterior face for mounted windows", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        }
+    });
+    const depthObjects = makeContainer("renderingDepthObjects");
+    renderer.layers = {
+        depthObjects,
+        groundObjects: makeContainer("renderingGroundObjects"),
+        characters: makeContainer("renderingCharacters")
+    };
+    renderer.getCharacterLayer = () => renderer.layers.characters;
+    renderer.isOmnivisionActive = () => false;
+    renderer.isLosMazeModeEnabled = () => false;
+    renderer.isScriptVisible = () => true;
+    renderer.applyScriptBrightness = () => {};
+    renderer.applyFrozenTint = () => {};
+    renderer.applyLayerDarknessForItem = () => {};
+    renderer.applySinkClip = () => true;
+    renderer.addPickRenderItem = () => {};
+
+    const mountedWall = {
+        id: 77,
+        type: "wallSection",
+        bottomZ: 3
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([[77, mountedWall]])
+    };
+    const mesh = { visible: false, renderable: false, alpha: 0, parent: null };
+    let depthOptions = null;
+    const windowItem = {
+        type: "window",
+        category: "windows",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 77,
+        x: 5,
+        y: 5,
+        depthBillboardFaceCenters: {
+            front: { x: 11, y: 5 },
+            back: { x: 5, y: 5 }
+        },
+        pixiSprite: { visible: true, renderable: true, alpha: 1 },
+        texturePath: "/assets/images/windows/window.png",
+        updateDepthBillboardMesh(_ctx, _camera, options) {
+            depthOptions = options;
+            return mesh;
+        }
+    };
+    const region = {
+        id: "fragment:house-l1",
+        level: 1,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        }
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: { buildingId: "building:house" },
+            buildingId: "building:house",
+            level: 1,
+            renderCache: {
+                interiorRegions: [region],
+                renderItems: [{ item: windowItem, level: 1 }]
+            }
+        }]
+    };
+
+    const rendered = renderer.renderDepthBillboardObjects({
+        wizard: { x: 20, y: 5, currentLayer: 1 },
+        map: {},
+        app: { screen: { width: 800, height: 600 } }
+    }, [windowItem], null, cutawayState);
+
+    assert.equal(rendered.has(windowItem), true);
+    assert.equal(depthOptions.forceMountedWallSide, "front");
+    assert.equal(depthOptions.drawOnlyMountedWallSide, true);
+    assert.equal(mesh.parent, depthObjects);
+});
+
+test("outside building cutaway does not force side selection for unrelated mounted windows", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const windowItem = {
+        type: "window",
+        category: "windows",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 77,
+        depthBillboardFaceCenters: {
+            front: { x: 11, y: 5 },
+            back: { x: 5, y: 5 }
+        }
+    };
+    const region = {
+        id: "fragment:house-l1",
+        level: 1,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        }
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: { buildingId: "building:house" },
+            buildingId: "building:house",
+            level: 1,
+            renderCache: {
+                interiorRegions: [region],
+                renderItems: []
+            }
+        }]
+    };
+
+    const side = renderer.getBuildingCutawayMountedExteriorSide(
+        windowItem,
+        cutawayState,
+        { wizard: { x: 20, y: 5 } },
+        {}
+    );
+
+    assert.equal(side, null);
+});
+
+test("building interior picker draws only active-floor building entries", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const parent = {};
+    const activeFloorItem = {
+        type: "furniture",
+        category: "furniture"
+    };
+    const activeFloorSurface = {
+        type: "road",
+        category: "roads"
+    };
+    const inactiveFloorItem = {
+        type: "furniture",
+        category: "furniture"
+    };
+    const externalItem = {
+        type: "tree",
+        category: "trees"
+    };
+    const displayObj = {
+        visible: true,
+        parent
+    };
+    const activeRegion = {
+        id: "fragment:house-l1",
+        level: 1
+    };
+    const cutawayState = {
+        triggers: [{
+            activeInteriorRegion: activeRegion,
+            renderCache: {
+                renderItems: [
+                    { item: activeFloorItem, level: 1 },
+                    { item: activeFloorSurface, level: 1 },
+                    { item: inactiveFloorItem, level: 2 }
+                ],
+                interiorRegions: []
+            }
+        }]
+    };
+
+    renderer.prepareBuildingInteriorPickerFrame(
+        {},
+        cutawayState,
+        { items: new Set([activeFloorItem]) }
+    );
+    renderer.addPickRenderItem(activeFloorItem, displayObj);
+    renderer.addPickRenderItem(activeFloorSurface, displayObj);
+    renderer.addPickRenderItem(inactiveFloorItem, displayObj);
+    renderer.addPickRenderItem(externalItem, displayObj);
+
+    assert.equal(renderer.pickRenderItems.length, 3);
+    assert.equal(renderer.pickRenderItems.some(entry => entry.item === activeFloorItem), true);
+    assert.equal(renderer.pickRenderItems.some(entry => entry.item === activeFloorSurface), true);
+    assert.equal(renderer.pickRenderItems.some(entry => entry.item === inactiveFloorItem), false);
+    assert.equal(renderer.pickRenderItems.some(entry => entry.item === externalItem), true);
 });
 
 test("building interior promotion lifts foreground plan character meshes", () => {
@@ -859,6 +1677,78 @@ test("building cutaway composite hiding preserves active interior foreground dis
     assert.equal(activeWallMesh.renderable, true);
     assert.equal(cachedRoofMesh.visible, false);
     assert.equal(cachedRoofMesh.renderable, false);
+});
+
+test("building cutaway composite marks floors visible through holes", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.beginLayerCutawayFrame();
+    const upper = {
+        fragmentId: "upper",
+        surfaceId: "house",
+        buildingId: "building:house",
+        level: 2,
+        nodeBaseZ: 6,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        holes: [[
+            { x: 3, y: 3 },
+            { x: 7, y: 3 },
+            { x: 7, y: 7 },
+            { x: 3, y: 7 }
+        ]],
+        texturePath: "/assets/images/flooring/woodfloor.png"
+    };
+    const lower = {
+        fragmentId: "lower",
+        surfaceId: "house",
+        buildingId: "building:house",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 2, y: 2 },
+            { x: 8, y: 2 },
+            { x: 8, y: 8 },
+            { x: 2, y: 8 }
+        ],
+        texturePath: "/assets/images/flooring/woodfloor.png"
+    };
+    const building = {
+        buildingId: "building:house",
+        holeVisibleFragments: new Map([["upper", new Set(["lower"])]])
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building,
+            buildingId: "building:house",
+            level: 1,
+            alpha: 0.25,
+            fragmentIds: new Set(["upper", "lower"]),
+            surfaceIds: new Set(["house"])
+        }]
+    };
+    renderer.getLayerCutawayState = () => cutawayState;
+
+    const entries = renderer.collectFloorVisualEntries({
+        map: {
+            floorsById: new Map([
+                ["upper", upper],
+                ["lower", lower]
+            ]),
+            ensureFloorBuildings: () => new Map([[building.buildingId, building]])
+        },
+        wizard: { currentLayer: 0 }
+    });
+
+    const throughEntry = entries.find(entry => entry && entry.key === "fragment:lower:through:upper");
+    assert.ok(throughEntry);
+    assert.equal(throughEntry.buildingCutawayCompositeFrame, renderer._layerCutawayFrameId);
+    assert.equal(throughEntry.buildingCutawayCompositeAlpha, 0.25);
 });
 
 test("building cutaway composite presents stale cache while replacement textures are pending", () => {
@@ -1049,19 +1939,42 @@ test("active building interior walls flatten when camera and player face opposit
         xyratio: 1,
         worldToScreen: (x, y, z = 0) => ({ x, y: y - z })
     };
-    const wizard = { x: 5, y: 5 };
     const flattenedWall = {
+        id: 101,
         type: "wallSection",
         bottomZ: 3,
-        isVisibleInMazeModeFacingRule: ({ player }) => {
-            assert.equal(player, wizard);
-            return false;
-        }
+        isVisibleInMazeModeFacingRule: () => false
     };
     const standingWall = {
+        id: 102,
         type: "wallSection",
         bottomZ: 3,
         isVisibleInMazeModeFacingRule: () => true
+    };
+    const latchedWall = {
+        type: "wallSection",
+        bottomZ: 3,
+        isVisibleInMazeModeFacingRule: ({ player }) => player && player.x < 0
+    };
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([
+            [101, flattenedWall],
+            [102, standingWall]
+        ])
+    };
+    const hiddenWindow = {
+        type: "window",
+        category: "windows",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 101,
+        traversalLayer: 1
+    };
+    const visibleWindow = {
+        type: "window",
+        category: "windows",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 102,
+        traversalLayer: 1
     };
     const region = {
         id: "fragment:house-l1",
@@ -1069,22 +1982,31 @@ test("active building interior walls flatten when camera and player face opposit
         polygon: { outer: [], holes: [] },
         staticObjects: [
             { item: flattenedWall },
-            { item: standingWall }
+            { item: standingWall },
+            { item: latchedWall },
+            { item: hiddenWindow },
+            { item: visibleWindow }
         ]
     };
     const cutawayState = {
+        _doorwayPresentationTransition: {
+            presentationWizard: { x: -1, y: 5, currentLayer: 1 }
+        },
         triggers: [{
             activeInteriorRegion: region,
             renderCache: { interiorRegions: [region] }
         }]
     };
 
-    const plan = renderer.buildBuildingInteriorRenderPlan({ wizard }, cutawayState);
+    const plan = renderer.buildBuildingInteriorRenderPlan({ wizard: { x: 1, y: 5 } }, cutawayState);
 
     assert.equal(plan.items.has(flattenedWall), true);
     assert.equal(plan.items.has(standingWall), true);
     assert.equal(plan.wallTopFaceOnly.get(flattenedWall), true);
     assert.equal(plan.wallTopFaceOnly.get(standingWall), false);
+    assert.equal(plan.wallTopFaceOnly.get(latchedWall), false);
+    assert.equal(plan.items.has(hiddenWindow), false);
+    assert.equal(plan.items.has(visibleWindow), true);
 });
 
 test("building cutaway capture temporarily restores flattened active walls to full geometry", () => {
@@ -1112,6 +2034,60 @@ test("building cutaway capture temporarily restores flattened active walls to fu
     restore();
 
     assert.deepEqual(calls, [false, true]);
+});
+
+test("building cutaway roof capture keeps pitched roof projection", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { xyratio: 0.5, viewscale: 2, x: 10, y: 20, z: 3 };
+    const roof = {
+        type: "roof",
+        x: 5,
+        y: 7,
+        z: 6,
+        vertices: [{ x: 2, y: 3, z: 2 }]
+    };
+    const projected = renderer.projectRoofVertexToCutawayCompositePlane(roof, roof.vertices[0], 0.5);
+    const rotationRadians = Math.atan(1.15547);
+    const expectedRotatedY = (3 * Math.cos(rotationRadians)) - (2 * Math.sin(rotationRadians));
+    assert.equal(projected.x, 7);
+    assert.equal(Math.abs(projected.y - (1 + (expectedRotatedY / 0.5))) < 1e-9, true);
+
+    const uniforms = {
+        uScreenSize: new Float32Array([800, 600]),
+        uCameraWorld: new Float32Array([10, 20]),
+        uCameraZ: 3,
+        uViewScale: 2,
+        uXyRatio: 0.5,
+        uBuildingCutawayProjectionPass: 0,
+        uBuildingCutawayPresentationXyRatio: 1,
+        uTint: new Float32Array([1, 1, 1, 0.25])
+    };
+    const displayObj = {
+        alpha: 0.25,
+        shader: { uniforms },
+        children: []
+    };
+    const restore = renderer.applyBuildingCutawayCompositeLocalCaptureState(
+        new Set([displayObj]),
+        { projectionSpace: true, minX: 4, minY: 5, pxPerWorld: 64, width: 256, height: 256 },
+        256,
+        256
+    );
+
+    assert.equal(uniforms.uBuildingCutawayProjectionPass, 1);
+    assert.equal(uniforms.uBuildingCutawayPresentationXyRatio, 0.5);
+    assert.equal(uniforms.uXyRatio, 1);
+    assert.equal(uniforms.uTint[3], 1);
+    assert.equal(displayObj.alpha, 1);
+
+    restore();
+
+    assert.equal(uniforms.uBuildingCutawayProjectionPass, 0);
+    assert.equal(uniforms.uBuildingCutawayPresentationXyRatio, 1);
+    assert.equal(uniforms.uXyRatio, 0.5);
+    assert.equal(uniforms.uTint[3], 0.25);
+    assert.equal(displayObj.alpha, 0.25);
 });
 
 test("building interior item promotion prefers depth mesh over flat fallback sprite", () => {
@@ -1147,13 +2123,7 @@ test("layer cutaway hides overhead floor stack by visibility polygon", () => {
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: [[
+        holes: [[
             { x: 2, y: 2 },
             { x: 4, y: 2 },
             { x: 4, y: 4 },
@@ -1171,13 +2141,6 @@ test("layer cutaway hides overhead floor stack by visibility polygon", () => {
             { x: 30, y: 30 },
             { x: 20, y: 30 }
         ],
-        visibilityPolygon: [
-            { x: 20, y: 20 },
-            { x: 30, y: 20 },
-            { x: 30, y: 30 },
-            { x: 20, y: 30 }
-        ],
-        visibilityHoles: []
     };
     const map = {
         floorsById: new Map([
@@ -1258,13 +2221,6 @@ test("building cutaway ghosts all fragments in active building", () => {
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     };
     const upper = {
         fragmentId: "house-l2",
@@ -1278,13 +2234,6 @@ test("building cutaway ghosts all fragments in active building", () => {
             { x: 8, y: 8 },
             { x: 2, y: 8 }
         ],
-        visibilityPolygon: [
-            { x: 2, y: 2 },
-            { x: 8, y: 2 },
-            { x: 8, y: 8 },
-            { x: 2, y: 8 }
-        ],
-        visibilityHoles: []
     };
     const tower = {
         fragmentId: "tower-l1",
@@ -1298,13 +2247,6 @@ test("building cutaway ghosts all fragments in active building", () => {
             { x: 30, y: 10 },
             { x: 20, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 20, y: 0 },
-            { x: 30, y: 0 },
-            { x: 30, y: 10 },
-            { x: 20, y: 10 }
-        ],
-        visibilityHoles: []
     };
     const houseBuilding = {
         buildingId: "building:house",
@@ -1620,6 +2562,56 @@ test("building cutaway ghosts all fragments in active building", () => {
         JSON.stringify(["fragment:house-l2"])
     );
 
+    const aboveBuildingState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: 5, y: 5, currentLayer: 3, currentLayerBaseZ: 9 }
+    });
+    assert.equal(aboveBuildingState.active, false);
+    assert.equal(aboveBuildingState.triggers.length, 0);
+
+    const exitFadeEntryStartState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: 5, y: -2, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 4000
+    });
+    assert.equal(exitFadeEntryStartState.active, true);
+    assert.equal(exitFadeEntryStartState.triggers[0].alpha, 1);
+    const exitFadeEntryDoneState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: 5, y: -2, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 4500
+    });
+    assert.equal(exitFadeEntryDoneState.active, true);
+    assert.equal(exitFadeEntryDoneState.triggers[0].alpha, 0.1);
+    const fadeExitStartState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: -0.5, y: 5, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 4600
+    });
+    assert.equal(fadeExitStartState.active, true);
+    assert.equal(fadeExitStartState.triggers[0].buildingId, "building:house");
+    assert.equal(fadeExitStartState.triggers[0].exitingCutaway, true);
+    assert.equal(fadeExitStartState.triggers[0].alpha, 0.1);
+    const fadeExitMidState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: -0.5, y: 5, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 4850
+    });
+    assert.equal(fadeExitMidState.active, true);
+    assert.equal(fadeExitMidState.triggers[0].alpha, 0.55);
+    const fadeExitDoneState = renderer.getLayerCutawayState({
+        map,
+        roofs: [roof],
+        wizard: { x: -0.5, y: 5, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 5100
+    });
+    assert.equal(fadeExitDoneState.active, false);
+    assert.equal(fadeExitDoneState.triggers.length, 0);
 });
 
 test("building render cache includes roofs by footprint when wall ids are unavailable", () => {
@@ -1637,13 +2629,6 @@ test("building render cache includes roofs by footprint when wall ids are unavai
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     };
     const building = {
         buildingId: "building:house",
@@ -1708,13 +2693,6 @@ test("building render cache consumes placed object manifest entries", () => {
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     };
     const rug = {
         type: "furniture",
@@ -1774,13 +2752,6 @@ test("building render cache invalidates when prototype wall state changes", () =
             { x: 10, y: 10 },
             { x: 0, y: 10 }
         ],
-        visibilityPolygon: [
-            { x: 0, y: 0 },
-            { x: 10, y: 0 },
-            { x: 10, y: 10 },
-            { x: 0, y: 10 }
-        ],
-        visibilityHoles: []
     };
     const building = {
         buildingId: "building:house",
@@ -1983,4 +2954,240 @@ test("roads are considered baked only when every covering chunk is current and r
 
     asset._level0RoadSurfaceModelVersion += 1;
     assert.equal(renderer.isRoadBakedIntoLevel0Surface(ctx, road), false);
+});
+
+test("straight stairs build a full 3d mesh with treads, risers, and sides", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        map: {
+            shortestDeltaX: (fromX, toX) => toX - fromX,
+            shortestDeltaY: (fromY, toY) => toY - fromY
+        }
+    };
+
+    const geometry = renderer.buildStraightStairMeshGeometry({
+        id: "stairs-a",
+        stairKind: "straight",
+        lowerPoint: { x: 0, y: 0 },
+        higherPoint: { x: 4, y: 0 },
+        lowerZ: 1,
+        higherZ: 3,
+        lowerLevel: 0,
+        higherLevel: 1,
+        width: 2,
+        stepCount: 4,
+        texturePath: "/assets/images/flooring/woodfloor.png"
+    });
+
+    assert.ok(geometry);
+    assert.equal(geometry.faceTypes.filter(type => type === "tread").length, 4);
+    assert.equal(geometry.faceTypes.filter(type => type === "riser").length, 4);
+    assert.equal(geometry.faceTypes.filter(type => type === "side").length, 8);
+    assert.equal(geometry.triangleCount, 32);
+    const zValues = [];
+    for (let i = 2; i < geometry.positions.length; i += 3) zValues.push(geometry.positions[i]);
+    assert.equal(Math.min(...zValues), 1);
+    assert.equal(Math.max(...zValues), 3);
+});
+
+test("straight stair records are not collected as floor visual polygons", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const entries = renderer.collectFloorVisualEntries({
+        map: {
+            floorsById: new Map(),
+            stairsById: new Map([["stairs-a", {
+                id: "stairs-a",
+                stairKind: "straight",
+                lowerLevel: 0,
+                higherLevel: 1,
+                lowerPoint: { x: 0, y: 0 },
+                higherPoint: { x: 4, y: 0 },
+                lowerZ: 0,
+                higherZ: 3,
+                width: 1.2,
+                stepCount: 6,
+                footprint: [
+                    { x: 0, y: 0.6 },
+                    { x: 4, y: 0.6 },
+                    { x: 4, y: -0.6 },
+                    { x: 0, y: -0.6 }
+                ]
+            }]])
+        },
+        wizard: { currentLayer: 0 }
+    });
+
+    assert.equal(Array.isArray(entries), true);
+    assert.equal(entries.length, 0);
+});
+
+test("straight stairs are collected as render objects on their lower floor fragment", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.beginFrameMetrics();
+    const lowerFragment = {
+        fragmentId: "floor-low",
+        surfaceId: "surface-low",
+        level: 0,
+        nodeBaseZ: 1
+    };
+    const stair = {
+        id: "stairs-a",
+        stairKind: "straight",
+        lowerFragmentId: "floor-low",
+        higherFragmentId: "floor-high",
+        lowerLevel: 0,
+        higherLevel: 1,
+        lowerPoint: { x: 2, y: 3 },
+        higherPoint: { x: 6, y: 3 },
+        lowerZ: 1,
+        higherZ: 5,
+        width: 1.2,
+        stepCount: 6,
+        footprint: [
+            { x: 2, y: 3.6 },
+            { x: 6, y: 3.6 },
+            { x: 6, y: 2.4 },
+            { x: 2, y: 2.4 }
+        ]
+    };
+    const map = {
+        floorsById: new Map([["floor-low", lowerFragment]]),
+        stairsById: new Map([["stairs-a", stair]]),
+        shortestDeltaX: (fromX, toX) => toX - fromX,
+        shortestDeltaY: (fromY, toY) => toY - fromY
+    };
+
+    const visibleObjects = renderer.collectVisibleObjects([], {
+        map,
+        camera: { x: 0, y: 0 },
+        viewport: { width: 20, height: 20 },
+        animals: [],
+        animalsPreFilteredVisible: true
+    });
+
+    assert.equal(visibleObjects.length, 1);
+    const item = visibleObjects[0];
+    assert.equal(item.type, "straightStair");
+    assert.equal(item.stairId, "stairs-a");
+    assert.equal(item.stair, stair);
+    assert.equal(item.fragmentId, "floor-low");
+    assert.equal(item.surfaceId, "surface-low");
+    assert.equal(item._renderTraversalLayer, 0);
+    assert.equal(item.x, 4);
+    assert.equal(item.y, 3);
+    assert.equal(renderer.currentFrameMetrics.cvoStairsAdded, 1);
+});
+
+test("building interior render plan includes active-floor stair render items outside the building cache", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const lowerFragment = {
+        fragmentId: "house-l1",
+        surfaceId: "house",
+        buildingId: "building:house",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ]
+    };
+    const upperFragment = {
+        fragmentId: "house-l2",
+        surfaceId: "house",
+        buildingId: "building:house",
+        level: 2,
+        nodeBaseZ: 6,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        holes: [[
+            { x: 3, y: 3 },
+            { x: 7, y: 3 },
+            { x: 7, y: 7 },
+            { x: 3, y: 7 }
+        ]]
+    };
+    const stair = {
+        id: "stairs-a",
+        stairKind: "straight",
+        lowerFragmentId: "house-l1",
+        higherFragmentId: "house-l2",
+        lowerLevel: 1,
+        higherLevel: 2,
+        lowerPoint: { x: 4, y: 5 },
+        higherPoint: { x: 6, y: 5 },
+        lowerZ: 3,
+        higherZ: 6,
+        width: 1.2,
+        stepCount: 6,
+        footprint: [
+            { x: 4, y: 5.6 },
+            { x: 6, y: 5.6 },
+            { x: 6, y: 4.4 },
+            { x: 4, y: 4.4 }
+        ]
+    };
+    const map = {
+        _floorBuildingVersion: 1,
+        floorsById: new Map([
+            ["house-l1", lowerFragment],
+            ["house-l2", upperFragment]
+        ]),
+        stairsById: new Map([["stairs-a", stair]]),
+        shortestDeltaX: (fromX, toX) => toX - fromX,
+        shortestDeltaY: (fromY, toY) => toY - fromY
+    };
+
+    const stairItem = renderer.getStraightStairRenderObject(stair, map);
+    const renderCache = {
+        interiorRegions: [
+            {
+                id: "fragment:house-l1",
+                kind: "floorFragment",
+                level: 1,
+                fragmentId: "house-l1",
+                surfaceId: "house",
+                polygon: renderer.getFloorFragmentInteriorPolygon(lowerFragment),
+                staticObjects: []
+            },
+            {
+                id: "fragment:house-l2",
+                kind: "floorFragment",
+                level: 2,
+                fragmentId: "house-l2",
+                surfaceId: "house",
+                polygon: renderer.getFloorFragmentInteriorPolygon(upperFragment),
+                staticObjects: []
+            }
+        ],
+        renderItems: []
+    };
+    const lowerRegion = renderCache.interiorRegions[0];
+    const upperRegion = renderCache.interiorRegions[1];
+    const plan = renderer.buildBuildingInteriorRenderPlan({ map }, {
+        triggers: [{
+            activeInteriorRegion: lowerRegion,
+            renderCache
+        }]
+    });
+    const lowerPlanHasStair = plan.items.has(stairItem);
+    const upperPlan = renderer.buildBuildingInteriorRenderPlan({ map }, {
+        triggers: [{
+            activeInteriorRegion: upperRegion,
+            renderCache
+        }]
+    });
+
+    assert.equal(renderCache.renderItems.length, 0);
+    assert.equal(lowerPlanHasStair, true);
+    assert.equal(upperPlan.items.has(stairItem), false);
 });

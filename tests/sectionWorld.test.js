@@ -631,8 +631,6 @@ test("ensurePrototypeLevel0FloorRecord regenerates legacy unflagged full-section
                     { x: -0.289, y: 1 }
                 ],
                 holes: [],
-                visibilityPolygon: [],
-                visibilityHoles: []
             }
         ]
     };

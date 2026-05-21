@@ -77,9 +77,18 @@
             if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
                 const width = viewport && Number.isFinite(viewport.width) ? viewport.width : 40;
                 const height = viewport && Number.isFinite(viewport.height) ? viewport.height : 30;
+                const wizardLayer = Number.isFinite(wizard.currentLayer)
+                    ? Math.round(Number(wizard.currentLayer))
+                    : (Number.isFinite(wizard.traversalLayer) ? Math.round(Number(wizard.traversalLayer)) : 0);
+                const wizardBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : wizardLayer * 3;
+                const wizardCameraZ = wizard && wizard._floorFallState && wizard._floorFallState.active && Number.isFinite(wizard.z)
+                    ? wizardBaseZ + Number(wizard.z)
+                    : wizardBaseZ;
                 this.x = wizard.x - width * 0.5;
                 this.y = wizard.y - height * 0.5;
-                this.z = 0;
+                this.z = wizardCameraZ;
                 this.prevX = this.x;
                 this.prevY = this.y;
                 this.prevZ = this.z;

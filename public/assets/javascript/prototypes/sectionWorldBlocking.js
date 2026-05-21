@@ -456,10 +456,48 @@
             return true;
         }
 
+        function backfillWallBlockedEdgesIntoAsset(asset, wall, recordId) {
+            if (!asset || !wall || !Number.isInteger(recordId)) return;
+            if (!Array.isArray(asset.blockedEdges)) asset.blockedEdges = [];
+            const wallLayer = Number.isFinite(wall.traversalLayer)
+                ? Math.round(Number(wall.traversalLayer))
+                : (Number.isFinite(wall.level) ? Math.round(Number(wall.level)) : 0);
+            const pointKey = (node) =>
+                `${Number(node.xindex)},${Number(node.yindex)},${wallLayer},${typeof node.surfaceId === "string" ? node.surfaceId : ""},${typeof node.fragmentId === "string" ? node.fragmentId : ""}`;
+            const serializePoint = (node) => ({
+                xindex: Number(node.xindex),
+                yindex: Number(node.yindex),
+                traversalLayer: wallLayer,
+                level: wallLayer,
+                surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+                fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : ""
+            });
+            const seenEdgeKeys = new Set();
+            for (const { node, direction } of (Array.isArray(wall.blockedLinks) ? wall.blockedLinks : [])) {
+                if (!node || !Array.isArray(node.neighbors)) continue;
+                const neighborNode = node.neighbors[direction];
+                if (!neighborNode) continue;
+                const aKey = pointKey(node);
+                const bKey = pointKey(neighborNode);
+                const edgeKey = aKey <= bKey ? `${recordId}|${aKey}|${bKey}` : `${recordId}|${bKey}|${aKey}`;
+                if (seenEdgeKeys.has(edgeKey)) continue;
+                seenEdgeKeys.add(edgeKey);
+                asset.blockedEdges.push({
+                    recordId,
+                    traversalLayer: wallLayer,
+                    level: wallLayer,
+                    a: serializePoint(node),
+                    b: serializePoint(neighborNode)
+                });
+            }
+            asset._prototypeBlockedEdgesDirty = false;
+        }
+
         return {
             applyPrototypeBlockedEdgesForSection,
             applyPrototypeSectionClearanceChunk,
             applyPrototypeSectionClearanceToNodes,
+            backfillWallBlockedEdgesIntoAsset,
             ensurePrototypeBlockedEdgeState,
             ensurePrototypeBlockedEdges,
             markPrototypeBlockedEdgesDirty,

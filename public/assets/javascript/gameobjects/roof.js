@@ -21,6 +21,7 @@ uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
 uniform float uBuildingCutawayProjectionPass;
+uniform float uBuildingCutawayPresentationXyRatio;
 varying vec2 vUvs;
 varying float vWorldZ;
 
@@ -52,8 +53,9 @@ void main(void) {
     float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
     float screenY = (anchorCamDy - uModelOrigin.z + uCameraZ) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
     if (uBuildingCutawayProjectionPass > 0.5) {
+        float presentationXyRatio = max(1e-6, abs(uBuildingCutawayPresentationXyRatio));
         screenX = camDx * uViewScale;
-        screenY = (camDy - camDz) * uViewScale * uXyRatio;
+        screenY = (anchorCamDy - uModelOrigin.z + uCameraZ + (aVertexPosition.y / presentationXyRatio)) * uViewScale;
     }
 
     float sx = max(1.0, uScreenSize.x);
@@ -1467,6 +1469,7 @@ void main(void) {
                     uWrapEnabled: new Float32Array([0, 0]),
                     uWrapAnchorWorld: new Float32Array([this.x || 0, this.y || 0]),
                     uBuildingCutawayProjectionPass: 0,
+                    uBuildingCutawayPresentationXyRatio: 1,
                     uTint: new Float32Array([tintR, tintG, tintB, 1]),
                     uAlphaCutoff: 0.02,
                     uBuildingCutawayDataPass: 0,

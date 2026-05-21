@@ -324,8 +324,6 @@ class Wizard extends Character {
         this.shieldDebrisGraphics = new PIXI.Graphics();
         characterLayer.addChild(this.shieldDebrisGraphics);
         this.shieldWireframeMesh = null;
-        this.shadowGraphics = new PIXI.Graphics();
-        characterLayer.addChild(this.shadowGraphics);
         this.hatColor = 0x000099; // Royal Blue
         this.hatBandColor = 0xFFD700; // Gold
         this.redrawHatGeometry();
@@ -538,13 +536,26 @@ class Wizard extends Character {
             this.jumpPolyC = h0;
         }
     }
+    isUsingHitboxMovement() {
+        return true;
+    }
+
+    shouldConstrainHitboxMovementToFloorSupport() {
+        return false;
+    }
+
     updateJump(dtSec) {
+        const supportZ = (
+            this._stairSupport &&
+            typeof this._stairSupport === "object" &&
+            Number.isFinite(this._stairSupport.localZ)
+        ) ? Number(this._stairSupport.localZ) : 0;
         if (typeof this.isFrozen === "function" && this.isFrozen()) {
-            this.z = Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0);
+            this.z = supportZ + (Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0));
             return;
         }
         if (!this.isJumping) {
-            this.z = 0;
+            this.z = supportZ;
             return;
         }
         const dt = Math.max(0, Number(dtSec) || 0);
@@ -558,7 +569,7 @@ class Wizard extends Character {
             // Symmetric arc: 0 at ends, max at midpoint.
             this.jumpHeight = 4 * this.jumpMaxHeight * t * (1 - t);
         }
-        this.z = this.jumpHeight;
+        this.z = supportZ + this.jumpHeight;
 
         if (this.jumpElapsedSec >= this.jumpDurationSec || this.jumpHeight <= 0.0001) {
             this.isJumping = false;
@@ -567,7 +578,7 @@ class Wizard extends Character {
             this.jumpCount = 0;
             this.jumpMode = "single";
             this.jumpLockedMovingBackward = false;
-            this.z = 0;
+            this.z = supportZ;
         }
     }
     startTripleJump() {
@@ -1399,55 +1410,6 @@ class Wizard extends Character {
         return super.moveDirection(vector, options);
     }
 
-    collectNearbyBlockingObjects(newX, newY, radius, options = {}) {
-        const nearbyObjects = super.collectNearbyBlockingObjects(newX, newY, radius, options);
-        const layer = Number.isFinite(this.currentLayer) ? Math.round(this.currentLayer) : 0;
-        if (layer >= 0) return nearbyObjects;
-        if (!this.map || !(this.map.floorsById instanceof Map) || this.map.floorsById.size === 0) return nearbyObjects;
-        const _g = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : null);
-        const circleVsPolygon = _g && typeof _g.checkCircleVsPolygon === "function" ? _g.checkCircleVsPolygon : null;
-        if (!circleVsPolygon) return nearbyObjects;
-
-        for (const fragment of this.map.floorsById.values()) {
-            if (!fragment) continue;
-            const fragLevel = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
-            if (fragLevel !== layer) continue;
-            const polygon = fragment.outerPolygon;
-            if (!Array.isArray(polygon) || polygon.length < 3) continue;
-
-            // Cached barrier object per fragment (reads outerPolygon live to handle edits).
-            if (!fragment._floorBarrierObject) {
-                fragment._floorBarrierObject = {
-                    _fragment: fragment,
-                    gone: false,
-                    isPassable: false,
-                    groundPlaneHitbox: {
-                        getBounds() { return { x: NaN, y: NaN, width: NaN, height: NaN }; },
-                        intersects(otherHitbox) {
-                            if (!otherHitbox || otherHitbox.type !== "circle") return null;
-                            const poly = fragment.outerPolygon;
-                            if (!Array.isArray(poly) || poly.length < 3) return null;
-                            const result = circleVsPolygon(otherHitbox, { points: poly });
-                            if (!result) return null;
-                            let inside = false;
-                            const cx = otherHitbox.x, cy = otherHitbox.y;
-                            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-                                const intersect = ((poly[i].y > cy) !== (poly[j].y > cy)) &&
-                                    (cx < (poly[j].x - poly[i].x) * (cy - poly[i].y) /
-                                        (poly[j].y - poly[i].y + 1e-7) + poly[i].x);
-                                if (intersect) inside = !inside;
-                            }
-                            if (inside) return null;
-                            return { pushX: -result.pushX, pushY: -result.pushY };
-                        }
-                    }
-                };
-            }
-            nearbyObjects.push(fragment._floorBarrierObject);
-        }
-        return nearbyObjects;
-    }
-    
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
         const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
@@ -1778,76 +1740,6 @@ class Wizard extends Character {
         this.updateModeToggleUi();
     }
     
-    draw() {
-        if (!this.pixiSprite) {
-            this.pixiSprite = new PIXI.Sprite(wizardFrames[0] || PIXI.Texture.WHITE);
-            characterLayer.addChild(this.pixiSprite);
-        }
-
-        const renderWorld = this.getInterpolatedPosition();
-        const interpolatedJumpHeight = Number.isFinite(renderWorld.z) ? renderWorld.z : 0;
-
-        // Draw a ground shadow from the same interpolated world position as the sprite.
-        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
-        const shadowCoors = {
-            x: screenCoors.x,
-            y: screenCoors.y + 0.2 * viewscale * xyratio
-        };
-        const shadowRadiusX = 0.2 * viewscale; // 0.3 map units wide (diameter)
-        const shadowRadiusY = shadowRadiusX * xyratio;
-        this.shadowGraphics.clear();
-        this.shadowGraphics.beginFill(0x000000, 0.3);
-        this.shadowGraphics.drawEllipse(shadowCoors.x, shadowCoors.y, shadowRadiusX, shadowRadiusY);
-        this.shadowGraphics.endFill();
-        if (this.pixiSprite && this.shadowGraphics.parent) {
-            const spriteIndex = characterLayer.children.indexOf(this.pixiSprite);
-            const shadowIndex = characterLayer.children.indexOf(this.shadowGraphics);
-            if (spriteIndex > 0 && shadowIndex >= spriteIndex) {
-                characterLayer.setChildIndex(this.shadowGraphics, spriteIndex - 1);
-            }
-        }
-        
-        // Determine which row (direction) to use
-        const visualSpeed = Math.hypot(this.movementVector?.x || 0, this.movementVector?.y || 0);
-        const isDead = !!this.dead || (Number.isFinite(this.hp) && this.hp <= 0);
-        const isVisuallyMoving = !isDead && (this.moving || visualSpeed > 0.02);
-        if (this.lastDirectionRow === undefined) this.lastDirectionRow = 0;
-        const rowIndex = this.lastDirectionRow;
-        
-        // Determine which frame (column) to show for animation
-        let frameIndex = rowIndex * 9; // Start of this row
-        if (this.isJumping) {
-            // Keep a fixed airborne pose while jumping.
-            const airborneFrameCol = 2;
-            frameIndex = rowIndex * 9 + airborneFrameCol;
-        } else if (isVisuallyMoving) {
-            // Columns 1-8 = running animation (8 frames)
-            // Column 0 = standing still
-            const speedRatio = (this.speed > 0) ? (visualSpeed / this.speed) : 0;
-            const simTicks = (renderNowMs / 1000) * frameRate;
-            const animFrame = Math.floor(simTicks * this.animationSpeedMultiplier * speedRatio / 2) % 8;
-            const effectiveAnimFrame = this.isMovingBackward ? (7 - animFrame) : animFrame;
-            frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
-        }
-        
-        // Set the texture to the appropriate frame
-        if (wizardFrames[frameIndex]) {
-            this.pixiSprite.texture = wizardFrames[frameIndex];
-        }
-        
-        // Update wizard sprite position
-        const jumpOffsetPx = interpolatedJumpHeight * viewscale * xyratio;
-        
-        this.pixiSprite.x = screenCoors.x;
-        this.pixiSprite.y = screenCoors.y - jumpOffsetPx;
-        this.pixiSprite.anchor.set(0.5, 0.75);
-        this.pixiSprite.width = viewscale;
-        this.pixiSprite.height = viewscale;
-
-        this.drawShield(interpolatedJumpHeight, renderWorld);
-        this.drawHat(interpolatedJumpHeight, renderWorld);
-    }
-
     saveJson() {
         const viewportX = (this.map && typeof this.map.wrapWorldX === "function")
             ? this.map.wrapWorldX(viewport.x)

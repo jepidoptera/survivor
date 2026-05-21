@@ -136,6 +136,21 @@
         return { x: worldX, y: worldY };
     }
 
+    function resolveViewportFollowZ(obj) {
+        if (!obj) return null;
+        const layer = Number.isFinite(obj.currentLayer)
+            ? Math.round(Number(obj.currentLayer))
+            : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null);
+        const baseZ = Number.isFinite(obj.currentLayerBaseZ)
+            ? Number(obj.currentLayerBaseZ)
+            : (Number.isFinite(layer) ? layer * 3 : null);
+        if (!Number.isFinite(baseZ)) return null;
+        if (obj._floorFallState && obj._floorFallState.active && Number.isFinite(obj.z)) {
+            return baseZ + Number(obj.z);
+        }
+        return baseZ;
+    }
+
     function centerViewport(obj, margin, smoothing = null) {
         if (!obj || !viewport) return;
         if (global && global.triggerAreaCameraDetachActive === true) return;
@@ -219,6 +234,25 @@
 
         viewport.x = nextX;
         viewport.y = nextY;
+        const followZ = resolveViewportFollowZ(obj);
+        if (Number.isFinite(followZ)) {
+            if (viewport._cameraZInitializedFromFollow !== true) {
+                viewport.z = followZ;
+                viewport.prevZ = followZ;
+                viewport._cameraZInitializedFromFollow = true;
+            } else if (!Number.isFinite(viewport.z)) {
+                viewport.z = followZ;
+            } else {
+                const layerTransitionActive = !!(
+                    obj._floorFallState && obj._floorFallState.active ||
+                    obj._pendingLayerTransition && obj._pendingLayerTransition.active
+                );
+                if (!layerTransitionActive && Math.abs(Number(viewport.z) - followZ) > 1e-6) {
+                    viewport.z = followZ;
+                    viewport.prevZ = followZ;
+                }
+            }
+        }
 
         let seamShiftX = 0;
         let seamShiftY = 0;

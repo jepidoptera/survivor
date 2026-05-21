@@ -1,5 +1,7 @@
 (function attachRenderingBuildingInteriorView(global) {
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
+    const BUILDING_INTERIOR_WIZARD_SHADOW_Z = BUILDING_INTERIOR_FOREGROUND_Z - 1;
+    const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
 
     class RenderingBuildingInteriorView {
         constructor(renderer) {
@@ -32,14 +34,14 @@
             return false;
         }
 
-        promoteDisplayObject(displayObj, ctx = null) {
+        promoteDisplayObject(displayObj, ctx = null, zIndex = BUILDING_INTERIOR_FOREGROUND_Z) {
             const r = this.renderer;
             if (!displayObj || !this.isPresentationActive(ctx)) return false;
             const ui = r.layers && r.layers.ui ? r.layers.ui : null;
             if (!ui) return false;
             ui.sortableChildren = true;
             if (displayObj.parent !== ui) ui.addChild(displayObj);
-            displayObj.zIndex = BUILDING_INTERIOR_FOREGROUND_Z;
+            displayObj.zIndex = zIndex;
             const uiState = this.getPresentationUiState();
             if (uiState && Object.prototype.hasOwnProperty.call(displayObj, "state")) {
                 displayObj.state = uiState;
@@ -57,10 +59,10 @@
             if (!this.isPresentationActive(ctx)) return 0;
             const candidates = [];
             const seen = new Set();
-            const addCandidate = (obj) => {
+            const addCandidate = (obj, zIndex = BUILDING_INTERIOR_FOREGROUND_Z) => {
                 if (!obj || seen.has(obj)) return;
                 seen.add(obj);
-                candidates.push(obj);
+                candidates.push({ obj, zIndex });
             };
             addCandidate(r.wallPlacementPreviewGraphics);
             addCandidate(r.roadPlacementPreviewContainer);
@@ -70,11 +72,17 @@
             addCandidate(r.placeObjectPreviewDisplayObject);
             addCandidate(r.powerupPlacementPreviewDisplayObject);
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            const shadowProxy = r.wizardShadowProxy || null;
+            addCandidate(shadowProxy && shadowProxy._renderingDepthMesh, BUILDING_INTERIOR_WIZARD_SHADOW_Z);
+            addCandidate(shadowProxy && shadowProxy.pixiSprite, BUILDING_INTERIOR_WIZARD_SHADOW_Z);
             addCandidate(wizardRef && wizardRef._renderingDepthMesh);
             addCandidate(wizardRef && wizardRef.pixiSprite);
-            addCandidate(wizardRef && wizardRef.hatGraphics);
+            addCandidate(wizardRef && wizardRef.hatGraphics, BUILDING_INTERIOR_WIZARD_HAT_Z);
             if (r.activeProjectileDisplayObjects instanceof Set) {
                 for (const obj of r.activeProjectileDisplayObjects) addCandidate(obj);
+            }
+            if (r.activePowerupDisplayObjects instanceof Set) {
+                for (const obj of r.activePowerupDisplayObjects) addCandidate(obj);
             }
             const picker = r.scenePicker || null;
             if (picker) {
@@ -86,9 +94,10 @@
             }
             let promoted = 0;
             for (let i = 0; i < candidates.length; i++) {
-                const obj = candidates[i];
+                const candidate = candidates[i];
+                const obj = candidate && candidate.obj;
                 if (!obj || obj.visible === false || obj.renderable === false) continue;
-                if (this.promoteDisplayObject(obj, ctx)) promoted += 1;
+                if (this.promoteDisplayObject(obj, ctx, candidate.zIndex)) promoted += 1;
             }
             const underlays = [
                 r.placeObjectPreviewItem && r.placeObjectPreviewItem._compositeUnderlayMesh,

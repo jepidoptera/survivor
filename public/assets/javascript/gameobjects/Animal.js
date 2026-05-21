@@ -1661,6 +1661,10 @@ class Animal extends Character {
     tickBehaviorOnly() {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
+        if (this.map && this.map._prototypeBlockingPending) {
+            this.moving = false;
+            return;
+        }
         if (this._movementSuspendedByStreaming === true) {
             const resolvedNode = (this.map && typeof this.map.worldToNode === "function")
                 ? ((typeof this.resolveNodeForTraversalLayer === "function")
@@ -3067,6 +3071,7 @@ class Squirrel extends Animal {
             return;
         }
 
+        const baseZ = Number.isFinite(this.currentLayerBaseZ) ? this.currentLayerBaseZ : 0;
         const peakHeight = Math.max(0.18, this.size * 0.8);
         const state = this._closeCombatState;
         const impactUntil = Number(this._playerSummonImpactUntilMs) || 0;
@@ -3079,14 +3084,14 @@ class Squirrel extends Animal {
             const lungeTravelDistance = Math.max(strikeDistance, this._getCloseCombatLungeTravelDistance(state), 0.6);
             const durationMs = Math.max(140, (lungeTravelDistance / Math.max(1e-4, Number(this.lungeSpeed) || 1)) * 1000);
             const progress = Math.max(0, Math.min(1, elapsedMs / durationMs));
-            this.z = peakHeight * Math.sin(progress * Math.PI * 0.92);
+            this.z = baseZ + peakHeight * Math.sin(progress * Math.PI * 0.92);
             this._playerSummonAttackRotation = -26 + (progress * 48);
             return;
         }
 
         if (impactUntil > now) {
             const impactProgress = 1 - ((impactUntil - now) / Math.max(1, this._playerSummonImpactHoldMs));
-            this.z = peakHeight * 0.14;
+            this.z = baseZ + peakHeight * 0.14;
             this._playerSummonAttackRotation = 28 - (impactProgress * 16);
             return;
         }
@@ -3094,13 +3099,13 @@ class Squirrel extends Animal {
         if (state && state.phase === "backoff") {
             const elapsedMs = Math.max(0, now - (Number(state.phaseStartedMs) || now));
             const progress = Math.max(0, Math.min(1, elapsedMs / 180));
-            this.z = peakHeight * 0.4 * ((1 - progress) ** 2);
+            this.z = baseZ + peakHeight * 0.4 * ((1 - progress) ** 2);
             this._playerSummonAttackRotation = 18 * (1 - progress);
             return;
         }
 
-        this.z *= 0.5;
-        if (Math.abs(this.z) < 0.01) this.z = 0;
+        this.z = baseZ + (this.z - baseZ) * 0.5;
+        if (Math.abs(this.z - baseZ) < 0.01) this.z = baseZ;
         this._playerSummonAttackRotation *= 0.5;
         if (Math.abs(this._playerSummonAttackRotation) < 0.5) {
             this._playerSummonAttackRotation = 0;
@@ -3109,8 +3114,9 @@ class Squirrel extends Animal {
 
     updateSquirrelLungeVisuals(now = Date.now()) {
         if (this.isPlayerAlliedSummon()) return;
+        const baseZ = Number.isFinite(this.currentLayerBaseZ) ? this.currentLayerBaseZ : 0;
         if (this.dead || this.gone) {
-            this.z = 0;
+            this.z = baseZ;
             return;
         }
 
@@ -3135,13 +3141,13 @@ class Squirrel extends Animal {
             const durationMs = Math.max(120, (lungeTravelDistance / Math.max(1e-4, Number(this.lungeSpeed) || 1)) * 1000);
             const progress = Math.max(0, Math.min(1, elapsedMs / durationMs));
             const peakHeight = Math.max(0.15, this.size * 0.65);
-            this.z = peakHeight * Math.sin(progress * Math.PI);
+            this.z = baseZ + peakHeight * Math.sin(progress * Math.PI);
             return;
         }
 
-        this.z *= 0.35;
-        if (Math.abs(this.z) < 0.01) {
-            this.z = 0;
+        this.z = baseZ + (this.z - baseZ) * 0.35;
+        if (Math.abs(this.z - baseZ) < 0.01) {
+            this.z = baseZ;
         }
     }
 
@@ -3156,7 +3162,8 @@ class Squirrel extends Animal {
         const now = Number.isFinite(result && result.nowMs) ? Number(result.nowMs) : Date.now();
         this._playerSummonImpactUntilMs = now + this._playerSummonImpactHoldMs;
         if (details.hit === true) {
-            this.z = Math.max(this.z, this.size * 0.12);
+            const baseZ = Number.isFinite(this.currentLayerBaseZ) ? this.currentLayerBaseZ : 0;
+            this.z = Math.max(this.z, baseZ + this.size * 0.12);
         }
     }
 

@@ -13,7 +13,7 @@ class Teleport extends globalThis.Spell {
         this.radius = 0;
     }
 
-    cast(targetX, targetY) {
+    cast(targetX, targetY, options = {}) {
         if (!wizard || !wizard.map) return this;
         if (!globalThis.Spell.canAffordMagicCost(this.magicCost, wizard)) {
             globalThis.Spell.indicateInsufficientMagic();
@@ -26,6 +26,11 @@ class Teleport extends globalThis.Spell {
         if (typeof wizard.map.wrapWorldX === "function") destinationX = wizard.map.wrapWorldX(destinationX);
         if (typeof wizard.map.wrapWorldY === "function") destinationY = wizard.map.wrapWorldY(destinationY);
         if (!Number.isFinite(destinationX) || !Number.isFinite(destinationY)) {
+            message("Cannot teleport there!");
+            return this;
+        }
+        const destinationNode = options && options.destinationNode ? options.destinationNode : null;
+        if (!destinationNode) {
             message("Cannot teleport there!");
             return this;
         }
@@ -43,7 +48,23 @@ class Teleport extends globalThis.Spell {
         globalThis.Spell.spendMagicCost(this.magicCost, wizard);
         wizard.x = destinationX;
         wizard.y = destinationY;
-        wizard.node = wizard.map.worldToNode(destinationX, destinationY) || wizard.node;
+        wizard.node = destinationNode;
+        if (typeof wizard.syncTraversalLayerFromNode === "function") {
+            wizard.syncTraversalLayerFromNode(destinationNode);
+        } else {
+            const destinationLayer = Number.isFinite(options && options.destinationLayer)
+                ? Math.round(Number(options.destinationLayer))
+                : (Number.isFinite(destinationNode.traversalLayer)
+                    ? Math.round(Number(destinationNode.traversalLayer))
+                    : (Number.isFinite(destinationNode.level) ? Math.round(Number(destinationNode.level)) : 0));
+            wizard.currentLayer = destinationLayer;
+            wizard.traversalLayer = destinationLayer;
+            wizard.currentLayerBaseZ = Number.isFinite(destinationNode.baseZ)
+                ? Number(destinationNode.baseZ)
+                : (Number.isFinite(options && options.destinationBaseZ) ? Number(options.destinationBaseZ) : destinationLayer * 3);
+        }
+        wizard.z = 0;
+        wizard._floorFallState = null;
         wizard.path = [];
         wizard.nextNode = null;
         wizard.destination = null;
