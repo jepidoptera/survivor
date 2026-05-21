@@ -22115,7 +22115,8 @@
         "-294,246",
         "-293,246",
         "-295,247"
-      ]
+      ],
+      "_prototypeGroundFloor": true
     }
   ],
   "floorHoles": [],
@@ -22124,6 +22125,24 @@
   "blockedEdges": [],
   "clearanceByTile": {},
   "objects": [],
-  "animals": [],
+  "animals": [
+    {
+      "type": "squirrel",
+      "x": -220.59684615384606,
+      "y": 211.4038461538459,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5675310682755336,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel115",
+      "id": 4
+    }
+  ],
   "powerups": []
 }

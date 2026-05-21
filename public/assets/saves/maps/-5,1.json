@@ -22115,7 +22115,8 @@
         "-247,321",
         "-246,321",
         "-245,321"
-      ]
+      ],
+      "_prototypeGroundFloor": true
     }
   ],
   "floorHoles": [],

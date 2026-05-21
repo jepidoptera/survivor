@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -109.89050847154762,
-    "y": 154.99310833447137,
+    "x": -62.95680921527348,
+    "y": 137.32579332232453,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -22,18 +22,18 @@
     "activeAura": "speed",
     "activeAuras": [
       "speed",
-      "omnivision"
+      "healing"
     ],
     "unlockedMagic": [],
-    "selectedFlooringTexture": "/assets/images/flooring/cave.jpg",
+    "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "doors",
-    "selectedPlaceableTexturePath": "/assets/images/doors/door2.png",
+    "selectedPlaceableCategory": "windows",
+    "selectedPlaceableTexturePath": "/assets/images/windows/very%20plain%20arch.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/thornflowers.png",
-      "windows": "/assets/images/windows/pointy%20arch%20window.png",
+      "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
-      "furniture": "/assets/images/furniture/hexrug.png",
+      "furniture": "/assets/images/furniture/crystal%20ball.png",
       "signs": "/assets/images/signs/princess.png",
       "roof": "/assets/images/roofs/slate.png"
     },
@@ -51,9 +51,10 @@
       "/assets/images/flowers/thornflowers.png": 0,
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 0,
-      "/assets/images/windows/pointy%20arch%20window.png": 0
+      "/assets/images/windows/pointy%20arch%20window.png": 0,
+      "/assets/images/windows/very%20plain%20arch.png": 0
     },
-    "selectedPlaceableScale": 1.932,
+    "selectedPlaceableScale": 1.81,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -65,11 +66,12 @@
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
       "/assets/images/flowers/thornflowers.png": 5,
-      "/assets/images/furniture/hexrug.png": 5.413,
+      "/assets/images/furniture/hexrug.png": 4,
       "/assets/images/furniture/crystal%20ball.png": 1.979,
-      "/assets/images/windows/pointy%20arch%20window.png": 1.468
+      "/assets/images/windows/pointy%20arch%20window.png": 1.468,
+      "/assets/images/windows/very%20plain%20arch.png": 1.81
     },
-    "selectedPlaceableRotation": 5,
+    "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
       "/assets/images/doors/door5.png": 0,
       "/assets/images/windows/window.png": 0,
@@ -83,7 +85,8 @@
       "/assets/images/flowers/thornflowers.png": 0,
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 30,
-      "/assets/images/windows/pointy%20arch%20window.png": 0
+      "/assets/images/windows/pointy%20arch%20window.png": 0,
+      "/assets/images/windows/very%20plain%20arch.png": 0
     },
     "selectedPlaceableRotationAxis": "spatial",
     "selectedPlaceableRotationAxisByTexture": {
@@ -99,10 +102,11 @@
       "/assets/images/flowers/thornflowers.png": "none",
       "/assets/images/furniture/hexrug.png": "ground",
       "/assets/images/furniture/crystal%20ball.png": "visual",
-      "/assets/images/windows/pointy%20arch%20window.png": "spatial"
+      "/assets/images/windows/pointy%20arch%20window.png": "spatial",
+      "/assets/images/windows/very%20plain%20arch.png": "spatial"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 1,
+    "selectedPlaceableAnchorY": 0.5,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -116,7 +120,8 @@
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
       "/assets/images/furniture/crystal%20ball.png": 0.5,
-      "/assets/images/windows/pointy%20arch%20window.png": 0.5
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5,
+      "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -131,10 +136,11 @@
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
       "/assets/images/furniture/crystal%20ball.png": 0.5,
-      "/assets/images/windows/pointy%20arch%20window.png": 0.5
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5,
+      "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
-    "selectedEditorCategory": "doors",
+    "selectedEditorCategory": "windows",
     "selectedFloorEditLevel": 0,
     "selectedWallHeight": 3,
     "selectedWallThickness": 0.375,
@@ -215,12 +221,12 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -125.39658397627066,
-      "y": 133.06805861110905
+      "x": -78.45058053689081,
+      "y": 123.82165450437819
     }
   },
   "los": {
     "mazeMode": false
   },
-  "activeCenterKey": "-3,-1"
+  "activeCenterKey": "-2,-1"
 }
