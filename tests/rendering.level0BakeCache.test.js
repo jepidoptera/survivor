@@ -185,6 +185,397 @@ test("upward layer transitions fade the upper layer into view", () => {
     assert.equal(renderer.getLayerFadeMultiplier(1, 1500), 1);
 });
 
+test("falling through a hole reveals lower layer immediately and fades old layer", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._lastRenderedWizardLayer = 1;
+    const wizard = {
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        z: 0,
+        height: 1,
+        _floorFallState: {
+            active: true,
+            fromLayer: 1,
+            targetLayer: 0
+        }
+    };
+
+    renderer.syncLayerTransitionState({
+        wizard,
+        renderNowMs: 1000
+    });
+
+    assert.equal(renderer._fallRevealLayer, 0);
+    assert.equal(renderer._lastRenderedWizardLayer, 0);
+    assert.equal(renderer.getCurrentFloorDarknessLayer(), 0);
+    assert.equal(renderer._layerFadeTransition.fromLayer, 1);
+    assert.equal(renderer._layerFadeTransition.toLayer, 0);
+    assert.equal(renderer._layerFadeTransition.fadingLayer, 1);
+    assert.equal(renderer._layerFadeTransition.startedAtMs, 1000);
+    assert.equal(renderer._layerFadeTransition.durationMs, 500);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1000), 1);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1250), 0.5);
+    assert.equal(renderer.getLayerFadeMultiplier(0, 1250), 1);
+
+    renderer.syncLayerTransitionState({
+        wizard,
+        renderNowMs: 1600
+    });
+
+    assert.equal(renderer._layerFadeTransition, null);
+    assert.equal(renderer._fallRevealLayer, 0);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1600), 0);
+    assert.equal(renderer.getLayerFadeMultiplier(0, 1600), 1);
+});
+
+test("fall landing does not start a second visual layer fade", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._lastRenderedWizardLayer = 1;
+    const wizard = {
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        z: 0,
+        _floorFallState: {
+            active: true,
+            fromLayer: 1,
+            targetLayer: 0
+        }
+    };
+
+    renderer.syncLayerTransitionState({
+        wizard,
+        renderNowMs: 1000
+    });
+    const originalTransition = renderer._layerFadeTransition;
+    wizard.currentLayer = 0;
+    wizard.currentLayerBaseZ = 0;
+    wizard._floorFallState = null;
+    wizard._pendingLayerTransition = {
+        active: true,
+        fromLevel: 1,
+        toLevel: 0,
+        startedAtMs: 1200,
+        durationMs: 500
+    };
+
+    renderer.syncLayerTransitionState({
+        wizard,
+        renderNowMs: 1200
+    });
+
+    assert.equal(wizard._pendingLayerTransition.active, false);
+    assert.equal(renderer._layerFadeTransition, originalTransition);
+    assert.equal(wizard._floorFallLayerRevealTransition, null);
+});
+
+test("fall reveal snapshot replaces live outgoing layer while preserving snapshot alpha", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._layerFadeTransition = {
+        fromLayer: 1,
+        toLayer: 0,
+        fadingLayer: 1,
+        startedAtMs: 1000,
+        durationMs: 500
+    };
+    renderer.layerTransitionSnapshot = {
+        active: true,
+        fromLayer: 1,
+        toLayer: 0,
+        fadingLayer: 1,
+        startedAtMs: 1000,
+        durationMs: 500
+    };
+
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1250), 0.5);
+    assert.equal(renderer.getLiveLayerFadeMultiplier(1, 1250), 0);
+    assert.equal(renderer.getLiveLayerFadeMultiplier(0, 1250), 1);
+
+    renderer.hideLayerTransitionSnapshot();
+
+    assert.equal(renderer.getLiveLayerFadeMultiplier(1, 1250), 0.5);
+});
+
+test("fall reveal snapshot follows camera z while it fades", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const root = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        },
+        getChildIndex(child) {
+            return this.children.indexOf(child);
+        },
+        setChildIndex(child, index) {
+            const current = this.children.indexOf(child);
+            if (current >= 0) this.children.splice(current, 1);
+            this.children.splice(index, 0, child);
+        }
+    };
+    const sprite = {
+        texture: { width: 800, height: 600 },
+        position: {
+            x: 0,
+            y: 0,
+            set(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+        },
+        scale: {
+            x: 1,
+            y: 1,
+            set(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+        },
+        anchor: { set() {} },
+        visible: false,
+        renderable: false
+    };
+    renderer.layers = { root };
+    renderer.layerTransitionSnapshotSprite = sprite;
+    renderer.layerTransitionSnapshotSize = { width: 800, height: 600 };
+    renderer.camera = {
+        x: 10,
+        y: 20,
+        z: 2,
+        viewscale: 10,
+        xyratio: 0.5
+    };
+    renderer._layerFadeTransition = {
+        fromLayer: 1,
+        toLayer: 0,
+        fadingLayer: 1,
+        startedAtMs: 1000,
+        durationMs: 500
+    };
+    renderer.layerTransitionSnapshot = {
+        active: true,
+        fromLayer: 1,
+        toLayer: 0,
+        fadingLayer: 1,
+        startedAtMs: 1000,
+        durationMs: 500,
+        width: 800,
+        height: 600,
+        camera: {
+            x: 10,
+            y: 20,
+            z: 3,
+            viewscale: 10,
+            xyratio: 0.5
+        }
+    };
+
+    const rendered = renderer.renderLayerTransitionSnapshot({ renderNowMs: 1250 });
+
+    assert.equal(rendered, sprite);
+    assert.equal(sprite.alpha, 0.5);
+    assert.equal(sprite.position.x, 0);
+    assert.equal(sprite.position.y, 595);
+    assert.equal(sprite.scale.x, 1);
+    assert.equal(sprite.scale.y, -1);
+});
+
+test("fall reveal snapshot capture hides wizard display objects", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const makeDisplay = (name) => ({ name, visible: true, renderable: true });
+    const wizard = {
+        pixiSprite: makeDisplay("wizardSprite"),
+        _renderingDepthMesh: makeDisplay("wizardDepth"),
+        _renderingDisplayObject: makeDisplay("wizardDisplay"),
+        hatGraphics: makeDisplay("wizardHat"),
+        shieldGraphics: makeDisplay("wizardShield"),
+        shieldDebrisGraphics: makeDisplay("wizardShieldDebris"),
+        shieldWireframeMesh: makeDisplay("wizardShieldWireframe")
+    };
+    renderer.wizardSprite = wizard.pixiSprite;
+    renderer.wizardGhostSprite = makeDisplay("wizardGhost");
+    renderer.wizardShadowSprite = makeDisplay("wizardShadowSprite");
+    renderer.wizardShadowProxy = {
+        pixiSprite: renderer.wizardShadowSprite,
+        _renderingDepthMesh: makeDisplay("wizardShadowDepth"),
+        _renderingDisplayObject: makeDisplay("wizardShadowDisplay")
+    };
+    const hidden = [];
+
+    renderer.hidePlayerDisplayObjectsForLayerTransitionSnapshot({ wizard }, (displayObj) => {
+        hidden.push(displayObj.name);
+    });
+
+    assert.deepEqual(hidden, [
+        "wizardSprite",
+        "wizardDepth",
+        "wizardDisplay",
+        "wizardHat",
+        "wizardShield",
+        "wizardShieldDebris",
+        "wizardShieldWireframe",
+        "wizardGhost",
+        "wizardShadowSprite",
+        "wizardShadowDepth",
+        "wizardShadowDisplay"
+    ]);
+});
+
+test("fall reveal cutaway state uses target visual layer before landing", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const upper = {
+        fragmentId: "upper",
+        surfaceId: "tower",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ]
+    };
+    const map = {
+        floorsById: new Map([[upper.fragmentId, upper]])
+    };
+    const wizard = {
+        x: 5,
+        y: 5,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        _floorFallState: {
+            active: true,
+            fromLayer: 1,
+            targetLayer: 0
+        }
+    };
+
+    renderer.syncLayerTransitionState({
+        wizard,
+        renderNowMs: 1000
+    });
+    const state = renderer.getLayerCutawayState({
+        map,
+        wizard,
+        renderNowMs: 1250
+    });
+
+    assert.equal(state.wizardLayer, 0);
+    assert.equal(state.wizardBaseZ, 0);
+    assert.equal(state.active, true);
+    assert.equal(state.hiddenFromLevel, 1);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, state), 1);
+    assert.equal(renderer.getLayerFadeMultiplier(1, 1250), 0.5);
+    assert.equal(renderer.isRenderItemHiddenByLayerCutaway({ x: 5, y: 5 }, 1, state, map), false);
+    assert.equal(renderer.isRenderItemHiddenByLayerCutaway({ x: 5, y: 5 }, 0, state, map), false);
+});
+
+test("wall depth render options include fall reveal layer alpha", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        worldToScreen: (x, y, z = 0) => ({ x, y: y - z }),
+        viewscale: 1,
+        xyratio: 1
+    };
+    const wall = {
+        type: "wallSection",
+        pixiSprite: {
+            alpha: 1,
+            tint: 0xffffff
+        },
+        _renderLayerAlpha: 0.35
+    };
+
+    const options = renderer.getBuildingInteriorWallDepthOptions({}, wall, false);
+
+    assert.equal(options.alpha, 0.35);
+});
+
+test("building cutaway composite capture preserves layer fade alpha", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        x: 0,
+        y: 0,
+        z: 0,
+        viewscale: 1,
+        xyratio: 1
+    };
+    const child = {
+        alpha: 0.4,
+        shader: {
+            uniforms: {
+                uTint: [1, 1, 1, 0.4]
+            }
+        },
+        children: []
+    };
+    const root = {
+        alpha: 0.8,
+        _buildingCutawayCompositeCaptureAlpha: 0.25,
+        shader: {
+            uniforms: {
+                uTint: [1, 1, 1, 0.8]
+            }
+        },
+        children: [child]
+    };
+
+    const restore = renderer.applyBuildingCutawayCompositeLocalCaptureState(
+        new Set([root]),
+        { x: 0, y: 0, width: 10, height: 10 },
+        10,
+        10
+    );
+
+    assert.equal(root.alpha, 0.25);
+    assert.equal(root.shader.uniforms.uTint[3], 0.25);
+    assert.equal(child.alpha, 1);
+    assert.equal(child.shader.uniforms.uTint[3], 1);
+
+    restore();
+
+    assert.equal(root.alpha, 0.8);
+    assert.equal(root.shader.uniforms.uTint[3], 0.8);
+    assert.equal(child.alpha, 0.4);
+    assert.equal(child.shader.uniforms.uTint[3], 0.4);
+});
+
+test("building cutaway composite selected objects carry fall reveal capture alpha", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._layerCutawayFrameId = 7;
+    const displayObject = {
+        parent: {},
+        visible: true,
+        renderable: true
+    };
+    const item = {
+        type: "wallSection",
+        _cutawayCompositeFrame: 7,
+        _renderLayerFadeAlpha: 0.2,
+        _renderingDepthMesh: displayObject
+    };
+
+    const selected = renderer.getBuildingCutawayCompositeDisplayObjects({
+        triggers: [{
+            building: {},
+            renderCache: {
+                renderItems: [{ item }]
+            }
+        }]
+    });
+
+    assert.equal(selected.has(displayObject), true);
+    assert.equal(displayObject._buildingCutawayCompositeCaptureAlpha, 0.2);
+});
+
 test("visible object collection includes objects attached to upper floor nodes", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -220,6 +611,63 @@ test("visible object collection includes objects attached to upper floor nodes",
     assert.equal(visibleObjects[0], floorObject);
     assert.equal(floorObject._renderTraversalLayer, 1);
     assert.equal(renderer.currentFrameMetrics.visibleFloorObjectNodes, 1);
+});
+
+test("visible object collection culls inactive far-away global walls", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.currentFrameMetrics = {};
+    renderer.camera = { x: 0, y: 0 };
+
+    const visibleNode = { id: "near-node", xindex: 0, yindex: 0, objects: [], visibilityObjects: [] };
+    const activeWall = {
+        id: 1,
+        type: "wallSection",
+        _prototypeOwnerSectionKey: "active",
+        startPoint: { x: 100, y: 100 },
+        endPoint: { x: 101, y: 100 },
+        attachedObjects: []
+    };
+    const visibleNodeWall = {
+        id: 2,
+        type: "wallSection",
+        _prototypeOwnerSectionKey: "old",
+        startPoint: { x: 100, y: 100 },
+        endPoint: { x: 101, y: 100 },
+        nodes: [visibleNode],
+        attachedObjects: []
+    };
+    const farWall = {
+        id: 3,
+        type: "wallSection",
+        _prototypeOwnerSectionKey: "old",
+        startPoint: { x: 500, y: 500 },
+        endPoint: { x: 501, y: 500 },
+        attachedObjects: []
+    };
+
+    RenderingImpl.__testContext.WallSectionUnit = {
+        _allSections: new Map([
+            [1, activeWall],
+            [2, visibleNodeWall],
+            [3, farWall]
+        ])
+    };
+
+    renderer._collectVisibleNodesSeenKeys = new Set(["near-node"]);
+    const visibleObjects = renderer.collectVisibleObjects([visibleNode], {
+        map: {
+            floorNodesById: new Map(),
+            getPrototypeActiveSectionKeys: () => new Set(["active"])
+        },
+        viewport: { width: 10, height: 10 },
+        animals: []
+    });
+
+    assert.equal(visibleObjects.includes(activeWall), true);
+    assert.equal(visibleObjects.includes(visibleNodeWall), true);
+    assert.equal(visibleObjects.includes(farWall), false);
+    assert.equal(renderer.currentFrameMetrics.visibleGlobalWallsCulled, 1);
 });
 
 test("upper-layer ground objects render in the depth layer instead of the ground layer", () => {

@@ -694,12 +694,34 @@ class Character {
             this.map.worldToNode(newX + padding, newY - padding),
             this.map.worldToNode(newX + padding, newY + padding)
         ];
+
+        const layer = this.getCurrentMovementLayer();
+        const needsLayerResolution = layer !== 0 && this.map && (
+            typeof this.map.getFloorNodeAtLayer === "function" ||
+            typeof this.map.getNode === "function"
+        );
+
         const uniqueNodes = [];
         const seen = new Set();
         for (let i = 0; i < sampledNodes.length; i++) {
-            const node = sampledNodes[i];
-            if (!node) continue;
-            const key = `${Number(node.xindex)}:${Number(node.yindex)}`;
+            const baseNode = sampledNodes[i];
+            if (!baseNode) continue;
+            let node = baseNode;
+            if (needsLayerResolution) {
+                const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                    ? baseNode._prototypeSectionKey : "";
+                let layeredNode = null;
+                if (typeof this.map.getFloorNodeAtLayer === "function") {
+                    layeredNode = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                        sectionKey, allowScan: false
+                    });
+                }
+                if (!layeredNode && layer === 0 && typeof this.map.getNode === "function") {
+                    layeredNode = this.map.getNode(baseNode.xindex, baseNode.yindex, layer);
+                }
+                node = layeredNode || baseNode;
+            }
+            const key = `${Number(node.xindex)}:${Number(node.yindex)}:${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : layer}`;
             if (seen.has(key)) continue;
             seen.add(key);
             uniqueNodes.push(node);
@@ -734,38 +756,56 @@ class Character {
         const minYIndex = Math.min(...yIndices);
         const maxYIndex = Math.max(...yIndices);
 
-        if (typeof this.map.getNodesInIndexWindow === "function") {
-            const xStart = minXIndex - 1;
-            const xEnd = maxXIndex + 1;
-            const yStart = minYIndex - 1;
-            const yEnd = maxYIndex + 1;
-            const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
-            for (let i = 0; i < nearbyNodes.length; i++) {
-                const node = nearbyNodes[i];
-                if (!node || !node.objects) continue;
-                for (const obj of node.objects) {
+        const movementLayer = this.getCurrentMovementLayer(options);
+        const useLayerFilter = this.isUsingHitboxMovement() && movementLayer !== 0;
+        const getNodeLayer = (node) => Number.isFinite(node && node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
+        const seen = useLayerFilter ? new Set() : null;
+
+        const collectFromNode = (node) => {
+            if (!node || !Array.isArray(node.objects)) return;
+            if (useLayerFilter && getNodeLayer(node) !== movementLayer) return;
+            for (const obj of node.objects) {
+                if (useLayerFilter) {
+                    if (!obj || obj.gone) continue;
+                    const objLayer = Number.isFinite(obj.traversalLayer)
+                        ? Math.round(Number(obj.traversalLayer))
+                        : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : getNodeLayer(node));
+                    if (objLayer !== movementLayer) continue;
                     if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
-                    nearbyObjects.push(obj);
+                    if (seen.has(obj)) continue;
+                    seen.add(obj);
+                } else {
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
                 }
+                nearbyObjects.push(obj);
+            }
+        };
+
+        if (typeof this.map.getNodesInIndexWindow === "function") {
+            const nearbyNodes = this.map.getNodesInIndexWindow(minXIndex - 1, maxXIndex + 1, minYIndex - 1, maxYIndex + 1);
+            for (let i = 0; i < nearbyNodes.length; i++) {
+                const node = useLayerFilter
+                    ? this.resolveNodeForMovementLayer(nearbyNodes[i])
+                    : nearbyNodes[i];
+                collectFromNode(node);
             }
             return nearbyObjects;
         }
 
         const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
         const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
-    const xStart = Math.max(minXIndex - 1, 0);
-    const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
-    const yStart = Math.max(minYIndex - 1, 0);
-    const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
-
+        const xStart = Math.max(minXIndex - 1, 0);
+        const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
+        const yStart = Math.max(minYIndex - 1, 0);
+        const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
         for (let x = xStart; x <= xEnd; x++) {
             for (let y = yStart; y <= yEnd; y++) {
-                if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
-                const nodeObjects = this.map.nodes[x][y].objects;
-                for (const obj of nodeObjects) {
-                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
-                    nearbyObjects.push(obj);
-                }
+                const rawNode = this.map.nodes[x] && this.map.nodes[x][y];
+                if (!rawNode || !rawNode.objects) continue;
+                const node = useLayerFilter ? this.resolveNodeForMovementLayer(rawNode) : rawNode;
+                collectFromNode(node);
             }
         }
         return nearbyObjects;
@@ -788,7 +828,7 @@ class Character {
         if (this.isJumping === true) return false;
         if (this._floorFallState && this._floorFallState.active === true) return false;
         const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
-        return layer > 0;
+        return layer !== 0;
     }
 
     getCurrentMovementLayer(_options = {}) {
@@ -797,6 +837,30 @@ class Character {
         if (this.node && Number.isFinite(this.node.traversalLayer)) return Math.round(Number(this.node.traversalLayer));
         if (this.node && Number.isFinite(this.node.level)) return Math.round(Number(this.node.level));
         return 0;
+    }
+
+    resolveNodeForMovementLayer(node) {
+        if (!node || !this.map) return node;
+        const layer = this.getCurrentMovementLayer();
+        const nodeLayer = Number.isFinite(node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+        if (nodeLayer === layer) return node;
+        const sourceNode = (node.sourceNode && typeof node.sourceNode === "object") ? node.sourceNode : node;
+        const xindex = Number(sourceNode.xindex);
+        const yindex = Number(sourceNode.yindex);
+        if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+        const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
+            ? sourceNode._prototypeSectionKey
+            : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        if (typeof this.map.getFloorNodeAtLayer === "function") {
+            const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, layer, { sectionKey, allowScan: false });
+            if (floorNode) return floorNode;
+        }
+        if (layer === 0 && typeof this.map.getNode === "function") {
+            return this.map.getNode(xindex, yindex, layer) || null;
+        }
+        return null;
     }
 
     getCharacterVectorMovementCandidates() {
@@ -1010,6 +1074,63 @@ class Character {
         return changed;
     }
 
+    _getFloorFragmentBoundaryPush(cx, cy, radius) {
+        if (this.getCurrentMovementLayer() === 0) return null;
+        if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
+        if (!this.map || !(this.map.floorsById instanceof Map)) return null;
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!(resolvedRadius > 0)) return null;
+        const layer = this.getCurrentMovementLayer();
+        for (const fragment of this.map.floorsById.values()) {
+            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (fragmentLayer !== layer) continue;
+            const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+            if (!poly || poly.length < 3) continue;
+            let nearestDistSq = Infinity;
+            let nearestCloseX = cx;
+            let nearestCloseY = cy;
+            for (let i = 0; i < poly.length; i++) {
+                const a = poly[i];
+                const b = poly[(i + 1) % poly.length];
+                const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
+                if (!Number.isFinite(ax + ay + bx + by)) continue;
+                const abx = bx - ax, aby = by - ay;
+                const lenSq = abx * abx + aby * aby;
+                const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
+                const closeX = ax + abx * t;
+                const closeY = ay + aby * t;
+                const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
+                if (dSq < nearestDistSq) {
+                    nearestDistSq = dSq;
+                    nearestCloseX = closeX;
+                    nearestCloseY = closeY;
+                }
+            }
+            const dist = Math.sqrt(nearestDistSq);
+            if (!(dist > 1e-6)) continue;
+            const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
+                ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
+                : true;
+            if (isInside) {
+                // Normal: circle overlaps boundary from inside — push center away from edge.
+                const overlap = resolvedRadius - dist;
+                if (!(overlap > 1e-6)) continue;
+                return {
+                    pushX: (cx - nearestCloseX) / dist * overlap,
+                    pushY: (cy - nearestCloseY) / dist * overlap
+                };
+            } else {
+                // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
+                const pullMagnitude = dist + resolvedRadius;
+                return {
+                    pushX: (nearestCloseX - cx) / dist * pullMagnitude,
+                    pushY: (nearestCloseY - cy) / dist * pullMagnitude
+                };
+            }
+        }
+        return null;
+    }
+
     _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
         let testX = candidateX;
         let testY = candidateY;
@@ -1193,6 +1314,13 @@ class Character {
                     });
                 }
             }
+            const boundaryPush = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+            if (boundaryPush) {
+                hasCollision = true;
+                totalPushX += boundaryPush.pushX;
+                totalPushY += boundaryPush.pushY;
+                maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPush.pushX, boundaryPush.pushY));
+            }
 
             if (!hasCollision) {
                 if (!isStaticCollisionAt(this.x, this.y)) {
@@ -1300,6 +1428,12 @@ class Character {
                 });
             }
         }
+        const boundaryPushFinal = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+        if (boundaryPushFinal) {
+            totalPushX += boundaryPushFinal.pushX;
+            totalPushY += boundaryPushFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPushFinal.pushX, boundaryPushFinal.pushY));
+        }
 
         if (maxPushLen > 0) {
             collided = true;
@@ -1384,12 +1518,19 @@ class Character {
             if (typeof this.map.isActorFootprintSupportedAtWorldPosition !== "function") {
                 throw new Error("hitbox floor movement requires isActorFootprintSupportedAtWorldPosition");
             }
+            // Hitbox actors: check center-point containment only (radius=0), not circle-in-polygon.
+            // This allows positions near walls (where the circle extends outside the polygon)
+            // while still blocking off-edge positions where the center itself leaves the polygon.
+            // Boundary push in _resolveStaticVectorMovementCandidate handles smooth wall sliding.
+            const supportOptions = this.isUsingHitboxMovement()
+                ? { ...options, supportRadius: 0 }
+                : options;
             return this.map.isActorFootprintSupportedAtWorldPosition(
                 targetX,
                 targetY,
                 this.getCurrentMovementLayer(options),
                 this,
-                options
+                supportOptions
             ) === true;
         }
         if (this.isUsingHitboxMovement()) return true;
@@ -1402,6 +1543,12 @@ class Character {
             if (this.movementVector && typeof this.movementVector === "object") {
                 this.movementVector.x = 0;
                 this.movementVector.y = 0;
+            }
+            // _resolveHitboxMovementConstraints already moved this.x/y; undo that.
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                this.x = this.prevX;
+                this.y = this.prevY;
+                this.updateHitboxes();
             }
             return false;
         }

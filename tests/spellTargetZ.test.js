@@ -1140,6 +1140,147 @@ test("teleport visual target keeps ground above underground fragments", () => {
     assert.equal(target.node, groundNode);
 });
 
+test("teleport visual target fails underground clicks with no floor fragment", () => {
+    const context = loadSpellContext();
+    context.viewport = { x: 0, y: 0, z: -3 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const groundFloor = {
+        fragmentId: "floor_area:section-a:0:0",
+        surfaceId: "floor_area:section-a:0",
+        ownerSectionKey: "section-a",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: []
+    };
+    const wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: -1,
+        traversalLayer: -1,
+        currentLayerBaseZ: -3,
+        map: {
+            floorsById: new context.Map([[groundFloor.fragmentId, groundFloor]]),
+            wrapWorldX: x => x,
+            wrapWorldY: y => y,
+            worldToNode() {
+                assert.fail("underground teleport without a floor fragment should not resolve a destination node");
+            }
+        }
+    };
+
+    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+
+    assert.equal(target.x, 2);
+    assert.equal(target.y, 2);
+    assert.equal(target.layer, -1);
+    assert.equal(target.baseZ, -3);
+    assert.equal(target.node, null);
+    assert.equal(target.floorTarget, null);
+});
+
+test("teleport visual target stays on the current underground floor", () => {
+    const context = loadSpellContext();
+    context.viewport = { x: 0, y: 0, z: -3 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const groundFloor = {
+        fragmentId: "floor_area:section-a:0:0",
+        surfaceId: "floor_area:section-a:0",
+        ownerSectionKey: "section-a",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 8, y: 0 },
+            { x: 8, y: 8 },
+            { x: 0, y: 8 }
+        ],
+        holes: []
+    };
+    const basementFloor = {
+        fragmentId: "floor_area:section-a:-1:0",
+        surfaceId: "floor_area:section-a:-1",
+        ownerSectionKey: "section-a",
+        level: -1,
+        nodeBaseZ: -3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: []
+    };
+    const upperFloor = {
+        fragmentId: "floor_area:section-a:1:0",
+        surfaceId: "floor_area:section-a:1",
+        ownerSectionKey: "section-a",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 8 },
+            { x: 4, y: 8 },
+            { x: 4, y: 12 },
+            { x: 0, y: 12 }
+        ],
+        holes: []
+    };
+    const baseNode = { xindex: 2, yindex: 2, _prototypeSectionKey: "section-a" };
+    const basementNode = {
+        xindex: 2,
+        yindex: 2,
+        traversalLayer: -1,
+        baseZ: -3,
+        fragmentId: basementFloor.fragmentId,
+        surfaceId: basementFloor.surfaceId
+    };
+    const wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: -1,
+        traversalLayer: -1,
+        currentLayerBaseZ: -3,
+        map: {
+            floorsById: new context.Map([
+                [groundFloor.fragmentId, groundFloor],
+                [basementFloor.fragmentId, basementFloor],
+                [upperFloor.fragmentId, upperFloor]
+            ]),
+            wrapWorldX: x => x,
+            wrapWorldY: y => y,
+            worldToNode(x, y) {
+                assert.equal(x, 2);
+                assert.equal(y, 2);
+                return baseNode;
+            },
+            getFloorNodeAtLayer(x, y, layer, options) {
+                assert.equal(x, 2);
+                assert.equal(y, 2);
+                assert.equal(layer, -1);
+                assert.equal(options.fragmentId, basementFloor.fragmentId);
+                assert.equal(options.surfaceId, basementFloor.surfaceId);
+                return basementNode;
+            }
+        }
+    };
+
+    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+
+    assert.equal(target.x, 2);
+    assert.equal(target.y, 2);
+    assert.equal(target.layer, -1);
+    assert.equal(target.baseZ, -3);
+    assert.equal(target.node, basementNode);
+    assert.equal(target.floorTarget.fragment, basementFloor);
+});
+
 test("teleport cast synchronizes wizard to the destination node layer", () => {
     const { context } = loadTeleportContext();
     const destinationNode = { xindex: 2, yindex: 3, traversalLayer: 0, baseZ: 0 };
@@ -1274,6 +1415,160 @@ test("floor vertex drag inside owner section uses fragment rematerialization", (
     assert.equal(registeredRecord.fragmentId, runtimeFloor.fragmentId);
     assert.equal(registeredRecord.outerPolygon[2].x, 9);
     assert.equal(registeredRecord.outerPolygon[2].y, 9);
+});
+
+test("floor selected vertex shift-click inserts toward the closer previous neighbor", () => {
+    const context = loadSpellContext();
+    context.worldToScreen = point => ({ x: Number(point.x), y: Number(point.y) });
+    context.presentGameFrame = () => {};
+    context.__sectionGeometry = {
+        getSectionHexagonCorners() {
+            return [
+                { x: -100, y: -100 },
+                { x: 100, y: -100 },
+                { x: 100, y: 100 },
+                { x: -100, y: 100 }
+            ];
+        }
+    };
+    const assetFloor = {
+        fragmentId: "floor_area:section-a:1:0",
+        surfaceId: "floor_area:section-a:1",
+        ownerSectionKey: "section-a",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        holes: [],
+        tileCoordKeys: []
+    };
+    const runtimeFloor = {
+        ...assetFloor,
+        outerPolygon: assetFloor.outerPolygon.map(point => ({ ...point })),
+        holes: []
+    };
+    let registeredRecord = null;
+    const map = {
+        floorsById: new context.Map([[runtimeFloor.fragmentId, runtimeFloor]]),
+        floorNodesById: new context.Map([[runtimeFloor.fragmentId, []]]),
+        _prototypeSectionState: {
+            basis: {},
+            sectionAssetsByKey: new context.Map([["section-a", {
+                key: "section-a",
+                centerAxial: { q: 0, r: 0 },
+                floors: [assetFloor],
+                tileCoordKeys: []
+            }]])
+        },
+        unregisterFloorFragments(ids) {
+            for (const id of ids) this.floorsById.delete(id);
+            return ids.length;
+        },
+        registerFloorFragmentsForSection(_sectionKey, _state, records) {
+            registeredRecord = records[0];
+            this.floorsById.set(registeredRecord.fragmentId, registeredRecord);
+            return { fragmentCount: records.length, nodeCount: 0 };
+        },
+        wrapWorldX: x => x,
+        wrapWorldY: y => y
+    };
+    const wizard = {
+        currentSpell: "flooredit",
+        selectedFloorEditLevel: 1,
+        map
+    };
+
+    assert.equal(context.SpellSystem.beginFloorEditorVertexDrag(wizard, 10, 0), true);
+    assert.equal(context.SpellSystem.endFloorEditorVertexDrag(wizard), true);
+    assert.equal(context.SpellSystem.insertFloorEditorVertexFromSelectedNeighbor(wizard, 2, 2, 2, 2), true);
+    assert.equal(context.SpellSystem.endFloorEditorVertexDrag(wizard), true);
+
+    assert.equal(registeredRecord.outerPolygon.length, 5);
+    assert.equal(registeredRecord.outerPolygon[1].x, 2);
+    assert.equal(registeredRecord.outerPolygon[1].y, 2);
+    assert.equal(registeredRecord.outerPolygon[2].x, 10);
+    assert.equal(registeredRecord.outerPolygon[2].y, 0);
+});
+
+test("floor selected vertex shift-click inserts toward the closer next neighbor", () => {
+    const context = loadSpellContext();
+    context.worldToScreen = point => ({ x: Number(point.x), y: Number(point.y) });
+    context.presentGameFrame = () => {};
+    context.__sectionGeometry = {
+        getSectionHexagonCorners() {
+            return [
+                { x: -100, y: -100 },
+                { x: 100, y: -100 },
+                { x: 100, y: 100 },
+                { x: -100, y: 100 }
+            ];
+        }
+    };
+    const assetFloor = {
+        fragmentId: "floor_area:section-a:1:0",
+        surfaceId: "floor_area:section-a:1",
+        ownerSectionKey: "section-a",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ],
+        holes: [],
+        tileCoordKeys: []
+    };
+    const runtimeFloor = {
+        ...assetFloor,
+        outerPolygon: assetFloor.outerPolygon.map(point => ({ ...point })),
+        holes: []
+    };
+    let registeredRecord = null;
+    const map = {
+        floorsById: new context.Map([[runtimeFloor.fragmentId, runtimeFloor]]),
+        floorNodesById: new context.Map([[runtimeFloor.fragmentId, []]]),
+        _prototypeSectionState: {
+            basis: {},
+            sectionAssetsByKey: new context.Map([["section-a", {
+                key: "section-a",
+                centerAxial: { q: 0, r: 0 },
+                floors: [assetFloor],
+                tileCoordKeys: []
+            }]])
+        },
+        unregisterFloorFragments(ids) {
+            for (const id of ids) this.floorsById.delete(id);
+            return ids.length;
+        },
+        registerFloorFragmentsForSection(_sectionKey, _state, records) {
+            registeredRecord = records[0];
+            this.floorsById.set(registeredRecord.fragmentId, registeredRecord);
+            return { fragmentCount: records.length, nodeCount: 0 };
+        },
+        wrapWorldX: x => x,
+        wrapWorldY: y => y
+    };
+    const wizard = {
+        currentSpell: "flooredit",
+        selectedFloorEditLevel: 1,
+        map
+    };
+
+    assert.equal(context.SpellSystem.beginFloorEditorVertexDrag(wizard, 10, 0), true);
+    assert.equal(context.SpellSystem.endFloorEditorVertexDrag(wizard), true);
+    assert.equal(context.SpellSystem.insertFloorEditorVertexFromSelectedNeighbor(wizard, 9, 8, 9, 8), true);
+    assert.equal(context.SpellSystem.endFloorEditorVertexDrag(wizard), true);
+
+    assert.equal(registeredRecord.outerPolygon.length, 5);
+    assert.equal(registeredRecord.outerPolygon[1].x, 10);
+    assert.equal(registeredRecord.outerPolygon[1].y, 0);
+    assert.equal(registeredRecord.outerPolygon[2].x, 9);
+    assert.equal(registeredRecord.outerPolygon[2].y, 8);
 });
 
 test("floor vertex drag clamps to the owner section boundary", () => {

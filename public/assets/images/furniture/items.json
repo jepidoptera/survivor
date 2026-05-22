@@ -262,6 +262,30 @@
         "radiusFromWidthMultiplier": 0.5,
         "minRadius": 0.12
       }
+    },
+    {
+      "file": "armor.png",
+      "texturePath": "/assets/images/furniture/armor.png",
+      "width": 1,
+      "height": 1.5,
+      "baseSize": 1.5,
+      "maxSize": 8,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "rotationAxis": "none",
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9
+      },
+      "groundPlaneHitbox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.35,
+        "minRadius": 0.12
+      }
     }
   ]
 }

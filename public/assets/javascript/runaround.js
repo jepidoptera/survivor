@@ -750,7 +750,19 @@ function queueAnimalPreviewMetricsLoad(typeName) {
 }
 
 let renderingUnavailableWarningShown = false;
+function pumpPrototypeBubbleShiftForFrame() {
+    if (
+        !map ||
+        !map._prototypeBubbleShiftSession ||
+        typeof map.advancePrototypeBubbleShiftSession !== "function"
+    ) {
+        return;
+    }
+    map.advancePrototypeBubbleShiftSession({ frameBudgetMs: 1.25 });
+}
+
 function presentGameFrame(renderAnimalsOverride = null) {
+    pumpPrototypeBubbleShiftForFrame();
     if (typeof hydrateVisibleLazyRoads === "function") {
         hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
     }
@@ -5384,6 +5396,15 @@ jQuery(() => {
                 event.shiftKey &&
                 typeof SpellSystem.insertTriggerAreaVertexOnEdge === "function" &&
                 SpellSystem.insertTriggerAreaVertexOnEdge(wizard, screenX, screenY, worldCoors.x, worldCoors.y)
+            ) {
+                event.preventDefault();
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
+            if (
+                event.shiftKey &&
+                typeof SpellSystem.insertFloorEditorVertexFromSelectedNeighbor === "function" &&
+                SpellSystem.insertFloorEditorVertexFromSelectedNeighbor(wizard, screenX, screenY, worldCoors.x, worldCoors.y)
             ) {
                 event.preventDefault();
                 suppressNextTriggerAreaToolClick = true;

@@ -44,7 +44,8 @@ X choose spells from menu on startup
    -maze
    -invisibility
    -omnivision
-    imps? squirrels?
+   /imps? squirrels?
+    phase through walls
     move
 
 X invisibility aura
@@ -60,6 +61,9 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
+  phase through walls
+  placing a roof should designate a building
+  new building menu toolset
   when a building is created, make a new floor fragment at the ground level.
   stairs
   height-aware LOS shadows
@@ -124,6 +128,7 @@ X cutting a hole in a floor causes walls to stop working
 X floor fragment edges slow but don't stop movement
   trees can't place within building footprint rectangle
 X rugs on an upper floor are visible in the building overlay
+  inside and outside doors have opposite handles
   
 
 

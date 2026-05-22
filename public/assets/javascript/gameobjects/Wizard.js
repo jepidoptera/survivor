@@ -1176,38 +1176,12 @@ class Wizard extends Character {
 
         const padding = this.getVectorMovementSearchPadding(radius, options);
         const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
-        const wizardLayer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        const wizardLayer = this.getCurrentMovementLayer();
         const getNodeTraversalLayer = (node) => (
             Number.isFinite(node && node.traversalLayer)
                 ? Math.round(Number(node.traversalLayer))
                 : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0)
         );
-        const resolveNodeForWizardLayer = (node) => {
-            if (!node) return null;
-            if (getNodeTraversalLayer(node) === wizardLayer) return node;
-            if (!this.map) return null;
-            const sourceNode = node.sourceNode && typeof node.sourceNode === "object"
-                ? node.sourceNode
-                : node;
-            const xindex = Number(sourceNode.xindex);
-            const yindex = Number(sourceNode.yindex);
-            if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
-            const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
-                ? sourceNode._prototypeSectionKey
-                : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-            if (typeof this.map.getFloorNodeAtLayer === "function") {
-                const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, wizardLayer, {
-                    sectionKey,
-                    allowScan: false
-                });
-                if (floorNode) return floorNode;
-            }
-            if (wizardLayer === 0 && typeof this.map.getNode === "function") {
-                const layeredNode = this.map.getNode(xindex, yindex, wizardLayer);
-                if (layeredNode) return layeredNode;
-            }
-            return null;
-        };
         if (searchNodes.length > 0) {
             const xIndices = searchNodes.map(node => Number(node.xindex));
             const yIndices = searchNodes.map(node => Number(node.yindex));
@@ -1251,7 +1225,7 @@ class Wizard extends Character {
                 const yEnd = maxYIndex + 1;
                 const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
                 for (let i = 0; i < nearbyNodes.length; i++) {
-                    collectFromNode(resolveNodeForWizardLayer(nearbyNodes[i]));
+                    collectFromNode(this.resolveNodeForMovementLayer(nearbyNodes[i]));
                 }
             } else {
                 const xStart = Math.max(minXIndex - 1, 0);
@@ -1262,7 +1236,7 @@ class Wizard extends Character {
                 for (let x = xStart; x <= xEnd; x++) {
                     for (let y = yStart; y <= yEnd; y++) {
                         if (!this.map.nodes[x] || !this.map.nodes[x][y]) continue;
-                        collectFromNode(resolveNodeForWizardLayer(this.map.nodes[x][y]));
+                        collectFromNode(this.resolveNodeForMovementLayer(this.map.nodes[x][y]));
                     }
                 }
             }
@@ -1370,42 +1344,6 @@ class Wizard extends Character {
         centerViewport(this, 0);
     }
 
-    getVectorMovementSearchNodes(newX, newY, padding) {
-        const baseNodes = super.getVectorMovementSearchNodes(newX, newY, padding);
-        if (!this.map || (
-            typeof this.map.getNode !== "function" &&
-            typeof this.map.getFloorNodeAtLayer !== "function"
-        )) {
-            return baseNodes;
-        }
-        const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
-        const uniqueNodes = [];
-        const seen = new Set();
-        for (let i = 0; i < baseNodes.length; i++) {
-            const baseNode = baseNodes[i];
-            if (!baseNode) continue;
-            const sectionKey = typeof baseNode._prototypeSectionKey === "string"
-                ? baseNode._prototypeSectionKey
-                : "";
-            let layeredNode = null;
-            if (typeof this.map.getFloorNodeAtLayer === "function") {
-                layeredNode = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
-                    sectionKey,
-                    allowScan: false
-                });
-            }
-            if (!layeredNode && layer === 0 && typeof this.map.getNode === "function") {
-                layeredNode = this.map.getNode(baseNode.xindex, baseNode.yindex, layer);
-            }
-            layeredNode = layeredNode || baseNode;
-            const key = `${Number(layeredNode.xindex)}:${Number(layeredNode.yindex)}:${Number.isFinite(layeredNode.traversalLayer) ? Number(layeredNode.traversalLayer) : layer}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            uniqueNodes.push(layeredNode);
-        }
-        return uniqueNodes;
-    }
-    
     moveDirection(vector, options = {}) {
         return super.moveDirection(vector, options);
     }

@@ -5605,6 +5605,7 @@ void main(void) {
             );
             const addStart = timerNow();
             const applyDirectionalBlocking = options.applyDirectionalBlocking !== false;
+            const pendingRoadRefreshNodes = (options.pendingRoadRefreshNodes instanceof Set) ? options.pendingRoadRefreshNodes : null;
             const removeStart = timerNow();
             this.removeFromMapNodes();
             const removeMs = timerNow() - removeStart;
@@ -5628,7 +5629,8 @@ void main(void) {
             // This ensures long walls are still discovered by local
             // collision queries near their midpoint.
             const centerlineStart = timerNow();
-            const centerlineNodes = this._collectCenterlineMapNodes();
+            const cachedAnchors = this._collectOrderedLineAnchors();
+            const centerlineNodes = this._collectCenterlineMapNodes(cachedAnchors);
             const centerlineMs = timerNow() - centerlineStart;
             for (let i = 0; i < centerlineNodes.length; i++) {
                 registerNode(centerlineNodes[i]);
@@ -5658,7 +5660,7 @@ void main(void) {
             let directionalMs = 0;
             if (applyDirectionalBlocking) {
                 const directionalStart = timerNow();
-                this._applyDirectionalBlocking();
+                this._applyDirectionalBlocking(cachedAnchors, pendingRoadRefreshNodes);
                 directionalMs = timerNow() - directionalStart;
             }
             this._lastAddToMapNodesStats = {
@@ -5991,48 +5993,48 @@ void main(void) {
         // Returns true when the connection between nodeA and nodeB crosses either
         // physical face of this wall (the two lines offset ±halfThickness from the
         // centerline in the perpendicular direction).
-        _connectionCrossesEitherFace(nodeA, nodeB) {
+        _connectionCrossesEitherFace(nodeA, nodeB, wallGeometry = null) {
             const mapRef = this.map || null;
             const origin = this.startPoint;
-            const wallStart = this._toLocalFromOrigin(origin, this.startPoint, mapRef);
-            const wallEnd   = this._toLocalFromOrigin(origin, this.endPoint,   mapRef);
-            const segStart  = this._toLocalFromOrigin(origin, nodeA, mapRef);
-            const segEnd    = this._toLocalFromOrigin(origin, nodeB, mapRef);
-            if (!wallStart || !wallEnd || !segStart || !segEnd) return false;
+            const segStart = this._toLocalFromOrigin(origin, nodeA, mapRef);
+            const segEnd   = this._toLocalFromOrigin(origin, nodeB, mapRef);
+            if (!segStart || !segEnd) return false;
+            const segLen = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+            if (!(segLen > EPS)) return false;
 
-            const wx = wallEnd.x - wallStart.x;
-            const wy = wallEnd.y - wallStart.y;
-            const wallLen = Math.hypot(wx, wy);
-            const segLen  = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
-            if (!(wallLen > EPS) || !(segLen > EPS)) return false;
-
-            // Wall axis unit vector and perpendicular.
-            const ux = wx / wallLen;
-            const uy = wy / wallLen;
-            const px = -uy;   // perp pointing "left" of wall direction
-            const py =  ux;
-
-            const halfT = Math.max(EPS, (Number.isFinite(this.thickness) ? Number(this.thickness) : 0.1) * 0.5);
-
-            // Extend endpoints slightly so face lines reach the hex edge at each end.
-            const halfHexToEdge = (mapRef && Number.isFinite(mapRef.hexHeight))
-                ? (Number(mapRef.hexHeight) * 0.5)
-                : 0.5;
-            const extend = halfHexToEdge + 0.001;
+            let ux, uy, px, py, halfT, extend, wsX, wsY, weX, weY;
+            if (wallGeometry) {
+                ({ ux, uy, px, py, halfT, extend, wsX, wsY, weX, weY } = wallGeometry);
+            } else {
+                const wallStart = this._toLocalFromOrigin(origin, this.startPoint, mapRef);
+                const wallEnd   = this._toLocalFromOrigin(origin, this.endPoint, mapRef);
+                if (!wallStart || !wallEnd) return false;
+                const wx = wallEnd.x - wallStart.x;
+                const wy = wallEnd.y - wallStart.y;
+                const wallLen = Math.hypot(wx, wy);
+                if (!(wallLen > EPS)) return false;
+                ux = wx / wallLen; uy = wy / wallLen;
+                px = -uy; py = ux;
+                halfT = Math.max(EPS, (Number.isFinite(this.thickness) ? Number(this.thickness) : 0.1) * 0.5);
+                const halfHexToEdge = (mapRef && Number.isFinite(mapRef.hexHeight)) ? (Number(mapRef.hexHeight) * 0.5) : 0.5;
+                extend = halfHexToEdge + 0.001;
+                wsX = wallStart.x; wsY = wallStart.y;
+                weX = wallEnd.x; weY = wallEnd.y;
+            }
 
             const testFace = (sign) => {
                 const offX = px * sign * halfT;
                 const offY = py * sign * halfT;
-                const faceStart = { x: wallStart.x + offX - ux * extend, y: wallStart.y + offY - uy * extend };
-                const faceEnd   = { x: wallEnd.x   + offX + ux * extend, y: wallEnd.y   + offY + uy * extend };
+                const faceStart = { x: wsX + offX - ux * extend, y: wsY + offY - uy * extend };
+                const faceEnd   = { x: weX + offX + ux * extend, y: weY + offY + uy * extend };
                 return WallSectionUnit._segmentsIntersect2D(faceStart, faceEnd, segStart, segEnd, EPS);
             };
 
             return testFace(+1) || testFace(-1);
         }
 
-        _collectCenterlineMapNodes() {
-            const orderedAnchors = this._collectOrderedLineAnchors();
+        _collectCenterlineMapNodes(cachedAnchors = null) {
+            const orderedAnchors = cachedAnchors !== null ? cachedAnchors : this._collectOrderedLineAnchors();
             if (!Array.isArray(orderedAnchors) || orderedAnchors.length === 0) return [];
 
             const out = [];
@@ -6126,8 +6128,8 @@ void main(void) {
             return out;
         }
 
-        _collectDirectionalBlockingTouchedNodes() {
-            const orderedAnchors = this._collectOrderedLineAnchors();
+        _collectDirectionalBlockingTouchedNodes(cachedAnchors = null) {
+            const orderedAnchors = cachedAnchors !== null ? cachedAnchors : this._collectOrderedLineAnchors();
             const out = [];
             const seen = new Set();
             const pushNode = (node) => {
@@ -6182,7 +6184,7 @@ void main(void) {
             }
         }
 
-        _applyDirectionalBlocking() {
+        _applyDirectionalBlocking(cachedAnchors = null, pendingRoadRefreshNodes = null) {
             const timerNow = () => (
                 (typeof performance !== "undefined" && performance && typeof performance.now === "function")
                     ? performance.now()
@@ -6193,8 +6195,8 @@ void main(void) {
             const clearMs = timerNow() - applyStart;
 
             const collectStart = timerNow();
-            const centerlineNodes = this._collectCenterlineMapNodes();
-            const touchedNodes = this._collectDirectionalBlockingTouchedNodes();
+            const centerlineNodes = this._collectCenterlineMapNodes(cachedAnchors);
+            const touchedNodes = this._collectDirectionalBlockingTouchedNodes(cachedAnchors);
             const collectMs = timerNow() - collectStart;
             if (touchedNodes.length === 0) return;
 
@@ -6203,6 +6205,24 @@ void main(void) {
             const blockedConnectionKeys = new Set();
             const blockedConnections = [];
             const doorSpans = this._collectMountedDoorTraversalSpans();
+
+            // Precompute constant wall geometry once for use in _connectionCrossesEitherFace.
+            const mapRef = this.map || null;
+            let wallGeometry = null;
+            if (this.startPoint) {
+                const wallEnd = this._toLocalFromOrigin(this.startPoint, this.endPoint, mapRef);
+                if (wallEnd) {
+                    const wallLen = Math.hypot(wallEnd.x, wallEnd.y);
+                    if (wallLen > EPS) {
+                        const ux = wallEnd.x / wallLen;
+                        const uy = wallEnd.y / wallLen;
+                        const halfT = Math.max(EPS, (Number.isFinite(this.thickness) ? Number(this.thickness) : 0.1) * 0.5);
+                        const halfHexToEdge = (mapRef && Number.isFinite(mapRef.hexHeight)) ? (Number(mapRef.hexHeight) * 0.5) : 0.5;
+                        wallGeometry = { ux, uy, px: -uy, py: ux, halfT, extend: halfHexToEdge + 0.001, wsX: 0, wsY: 0, weX: wallEnd.x, weY: wallEnd.y };
+                    }
+                }
+            }
+
             const blockStart = timerNow();
 
             // Traverse every odd-adjacent pair among the map nodes touched by the
@@ -6233,7 +6253,7 @@ void main(void) {
                             const keyB = this._nodeKey(other);
                             if (!keyB || !localNeighbors.has(keyB)) continue;
                             if (keyA >= keyB) continue;
-                            if (!this._connectionCrossesEitherFace(neighborNode, other)) continue;
+                            if (!this._connectionCrossesEitherFace(neighborNode, other, wallGeometry)) continue;
                             const blocker = this._resolveDirectionalBlockerForConnection(neighborNode, other, doorSpans);
                             if (!blocker) continue;
                             this._blockConnectionBetween(neighborNode, other, blockedConnectionKeys, blockedConnections, blocker);
@@ -6272,7 +6292,7 @@ void main(void) {
             // Refresh floor tiles on/near this wall's centerline nodes so they
             // pick up the new clip planes from _computeWallClipPlanesForNode.
             if (typeof Road !== 'undefined' && Array.isArray(this.nodes) && this.nodes.length > 0) {
-                const _refreshNodes = new Set();
+                const _refreshNodes = pendingRoadRefreshNodes || new Set();
                 for (let _i = 0; _i < this.nodes.length; _i++) {
                     const _n = this.nodes[_i];
                     if (!_n) continue;
@@ -6282,7 +6302,9 @@ void main(void) {
                         if (_nb) _refreshNodes.add(_nb);
                     }
                 }
-                Road.refreshTexturesAroundNodes(_refreshNodes);
+                if (!pendingRoadRefreshNodes) {
+                    Road.refreshTexturesAroundNodes(_refreshNodes);
+                }
             }
         }
 

@@ -2,6 +2,23 @@ const placeableMetadataByCategory = new Map();
 const placeableMetadataFetchPromises = new Map();
 const LEVEL0_ROAD_SURFACE_REBAKE_THROTTLE_MS = 1000;
 
+function destroyPixiDisplayObjectPreservingTexture(displayObj, options) {
+    if (!displayObj || displayObj.destroyed === true || typeof displayObj.destroy !== "function") return false;
+    // Pixi Sprite.destroy() calls this._texture.off(...). Road render sprites can
+    // have had that private slot nulled after texture-cache churn, so restore a
+    // non-owning sentinel before destruction.
+    if (
+        !displayObj._texture &&
+        typeof PIXI !== "undefined" &&
+        PIXI.Texture &&
+        PIXI.Texture.EMPTY
+    ) {
+        displayObj._texture = PIXI.Texture.EMPTY;
+    }
+    displayObj.destroy(options || { children: false, texture: false, baseTexture: false });
+    return true;
+}
+
 function resolvePrototypeSectionAssetForNode(mapRef, node) {
     if (!mapRef || !node) return null;
     const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
@@ -2594,24 +2611,18 @@ void main(void) {
         if (pixiSprite && pixiSprite.parent) {
             pixiSprite.parent.removeChild(pixiSprite);
         }
-        if (pixiSprite && pixiSprite.destroyed !== true && typeof pixiSprite.destroy === "function") {
-            pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
-        }
+        destroyPixiDisplayObjectPreservingTexture(pixiSprite, { children: true, texture: false, baseTexture: false });
         this.pixiSprite = null;
         this._destroyFlowerBurnFragments();
         if (fireSprite && fireSprite.parent) {
             fireSprite.parent.removeChild(fireSprite);
         }
-        if (fireSprite && fireSprite.destroyed !== true && typeof fireSprite.destroy === "function") {
-            fireSprite.destroy({ children: true, texture: false, baseTexture: false });
-        }
+        destroyPixiDisplayObjectPreservingTexture(fireSprite, { children: true, texture: false, baseTexture: false });
         this.fireSprite = null;
         if (depthBillboardMesh && depthBillboardMesh.parent) {
             depthBillboardMesh.parent.removeChild(depthBillboardMesh);
         }
-        if (depthBillboardMesh && depthBillboardMesh.destroyed !== true && typeof depthBillboardMesh.destroy === "function") {
-            depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
-        }
+        destroyPixiDisplayObjectPreservingTexture(depthBillboardMesh, { children: false, texture: false, baseTexture: false });
         this._depthBillboardMesh = null;
         this._depthBillboardWorldPositions = null;
         this._depthBillboardLastSignature = "";
@@ -2642,9 +2653,7 @@ void main(void) {
         if (extraDisplayObject && extraDisplayObject.parent) {
             extraDisplayObject.parent.removeChild(extraDisplayObject);
         }
-        if (extraDisplayObject && extraDisplayObject.destroyed !== true && typeof extraDisplayObject.destroy === "function") {
-            extraDisplayObject.destroy({ children: false, texture: false, baseTexture: false });
-        }
+        destroyPixiDisplayObjectPreservingTexture(extraDisplayObject, { children: false, texture: false, baseTexture: false });
         this._renderingDisplayObject = null;
         if (typeof globalThis !== "undefined") {
             if (this.type === "tree" && typeof globalThis.unregisterLazyTreeRecordAt === "function") {

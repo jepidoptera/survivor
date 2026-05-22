@@ -1208,7 +1208,7 @@ test("schedulePrototypeRuntimeSync prunes animals from sections leaving the targ
     assert.equal(map._prototypeAnimalState.activeRecordSignature, "");
 });
 
-test("schedulePrototypeRuntimeSync loads newly entering walls without unloading existing bubble walls", () => {
+test("schedulePrototypeRuntimeSync loads newly entering walls and unloads walls leaving the bubble", () => {
     const map = createPrototypeMap();
     attachPrototypeApis(map, createEmptyPrototypeState());
     globalThis.map = map;
@@ -1281,9 +1281,9 @@ test("schedulePrototypeRuntimeSync loads newly entering walls without unloading 
     map.schedulePrototypeRuntimeSync({ frameBudgetMs: 10 });
     assert.equal(map.flushPrototypeBubbleShiftSession(), true);
 
-    assert.deepEqual(removedWallIds, []);
+    assert.deepEqual(removedWallIds, [101]);
     assert.deepEqual(loadOrder, ["wall:104"]);
-    assert.deepEqual(Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.keys()).sort((a, b) => a - b), [101, 102, 103, 104]);
+    assert.deepEqual(Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.keys()).sort((a, b) => a - b), [102, 103, 104]);
 });
 
 test("schedulePrototypeRuntimeSync leaves changed runtime walls intact during scoped section entry", () => {
@@ -1402,7 +1402,7 @@ test("schedulePrototypeRuntimeSync leaves changed runtime walls intact during sc
     assert.equal(changedRuntimeWall.height, 2);
     assert.equal(map._prototypeWallState.activeRuntimeWallsByRecordId.has(104), true);
     assert.equal(Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.values()).some((wall) => wall && wall.gone), false);
-    assert.deepEqual(removedWallIds, []);
+    assert.deepEqual(removedWallIds, [101]);
 });
 
 test("schedulePrototypeRuntimeSync keeps a mounted window attached without rewriting the wall id on section entry", () => {

@@ -1252,7 +1252,21 @@ void main(void) {
             let roadCount = 0;
             this._roadTilePickStatsAccumulator = { candidates: 0, pending: 0 };
             let cacheMisses = 0;
-            for (const [sectionKey, asset] of state.sectionAssetsByKey.entries()) {
+            const activeSectionKeys = (
+                map &&
+                typeof map.getPrototypeActiveSectionKeys === "function"
+            ) ? map.getPrototypeActiveSectionKeys() : null;
+            const sectionEntries = (activeSectionKeys instanceof Set && activeSectionKeys.size > 0)
+                ? Array.from(activeSectionKeys, (sectionKey) => [sectionKey, state.sectionAssetsByKey.get(sectionKey) || null])
+                : Array.from(state.sectionAssetsByKey.entries());
+            let skippedInactive = 0;
+            for (let entryIndex = 0; entryIndex < sectionEntries.length; entryIndex++) {
+                const sectionKey = sectionEntries[entryIndex][0];
+                const asset = sectionEntries[entryIndex][1];
+                if (!asset) {
+                    skippedInactive += 1;
+                    continue;
+                }
                 const beforeCache = this.roadTilePickSurfaceCache.get(sectionKey) || null;
                 const surface = this.getRoadTilePickSurface({ ...(ctx || {}), map }, sectionKey, asset);
                 if (!surface || !surface.texture || !surface.bounds) continue;
@@ -1295,6 +1309,7 @@ void main(void) {
                 candidates: this._roadTilePickStatsAccumulator ? this._roadTilePickStatsAccumulator.candidates : 0,
                 pendingSections: this._roadTilePickStatsAccumulator ? this._roadTilePickStatsAccumulator.pending : 0,
                 cacheMisses,
+                skippedInactive,
                 cacheSize: this.roadTilePickSurfaceCache instanceof Map ? this.roadTilePickSurfaceCache.size : 0
             });
             this._roadTilePickStatsAccumulator = null;

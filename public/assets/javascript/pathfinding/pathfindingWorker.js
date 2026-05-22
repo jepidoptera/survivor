@@ -365,6 +365,10 @@ function handleRequestPath(message) {
             // Skip hard-blocked nodes (except when it's the goal and we allow it)
             if (toNode.blocked && (toKey !== goalKey || !allowBlockedDestination)) continue;
 
+            // Skip fragment-boundary nodes (clearance=-1) as intermediate steps;
+            // they may still be reached as the goal destination.
+            if (toNode.clearance !== null && Number(toNode.clearance) < 0 && toKey !== goalKey) continue;
+
             // Clearance filter (skip non-goal nodes that don't meet clearance)
             if (requiredClearance > 0 && toKey !== goalKey) {
                 const cl = toNode.clearance !== null ? toNode.clearance : Infinity;

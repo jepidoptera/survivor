@@ -367,6 +367,19 @@ class MinPriorityQueue {
     }
 }
 
+function markFloorNodeRenderObjectCacheDirty(node, obj) {
+    if (!node || typeof node.fragmentId !== "string" || node.fragmentId.length === 0) return;
+    if (!obj) return;
+    const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+    if (animalCtor && obj instanceof animalCtor) return;
+    if (typeof globalThis !== "undefined" && obj === globalThis.wizard) return;
+    if (obj.type === "powerup") return;
+    const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+    if (mapRef && typeof mapRef.markFloorObjectNodeCacheDirty === "function") {
+        mapRef.markFloorObjectNodeCacheDirty();
+    }
+}
+
 class MapNode {
     constructor(x, y, mapWidth, mapHeight) {
         this.x = x * 0.866;
@@ -474,8 +487,10 @@ class MapNode {
 
     addObject(obj) {
         if (!this.objects) this.objects = [];
+        const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
         const wasBlocked = !!(this.blocked || this.blockedByObjects > 0);
         this.objects.push(obj);
+        markFloorNodeRenderObjectCacheDirty(this, obj);
         if (doesObjectBlockTile(obj)) {
             this.blockedByObjects = Math.max(0, Number(this.blockedByObjects) || 0) + 1;
         }
@@ -489,7 +504,6 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
         const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
         const shouldDirtyBuildingCache = !!(
             obj &&
@@ -514,6 +528,7 @@ class MapNode {
         if (!this.visibilityObjects) this.visibilityObjects = [];
         if (this.visibilityObjects.includes(obj)) return;
         this.visibilityObjects.push(obj);
+        markFloorNodeRenderObjectCacheDirty(this, obj);
     }
 
     removeObject(obj) {
@@ -523,6 +538,8 @@ class MapNode {
         if (idx === -1) return;
         const removed = this.objects[idx];
         this.objects.splice(idx, 1);
+        const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        markFloorNodeRenderObjectCacheDirty(this, removed);
         if (doesObjectBlockTile(removed)) {
             this.blockedByObjects = Math.max(0, (Number(this.blockedByObjects) || 0) - 1);
         }
@@ -536,7 +553,6 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
         const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
         const shouldDirtyBuildingCache = !!(
             removed &&
@@ -559,7 +575,10 @@ class MapNode {
     removeVisibilityObject(obj) {
         if (!this.visibilityObjects) return;
         const idx = this.visibilityObjects.indexOf(obj);
-        if (idx !== -1) this.visibilityObjects.splice(idx, 1);
+        if (idx !== -1) {
+            this.visibilityObjects.splice(idx, 1);
+            markFloorNodeRenderObjectCacheDirty(this, obj);
+        }
     }
 
     recountBlockingObjects() {
@@ -1041,6 +1060,178 @@ class GameMap {
         this._buildingRenderCacheVersion = 0;
         this.transitionsById = new Map();
         this.stairsById = new Map();
+        this.markFloorObjectNodeCacheDirty();
+    }
+
+    markFloorObjectNodeCacheDirty() {
+        this._floorObjectNodeCacheVersion = (Number(this._floorObjectNodeCacheVersion) || 0) + 1;
+        this._floorObjectNodeSpatialIndexReadyVersion = -1;
+        return this._floorObjectNodeCacheVersion;
+    }
+
+    floorObjectNodeHasIndexedRenderEntries(node) {
+        if (!node) return false;
+        const hasRelevantEntry = (list) => {
+            if (!Array.isArray(list) || list.length === 0) return false;
+            for (let i = 0; i < list.length; i++) {
+                const obj = list[i];
+                if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
+                if (obj.type === "road") continue;
+                return true;
+            }
+            return false;
+        };
+        return hasRelevantEntry(node.objects) || hasRelevantEntry(node.visibilityObjects);
+    }
+
+    beginFloorObjectNodeSpatialIndexBuild() {
+        const source = this.floorNodesById instanceof Map
+            ? Array.from(this.floorNodesById.values())
+            : [];
+        return {
+            map: this,
+            version: Number(this._floorObjectNodeCacheVersion) || 0,
+            mapSize: this.floorNodesById instanceof Map ? this.floorNodesById.size : 0,
+            source,
+            bySectionY: new Map(),
+            allByY: new Map(),
+            rows: [],
+            totalNodes: 0,
+            scanMs: 0,
+            sortMs: 0,
+            committed: false
+        };
+    }
+
+    _addFloorObjectNodeSpatialIndexRow(rowsByY, yKey) {
+        if (!(rowsByY instanceof Map)) return null;
+        let row = rowsByY.get(yKey);
+        if (!Array.isArray(row)) {
+            row = [];
+            rowsByY.set(yKey, row);
+        }
+        return row;
+    }
+
+    _addFloorObjectNodeToSpatialIndexJob(job, node) {
+        if (!job || !node || !this.floorObjectNodeHasIndexedRenderEntries(node)) return;
+        const yKey = Number.isFinite(node.yindex) ? Math.round(Number(node.yindex)) : null;
+        if (!Number.isFinite(yKey)) return;
+        const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+        let sectionRows = job.bySectionY.get(sectionKey);
+        if (!(sectionRows instanceof Map)) {
+            sectionRows = new Map();
+            job.bySectionY.set(sectionKey, sectionRows);
+        }
+        this._addFloorObjectNodeSpatialIndexRow(sectionRows, yKey).push(node);
+        this._addFloorObjectNodeSpatialIndexRow(job.allByY, yKey).push(node);
+        job.totalNodes += 1;
+    }
+
+    scanFloorObjectNodeSpatialIndexBuildRange(job, startIndex, endIndex) {
+        if (!job || job.map !== this || !Array.isArray(job.source)) return 0;
+        const scanStartMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const start = Math.max(0, Math.floor(Number(startIndex) || 0));
+        const end = Math.min(job.source.length, Math.max(start, Math.floor(Number(endIndex) || 0)));
+        let scanned = 0;
+        for (let i = start; i < end; i++) {
+            const nodeArr = job.source[i];
+            if (!Array.isArray(nodeArr)) continue;
+            for (let j = 0; j < nodeArr.length; j++) {
+                this._addFloorObjectNodeToSpatialIndexJob(job, nodeArr[j]);
+                scanned += 1;
+            }
+        }
+        const scanEndMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        job.scanMs += scanEndMs - scanStartMs;
+        return scanned;
+    }
+
+    prepareFloorObjectNodeSpatialIndexSortRows(job) {
+        if (!job || job.map !== this) return 0;
+        const rows = [];
+        for (const sectionRows of job.bySectionY.values()) {
+            if (!(sectionRows instanceof Map)) continue;
+            for (const row of sectionRows.values()) {
+                if (Array.isArray(row) && row.length > 1) rows.push(row);
+            }
+        }
+        for (const row of job.allByY.values()) {
+            if (Array.isArray(row) && row.length > 1) rows.push(row);
+        }
+        job.rows = rows;
+        return rows.length;
+    }
+
+    sortFloorObjectNodeSpatialIndexRows(job, startIndex, endIndex) {
+        if (!job || job.map !== this || !Array.isArray(job.rows)) return 0;
+        const sortStartMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const start = Math.max(0, Math.floor(Number(startIndex) || 0));
+        const end = Math.min(job.rows.length, Math.max(start, Math.floor(Number(endIndex) || 0)));
+        for (let i = start; i < end; i++) {
+            const row = job.rows[i];
+            if (!Array.isArray(row) || row.length < 2) continue;
+            row.sort((left, right) => {
+                const xDelta = (Number(left && left.xindex) || 0) - (Number(right && right.xindex) || 0);
+                if (xDelta !== 0) return xDelta;
+                return String(left && left.id || "").localeCompare(String(right && right.id || ""));
+            });
+        }
+        const sortEndMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        job.sortMs += sortEndMs - sortStartMs;
+        return end - start;
+    }
+
+    commitFloorObjectNodeSpatialIndexBuild(job) {
+        if (!job || job.map !== this) return null;
+        const index = {
+            version: Number(job.version) || 0,
+            mapSize: Number(job.mapSize) || 0,
+            bySectionY: job.bySectionY instanceof Map ? job.bySectionY : new Map(),
+            allByY: job.allByY instanceof Map ? job.allByY : new Map(),
+            totalNodes: Number(job.totalNodes) || 0,
+            rowsBuilt: Array.isArray(job.rows) ? job.rows.length : 0,
+            scanMs: Number(job.scanMs) || 0,
+            sortMs: Number(job.sortMs) || 0
+        };
+        this._floorObjectNodeSpatialIndex = index;
+        this._floorObjectNodeSpatialIndexReadyVersion = index.version;
+        job.committed = true;
+        return index;
+    }
+
+    rebuildFloorObjectNodeSpatialIndex() {
+        const job = this.beginFloorObjectNodeSpatialIndexBuild();
+        this.scanFloorObjectNodeSpatialIndexBuildRange(job, 0, job.source.length);
+        this.prepareFloorObjectNodeSpatialIndexSortRows(job);
+        this.sortFloorObjectNodeSpatialIndexRows(job, 0, job.rows.length);
+        return this.commitFloorObjectNodeSpatialIndexBuild(job);
+    }
+
+    getFloorObjectNodeSpatialIndex() {
+        return this._floorObjectNodeSpatialIndex || null;
+    }
+
+    isFloorObjectNodeSpatialIndexCurrent() {
+        const index = this.getFloorObjectNodeSpatialIndex();
+        return !!(
+            index &&
+            index.version === (Number(this._floorObjectNodeCacheVersion) || 0) &&
+            index.mapSize === (this.floorNodesById instanceof Map ? this.floorNodesById.size : 0)
+        );
+    }
+
+    ensureFloorObjectNodeSpatialIndex() {
+        if (this.isFloorObjectNodeSpatialIndexCurrent()) return this.getFloorObjectNodeSpatialIndex();
+        return this.rebuildFloorObjectNodeSpatialIndex();
     }
 
     getFloorNodeKey(nodeOrX, y = null, surfaceId = "", fragmentId = "") {
@@ -1681,6 +1872,7 @@ class GameMap {
         if (!(this.floorNodeIndex instanceof Map)) this.floorNodeIndex = new Map();
         this.floorNodeIndex.set(node.id, node);
         this._indexFloorNodeByLayer(node);
+        this.markFloorObjectNodeCacheDirty();
         return node;
     }
 
@@ -1736,7 +1928,13 @@ class GameMap {
         floorNode.visibilityObjects = [];
         floorNode.blockedByObjects = 0;
         floorNode.blocked = false;
-        floorNode.clearance = Number.isFinite(sourceNode.clearance) ? Number(sourceNode.clearance) : Infinity;
+        // Non-ground floor nodes must not inherit ground-level clearance — it reflects
+        // surface obstacles that are irrelevant underground (and missing underground walls).
+        // Ground floor nodes (level === 0) inherit normally since they share the surface plane.
+        const floorLevel = Number.isFinite(floorNode.level) ? floorNode.level : 0;
+        floorNode.clearance = (floorLevel === 0 && Number.isFinite(sourceNode.clearance))
+            ? Number(sourceNode.clearance)
+            : Infinity;
         return this.registerFloorNode(floorNode, fragment);
     }
 
@@ -2594,6 +2792,9 @@ class GameMap {
                     traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
                 });
                 if (!floorNode) continue;
+                if (this._isFloorNodeAtFragmentBoundary(sourceNode, registeredFragment)) {
+                    floorNode.clearance = -1;
+                }
                 pendingNodes.push(floorNode);
                 created += 1;
             }
@@ -2701,7 +2902,10 @@ class GameMap {
             }
             if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
         }
-        if (removedCount > 0 || ids.length > 0) this.markFloorBuildingsDirty();
+        if (removedCount > 0 || ids.length > 0) {
+            this.markFloorObjectNodeCacheDirty();
+            this.markFloorBuildingsDirty();
+        }
         return removedCount;
     }
 
@@ -2842,6 +3046,7 @@ class GameMap {
             if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
         }
         if (this.floorFragmentsBySectionKey instanceof Map) this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorObjectNodeCacheDirty();
         this.markFloorBuildingsDirty();
         return nodes.length;
     }
@@ -2909,6 +3114,7 @@ class GameMap {
             if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
         }
         this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorObjectNodeCacheDirty();
         this.markFloorBuildingsDirty();
         return removedCount;
     }
@@ -3001,6 +3207,24 @@ class GameMap {
         return connectionCount;
     }
 
+    // Hex node spacing is 1.0 world units → inradius = 0.5.
+    // A node whose center is within 0.5 units of the polygon boundary has a hex cell
+    // that extends outside the polygon, so it should not be a valid pathfinding destination.
+    _isFloorNodeAtFragmentBoundary(sourceNode, fragment) {
+        const HEX_INRADIUS_SQ = 0.25; // 0.5²
+        const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+        if (!poly || poly.length < 3) return false;
+        if (getPointPolygonBoundaryDistanceSq2D(sourceNode.x, sourceNode.y, poly) < HEX_INRADIUS_SQ) return true;
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            if (Array.isArray(holes[i]) && holes[i].length >= 3 &&
+                getPointPolygonBoundaryDistanceSq2D(sourceNode.x, sourceNode.y, holes[i]) < HEX_INRADIUS_SQ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     rebuildFloorRuntimeFromSectionState(sectionState, options = {}) {
         this.resetFloorRuntimeState();
         if (
@@ -3049,6 +3273,9 @@ class GameMap {
                         traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
                     });
                     if (!floorNode) continue;
+                    if (this._isFloorNodeAtFragmentBoundary(sourceNode, registeredFragment)) {
+                        floorNode.clearance = -1;
+                    }
                     nodeCount += 1;
                     materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
                 }

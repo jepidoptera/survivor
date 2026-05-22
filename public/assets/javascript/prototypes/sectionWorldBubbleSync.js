@@ -291,6 +291,23 @@
                 : []
         });
 
+        const buildBubbleFloorObjectIndexSummary = (stats, hotspots) => {
+            if (!stats || typeof stats !== "object") return null;
+            addBubbleHotspot(hotspots, "floorObjectIndex", stats.ms, {
+                nodes: Number(stats.nodes) || 0,
+                rows: Number(stats.rows) || 0
+            });
+            return {
+                ms: toBubbleMs(stats.ms),
+                scanMs: toBubbleMs(stats.scanMs),
+                sortMs: toBubbleMs(stats.sortMs),
+                nodes: Number(stats.nodes) || 0,
+                rows: Number(stats.rows) || 0,
+                scanTasks: Number(stats.scanTasks) || 0,
+                sortTasks: Number(stats.sortTasks) || 0
+            };
+        };
+
         const createPrototypeAsyncBubbleShiftSession = (startedAtMs, previousCenterKey, layoutMs, options = {}) => ({
             from: previousCenterKey || "",
             to: (map._prototypeSectionState && map._prototypeSectionState.activeCenterKey) || "",
@@ -310,7 +327,8 @@
             wallsChanged: false,
             objectsChanged: false,
             animalsChanged: false,
-            powerupsChanged: false
+            powerupsChanged: false,
+            floorObjectNodeIndexStats: null
         });
 
         const finalizePrototypeAsyncBubbleShiftSession = (session) => {
@@ -358,6 +376,7 @@
                     walls: buildBubbleWallSummary(wallStats, session.wallsChanged, hotspots),
                     objects: buildBubbleObjectSummary(objectStats, session.objectsChanged, powerupSummary, hotspots),
                     animals: buildBubbleAnimalSummary(animalStats, session.animalsChanged, hotspots),
+                    floorObjectIndex: buildBubbleFloorObjectIndexSummary(session.floorObjectNodeIndexStats, hotspots),
                     hotspots: sortBubbleHotspots(hotspots)
                 });
             } catch (_err) {
@@ -396,7 +415,67 @@
             return session;
         };
 
+        const enqueuePrototypeAsyncFloorObjectNodeIndexBuild = (session) => {
+            if (!session || !map) return;
+            if (
+                typeof map.beginFloorObjectNodeSpatialIndexBuild !== "function" ||
+                typeof map.scanFloorObjectNodeSpatialIndexBuildRange !== "function" ||
+                typeof map.prepareFloorObjectNodeSpatialIndexSortRows !== "function" ||
+                typeof map.sortFloorObjectNodeSpatialIndexRows !== "function" ||
+                typeof map.commitFloorObjectNodeSpatialIndexBuild !== "function"
+            ) {
+                return;
+            }
+            prependPrototypeTasks(session, [createPrototypeTask("floorObjectIndex.plan", () => {
+                const totalStart = prototypeNow();
+                const job = map.beginFloorObjectNodeSpatialIndexBuild();
+                const sourceLength = Array.isArray(job && job.source) ? job.source.length : 0;
+                const scanChunkSize = 250;
+                const sortChunkSize = 250;
+                const scanTasks = [];
+                for (let i = 0; i < sourceLength; i += scanChunkSize) {
+                    const start = i;
+                    const end = Math.min(sourceLength, i + scanChunkSize);
+                    scanTasks.push(createPrototypeTask("floorObjectIndex.scan", () => {
+                        map.scanFloorObjectNodeSpatialIndexBuildRange(job, start, end);
+                    }));
+                }
+                scanTasks.push(createPrototypeTask("floorObjectIndex.sortPlan", () => {
+                    const rows = map.prepareFloorObjectNodeSpatialIndexSortRows(job);
+                    const sortTasks = [];
+                    for (let i = 0; i < rows; i += sortChunkSize) {
+                        const start = i;
+                        const end = Math.min(rows, i + sortChunkSize);
+                        sortTasks.push(createPrototypeTask("floorObjectIndex.sort", () => {
+                            map.sortFloorObjectNodeSpatialIndexRows(job, start, end);
+                        }));
+                    }
+                    sortTasks.push(createPrototypeTask("floorObjectIndex.commit", () => {
+                        const index = map.commitFloorObjectNodeSpatialIndexBuild(job);
+                        const totalMs = prototypeNow() - totalStart;
+                        session.floorObjectNodeIndexStats = {
+                            ms: totalMs,
+                            scanMs: Number(job && job.scanMs) || 0,
+                            sortMs: Number(job && job.sortMs) || 0,
+                            nodes: index && Number.isFinite(index.totalNodes) ? Number(index.totalNodes) : 0,
+                            rows: index && Number.isFinite(index.rowsBuilt) ? Number(index.rowsBuilt) : 0,
+                            scanTasks: scanTasks.length,
+                            sortTasks: sortTasks.length
+                        };
+                    }));
+                    prependPrototypeTasks(session, sortTasks);
+                }));
+                prependPrototypeTasks(session, scanTasks);
+            })]);
+        };
+
         const attachFlushPrototypeBubbleShiftSession = () => {
+            map.advancePrototypeBubbleShiftSession = function advancePrototypeBubbleShiftSession(options = {}) {
+                const session = this._prototypeBubbleShiftSession;
+                if (!session || session.completed === true) return true;
+                advancePrototypeAsyncBubbleShiftSession(session, options);
+                return !this._prototypeBubbleShiftSession || this._prototypeBubbleShiftSession.completed === true;
+            };
             map.flushPrototypeBubbleShiftSession = function flushPrototypeBubbleShiftSession(options = {}) {
                 let session = this._prototypeBubbleShiftSession;
                 if (!session || session.completed === true) return true;
@@ -879,6 +958,7 @@
                     prunePrototypeAnimalsForTargetBubble();
                     this._prototypeBubbleShiftSession = null;
                     const asyncSession = createPrototypeAsyncBubbleShiftSession(totalStart, previousCenterKey, layoutMs, options);
+                    enqueuePrototypeAsyncFloorObjectNodeIndexBuild(asyncSession);
                     enqueuePrototypeAsyncPowerupSync(asyncSession);
                     enqueuePrototypeAsyncAnimalSync(asyncSession);
                     enqueuePrototypeAsyncObjectSync(asyncSession);
@@ -906,6 +986,7 @@
                 const previousCenterKey = this._prototypeSectionState && this._prototypeSectionState.activeCenterKey;
                 prunePrototypeAnimalsForTargetBubble();
                 const asyncSession = createPrototypeAsyncBubbleShiftSession(startedAtMs, previousCenterKey, 0, options);
+                enqueuePrototypeAsyncFloorObjectNodeIndexBuild(asyncSession);
                 enqueuePrototypeAsyncPowerupSync(asyncSession);
                 enqueuePrototypeAsyncAnimalSync(asyncSession);
                 enqueuePrototypeAsyncObjectSync(asyncSession);

@@ -933,8 +933,16 @@
                 nextTasks.push(createPrototypeTask("walls.collect", () => {
                     const collectStart = prototypeNow();
                     const activeSectionKeys = map.getPrototypeActiveSectionKeys();
+                    const sectionState = map && map._prototypeSectionState;
+                    const transition = sectionState && sectionState.pendingLayoutTransition;
+                    const targetActiveSectionKeys = transition && transition.targetActiveKeys instanceof Set
+                        ? transition.targetActiveKeys
+                        : (sectionState && sectionState.activeSectionKeys instanceof Set
+                            ? sectionState.activeSectionKeys
+                            : activeSectionKeys);
                     const collectSectionKeys = sync.scopedToSections ? new Set(scopedSectionKeys) : activeSectionKeys;
                     sync.activeSectionKeys = activeSectionKeys;
+                    sync.targetActiveSectionKeys = targetActiveSectionKeys;
                     sync.collectSectionKeys = collectSectionKeys;
                     if (typeof map.ensurePrototypeBlockedEdges === "function") {
                         map.ensurePrototypeBlockedEdges(collectSectionKeys);
@@ -1013,11 +1021,15 @@
                     }
                     sync.removalEntries = [];
                     sync.orphanedMountedObjects = [];
-                    if (!sync.scopedToSections) {
-                        for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
-                            if (desiredRecordIds.has(recordId)) continue;
-                            sync.removalEntries.push({ recordId, runtimeWall });
-                        }
+                    for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
+                        const ownerSectionKey = runtimeWall && typeof runtimeWall._prototypeOwnerSectionKey === "string"
+                            ? runtimeWall._prototypeOwnerSectionKey
+                            : "";
+                        const shouldRemove = sync.scopedToSections
+                            ? !!(ownerSectionKey && !targetActiveSectionKeys.has(ownerSectionKey))
+                            : !desiredRecordIds.has(recordId);
+                        if (!shouldRemove) continue;
+                        sync.removalEntries.push({ recordId, runtimeWall });
                     }
                     sync.loadWallEntries = [];
                     for (let i = 0; i < desiredRecords.length; i++) {
@@ -1090,6 +1102,7 @@
                             });
                         }));
                     }
+                    const pendingWallRoadRefreshNodes = (typeof globalScope.Road !== 'undefined' && sync.loadWallEntries.length > 0) ? new Set() : null;
                     for (let i = 0; i < sync.loadWallEntries.length; i++) {
                         const entry = sync.loadWallEntries[i];
                         phaseTasks.push(createPrototypeTask("walls.loadJson", () => {
@@ -1103,7 +1116,7 @@
                             const usesSectionBlockedEdges = !!(precomputedEdges && precomputedEdges.length > 0);
                             if (typeof runtimeWall.addToMapNodes === "function") {
                                 const addNodesStart = prototypeNow();
-                                runtimeWall.addToMapNodes({ applyDirectionalBlocking: !usesSectionBlockedEdges });
+                                runtimeWall.addToMapNodes({ applyDirectionalBlocking: !usesSectionBlockedEdges, pendingRoadRefreshNodes: pendingWallRoadRefreshNodes });
                                 sync.addNodesMs += prototypeNow() - addNodesStart;
                                 const addStats = runtimeWall._lastAddToMapNodesStats || null;
                                 if (addStats) {
@@ -1136,6 +1149,13 @@
                             emitPrototypeWallSwapDiagnostic("afterLoad", wallState, sync, {
                                 queuedTasks: "after wall load, before blocked edges/joinery"
                             });
+                        }));
+                        phaseTasks.push(createPrototypeTask("walls.roadRefresh", () => {
+                            if (pendingWallRoadRefreshNodes && pendingWallRoadRefreshNodes.size > 0 &&
+                                typeof globalScope.Road !== 'undefined' &&
+                                typeof globalScope.Road.refreshTexturesAroundNodes === 'function') {
+                                globalScope.Road.refreshTexturesAroundNodes(pendingWallRoadRefreshNodes);
+                            }
                         }));
                     }
                     for (let i = 0; i < sync.applyBlockedSectionKeys.length; i++) {

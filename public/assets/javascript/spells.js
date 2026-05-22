@@ -5986,11 +5986,15 @@ const SpellSystem = (() => {
         const maxLevel = Number.isFinite(options && options.maxLevel)
             ? normalizeFloorEditLevel(options.maxLevel)
             : Infinity;
+        const exactLevel = Number.isFinite(options && options.exactLevel)
+            ? normalizeFloorEditLevel(options.exactLevel)
+            : null;
         const includeGround = !!(options && options.includeGround === true);
         let best = null;
         for (const fragment of mapRef.floorsById.values()) {
             if (!fragment) continue;
             const level = Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0;
+            if (exactLevel !== null && level !== exactLevel) continue;
             if (level === 0 && !includeGround) continue;
             if (level > maxLevel) continue;
             if (fragment._prototypeGroundFloor === true && !(includeGround && level === 0)) continue;
@@ -6061,10 +6065,19 @@ const SpellSystem = (() => {
         let targetLayer = 0;
         let targetBaseZ = 0;
         let floorTarget = null;
+        const currentLayer = Number.isFinite(wizardRef && wizardRef.currentLayer)
+            ? Math.round(Number(wizardRef.currentLayer))
+            : (Number.isFinite(wizardRef && wizardRef.traversalLayer)
+                ? Math.round(Number(wizardRef.traversalLayer))
+                : 0);
+        const isUndergroundTeleport = currentLayer < 0;
 
         if (Number.isFinite(screenPoint.screenX) && Number.isFinite(screenPoint.screenY)) {
             const visibleFloorOptions = { includeGround: true };
-            if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
+            if (isUndergroundTeleport) {
+                visibleFloorOptions.includeGround = false;
+                visibleFloorOptions.exactLevel = currentLayer;
+            } else if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
                 visibleFloorOptions.maxLevel = Number.isFinite(wizardRef && wizardRef.currentLayer)
                     ? Number(wizardRef.currentLayer)
                     : (Number.isFinite(wizardRef && wizardRef.traversalLayer) ? Number(wizardRef.traversalLayer) : 0);
@@ -6077,7 +6090,15 @@ const SpellSystem = (() => {
                 targetLayer = Number.isFinite(floorTarget.level) ? Math.round(Number(floorTarget.level)) : 0;
                 targetBaseZ = Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : targetLayer * 3;
             } else {
-                targetPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
+                targetLayer = isUndergroundTeleport ? currentLayer : 0;
+                targetBaseZ = isUndergroundTeleport
+                    ? (Number.isFinite(wizardRef && wizardRef.currentLayerBaseZ)
+                        ? Number(wizardRef.currentLayerBaseZ)
+                        : targetLayer * 3)
+                    : 0;
+                targetPoint = isUndergroundTeleport
+                    ? resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, targetBaseZ)
+                    : resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
             }
         }
 
@@ -6089,7 +6110,9 @@ const SpellSystem = (() => {
         const wrappedY = mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(resolvedY)
             ? mapRef.wrapWorldY(resolvedY)
             : resolvedY;
-        const destinationNode = resolveTeleportNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+        const destinationNode = (isUndergroundTeleport && !floorTarget)
+            ? null
+            : resolveTeleportNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
 
         return {
             x: wrappedX,
@@ -6366,6 +6389,84 @@ const SpellSystem = (() => {
             fragmentId: hit.fragmentId,
             ringKind: hit.ringKind,
             holeIndex: hit.holeIndex,
+            vertexIndex: insertIndex,
+            dragging: true,
+            dirty: true
+        };
+        return true;
+    }
+
+    function getFloorEditorDistanceSq(mapRef, a, b) {
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+            return Infinity;
+        }
+        const dx = mapRef && typeof mapRef.shortestDeltaX === "function"
+            ? mapRef.shortestDeltaX(ax, bx)
+            : (bx - ax);
+        const dy = mapRef && typeof mapRef.shortestDeltaY === "function"
+            ? mapRef.shortestDeltaY(ay, by)
+            : (by - ay);
+        return (dx * dx) + (dy * dy);
+    }
+
+    function resolveFloorEditorSelectedInsertionPoint(wizardRef, selection, screenX, screenY, worldX, worldY) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        const fragment = selection && selection.fragment ? selection.fragment : null;
+        const baseZ = Number.isFinite(fragment && fragment.nodeBaseZ)
+            ? Number(fragment.nodeBaseZ)
+            : (getSelectedFloorEditLevel(wizardRef) * 3);
+        const screenPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, Number(screenX), Number(screenY), baseZ);
+        let x = screenPoint && Number.isFinite(screenPoint.x) ? Number(screenPoint.x) : Number(worldX);
+        let y = screenPoint && Number.isFinite(screenPoint.y) ? Number(screenPoint.y) : Number(worldY);
+        if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+        const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+        const ownerSectionKey = fragment && typeof fragment.ownerSectionKey === "string"
+            ? fragment.ownerSectionKey
+            : "";
+        const ownerAsset = ownerSectionKey && state && state.sectionAssetsByKey instanceof Map
+            ? state.sectionAssetsByKey.get(ownerSectionKey)
+            : null;
+        if (!ownerAsset) return { x, y };
+        return clampFloorEditPointToSection(ownerAsset, state, { x, y });
+    }
+
+    function insertFloorEditorVertexFromSelectedNeighbor(wizardRef, screenX, screenY, worldX, worldY) {
+        if (!isFloorEditorDebugEditEnabled(wizardRef)) return false;
+        const selection = getFloorEditorVertexSelection(wizardRef);
+        if (!selection) return false;
+        const ring = getFloorEditorRingFromFragment(selection.fragment, selection.ringKind, selection.holeIndex);
+        if (!Array.isArray(ring) || ring.length < 3) return false;
+
+        const insertPoint = resolveFloorEditorSelectedInsertionPoint(wizardRef, selection, screenX, screenY, worldX, worldY);
+        if (!insertPoint || !Number.isFinite(insertPoint.x) || !Number.isFinite(insertPoint.y)) return false;
+
+        const mapRef = wizardRef.map || null;
+        const selectedIndex = selection.vertexIndex;
+        const prevIndex = (selectedIndex - 1 + ring.length) % ring.length;
+        const nextIndex = (selectedIndex + 1) % ring.length;
+        const prevDistanceSq = getFloorEditorDistanceSq(mapRef, insertPoint, ring[prevIndex]);
+        const nextDistanceSq = getFloorEditorDistanceSq(mapRef, insertPoint, ring[nextIndex]);
+        const insertIndex = prevDistanceSq <= nextDistanceSq
+            ? selectedIndex
+            : Math.min(ring.length, selectedIndex + 1);
+
+        const nextRing = cloneFloorEditorRing(ring);
+        nextRing.splice(insertIndex, 0, { x: insertPoint.x, y: insertPoint.y });
+        selection.vertexIndex = insertIndex;
+        selection.dragging = true;
+        const updated = applyFloorEditorRingToFragment(wizardRef, selection, nextRing, { rematerialize: false });
+        if (!updated) return false;
+        wizardRef._floorEditorVertexSelection = {
+            fragmentId: selection.fragmentId,
+            ringKind: selection.ringKind,
+            holeIndex: selection.holeIndex,
             vertexIndex: insertIndex,
             dragging: true,
             dirty: true
@@ -10485,6 +10586,7 @@ const SpellSystem = (() => {
         endTriggerAreaVertexDrag,
         deleteSelectedTriggerAreaVertex,
         getTriggerAreaVertexSelection,
+        insertFloorEditorVertexFromSelectedNeighbor,
         insertFloorEditorVertexOnEdge,
         beginFloorEditorVertexDrag,
         updateFloorEditorVertexDrag,
