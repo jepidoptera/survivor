@@ -620,6 +620,10 @@
                         tasks.push(createPrototypeTask("layout.floorPrepare", () => {
                             const prepared = map.prepareFloorSectionFragmentsForSection(sectionKey);
                             if (!prepared) return; // already registered or nothing to do
+                            // Skip floor node creation for sections with no upper floors — layer-0 floor nodes
+                            // are never looked up (getFloorNodeAtLayer layer=0 returns getNode() directly).
+                            const hasUpperFloor = prepared.some((f) => Number(f && f.level) > 0);
+                            if (!hasUpperFloor) return;
                             const nodeCount = typeof map.getSectionNodeCount === "function"
                                 ? map.getSectionNodeCount(sectionKey) : 0;
                             const batchTasks = [];

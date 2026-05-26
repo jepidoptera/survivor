@@ -43,6 +43,27 @@ app.get('/twosectionprototype', (req, res) => {
     res.render('sectionworld')
 })
 
+app.get('/api/assets/images/:folder', (req, res) => {
+    const folder = String(req.params.folder || '');
+    const allowedFolders = new Set(['flooring', 'roofs', 'walls']);
+    if (!allowedFolders.has(folder)) {
+        return res.status(400).json({ ok: false, reason: 'invalid-folder' });
+    }
+    const dir = path.join(__dirname, 'public', 'assets', 'images', folder);
+    fs.readdir(dir, { withFileTypes: true }, (error, entries) => {
+        if (error) {
+            return res.status(500).json({ ok: false, reason: 'read-failed' });
+        }
+        const files = entries
+            .filter((entry) => entry.isFile())
+            .map((entry) => entry.name)
+            .filter((name) => /\.(png|jpe?g|webp|gif)$/i.test(name))
+            .sort((a, b) => a.localeCompare(b))
+            .map((name) => `/assets/images/${folder}/${name}`);
+        return res.json({ ok: true, folder, files });
+    });
+});
+
 const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile.json');
 const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backups');
 const sectionWorldSavesRoot = path.join(__dirname, 'public', 'assets', 'saves');

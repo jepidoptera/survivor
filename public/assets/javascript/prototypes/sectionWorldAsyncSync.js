@@ -893,6 +893,9 @@
                     addNodesMs: 0,
                     addNodesRemoveMs: 0,
                     addNodesCenterlineMs: 0,
+                    addNodesRegisterCenterlineMs: 0,
+                    addNodesHitboxMs: 0,
+                    addNodesRegisterHitboxMs: 0,
                     addNodesDirectionalMs: 0,
                     blockedEdgeApplyMs: 0,
                     blockedEdgeRemoveMs: 0,
@@ -1122,7 +1125,26 @@
                                 if (addStats) {
                                     sync.addNodesRemoveMs += Number(addStats.removeMs) || 0;
                                     sync.addNodesCenterlineMs += Number(addStats.centerlineMs) || 0;
+                                    sync.addNodesRegisterCenterlineMs += Number(addStats.registerCenterlineMs) || 0;
+                                    sync.addNodesHitboxMs += Number(addStats.hitboxMs) || 0;
+                                    sync.addNodesRegisterHitboxMs += Number(addStats.registerHitboxMs) || 0;
                                     sync.addNodesDirectionalMs += Number(addStats.directionalMs) || 0;
+                                    if (addStats.ms > 5 && typeof console !== "undefined") {
+                                        console.warn("[wall addToMapNodes slow]", {
+                                            id: recordId,
+                                            ms: addStats.ms,
+                                            removeMs: addStats.removeMs,
+                                            centerlineMs: addStats.centerlineMs,
+                                            registerCenterlineMs: addStats.registerCenterlineMs,
+                                            hitboxMs: addStats.hitboxMs,
+                                            registerHitboxMs: addStats.registerHitboxMs,
+                                            directionalMs: addStats.directionalMs,
+                                            nodeCount: addStats.nodeCount,
+                                            centerlineCount: addStats.centerlineCount,
+                                            hitboxCount: addStats.hitboxCount,
+                                            directional: runtimeWall._lastDirectionalBlockingStats || null
+                                        });
+                                    }
                                 }
                                 const directionalStats = runtimeWall._lastDirectionalBlockingStats || null;
                                 if (directionalStats) {
@@ -1299,6 +1321,9 @@
                             clearanceNodeCount: sync.clearanceNodeCount,
                             addNodesRemoveMs: Number(sync.addNodesRemoveMs.toFixed(2)),
                             addNodesCenterlineMs: Number(sync.addNodesCenterlineMs.toFixed(2)),
+                            addNodesRegisterCenterlineMs: Number(sync.addNodesRegisterCenterlineMs.toFixed(2)),
+                            addNodesHitboxMs: Number(sync.addNodesHitboxMs.toFixed(2)),
+                            addNodesRegisterHitboxMs: Number(sync.addNodesRegisterHitboxMs.toFixed(2)),
                             addNodesDirectionalMs: Number(sync.addNodesDirectionalMs.toFixed(2)),
                             precomputedBlockMs: Number(sync.precomputedBlockMs.toFixed(2)),
                             precomputedBlockedConnections: sync.precomputedBlockedConnections,

@@ -2786,6 +2786,9 @@ class GameMap {
             const sourceNode = sourceNodes[n];
             for (let fi = 0; fi < fragments.length; fi++) {
                 const registeredFragment = fragments[fi];
+                // Skip level-0 floor nodes — getFloorNodeAtLayer(x, y, 0) returns getNode() directly,
+                // so level-0 floor nodes are never looked up via the floor node index.
+                if (Number(registeredFragment.level) === 0) continue;
                 if (checkBelongs && !checkBelongs(sourceNode, registeredFragment)) continue;
                 const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
                     baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,

@@ -1231,7 +1231,8 @@ function attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data) {
 function getMountedWallFaceCentersForObject(item) {
     const mountedId = Number.isInteger(item && item.mountedWallLineGroupId)
         ? Number(item.mountedWallLineGroupId)
-        : (Number.isInteger(item && item.mountedSectionId) ? Number(item.mountedSectionId) : null);
+        : (Number.isInteger(item && item.mountedSectionId) ? Number(item.mountedSectionId)
+        : (Number.isInteger(item && item.mountedWallSectionUnitId) ? Number(item.mountedWallSectionUnitId) : null));
     if (!Number.isInteger(mountedId)) return null;
     const worldX = Number(item && item.x);
     const worldY = Number(item && item.y);
@@ -1240,47 +1241,66 @@ function getMountedWallFaceCentersForObject(item) {
     const mapRef = item && item.map ? item.map : null;
     const allSegments = collectMountableWallSegmentsForMountedId(mapRef, mountedId);
     const walls = allSegments.filter(seg => Number.isInteger(seg.groupId) && Number(seg.groupId) === mountedId);
-    if (!Array.isArray(walls) || walls.length === 0) return null;
-
-    let best = null;
-    for (let i = 0; i < walls.length; i++) {
-        const wall = walls[i];
-        if (!wall) continue;
-        const profile = buildSegmentFaceProfile(wall, worldX, worldY, mapRef);
-        if (!profile || !profile.aLeft || !profile.bLeft || !profile.aRight || !profile.bRight) continue;
-        const left = closestPointOnSegment2D(
-            worldX, worldY,
-            Number(profile.aLeft.x), Number(profile.aLeft.y),
-            Number(profile.bLeft.x), Number(profile.bLeft.y)
-        );
-        const right = closestPointOnSegment2D(
-            worldX, worldY,
-            Number(profile.aRight.x), Number(profile.aRight.y),
-            Number(profile.bRight.x), Number(profile.bRight.y)
-        );
-        const score = Math.min(left.dist2, right.dist2);
-        if (!best || score < best.score) {
-            best = { left, right, score };
+    if (Array.isArray(walls) && walls.length > 0) {
+        let best = null;
+        for (let i = 0; i < walls.length; i++) {
+            const wall = walls[i];
+            if (!wall) continue;
+            const profile = buildSegmentFaceProfile(wall, worldX, worldY, mapRef);
+            if (!profile || !profile.aLeft || !profile.bLeft || !profile.aRight || !profile.bRight) continue;
+            const left = closestPointOnSegment2D(
+                worldX, worldY,
+                Number(profile.aLeft.x), Number(profile.aLeft.y),
+                Number(profile.bLeft.x), Number(profile.bLeft.y)
+            );
+            const right = closestPointOnSegment2D(
+                worldX, worldY,
+                Number(profile.aRight.x), Number(profile.aRight.y),
+                Number(profile.bRight.x), Number(profile.bRight.y)
+            );
+            const score = Math.min(left.dist2, right.dist2);
+            if (!best || score < best.score) {
+                best = { left, right, score };
+            }
+        }
+        if (best) {
+            const facingSign = Number.isFinite(item && item.mountedWallFacingSign)
+                ? Number(item.mountedWallFacingSign)
+                : 1;
+            const frontRaw = (facingSign >= 0) ? best.left : best.right;
+            const backRaw = (facingSign >= 0) ? best.right : best.left;
+            let nx = frontRaw.x - backRaw.x;
+            let ny = frontRaw.y - backRaw.y;
+            const nLen = Math.hypot(nx, ny);
+            if (nLen > 1e-6) {
+                nx /= nLen;
+                ny /= nLen;
+                const eps = 0.01;
+                return {
+                    front: { x: frontRaw.x + nx * eps, y: frontRaw.y + ny * eps },
+                    back: { x: backRaw.x - nx * eps, y: backRaw.y - ny * eps }
+                };
+            }
         }
     }
-    if (!best) return null;
 
-    const facingSign = Number.isFinite(item && item.mountedWallFacingSign)
-        ? Number(item.mountedWallFacingSign)
-        : 1;
-    const frontRaw = (facingSign >= 0) ? best.left : best.right;
-    const backRaw = (facingSign >= 0) ? best.right : best.left;
-    let nx = frontRaw.x - backRaw.x;
-    let ny = frontRaw.y - backRaw.y;
-    const nLen = Math.hypot(nx, ny);
-    if (!(nLen > 1e-6)) return null;
-    nx /= nLen;
-    ny /= nLen;
-    const eps = 0.01;
-    return {
-        front: { x: frontRaw.x + nx * eps, y: frontRaw.y + ny * eps },
-        back: { x: backRaw.x - nx * eps, y: backRaw.y - ny * eps }
-    };
+    // Fallback: derive face centers from placement rotation when the wall section is unavailable
+    if (Number.isFinite(item && item.placementRotation)) {
+        const theta = Number(item.placementRotation) * (Math.PI / 180);
+        const perpNx = -Math.sin(theta);
+        const perpNy = Math.cos(theta);
+        const facingSign = Number.isFinite(item && item.mountedWallFacingSign)
+            ? Number(item.mountedWallFacingSign)
+            : 1;
+        const sign = (facingSign >= 0) ? 1 : -1;
+        const halfT = 0.15;
+        const eps = 0.01;
+        return {
+            front: { x: worldX + perpNx * (halfT + eps) * sign, y: worldY + perpNy * (halfT + eps) * sign },
+            back: { x: worldX - perpNx * (halfT + eps) * sign, y: worldY - perpNy * (halfT + eps) * sign }
+        };
+    }
+    return null;
 }
 
 function chooseMountedWallFaceCenterForViewer(faceCenters, viewerPoint, mapRef = null) {
