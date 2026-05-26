@@ -7,6 +7,18 @@
       "repeatsPerMapUnitY": 0.4
     },
     {
+      "file": "stonewall2.jpg",
+      "texturePath": "/assets/images/walls/stonewall2.jpg",
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    },
+    {
+      "file": "stonewall20.png",
+      "texturePath": "/assets/images/walls/stonewall20.png",
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    },
+    {
       "file": "woodwall.png",
       "texturePath": "/assets/images/walls/woodwall.png",
       "repeatsPerMapUnitX": 0.5,
