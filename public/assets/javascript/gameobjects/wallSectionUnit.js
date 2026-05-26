@@ -17,13 +17,22 @@ uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
 uniform vec2 uDepthRange;
+uniform float uCameraRotation;
+uniform vec2 uCameraRotationCenter;
 varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
 varying float vWorldZ;
 void main(void) {
-    float camDx = aWorldPosition.x - uCameraWorld.x;
-    float camDy = aWorldPosition.y - uCameraWorld.y;
+    float cosR = cos(uCameraRotation);
+    float sinR = sin(uCameraRotation);
+    vec2 rel = aWorldPosition.xy - uCameraRotationCenter;
+    vec2 rotatedWorld = vec2(
+        rel.x * cosR - rel.y * sinR,
+        rel.x * sinR + rel.y * cosR
+    ) + uCameraRotationCenter;
+    float camDx = rotatedWorld.x - uCameraWorld.x;
+    float camDy = rotatedWorld.y - uCameraWorld.y;
     float camDz = aWorldPosition.z - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
@@ -64,7 +73,7 @@ vec3 adjustSaturation(vec3 color, float saturation) {
 }
 
 void main(void) {
-    vec4 sampled = texture2D(uSampler, vUvs);
+    vec4 sampled = texture2D(uSampler, fract(vUvs));
     vec4 tex = mix(vec4(1.0, 1.0, 1.0, 1.0), sampled, clamp(vTextureMix, 0.0, 1.0));
     vec4 outColor = tex * uTint * vColor;
     float b = clamp(uBrightness, -1.0, 1.0);
@@ -3025,6 +3034,7 @@ void main(void) {
             const topFaceOnly = !!(options.topFaceOnly) && !clipToLosVisibleSpan && !options.mazeMode;
             const bottomFaceOnly = !!(options.bottomFaceOnly) && !clipToLosVisibleSpan && !options.mazeMode;
             const horizontalFaceOnly = topFaceOnly || bottomFaceOnly;
+            const localTextureU = !!options.localTextureU;
             const clippedSpanMode = clipToLosVisibleSpan || !!options.mazeMode;
             const mazePrismFaces = clippedSpanMode ? this.getMazeModeClippedPrismFacesWorld(options) : null;
             const mazePrismKey = (clippedSpanMode && Array.isArray(mazePrismFaces) && mazePrismFaces.length > 0)
@@ -3054,6 +3064,7 @@ void main(void) {
                 Number(repeatY).toFixed(6),
                 Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
                 Number.isFinite(this.texturePhaseB) ? Number(this.texturePhaseB).toFixed(6) : "nan",
+                localTextureU ? "localU" : "worldU",
                 wallTextureCfg.texturePath || this.wallTexturePath || DEFAULT_WALL_TEXTURE,
                 clippedSpanMode ? (clipToLosVisibleSpan ? "clip" : "maze") : (horizontalFaceOnly ? `${topFaceOnly ? "topOnly" : "bottomOnly"}:${WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT}` : "full"),
                 mazePrismKey
@@ -3163,26 +3174,28 @@ void main(void) {
                         const src = facePts[triOrder[i]];
                         const relXWorld = src.x - baseX;
                         const relYWorld = src.y - baseY;
+                        const alongLocal = relXWorld * ux + relYWorld * uy;
                         const alongWorld = src.x * ux + src.y * uy;
                         const acrossWorld = relXWorld * vx + relYWorld * vy;
+                        const textureUAlong = localTextureU ? alongLocal : alongWorld;
                         const heightWorld = src.z - bottomZ;
 
                         positions.push(src.x, src.y, src.z);
                         if (isTopFace) {
                             const acrossNorm = (acrossWorld - topAcrossMin) / Math.max(1e-6, (topAcrossMax - topAcrossMin));
                             uvs.push(
-                                alongWorld * repeatX + phaseU,
+                                textureUAlong * repeatX + phaseU,
                                 (1 - acrossNorm) * topTextureVSpan
                             );
                         } else if (isCapFace) {
                             uvs.push(
                                 acrossWorld * repeatX + phaseU,
-                                (this.height - heightWorld) * repeatY
+                                (this.height - heightWorld) * repeatY + phaseV
                             );
                         } else {
                             uvs.push(
-                                alongWorld * repeatX + phaseU,
-                                (this.height - heightWorld) * repeatY
+                                textureUAlong * repeatX + phaseU,
+                                (this.height - heightWorld) * repeatY + phaseV
                             );
                         }
                         const mazeC = isTopFace ? 1.25 : 1;
@@ -3321,18 +3334,19 @@ void main(void) {
                         : (Number(vertices[srcPos + 2]) || 0);
                     const along = Number(alongStablePerVertex[srcVertex]) || 0;
                     const alongWorld = Number(alongWorldPerVertex[srcVertex]) || 0;
+                    const textureUAlong = localTextureU ? along : alongWorld;
                     const across = Number(acrossPerVertex[srcVertex]) || 0;
                     const height = Number(heightPerVertex[srcVertex]) || 0;
                     if (isTopFaceTri) {
                         const acrossNorm = (across - topAcrossMin) / Math.max(1e-6, (topAcrossMax - topAcrossMin));
-                        expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
+                        expandedUvs[dstUv] = textureUAlong * repeatX + phaseU;
                         expandedUvs[dstUv + 1] = (1 - acrossNorm) * topTextureVSpan;
                     } else if (capFace) {
                         expandedUvs[dstUv] = across * repeatX + phaseU;
-                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY;
+                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY + phaseV;
                     } else {
-                        expandedUvs[dstUv] = alongWorld * repeatX + phaseU;
-                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY;
+                        expandedUvs[dstUv] = textureUAlong * repeatX + phaseU;
+                        expandedUvs[dstUv + 1] = (this.height - height) * repeatY + phaseV;
                     }
                     expandedColors[dstColor] = colorR;
                     expandedColors[dstColor + 1] = colorG;
@@ -3413,6 +3427,8 @@ void main(void) {
                 uViewScale: 1,
                 uXyRatio: 1,
                 uDepthRange: new Float32Array([0, 1]),
+                uCameraRotation: 0,
+                uCameraRotationCenter: new Float32Array([0, 0]),
                 uTint: new Float32Array([1, 1, 1, 1]),
                 uBrightness: 0,
                 uAlphaCutoff: 0.02,
@@ -3490,6 +3506,14 @@ void main(void) {
             u.uXyRatio = xyratio;
             u.uDepthRange[0] = farMetric;
             u.uDepthRange[1] = invSpan;
+            u.uCameraRotation = Number.isFinite(options.cameraRotation)
+                ? Number(options.cameraRotation)
+                : (Number.isFinite(camera && camera.rotation) ? Number(camera.rotation) : 0);
+            const rotationCenter = (options.cameraRotationCenter && typeof options.cameraRotationCenter === "object")
+                ? options.cameraRotationCenter
+                : ((camera && camera.rotationCenter && typeof camera.rotationCenter === "object") ? camera.rotationCenter : null);
+            u.uCameraRotationCenter[0] = Number(rotationCenter && rotationCenter.x) || 0;
+            u.uCameraRotationCenter[1] = Number(rotationCenter && rotationCenter.y) || 0;
             u.uTint[0] = ((tint >> 16) & 255) / 255;
             u.uTint[1] = ((tint >> 8) & 255) / 255;
             u.uTint[2] = (tint & 255) / 255;
@@ -5631,17 +5655,21 @@ void main(void) {
             const centerlineStart = timerNow();
             const cachedAnchors = this._collectOrderedLineAnchors();
             const centerlineNodes = this._collectCenterlineMapNodes(cachedAnchors);
-            const centerlineMs = timerNow() - centerlineStart;
+            const centerlineCollectMs = timerNow() - centerlineStart;
+            const registerCenterlineStart = timerNow();
             for (let i = 0; i < centerlineNodes.length; i++) {
                 registerNode(centerlineNodes[i]);
             }
+            const registerCenterlineMs = timerNow() - registerCenterlineStart;
 
             const hitboxStart = timerNow();
             const hitboxNodes = this._collectGroundHitboxMapNodes();
-            const hitboxMs = timerNow() - hitboxStart;
+            const hitboxCollectMs = timerNow() - hitboxStart;
+            const registerHitboxStart = timerNow();
             for (let i = 0; i < hitboxNodes.length; i++) {
                 registerNode(hitboxNodes[i]);
             }
+            const registerHitboxMs = timerNow() - registerHitboxStart;
 
             // Endpoint anchors as fallback (e.g. midpoint endpoint cases).
             registerNode(sp);
@@ -5663,11 +5691,14 @@ void main(void) {
                 this._applyDirectionalBlocking(cachedAnchors, pendingRoadRefreshNodes);
                 directionalMs = timerNow() - directionalStart;
             }
+            const totalMs = timerNow() - addStart;
             this._lastAddToMapNodesStats = {
-                ms: Number((timerNow() - addStart).toFixed(2)),
+                ms: Number(totalMs.toFixed(2)),
                 removeMs: Number(removeMs.toFixed(2)),
-                centerlineMs: Number(centerlineMs.toFixed(2)),
-                hitboxMs: Number(hitboxMs.toFixed(2)),
+                centerlineMs: Number(centerlineCollectMs.toFixed(2)),
+                registerCenterlineMs: Number(registerCenterlineMs.toFixed(2)),
+                hitboxMs: Number(hitboxCollectMs.toFixed(2)),
+                registerHitboxMs: Number(registerHitboxMs.toFixed(2)),
                 directionalMs: Number(directionalMs.toFixed(2)),
                 nodeCount: Array.isArray(this.nodes) ? this.nodes.length : 0,
                 centerlineCount: Array.isArray(centerlineNodes) ? centerlineNodes.length : 0,
@@ -5709,9 +5740,11 @@ void main(void) {
             if (!mapRef) return null;
             if (typeof mapRef.getFloorNodeAtLayer === "function") {
                 const resolved = mapRef.getFloorNodeAtLayer(sourceNode.xindex, sourceNode.yindex, layer, {
-                    sectionKey: typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : ""
+                    sectionKey: typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : "",
+                    allowScan: false
                 });
                 if (resolved) return resolved;
+                return null; // floorNodeLayerIndex is authoritative; no floor node here means no registration
             }
             if (!(mapRef.floorNodesById instanceof Map)) return null;
             let fallback = null;
