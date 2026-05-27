@@ -5,7 +5,7 @@ import { MountedObjectTool } from "./tools/MountedObjectTool.js";
 import { PolygonEditTool } from "./tools/PolygonEditTool.js";
 import { SelectTool } from "./tools/SelectTool.js";
 import { WallTool } from "./tools/WallTool.js";
-import { getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId } from "./BuildingModel.js";
+import { findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, wallCenterlinePoints } from "./BuildingModel.js";
 
 const MATERIALS = {
     floors: [
@@ -66,6 +66,8 @@ const snapToggle = document.querySelector("#snapToggle");
 const anchorToggle = document.querySelector("#anchorToggle");
 const selectedSummary = document.querySelector("#selectedSummary");
 const paintToolButton = document.querySelector('[data-tool="paint"]');
+const wallToolButton = document.querySelector(".wallToolButton");
+const wallToolIcon = document.querySelector("#wallToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
 
 const webglContextAttributes = {
@@ -115,13 +117,13 @@ if (state.hasBrowserSave()) {
     }
 }
 window.__buildingEditorDebugState = state;
-window.repairBuildingEditorBrowserSave = () => {
+window.repairBuildingEditorBrowserSave = (options = {}) => {
     try {
-        const result = state.repairBrowserSave();
+        const result = state.repairBrowserSave(options);
         renderer.render();
         syncUi();
-        if (result.repairedRingCount > 0) {
-            setStatus(`repaired ${result.repairedRingCount} saved floor ring(s); original backed up as ${result.backupKey}`);
+        if (result.repairedRingCount > 0 || result.rebuiltPerimeterFloorCount > 0) {
+            setStatus(`repaired ${result.repairedRingCount} floor ring(s), rebuilt ${result.rebuiltPerimeterFloorCount} perimeter wall set(s); original backed up as ${result.backupKey}`);
         } else {
             setStatus("browser-saved building is already valid");
         }
@@ -155,6 +157,7 @@ let rotatePointerX = null;
 let lastStagePointer = null;
 let layerPanelSignature = "";
 let texturePaletteSignature = "";
+let wallToolTexturePaletteOpen = false;
 let mountTexturePaletteSignature = "";
 let mountTexturePaletteOpen = false;
 let windowContext = null;
@@ -251,14 +254,30 @@ function mergeMountedAssetDefaults(category, defaults, item) {
 }
 
 async function loadMountedObjectAssets(category) {
-    const response = await fetch(`/assets/images/${encodeURIComponent(category)}/items.json`, { cache: "no-cache" });
-    if (!response.ok) {
+    const manifestResponse = await fetch(`/assets/images/${encodeURIComponent(category)}/items.json`, { cache: "no-cache" });
+    if (!manifestResponse.ok) {
         throw new Error(`could not load ${category} asset manifest`);
     }
-    const payload = await response.json();
+    const payload = await manifestResponse.json();
+    const directoryResponse = await fetch("/api/placeables", { cache: "no-cache" });
+    if (!directoryResponse.ok) {
+        throw new Error(`could not load ${category} image directory`);
+    }
+    const directoryPayload = await directoryResponse.json();
+    const directoryTextures = normalizeImagePathList(
+        directoryPayload && directoryPayload.categories && directoryPayload.categories[category],
+        category
+    );
     const items = Array.isArray(payload.items) ? payload.items : [];
-    if (!items.length) throw new Error(`${category} asset manifest is empty`);
-    MOUNTED_OBJECT_ASSETS[category] = items.map((item) => mergeMountedAssetDefaults(category, payload.defaults, item));
+    const texturePaths = new Set(items.map((item) => String(item && item.texturePath || "")));
+    const unlistedItems = directoryTextures
+        .filter((texturePath) => !texturePaths.has(texturePath))
+        .map((texturePath) => ({ texturePath }));
+    const assets = [...items, ...unlistedItems]
+        .map((item) => mergeMountedAssetDefaults(category, payload.defaults, item))
+        .sort((a, b) => textureName(a.texturePath).localeCompare(textureName(b.texturePath)));
+    if (!assets.length) throw new Error(`${category} asset manifest and image directory are empty`);
+    MOUNTED_OBJECT_ASSETS[category] = assets;
     if (!state.mountedObjectTool.assets[category]) {
         const firstAsset = MOUNTED_OBJECT_ASSETS[category][0];
         state.mountedObjectTool.assets[category] = {
@@ -338,12 +357,14 @@ function draftConsumesEscape(draft) {
 }
 
 function activePaintMode() {
+    if (state.tool === "wall") return "walls";
     const kind = state.selection && state.selection.kind;
     if (kind === "roof") return "roofs";
     return kind === "wall" || kind === "wallEndpoint" ? "walls" : "floor";
 }
 
 function selectionCanUsePaintTool() {
+    if (state.tool === "wall") return true;
     const kind = state.selection && state.selection.kind;
     return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "wall" || kind === "wallEndpoint";
 }
@@ -391,7 +412,7 @@ function windowSelectionModeFromEvent(event, fallbackMode) {
 }
 
 function windowGroupForContext(group) {
-    if (!windowContext || windowContext.objectId === undefined || windowContext.objectId === null) {
+    if (!windowContext || windowContext.type !== "window" || windowContext.objectId === undefined || windowContext.objectId === null) {
         throw new Error("window context menu is missing its source window");
     }
     const source = getBuildingMountedObjects(state.building)
@@ -420,25 +441,96 @@ function windowGroupForContext(group) {
     throw new Error(`unknown window selection group: ${group}`);
 }
 
+function wallCenterlineForContext(wall) {
+    const floor = findFloor(state.building, wall && wall.floorId);
+    if (!floor) throw new Error(`wall context menu source is missing its level: ${wall && wall.floorId}`);
+    return wallCenterlinePoints(state.building, wall, floor);
+}
+
+function sameWallColumn(a, b) {
+    const aPoints = wallCenterlineForContext(a);
+    const bPoints = wallCenterlineForContext(b);
+    if (aPoints.length !== 2 || bPoints.length !== 2) {
+        throw new Error("wall column selection requires two-point wall centerlines");
+    }
+    const tolerance = 0.08;
+    const samePoint = (p, q) => Math.hypot(Number(p.x) - Number(q.x), Number(p.y) - Number(q.y)) <= tolerance;
+    return (samePoint(aPoints[0], bPoints[0]) && samePoint(aPoints[1], bPoints[1])) ||
+        (samePoint(aPoints[0], bPoints[1]) && samePoint(aPoints[1], bPoints[0]));
+}
+
+function wallGroupForContext(group) {
+    if (!windowContext || windowContext.type !== "wall" || windowContext.wallId === undefined || windowContext.wallId === null) {
+        throw new Error("wall context menu is missing its source wall");
+    }
+    const source = getBuildingWalls(state.building)
+        .find((wall) => String(wall.id) === String(windowContext.wallId));
+    if (!source) {
+        throw new Error("wall context menu source is no longer a wall");
+    }
+    const walls = getBuildingWalls(state.building);
+    if (group === "level") {
+        return walls.filter((wall) => String(wall.floorId) === String(source.floorId));
+    }
+    if (group === "column") {
+        return walls.filter((wall) => sameWallColumn(source, wall));
+    }
+    if (group === "texture") {
+        return walls.filter((wall) => wall.wallTexturePath === source.wallTexturePath);
+    }
+    if (group === "all") {
+        return walls;
+    }
+    throw new Error(`unknown wall selection group: ${group}`);
+}
+
 function applyWindowContextSelection(group, mode) {
+    if (!windowContext) throw new Error("selection context menu is missing its source");
+    const preserveView = state.renderStyle() === "exterior";
+    if (windowContext.type === "wall") {
+        const wallIds = wallGroupForContext(group).map((wall) => wall.id);
+        if (!wallIds.length) return;
+        if (mode === "remove") {
+            state.removeWallsFromSelection(wallIds, { preserveView });
+            return;
+        }
+        if (mode === "add") {
+            state.addWallsToSelection(wallIds, { preserveView });
+            return;
+        }
+        state.selectWalls(wallIds, { preserveView });
+        return;
+    }
     const objectIds = windowGroupForContext(group).map((object) => object.id);
     if (!objectIds.length) return;
-    const preserveView = state.renderStyle() === "exterior";
     if (mode === "remove") {
-        objectIds.forEach((objectId) => state.removeMountedObjectFromSelection(objectId, { preserveView }));
+        state.removeMountedObjectsFromSelection(objectIds, { preserveView });
         return;
     }
     if (mode === "add") {
-        objectIds.forEach((objectId) => state.addMountedObjectToSelection(objectId, { preserveView }));
+        state.addMountedObjectsToSelection(objectIds, { preserveView });
         return;
     }
-    state.selectMountedObject(objectIds[0], { preserveView });
-    objectIds.slice(1).forEach((objectId) => state.addMountedObjectToSelection(objectId, { preserveView }));
+    state.selectMountedObjects(objectIds, { preserveView });
 }
 
 function showWindowContextMenu(screenPoint, sourceObject, mode) {
     windowContext = {
+        type: "window",
         objectId: sourceObject.id,
+        mode
+    };
+    const left = Math.max(8, Math.min(Number(screenPoint.x), window.innerWidth - 170));
+    const top = Math.max(8, Math.min(Number(screenPoint.y), window.innerHeight - 170));
+    windowContextMenu.style.left = `${left}px`;
+    windowContextMenu.style.top = `${top}px`;
+    windowContextMenu.hidden = false;
+}
+
+function showWallContextMenu(screenPoint, sourceWall, mode) {
+    windowContext = {
+        type: "wall",
+        wallId: sourceWall.id,
         mode
     };
     const left = Math.max(8, Math.min(Number(screenPoint.x), window.innerWidth - 170));
@@ -454,6 +546,10 @@ function closeWindowContextMenu() {
 }
 
 function applyTextureToSelection(texturePath) {
+    if (state.tool === "wall") {
+        state.updateWallToolTexture(texturePath);
+        return;
+    }
     const kind = state.selection && state.selection.kind;
     if (kind === "wall" || kind === "wallEndpoint") {
         state.updateSelectedWallTexture(texturePath);
@@ -472,9 +568,14 @@ function applyTextureToSelection(texturePath) {
 
 function selectionScopeMatches(element) {
     if (mountedObjectSettingsActive()) return false;
+    const exclude = element.dataset.selectionExclude;
+    const kind = state.selection && state.selection.kind;
+    if (exclude && exclude.split(/\s+/).includes(kind)) return false;
     const scope = element.dataset.selectionScope;
     if (!scope) return true;
-    const kind = state.selection && state.selection.kind;
+    if (state.tool === "wall") {
+        return scope.split(/\s+/).includes("wall");
+    }
     return scope.split(/\s+/).includes(kind);
 }
 
@@ -485,6 +586,9 @@ function toolScopeMatches(element) {
     if (include && !include.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
     const exclude = element.dataset.toolExclude;
     if (exclude && exclude.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
+    const selectionExclude = element.dataset.selectionExclude;
+    const kind = state.selection && state.selection.kind;
+    if (selectionExclude && selectionExclude.split(/\s+/).includes(kind)) return false;
     return true;
 }
 
@@ -515,6 +619,13 @@ function syncMountedToolButtonTextures() {
             ? `Place windows: ${textureName(asset.texturePath)}`
             : `Place doors: ${textureName(asset.texturePath)}`;
     });
+}
+
+function syncWallToolButtonTexture() {
+    if (!wallToolButton || !wallToolIcon) return;
+    const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
+    wallToolIcon.style.backgroundImage = texture ? `url("${texture}")` : "";
+    wallToolButton.title = texture ? `Place walls: ${textureName(texture)}` : "Place walls";
 }
 
 function syncSelectOptions(select, values) {
@@ -643,8 +754,9 @@ function textureName(path) {
 function renderTexturePalette() {
     const mode = activePaintMode();
     const textures = PAINT_TEXTURES[mode] || [];
-    const selected = state.paintTextureForMode(mode);
-    texturePalette.hidden = state.tool !== "paint" || !selectionCanUsePaintTool();
+    const selected = state.tool === "wall" ? state.wallTool.texture : state.paintTextureForMode(mode);
+    if (state.tool !== "wall") wallToolTexturePaletteOpen = false;
+    texturePalette.hidden = !((state.tool === "paint" || wallToolTexturePaletteOpen) && selectionCanUsePaintTool());
     texturePalette.setAttribute("aria-label", `${mode === "walls" ? "wall" : (mode === "roofs" ? "roof" : "floor")} textures`);
     texturePalette.style.setProperty("--texture-column-count", String(Math.max(1, textures.length)));
     positionTexturePalette();
@@ -777,6 +889,9 @@ function renderLayerPanel(floors) {
 
 function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
     const selection = state.selection || { kind: "building" };
+    if (state.tool === "wall") {
+        return `wall tool, height ${Number(state.wallTool.height)}`;
+    }
     if (state.tool === "mountObject") {
         return `${state.mountedObjectTool.category === "windows" ? "window" : "door"} tool`;
     }
@@ -829,8 +944,10 @@ function syncUi() {
     mountToolButtons.forEach((button) => {
         button.dataset.active = state.tool === "mountObject" && button.dataset.mountCategory === state.mountedObjectTool.category ? "true" : "false";
     });
+    if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
+    syncWallToolButtonTexture();
     syncMountedToolButtonTextures();
-    document.querySelectorAll("[data-selection-scope]").forEach((element) => {
+    document.querySelectorAll("[data-selection-scope], [data-selection-exclude]").forEach((element) => {
         element.hidden = !selectionScopeMatches(element);
     });
     document.querySelectorAll("[data-tool-scope], [data-tool-exclude]").forEach((element) => {
@@ -851,7 +968,10 @@ function syncUi() {
         roofOverhang.value = Number(selectedFloor.roofOverhang);
         roofPeakHeight.value = Number(selectedFloor.roofPeakHeight);
     }
-    if (selectedWalls.length > 0) {
+    if (state.tool === "wall") {
+        wallHeight.value = Number(state.wallTool.height);
+        if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.wallTool.texture)}`;
+    } else if (selectedWalls.length > 0) {
         wallHeight.value = sharedWallValue(selectedWalls, (wall) => wall.height, state.inputs.wallHeight);
     } else if (selectedFloor) {
         wallHeight.value = selectedFloor.defaultWallHeight;
@@ -885,6 +1005,12 @@ state.addEventListener("change", () => {
 document.querySelectorAll("[data-tool]").forEach((button) => {
     button.addEventListener("click", () => {
         withErrorBoundary(() => {
+            if (button.dataset.tool === "paint" && state.tool === "wall") {
+                wallToolTexturePaletteOpen = !wallToolTexturePaletteOpen;
+                renderTexturePalette();
+                return;
+            }
+            wallToolTexturePaletteOpen = false;
             state.setTool(state.tool === button.dataset.tool ? "select" : button.dataset.tool);
         });
     });
@@ -898,7 +1024,10 @@ texturePalette.addEventListener("click", (event) => {
         const texturePath = swatch.dataset.texturePath;
         state.setPaintTexture(mode, texturePath);
         applyTextureToSelection(texturePath);
-        state.setTool("select");
+        wallToolTexturePaletteOpen = false;
+        if (state.tool !== "wall") {
+            state.setTool("select");
+        }
     });
 });
 
@@ -989,6 +1118,17 @@ document.querySelector("#loadBrowser").addEventListener("click", () => {
     withErrorBoundary(() => state.loadFromBrowser());
 });
 
+document.querySelector("#resetBrowser").addEventListener("click", () => {
+    if (!window.confirm("Reset the building editor to the default box and overwrite the browser save?")) return;
+    withErrorBoundary(() => {
+        state.reset();
+        state.saveToBrowser();
+        renderer.render();
+        syncUi();
+        setStatus("reset to default building and saved");
+    });
+});
+
 document.querySelector("#importJson").addEventListener("click", () => {
     withErrorBoundary(() => state.import(jsonText.value));
 });
@@ -1006,7 +1146,7 @@ layerPanel.addEventListener("click", (event) => {
             state.selectAllFloors();
             return;
         }
-        state.selectFloorLayer(card.dataset.floorId);
+        state.selectFloor(card.dataset.floorId);
     });
 });
 
@@ -1059,14 +1199,24 @@ app.stage.on("pointerdown", (event) => {
         const screenPoint = { x: event.data.global.x, y: event.data.global.y };
         renderer.setScreenPickerDebugPoint(screenPoint);
         if (original.button === 2) {
-            const hit = renderer.pickAtScreen(screenPoint, { includeSurfaces: false, includeWalls: false });
+            const hit = renderer.pickAtScreen(screenPoint, { includeSurfaces: false });
+            const menuPoint = {
+                x: Number.isFinite(Number(original.clientX)) ? Number(original.clientX) : screenPoint.x,
+                y: Number.isFinite(Number(original.clientY)) ? Number(original.clientY) : screenPoint.y
+            };
             if (hit && hit.type === "mountedObject" && isWindowObject(hit.object)) {
                 showWindowContextMenu(
-                    {
-                        x: Number.isFinite(Number(original.clientX)) ? Number(original.clientX) : screenPoint.x,
-                        y: Number.isFinite(Number(original.clientY)) ? Number(original.clientY) : screenPoint.y
-                    },
+                    menuPoint,
                     hit.object,
+                    windowSelectionModeFromEvent(original, "replace")
+                );
+                panning = null;
+                return;
+            }
+            if (hit && hit.type === "wall") {
+                showWallContextMenu(
+                    menuPoint,
+                    hit.wall,
                     windowSelectionModeFromEvent(original, "replace")
                 );
                 panning = null;
@@ -1364,6 +1514,12 @@ function isTextEditingTarget(target) {
 new ResizeObserver(resizeStage).observe(stageHost);
 resizeStage();
 renderer.render();
+try {
+    state.loadWallToolSettingsFromBrowser();
+} catch (error) {
+    console.error(error);
+    setStatus(error.message, true);
+}
 syncUi();
 if (loadedBrowserSaveOnStartup) {
     setStatus("loaded browser-saved building");

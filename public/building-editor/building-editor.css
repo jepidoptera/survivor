@@ -253,22 +253,36 @@ input[type="range"] {
     border-right: 1px solid #31424d;
 }
 
-.mountToolButton[data-active="true"] {
+.sideToolButton[data-active="true"] {
     border-color: #ffd27a;
     background: #3c3323;
 }
 
-.mountToolButton {
+.sideToolButton {
     width: 91px;
     min-width: 91px;
     min-height: 91px;
     padding: 8px;
 }
 
-.mountToolButton img {
+.sideToolButton img {
     width: 55px;
     height: 55px;
     object-fit: contain;
+}
+
+.wallToolIcon {
+    display: block;
+    width: 55px;
+    height: 55px;
+    border: 2px solid #d8e0d8;
+    border-radius: 4px;
+    background-color: #4d5653;
+    background-position: center;
+    background-size: cover;
+    box-shadow:
+        inset 0 0 0 4px rgba(16, 24, 28, 0.3),
+        inset 0 0 16px rgba(0, 0, 0, 0.32);
 }
 
 #stageHost canvas {
@@ -427,7 +441,7 @@ textarea {
 
 .buttonRow {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 8px;
 }
 

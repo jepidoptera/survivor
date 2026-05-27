@@ -1,4 +1,5 @@
 import { distance } from "../BuildingGeometry.js";
+import { getFloorId } from "../BuildingModel.js";
 
 export class WallTool {
     constructor(state) {
@@ -6,7 +7,24 @@ export class WallTool {
         this.drag = null;
     }
 
-    pointerDown(worldPoint, threshold) {
+    pointerDown(worldPoint, threshold, options = {}) {
+        const screenHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickAtScreen === "function"
+            ? options.renderer.pickAtScreen(options.screenPoint, { includeMountedObjects: false })
+            : null;
+        const targetHit = screenHit && screenHit.floor
+            ? screenHit
+            : this.state.pickFloorAt(worldPoint);
+        if (targetHit && targetHit.floor) {
+            const floorId = getFloorId(targetHit.floor);
+            if (!this.state.isWallToolFocusedOnFloor(floorId)) {
+                this.drag = null;
+                this.state.draft = null;
+                this.state.focusWallToolFloor(floorId);
+                return;
+            }
+        }
         const start = this.state.snapWallEndpoint(worldPoint, threshold);
         this.drag = { threshold, start, current: start };
         this.state.draft = {
@@ -39,7 +57,7 @@ export class WallTool {
             this.state.emitChange();
             return;
         }
-        this.state.addWallBetweenEndpoints(start.endpoint, current.endpoint);
+        this.state.addWallBetweenEndpoints(start.endpoint, current.endpoint, { select: false });
         this.state.emitChange();
     }
 

@@ -489,6 +489,317 @@ function applyPerimeterWallSettings(wall, settings) {
     return wall;
 }
 
+function perimeterWallForEdge(building, floor, startVertex, endVertex) {
+    const fragmentId = getFloorId(floor);
+    const startId = startVertex && startVertex.id;
+    const endId = endVertex && endVertex.id;
+    return getBuildingWalls(building).find((wall) => {
+        const attachment = wall && wall.attachment;
+        return wall.role === "perimeter" &&
+            wall.fragmentId === fragmentId &&
+            attachment &&
+            attachment.kind === "fragmentEdge" &&
+            attachment.ring === "outer" &&
+            attachment.startVertexId === startId &&
+            attachment.endVertexId === endId;
+    }) || null;
+}
+
+function setPerimeterWallEdge(building, floor, wall, startVertex, endVertex) {
+    const fragmentId = getFloorId(floor);
+    wall.floorId = fragmentId;
+    wall.fragmentId = fragmentId;
+    wall.startPoint = vertexEndpoint(floor, startVertex);
+    wall.endPoint = vertexEndpoint(floor, endVertex);
+    wall.attachment = {
+        kind: "fragmentEdge",
+        fragmentId,
+        ring: "outer",
+        startVertexId: startVertex.id,
+        endVertexId: endVertex.id
+    };
+    wall.bottomZ = getFloorElevation(floor);
+    wall.traversalLayer = Math.round(Number(floor.level) || 0);
+    refreshWallEndpointCoordinatesForWall(building, wall);
+    return wall;
+}
+
+function createPerimeterWallForEdge(building, floor, startVertex, endVertex, settings = null) {
+    const wall = createWall({
+        floorId: getFloorId(floor),
+        startPoint: vertexEndpoint(floor, startVertex),
+        endPoint: vertexEndpoint(floor, endVertex),
+        height: settings && Number.isFinite(Number(settings.height)) ? Number(settings.height) : floor.floorHeight,
+        texture: settings && typeof settings.wallTexturePath === "string" ? settings.wallTexturePath : floor.defaultWallTexturePath,
+        thickness: settings && Number.isFinite(Number(settings.thickness)) ? Number(settings.thickness) : DEFAULTS.wallThickness,
+        bottomZ: getFloorElevation(floor),
+        traversalLayer: floor.level,
+        role: "perimeter",
+        attachment: {
+            kind: "fragmentEdge",
+            fragmentId: getFloorId(floor),
+            ring: "outer",
+            startVertexId: startVertex.id,
+            endVertexId: endVertex.id
+        }
+    });
+    applyPerimeterWallSettings(wall, settings);
+    building.wallSections.push(wall);
+    refreshWallEndpointCoordinatesForWall(building, wall);
+    return wall;
+}
+
+function placeWallRelativeToWall(building, wall, referenceWall, after = true) {
+    const walls = getBuildingWalls(building);
+    const wallIndex = walls.findIndex((candidate) => candidate === wall || candidate.id === wall.id);
+    const referenceIndex = walls.findIndex((candidate) => candidate === referenceWall || candidate.id === referenceWall.id);
+    if (wallIndex < 0) throw new Error(`cannot order missing perimeter wall: ${wall && wall.id}`);
+    if (referenceIndex < 0) throw new Error(`cannot order relative to missing perimeter wall: ${referenceWall && referenceWall.id}`);
+    const [removed] = walls.splice(wallIndex, 1);
+    const nextReferenceIndex = walls.findIndex((candidate) => candidate === referenceWall || candidate.id === referenceWall.id);
+    if (nextReferenceIndex < 0) throw new Error(`cannot order relative to removed perimeter wall: ${referenceWall && referenceWall.id}`);
+    walls.splice(nextReferenceIndex + (after ? 1 : 0), 0, removed);
+}
+
+function mountedObjectsForWall(building, wall) {
+    const wallId = String(wall && wall.id);
+    return getBuildingMountedObjects(building)
+        .filter((object) => String(object.wallId ?? object.mountedWallSectionUnitId) === wallId)
+        .sort((a, b) => Number(a.wallT) - Number(b.wallT));
+}
+
+function setMountedObjectWall(object, wall, floor) {
+    object.wallId = wall.id;
+    object.mountedSectionId = wall.id;
+    object.mountedWallLineGroupId = wall.id;
+    object.mountedWallSectionUnitId = wall.id;
+    object.floorId = getFloorId(floor);
+}
+
+function segmentLength(a, b) {
+    return Math.hypot(Number(b.x) - Number(a.x), Number(b.y) - Number(a.y));
+}
+
+function clampMountedObjectT(object, wallLength) {
+    const length = Number(wallLength);
+    const width = Number(object && object.width);
+    if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(width) || width <= 0 || width >= length) {
+        return 0.5;
+    }
+    const margin = width / (2 * length);
+    return Math.max(margin, Math.min(1 - margin, Number(object.wallT)));
+}
+
+function updateMountedObjectWorldPosition(building, floor, wall, object) {
+    const points = wallCenterlinePoints(building, wall, floor);
+    if (points.length !== 2) {
+        throw new Error(`cannot update mounted object ${object && object.id}: wall ${wall && wall.id} has no centerline`);
+    }
+    const t = Math.max(0, Math.min(1, Number(object.wallT)));
+    const dx = Number(points[1].x) - Number(points[0].x);
+    const dy = Number(points[1].y) - Number(points[0].y);
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.000001) {
+        throw new Error(`cannot update mounted object ${object && object.id}: wall ${wall && wall.id} has a degenerate centerline`);
+    }
+    const ux = dx / length;
+    const uy = dy / length;
+    const nx = -uy;
+    const ny = ux;
+    const facingSign = Number(object.mountedWallFacingSign) >= 0 ? 1 : -1;
+    const halfThickness = Math.max(0.001, Number(wall.thickness) || DEFAULTS.wallThickness) * 0.5;
+    const center = {
+        x: Number(points[0].x) + dx * t,
+        y: Number(points[0].y) + dy * t
+    };
+    object.x = center.x + nx * halfThickness * facingSign;
+    object.y = center.y + ny * halfThickness * facingSign;
+    object.z = getFloorElevation(floor) + (Number(object.zOffset) || 0);
+    object.placementRotation = Math.atan2(uy, ux) * 180 / Math.PI;
+    const halfWidth = Number(object.width) * 0.5;
+    const hitboxHalfT = halfThickness * (String(object.category || "").trim().toLowerCase() === "doors" ? 1.1 : 1);
+    object.groundPlaneHitboxOverridePoints = [
+        { x: center.x - ux * halfWidth + nx * hitboxHalfT, y: center.y - uy * halfWidth + ny * hitboxHalfT },
+        { x: center.x + ux * halfWidth + nx * hitboxHalfT, y: center.y + uy * halfWidth + ny * hitboxHalfT },
+        { x: center.x + ux * halfWidth - nx * hitboxHalfT, y: center.y + uy * halfWidth - ny * hitboxHalfT },
+        { x: center.x - ux * halfWidth - nx * hitboxHalfT, y: center.y - uy * halfWidth - ny * hitboxHalfT }
+    ];
+}
+
+function resolveMountedObjectIntervals(building, floor, wall) {
+    const objects = mountedObjectsForWall(building, wall)
+        .map((object) => ({
+            object,
+            width: Number(object.width),
+            desiredCenter: Number(object.wallT)
+    }))
+        .filter((entry) => Number.isFinite(entry.width) && entry.width > 0 && Number.isFinite(entry.desiredCenter))
+        .sort((a, b) => a.desiredCenter - b.desiredCenter);
+    if (!objects.length) return;
+    const points = wallCenterlinePoints(building, wall, floor);
+    if (points.length !== 2) throw new Error(`cannot resolve mounted object intervals: wall ${wall && wall.id} has no centerline`);
+    const length = segmentLength(points[0], points[1]);
+    if (!Number.isFinite(length) || length <= 0.000001) {
+        throw new Error(`cannot resolve mounted object intervals: wall ${wall && wall.id} has a degenerate centerline`);
+    }
+    const totalWidth = objects.reduce((sum, entry) => sum + entry.width, 0);
+    const assignPacked = (entries, start) => {
+        let cursor = start;
+        entries.forEach((entry) => {
+            entry.center = cursor + entry.width * 0.5;
+            cursor += entry.width;
+        });
+    };
+    if (totalWidth >= length) {
+        let cursor = 0;
+        objects.forEach((entry) => {
+            const segment = length * (entry.width / totalWidth);
+            entry.center = cursor + segment * 0.5;
+            cursor += segment;
+        });
+    } else {
+        objects.forEach((entry) => {
+            entry.center = Math.max(entry.width * 0.5, Math.min(length - entry.width * 0.5, entry.desiredCenter * length));
+        });
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (let index = 0; index < objects.length;) {
+                const cluster = [objects[index]];
+                let clusterRight = objects[index].center + objects[index].width * 0.5;
+                let cursor = index + 1;
+                while (cursor < objects.length) {
+                    const candidateLeft = objects[cursor].center - objects[cursor].width * 0.5;
+                    if (candidateLeft >= clusterRight - 0.000001) break;
+                    cluster.push(objects[cursor]);
+                    clusterRight = Math.max(clusterRight, objects[cursor].center + objects[cursor].width * 0.5);
+                    cursor += 1;
+                }
+                if (cluster.length > 1) {
+                    changed = true;
+                    const clusterWidth = cluster.reduce((sum, entry) => sum + entry.width, 0);
+                    const weightedCenter = cluster.reduce((sum, entry) => sum + entry.center * entry.width, 0) / clusterWidth;
+                    const left = Math.max(0, Math.min(length - clusterWidth, weightedCenter - clusterWidth * 0.5));
+                    assignPacked(cluster, left);
+                }
+                index = cursor;
+            }
+        }
+    }
+    objects.forEach((entry) => {
+        entry.object.wallT = Math.max(0, Math.min(1, entry.center / length));
+        setMountedObjectWall(entry.object, wall, floor);
+        updateMountedObjectWorldPosition(building, floor, wall, entry.object);
+    });
+}
+
+function removeWallSection(building, wall) {
+    const walls = getBuildingWalls(building);
+    const index = walls.findIndex((candidate) => candidate === wall || candidate.id === wall.id);
+    if (index < 0) throw new Error(`cannot remove missing perimeter wall: ${wall && wall.id}`);
+    walls.splice(index, 1);
+}
+
+function remountObjectOnWall(building, floor, wall, object, wallT) {
+    object.wallT = Number(wallT);
+    const points = wallCenterlinePoints(building, wall, floor);
+    if (points.length !== 2) throw new Error(`cannot remount object ${object && object.id}: wall ${wall && wall.id} has no centerline`);
+    const length = segmentLength(points[0], points[1]);
+    object.wallT = clampMountedObjectT(object, length);
+    setMountedObjectWall(object, wall, floor);
+    updateMountedObjectWorldPosition(building, floor, wall, object);
+}
+
+function normalizedMountedObjectWallT(object, action) {
+    const t = Number(object && object.wallT);
+    if (!Number.isFinite(t)) throw new Error(`cannot ${action} mounted object ${object && object.id}: wallT is not finite`);
+    return Math.max(0, Math.min(1, t));
+}
+
+export function splitPerimeterWallAtVertex(building, floor, startVertex, insertedVertex, endVertex) {
+    if (!building || !Array.isArray(building.wallSections)) throw new Error("cannot split perimeter wall without a building wall section list");
+    if (!floor) throw new Error("cannot split perimeter wall without a floor");
+    if (!startVertex || !startVertex.id || !insertedVertex || !insertedVertex.id || !endVertex || !endVertex.id) {
+        throw new Error("cannot split perimeter wall without stable floor vertex ids");
+    }
+    const oldWall = perimeterWallForEdge(building, floor, startVertex, endVertex);
+    if (!oldWall) {
+        throw new Error(`cannot split missing perimeter wall edge ${startVertex.id}->${endVertex.id} on floor ${getFloorId(floor)}`);
+    }
+    const oldLength = segmentLength(startVertex, endVertex);
+    const firstLength = segmentLength(startVertex, insertedVertex);
+    const secondLength = segmentLength(insertedVertex, endVertex);
+    if (oldLength <= 0.000001 || firstLength <= 0.000001 || secondLength <= 0.000001) {
+        throw new Error(`cannot split degenerate perimeter wall edge ${startVertex.id}->${endVertex.id}`);
+    }
+    const splitT = firstLength / oldLength;
+    const oldObjects = mountedObjectsForWall(building, oldWall)
+        .map((object) => ({ object, oldT: normalizedMountedObjectWallT(object, "split wall with") }));
+    const firstObjects = oldObjects.filter((entry) => entry.oldT <= splitT);
+    const secondObjects = oldObjects.filter((entry) => entry.oldT > splitT);
+    const keepOldOnFirst = secondObjects.length === 0 || firstObjects.length >= secondObjects.length;
+    const settings = perimeterWallSettings(oldWall, false);
+    let firstWall;
+    let secondWall;
+    if (keepOldOnFirst) {
+        firstWall = setPerimeterWallEdge(building, floor, oldWall, startVertex, insertedVertex);
+        secondWall = createPerimeterWallForEdge(building, floor, insertedVertex, endVertex, settings);
+        placeWallRelativeToWall(building, secondWall, firstWall, true);
+    } else {
+        firstWall = createPerimeterWallForEdge(building, floor, startVertex, insertedVertex, settings);
+        secondWall = setPerimeterWallEdge(building, floor, oldWall, insertedVertex, endVertex);
+        placeWallRelativeToWall(building, firstWall, secondWall, false);
+    }
+    firstObjects.forEach((entry) => {
+        remountObjectOnWall(building, floor, firstWall, entry.object, entry.oldT / splitT);
+    });
+    secondObjects.forEach((entry) => {
+        remountObjectOnWall(building, floor, secondWall, entry.object, (entry.oldT - splitT) / (1 - splitT));
+    });
+    resolveMountedObjectIntervals(building, floor, firstWall);
+    resolveMountedObjectIntervals(building, floor, secondWall);
+    return { firstWall, secondWall };
+}
+
+export function mergePerimeterWallsAcrossDeletedVertex(building, floor, previousVertex, deletedVertex, nextVertex) {
+    if (!building || !Array.isArray(building.wallSections)) throw new Error("cannot merge perimeter walls without a building wall section list");
+    if (!floor) throw new Error("cannot merge perimeter walls without a floor");
+    if (!previousVertex || !previousVertex.id || !deletedVertex || !deletedVertex.id || !nextVertex || !nextVertex.id) {
+        throw new Error("cannot merge perimeter walls without stable floor vertex ids");
+    }
+    const firstWall = perimeterWallForEdge(building, floor, previousVertex, deletedVertex);
+    const secondWall = perimeterWallForEdge(building, floor, deletedVertex, nextVertex);
+    if (!firstWall) {
+        throw new Error(`cannot merge missing perimeter wall edge ${previousVertex.id}->${deletedVertex.id} on floor ${getFloorId(floor)}`);
+    }
+    if (!secondWall) {
+        throw new Error(`cannot merge missing perimeter wall edge ${deletedVertex.id}->${nextVertex.id} on floor ${getFloorId(floor)}`);
+    }
+    const firstLength = segmentLength(previousVertex, deletedVertex);
+    const secondLength = segmentLength(deletedVertex, nextVertex);
+    const combinedLength = firstLength + secondLength;
+    if (firstLength <= 0.000001 || secondLength <= 0.000001 || combinedLength <= 0.000001) {
+        throw new Error(`cannot merge degenerate perimeter wall edges around vertex ${deletedVertex.id}`);
+    }
+    const firstObjects = mountedObjectsForWall(building, firstWall);
+    const secondObjects = mountedObjectsForWall(building, secondWall);
+    const keepFirstWall = secondObjects.length === 0 || firstObjects.length > 0;
+    const survivor = keepFirstWall ? firstWall : secondWall;
+    const removed = keepFirstWall ? secondWall : firstWall;
+    const remounts = [
+        ...firstObjects.map((object) => ({ object, distance: normalizedMountedObjectWallT(object, "merge wall with") * firstLength })),
+        ...secondObjects.map((object) => ({ object, distance: firstLength + normalizedMountedObjectWallT(object, "merge wall with") * secondLength }))
+    ];
+    setPerimeterWallEdge(building, floor, survivor, previousVertex, nextVertex);
+    remounts.forEach((entry) => {
+        setMountedObjectWall(entry.object, survivor, floor);
+        entry.object.wallT = entry.distance / combinedLength;
+    });
+    removeWallSection(building, removed);
+    resolveMountedObjectIntervals(building, floor, survivor);
+    return survivor;
+}
+
 function perimeterWallSettingMaps(walls) {
     const exact = new Map();
     const byStart = new Map();

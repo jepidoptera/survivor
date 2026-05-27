@@ -14,6 +14,11 @@ const FLOOR_DEPTH_BIAS = 0.015;
 const GEOMETRY_EPSILON = 0.000001;
 const COLLAPSED_WALL_INTERSECTION_AREA_EPSILON = 0.25;
 const COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE = 1.01;
+const COLLAPSED_WALL_FRONT_DEPTH_EPSILON = 0.05;
+const SCENE_LIGHT_TILT_RADIANS = 20 * Math.PI / 180;
+const SCENE_LIGHT_DIFFUSE = 0.95;
+const SCENE_LIGHT_MIN = 0.58;
+const SCENE_LIGHT_MAX = 1.36;
 const DEFAULT_WALL_TEXTURE_REPEAT = 0.1;
 const PICKER_DEBUG_DEPTH_BIAS = 0.05;
 const SELECTION_OUTLINE_COLOR = 0x42a5ff;
@@ -22,6 +27,7 @@ const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
 const FLOOR_DEPTH_VS = `
 precision highp float;
 attribute vec3 aWorldPosition;
+attribute vec3 aWorldNormal;
 attribute vec2 aUvs;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
@@ -32,7 +38,11 @@ uniform vec2 uDepthRange;
 uniform float uDepthBias;
 uniform float uCameraRotation;
 uniform vec2 uCameraRotationCenter;
+uniform vec3 uLightVector;
+uniform float uLightDiffuse;
+uniform vec2 uLightClamp;
 varying vec2 vUvs;
+varying float vLightFactor;
 void main(void) {
     float cosR = cos(uCameraRotation);
     float sinR = sin(uCameraRotation);
@@ -57,6 +67,16 @@ void main(void) {
         1.0 - (screenY / sy) * 2.0
     );
     gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vec3 normal = normalize(vec3(
+        aWorldNormal.x * cosR - aWorldNormal.y * sinR,
+        aWorldNormal.x * sinR + aWorldNormal.y * cosR,
+        aWorldNormal.z
+    ));
+    vec3 light = normalize(uLightVector);
+    float lightDot = dot(normal, light);
+    float upwardWeight = smoothstep(0.25, 0.75, abs(normal.z));
+    float overheadBaseline = light.z * upwardWeight;
+    vLightFactor = clamp(1.0 + (lightDot - overheadBaseline) * uLightDiffuse, uLightClamp.x, uLightClamp.y);
     vUvs = aUvs;
 }
 `;
@@ -64,11 +84,13 @@ void main(void) {
 const FLOOR_DEPTH_FS = `
 precision highp float;
 varying vec2 vUvs;
+varying float vLightFactor;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
 void main(void) {
     vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
+    outColor.rgb *= vLightFactor;
     if (outColor.a < uAlphaCutoff) discard;
     gl_FragColor = outColor;
 }
@@ -195,6 +217,54 @@ function roofRenderElevation(floor) {
     return floorTopElevation(floor) + ROOF_RENDER_Z_LIFT;
 }
 
+function ringCumulativeLengths(ring) {
+    const lengths = [0];
+    let total = 0;
+    for (let index = 0; index < ring.length; index++) {
+        const current = ring[index];
+        const next = ring[(index + 1) % ring.length];
+        total += Math.hypot(Number(next.x) - Number(current.x), Number(next.y) - Number(current.y));
+        lengths.push(total);
+    }
+    return lengths;
+}
+
+function distancePointToLineSegment(point, a, b) {
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= GEOMETRY_EPSILON) {
+        return Math.hypot(Number(point.x) - Number(a.x), Number(point.y) - Number(a.y));
+    }
+    const t = Math.max(0, Math.min(1, ((Number(point.x) - Number(a.x)) * dx + (Number(point.y) - Number(a.y)) * dy) / lengthSquared));
+    return Math.hypot(
+        Number(point.x) - (Number(a.x) + dx * t),
+        Number(point.y) - (Number(a.y) + dy * t)
+    );
+}
+
+function triangleSurfaceNormal(a, b, c, label) {
+    const abx = Number(b.x) - Number(a.x);
+    const aby = Number(b.y) - Number(a.y);
+    const abz = Number(b.z) - Number(a.z);
+    const acx = Number(c.x) - Number(a.x);
+    const acy = Number(c.y) - Number(a.y);
+    const acz = Number(c.z) - Number(a.z);
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+    const length = Math.hypot(nx, ny, nz);
+    if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires a non-degenerate triangle normal`);
+    }
+    if (nz < 0) {
+        nx = -nx;
+        ny = -ny;
+        nz = -nz;
+    }
+    return { x: nx / length, y: ny / length, z: nz / length };
+}
+
 function triangulatePitchedRoof(floor) {
     const floorId = getFloorId(floor);
     const holes = Array.isArray(floor && floor.holes) ? floor.holes.filter((ring) => Array.isArray(ring) && ring.length >= 3) : [];
@@ -212,14 +282,33 @@ function triangulatePitchedRoof(floor) {
     }
     const points = [];
     const indices = [];
-    const pushPoint = (point, z) => {
-        points.push({ x: Number(point.x), y: Number(point.y), z });
-        return points.length - 1;
+    const addTriangle = (a, b, c) => {
+        const normal = triangleSurfaceNormal(a, b, c, `roof ${floorId}`);
+        const start = points.length;
+        points.push(
+            { ...a, normal },
+            { ...b, normal },
+            { ...c, normal }
+        );
+        indices.push(start, start + 1, start + 2);
     };
-    const addFan = (ringStartIndex, ringLength, centerIndex) => {
+    const addTexturedFan = (ring) => {
+        const cumulative = ringCumulativeLengths(ring);
+        const ringLength = ring.length;
         for (let index = 0; index < ringLength; index++) {
             const next = (index + 1) % ringLength;
-            indices.push(ringStartIndex + index, ringStartIndex + next, centerIndex);
+            const a = ring[index];
+            const b = ring[next];
+            const uA = cumulative[index] * ROOF_TEXTURE_REPEAT;
+            const uB = cumulative[index + 1] * ROOF_TEXTURE_REPEAT;
+            const uCenter = (uA + uB) * 0.5;
+            const slopeDistance = Math.hypot(distancePointToLineSegment(center, a, b), peakHeight);
+            const vCenter = Math.max(1, slopeDistance * ROOF_TEXTURE_REPEAT);
+            addTriangle(
+                { x: Number(a.x), y: Number(a.y), z: rimZ, u: uA, v: 0 },
+                { x: Number(b.x), y: Number(b.y), z: rimZ, u: uB, v: 0 },
+                { x: Number(center.x), y: Number(center.y), z: rimZ + peakHeight, u: uCenter, v: vCenter }
+            );
         }
     };
 
@@ -228,19 +317,30 @@ function triangulatePitchedRoof(floor) {
         if (!Array.isArray(innerRing) || innerRing.length !== contactRing.length) {
             throw new Error(`roof ${floorId} negative overhang requires a valid inset ring`);
         }
-        contactRing.forEach((point) => pushPoint(point, rimZ));
-        innerRing.forEach((point) => pushPoint(point, rimZ));
-        const centerIndex = pushPoint(center, rimZ + peakHeight);
         const ringLength = contactRing.length;
+        const cumulative = ringCumulativeLengths(contactRing);
         for (let index = 0; index < ringLength; index++) {
             const next = (index + 1) % ringLength;
-            const outerA = index;
-            const outerB = next;
-            const innerA = ringLength + index;
-            const innerB = ringLength + next;
-            indices.push(outerA, outerB, innerB, outerA, innerB, innerA);
+            const outerA = contactRing[index];
+            const outerB = contactRing[next];
+            const innerA = innerRing[index];
+            const innerB = innerRing[next];
+            const uA = cumulative[index] * ROOF_TEXTURE_REPEAT;
+            const uB = cumulative[index + 1] * ROOF_TEXTURE_REPEAT;
+            const vInnerA = Math.hypot(Number(innerA.x) - Number(outerA.x), Number(innerA.y) - Number(outerA.y)) * ROOF_TEXTURE_REPEAT;
+            const vInnerB = Math.hypot(Number(innerB.x) - Number(outerB.x), Number(innerB.y) - Number(outerB.y)) * ROOF_TEXTURE_REPEAT;
+            addTriangle(
+                { x: Number(outerA.x), y: Number(outerA.y), z: rimZ, u: uA, v: 0 },
+                { x: Number(outerB.x), y: Number(outerB.y), z: rimZ, u: uB, v: 0 },
+                { x: Number(innerB.x), y: Number(innerB.y), z: rimZ, u: uB, v: vInnerB }
+            );
+            addTriangle(
+                { x: Number(outerA.x), y: Number(outerA.y), z: rimZ, u: uA, v: 0 },
+                { x: Number(innerB.x), y: Number(innerB.y), z: rimZ, u: uB, v: vInnerB },
+                { x: Number(innerA.x), y: Number(innerA.y), z: rimZ, u: uA, v: vInnerA }
+            );
         }
-        addFan(ringLength, ringLength, centerIndex);
+        addTexturedFan(innerRing);
         return { points, indices: new Uint16Array(indices) };
     }
 
@@ -248,9 +348,7 @@ function triangulatePitchedRoof(floor) {
     if (!Array.isArray(outerRing) || outerRing.length < 3) {
         throw new Error(`roof ${floorId} overhang requires a valid outer ring`);
     }
-    outerRing.forEach((point) => pushPoint(point, rimZ));
-    const centerIndex = pushPoint(center, rimZ + peakHeight);
-    addFan(0, outerRing.length, centerIndex);
+    addTexturedFan(outerRing);
     return { points, indices: new Uint16Array(indices) };
 }
 
@@ -753,6 +851,7 @@ export class BuildingRenderer {
         }
         this.drawGrid();
         this.drawGameStyleBuilding();
+        this.drawFloorUnderlay(this.floorLayer);
         this.drawMountedObjects();
         this.drawScreenPickerDebug(this.lastWallPickEntries);
         this.drawSelectionOutline();
@@ -781,6 +880,68 @@ export class BuildingRenderer {
             x: center.x + dx * cos - dy * sin,
             y: center.y + dx * sin + dy * cos
         };
+    }
+
+    rotateVectorForCamera(vector) {
+        const angle = Number(this.state.camera.rotation) || 0;
+        const x = Number(vector && vector.x);
+        const y = Number(vector && vector.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("camera vector rotation requires finite x/y");
+        }
+        if (Math.abs(angle) < 0.000001) return { x, y };
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        return {
+            x: x * cos - y * sin,
+            y: x * sin + y * cos
+        };
+    }
+
+    sceneLightVectorCamera() {
+        return {
+            x: -Math.sin(SCENE_LIGHT_TILT_RADIANS),
+            y: 0,
+            z: Math.cos(SCENE_LIGHT_TILT_RADIANS)
+        };
+    }
+
+    sceneLightFactorForCameraNormal(normal) {
+        const nx = Number(normal && normal.x);
+        const ny = Number(normal && normal.y);
+        const nz = Number(normal && normal.z);
+        const length = Math.hypot(nx, ny, nz);
+        if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+            throw new Error("scene lighting requires a non-zero surface normal");
+        }
+        const light = this.sceneLightVectorCamera();
+        const dot = (nx / length) * light.x + (ny / length) * light.y + (nz / length) * light.z;
+        const upwardWeight = Math.max(0, Math.min(1, (Math.abs(nz / length) - 0.25) / 0.5));
+        const smoothedUpwardWeight = upwardWeight * upwardWeight * (3 - 2 * upwardWeight);
+        const overheadBaseline = light.z * smoothedUpwardWeight;
+        const factor = 1 + SCENE_LIGHT_DIFFUSE * (dot - overheadBaseline);
+        return Math.max(SCENE_LIGHT_MIN, Math.min(SCENE_LIGHT_MAX, factor));
+    }
+
+    wallVisibleNormalCamera(wall, floor) {
+        const points = wallCenterlinePoints(this.state.building, wall, floor);
+        if (points.length !== 2) {
+            throw new Error(`wall ${wall && wall.id} lighting requires two centerline points`);
+        }
+        const dx = Number(points[1].x) - Number(points[0].x);
+        const dy = Number(points[1].y) - Number(points[0].y);
+        const length = Math.hypot(dx, dy);
+        if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+            throw new Error(`wall ${wall && wall.id} lighting requires non-coincident endpoints`);
+        }
+        let normal = this.rotateVectorForCamera({ x: -dy / length, y: dx / length });
+        if (normal.y < 0) normal = { x: -normal.x, y: -normal.y };
+        return { x: normal.x, y: normal.y, z: 0 };
+    }
+
+    wallSceneBrightnessPercent(wall, floor) {
+        const factor = this.sceneLightFactorForCameraNormal(this.wallVisibleNormalCamera(wall, floor));
+        return (factor - 1) * 100;
     }
 
     unrotatePointForCamera(point) {
@@ -1039,17 +1200,24 @@ export class BuildingRenderer {
         const texturePath = normalizeTexturePath(options.texturePath, options.textureFallback);
         const textureRepeat = Number.isFinite(Number(options.textureRepeat)) ? Number(options.textureRepeat) : FLOOR_TEXTURE_REPEAT;
         const positions = new Float32Array(triangulation.points.length * 3);
+        const normals = new Float32Array(triangulation.points.length * 3);
         const uvs = new Float32Array(triangulation.points.length * 2);
         triangulation.points.forEach((point, index) => {
             const pointZ = Number.isFinite(Number(point.z)) ? Number(point.z) : z;
             positions[index * 3] = Number(point.x);
             positions[index * 3 + 1] = Number(point.y);
             positions[index * 3 + 2] = pointZ;
-            uvs[index * 2] = Number(point.x) * textureRepeat;
-            uvs[index * 2 + 1] = Number(point.y) * textureRepeat;
+            const normal = point.normal || { x: 0, y: 0, z: 1 };
+            normals[index * 3] = Number.isFinite(Number(normal.x)) ? Number(normal.x) : 0;
+            normals[index * 3 + 1] = Number.isFinite(Number(normal.y)) ? Number(normal.y) : 0;
+            normals[index * 3 + 2] = Number.isFinite(Number(normal.z)) ? Number(normal.z) : 1;
+            const hasCustomUv = Number.isFinite(Number(point.u)) && Number.isFinite(Number(point.v));
+            uvs[index * 2] = hasCustomUv ? Number(point.u) : Number(point.x) * textureRepeat;
+            uvs[index * 2 + 1] = hasCustomUv ? Number(point.v) : Number(point.y) * textureRepeat;
         });
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
+            .addAttribute("aWorldNormal", normals, 3)
             .addAttribute("aUvs", uvs, 2)
             .addIndex(triangulation.indices);
         const shader = PIXI.Shader.from(FLOOR_DEPTH_VS, FLOOR_DEPTH_FS, {
@@ -1065,6 +1233,9 @@ export class BuildingRenderer {
             uDepthBias: FLOOR_DEPTH_BIAS,
             uCameraRotation: 0,
             uCameraRotationCenter: new Float32Array([0, 0]),
+            uLightVector: new Float32Array([0, 0, 1]),
+            uLightDiffuse: SCENE_LIGHT_DIFFUSE,
+            uLightClamp: new Float32Array([SCENE_LIGHT_MIN, SCENE_LIGHT_MAX]),
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
             uSampler: this.getSurfaceTexture(texturePath, options.textureFallback)
@@ -1113,10 +1284,20 @@ export class BuildingRenderer {
         const rotationCenter = this.state.camera.rotationCenter || this.state.buildingCenter();
         u.uCameraRotationCenter[0] = Number(rotationCenter.x) || 0;
         u.uCameraRotationCenter[1] = Number(rotationCenter.y) || 0;
+        const light = this.sceneLightVectorCamera();
+        u.uLightVector[0] = light.x;
+        u.uLightVector[1] = light.y;
+        u.uLightVector[2] = light.z;
+        u.uLightDiffuse = SCENE_LIGHT_DIFFUSE;
+        u.uLightClamp[0] = SCENE_LIGHT_MIN;
+        u.uLightClamp[1] = SCENE_LIGHT_MAX;
         u.uSampler = this.getSurfaceTexture(options.texturePath, options.textureFallback);
-        u.uTint[0] = 1;
-        u.uTint[1] = 1;
-        u.uTint[2] = 1;
+        const lightFactor = Number.isFinite(Number(options.lightFactor))
+            ? Math.max(SCENE_LIGHT_MIN, Math.min(SCENE_LIGHT_MAX, Number(options.lightFactor)))
+            : 1;
+        u.uTint[0] = lightFactor;
+        u.uTint[1] = lightFactor;
+        u.uTint[2] = lightFactor;
         u.uTint[3] = Math.max(0, Math.min(1, Number(alpha)));
         mesh.visible = true;
     }
@@ -1393,19 +1574,39 @@ export class BuildingRenderer {
             ? wallEntries.filter((entry) => entry && getFloorId(entry.floor) === floorId).map((entry) => entry.wall)
             : getBuildingWalls(this.state.building).filter((wall) => String(wall.fragmentId || wall.floorId) === floorId);
         const wallFootprints = wallsForFloor.map((wall) => {
-            const profile = this.wallProfileForRender(wall, wallEntries);
-            return wallFootprintPolygon(this.state.building, wall, floor, profile
-                ? {
-                    profile,
-                    footprintScale: COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE
-                }
-                : {
-                    thicknessScale: COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE
-                });
+            try {
+                const profile = this.wallProfileForRender(wall, wallEntries);
+                return {
+                    wall,
+                    footprint: wallFootprintPolygon(this.state.building, wall, floor, profile
+                        ? {
+                            profile,
+                            footprintScale: COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE
+                        }
+                        : {
+                            thicknessScale: COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE
+                        })
+                };
+            } catch (error) {
+                throw new Error(`collapsed wall open-area footprint failed for floor ${floorId}, wall ${wall && wall.id}: ${error.message}`);
+            }
         });
-        const openArea = wallFootprints.length > 0
-            ? clipper.difference(floorPolygon, ...wallFootprints)
-            : [floorPolygon];
+        let openArea = [floorPolygon];
+        if (wallFootprints.length > 0) {
+            try {
+                openArea = clipper.difference(floorPolygon, ...wallFootprints.map((entry) => entry.footprint));
+            } catch (error) {
+                for (let index = 0; index < wallFootprints.length; index++) {
+                    const entry = wallFootprints[index];
+                    try {
+                        clipper.difference(floorPolygon, ...wallFootprints.slice(0, index + 1).map((item) => item.footprint));
+                    } catch (innerError) {
+                        throw new Error(`collapsed wall open-area clipping failed for floor ${floorId} after adding wall ${entry.wall && entry.wall.id}: ${innerError.message}`);
+                    }
+                }
+                throw new Error(`collapsed wall open-area clipping failed for floor ${floorId}: ${error.message}`);
+            }
+        }
         const screenOpenArea = this.projectClipGeometryToScreen(openArea, getFloorElevation(floor));
         this.collapsedWallGeometryByFloorId.set(floorId, screenOpenArea);
         return screenOpenArea;
@@ -1752,11 +1953,24 @@ export class BuildingRenderer {
     shouldDrawWallCollapsed(wall, floor, wallEntries = null) {
         if (this.state.renderStyle() !== "interior") return false;
         if (this.state.selectedWallIds().length > 0) return false;
+        if (!this.wallIsInFrontOfFloor(wall, floor, wallEntries)) return false;
         const openArea = this.floorOpenAreaScreenGeometry(floor, wallEntries);
         if (clipGeometryArea(openArea) <= GEOMETRY_EPSILON) return false;
         const wallImage = this.wallScreenImagePolygon(wall, floor, wallEntries);
         const intersection = polygonClipper().intersection(openArea, wallImage);
         return clipGeometryArea(intersection) > COLLAPSED_WALL_INTERSECTION_AREA_EPSILON;
+    }
+
+    wallIsInFrontOfFloor(wall, floor, wallEntries = null) {
+        const baseZ = getFloorElevation(floor);
+        const floorCenter = polygonCentroid(floor.outerPolygon || []);
+        if (!finite2dPoint(floorCenter)) {
+            throw new Error(`collapsed wall visibility requires floor ${getFloorId(floor)} to have a finite centroid`);
+        }
+        const floorDepth = this.worldDepthMetric(floorCenter, baseZ);
+        const profile = this.wallRenderProfilePoints(wall, floor, wallEntries, `wall ${wall && wall.id} front/back visibility profile`);
+        const wallDepth = profile.reduce((total, point) => total + this.worldDepthMetric(point, baseZ), 0) / profile.length;
+        return wallDepth > floorDepth + COLLAPSED_WALL_FRONT_DEPTH_EPSILON;
     }
 
     drawWallProjectionOutlines(floorIds, wallEntries = null) {
@@ -1818,6 +2032,7 @@ export class BuildingRenderer {
         const selected = this.state.isWallSelected(wall);
         const bottomFaceOnly = this.shouldDrawWallCollapsed(wall, floor, wallEntries);
         const localTextureU = this.shouldUseExteriorPerimeterTextureU(wall);
+        const sceneBrightness = this.wallSceneBrightnessPercent(wall, floor);
         const mesh = entry.unit.getDepthMeshDisplayObject({
             camera: this.gameCamera(),
             app: this.app,
@@ -1827,7 +2042,7 @@ export class BuildingRenderer {
             cameraRotationCenter: this.state.camera.rotationCenter || this.state.buildingCenter(),
             tint: selected ? 0xffd27a : 0xffffff,
             alpha,
-            brightness: selected ? 12 : 0,
+            brightness: sceneBrightness + (selected ? 12 : 0),
             bottomFaceOnly,
             localTextureU
         });
@@ -1995,35 +2210,48 @@ export class BuildingRenderer {
         }
     }
 
-    drawFloors() {
-        const gfx = this.floorLayer;
-        gfx.clear();
-        const floors = [...getBuildingFloors(this.state.building)].sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
-        floors.forEach((floor) => {
-            if (!this.state.isFloorSelected(getFloorId(floor))) return;
-            const selectionKind = this.state.selection && this.state.selection.kind;
-            const selected = this.state.selection.floorId === getFloorId(floor) &&
-                (selectionKind === "level" || selectionKind === "floor" || selectionKind === "floorVertex" || selectionKind === "roof");
-            const elevation = getFloorElevation(floor);
-            const points = floor.outerPolygon.map((point) => this.worldToScreen(point, elevation));
-            if (points.length < 3) return;
-            gfx.beginFill(selected ? 0x4d8b8f : 0x415c54, selected ? 0.52 : 0.36);
-            gfx.lineStyle(selected ? 3 : 2, selected ? 0x9fe4d5 : 0x6c9280, selected ? 1 : 0.85);
-            gfx.drawPolygon(flattenPolygon(points));
-            const holes = Array.isArray(floor.holes) ? floor.holes : [];
-            if (holes.length > 0) {
-                if (typeof gfx.beginHole !== "function" || typeof gfx.endHole !== "function") {
-                    throw new Error("floor hole rendering requires PIXI Graphics.beginHole/endHole");
-                }
-                gfx.beginHole();
-                holes.forEach((ring) => {
-                    const holePoints = ring.map((point) => this.worldToScreen(point, elevation));
-                    if (holePoints.length >= 3) gfx.drawPolygon(flattenPolygon(holePoints));
-                });
-                gfx.endHole();
-            }
-            gfx.endFill();
+    drawFloorUnderlay(gfx) {
+        const floor = typeof this.state.floorUnderlay === "function" ? this.state.floorUnderlay() : null;
+        if (!floor) return;
+        const elevation = getFloorElevation(floor);
+        const drawRing = (ring, color, alpha) => {
+            if (!Array.isArray(ring) || ring.length < 3) return;
+            const points = ring.map((point) => this.worldToScreen(point, elevation));
+            gfx.lineStyle(2, color, alpha);
+            this.drawDashedScreenLoop(gfx, points, 8, 6);
+            points.forEach((point) => {
+                gfx.beginFill(color, 0.42);
+                gfx.lineStyle(1, 0x111820, 0.75);
+                gfx.drawCircle(point.x, point.y, 3.25);
+                gfx.endFill();
+            });
+        };
+        drawRing(floor.outerPolygon, 0xb7c6d1, 0.72);
+        (Array.isArray(floor.holes) ? floor.holes : []).forEach((ring) => {
+            drawRing(ring, 0xff9c85, 0.5);
         });
+    }
+
+    drawDashedScreenLoop(gfx, points, dashLength = 8, gapLength = 6) {
+        if (!Array.isArray(points) || points.length < 2) return;
+        for (let index = 0; index < points.length; index++) {
+            const a = points[index];
+            const b = points[(index + 1) % points.length];
+            const dx = Number(b.x) - Number(a.x);
+            const dy = Number(b.y) - Number(a.y);
+            const length = Math.hypot(dx, dy);
+            if (!Number.isFinite(length) || length <= 0.000001) continue;
+            const ux = dx / length;
+            const uy = dy / length;
+            let cursor = 0;
+            while (cursor < length) {
+                const start = cursor;
+                const end = Math.min(length, cursor + dashLength);
+                gfx.moveTo(Number(a.x) + ux * start, Number(a.y) + uy * start);
+                gfx.lineTo(Number(a.x) + ux * end, Number(a.y) + uy * end);
+                cursor += dashLength + gapLength;
+            }
+        }
     }
 
     drawWalls() {
@@ -2213,10 +2441,73 @@ export class BuildingRenderer {
         })]);
     }
 
+    mountedObjectResizeHandles(object) {
+        const placement = this.mountedObjectPlacement(object);
+        if (!placement) return [];
+        const screen = this.mountedObjectScreenPlacement(object, placement);
+        if (!screen || !Array.isArray(screen.quadPoints) || screen.quadPoints.length !== 4) {
+            throw new Error(`mounted object ${object && object.id} resize handles require a screen quad`);
+        }
+        const [topLeft, topRight, bottomRight, bottomLeft] = screen.quadPoints;
+        const midpoint = (a, b) => ({ x: (Number(a.x) + Number(b.x)) * 0.5, y: (Number(a.y) + Number(b.y)) * 0.5 });
+        const category = String(object && object.category || "").trim().toLowerCase();
+        const handles = [
+            { key: "topLeft", point: topLeft, resizeX: true, resizeY: true, verticalSide: "top" },
+            { key: "topRight", point: topRight, resizeX: true, resizeY: true, verticalSide: "top" },
+            { key: "top", point: midpoint(topLeft, topRight), resizeX: false, resizeY: true, verticalSide: "top" },
+            { key: "right", point: midpoint(topRight, bottomRight), resizeX: true, resizeY: false, verticalSide: null },
+            { key: "left", point: midpoint(topLeft, bottomLeft), resizeX: true, resizeY: false, verticalSide: null }
+        ];
+        if (category === "windows") {
+            handles.push(
+                { key: "bottomRight", point: bottomRight, resizeX: true, resizeY: true, verticalSide: "bottom" },
+                { key: "bottomLeft", point: bottomLeft, resizeX: true, resizeY: true, verticalSide: "bottom" },
+                { key: "bottom", point: midpoint(bottomLeft, bottomRight), resizeX: false, resizeY: true, verticalSide: "bottom" }
+            );
+        }
+        return handles.map((handle) => ({
+            ...handle,
+            object,
+            objectId: object.id,
+            placement,
+            screen
+        }));
+    }
+
+    pickMountedObjectResizeHandle(screenPoint, thresholdPixels = 10) {
+        if (!screenPoint || this.state.tool === "mountObject") return null;
+        const selectedObjects = this.state.selectedMountedObjects();
+        if (!selectedObjects.length) return null;
+        const threshold = Number.isFinite(Number(thresholdPixels)) ? Number(thresholdPixels) : 10;
+        let best = null;
+        selectedObjects.forEach((object) => {
+            this.mountedObjectResizeHandles(object).forEach((handle) => {
+                const distance = Math.hypot(Number(screenPoint.x) - Number(handle.point.x), Number(screenPoint.y) - Number(handle.point.y));
+                if (distance > threshold) return;
+                const priority = handle.resizeX && handle.resizeY ? 0 : 1;
+                if (!best || distance < best.distance - 0.001 || (Math.abs(distance - best.distance) <= 0.001 && priority < best.priority)) {
+                    best = { ...handle, distance, priority };
+                }
+            });
+        });
+        return best;
+    }
+
     mountedObjectPickDepthMetric(entry) {
         const worldQuad = this.mountedObjectWorldQuad(entry.object, entry);
         if (!worldQuad) throw new Error(`mounted object ${entry && entry.object && entry.object.id} screen picking requires world quad geometry`);
         return worldQuad.quads.flat().reduce((best, point) => Math.max(best, this.worldDepthMetric(point, point.z)), -Infinity);
+    }
+
+    mountedObjectWorldNormal(placement, worldQuad) {
+        const nx = Number(placement && placement.sectionNormalX);
+        const ny = Number(placement && placement.sectionNormalY);
+        if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
+            throw new Error("mounted object lighting requires a finite wall normal");
+        }
+        const facingSign = Number(placement.mountedWallFacingSign) >= 0 ? 1 : -1;
+        const faceSign = worldQuad && worldQuad.visibleFace === "back" ? -1 : 1;
+        return { x: nx * facingSign * faceSign, y: ny * facingSign * faceSign, z: 0 };
     }
 
     createMountedObjectMesh(texture) {
@@ -2224,6 +2515,7 @@ export class BuildingRenderer {
             throw new Error("wall-mounted door/window rendering requires PIXI Geometry, Shader, and Mesh");
         }
         const positions = new Float32Array(12);
+        const normals = new Float32Array(12);
         const uvs = new Float32Array([
             0, 0,
             1, 0,
@@ -2232,6 +2524,7 @@ export class BuildingRenderer {
         ]);
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
+            .addAttribute("aWorldNormal", normals, 3)
             .addAttribute("aUvs", uvs, 2)
             .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
         const shader = PIXI.Shader.from(FLOOR_DEPTH_VS, FLOOR_DEPTH_FS, {
@@ -2247,6 +2540,9 @@ export class BuildingRenderer {
             uDepthBias: FLOOR_DEPTH_BIAS,
             uCameraRotation: 0,
             uCameraRotationCenter: new Float32Array([0, 0]),
+            uLightVector: new Float32Array([0, 0, 1]),
+            uLightDiffuse: SCENE_LIGHT_DIFFUSE,
+            uLightClamp: new Float32Array([SCENE_LIGHT_MIN, SCENE_LIGHT_MAX]),
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
             uSampler: texture
@@ -2283,6 +2579,22 @@ export class BuildingRenderer {
             }
             buffer.data.set(vertices);
             if (typeof buffer.update === "function") buffer.update();
+            const normalBuffer = mesh.geometry.getBuffer("aWorldNormal");
+            if (!normalBuffer || !normalBuffer.data || typeof normalBuffer.data.set !== "function") {
+                throw new Error("wall-mounted door/window mesh is missing normal buffer data");
+            }
+            const normal = this.mountedObjectWorldNormal(placement, worldQuad);
+            const normals = new Float32Array([
+                normal.x, normal.y, normal.z,
+                normal.x, normal.y, normal.z,
+                normal.x, normal.y, normal.z,
+                normal.x, normal.y, normal.z
+            ]);
+            if (normalBuffer.data.length !== normals.length) {
+                throw new Error("wall-mounted door/window mesh normal buffer has unexpected length");
+            }
+            normalBuffer.data.set(normals);
+            if (typeof normalBuffer.update === "function") normalBuffer.update();
             const uvBuffer = mesh.geometry.getBuffer("aUvs");
             if (!uvBuffer || !uvBuffer.data || typeof uvBuffer.data.set !== "function") {
                 throw new Error("wall-mounted door/window mesh is missing uv buffer data");
@@ -2447,9 +2759,13 @@ export class BuildingRenderer {
         gfx.clear();
         if (this.state.tool === "mountObject") return;
         const floor = this.state.selectedFloor();
+        const selectionKind = this.state.selection && this.state.selection.kind;
+        if (selectionKind === "mountedObject") {
+            this.drawSelectedMountedObjectResizeHandles(gfx);
+            return;
+        }
         if (!floor) return;
         const elevation = getFloorElevation(floor);
-        const selectionKind = this.state.selection && this.state.selection.kind;
         if (selectionKind === "wall" || selectionKind === "wallEndpoint") {
             this.drawSelectedWallEndpointHandles(gfx, elevation);
             return;
@@ -2477,6 +2793,24 @@ export class BuildingRenderer {
         gfx.lineStyle(2, 0xf4f2e8, 0.85);
         gfx.drawCircle(centerScreen.x, centerScreen.y, 4);
         gfx.endFill();
+    }
+
+    drawSelectedMountedObjectResizeHandles(gfx) {
+        const objects = this.state.selectedMountedObjects();
+        objects.forEach((object) => {
+            this.mountedObjectResizeHandles(object).forEach((handle) => {
+                const point = handle.point;
+                const corner = handle.resizeX && handle.resizeY;
+                gfx.beginFill(corner ? 0xffffff : 0xc9d1d8, 1);
+                gfx.lineStyle(2, 0x111820, 1);
+                if (corner) {
+                    gfx.drawRect(Number(point.x) - 4.5, Number(point.y) - 4.5, 9, 9);
+                } else {
+                    gfx.drawCircle(Number(point.x), Number(point.y), 4.5);
+                }
+                gfx.endFill();
+            });
+        });
     }
 
     drawSelectedWallEndpointHandles(gfx, elevation) {
