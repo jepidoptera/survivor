@@ -4,11 +4,14 @@ import {
     createFloor,
     createPerimeterWallsForFloor,
     createWall,
+    createWallMountedObject,
     DEFAULTS,
     duplicateFloor,
     fallbackDeletedVertexEndpointsToPoint,
     findFloor,
+    findMountedObject,
     findWall,
+    getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
     getFloorElevation,
@@ -20,8 +23,9 @@ import {
     setFloorElevation,
     wallPoints
 } from "./BuildingModel.js";
-import { distance, distanceToSegment, nearestFloorVertex, nearestWall, pointInPolygon } from "./BuildingGeometry.js";
+import { distance, distanceToSegment, nearestFloorVertex, nearestWall, pointInPolygon, repairSimplePolygonRing, simplePolygonRingError } from "./BuildingGeometry.js";
 import { polygonCentroid } from "./BuildingGeometry.js";
+import { validateBuilding } from "./BuildingValidation.js";
 import { nearestHexAnchor, snapToHexAnchor } from "./BuildingHexGrid.js";
 import {
     applyFloorPolygonEdit,
@@ -35,6 +39,8 @@ import {
 } from "./BuildingPolygonEditing.js";
 
 const STORAGE_KEY = "survivor-building-editor-current";
+const MOUNTED_OBJECT_TOOL_STORAGE_KEY = "survivor-building-editor-mounted-object-tools";
+const CORRUPT_SAVE_BACKUP_KEY_PREFIX = `${STORAGE_KEY}-corrupt-backup`;
 const STACKED_VERTEX_TOLERANCE = 0.0001;
 
 function closestPointOnSegment(point, a, b) {
@@ -125,21 +131,63 @@ function syncWallLineBoundaryAttachment(wall) {
     };
 }
 
+function createSelection(kind, fields = {}) {
+    const wallIds = Array.isArray(fields.wallIds)
+        ? fields.wallIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
+        : (fields.wallId !== undefined && fields.wallId !== null ? [fields.wallId] : []);
+    const wallId = fields.wallId !== undefined && fields.wallId !== null
+        ? fields.wallId
+        : (wallIds.length === 1 ? wallIds[0] : null);
+    const mountedObjectIds = Array.isArray(fields.mountedObjectIds)
+        ? fields.mountedObjectIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
+        : (fields.mountedObjectId !== undefined && fields.mountedObjectId !== null ? [fields.mountedObjectId] : []);
+    const mountedObjectId = fields.mountedObjectId !== undefined && fields.mountedObjectId !== null
+        ? fields.mountedObjectId
+        : (mountedObjectIds.length === 1 ? mountedObjectIds[0] : null);
+    const floorId = fields.floorId !== undefined && fields.floorId !== null
+        ? String(fields.floorId)
+        : (fields.levelId !== undefined && fields.levelId !== null ? String(fields.levelId) : null);
+    return {
+        kind,
+        floorId,
+        levelId: floorId,
+        wallId,
+        wallIds,
+        mountedObjectId,
+        mountedObjectIds,
+        wallEndpointKey: fields.wallEndpointKey || null,
+        ringKind: fields.ringKind || null,
+        holeIndex: Number.isFinite(Number(fields.holeIndex)) ? Number(fields.holeIndex) : -1,
+        vertexIndex: Number.isFinite(Number(fields.vertexIndex)) ? Number(fields.vertexIndex) : -1
+    };
+}
+
 export class BuildingEditorState extends EventTarget {
     constructor() {
         super();
         this.building = createEmptyBuilding();
-        this.tool = "edit";
-        this.editorMode = "floor";
+        this.tool = "select";
         this.selectedFloorIds = new Set();
         this.layerSelectionMode = "floor";
-        this.selection = { floorId: null, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.selection = createSelection("building");
         this.snapToGrid = true;
         this.showSnapAnchors = false;
         this.shiftKeyDown = false;
         this.paintTextures = {
             floor: DEFAULTS.floorTexture,
+            roofs: DEFAULTS.roofTexture,
             walls: DEFAULTS.wallTexture
+        };
+        this.mountedObjectTool = {
+            category: "doors",
+            assets: {
+                doors: null,
+                windows: null
+            },
+            settings: {
+                doors: { size: 1, aspectRatio: 0.75 },
+                windows: { size: 1, aspectRatio: 1 }
+            }
         };
         this.gridSize = DEFAULTS.gridSize;
         this.camera = { x: 0, y: 0, z: 0, zoom: 72, rotation: 0, rotationCenter: { x: 0, y: 0 } };
@@ -152,6 +200,8 @@ export class BuildingEditorState extends EventTarget {
             floorHeight: DEFAULTS.wallHeight,
             floorTexture: DEFAULTS.floorTexture,
             roofTexture: DEFAULTS.roofTexture,
+            roofOverhang: DEFAULTS.roofOverhang,
+            roofPeakHeight: DEFAULTS.roofPeakHeight,
             wallHeight: DEFAULTS.wallHeight,
             wallTexture: DEFAULTS.wallTexture
         };
@@ -184,8 +234,28 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
+    clearSelectionForTool() {
+        const floors = getBuildingFloors(this.building);
+        if (this.layerSelectionMode === "all" || this.selectedFloorIds.size !== 1) {
+            this.selection = createSelection("building");
+            this.syncInputsFromFloor(floors[0] || null);
+            return;
+        }
+        const selectedFloorId = [...this.selectedFloorIds][0];
+        const floor = findFloor(this.building, selectedFloorId);
+        if (!floor) {
+            this.selection = createSelection("building");
+            this.syncInputsFromFloor(floors[0] || null);
+            return;
+        }
+        this.selection = createSelection("level", { floorId: getFloorId(floor) });
+        this.syncInputsFromFloor(floor);
+    }
+
     paintTextureForMode(mode) {
-        return mode === "walls" ? this.paintTextures.walls : this.paintTextures.floor;
+        if (mode === "walls") return this.paintTextures.walls;
+        if (mode === "roofs") return this.paintTextures.roofs;
+        return this.paintTextures.floor;
     }
 
     setPaintTexture(mode, texture) {
@@ -193,8 +263,246 @@ export class BuildingEditorState extends EventTarget {
             throw new Error("paint texture path must be a non-empty string");
         }
         if (mode === "walls") this.paintTextures.walls = texture;
+        else if (mode === "roofs") this.paintTextures.roofs = texture;
         else this.paintTextures.floor = texture;
         this.emitChange();
+    }
+
+    setMountedObjectToolCategory(category) {
+        const resolved = String(category || "").trim().toLowerCase();
+        if (resolved !== "doors" && resolved !== "windows") {
+            throw new Error(`unknown mounted object category: ${category}`);
+        }
+        const selectedObject = this.selectedMountedObject();
+        if (selectedObject && String(selectedObject.category || "").trim().toLowerCase() === resolved) {
+            this.copyMountedObjectToTool(selectedObject);
+        }
+        this.mountedObjectTool.category = resolved;
+        this.tool = "mountObject";
+        this.draft = null;
+        this.clearSelectionForTool();
+        this.saveMountedObjectToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    copyMountedObjectToTool(object) {
+        if (!object) throw new Error("cannot copy missing mounted object to tool");
+        const category = String(object.category || "").trim().toLowerCase();
+        if (category !== "doors" && category !== "windows") {
+            throw new Error(`cannot copy mounted object category to tool: ${category || "missing"}`);
+        }
+        const width = Number(object.width);
+        const height = Number(object.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+            throw new Error("cannot copy door/window tool settings without positive width and height");
+        }
+        if (typeof object.texturePath !== "string" || object.texturePath.length === 0) {
+            throw new Error("cannot copy door/window tool settings without a texture path");
+        }
+        this.mountedObjectTool.assets[category] = {
+            ...object,
+            category,
+            texturePath: object.texturePath,
+            width,
+            height,
+            baseWidth: width,
+            baseHeight: height,
+            anchorX: Number.isFinite(Number(object.placeableAnchorX ?? object.anchorX))
+                ? Number(object.placeableAnchorX ?? object.anchorX)
+                : 0.5,
+            anchorY: Number.isFinite(Number(object.placeableAnchorY ?? object.anchorY))
+                ? Number(object.placeableAnchorY ?? object.anchorY)
+                : (category === "windows" ? 0.5 : 1)
+        };
+        this.mountedObjectTool.settings[category] = {
+            size: height,
+            aspectRatio: width / height
+        };
+    }
+
+    setMountedObjectAsset(category, asset) {
+        const resolved = String(category || "").trim().toLowerCase();
+        if (resolved !== "doors" && resolved !== "windows") {
+            throw new Error(`unknown mounted object category: ${category}`);
+        }
+        if (!asset || typeof asset.texturePath !== "string" || asset.texturePath.length === 0) {
+            throw new Error("mounted object asset requires a texture path");
+        }
+        const width = Number(asset.width);
+        const height = Number(asset.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+            throw new Error("mounted object asset requires positive width and height");
+        }
+        this.mountedObjectTool.category = resolved;
+        this.mountedObjectTool.assets[resolved] = { ...asset, category: resolved, baseWidth: width, baseHeight: height };
+        this.mountedObjectTool.settings[resolved] = {
+            size: height,
+            aspectRatio: width / height
+        };
+        this.tool = "mountObject";
+        this.draft = null;
+        this.clearSelectionForTool();
+        this.saveMountedObjectToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateMountedObjectSize(value) {
+        const selectedObjects = this.selectedMountedObjects();
+        if (this.tool !== "mountObject" && selectedObjects.length > 0) {
+            const size = Number(value);
+            if (!Number.isFinite(size) || size <= 0) {
+                throw new Error("door/window size must be a positive number");
+            }
+            selectedObjects.forEach((object) => {
+                const currentHeight = Number(object.height);
+                const currentWidth = Number(object.width);
+                const aspectRatio = Number.isFinite(currentWidth) && currentWidth > 0 && Number.isFinite(currentHeight) && currentHeight > 0
+                    ? currentWidth / currentHeight
+                    : 1;
+                object.height = size;
+                object.width = size * aspectRatio;
+            });
+            this.emitChange();
+            return;
+        }
+        const category = this.mountedObjectTool.category || "doors";
+        const size = Number(value);
+        if (!Number.isFinite(size) || size <= 0) {
+            throw new Error("door/window size must be a positive number");
+        }
+        this.mountedObjectTool.settings[category] = {
+            ...(this.mountedObjectTool.settings[category] || {}),
+            size
+        };
+        this.saveMountedObjectToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateMountedObjectAspectRatio(value) {
+        const selectedObjects = this.selectedMountedObjects();
+        if (this.tool !== "mountObject" && selectedObjects.length > 0) {
+            const aspectRatio = Number(value);
+            if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+                throw new Error("door/window aspect ratio must be a positive number");
+            }
+            selectedObjects.forEach((object) => {
+                const height = Number(object.height);
+                if (!Number.isFinite(height) || height <= 0) {
+                    throw new Error("selected door/window height must be a positive number");
+                }
+                object.width = height * aspectRatio;
+            });
+            this.emitChange();
+            return;
+        }
+        const category = this.mountedObjectTool.category || "doors";
+        const aspectRatio = Number(value);
+        if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+            throw new Error("door/window aspect ratio must be a positive number");
+        }
+        this.mountedObjectTool.settings[category] = {
+            ...(this.mountedObjectTool.settings[category] || {}),
+            aspectRatio
+        };
+        this.saveMountedObjectToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    mountedObjectToolSettingsSnapshot() {
+        return {
+            category: this.mountedObjectTool.category,
+            assets: {
+                doors: this.mountedObjectTool.assets.doors || null,
+                windows: this.mountedObjectTool.assets.windows || null
+            },
+            settings: {
+                doors: this.mountedObjectTool.settings.doors || null,
+                windows: this.mountedObjectTool.settings.windows || null
+            }
+        };
+    }
+
+    saveMountedObjectToolSettingsToBrowser() {
+        localStorage.setItem(MOUNTED_OBJECT_TOOL_STORAGE_KEY, JSON.stringify(this.mountedObjectToolSettingsSnapshot()));
+    }
+
+    loadMountedObjectToolSettingsFromBrowser() {
+        const stored = localStorage.getItem(MOUNTED_OBJECT_TOOL_STORAGE_KEY);
+        if (!stored) return false;
+        const payload = JSON.parse(stored);
+        if (!payload || typeof payload !== "object") {
+            throw new Error("stored door/window tool settings must be an object");
+        }
+        ["doors", "windows"].forEach((category) => {
+            const asset = payload.assets && payload.assets[category];
+            if (asset) {
+                const width = Number(asset.width);
+                const height = Number(asset.height);
+                if (typeof asset.texturePath !== "string" || asset.texturePath.length === 0) {
+                    throw new Error(`stored ${category} tool asset is missing a texture path`);
+                }
+                if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+                    throw new Error(`stored ${category} tool asset requires positive width and height`);
+                }
+                this.mountedObjectTool.assets[category] = {
+                    ...asset,
+                    category,
+                    width,
+                    height,
+                    baseWidth: Number.isFinite(Number(asset.baseWidth)) ? Number(asset.baseWidth) : width,
+                    baseHeight: Number.isFinite(Number(asset.baseHeight)) ? Number(asset.baseHeight) : height
+                };
+            }
+            const settings = payload.settings && payload.settings[category];
+            if (settings) {
+                const size = Number(settings.size);
+                const aspectRatio = Number(settings.aspectRatio);
+                if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+                    throw new Error(`stored ${category} tool settings require positive size and aspect ratio`);
+                }
+                this.mountedObjectTool.settings[category] = { size, aspectRatio };
+            }
+        });
+        const category = String(payload.category || "").trim().toLowerCase();
+        if (category === "doors" || category === "windows") {
+            this.mountedObjectTool.category = category;
+        }
+        this.emitChange();
+        return true;
+    }
+
+    selectedMountedObjectAsset() {
+        const selectedObject = this.selectedMountedObjects()[0] || null;
+        if (selectedObject) {
+            const width = Number(selectedObject.width);
+            const height = Number(selectedObject.height);
+            if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+                throw new Error("selected door/window requires positive width and height");
+            }
+            return {
+                ...selectedObject,
+                texturePath: selectedObject.texturePath,
+                size: height,
+                aspectRatio: width / height
+            };
+        }
+        const category = this.mountedObjectTool.category || "doors";
+        const asset = this.mountedObjectTool.assets[category] || null;
+        if (!asset) return null;
+        const settings = this.mountedObjectTool.settings[category] || {};
+        const size = Number.isFinite(Number(settings.size)) && Number(settings.size) > 0
+            ? Number(settings.size)
+            : Number(asset.baseHeight || asset.height);
+        const aspectRatio = Number.isFinite(Number(settings.aspectRatio)) && Number(settings.aspectRatio) > 0
+            ? Number(settings.aspectRatio)
+            : Number(asset.baseWidth || asset.width) / Number(asset.baseHeight || asset.height);
+        return {
+            ...asset,
+            width: size * aspectRatio,
+            height: size,
+            size,
+            aspectRatio
+        };
     }
 
     setRenderError(message) {
@@ -206,7 +514,65 @@ export class BuildingEditorState extends EventTarget {
     }
 
     selectedWall() {
-        return findWall(this.building, this.selection.wallId);
+        const wallIds = this.selectedWallIds();
+        return wallIds.length === 1 ? findWall(this.building, wallIds[0]) : null;
+    }
+
+    selectedMountedObject() {
+        const objectIds = this.selectedMountedObjectIds();
+        return objectIds.length === 1 ? findMountedObject(this.building, objectIds[0]) : null;
+    }
+
+    selectedMountedObjectIds() {
+        const kind = this.selection && this.selection.kind;
+        if (kind !== "mountedObject") return [];
+        if (Array.isArray(this.selection.mountedObjectIds) && this.selection.mountedObjectIds.length > 0) {
+            return this.selection.mountedObjectIds;
+        }
+        return this.selection.mountedObjectId !== null && this.selection.mountedObjectId !== undefined ? [this.selection.mountedObjectId] : [];
+    }
+
+    selectedMountedObjects() {
+        return this.selectedMountedObjectIds().map((objectId) => {
+            const object = findMountedObject(this.building, objectId);
+            if (!object) throw new Error(`selected mounted object is missing from building: ${objectId}`);
+            return object;
+        });
+    }
+
+    selectedWallIds() {
+        const kind = this.selection && this.selection.kind;
+        if (kind !== "wall" && kind !== "wallEndpoint") return [];
+        if (Array.isArray(this.selection.wallIds) && this.selection.wallIds.length > 0) {
+            return this.selection.wallIds;
+        }
+        return this.selection.wallId !== null && this.selection.wallId !== undefined ? [this.selection.wallId] : [];
+    }
+
+    selectedWalls() {
+        return this.selectedWallIds().map((wallId) => {
+            const wall = findWall(this.building, wallId);
+            if (!wall) throw new Error(`selected wall is missing from building: ${wallId}`);
+            return wall;
+        });
+    }
+
+    isWallSelected(wall) {
+        if (!wall) return false;
+        const ids = new Set(this.selectedWallIds().map((id) => String(id)));
+        return ids.has(String(wall.id));
+    }
+
+    syncInputsFromFloor(floor) {
+        if (!floor) return;
+        this.inputs.floorElevation = getFloorElevation(floor);
+        this.inputs.floorHeight = floor.floorHeight;
+        this.inputs.floorTexture = floor.floorTexturePath;
+        this.inputs.roofTexture = floor.roofTexturePath;
+        this.inputs.roofOverhang = floor.roofOverhang;
+        this.inputs.roofPeakHeight = floor.roofPeakHeight;
+        this.inputs.wallHeight = floor.defaultWallHeight;
+        this.inputs.wallTexture = floor.defaultWallTexturePath;
     }
 
     buildingCenter() {
@@ -238,58 +604,65 @@ export class BuildingEditorState extends EventTarget {
         return this.camera.rotationCenter;
     }
 
-    selectFloor(floorId) {
+    selectFloor(floorId, options = {}) {
         const floor = findFloor(this.building, floorId);
         if (!floor) {
             throw new Error(`cannot select missing floor: ${floorId}`);
         }
         const selectedFloorId = getFloorId(floor);
-        this.selectedFloorIds = new Set([selectedFloorId]);
-        this.layerSelectionMode = "floor";
-        this.selection = { floorId: selectedFloorId, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
-        this.inputs.floorElevation = getFloorElevation(floor);
-        this.inputs.floorHeight = floor.floorHeight;
-        this.inputs.floorTexture = floor.floorTexturePath;
-        this.inputs.roofTexture = floor.roofTexturePath;
-        this.inputs.wallHeight = floor.defaultWallHeight;
-        this.inputs.wallTexture = floor.defaultWallTexturePath;
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("floor", { floorId: selectedFloorId });
+        this.syncInputsFromFloor(floor);
         this.emitChange();
     }
 
     selectAllFloors() {
+        this.selectBuilding();
+    }
+
+    selectBuilding() {
         const floors = getBuildingFloors(this.building);
         this.selectedFloorIds = new Set(floors.map((floor) => getFloorId(floor)));
         this.layerSelectionMode = "all";
-        const currentFloor = findFloor(this.building, this.selection.floorId);
-        const primaryFloor = currentFloor || floors[0] || null;
-        if (primaryFloor) {
-            const floorId = getFloorId(primaryFloor);
-            this.selection = { floorId, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
-            this.inputs.floorElevation = getFloorElevation(primaryFloor);
-            this.inputs.floorHeight = primaryFloor.floorHeight;
-            this.inputs.floorTexture = primaryFloor.floorTexturePath;
-            this.inputs.roofTexture = primaryFloor.roofTexturePath;
-            this.inputs.wallHeight = primaryFloor.defaultWallHeight;
-            this.inputs.wallTexture = primaryFloor.defaultWallTexturePath;
-        }
+        this.selection = createSelection("building");
+        this.syncInputsFromFloor(floors[0] || null);
         this.emitChange();
     }
 
     selectFloorLayer(floorId) {
+        this.selectLevel(floorId);
+    }
+
+    selectLevel(floorId, options = {}) {
         const floor = findFloor(this.building, floorId);
         if (!floor) {
             throw new Error(`cannot select missing floor layer: ${floorId}`);
         }
         const selectedFloorId = getFloorId(floor);
-        this.selectedFloorIds = new Set([selectedFloorId]);
-        this.layerSelectionMode = "floor";
-        this.selection = { floorId: selectedFloorId, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
-        this.inputs.floorElevation = getFloorElevation(floor);
-        this.inputs.floorHeight = floor.floorHeight;
-        this.inputs.floorTexture = floor.floorTexturePath;
-        this.inputs.roofTexture = floor.roofTexturePath;
-        this.inputs.wallHeight = floor.defaultWallHeight;
-        this.inputs.wallTexture = floor.defaultWallTexturePath;
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("level", { floorId: selectedFloorId });
+        this.syncInputsFromFloor(floor);
+        this.emitChange();
+    }
+
+    selectRoof(floorId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) {
+            throw new Error(`cannot select roof for missing level: ${floorId}`);
+        }
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("roof", { floorId: selectedFloorId });
+        this.syncInputsFromFloor(floor);
         this.emitChange();
     }
 
@@ -311,17 +684,195 @@ export class BuildingEditorState extends EventTarget {
         return new Set(this.selectedFloorIds);
     }
 
-    selectWall(wallId) {
+    selectWall(wallId, options = {}) {
         const wall = findWall(this.building, wallId);
         if (!wall) {
             throw new Error(`cannot select missing wall: ${wallId}`);
         }
-        this.selectedFloorIds = new Set([wall.floorId]);
-        this.layerSelectionMode = "floor";
-        this.selection = { floorId: wall.floorId, wallId: wall.id, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([wall.floorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("wall", { floorId: wall.floorId, wallId: wall.id });
         this.inputs.wallHeight = wall.height;
         this.inputs.wallTexture = wall.wallTexturePath;
         this.emitChange();
+    }
+
+    selectMountedObject(objectId, options = {}) {
+        const object = findMountedObject(this.building, objectId);
+        if (!object) {
+            throw new Error(`cannot select missing mounted object: ${objectId}`);
+        }
+        const wall = findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId);
+        if (!wall) {
+            throw new Error(`cannot select mounted object ${objectId} without its wall`);
+        }
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([wall.floorId]);
+            this.layerSelectionMode = "floor";
+        }
+        const category = String(object.category || "").trim().toLowerCase();
+        if (category === "doors" || category === "windows") {
+            this.mountedObjectTool.category = category;
+        }
+        this.selection = createSelection("mountedObject", {
+            floorId: wall.floorId,
+            wallId: wall.id,
+            mountedObjectId: object.id
+        });
+        this.emitChange();
+    }
+
+    updateSelectedMountedObjectAsset(asset) {
+        const objects = this.selectedMountedObjects();
+        if (!objects.length) throw new Error("cannot update texture without a selected door/window");
+        if (!asset || typeof asset.texturePath !== "string" || asset.texturePath.length === 0) {
+            throw new Error("mounted object asset requires a texture path");
+        }
+        objects.forEach((object) => {
+            object.texturePath = asset.texturePath;
+            object.placeableAnchorX = Number.isFinite(Number(asset.anchorX)) ? Number(asset.anchorX) : object.placeableAnchorX;
+            object.placeableAnchorY = Number.isFinite(Number(asset.anchorY)) ? Number(asset.anchorY) : object.placeableAnchorY;
+            object.renderDepthOffset = Number.isFinite(Number(asset.renderDepthOffset)) ? Number(asset.renderDepthOffset) : object.renderDepthOffset;
+            object.compositeLayers = Array.isArray(asset.compositeLayers) ? asset.compositeLayers : object.compositeLayers;
+            object.isOpen = asset.isOpen === true;
+            object.isPassable = asset.isPassable !== false;
+            object.blocksTile = asset.blocksTile === true;
+            object.castsLosShadows = asset.castsLosShadows === true;
+        });
+        this.emitChange();
+    }
+
+    addMountedObjectToSelection(objectId, options = {}) {
+        const object = findMountedObject(this.building, objectId);
+        if (!object) {
+            throw new Error(`cannot add missing mounted object to selection: ${objectId}`);
+        }
+        const wall = findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId);
+        if (!wall) throw new Error(`cannot add mounted object ${objectId} without its wall`);
+        const nextObjectIds = [...this.selectedMountedObjectIds()];
+        if (!nextObjectIds.some((id) => String(id) === String(object.id))) {
+            nextObjectIds.push(object.id);
+        }
+        const selectedObjects = nextObjectIds.map((id) => {
+            const selectedObject = findMountedObject(this.building, id);
+            if (!selectedObject) throw new Error(`selected mounted object is missing from building: ${id}`);
+            return selectedObject;
+        });
+        const selectedWalls = selectedObjects.map((selectedObject) => {
+            const selectedWall = findWall(this.building, selectedObject.wallId ?? selectedObject.mountedWallSectionUnitId);
+            if (!selectedWall) throw new Error(`selected mounted object ${selectedObject.id} is missing its wall`);
+            return selectedWall;
+        });
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(selectedWalls.map((selectedWall) => selectedWall.floorId));
+            this.layerSelectionMode = "floor";
+        }
+        const selectedWallIds = new Set(selectedWalls.map((selectedWall) => String(selectedWall.id)));
+        this.selection = createSelection("mountedObject", {
+            floorId: selectedWalls[0].floorId,
+            wallId: selectedWallIds.size === 1 ? selectedWalls[0].id : null,
+            mountedObjectIds: nextObjectIds
+        });
+        this.emitChange();
+        return true;
+    }
+
+    removeMountedObjectFromSelection(objectId, options = {}) {
+        const object = findMountedObject(this.building, objectId);
+        if (!object) {
+            throw new Error(`cannot remove missing mounted object from selection: ${objectId}`);
+        }
+        const nextObjectIds = this.selectedMountedObjectIds().filter((id) => String(id) !== String(object.id));
+        if (nextObjectIds.length === this.selectedMountedObjectIds().length) return false;
+        if (nextObjectIds.length === 0) {
+            const wall = findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId);
+            if (wall) this.selectLevel(wall.floorId, options);
+            else this.selectBuilding();
+            return true;
+        }
+        if (nextObjectIds.length === 1) {
+            this.selectMountedObject(nextObjectIds[0], options);
+            return true;
+        }
+        const selectedObjects = nextObjectIds.map((id) => {
+            const selectedObject = findMountedObject(this.building, id);
+            if (!selectedObject) throw new Error(`selected mounted object is missing from building: ${id}`);
+            return selectedObject;
+        });
+        const selectedWalls = selectedObjects.map((selectedObject) => {
+            const selectedWall = findWall(this.building, selectedObject.wallId ?? selectedObject.mountedWallSectionUnitId);
+            if (!selectedWall) throw new Error(`selected mounted object ${selectedObject.id} is missing its wall`);
+            return selectedWall;
+        });
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(selectedWalls.map((selectedWall) => selectedWall.floorId));
+            this.layerSelectionMode = "floor";
+        }
+        const selectedWallIds = new Set(selectedWalls.map((selectedWall) => String(selectedWall.id)));
+        this.selection = createSelection("mountedObject", {
+            floorId: selectedWalls[0].floorId,
+            wallId: selectedWallIds.size === 1 ? selectedWalls[0].id : null,
+            mountedObjectIds: nextObjectIds
+        });
+        this.emitChange();
+        return true;
+    }
+
+    addWallToSelection(wallId, options = {}) {
+        const wall = findWall(this.building, wallId);
+        if (!wall) {
+            throw new Error(`cannot add missing wall to selection: ${wallId}`);
+        }
+        const nextWallIds = [...this.selectedWallIds()];
+        if (!nextWallIds.some((id) => String(id) === String(wall.id))) {
+            nextWallIds.push(wall.id);
+        }
+        const selectedWalls = nextWallIds.map((id) => {
+            const selectedWall = findWall(this.building, id);
+            if (!selectedWall) throw new Error(`selected wall is missing from building: ${id}`);
+            return selectedWall;
+        });
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(selectedWalls.map((selectedWall) => selectedWall.floorId));
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("wall", { floorId: selectedWalls[0].floorId, wallIds: nextWallIds });
+        this.inputs.wallHeight = wall.height;
+        this.inputs.wallTexture = wall.wallTexturePath;
+        this.emitChange();
+    }
+
+    removeWallFromSelection(wallId, options = {}) {
+        const wall = findWall(this.building, wallId);
+        if (!wall) {
+            throw new Error(`cannot remove missing wall from selection: ${wallId}`);
+        }
+        const nextWallIds = this.selectedWallIds().filter((id) => String(id) !== String(wall.id));
+        if (nextWallIds.length === this.selectedWallIds().length) return false;
+        if (nextWallIds.length === 0) {
+            this.selectLevel(wall.floorId, options);
+            return true;
+        }
+        if (nextWallIds.length === 1) {
+            this.selectWall(nextWallIds[0], options);
+            return true;
+        }
+        const selectedWalls = nextWallIds.map((id) => {
+            const selectedWall = findWall(this.building, id);
+            if (!selectedWall) throw new Error(`selected wall is missing from building: ${id}`);
+            return selectedWall;
+        });
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(selectedWalls.map((selectedWall) => selectedWall.floorId));
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("wall", { floorId: selectedWalls[0].floorId, wallIds: nextWallIds });
+        this.inputs.wallHeight = selectedWalls[0].height;
+        this.inputs.wallTexture = selectedWalls[0].wallTexturePath;
+        this.emitChange();
+        return true;
     }
 
     selectWallEndpoint(wallId, endpointKey) {
@@ -335,10 +886,49 @@ export class BuildingEditorState extends EventTarget {
         if (!wall[endpointKey]) {
             throw new Error(`cannot select missing wall endpoint: ${endpointKey}`);
         }
-        this.selection = { floorId: wall.floorId, wallId: wall.id, wallEndpointKey: endpointKey, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.selection = createSelection("wallEndpoint", { floorId: wall.floorId, wallId: wall.id, wallEndpointKey: endpointKey });
         this.inputs.wallHeight = wall.height;
         this.inputs.wallTexture = wall.wallTexturePath;
         this.emitChange();
+    }
+
+    selectParentSelection() {
+        const selection = this.selection || createSelection("building");
+        const preserveView = this.renderStyle() === "exterior";
+        switch (selection.kind) {
+            case "floorVertex":
+                this.selectFloor(selection.floorId, { preserveView });
+                return true;
+            case "wallEndpoint":
+                this.selectWall(selection.wallId, { preserveView });
+                return true;
+            case "mountedObject":
+                if (selection.wallId !== null && selection.wallId !== undefined) {
+                    this.selectWall(selection.wallId, { preserveView });
+                } else if (selection.floorId) {
+                    this.selectLevel(selection.floorId, { preserveView });
+                } else {
+                    this.selectBuilding();
+                }
+                return true;
+            case "wall":
+            case "floor":
+            case "roof":
+                this.selectLevel(selection.floorId, { preserveView });
+                return true;
+            case "level":
+                this.selectBuilding();
+                return true;
+            case "building":
+                return false;
+            default:
+                if (selection.floorId) {
+                    this.selectLevel(selection.floorId, { preserveView });
+                    return true;
+                }
+                this.selectBuilding();
+                return true;
+        }
     }
 
     addWall(points) {
@@ -392,6 +982,50 @@ export class BuildingEditorState extends EventTarget {
         return wall;
     }
 
+    addMountedWallObject(placement, asset) {
+        if (!placement || !placement.wall || !placement.floor) {
+            throw new Error("cannot place door or window without a wall placement");
+        }
+        if (!asset || typeof asset.texturePath !== "string" || asset.texturePath.length === 0) {
+            throw new Error("cannot place door or window without a selected asset");
+        }
+        if (!placement.valid) {
+            throw new Error(placement.reason || "door or window does not fit on this wall");
+        }
+        if (!Array.isArray(this.building.mountedWallObjects)) this.building.mountedWallObjects = [];
+        const category = String(asset.category || this.mountedObjectTool.category || "").trim().toLowerCase();
+        const object = createWallMountedObject({
+            floorId: getFloorId(placement.floor),
+            wallId: placement.wall.id,
+            category,
+            texturePath: asset.texturePath,
+            wallT: placement.wallT,
+            width: asset.width,
+            height: asset.height,
+            zOffset: placement.zOffset,
+            placementRotation: placement.placementRotation,
+            mountedWallFacingSign: placement.mountedWallFacingSign,
+            placeableAnchorX: asset.anchorX,
+            placeableAnchorY: asset.anchorY,
+            renderDepthOffset: asset.renderDepthOffset,
+            compositeLayers: asset.compositeLayers
+        });
+        object.x = Number(placement.faceCenter.x);
+        object.y = Number(placement.faceCenter.y);
+        object.z = getFloorElevation(placement.floor) + Number(placement.zOffset);
+        object.isOpen = asset.isOpen === true;
+        object.isPassable = asset.isPassable !== false;
+        object.blocksTile = asset.blocksTile === true;
+        object.castsLosShadows = asset.castsLosShadows === true;
+        object.groundPlaneHitboxOverridePoints = Array.isArray(placement.groundPlaneHitboxOverridePoints)
+            ? placement.groundPlaneHitboxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+            : undefined;
+        this.building.mountedWallObjects.push(object);
+        this.draft = null;
+        this.emitChange();
+        return object;
+    }
+
     snapWallEndpoint(point, threshold, options = {}) {
         const floor = this.selectedFloor();
         if (!floor) {
@@ -399,6 +1033,18 @@ export class BuildingEditorState extends EventTarget {
             return { point: prepared, endpoint: pointEndpoint(prepared), kind: "point" };
         }
         const floorId = getFloorId(floor);
+        const ignoredVertexEndpoint = options.ignoreVertexEndpoint || null;
+        const matchesIgnoredVertex = (endpoint, ringKind = null, holeIndex = -1, vertexId = null) => (
+            ignoredVertexEndpoint &&
+            ignoredVertexEndpoint.kind === "vertex" &&
+            endpoint &&
+            endpoint.kind === "vertex" &&
+            endpoint.fragmentId === ignoredVertexEndpoint.fragmentId &&
+            endpoint.fragmentId === floorId &&
+            endpoint.ring === (ringKind || ignoredVertexEndpoint.ring) &&
+            Number(endpoint.holeIndex) === Number(holeIndex ?? ignoredVertexEndpoint.holeIndex) &&
+            endpoint.vertexId === (vertexId || ignoredVertexEndpoint.vertexId)
+        );
         let best = null;
         const consider = (candidate) => {
             if (!candidate || !Number.isFinite(candidate.distance) || candidate.distance > threshold) return;
@@ -413,6 +1059,13 @@ export class BuildingEditorState extends EventTarget {
 
         ringsForFloor(floor).forEach((ring) => {
             ring.points.forEach((vertex) => {
+                if (matchesIgnoredVertex({
+                    kind: "vertex",
+                    fragmentId: floorId,
+                    ring: ring.ringKind,
+                    holeIndex: ring.holeIndex,
+                    vertexId: vertex.id
+                }, ring.ringKind, ring.holeIndex, vertex.id)) return;
                 const candidatePoint = { x: Number(vertex.x), y: Number(vertex.y) };
                 consider({
                     priority: 0,
@@ -441,6 +1094,7 @@ export class BuildingEditorState extends EventTarget {
                 { endpoint: wall.startPoint, point: points[0] },
                 { endpoint: wall.endPoint, point: points[1] }
             ].forEach((entry) => {
+                if (matchesIgnoredVertex(entry.endpoint)) return;
                 const candidatePoint = { x: Number(entry.point.x), y: Number(entry.point.y) };
                 const endpoint = entry.endpoint && entry.endpoint.kind === "vertex"
                     ? cloneEndpoint(entry.endpoint)
@@ -487,12 +1141,10 @@ export class BuildingEditorState extends EventTarget {
     }
 
     pickWallEndpoint(point, threshold) {
-        const floor = this.selectedFloor();
-        if (!floor) return null;
-        const floorId = getFloorId(floor);
+        const selectedWall = this.selectedWall();
+        if (!selectedWall) return null;
         let best = null;
-        getBuildingWalls(this.building).forEach((wall) => {
-            if ((wall.fragmentId || wall.floorId) !== floorId) return;
+        [selectedWall].forEach((wall) => {
             const points = wallPoints(this.building, wall);
             if (points.length !== 2) return;
             [
@@ -508,15 +1160,29 @@ export class BuildingEditorState extends EventTarget {
         return best;
     }
 
-    moveSelectedWallEndpoint(point, threshold) {
+    moveSelectedWallEndpoint(point, threshold, options = {}) {
         const wall = this.selectedWall();
         const endpointKey = this.selection.wallEndpointKey;
         if (!wall || (endpointKey !== "startPoint" && endpointKey !== "endPoint")) return false;
-        const snapped = this.snapWallEndpoint(point, threshold, { ignoreWallId: wall.id });
+        const detachVertexEndpoint = options.detachVertexEndpoint === true ||
+            (wall.role === "perimeter" && wall[endpointKey] && wall[endpointKey].kind === "vertex");
         const previousEndpoint = cloneEndpoint(wall[endpointKey]);
-        wall[endpointKey] = cloneEndpoint(snapped.endpoint);
-        if (distance(wall.startPoint, wall.endPoint) < 0.000001) {
+        const nextEndpoint = this.snapWallEndpoint(point, threshold, {
+            ignoreWallId: wall.id,
+            ignoreVertexEndpoint: detachVertexEndpoint ? previousEndpoint : null
+        }).endpoint;
+        const previousAttachment = wall.attachment ? JSON.parse(JSON.stringify(wall.attachment)) : null;
+        const previousRole = wall.role;
+        if (detachVertexEndpoint && wall.role === "perimeter") {
+            wall.role = "interior";
+            wall.attachment = null;
+        }
+        wall[endpointKey] = cloneEndpoint(nextEndpoint);
+        const points = wallPoints(this.building, wall);
+        if (points.length !== 2 || distance(points[0], points[1]) < 0.000001) {
             wall[endpointKey] = previousEndpoint;
+            wall.attachment = previousAttachment;
+            wall.role = previousRole;
             return false;
         }
         syncWallLineBoundaryAttachment(wall);
@@ -588,13 +1254,15 @@ export class BuildingEditorState extends EventTarget {
             .filter((candidate) => getFloorId(candidate) !== deletedFloorId);
         this.building.wallSections = getBuildingWalls(this.building)
             .filter((wall) => wall.floorId !== deletedFloorId && wall.fragmentId !== deletedFloorId);
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((object) => object.floorId !== deletedFloorId);
         this.selectedFloorIds.delete(deletedFloorId);
 
         const remainingFloors = getBuildingFloors(this.building);
         if (!remainingFloors.length) {
             this.selectedFloorIds = new Set();
             this.layerSelectionMode = "floor";
-            this.selection = { floorId: null, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+            this.selection = createSelection("building");
             this.draft = null;
             this.floorVertexDrag = null;
             this.emitChange();
@@ -610,12 +1278,14 @@ export class BuildingEditorState extends EventTarget {
 
         if (this.layerSelectionMode === "all") {
             this.selectedFloorIds = new Set(getBuildingFloors(this.building).map((candidate) => getFloorId(candidate)));
-            const primaryFloor = findFloor(this.building, this.selection.floorId) || remainingFloors[0];
-            this.selection = { floorId: getFloorId(primaryFloor), wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+            const primaryFloor = remainingFloors[0];
+            this.selection = createSelection("building");
             this.inputs.floorElevation = getFloorElevation(primaryFloor);
             this.inputs.floorHeight = primaryFloor.floorHeight;
             this.inputs.floorTexture = primaryFloor.floorTexturePath;
             this.inputs.roofTexture = primaryFloor.roofTexturePath;
+            this.inputs.roofOverhang = primaryFloor.roofOverhang;
+            this.inputs.roofPeakHeight = primaryFloor.roofPeakHeight;
             this.inputs.wallHeight = primaryFloor.defaultWallHeight;
             this.inputs.wallTexture = primaryFloor.defaultWallTexturePath;
             this.draft = null;
@@ -674,9 +1344,11 @@ export class BuildingEditorState extends EventTarget {
         if (!Number.isFinite(height) || height <= 0) {
             throw new Error("wall height must be a positive number");
         }
-        const wall = this.selectedWall();
-        if (wall) {
-            wall.height = height;
+        const walls = this.selectedWalls();
+        if (walls.length > 0) {
+            walls.forEach((wall) => {
+                wall.height = height;
+            });
         } else {
             const floor = this.selectedFloor();
             if (!floor) throw new Error("cannot update wall defaults without a selected floor");
@@ -687,9 +1359,11 @@ export class BuildingEditorState extends EventTarget {
     }
 
     updateSelectedWallTexture(texture) {
-        const wall = this.selectedWall();
-        if (wall) {
-            wall.wallTexturePath = texture;
+        const walls = this.selectedWalls();
+        if (walls.length > 0) {
+            walls.forEach((wall) => {
+                wall.wallTexturePath = texture;
+            });
         } else {
             const floor = this.selectedFloor();
             if (!floor) throw new Error("cannot update wall defaults without a selected floor");
@@ -714,6 +1388,43 @@ export class BuildingEditorState extends EventTarget {
         if (!floor) throw new Error("cannot update roof texture without a selected floor");
         floor.roofTexturePath = texture;
         this.inputs.roofTexture = texture;
+        this.paintTextures.roofs = texture;
+        this.emitChange();
+    }
+
+    updateSelectedRoofOverhang(value) {
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error("cannot update roof overhang without a selected floor");
+        const overhang = Number(value);
+        if (!Number.isFinite(overhang)) {
+            throw new Error("roof overhang must be a finite number");
+        }
+        floor.roofOverhang = overhang;
+        this.inputs.roofOverhang = overhang;
+        this.emitChange();
+    }
+
+    updateSelectedRoofPeakHeight(value) {
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error("cannot update roof peak height without a selected floor");
+        const peakHeight = Number(value);
+        if (!Number.isFinite(peakHeight) || peakHeight < 0) {
+            throw new Error("roof peak height must be zero or greater");
+        }
+        floor.roofPeakHeight = peakHeight;
+        this.inputs.roofPeakHeight = peakHeight;
+        this.emitChange();
+    }
+
+    paintRoof(floorOrId, texture) {
+        const floor = typeof floorOrId === "string" ? findFloor(this.building, floorOrId) : floorOrId;
+        if (!floor) throw new Error("cannot paint missing roof");
+        floor.roofTexturePath = texture;
+        this.inputs.roofTexture = texture;
+        this.paintTextures.roofs = texture;
+        this.selection = createSelection("roof", { floorId: getFloorId(floor) });
+        this.selectedFloorIds = new Set([getFloorId(floor)]);
+        this.layerSelectionMode = "floor";
         this.emitChange();
     }
 
@@ -723,7 +1434,7 @@ export class BuildingEditorState extends EventTarget {
         floor.floorTexturePath = texture;
         this.inputs.floorTexture = texture;
         this.paintTextures.floor = texture;
-        this.selection = { floorId: getFloorId(floor), wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.selection = createSelection("floor", { floorId: getFloorId(floor) });
         this.selectedFloorIds = new Set([getFloorId(floor)]);
         this.layerSelectionMode = "floor";
         this.emitChange();
@@ -749,21 +1460,26 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
-    selectFloorVertex(floorId, ringKind, holeIndex, vertexIndex) {
+    selectFloorVertex(floorId, ringKind, holeIndex, vertexIndex, options = {}) {
         const floor = findFloor(this.building, floorId);
         if (!floor) throw new Error(`cannot select vertex on missing floor: ${floorId}`);
         const ring = getFloorRing(floor, ringKind, holeIndex);
         if (!Array.isArray(ring) || !ring[vertexIndex]) {
             throw new Error(`cannot select missing floor vertex: ${vertexIndex}`);
         }
-        this.selection = { floorId, wallId: null, wallEndpointKey: null, ringKind, holeIndex, vertexIndex };
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("floorVertex", { floorId: selectedFloorId, ringKind, holeIndex, vertexIndex });
         this.emitChange();
     }
 
     clearVertexSelection() {
         const floor = this.selectedFloor();
         if (floor) {
-            this.selection = { floorId: getFloorId(floor), wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+            this.selection = createSelection("floor", { floorId: getFloorId(floor) });
             this.floorVertexDrag = null;
             this.emitChange();
         }
@@ -830,7 +1546,6 @@ export class BuildingEditorState extends EventTarget {
         const nextRing = ring.map((vertex, index) => (
             index === selection.vertexIndex ? { ...vertex, ...this.preparePoint(point) } : { ...vertex }
         ));
-        setFloorRing(floor, selection.ringKind, selection.holeIndex, nextRing);
         const movedPoint = nextRing[selection.vertexIndex];
         const activeDrag = this.floorVertexDrag &&
             this.floorVertexDrag.floorId === getFloorId(floor) &&
@@ -839,6 +1554,13 @@ export class BuildingEditorState extends EventTarget {
             Number(this.floorVertexDrag.vertexIndex) === Number(selection.vertexIndex)
             ? this.floorVertexDrag
             : null;
+        const ringUpdates = [{
+            floor,
+            floorId: getFloorId(floor),
+            ringKind: selection.ringKind,
+            holeIndex: selection.holeIndex,
+            ring: nextRing
+        }];
         const changedFloors = new Set([getFloorId(floor)]);
         if (activeDrag) {
             const dx = Number(movedPoint.x) - Number(activeDrag.origin.x);
@@ -851,10 +1573,23 @@ export class BuildingEditorState extends EventTarget {
                         ? { ...vertex, x: Number(linked.origin.x) + dx, y: Number(linked.origin.y) + dy }
                         : { ...vertex }
                 ));
-                setFloorRing(linked.floor, linked.ringKind, linked.holeIndex, linkedNextRing);
+                ringUpdates.push({
+                    floor: linked.floor,
+                    floorId: linked.floorId,
+                    ringKind: linked.ringKind,
+                    holeIndex: linked.holeIndex,
+                    ring: linkedNextRing
+                });
                 changedFloors.add(linked.floorId);
             });
         }
+        ringUpdates.forEach((update) => {
+            const error = simplePolygonRingError(update.ring, `floor ${update.floorId} ${update.ringKind} polygon`);
+            if (error) throw new Error(`cannot move floor vertex: ${error}`);
+        });
+        ringUpdates.forEach((update) => {
+            setFloorRing(update.floor, update.ringKind, update.holeIndex, update.ring);
+        });
         if (selection.ringKind === "outer") {
             getBuildingFloors(this.building).forEach((candidateFloor) => {
                 if (changedFloors.has(getFloorId(candidateFloor))) {
@@ -914,31 +1649,50 @@ export class BuildingEditorState extends EventTarget {
         return changedFloorIds;
     }
 
+    insertFloorVertexOnKnownEdge(floorId, ringKind, holeIndex, insertAfterIndex, point) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot insert vertex on missing floor: ${floorId}`);
+        const points = getFloorRing(floor, ringKind, holeIndex);
+        if (!Array.isArray(points) || points.length < 3) {
+            throw new Error(`cannot insert vertex on missing ${ringKind} ring`);
+        }
+        const edgeIndex = Math.floor(Number(insertAfterIndex));
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= points.length) {
+            throw new Error(`cannot insert vertex on missing edge: ${insertAfterIndex}`);
+        }
+        const preparedPoint = this.preparePoint(point);
+        const edgeStart = points[edgeIndex];
+        const edgeEnd = points[(edgeIndex + 1) % points.length];
+        const result = insertVertexOnRingEdge(points, edgeIndex, preparedPoint);
+        setFloorRing(floor, ringKind, holeIndex, result.ring);
+        const changedFloorIds = new Set([getFloorId(floor)]);
+        this.propagateInsertedFloorVertex(floor, ringKind, holeIndex, edgeStart, edgeEnd, preparedPoint)
+            .forEach((changedFloorId) => changedFloorIds.add(changedFloorId));
+        if (ringKind === "outer") {
+            this.refreshChangedFloorWalls(changedFloorIds);
+        }
+        this.selection = createSelection("floorVertex", {
+            floorId: getFloorId(floor),
+            ringKind,
+            holeIndex,
+            vertexIndex: result.vertexIndex
+        });
+        this.emitChange();
+        return true;
+    }
+
     insertFloorVertexOnEdge(point, threshold) {
         const floor = this.selectedFloor();
         if (!floor) return false;
         const hit = findRingEdgeAtPoint(floor, point, threshold);
         if (!hit) return false;
-        const edgeStart = hit.points[hit.insertAfterIndex];
-        const edgeEnd = hit.points[(hit.insertAfterIndex + 1) % hit.points.length];
-        const result = insertVertexOnRingEdge(hit.points, hit.insertAfterIndex, hit.point);
-        setFloorRing(floor, hit.ringKind, hit.holeIndex, result.ring);
-        const changedFloorIds = new Set([getFloorId(floor)]);
-        this.propagateInsertedFloorVertex(floor, hit.ringKind, hit.holeIndex, edgeStart, edgeEnd, hit.point)
-            .forEach((floorId) => changedFloorIds.add(floorId));
-        if (hit.ringKind === "outer") {
-            this.refreshChangedFloorWalls(changedFloorIds);
-        }
-        this.selection = {
-            floorId: getFloorId(floor),
-            wallId: null,
-            wallEndpointKey: null,
-            ringKind: hit.ringKind,
-            holeIndex: hit.holeIndex,
-            vertexIndex: result.vertexIndex
-        };
-        this.emitChange();
-        return true;
+        return this.insertFloorVertexOnKnownEdge(
+            getFloorId(floor),
+            hit.ringKind,
+            hit.holeIndex,
+            hit.insertAfterIndex,
+            hit.point
+        );
     }
 
     insertFloorVertexNearSelected(point) {
@@ -968,14 +1722,12 @@ export class BuildingEditorState extends EventTarget {
         if (selection.ringKind === "outer") {
             this.refreshChangedFloorWalls(changedFloorIds);
         }
-        this.selection = {
+        this.selection = createSelection("floorVertex", {
             floorId: getFloorId(floor),
-            wallId: null,
-            wallEndpointKey: null,
             ringKind: selection.ringKind,
             holeIndex: selection.holeIndex,
             vertexIndex: result.vertexIndex
-        };
+        });
         this.emitChange();
         return true;
     }
@@ -1002,14 +1754,12 @@ export class BuildingEditorState extends EventTarget {
         if (selection.ringKind === "outer") {
             this.refreshChangedFloorWalls(changedFloorIds);
         }
-        this.selection = {
+        this.selection = createSelection("floorVertex", {
             floorId: getFloorId(floor),
-            wallId: null,
-            wallEndpointKey: null,
             ringKind: selection.ringKind,
             holeIndex: selection.holeIndex,
             vertexIndex: Math.min(selection.vertexIndex, nextRing.length - 1)
-        };
+        });
         this.emitChange();
         return true;
     }
@@ -1019,7 +1769,7 @@ export class BuildingEditorState extends EventTarget {
         if (!floor) throw new Error("cannot edit polygon without a selected floor");
         const result = applyFloorPolygonEdit(floor, points, operation);
         replaceFloorShape(this.building, floor, result.footprint, result.holes, { regeneratePerimeterWalls: true });
-        this.selection = { floorId: getFloorId(floor), wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.selection = createSelection("floor", { floorId: getFloorId(floor) });
         this.emitChange();
     }
 
@@ -1038,14 +1788,18 @@ export class BuildingEditorState extends EventTarget {
         return `midpoint ${anchor.a.xindex},${anchor.a.yindex} / ${anchor.b.xindex},${anchor.b.yindex}`;
     }
 
-    pick(point, threshold) {
+    pickSelectedFloorVertex(point, threshold) {
         const selectedFloor = this.selectedFloor();
-        if (selectedFloor) {
-            const ringVertex = findRingVertexAtPoint(selectedFloor, point, threshold);
-            if (ringVertex) return { type: "floorVertex", floor: selectedFloor, ...ringVertex };
-            const vertex = nearestFloorVertex(selectedFloor, point, threshold);
-            if (vertex) return { type: "floorVertex", ...vertex };
-        }
+        if (!selectedFloor) return null;
+        const ringVertex = findRingVertexAtPoint(selectedFloor, point, threshold);
+        if (ringVertex) return { type: "floorVertex", floor: selectedFloor, ...ringVertex };
+        const vertex = nearestFloorVertex(selectedFloor, point, threshold);
+        return vertex ? { type: "floorVertex", ...vertex } : null;
+    }
+
+    pick(point, threshold) {
+        const vertexHit = this.pickSelectedFloorVertex(point, threshold);
+        if (vertexHit) return vertexHit;
         const wallHit = nearestWall(this.building, point, threshold, (_wall, floor) => this.isFloorSelected(getFloorId(floor)));
         if (wallHit) return { type: "wall", ...wallHit };
         const floors = getBuildingFloors(this.building);
@@ -1083,7 +1837,31 @@ export class BuildingEditorState extends EventTarget {
         const floor = findFloor(this.building, wall.floorId);
         if (!floor) throw new Error(`selected wall has missing floor: ${wall.floorId}`);
         this.building.wallSections = getBuildingWalls(this.building).filter((candidate) => Number(candidate.id) !== Number(wall.id));
-        this.selection = { floorId: getFloorId(floor), wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((object) => Number(object.wallId) !== Number(wall.id));
+        this.selection = createSelection("level", { floorId: getFloorId(floor) });
+        this.emitChange();
+        return true;
+    }
+
+    deleteSelectedMountedObject() {
+        const objects = this.selectedMountedObjects();
+        if (!objects.length) return false;
+        const objectIds = new Set(objects.map((object) => String(object.id)));
+        const walls = objects
+            .map((object) => findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId))
+            .filter(Boolean);
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((candidate) => !objectIds.has(String(candidate.id)));
+        const wallIds = new Set(walls.map((wall) => String(wall.id)));
+        if (walls.length === 1 || wallIds.size === 1) {
+            const wall = walls[0];
+            this.selection = createSelection("wall", { floorId: wall.floorId, wallId: wall.id });
+        } else if (walls.length > 0) {
+            this.selection = createSelection("level", { floorId: walls[0].floorId });
+        } else {
+            this.selection = createSelection("building");
+        }
         this.emitChange();
         return true;
     }
@@ -1093,18 +1871,78 @@ export class BuildingEditorState extends EventTarget {
     }
 
     import(rawJson) {
-        this.building = normalizeImportedBuilding(rawJson);
+        const nextBuilding = normalizeImportedBuilding(rawJson);
+        const errors = validateBuilding(nextBuilding);
+        if (errors.length) {
+            throw new Error(`cannot load invalid building: ${errors[0]}`);
+        }
+        this.building = nextBuilding;
         const firstFloor = getBuildingFloors(this.building)[0] || null;
         this.selectedFloorIds = new Set(getBuildingFloors(this.building).map((floor) => getFloorId(floor)));
         this.layerSelectionMode = "all";
-        this.selection = { floorId: firstFloor ? getFloorId(firstFloor) : null, wallId: null, wallEndpointKey: null, ringKind: null, holeIndex: -1, vertexIndex: -1 };
+        this.selection = createSelection("building");
+        this.syncInputsFromFloor(firstFloor);
         this.draft = null;
         this.updateCameraRotationCenter();
         this.emitChange();
     }
 
+    repairFloorRings(building) {
+        let repairedRingCount = 0;
+        getBuildingFloors(building).forEach((floor) => {
+            const floorId = getFloorId(floor);
+            const outerError = simplePolygonRingError(floor.outerPolygon, `floor ${floorId} outerPolygon`);
+            if (outerError) {
+                floor.outerPolygon = repairSimplePolygonRing(floor.outerPolygon, `floor ${floorId} outerPolygon`);
+                repairedRingCount += 1;
+            }
+            if (Array.isArray(floor.holes)) {
+                floor.holes = floor.holes.map((ring, holeIndex) => {
+                    const holeError = simplePolygonRingError(ring, `floor ${floorId} hole ${holeIndex}`);
+                    if (!holeError) return ring;
+                    repairedRingCount += 1;
+                    return repairSimplePolygonRing(ring, `floor ${floorId} hole ${holeIndex}`);
+                });
+            }
+            refreshWallSectionEndpoints(building, floor);
+        });
+        return repairedRingCount;
+    }
+
+    repairBrowserSave() {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (!stored) {
+            throw new Error("no browser-saved building was found");
+        }
+        const building = normalizeImportedBuilding(stored);
+        const initialErrors = validateBuilding(building);
+        if (initialErrors.length === 0) {
+            this.import(stored);
+            return { repairedRingCount: 0, backupKey: null };
+        }
+        const repairedRingCount = this.repairFloorRings(building);
+        const errors = validateBuilding(building);
+        if (errors.length) {
+            throw new Error(`browser save repair failed: ${errors[0]}`);
+        }
+        const backupKey = `${CORRUPT_SAVE_BACKUP_KEY_PREFIX}-${new Date().toISOString()}`;
+        localStorage.setItem(backupKey, stored);
+        const repaired = serializeBuilding(building);
+        localStorage.setItem(STORAGE_KEY, repaired);
+        this.import(repaired);
+        return { repairedRingCount, backupKey };
+    }
+
     saveToBrowser() {
+        const errors = validateBuilding(this.building);
+        if (errors.length) {
+            throw new Error(`cannot save invalid building: ${errors[0]}`);
+        }
         localStorage.setItem(STORAGE_KEY, this.serialize());
+    }
+
+    hasBrowserSave() {
+        return localStorage.getItem(STORAGE_KEY) !== null;
     }
 
     loadFromBrowser() {
@@ -1118,7 +1956,7 @@ export class BuildingEditorState extends EventTarget {
     reset() {
         this.building = createEmptyBuilding();
         this.createStarterFloor();
-        this.tool = "edit";
+        this.tool = "select";
         this.camera.rotation = 0;
         this.centerCameraOnSelectedFloor();
     }

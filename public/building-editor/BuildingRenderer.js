@@ -2,7 +2,7 @@ import { flattenPolygon, polygonCentroid } from "./BuildingGeometry.js";
 import { validateBuilding } from "./BuildingValidation.js";
 import { ADJACENT_DIRECTIONS, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
-import { findFloor, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
+import { findFloor, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
 
 const GAME_XY_RATIO = 0.66;
 const FLOOR_TEXTURE_REPEAT = 0.1;
@@ -15,6 +15,9 @@ const GEOMETRY_EPSILON = 0.000001;
 const COLLAPSED_WALL_INTERSECTION_AREA_EPSILON = 0.25;
 const COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE = 1.01;
 const DEFAULT_WALL_TEXTURE_REPEAT = 0.1;
+const PICKER_DEBUG_DEPTH_BIAS = 0.05;
+const SELECTION_OUTLINE_COLOR = 0x42a5ff;
+const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
 
 const FLOOR_DEPTH_VS = `
 precision highp float;
@@ -71,6 +74,53 @@ void main(void) {
 }
 `;
 
+const SOLID_DEPTH_VS = `
+precision highp float;
+attribute vec3 aWorldPosition;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+uniform float uDepthBias;
+uniform float uCameraRotation;
+uniform vec2 uCameraRotationCenter;
+void main(void) {
+    float cosR = cos(uCameraRotation);
+    float sinR = sin(uCameraRotation);
+    vec2 rel = aWorldPosition.xy - uCameraRotationCenter;
+    vec2 rotatedWorld = vec2(
+        rel.x * cosR - rel.y * sinR,
+        rel.x * sinR + rel.y * cosR
+    ) + uCameraRotationCenter;
+    float camDx = rotatedWorld.x - uCameraWorld.x;
+    float camDy = rotatedWorld.y - uCameraWorld.y;
+    float camDz = aWorldPosition.z - uCameraZ;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz + uDepthBias;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+}
+`;
+
+const SOLID_DEPTH_FS = `
+precision highp float;
+uniform vec4 uColor;
+void main(void) {
+    gl_FragColor = uColor;
+}
+`;
+
 function normalizeTexturePath(path, fallback) {
     return (typeof path === "string" && path.length > 0) ? path : fallback;
 }
@@ -114,6 +164,20 @@ function triangulateFloor(floor) {
     return triangulateSurface(floor && floor.outerPolygon, floor && floor.holes);
 }
 
+function roofOverhang(floor) {
+    const value = Number(floor && floor.roofOverhang);
+    if (!Number.isFinite(value)) throw new Error(`roof ${getFloorId(floor)} overhang must be finite`);
+    return value;
+}
+
+function roofPeakHeight(floor) {
+    const value = Number(floor && floor.roofPeakHeight);
+    if (!Number.isFinite(value) || value < 0) {
+        throw new Error(`roof ${getFloorId(floor)} peak height must be zero or greater`);
+    }
+    return value;
+}
+
 function floorMeshSignature(floor) {
     return surfaceMeshSignature(floor, floor.floorTexturePath, getFloorElevation(floor));
 }
@@ -131,8 +195,77 @@ function roofRenderElevation(floor) {
     return floorTopElevation(floor) + ROOF_RENDER_Z_LIFT;
 }
 
+function triangulatePitchedRoof(floor) {
+    const floorId = getFloorId(floor);
+    const holes = Array.isArray(floor && floor.holes) ? floor.holes.filter((ring) => Array.isArray(ring) && ring.length >= 3) : [];
+    if (holes.length > 0) {
+        throw new Error(`roof ${floorId} with overhang or peak height cannot render floor holes yet`);
+    }
+    const contactRing = ringPointsForTriangulation(floor && floor.outerPolygon);
+    if (contactRing.length < 3) return null;
+    const overhang = roofOverhang(floor);
+    const peakHeight = roofPeakHeight(floor);
+    const rimZ = roofRenderElevation(floor);
+    const center = polygonCentroid(contactRing);
+    if (!Number.isFinite(Number(center && center.x)) || !Number.isFinite(Number(center && center.y))) {
+        throw new Error(`roof ${floorId} requires a finite center point`);
+    }
+    const points = [];
+    const indices = [];
+    const pushPoint = (point, z) => {
+        points.push({ x: Number(point.x), y: Number(point.y), z });
+        return points.length - 1;
+    };
+    const addFan = (ringStartIndex, ringLength, centerIndex) => {
+        for (let index = 0; index < ringLength; index++) {
+            const next = (index + 1) % ringLength;
+            indices.push(ringStartIndex + index, ringStartIndex + next, centerIndex);
+        }
+    };
+
+    if (overhang < -GEOMETRY_EPSILON) {
+        const innerRing = offsetRing(contactRing, overhang);
+        if (!Array.isArray(innerRing) || innerRing.length !== contactRing.length) {
+            throw new Error(`roof ${floorId} negative overhang requires a valid inset ring`);
+        }
+        contactRing.forEach((point) => pushPoint(point, rimZ));
+        innerRing.forEach((point) => pushPoint(point, rimZ));
+        const centerIndex = pushPoint(center, rimZ + peakHeight);
+        const ringLength = contactRing.length;
+        for (let index = 0; index < ringLength; index++) {
+            const next = (index + 1) % ringLength;
+            const outerA = index;
+            const outerB = next;
+            const innerA = ringLength + index;
+            const innerB = ringLength + next;
+            indices.push(outerA, outerB, innerB, outerA, innerB, innerA);
+        }
+        addFan(ringLength, ringLength, centerIndex);
+        return { points, indices: new Uint16Array(indices) };
+    }
+
+    const outerRing = overhang > GEOMETRY_EPSILON ? offsetRing(contactRing, overhang) : contactRing;
+    if (!Array.isArray(outerRing) || outerRing.length < 3) {
+        throw new Error(`roof ${floorId} overhang requires a valid outer ring`);
+    }
+    outerRing.forEach((point) => pushPoint(point, rimZ));
+    const centerIndex = pushPoint(center, rimZ + peakHeight);
+    addFan(0, outerRing.length, centerIndex);
+    return { points, indices: new Uint16Array(indices) };
+}
+
+function triangulateRoof(floor) {
+    const hasOverhang = Math.abs(roofOverhang(floor)) > GEOMETRY_EPSILON;
+    const hasPeak = roofPeakHeight(floor) > GEOMETRY_EPSILON;
+    return hasOverhang || hasPeak ? triangulatePitchedRoof(floor) : triangulateFloor(floor);
+}
+
 function roofMeshSignature(floor) {
-    return surfaceMeshSignature(floor, floor.roofTexturePath, roofRenderElevation(floor));
+    return [
+        surfaceMeshSignature(floor, floor.roofTexturePath, roofRenderElevation(floor)),
+        Number(roofOverhang(floor)).toFixed(4),
+        Number(roofPeakHeight(floor)).toFixed(4)
+    ].join(";");
 }
 
 function surfaceMeshSignature(floor, texturePath, z) {
@@ -392,6 +525,151 @@ function flattenClipRing(ring, label) {
     });
 }
 
+function screenPointToClipPoint(point, label = "screen pick point") {
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error(`${label} requires finite screen coordinates`);
+    }
+    return [x, y];
+}
+
+function distanceToClipSegment(point, a, b) {
+    const ax = Number(a[0]);
+    const ay = Number(a[1]);
+    const bx = Number(b[0]);
+    const by = Number(b[1]);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= GEOMETRY_EPSILON) return Math.hypot(point[0] - ax, point[1] - ay);
+    const t = Math.max(0, Math.min(1, ((point[0] - ax) * dx + (point[1] - ay) * dy) / lengthSquared));
+    return Math.hypot(point[0] - (ax + dx * t), point[1] - (ay + dy * t));
+}
+
+function pointInClipRing(point, ring, boundaryPixels = 0.75) {
+    if (!Array.isArray(ring) || ring.length < 4) {
+        throw new Error("screen wall picking requires closed projection rings");
+    }
+    let inside = false;
+    for (let index = 0, previousIndex = ring.length - 1; index < ring.length; previousIndex = index++) {
+        const current = ring[index];
+        const previous = ring[previousIndex];
+        if (!Array.isArray(current) || !Array.isArray(previous)) {
+            throw new Error("screen wall picking found a malformed projection ring");
+        }
+        if (distanceToClipSegment(point, previous, current) <= boundaryPixels) return true;
+        const xi = Number(current[0]);
+        const yi = Number(current[1]);
+        const xj = Number(previous[0]);
+        const yj = Number(previous[1]);
+        if (![xi, yi, xj, yj].every(Number.isFinite)) {
+            throw new Error("screen wall picking found a non-finite projection point");
+        }
+        const intersects = ((yi > point[1]) !== (yj > point[1])) &&
+            (point[0] < ((xj - xi) * (point[1] - yi)) / ((yj - yi) || GEOMETRY_EPSILON) + xi);
+        if (intersects) inside = !inside;
+    }
+    return inside;
+}
+
+function pointInClipPolygon(point, polygon) {
+    if (!Array.isArray(polygon) || polygon.length === 0) return false;
+    if (!pointInClipRing(point, polygon[0])) return false;
+    return !polygon.slice(1).some((hole) => pointInClipRing(point, hole, 0));
+}
+
+function looksLikeClipRing(value) {
+    return Array.isArray(value) &&
+        value.length >= 4 &&
+        Array.isArray(value[0]) &&
+        value[0].length >= 2 &&
+        Number.isFinite(Number(value[0][0])) &&
+        Number.isFinite(Number(value[0][1]));
+}
+
+function looksLikeClipPolygon(value) {
+    return Array.isArray(value) && value.length > 0 && looksLikeClipRing(value[0]);
+}
+
+function pointInClipGeometry(point, geometry) {
+    if (looksLikeClipRing(geometry)) return pointInClipRing(point, geometry);
+    if (looksLikeClipPolygon(geometry)) return pointInClipPolygon(point, geometry);
+    return (Array.isArray(geometry) ? geometry : []).some((polygon) => {
+        if (!looksLikeClipPolygon(polygon)) {
+            throw new Error("screen wall picking requires polygon or multipolygon projection geometry");
+        }
+        return pointInClipPolygon(point, polygon);
+    });
+}
+
+function clipGeometryRings(geometry, label) {
+    if (looksLikeClipRing(geometry)) return [geometry];
+    if (looksLikeClipPolygon(geometry)) return geometry;
+    return (Array.isArray(geometry) ? geometry : []).flatMap((polygon, polygonIndex) => {
+        if (!looksLikeClipPolygon(polygon)) {
+            throw new Error(`${label} contains malformed polygon ${polygonIndex}`);
+        }
+        return polygon;
+    });
+}
+
+function clipRingCentroid(ring, label) {
+    if (!looksLikeClipRing(ring)) {
+        throw new Error(`${label} requires a closed screen ring`);
+    }
+    const points = ring.slice(0, -1);
+    const total = points.reduce((acc, point, index) => {
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point at index ${index}`);
+        }
+        return { x: acc.x + x, y: acc.y + y };
+    }, { x: 0, y: 0 });
+    return {
+        x: total.x / points.length,
+        y: total.y / points.length
+    };
+}
+
+function debugWallColor(wallId) {
+    const numeric = Number(wallId);
+    const seed = Number.isFinite(numeric)
+        ? numeric
+        : String(wallId || "").split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const hue = ((seed * 47) % 360 + 360) % 360;
+    const chroma = 0.58;
+    const lightness = 0.58;
+    const a = chroma * Math.min(lightness, 1 - lightness);
+    const f = (n) => {
+        const k = (n + hue / 30) % 12;
+        return lightness - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    };
+    const r = Math.round(f(0) * 255);
+    const g = Math.round(f(8) * 255);
+    const b = Math.round(f(4) * 255);
+    return (r << 16) | (g << 8) | b;
+}
+
+function debugSurfaceColor(type, floorId) {
+    const offset = type === "roof" ? 113 : 29;
+    const seed = String(floorId || "")
+        .split("")
+        .reduce((acc, char) => acc + char.charCodeAt(0), offset);
+    return debugWallColor(seed);
+}
+
+function colorToVec4(color, alpha = 1) {
+    const value = Number(color) >>> 0;
+    return new Float32Array([
+        ((value >> 16) & 255) / 255,
+        ((value >> 8) & 255) / 255,
+        (value & 255) / 255,
+        Math.max(0, Math.min(1, Number(alpha)))
+    ]);
+}
+
 export class BuildingRenderer {
     constructor(app, state) {
         if (!globalThis.PIXI) {
@@ -406,24 +684,64 @@ export class BuildingRenderer {
         this.buildingUnit.name = "buildingEditorGameStyleBuildingUnit";
         this.floorLayer = new PIXI.Graphics();
         this.wallLayer = new PIXI.Graphics();
+        this.mountedObjectLayer = new PIXI.Container();
+        this.selectionOutlineLayer = new PIXI.Graphics();
         this.handleLayer = new PIXI.Graphics();
         this.draftLayer = new PIXI.Graphics();
+        this.pickerDepthDebugLayer = new PIXI.Container();
+        this.pickerDebugLayer = new PIXI.Graphics();
+        this.pickerDebugLabels = new PIXI.Container();
         this.floorMeshById = new Map();
         this.roofMeshById = new Map();
         this.wallUnitById = new Map();
+        this.mountedObjectMeshById = new Map();
+        this.mountedObjectPreviewMesh = null;
         this.floorTextureByPath = new Map();
         this.floorDepthState = null;
         this.collapsedWallGeometryByFloorId = new Map();
+        this.lastWallPickEntries = [];
+        this.lastSurfacePickEntries = [];
+        this.lastMountedObjectPickEntries = [];
+        this.screenPickerDebug = false;
+        this.screenPickerDebugPoint = null;
         this.root.addChild(
             this.gridLayer,
             this.gridAnchorLayer,
             this.buildingUnit,
             this.floorLayer,
             this.wallLayer,
+            this.mountedObjectLayer,
+            this.selectionOutlineLayer,
             this.handleLayer,
-            this.draftLayer
+            this.draftLayer,
+            this.pickerDepthDebugLayer,
+            this.pickerDebugLayer,
+            this.pickerDebugLabels
         );
         this.app.stage.addChild(this.root);
+    }
+
+    setScreenPickerDebug(enabled) {
+        this.screenPickerDebug = !!enabled;
+    }
+
+    toggleScreenPickerDebug() {
+        this.screenPickerDebug = !this.screenPickerDebug;
+        return this.screenPickerDebug;
+    }
+
+    setScreenPickerDebugPoint(point) {
+        if (!point) {
+            this.screenPickerDebugPoint = null;
+            return;
+        }
+        this.screenPickerDebugPoint = {
+            x: Number(point.x),
+            y: Number(point.y)
+        };
+        if (!Number.isFinite(this.screenPickerDebugPoint.x) || !Number.isFinite(this.screenPickerDebugPoint.y)) {
+            throw new Error("screen picker debug point requires finite screen coordinates");
+        }
     }
 
     render() {
@@ -435,8 +753,12 @@ export class BuildingRenderer {
         }
         this.drawGrid();
         this.drawGameStyleBuilding();
+        this.drawMountedObjects();
+        this.drawScreenPickerDebug(this.lastWallPickEntries);
+        this.drawSelectionOutline();
         this.drawHandles();
         this.drawDraft();
+        this.drawMountedObjectPreview();
         if (typeof this.app.render === "function") {
             this.app.render();
         }
@@ -630,6 +952,64 @@ export class BuildingRenderer {
         return state;
     }
 
+    createSolidDepthMesh(name, positions, indices, color, depthBias = PICKER_DEBUG_DEPTH_BIAS) {
+        if (!PIXI.Geometry || !PIXI.Shader || !PIXI.Mesh) {
+            throw new Error("screen picker depth debug requires PIXI Geometry, Shader, and Mesh");
+        }
+        if (!(positions instanceof Float32Array) || positions.length < 9 || positions.length % 3 !== 0) {
+            throw new Error(`screen picker depth debug mesh ${name} requires finite 3D positions`);
+        }
+        if (!(indices instanceof Uint16Array) && !(indices instanceof Uint32Array)) {
+            throw new Error(`screen picker depth debug mesh ${name} requires typed triangle indices`);
+        }
+        const shader = PIXI.Shader.from(SOLID_DEPTH_VS, SOLID_DEPTH_FS, {
+            uScreenSize: new Float32Array([1, 1]),
+            uCameraWorld: new Float32Array([0, 0]),
+            uCameraZ: 0,
+            uViewScale: 1,
+            uXyRatio: GAME_XY_RATIO,
+            uDepthRange: new Float32Array([
+                FLOOR_DEPTH_FAR_METRIC,
+                1 / Math.max(1e-6, FLOOR_DEPTH_FAR_METRIC - FLOOR_DEPTH_NEAR_METRIC)
+            ]),
+            uDepthBias: Number(depthBias),
+            uCameraRotation: 0,
+            uCameraRotationCenter: new Float32Array([0, 0]),
+            uColor: colorToVec4(color, 1)
+        });
+        const geometry = new PIXI.Geometry()
+            .addAttribute("aWorldPosition", positions, 3)
+            .addIndex(indices);
+        const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
+        mesh.name = name;
+        mesh.interactive = false;
+        mesh.visible = true;
+        this.updateSolidDepthMeshUniforms(mesh, depthBias);
+        return mesh;
+    }
+
+    updateSolidDepthMeshUniforms(mesh, depthBias = PICKER_DEBUG_DEPTH_BIAS) {
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms) {
+            throw new Error("missing screen picker depth debug mesh uniforms");
+        }
+        const camera = this.gameCamera();
+        const u = mesh.shader.uniforms;
+        u.uScreenSize[0] = Math.max(1, this.app.screen.width);
+        u.uScreenSize[1] = Math.max(1, this.app.screen.height);
+        u.uCameraWorld[0] = Number(camera.x);
+        u.uCameraWorld[1] = Number(camera.y);
+        u.uCameraZ = Number(camera.z);
+        u.uViewScale = Number(camera.viewscale);
+        u.uXyRatio = Number(camera.xyratio);
+        u.uDepthRange[0] = FLOOR_DEPTH_FAR_METRIC;
+        u.uDepthRange[1] = 1 / Math.max(1e-6, FLOOR_DEPTH_FAR_METRIC - FLOOR_DEPTH_NEAR_METRIC);
+        u.uDepthBias = Number(depthBias);
+        u.uCameraRotation = Number(this.state.camera.rotation) || 0;
+        const rotationCenter = this.state.camera.rotationCenter || this.state.buildingCenter();
+        u.uCameraRotationCenter[0] = Number(rotationCenter.x) || 0;
+        u.uCameraRotationCenter[1] = Number(rotationCenter.y) || 0;
+    }
+
     getFloorTexture(texturePath) {
         return this.getSurfaceTexture(texturePath, "/assets/images/flooring/woodfloor.png");
     }
@@ -661,9 +1041,10 @@ export class BuildingRenderer {
         const positions = new Float32Array(triangulation.points.length * 3);
         const uvs = new Float32Array(triangulation.points.length * 2);
         triangulation.points.forEach((point, index) => {
+            const pointZ = Number.isFinite(Number(point.z)) ? Number(point.z) : z;
             positions[index * 3] = Number(point.x);
             positions[index * 3 + 1] = Number(point.y);
-            positions[index * 3 + 2] = z;
+            positions[index * 3 + 2] = pointZ;
             uvs[index * 2] = Number(point.x) * textureRepeat;
             uvs[index * 2 + 1] = Number(point.y) * textureRepeat;
         });
@@ -786,7 +1167,7 @@ export class BuildingRenderer {
                 if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
                 entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
             }
-            const triangulation = triangulateFloor(floor);
+            const triangulation = triangulateRoof(floor);
             if (!triangulation) return null;
             const mesh = this.createRoofMesh(floor, triangulation);
             if (!mesh) return null;
@@ -873,8 +1254,22 @@ export class BuildingRenderer {
             const authoredPoints = wallPoints(this.state.building, wall);
             if (authoredPoints.length !== 2) return;
             [
-                { endpointKey: "startPoint", sharedEnd: "start", point: authoredPoints[0], farPoint: authoredPoints[1], runtimePoint: unit.startPoint },
-                { endpointKey: "endPoint", sharedEnd: "end", point: authoredPoints[1], farPoint: authoredPoints[0], runtimePoint: unit.endPoint }
+                {
+                    endpointKey: "startPoint",
+                    sharedEnd: "start",
+                    point: authoredPoints[0],
+                    farPoint: authoredPoints[1],
+                    runtimePoint: unit.startPoint,
+                    runtimeFarPoint: unit.endPoint
+                },
+                {
+                    endpointKey: "endPoint",
+                    sharedEnd: "end",
+                    point: authoredPoints[1],
+                    farPoint: authoredPoints[0],
+                    runtimePoint: unit.endPoint,
+                    runtimeFarPoint: unit.startPoint
+                }
             ].forEach((endpoint) => {
                 const groupKey = this.wallMiterEndpointKey(wall, endpoint.endpointKey, endpoint.point, floor);
                 const layer = Number.isFinite(Number(wall.traversalLayer))
@@ -888,6 +1283,8 @@ export class BuildingRenderer {
                     sharedEnd: endpoint.sharedEnd,
                     sharedPoint: endpoint.point,
                     farPoint: endpoint.farPoint,
+                    profileSharedPoint: endpoint.runtimePoint,
+                    profileFarPoint: endpoint.runtimeFarPoint,
                     runtimeEndpointKey: WallSectionUnit.endpointKey(endpoint.runtimePoint)
                 });
             });
@@ -906,8 +1303,10 @@ export class BuildingRenderer {
     applyMiterGroup(group) {
         if (!Array.isArray(group) || group.length < 2) return;
         const entries = group.map((item) => {
-            const dx = Number(item.farPoint.x) - Number(item.sharedPoint.x);
-            const dy = Number(item.farPoint.y) - Number(item.sharedPoint.y);
+            const sharedPoint = finite2dPoint(item.profileSharedPoint) ? item.profileSharedPoint : item.sharedPoint;
+            const farPoint = finite2dPoint(item.profileFarPoint) ? item.profileFarPoint : item.farPoint;
+            const dx = Number(farPoint.x) - Number(sharedPoint.x);
+            const dy = Number(farPoint.y) - Number(sharedPoint.y);
             const length = Math.hypot(dx, dy);
             if (length <= GEOMETRY_EPSILON) return null;
             const ux = dx / length;
@@ -919,12 +1318,12 @@ export class BuildingRenderer {
                 awayDir: { x: ux, y: uy },
                 angle: Math.atan2(uy, ux),
                 leftFace: {
-                    x: Number(item.sharedPoint.x) + leftN.x * halfT,
-                    y: Number(item.sharedPoint.y) + leftN.y * halfT
+                    x: Number(sharedPoint.x) + leftN.x * halfT,
+                    y: Number(sharedPoint.y) + leftN.y * halfT
                 },
                 rightFace: {
-                    x: Number(item.sharedPoint.x) - leftN.x * halfT,
-                    y: Number(item.sharedPoint.y) - leftN.y * halfT
+                    x: Number(sharedPoint.x) - leftN.x * halfT,
+                    y: Number(sharedPoint.y) - leftN.y * halfT
                 },
                 leftLabel: item.sharedEnd === "start" ? "posN" : "negN",
                 rightLabel: item.sharedEnd === "start" ? "negN" : "posN"
@@ -1012,16 +1411,20 @@ export class BuildingRenderer {
         return screenOpenArea;
     }
 
+    wallRenderProfilePoints(wall, floor, wallEntries = null, label = "wall render profile") {
+        const renderProfile = this.wallProfileForRender(wall, wallEntries);
+        return renderProfile
+            ? wallProfilePolygonFromProfile(renderProfile, label)
+            : wallProfilePoints(this.state.building, wall, floor);
+    }
+
     wallScreenImagePolygon(wall, floor, wallEntries = null) {
         const baseZ = getFloorElevation(floor);
         const height = Number(wall && wall.height);
         if (!Number.isFinite(height) || height <= 0) {
             throw new Error(`wall ${wall && wall.id} screen image requires a positive height`);
         }
-        const renderProfile = this.wallProfileForRender(wall, wallEntries);
-        const profile = renderProfile
-            ? wallProfilePolygonFromProfile(renderProfile, `wall ${wall && wall.id} mitered screen image`)
-            : wallProfilePoints(this.state.building, wall, floor);
+        const profile = this.wallRenderProfilePoints(wall, floor, wallEntries, `wall ${wall && wall.id} mitered screen image`);
         const projected = [];
         profile.forEach((point) => {
             projected.push(this.worldToScreen(point, baseZ));
@@ -1030,8 +1433,325 @@ export class BuildingRenderer {
         return [closedClipRing(convexHull(projected, `wall ${wall && wall.id} screen image`), `wall ${wall && wall.id} screen image`)];
     }
 
+    wallScreenCollapsedGeometry(wall, floor, wallEntries = null) {
+        const profile = this.wallProfileForRender(wall, wallEntries);
+        const footprint = wallFootprintPolygon(this.state.building, wall, floor, profile ? { profile } : {});
+        return this.projectClipGeometryToScreen([footprint], getFloorElevation(floor));
+    }
+
+    wallScreenPickGeometry(wall, floor, wallEntries = null) {
+        return this.shouldDrawWallCollapsed(wall, floor, wallEntries)
+            ? this.wallScreenCollapsedGeometry(wall, floor, wallEntries)
+            : this.wallScreenImagePolygon(wall, floor, wallEntries);
+    }
+
+    surfaceScreenGeometry(floor, z, label) {
+        return this.projectClipGeometryToScreen([floorClipPolygon(floor)], z)
+            .map((polygon, polygonIndex) => polygon.map((ring, ringIndex) => {
+                if (!looksLikeClipRing(ring)) {
+                    throw new Error(`${label} projected malformed ring ${polygonIndex}:${ringIndex}`);
+                }
+                return ring;
+            }));
+    }
+
+    roofScreenGeometry(floor, label) {
+        const overhang = roofOverhang(floor);
+        const rings = [];
+        if (overhang > GEOMETRY_EPSILON) {
+            rings.push(closedClipRing(offsetRing(floor && floor.outerPolygon, overhang), `${label} overhang outer polygon`));
+        } else {
+            rings.push(closedClipRing(floor && floor.outerPolygon, `${label} contact outer polygon`));
+            if (Math.abs(overhang) <= GEOMETRY_EPSILON && roofPeakHeight(floor) <= GEOMETRY_EPSILON) {
+                (Array.isArray(floor && floor.holes) ? floor.holes : []).forEach((ring, index) => {
+                    rings.push(closedClipRing(ring, `${label} hole ${index}`));
+                });
+            }
+        }
+        return this.projectClipGeometryToScreen([rings], roofRenderElevation(floor))
+            .map((polygon, polygonIndex) => polygon.map((ring, ringIndex) => {
+                if (!looksLikeClipRing(ring)) {
+                    throw new Error(`${label} projected malformed roof ring ${polygonIndex}:${ringIndex}`);
+                }
+                return ring;
+            }));
+    }
+
+    surfaceEntryScreenGeometry(entry, label) {
+        if (!entry || !entry.floor) throw new Error(`${label} requires a surface entry with a floor`);
+        return entry.type === "roof"
+            ? this.roofScreenGeometry(entry.floor, label)
+            : this.surfaceScreenGeometry(entry.floor, entry.z, label);
+    }
+
+    worldDepthMetric(point, z) {
+        const camera = this.state.camera;
+        const cameraZ = Number.isFinite(Number(camera.z)) ? Number(camera.z) : 0;
+        const rotated = this.rotatePointForCamera(point);
+        return (Number(rotated.y) - Number(camera.y)) + (Number(z) - cameraZ);
+    }
+
+    surfaceDepthMetricAtScreen(screenPoint, z) {
+        const point = screenPointToClipPoint(screenPoint, "surface screen pick");
+        const camera = this.state.camera;
+        const cameraZ = Number.isFinite(Number(camera.z)) ? Number(camera.z) : 0;
+        const zoom = Number(camera.zoom);
+        if (!Number.isFinite(zoom) || zoom <= 0) {
+            throw new Error("surface screen picking requires a positive camera zoom");
+        }
+        const camDy = (point[1] - this.app.screen.height / 2) / (zoom * GAME_XY_RATIO) + (Number(z) - cameraZ);
+        return camDy + (Number(z) - cameraZ);
+    }
+
+    wallScreenPickDepthMetric(wall, floor, wallEntries = null) {
+        const baseZ = getFloorElevation(floor);
+        const height = Number(wall && wall.height);
+        if (!Number.isFinite(height) || height <= 0) {
+            throw new Error(`wall ${wall && wall.id} screen picking requires a positive height`);
+        }
+        const profile = this.wallRenderProfilePoints(wall, floor, wallEntries, `wall ${wall && wall.id} screen pick profile`);
+        if (this.shouldDrawWallCollapsed(wall, floor, wallEntries)) {
+            return profile.reduce((best, point) => Math.max(best, this.worldDepthMetric(point, baseZ)), -Infinity);
+        }
+        return profile.reduce((best, point) => Math.max(
+            best,
+            this.worldDepthMetric(point, baseZ),
+            this.worldDepthMetric(point, baseZ + height)
+        ), -Infinity);
+    }
+
+    pickWallAtScreen(screenPoint) {
+        const hit = this.pickAtScreen(screenPoint, { includeSurfaces: false });
+        return hit && hit.type === "wall" ? hit : null;
+    }
+
+    pickSurfaceAtScreen(screenPoint) {
+        const hit = this.pickAtScreen(screenPoint, { includeWalls: false });
+        return hit && (hit.type === "floor" || hit.type === "roof") ? hit : null;
+    }
+
+    pickAtScreen(screenPoint, options = {}) {
+        const point = screenPointToClipPoint(screenPoint, "wall screen pick");
+        let best = null;
+        let bestMountedObject = null;
+        const includeWalls = options.includeWalls !== false;
+        const includeSurfaces = options.includeSurfaces !== false;
+        const includeMountedObjects = options.includeMountedObjects !== false;
+        const considerHit = (hit) => {
+            if (!hit) return;
+            if (!best ||
+                hit.depthMetric > best.depthMetric + GEOMETRY_EPSILON ||
+                (Math.abs(hit.depthMetric - best.depthMetric) <= GEOMETRY_EPSILON && hit.priority > best.priority)) {
+                best = hit;
+            }
+        };
+        if (includeSurfaces) {
+            for (const candidate of this.lastSurfacePickEntries) {
+                if (!candidate || !candidate.floor || (candidate.type !== "floor" && candidate.type !== "roof")) {
+                    throw new Error("screen surface picking encountered an invalid render entry");
+                }
+                const projection = this.surfaceEntryScreenGeometry(
+                    candidate,
+                    `${candidate.type} ${getFloorId(candidate.floor)} screen pick`
+                );
+                if (!pointInClipGeometry(point, projection)) continue;
+                considerHit({
+                    type: candidate.type,
+                    floor: candidate.floor,
+                    depthMetric: this.surfaceDepthMetricAtScreen(screenPoint, candidate.z),
+                    priority: candidate.type === "roof" ? 20 : 10
+                });
+            }
+        }
+        if (includeWalls) {
+            for (const candidate of this.lastWallPickEntries) {
+                if (!candidate || !candidate.wall || !candidate.floor) {
+                    throw new Error("wall screen picking encountered an invalid render entry");
+                }
+                const projection = this.wallScreenPickGeometry(candidate.wall, candidate.floor, this.lastWallPickEntries);
+                if (!pointInClipGeometry(point, projection)) continue;
+                considerHit({
+                    type: "wall",
+                    wall: candidate.wall,
+                    floor: candidate.floor,
+                    depthMetric: this.wallScreenPickDepthMetric(candidate.wall, candidate.floor, this.lastWallPickEntries),
+                    priority: 30
+                });
+            }
+        }
+        if (includeMountedObjects) {
+            for (const candidate of this.lastMountedObjectPickEntries) {
+                if (!candidate || !candidate.object || !candidate.wall || !candidate.floor) {
+                    throw new Error("mounted object screen picking encountered an invalid render entry");
+                }
+                const projection = this.mountedObjectScreenGeometry(candidate);
+                if (!pointInClipGeometry(point, projection)) continue;
+                const hit = {
+                    ...candidate,
+                    type: "mountedObject",
+                    depthMetric: this.mountedObjectPickDepthMetric(candidate),
+                    priority: 40
+                };
+                if (!bestMountedObject ||
+                    hit.depthMetric > bestMountedObject.depthMetric + GEOMETRY_EPSILON ||
+                    (Math.abs(hit.depthMetric - bestMountedObject.depthMetric) <= GEOMETRY_EPSILON && hit.priority > bestMountedObject.priority)) {
+                    bestMountedObject = hit;
+                }
+            }
+        }
+        if (bestMountedObject) return { ...bestMountedObject, type: "mountedObject" };
+        if (!best) return null;
+        if (best.type === "wall") return { type: "wall", wall: best.wall, floor: best.floor };
+        return { type: best.type, floor: best.floor };
+    }
+
+    clearScreenPickerDebug() {
+        this.pickerDebugLayer.clear();
+        this.pickerDepthDebugLayer.removeChildren().forEach((child) => {
+            if (child && typeof child.destroy === "function") {
+                child.destroy({ children: false, texture: false, baseTexture: false });
+            }
+        });
+        this.pickerDebugLabels.removeChildren().forEach((child) => {
+            if (child && typeof child.destroy === "function") child.destroy();
+        });
+    }
+
+    createSurfacePickerDebugMesh(entry) {
+        if (!entry || !entry.floor || (entry.type !== "floor" && entry.type !== "roof")) {
+            throw new Error("cannot create picker debug surface mesh without a valid surface entry");
+        }
+        const floor = entry.floor;
+        const triangulation = entry.type === "roof" ? triangulateRoof(floor) : triangulateFloor(floor);
+        if (!triangulation) {
+            throw new Error(`screen picker debug surface ${entry.type} ${getFloorId(floor)} requires triangulatable geometry`);
+        }
+        const z = Number(entry.z);
+        if (!Number.isFinite(z)) {
+            throw new Error(`screen picker debug surface ${entry.type} ${getFloorId(floor)} requires finite z`);
+        }
+        const positions = new Float32Array(triangulation.points.length * 3);
+        triangulation.points.forEach((point, index) => {
+            const pointZ = Number.isFinite(Number(point.z)) ? Number(point.z) : z;
+            positions[index * 3] = Number(point.x);
+            positions[index * 3 + 1] = Number(point.y);
+            positions[index * 3 + 2] = pointZ;
+        });
+        return this.createSolidDepthMesh(
+            `buildingEditorPickerDebug:${entry.type}:${getFloorId(floor)}`,
+            positions,
+            triangulation.indices,
+            debugSurfaceColor(entry.type, getFloorId(floor))
+        );
+    }
+
+    createWallPickerDebugMesh(entry, wallEntries) {
+        const unit = entry && entry.entry && entry.entry.unit;
+        if (!entry || !entry.wall || !entry.floor || !unit) {
+            throw new Error("cannot create picker debug wall mesh without a valid wall entry");
+        }
+        if (typeof unit._buildDepthGeometry !== "function") {
+            throw new Error(`screen picker debug wall ${entry.wall.id} requires WallSectionUnit depth geometry`);
+        }
+        this.updateWallTexturePhase(unit, entry.wall, entry.floor);
+        const geometry = unit._buildDepthGeometry({
+            bottomFaceOnly: this.shouldDrawWallCollapsed(entry.wall, entry.floor, wallEntries),
+            localTextureU: this.shouldUseExteriorPerimeterTextureU(entry.wall)
+        });
+        if (!geometry || !(geometry.positions instanceof Float32Array) || geometry.positions.length < 9) {
+            throw new Error(`missing screen picker wall depth geometry for wall ${entry.wall.id}`);
+        }
+        return this.createSolidDepthMesh(
+            `buildingEditorPickerDebug:wall:${entry.wall.id}`,
+            geometry.positions,
+            geometry.indices,
+            debugWallColor(entry.wall.id)
+        );
+    }
+
+    drawScreenPickerHoverOutline(hit, wallEntries) {
+        if (!hit) return;
+        const gfx = this.pickerDebugLayer;
+        let labelText = "";
+        let rings = [];
+        if (hit.type === "wall") {
+            labelText = `wall ${hit.wall.id}`;
+            rings = clipGeometryRings(this.wallScreenPickGeometry(hit.wall, hit.floor, wallEntries), `wall ${hit.wall.id} hover`);
+        } else if (hit.type === "mountedObject") {
+            labelText = `${hit.object.category === "windows" ? "window" : "door"} ${hit.object.id}`;
+            rings = clipGeometryRings(this.mountedObjectScreenGeometry(hit), `${labelText} hover`);
+        } else if (hit.type === "floor" || hit.type === "roof") {
+            const floorId = getFloorId(hit.floor);
+            labelText = `${hit.type} ${floorId}`;
+            const z = hit.type === "roof" ? roofRenderElevation(hit.floor) : getFloorElevation(hit.floor);
+            rings = hit.type === "roof"
+                ? this.roofScreenGeometry(hit.floor, `${hit.type} ${floorId} hover`)
+                : this.surfaceScreenGeometry(hit.floor, z, `${hit.type} ${floorId} hover`);
+            // Flatten one polygon level below.
+            rings = rings.flat();
+        } else {
+            throw new Error(`cannot draw hover outline for unknown pick hit type: ${hit.type}`);
+        }
+        if (!rings.length) return;
+        let labelPoint = null;
+        rings.forEach((ring, index) => {
+            const flatRing = flattenClipRing(ring, `${labelText} hover outline ${index}`);
+            gfx.lineStyle(3, 0xffffff, 1);
+            gfx.drawPolygon(flatRing);
+            if (index === 0) labelPoint = clipRingCentroid(ring, `${labelText} hover label`);
+        });
+        if (!labelPoint) return;
+        const label = new PIXI.Text(labelText, {
+            fontFamily: "monospace",
+            fontSize: 12,
+            fill: 0xffffff,
+            stroke: 0x000000,
+            strokeThickness: 4
+        });
+        label.anchor.set(0.5);
+        label.position.set(labelPoint.x, labelPoint.y);
+        this.pickerDebugLabels.addChild(label);
+    }
+
+    drawScreenPickerDebug(wallEntries) {
+        this.clearScreenPickerDebug();
+        if (!this.screenPickerDebug) return;
+        const gfx = this.pickerDebugLayer;
+        const wallPickEntries = Array.isArray(wallEntries) ? wallEntries : [];
+        const surfacePickEntries = Array.isArray(this.lastSurfacePickEntries) ? this.lastSurfacePickEntries : [];
+        const mountedObjectPickEntries = Array.isArray(this.lastMountedObjectPickEntries) ? this.lastMountedObjectPickEntries : [];
+        const pointerHit = this.screenPickerDebugPoint ? this.pickAtScreen(this.screenPickerDebugPoint) : null;
+        surfacePickEntries.forEach((entry) => {
+            this.pickerDepthDebugLayer.addChild(this.createSurfacePickerDebugMesh(entry));
+        });
+        wallPickEntries.forEach((entry) => {
+            this.pickerDepthDebugLayer.addChild(this.createWallPickerDebugMesh(entry, wallEntries));
+        });
+        mountedObjectPickEntries.forEach((entry) => {
+            const worldQuad = this.mountedObjectWorldQuad(entry.object, entry);
+            if (!worldQuad) throw new Error(`screen picker debug mounted object ${entry.object.id} is missing quad geometry`);
+            this.pickerDepthDebugLayer.addChild(this.createSolidDepthMesh(
+                `buildingEditorPickerDebug:mountedObject:${entry.object.id}`,
+                new Float32Array(worldQuad.quads.flat().flatMap((point) => [point.x, point.y, point.z])),
+                new Uint16Array([0, 1, 2, 0, 2, 3]),
+                debugWallColor(entry.object.id)
+            ));
+        });
+        this.drawScreenPickerHoverOutline(pointerHit, wallEntries);
+        if (this.screenPickerDebugPoint) {
+            const point = screenPointToClipPoint(this.screenPickerDebugPoint, "screen picker debug cursor");
+            gfx.lineStyle(2, 0x000000, 1);
+            gfx.moveTo(point[0] - 7, point[1]);
+            gfx.lineTo(point[0] + 7, point[1]);
+            gfx.moveTo(point[0], point[1] - 7);
+            gfx.lineTo(point[0], point[1] + 7);
+            gfx.drawCircle(point[0], point[1], 4);
+        }
+    }
+
     shouldDrawWallCollapsed(wall, floor, wallEntries = null) {
         if (this.state.renderStyle() !== "interior") return false;
+        if (this.state.selectedWallIds().length > 0) return false;
         const openArea = this.floorOpenAreaScreenGeometry(floor, wallEntries);
         if (clipGeometryArea(openArea) <= GEOMETRY_EPSILON) return false;
         const wallImage = this.wallScreenImagePolygon(wall, floor, wallEntries);
@@ -1046,7 +1766,7 @@ export class BuildingRenderer {
         getBuildingWalls(this.state.building).forEach((wall) => {
             const floor = findFloor(this.state.building, wall.fragmentId || wall.floorId);
             if (!floor || !floorIds.has(getFloorId(floor))) return;
-            const projection = this.wallScreenImagePolygon(wall, floor, wallEntries);
+            const projection = clipGeometryRings(this.wallScreenPickGeometry(wall, floor, wallEntries), `wall ${wall.id} projection`);
             projection.forEach((ring, index) => {
                 wallDebug.drawPolygon(flattenClipRing(ring, `wall ${wall.id} projection outline ${index}`));
             });
@@ -1095,7 +1815,7 @@ export class BuildingRenderer {
         const entry = this.ensureWallUnit(wall, floor);
         if (!entry) return null;
         this.updateWallTexturePhase(entry.unit, wall, floor);
-        const selected = Number(this.state.selection.wallId) === Number(wall.id);
+        const selected = this.state.isWallSelected(wall);
         const bottomFaceOnly = this.shouldDrawWallCollapsed(wall, floor, wallEntries);
         const localTextureU = this.shouldUseExteriorPerimeterTextureU(wall);
         const mesh = entry.unit.getDepthMeshDisplayObject({
@@ -1205,7 +1925,11 @@ export class BuildingRenderer {
     drawGameStyleBuilding() {
         this.floorLayer.clear();
         this.wallLayer.clear();
+        this.clearScreenPickerDebug();
         this.collapsedWallGeometryByFloorId.clear();
+        this.lastWallPickEntries = [];
+        this.lastSurfacePickEntries = [];
+        this.lastMountedObjectPickEntries = [];
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
         const liveFloorMeshIds = new Set();
@@ -1218,10 +1942,26 @@ export class BuildingRenderer {
         floors.forEach((floor) => {
             const floorAlpha = exterior ? 0.92 : 1;
             const mesh = this.syncFloorMesh(floor, floorAlpha);
-            if (mesh) liveFloorMeshIds.add(getFloorId(floor));
-            if (exterior) {
+            if (mesh) {
+                liveFloorMeshIds.add(getFloorId(floor));
+                this.lastSurfacePickEntries.push({
+                    type: "floor",
+                    floor,
+                    z: getFloorElevation(floor)
+                });
+            }
+            const selection = this.state.selection || {};
+            const selectedRoofVisible = selection.kind === "roof" && selection.floorId === getFloorId(floor);
+            if (exterior || selectedRoofVisible) {
                 const roofMesh = this.syncRoofMesh(floor, 1);
-                if (roofMesh) liveRoofMeshIds.add(getFloorId(floor));
+                if (roofMesh) {
+                    liveRoofMeshIds.add(getFloorId(floor));
+                    this.lastSurfacePickEntries.push({
+                        type: "roof",
+                        floor,
+                        z: roofRenderElevation(floor)
+                    });
+                }
             }
         });
         getBuildingWalls(this.state.building).forEach((wall) => {
@@ -1239,6 +1979,7 @@ export class BuildingRenderer {
         for (const entries of wallEntriesByFloorId.values()) {
             this.miterWallEntriesForFloor(entries);
         }
+        this.lastWallPickEntries = wallEntries;
         wallEntries.forEach((entry) => {
             this.renderWallUnit(entry.wall, entry.floor, 1, wallEntries);
         });
@@ -1260,7 +2001,9 @@ export class BuildingRenderer {
         const floors = [...getBuildingFloors(this.state.building)].sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
         floors.forEach((floor) => {
             if (!this.state.isFloorSelected(getFloorId(floor))) return;
-            const selected = this.state.selection.floorId === getFloorId(floor) && !this.state.selection.wallId;
+            const selectionKind = this.state.selection && this.state.selection.kind;
+            const selected = this.state.selection.floorId === getFloorId(floor) &&
+                (selectionKind === "level" || selectionKind === "floor" || selectionKind === "floorVertex" || selectionKind === "roof");
             const elevation = getFloorElevation(floor);
             const points = floor.outerPolygon.map((point) => this.worldToScreen(point, elevation));
             if (points.length < 3) return;
@@ -1292,7 +2035,7 @@ export class BuildingRenderer {
             if (!floor || points.length < 2) return;
             if (!this.state.isFloorSelected(getFloorId(floor))) return;
             const baseZ = getFloorElevation(floor);
-            const selected = this.state.selection.wallId === wall.id;
+            const selected = this.state.isWallSelected(wall);
             const color = selected ? 0xffd27a : (wall.role === "perimeter" ? 0xe8e0cd : 0x78b7ff);
             const wallTopZ = baseZ + Math.max(0, Number(wall.height) || 0);
             for (let index = 1; index < points.length; index++) {
@@ -1317,16 +2060,401 @@ export class BuildingRenderer {
         });
     }
 
+    strokeClipRing(gfx, ring, label, width, color, alpha) {
+        gfx.lineStyle(width, color, alpha);
+        gfx.drawPolygon(flattenClipRing(ring, label));
+    }
+
+    drawClipGeometryOutline(gfx, geometry, label) {
+        const rings = clipGeometryRings(geometry, label);
+        rings.forEach((ring, index) => {
+            this.strokeClipRing(gfx, ring, `${label} shadow ${index}`, 7, SELECTION_OUTLINE_SHADOW_COLOR, 0.9);
+        });
+        rings.forEach((ring, index) => {
+            this.strokeClipRing(gfx, ring, `${label} blue ${index}`, 3, SELECTION_OUTLINE_COLOR, 1);
+        });
+    }
+
+    mountedObjectPlacement(object) {
+        if (!object) return null;
+        const wall = findWall(this.state.building, object.wallId ?? object.mountedWallSectionUnitId);
+        if (!wall) throw new Error(`mounted wall object ${object.id} references missing wall ${object.wallId}`);
+        const floor = findFloor(this.state.building, wall.fragmentId || wall.floorId);
+        if (!floor) throw new Error(`mounted wall object ${object.id} references wall ${wall.id} with missing floor`);
+        if (!this.state.isFloorSelected(getFloorId(floor))) return null;
+        const points = wallCenterlinePoints(this.state.building, wall, floor);
+        if (points.length !== 2) throw new Error(`mounted wall object ${object.id} wall ${wall.id} does not resolve to two points`);
+        const a = points[0];
+        const b = points[1];
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.000001)) throw new Error(`mounted wall object ${object.id} wall ${wall.id} has zero length`);
+        const t = Math.max(0, Math.min(1, Number(object.wallT)));
+        if (!Number.isFinite(t)) throw new Error(`mounted wall object ${object.id} wallT must be finite`);
+        const ux = dx / length;
+        const uy = dy / length;
+        const nx = -uy;
+        const ny = ux;
+        const halfThickness = Math.max(0.001, Number(wall.thickness) || 0.001) * 0.5;
+        const facingSign = Number(object.mountedWallFacingSign) >= 0 ? 1 : -1;
+        const wallCenter = {
+            x: Number(a.x) + dx * t,
+            y: Number(a.y) + dy * t
+        };
+        const faceCenter = {
+            x: wallCenter.x + nx * halfThickness * facingSign,
+            y: wallCenter.y + ny * halfThickness * facingSign
+        };
+        return {
+            object,
+            wall,
+            floor,
+            points,
+            wallCenter,
+            faceCenter,
+            sectionDirX: ux,
+            sectionDirY: uy,
+            sectionNormalX: nx,
+            sectionNormalY: ny,
+            mountedWallFacingSign: facingSign,
+            wallThickness: halfThickness * 2,
+            wallHeight: Number(wall.height),
+            zOffset: Number(object.zOffset) || 0,
+            placementRotation: Number(object.placementRotation) || (Math.atan2(uy, ux) * 180 / Math.PI)
+        };
+    }
+
+    mountedObjectWorldQuad(object, placement = null) {
+        const resolved = placement || this.mountedObjectPlacement(object);
+        if (!resolved) return null;
+        const source = object || resolved.object || {};
+        const width = Number(source.width);
+        const height = Number(source.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`mounted wall object ${source.id || "preview"} requires positive width and height`);
+        }
+        const baseZ = getFloorElevation(resolved.floor);
+        const anchorY = Number.isFinite(Number(source.placeableAnchorY ?? source.anchorY))
+            ? Number(source.placeableAnchorY ?? source.anchorY)
+            : (source.category === "windows" ? 0.5 : 1);
+        const anchorZ = baseZ + Number(resolved.zOffset || 0);
+        const bottomZ = anchorZ - (1 - anchorY) * height;
+        const topZ = bottomZ + height;
+        const halfWidth = width * 0.5;
+        const ux = Number(resolved.sectionDirX);
+        const uy = Number(resolved.sectionDirY);
+        const nx = Number(resolved.sectionNormalX);
+        const ny = Number(resolved.sectionNormalY);
+        const facingSign = Number(resolved.mountedWallFacingSign) >= 0 ? 1 : -1;
+        const faceBias = 0.012;
+        const frontCenter = {
+            x: Number(resolved.faceCenter.x) + nx * facingSign * faceBias,
+            y: Number(resolved.faceCenter.y) + ny * facingSign * faceBias
+        };
+        const halfThickness = Math.max(0, Number(resolved.wallThickness) || 0) * 0.5;
+        const backCenter = {
+            x: Number(resolved.wallCenter.x) - nx * halfThickness * facingSign - nx * facingSign * faceBias,
+            y: Number(resolved.wallCenter.y) - ny * halfThickness * facingSign - ny * facingSign * faceBias
+        };
+        const quadForCenter = (center) => [
+            { x: center.x - ux * halfWidth, y: center.y - uy * halfWidth, z: topZ },
+            { x: center.x + ux * halfWidth, y: center.y + uy * halfWidth, z: topZ },
+            { x: center.x + ux * halfWidth, y: center.y + uy * halfWidth, z: bottomZ },
+            { x: center.x - ux * halfWidth, y: center.y - uy * halfWidth, z: bottomZ }
+        ];
+        const frontQuadPoints = quadForCenter(frontCenter);
+        const backQuadPoints = quadForCenter(backCenter);
+        const frontCameraY = this.rotatePointForCamera(frontCenter).y;
+        const backCameraY = this.rotatePointForCamera(backCenter).y;
+        if (!Number.isFinite(frontCameraY) || !Number.isFinite(backCameraY)) {
+            throw new Error(`mounted wall object ${source.id || "preview"} face selection requires finite camera-space centers`);
+        }
+        const visibleFace = frontCameraY >= backCameraY ? "front" : "back";
+        const visibleCenter = visibleFace === "front" ? frontCenter : backCenter;
+        const quadPoints = visibleFace === "front" ? frontQuadPoints : backQuadPoints;
+        return {
+            quadPoints,
+            frontQuadPoints,
+            backQuadPoints,
+            quads: [quadPoints],
+            visibleFace,
+            anchorY,
+            bottomCenter: { x: visibleCenter.x, y: visibleCenter.y, z: bottomZ },
+            topCenter: { x: visibleCenter.x, y: visibleCenter.y, z: topZ }
+        };
+    }
+
+    mountedObjectScreenPlacement(object, placement = null) {
+        const worldQuad = this.mountedObjectWorldQuad(object, placement);
+        if (!worldQuad) return null;
+        return {
+            ...worldQuad,
+            quadPoints: worldQuad.quadPoints.map((point) => this.worldToScreen(point, point.z)),
+            backQuadPoints: worldQuad.backQuadPoints.map((point) => this.worldToScreen(point, point.z)),
+            quads: worldQuad.quads.map((quad) => quad.map((point) => this.worldToScreen(point, point.z))),
+            bottomCenterScreen: this.worldToScreen(worldQuad.bottomCenter, worldQuad.bottomCenter.z),
+            topCenterScreen: this.worldToScreen(worldQuad.topCenter, worldQuad.topCenter.z)
+        };
+    }
+
+    mountedObjectScreenGeometry(entry) {
+        const screen = this.mountedObjectScreenPlacement(entry.object, entry);
+        if (!screen || !Array.isArray(screen.quadPoints) || screen.quadPoints.length !== 4) {
+            throw new Error(`mounted object ${entry && entry.object && entry.object.id} screen picking requires a quad`);
+        }
+        return screen.quads.map((quad, quadIndex) => [quad.map((point, index) => {
+            const x = Number(point.x);
+            const y = Number(point.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error(`mounted object ${entry.object.id} screen pick quad ${quadIndex} has non-finite point ${index}`);
+            }
+            return [x, y];
+        })]);
+    }
+
+    mountedObjectPickDepthMetric(entry) {
+        const worldQuad = this.mountedObjectWorldQuad(entry.object, entry);
+        if (!worldQuad) throw new Error(`mounted object ${entry && entry.object && entry.object.id} screen picking requires world quad geometry`);
+        return worldQuad.quads.flat().reduce((best, point) => Math.max(best, this.worldDepthMetric(point, point.z)), -Infinity);
+    }
+
+    createMountedObjectMesh(texture) {
+        if (!PIXI.Geometry || !PIXI.Shader || !PIXI.Mesh) {
+            throw new Error("wall-mounted door/window rendering requires PIXI Geometry, Shader, and Mesh");
+        }
+        const positions = new Float32Array(12);
+        const uvs = new Float32Array([
+            0, 0,
+            1, 0,
+            1, 1,
+            0, 1
+        ]);
+        const geometry = new PIXI.Geometry()
+            .addAttribute("aWorldPosition", positions, 3)
+            .addAttribute("aUvs", uvs, 2)
+            .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
+        const shader = PIXI.Shader.from(FLOOR_DEPTH_VS, FLOOR_DEPTH_FS, {
+            uScreenSize: new Float32Array([1, 1]),
+            uCameraWorld: new Float32Array([0, 0]),
+            uCameraZ: 0,
+            uViewScale: 1,
+            uXyRatio: GAME_XY_RATIO,
+            uDepthRange: new Float32Array([
+                FLOOR_DEPTH_FAR_METRIC,
+                1 / Math.max(1e-6, FLOOR_DEPTH_FAR_METRIC - FLOOR_DEPTH_NEAR_METRIC)
+            ]),
+            uDepthBias: FLOOR_DEPTH_BIAS,
+            uCameraRotation: 0,
+            uCameraRotationCenter: new Float32Array([0, 0]),
+            uTint: new Float32Array([1, 1, 1, 1]),
+            uAlphaCutoff: 0.001,
+            uSampler: texture
+        });
+        const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
+        mesh.interactive = false;
+        mesh.visible = false;
+        return mesh;
+    }
+
+    updateMountedObjectMesh(mesh, source, placement, options = {}) {
+        const texturePath = normalizeTexturePath(source.texturePath, source.category === "windows"
+            ? "/assets/images/windows/window.png"
+            : "/assets/images/doors/door5.png");
+        if (mesh._texturePath !== texturePath) {
+            mesh.shader.uniforms.uSampler = this.getSurfaceTexture(texturePath, source.category === "windows"
+                ? "/assets/images/windows/window.png"
+                : "/assets/images/doors/door5.png");
+            mesh._texturePath = texturePath;
+        }
+        const worldQuad = this.mountedObjectWorldQuad(source, placement);
+        if (!worldQuad) {
+            mesh.visible = false;
+            return false;
+        }
+        const vertices = new Float32Array(worldQuad.quadPoints.flatMap((point) => [point.x, point.y, point.z]));
+        if (mesh.geometry && typeof mesh.geometry.getBuffer === "function") {
+            const buffer = mesh.geometry.getBuffer("aWorldPosition");
+            if (!buffer || !buffer.data || typeof buffer.data.set !== "function") {
+                throw new Error("wall-mounted door/window mesh is missing world-position buffer data");
+            }
+            if (buffer.data.length !== vertices.length) {
+                throw new Error("wall-mounted door/window mesh world-position buffer has unexpected length");
+            }
+            buffer.data.set(vertices);
+            if (typeof buffer.update === "function") buffer.update();
+            const uvBuffer = mesh.geometry.getBuffer("aUvs");
+            if (!uvBuffer || !uvBuffer.data || typeof uvBuffer.data.set !== "function") {
+                throw new Error("wall-mounted door/window mesh is missing uv buffer data");
+            }
+            const uvs = worldQuad.visibleFace === "back"
+                ? new Float32Array([1, 0, 0, 0, 0, 1, 1, 1])
+                : new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+            if (uvBuffer.data.length !== uvs.length) {
+                throw new Error("wall-mounted door/window mesh uv buffer has unexpected length");
+            }
+            uvBuffer.data.set(uvs);
+            if (typeof uvBuffer.update === "function") uvBuffer.update();
+        } else {
+            throw new Error("wall-mounted door/window mesh does not expose editable vertices");
+        }
+        const alphaMultiplier = Number.isFinite(Number(options.alphaMultiplier))
+            ? Number(options.alphaMultiplier)
+            : 1;
+        const alpha = Math.max(0, Math.min(1, Number(source.previewAlpha ?? 1) * alphaMultiplier));
+        this.updateSurfaceMeshUniforms(mesh, placement.floor, alpha, {
+            texturePath,
+            textureFallback: source.category === "windows" ? "/assets/images/windows/window.png" : "/assets/images/doors/door5.png"
+        });
+        mesh.visible = true;
+        return true;
+    }
+
+    drawMountedObjects() {
+        const liveIds = new Set();
+        const draft = this.state.draft;
+        const replacingMountedObjectId = draft &&
+            draft.kind === "mountedObject" &&
+            draft.replacingMountedObjectId != null
+            ? String(draft.replacingMountedObjectId)
+            : null;
+        this.lastMountedObjectPickEntries = [];
+        getBuildingMountedObjects(this.state.building).forEach((object) => {
+            const id = String(object.id);
+            if (replacingMountedObjectId === id) return;
+            const placement = this.mountedObjectPlacement(object);
+            if (!placement) return;
+            liveIds.add(id);
+            let mesh = this.mountedObjectMeshById.get(id);
+            if (!mesh) {
+                mesh = this.createMountedObjectMesh(PIXI.Texture.EMPTY);
+                this.mountedObjectMeshById.set(id, mesh);
+                this.buildingUnit.addChild(mesh);
+            } else if (mesh.parent !== this.buildingUnit) {
+                this.buildingUnit.addChild(mesh);
+            }
+            this.updateMountedObjectMesh(mesh, object, placement, {
+                alphaMultiplier: this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1
+            });
+            this.lastMountedObjectPickEntries.push({
+                ...placement,
+                object,
+                mesh
+            });
+        });
+        for (const [id, mesh] of this.mountedObjectMeshById.entries()) {
+            if (!liveIds.has(id)) mesh.visible = false;
+        }
+    }
+
+    drawMountedObjectPreview() {
+        const draft = this.state.draft;
+        const preview = draft && draft.kind === "mountedObject" ? draft : null;
+        if (!preview || !preview.asset || !preview.placement) {
+            if (this.mountedObjectPreviewMesh) this.mountedObjectPreviewMesh.visible = false;
+            return;
+        }
+        if (!this.mountedObjectPreviewMesh) {
+            this.mountedObjectPreviewMesh = this.createMountedObjectMesh(PIXI.Texture.EMPTY);
+            this.buildingUnit.addChild(this.mountedObjectPreviewMesh);
+        } else if (this.mountedObjectPreviewMesh.parent !== this.buildingUnit) {
+            this.buildingUnit.addChild(this.mountedObjectPreviewMesh);
+        }
+        this.updateMountedObjectMesh(this.mountedObjectPreviewMesh, {
+            ...preview.asset,
+            previewAlpha: 0.55,
+            valid: preview.placement.valid
+        }, preview.placement);
+    }
+
+    drawSurfaceSelectionOutline(gfx, floor, z, label) {
+        this.drawClipGeometryOutline(gfx, this.surfaceScreenGeometry(floor, z, label), label);
+    }
+
+    drawRoofSelectionOutline(gfx, floor, label) {
+        this.drawClipGeometryOutline(gfx, this.roofScreenGeometry(floor, label), label);
+    }
+
+    drawWallEntrySelectionOutline(gfx, entry, label, options = {}) {
+        if (!entry || !entry.wall || !entry.floor) {
+            throw new Error(`${label} requires a rendered wall entry`);
+        }
+        const geometry = options.fullHeight === true
+            ? this.wallScreenImagePolygon(entry.wall, entry.floor, this.lastWallPickEntries)
+            : this.wallScreenPickGeometry(entry.wall, entry.floor, this.lastWallPickEntries);
+        this.drawClipGeometryOutline(
+            gfx,
+            geometry,
+            label
+        );
+    }
+
+    drawSelectionOutline() {
+        const gfx = this.selectionOutlineLayer;
+        gfx.clear();
+        if (this.state.tool === "mountObject") return;
+        const selection = this.state.selection || { kind: "building" };
+        if (selection.kind === "building" || selection.kind === "level") {
+            return;
+        }
+        if (selection.kind === "wall" || selection.kind === "wallEndpoint") {
+            const selectedWallIds = new Set(this.state.selectedWallIds().map((id) => String(id)));
+            if (selectedWallIds.size === 0) {
+                throw new Error(`${selection.kind} selection outline is missing selected wall ids`);
+            }
+            const entries = this.lastWallPickEntries.filter((entry) => entry && entry.wall && selectedWallIds.has(String(entry.wall.id)));
+            if (entries.length !== selectedWallIds.size) {
+                throw new Error("selected wall outline is missing a rendered wall entry");
+            }
+            entries.forEach((entry) => {
+                this.drawWallEntrySelectionOutline(gfx, entry, `wall ${entry.wall.id} selection outline`, { fullHeight: true });
+            });
+            return;
+        }
+        if (selection.kind === "mountedObject") {
+            const objects = this.state.selectedMountedObjects();
+            if (!objects.length) {
+                throw new Error("mounted object selection outline is missing selected objects");
+            }
+            objects.forEach((object) => {
+                const placement = this.mountedObjectPlacement(object);
+                if (!placement) {
+                    throw new Error(`mounted object ${object.id} selection outline is missing placement geometry`);
+                }
+                this.drawClipGeometryOutline(gfx, this.mountedObjectScreenGeometry({
+                    ...placement,
+                    object
+                }), `mounted object ${object.id} selection outline`);
+            });
+            return;
+        }
+        const floor = this.state.selectedFloor();
+        if (!floor) {
+            throw new Error(`${selection.kind} selection outline is missing a selected floor`);
+        }
+        const floorId = getFloorId(floor);
+        if (selection.kind === "roof") {
+            this.drawRoofSelectionOutline(gfx, floor, `roof ${floorId} selection outline`);
+            return;
+        }
+        if (selection.kind === "floor" || selection.kind === "floorVertex") {
+            this.drawSurfaceSelectionOutline(gfx, floor, getFloorElevation(floor), `floor ${floorId} selection outline`);
+        }
+    }
+
     drawHandles() {
         const gfx = this.handleLayer;
         gfx.clear();
+        if (this.state.tool === "mountObject") return;
         const floor = this.state.selectedFloor();
         if (!floor) return;
         const elevation = getFloorElevation(floor);
-        if (this.state.editorMode === "walls") {
-            this.drawWallEndpointHandles(gfx, floor, elevation);
+        const selectionKind = this.state.selection && this.state.selection.kind;
+        if (selectionKind === "wall" || selectionKind === "wallEndpoint") {
+            this.drawSelectedWallEndpointHandles(gfx, elevation);
             return;
         }
+        if (selectionKind !== "floor" && selectionKind !== "floorVertex") return;
         const baseColor = this.state.tool === "select" ? 0xf4f2e8 : 0xa7b0b8;
         ringsForFloor(floor).forEach((ring) => {
             ring.points.forEach((point, vertexIndex) => {
@@ -1351,26 +2479,50 @@ export class BuildingRenderer {
         gfx.endFill();
     }
 
-    drawWallEndpointHandles(gfx, floor, elevation) {
-        const floorId = getFloorId(floor);
-        getBuildingWalls(this.state.building).forEach((wall) => {
-            if ((wall.fragmentId || wall.floorId) !== floorId) return;
-            const points = wallPoints(this.state.building, wall);
-            if (points.length !== 2) return;
-            [
-                { key: "startPoint", point: points[0] },
-                { key: "endPoint", point: points[1] }
-            ].forEach((entry) => {
-                const selected = (
-                    Number(this.state.selection.wallId) === Number(wall.id) &&
-                    this.state.selection.wallEndpointKey === entry.key
-                );
-                const screen = this.worldToScreen(entry.point, elevation);
-                gfx.beginFill(selected ? 0xffffff : 0xc9d1d8, 1);
-                gfx.lineStyle(selected ? 3 : 2, selected ? 0xffd27a : 0x111820, 1);
-                gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
-                gfx.endFill();
-            });
+    drawSelectedWallEndpointHandles(gfx, elevation) {
+        const wall = this.state.selectedWall();
+        if (!wall) return;
+        const points = wallPoints(this.state.building, wall);
+        if (points.length !== 2) return;
+        [
+            { key: "startPoint", point: points[0] },
+            { key: "endPoint", point: points[1] }
+        ].forEach((entry) => {
+            const selected = this.state.selection.kind === "wallEndpoint" &&
+                this.state.selection.wallEndpointKey === entry.key;
+            const screen = this.worldToScreen(entry.point, elevation);
+            gfx.beginFill(selected ? 0xffffff : 0xc9d1d8, 1);
+            gfx.lineStyle(selected ? 3 : 2, selected ? 0xffd27a : 0x111820, 1);
+            gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
+            gfx.endFill();
+        });
+    }
+
+    drawFloorContourSnapGuide(gfx, floor, z) {
+        const guideZ = Number(z);
+        if (!Number.isFinite(guideZ)) {
+            throw new Error("floor contour snap guide requires a finite z height");
+        }
+        ringsForFloor(floor).forEach((ring) => {
+            if (!Array.isArray(ring.points) || ring.points.length < 3) {
+                throw new Error("floor contour snap guide requires valid floor rings");
+            }
+            const first = ring.points[0];
+            if (!Number.isFinite(Number(first.x)) || !Number.isFinite(Number(first.y))) {
+                throw new Error("floor contour snap guide contains a non-finite vertex");
+            }
+            const firstScreen = this.worldToScreen(first, guideZ);
+            gfx.lineStyle(2, 0xff0000, 0.72);
+            gfx.moveTo(firstScreen.x, firstScreen.y);
+            for (let index = 1; index < ring.points.length; index++) {
+                const point = ring.points[index];
+                if (!Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) {
+                    throw new Error("floor contour snap guide contains a non-finite vertex");
+                }
+                const screen = this.worldToScreen(point, guideZ);
+                gfx.lineTo(screen.x, screen.y);
+            }
+            gfx.lineTo(firstScreen.x, firstScreen.y);
         });
     }
 
@@ -1378,6 +2530,62 @@ export class BuildingRenderer {
         const gfx = this.draftLayer;
         gfx.clear();
         const draft = this.state.draft;
+        if (draft && draft.kind === "mountedObject" && draft.placement) {
+            const placement = draft.placement;
+            if (placement.wall && placement.floor) {
+                this.drawWallEntrySelectionOutline(gfx, {
+                    wall: placement.wall,
+                    floor: placement.floor
+                }, `mounted object preview wall ${placement.wall.id} outline`, { fullHeight: true });
+            }
+            const screen = this.mountedObjectScreenPlacement(draft.asset, placement);
+            if (screen) {
+                gfx.lineStyle(2, placement.valid ? 0xffd27a : 0xff8a8a, 0.95);
+                screen.quads.forEach((points) => {
+                    gfx.moveTo(points[0].x, points[0].y);
+                    for (let index = 1; index < points.length; index++) gfx.lineTo(points[index].x, points[index].y);
+                    gfx.closePath();
+                });
+            }
+            if (placement.centerSnapActive) {
+                const baseZ = getFloorElevation(placement.floor);
+                const topZ = baseZ + Math.max(0, Number(placement.wallHeight) || 0);
+                const center = placement.faceCenter;
+                const bottom = this.worldToScreen(center, baseZ);
+                const top = this.worldToScreen(center, topZ);
+                gfx.lineStyle(2, 0xff0000, 0.72);
+                gfx.moveTo(bottom.x, bottom.y);
+                gfx.lineTo(top.x, top.y);
+            }
+            if (placement.verticalPeerSnapActive) {
+                this.drawFloorContourSnapGuide(gfx, placement.floor, placement.verticalSnapZ);
+            }
+            if (placement.verticalCenterSnapActive && Array.isArray(placement.points) && placement.points.length === 2) {
+                const baseZ = getFloorElevation(placement.floor);
+                const wallMidZ = baseZ + Math.max(0, Number(placement.wallHeight) || 0) * 0.5;
+                const normalX = Number(placement.sectionNormalX);
+                const normalY = Number(placement.sectionNormalY);
+                const halfThickness = Math.max(0, Number(placement.wallThickness) || 0) * 0.5;
+                const facingSign = Number(placement.mountedWallFacingSign) >= 0 ? 1 : -1;
+                if (!Number.isFinite(normalX) || !Number.isFinite(normalY)) {
+                    throw new Error("vertical window snap guide requires a finite wall normal");
+                }
+                const start = {
+                    x: Number(placement.points[0].x) + normalX * halfThickness * facingSign,
+                    y: Number(placement.points[0].y) + normalY * halfThickness * facingSign
+                };
+                const end = {
+                    x: Number(placement.points[1].x) + normalX * halfThickness * facingSign,
+                    y: Number(placement.points[1].y) + normalY * halfThickness * facingSign
+                };
+                const startScreen = this.worldToScreen(start, wallMidZ);
+                const endScreen = this.worldToScreen(end, wallMidZ);
+                gfx.lineStyle(2, 0xff0000, 0.72);
+                gfx.moveTo(startScreen.x, startScreen.y);
+                gfx.lineTo(endScreen.x, endScreen.y);
+            }
+            return;
+        }
         if (!draft || !Array.isArray(draft.points) || !draft.points.length) return;
         const z = this.activePlaneZ();
         const color = draft.kind === "wall"

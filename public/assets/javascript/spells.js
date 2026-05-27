@@ -4211,217 +4211,44 @@ const SpellSystem = (() => {
         if (category === "roof") return getRoofPlacementCandidate(wizardRef, worldX, worldY);
         if (category !== "windows" && category !== "doors") return null;
 
-        const placeableScale = Number.isFinite(wizardRef.selectedPlaceableScale)
-            ? Number(wizardRef.selectedPlaceableScale)
-            : 1;
-        const scaleMin = Number.isFinite(wizardRef.selectedPlaceableScaleMin) ? wizardRef.selectedPlaceableScaleMin : 0.2;
-        const scaleMax = Number.isFinite(wizardRef.selectedPlaceableScaleMax) ? wizardRef.selectedPlaceableScaleMax : 5;
-        const clampedScale = Math.max(scaleMin, Math.min(scaleMax, placeableScale));
-        const selectedAnchorY = Number.isFinite(wizardRef.selectedPlaceableAnchorY)
-            ? Number(wizardRef.selectedPlaceableAnchorY)
-            : 1;
-        const effectiveAnchorY = (category === "windows") ? 0.5 : selectedAnchorY;
-        const windowWorldWidth = clampedScale;
-        // Height fit is in world units; object height is clampedScale (not screen-scaled).
-        const windowWorldHeight = clampedScale;
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
         const mouseScreen = (
             typeof mousePos !== "undefined" &&
             mousePos &&
             Number.isFinite(mousePos.screenX) &&
             Number.isFinite(mousePos.screenY)
-        ) ? { x: mousePos.screenX, y: mousePos.screenY } : worldToScreen({ x: worldX, y: worldY });
+        ) ? { x: mousePos.screenX, y: mousePos.screenY } : (worldToScreenFn ? worldToScreenFn({ x: worldX, y: worldY }) : null);
         if (!mouseScreen || !Number.isFinite(mouseScreen.x) || !Number.isFinite(mouseScreen.y)) return null;
-        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
         if (!worldToScreenFn) return null;
 
         const pickResult = pickObjectViaRenderingColorId((obj) =>
             !!(obj && obj.type === "wallSection" && !obj.gone && !obj.vanishing)
         );
         if (!pickResult || !pickResult.picked || pickResult.picked.type !== "wallSection") return null;
-        const section = pickResult.picked;
-        if (!section.startPoint || !section.endPoint) return null;
-        const profile = section.getWallProfile();
-        if (!profile) return null;
 
-        const mapRef = wizardRef.map;
-        const vs = Number.isFinite(viewscale) ? viewscale : 1;
-        const xyr = Number.isFinite(xyratio) ? xyratio : 0.66;
-
-        const wallHeight = Math.max(0, Number(section.height) || 0);
-        const halfT = Math.max(0.001, Number(section.thickness) || 0.001) * 0.5;
-
-        const sx = Number(section.startPoint.x);
-        const sy = Number(section.startPoint.y);
-        const ex = Number(section.endPoint.x);
-        const ey = Number(section.endPoint.y);
-        if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
-            !Number.isFinite(ex) || !Number.isFinite(ey)) return null;
-
-        const dx = ex - sx;
-        const dy = ey - sy;
-        const len = Math.hypot(dx, dy);
-        if (!(len > 1e-6)) return null;
-
-        const ux = dx / len;
-        const uy = dy / len;
-        const vx = -uy;
-        const vy = ux;
-        const { aLeft, aRight, bLeft, bRight } = profile;
-
-        const toScreen = (pt, z) => {
-            const s = worldToScreenFn(pt);
-            return { x: s.x, y: s.y - z * vs * xyr };
-        };
-
-        const longFaceA = [toScreen(aLeft, 0), toScreen(bLeft, 0), toScreen(bLeft, wallHeight), toScreen(aLeft, wallHeight)];
-        const longFaceB = [toScreen(aRight, 0), toScreen(bRight, 0), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
-        const topFace = [toScreen(aLeft, wallHeight), toScreen(bLeft, wallHeight), toScreen(bRight, wallHeight), toScreen(aRight, wallHeight)];
-        const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
-        const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
-        const facingSign = longAFront ? 1 : -1;
-
-        const sectionStartScreen = (facingSign > 0) ? longFaceA[0] : longFaceB[0];
-        const sectionEndScreen = (facingSign > 0) ? longFaceA[1] : longFaceB[1];
-        const sdx = sectionEndScreen.x - sectionStartScreen.x;
-        const sdy = sectionEndScreen.y - sectionStartScreen.y;
-        const sLen2 = sdx * sdx + sdy * sdy;
-        if (!(sLen2 > 1e-6)) return null;
-
-        const wallPosition = (typeof section.getWallPositionAtScreenPoint === "function")
-            ? section.getWallPositionAtScreenPoint(
-                Number(mouseScreen.x),
-                Number(mouseScreen.y),
-                {
-                    worldX: Number(worldX),
-                    worldY: Number(worldY),
-                    worldToScreenFn,
-                    viewscale: vs,
-                    xyratio: xyr
-                }
-            )
-            : null;
-        const mouseRelX = mouseScreen.x - sectionStartScreen.x;
-        const mouseRelY = mouseScreen.y - sectionStartScreen.y;
-        const fallbackProjT = Math.max(0, Math.min(1,
-            (mouseRelX * sdx + mouseRelY * sdy) / sLen2));
-        const sectionProjT = Number.isFinite(wallPosition)
-            ? Math.max(0, Math.min(1, Number(wallPosition)))
-            : fallbackProjT;
-
-        const sectionLength = len;
-        const halfWidth = windowWorldWidth * 0.5;
-        const fitsLength = sectionLength + 1e-6 >= windowWorldWidth;
-        const fitsHeight = windowWorldHeight <= wallHeight + 1e-6;
-
-        let along = sectionProjT * sectionLength;
-        along = fitsLength
-            ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, along))
-            : Math.max(0, Math.min(sectionLength, along));
-
-        const sectionCenterAlong = sectionLength * 0.5;
-        const sectionCenterWorld = {
-            x: sx + ux * sectionCenterAlong + vx * halfT * facingSign,
-            y: sy + uy * sectionCenterAlong + vy * halfT * facingSign
-        };
-        const faceMinX = Math.min(sectionStartScreen.x, sectionEndScreen.x);
-        const faceMaxX = Math.max(sectionStartScreen.x, sectionEndScreen.x);
-        const faceSpanX = faceMaxX - faceMinX;
-        const centerSnapPx = 10;
-        let centerDistPx = Infinity;
-        if (faceSpanX > 1e-4) {
-            centerDistPx = Math.abs(mouseScreen.x - (faceMinX + faceMaxX) * 0.5);
-        } else {
-            let topMinY = Infinity, topMaxY = -Infinity;
-            for (let ti = 0; ti < topFace.length; ti++) {
-                if (topFace[ti].y < topMinY) topMinY = topFace[ti].y;
-                if (topFace[ti].y > topMaxY) topMaxY = topFace[ti].y;
-            }
-            if (Number.isFinite(topMinY) && Number.isFinite(topMaxY) && (topMaxY - topMinY) > 1e-4) {
-                centerDistPx = Math.abs(mouseScreen.y - (topMinY + topMaxY) * 0.5);
-            }
+        const placementApi = (typeof globalThis !== "undefined") ? globalThis.PlaceObjectPlacement : null;
+        if (!placementApi || typeof placementApi.resolveWallMountedPlacementCandidate !== "function") {
+            throw new Error("missing shared wall-mounted place object placement helper");
         }
-        let centerSnapActive = false;
-        if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
-            along = fitsLength
-                ? Math.max(halfWidth, Math.min(sectionLength - halfWidth, sectionCenterAlong))
-                : Math.max(0, Math.min(sectionLength, sectionCenterAlong));
-            centerSnapActive = true;
-        }
-
-        const rotDeg = Math.atan2(uy, ux) * (180 / Math.PI);
-        const isDoorPlacement = category === "doors";
-        const hitboxHalfT = isDoorPlacement ? (halfT * 1.1) : halfT;
-
-        let centerX = sx + ux * along;
-        let centerY = sy + uy * along;
-        let wallFaceCenterX = centerX + vx * halfT * facingSign;
-        let wallFaceCenterY = centerY + vy * halfT * facingSign;
-        if (mapRef && typeof mapRef.wrapWorldX === "function") {
-            centerX = mapRef.wrapWorldX(centerX);
-            wallFaceCenterX = mapRef.wrapWorldX(wallFaceCenterX);
-        }
-        if (mapRef && typeof mapRef.wrapWorldY === "function") {
-            centerY = mapRef.wrapWorldY(centerY);
-            wallFaceCenterY = mapRef.wrapWorldY(wallFaceCenterY);
-        }
-
-        const normalBias = (category === "windows") ? 0.001 : 0;
-        const desiredBaseX = wallFaceCenterX + vx * normalBias * facingSign;
-        const desiredBaseY = wallFaceCenterY + vy * normalBias * facingSign;
-        const verticalOffset = (1 - effectiveAnchorY) * windowWorldHeight;
-        let snappedX = desiredBaseX;
-        let snappedY = isDoorPlacement
-            ? (desiredBaseY - verticalOffset)
-            : desiredBaseY;
-        const wallBottomZ = Number.isFinite(section.bottomZ) ? Number(section.bottomZ) : 0;
-        const snappedZ = (category === "windows") ? (wallBottomZ + wallHeight * 0.5) : 0;
-        if (mapRef && typeof mapRef.wrapWorldX === "function") snappedX = mapRef.wrapWorldX(snappedX);
-        if (mapRef && typeof mapRef.wrapWorldY === "function") snappedY = mapRef.wrapWorldY(snappedY);
-
-        const p1 = { x: centerX - ux * halfWidth + vx * hitboxHalfT, y: centerY - uy * halfWidth + vy * hitboxHalfT };
-        const p2 = { x: centerX + ux * halfWidth + vx * hitboxHalfT, y: centerY + uy * halfWidth + vy * hitboxHalfT };
-        const p3 = { x: centerX + ux * halfWidth - vx * hitboxHalfT, y: centerY + uy * halfWidth - vy * hitboxHalfT };
-        const p4 = { x: centerX - ux * halfWidth - vx * hitboxHalfT, y: centerY - uy * halfWidth - vy * hitboxHalfT };
-        const wrapPt = (pt) => ({
-            x: (mapRef && typeof mapRef.wrapWorldX === "function") ? mapRef.wrapWorldX(pt.x) : pt.x,
-            y: (mapRef && typeof mapRef.wrapWorldY === "function") ? mapRef.wrapWorldY(pt.y) : pt.y
+        return placementApi.resolveWallMountedPlacementCandidate({
+            section: pickResult.picked,
+            category,
+            worldX,
+            worldY,
+            mouseScreen,
+            worldToScreenFn,
+            viewscale: (typeof viewscale !== "undefined" && Number.isFinite(viewscale)) ? viewscale : 1,
+            xyratio: (typeof xyratio !== "undefined" && Number.isFinite(xyratio)) ? xyratio : 0.66,
+            mapRef: wizardRef.map,
+            placeableScale: Number.isFinite(wizardRef.selectedPlaceableScale)
+                ? Number(wizardRef.selectedPlaceableScale)
+                : 1,
+            scaleMin: Number.isFinite(wizardRef.selectedPlaceableScaleMin) ? wizardRef.selectedPlaceableScaleMin : 0.2,
+            scaleMax: Number.isFinite(wizardRef.selectedPlaceableScaleMax) ? wizardRef.selectedPlaceableScaleMax : 5,
+            anchorY: Number.isFinite(wizardRef.selectedPlaceableAnchorY)
+                ? Number(wizardRef.selectedPlaceableAnchorY)
+                : 1
         });
-
-        return {
-            valid: fitsLength && fitsHeight,
-            reason: !fitsLength
-                ? (isDoorPlacement ? "Door is wider than this wall section." : "Window is wider than this wall section.")
-                : (!fitsHeight
-                    ? (isDoorPlacement ? "Door is taller than this wall." : "Window is taller than this wall.")
-                    : null),
-            targetWall: section,
-            mountedWallLineGroupId: section.id,
-            mountedSectionId: section.id,
-            mountedWallSectionUnitId: section.id,
-            mountedWallFacingSign: facingSign,
-            snappedX,
-            snappedY,
-            snappedZ,
-            snappedRotationDeg: rotDeg,
-            wallGroundHitboxPoints: [wrapPt(p1), wrapPt(p2), wrapPt(p3), wrapPt(p4)],
-            wallHeight,
-            wallThickness: halfT * 2,
-            centerSnapActive,
-            sectionCenterX: (mapRef && typeof mapRef.wrapWorldX === "function")
-                ? mapRef.wrapWorldX(sectionCenterWorld.x) : sectionCenterWorld.x,
-            sectionCenterY: (mapRef && typeof mapRef.wrapWorldY === "function")
-                ? mapRef.wrapWorldY(sectionCenterWorld.y) : sectionCenterWorld.y,
-            sectionFacingSign: facingSign,
-            sectionNormalX: vx,
-            sectionNormalY: vy,
-            sectionDirX: ux,
-            sectionDirY: uy,
-            wallFaceCenterX,
-            wallFaceCenterY,
-            placementHalfWidth: halfWidth,
-            placementCenterX: desiredBaseX,
-            placementCenterY: desiredBaseY
-        };
     }
 
     function getRoofPlacementCandidate(wizardRef, worldX, worldY) {

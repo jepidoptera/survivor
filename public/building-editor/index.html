@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Building Editor</title>
     <script src="/pixi.js/pixi.js"></script>
+    <script src="/assets/javascript/wallGeometry.js"></script>
     <script src="/assets/javascript/gameobjects/wallSectionUnit.js"></script>
+    <script src="/assets/javascript/placeObjectPlacement.js"></script>
     <script src="/vendor/earcut/dist/earcut.min.js"></script>
     <script src="/vendor/polygon-clipping/dist/polygon-clipping.umd.min.js"></script>
     <link rel="icon" type="image/png" href="/assets/images/wizard-hat-favicon.png">
@@ -13,63 +15,72 @@
 </head>
 <body>
     <div class="appShell">
-        <aside class="toolbar" aria-label="building editor tools">
-            <button type="button" data-tool-mode="floor">Floor</button>
-            <button type="button" data-tool-mode="walls">Walls</button>
-            <div class="toolDivider" aria-hidden="true"></div>
-            <button type="button" data-tool="edit" data-tool-visible-in="floor walls" class="iconTool" title="Edit vertices">
-                <img src="/assets/images/thumbnails/edit.png" alt="">
-            </button>
-            <button type="button" data-tool="polygon" data-tool-visible-in="floor" class="iconTool" title="Add polygon">
-                <img src="/assets/images/thumbnails/polygon.png" alt="">
-            </button>
-            <button type="button" data-tool="scissors" data-tool-visible-in="floor" class="iconTool" title="Subtract polygon">
-                <img src="/assets/images/thumbnails/scissors.png" alt="">
-            </button>
-            <button type="button" data-tool="wall" data-tool-visible-in="walls" class="iconTool" title="Add wall">+</button>
-            <button type="button" data-tool="paint" data-tool-visible-in="floor walls" class="iconTool" title="Paint texture">🎨</button>
-            <div id="texturePalette" class="texturePalette" data-tool-visible-in="floor walls" hidden></div>
-            <button type="button" id="finishDraft" data-tool-visible-in="floor">Finish</button>
-            <button type="button" id="cancelDraft" data-tool-visible-in="floor">Cancel</button>
-        </aside>
-
         <main class="workspace">
             <div class="controlBar">
-                <label data-tool-visible-in="floor">
+                <div class="toolCluster" aria-label="building editor tools">
+                    <button type="button" data-tool="polygon" data-tool-exclude="mountObject" class="iconTool" title="Add floor polygon">
+                        <img src="/assets/images/thumbnails/polygon.png" alt="">
+                    </button>
+                    <button type="button" data-tool="scissors" data-tool-exclude="mountObject" class="iconTool" title="Cut floor hole">
+                        <img src="/assets/images/thumbnails/scissors.png" alt="">
+                    </button>
+                    <button type="button" data-tool="wall" data-tool-exclude="mountObject" class="iconTool" title="Add wall">+</button>
+                    <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof wall wallEndpoint" class="iconTool" title="Paint texture">🎨</button>
+                    <div id="texturePalette" class="texturePalette" hidden></div>
+                </div>
+                <label data-selection-scope="level floor floorVertex">
                     Elevation
                     <input id="floorElevation" type="number" step="0.25">
                 </label>
-                <label data-tool-visible-in="floor">
+                <label data-selection-scope="level floor floorVertex">
                     Height
                     <input id="floorHeight" type="number" min="0.1" step="0.1">
                 </label>
-                <label data-tool-visible-in="floor">
-                    Floor texture
-                    <select id="floorTexture"></select>
+                <label data-selection-scope="roof">
+                    Overhang
+                    <input id="roofOverhang" type="number" step="0.1">
                 </label>
-                <label data-tool-visible-in="floor">
-                    Roof texture
-                    <select id="roofTexture"></select>
+                <label data-selection-scope="roof">
+                    Peak height
+                    <input id="roofPeakHeight" type="number" min="0" step="0.1">
                 </label>
-                <button type="button" id="duplicateFloor" data-tool-visible-in="floor">Duplicate Floor</button>
-                <label data-tool-visible-in="walls">
+                <button type="button" id="duplicateFloor" data-selection-scope="level floor floorVertex roof">Duplicate Level</button>
+                <label data-selection-scope="wall wallEndpoint">
                     Wall height
                     <input id="wallHeight" type="number" min="0.1" step="0.1">
                 </label>
-                <label data-tool-visible-in="walls">
-                    Wall texture
-                    <select id="wallTexture"></select>
+                <label data-tool-scope="mountObject">
+                    Size
+                    <input id="mountSize" type="range" min="0.2" max="5" step="0.05">
                 </label>
-                <label class="checkLabel">
+                <input id="mountSizeValue" class="toolValue" data-tool-scope="mountObject" type="number" min="0.2" max="5" step="0.05" title="Size value">
+                <label data-tool-scope="mountObject">
+                    Aspect ratio
+                    <input id="mountAspect" type="range" min="-2" max="2" step="0.02">
+                </label>
+                <input id="mountAspectValue" class="toolValue" data-tool-scope="mountObject" type="number" min="0.05" max="25" step="0.01" title="Aspect ratio value">
+                <button type="button" id="mountTextureButton" data-tool-scope="mountObject" class="iconTool" title="Paint texture">🎨</button>
+                <div id="mountTexturePalette" class="texturePalette" hidden></div>
+                <label class="checkLabel" data-tool-exclude="mountObject">
                     <input id="snapToggle" type="checkbox" checked>
-                    Snap anchors
+                    Snap to grid
                 </label>
-                <label class="checkLabel">
+                <label class="checkLabel" data-tool-exclude="mountObject">
                     <input id="anchorToggle" type="checkbox">
                     Show anchors
                 </label>
             </div>
-            <div id="stageHost" tabindex="0"></div>
+            <div class="stageFrame">
+                <div class="sideToolbar" aria-label="wall fixture tools">
+                    <button type="button" class="iconTool mountToolButton" data-mount-category="doors" title="Place doors">
+                        <img src="/assets/images/doors/door5.png" alt="">
+                    </button>
+                    <button type="button" class="iconTool mountToolButton" data-mount-category="windows" title="Place windows">
+                        <img src="/assets/images/windows/window.png" alt="">
+                    </button>
+                </div>
+                <div id="stageHost" tabindex="0"></div>
+            </div>
             <div class="statusBar">
                 <span id="selectedSummary"></span>
                 <span id="statusText"></span>
@@ -91,6 +102,14 @@
                 </div>
             </section>
         </aside>
+    </div>
+    <div id="windowContextMenu" class="contextMenu" hidden>
+        <div class="contextMenuTitle">select:</div>
+        <div class="contextMenuSeparator"></div>
+        <button type="button" data-window-select="level">this level</button>
+        <button type="button" data-window-select="column">this column</button>
+        <button type="button" data-window-select="texture">same texture</button>
+        <button type="button" data-window-select="all">all</button>
     </div>
 
     <script type="module" src="./main.js"></script>

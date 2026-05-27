@@ -1,4 +1,5 @@
 import "../assets/javascript/shared/FloorPolygonEditingCore.js";
+import { simplePolygonRingError } from "./BuildingGeometry.js";
 
 const core = globalThis.FloorPolygonEditingCore;
 if (!core) {
@@ -53,7 +54,8 @@ export function getFloorRing(floor, ringKind = "outer", holeIndex = -1) {
 
 export function setFloorRing(floor, ringKind, holeIndex, points) {
     const ring = cloneRingWithIds(points, ringKind === "hole" ? "hole-vertex" : "vertex");
-    if (ring.length < 3) throw new Error("floor polygon ring requires at least three vertices");
+    const error = simplePolygonRingError(ring, "floor polygon ring");
+    if (error) throw new Error(error);
     if (ringKind === "outer") {
         floor.outerPolygon = ring;
         return;

@@ -22,18 +22,16 @@ textarea {
 
 .appShell {
     display: grid;
-    grid-template-columns: 88px minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     width: 100%;
     height: 100%;
 }
 
-.toolbar {
+.toolCluster {
     display: flex;
-    flex-direction: column;
     gap: 8px;
-    padding: 12px 10px;
-    background: #17222b;
-    border-right: 1px solid #31424d;
+    align-items: center;
+    margin-right: 4px;
 }
 
 button {
@@ -55,15 +53,11 @@ button[data-active="true"] {
     display: none !important;
 }
 
-.toolDivider {
-    height: 1px;
-    margin: 4px 0;
-    background: #31424d;
-}
-
 .iconTool {
     display: grid;
     place-items: center;
+    width: 38px;
+    min-width: 38px;
     padding: 4px;
 }
 
@@ -112,9 +106,57 @@ button[data-active="true"] {
     pointer-events: none;
 }
 
+.contextMenu {
+    position: fixed;
+    z-index: 30;
+    display: grid;
+    gap: 2px;
+    min-width: 150px;
+    padding: 7px;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #101820;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36);
+}
+
+.contextMenu[hidden] {
+    display: none !important;
+}
+
+.contextMenuTitle {
+    padding: 3px 7px 5px;
+    color: #b8c5cc;
+    font-size: 12px;
+    text-transform: lowercase;
+}
+
+.contextMenuSeparator {
+    height: 1px;
+    margin: 1px 0 4px;
+    background: #44545f;
+}
+
+.contextMenu button {
+    min-height: 0;
+    padding: 3px 7px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #b8c5cc;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    text-transform: lowercase;
+}
+
+.contextMenu button:hover {
+    background: transparent;
+    color: #f4f2e8;
+}
+
 .workspace {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) 34px;
+    grid-template-rows: 62px minmax(0, 1fr) 34px;
     min-width: 0;
     min-height: 0;
 }
@@ -123,8 +165,13 @@ button[data-active="true"] {
     display: flex;
     align-items: end;
     gap: 12px;
+    box-sizing: border-box;
+    height: 62px;
     min-height: 62px;
+    max-height: 62px;
     padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
     background: #192730;
     border-bottom: 1px solid #31424d;
 }
@@ -155,6 +202,19 @@ input[type="number"] {
     width: 96px;
 }
 
+input[type="range"] {
+    width: 130px;
+    padding: 0;
+}
+
+.toolValue {
+    align-self: center;
+    width: 70px;
+    min-width: 70px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
 .checkLabel {
     display: flex;
     align-items: center;
@@ -174,6 +234,41 @@ input[type="number"] {
     min-height: 0;
     touch-action: none;
     outline: none;
+}
+
+.stageFrame {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+}
+
+.sideToolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px;
+    background: #17232b;
+    border-right: 1px solid #31424d;
+}
+
+.mountToolButton[data-active="true"] {
+    border-color: #ffd27a;
+    background: #3c3323;
+}
+
+.mountToolButton {
+    width: 91px;
+    min-width: 91px;
+    min-height: 91px;
+    padding: 8px;
+}
+
+.mountToolButton img {
+    width: 55px;
+    height: 55px;
+    object-fit: contain;
 }
 
 #stageHost canvas {
@@ -338,7 +433,7 @@ textarea {
 
 @media (max-width: 900px) {
     .appShell {
-        grid-template-columns: 72px minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .inspector {
@@ -346,7 +441,6 @@ textarea {
     }
 
     .controlBar {
-        flex-wrap: wrap;
-        align-content: start;
+        flex-wrap: nowrap;
     }
 }

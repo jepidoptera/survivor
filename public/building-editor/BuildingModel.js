@@ -2,6 +2,8 @@ const DEFAULTS = Object.freeze({
     floorTexture: "/assets/images/flooring/woodfloor.png",
     wallTexture: "/assets/images/walls/woodwall.png",
     roofTexture: "/assets/images/roofs/slate.png",
+    roofOverhang: 0,
+    roofPeakHeight: 0,
     wallHeight: 3,
     wallThickness: 0.1,
     gridSize: 1
@@ -9,6 +11,7 @@ const DEFAULTS = Object.freeze({
 
 let stringIdCounter = 1;
 let wallIdCounter = 1;
+let mountedObjectIdCounter = 1;
 
 function nextStringId(prefix) {
     return `${prefix}-${stringIdCounter++}`;
@@ -16,6 +19,10 @@ function nextStringId(prefix) {
 
 function nextWallId() {
     return wallIdCounter++;
+}
+
+function nextMountedObjectId() {
+    return mountedObjectIdCounter++;
 }
 
 function clonePoint(point, fallbackPrefix = "vertex") {
@@ -77,7 +84,7 @@ function lineIntersection(lineA, lineB) {
     };
 }
 
-function offsetRing(ring, distance) {
+export function offsetRing(ring, distance) {
     const points = ringPoints(ring);
     if (points.length < 3 || Math.abs(Number(distance)) < 0.000001) return points;
     const area = polygonArea(points);
@@ -229,11 +236,14 @@ export function createEmptyBuilding() {
             floorTexture: DEFAULTS.floorTexture,
             wallTexture: DEFAULTS.wallTexture,
             roofTexture: DEFAULTS.roofTexture,
+            roofOverhang: DEFAULTS.roofOverhang,
+            roofPeakHeight: DEFAULTS.roofPeakHeight,
             wallHeight: DEFAULTS.wallHeight,
             wallThickness: DEFAULTS.wallThickness
         },
         floorFragments: [],
         wallSections: [],
+        mountedWallObjects: [],
         roof: null
     };
 }
@@ -244,6 +254,10 @@ export function getBuildingFloors(building) {
 
 export function getBuildingWalls(building) {
     return Array.isArray(building && building.wallSections) ? building.wallSections : [];
+}
+
+export function getBuildingMountedObjects(building) {
+    return Array.isArray(building && building.mountedWallObjects) ? building.mountedWallObjects : [];
 }
 
 export function getFloorId(floor) {
@@ -269,6 +283,8 @@ export function createFloor({
     holes = [],
     floorTexture = DEFAULTS.floorTexture,
     roofTexture = DEFAULTS.roofTexture,
+    roofOverhang = DEFAULTS.roofOverhang,
+    roofPeakHeight = DEFAULTS.roofPeakHeight,
     floorHeight = DEFAULTS.wallHeight,
     defaultWallHeight = DEFAULTS.wallHeight,
     defaultWallTexture = DEFAULTS.wallTexture,
@@ -291,6 +307,8 @@ export function createFloor({
         holes: Array.isArray(holes) ? holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [],
         floorTexturePath: floorTexture,
         roofTexturePath: roofTexture,
+        roofOverhang: Number(roofOverhang),
+        roofPeakHeight: Number(roofPeakHeight),
         floorHeight: Number(floorHeight),
         defaultWallHeight: Number(defaultWallHeight),
         defaultWallTexturePath: defaultWallTexture,
@@ -303,6 +321,12 @@ export function createFloor({
     }
     if (!Number.isFinite(floor.floorHeight) || floor.floorHeight <= 0) {
         throw new Error("building floor height must be a positive number");
+    }
+    if (!Number.isFinite(floor.roofOverhang)) {
+        throw new Error("building roof overhang must be a finite number");
+    }
+    if (!Number.isFinite(floor.roofPeakHeight) || floor.roofPeakHeight < 0) {
+        throw new Error("building roof peak height must be zero or greater");
     }
     floor._createPerimeterWalls = createPerimeterWalls === true;
     return floor;
@@ -361,6 +385,69 @@ export function createWall({
     }
     refreshWallEndpointCoordinatesForWall(null, wall);
     return wall;
+}
+
+export function createWallMountedObject({
+    floorId,
+    wallId,
+    category,
+    texturePath,
+    wallT,
+    width,
+    height,
+    zOffset,
+    placementRotation = 0,
+    mountedWallFacingSign = 1,
+    placeableAnchorX = 0.5,
+    placeableAnchorY = 1,
+    renderDepthOffset = 0,
+    compositeLayers = null
+}) {
+    const resolvedFloorId = String(floorId || "");
+    if (!resolvedFloorId) throw new Error("mounted wall object requires a floor fragment id");
+    const resolvedWallId = Number(wallId);
+    if (!Number.isFinite(resolvedWallId)) throw new Error("mounted wall object requires a finite wall id");
+    const resolvedCategory = String(category || "").trim().toLowerCase();
+    if (resolvedCategory !== "doors" && resolvedCategory !== "windows") {
+        throw new Error(`mounted wall object category must be doors or windows: ${resolvedCategory || "missing"}`);
+    }
+    if (typeof texturePath !== "string" || texturePath.length === 0) {
+        throw new Error("mounted wall object requires a texture path");
+    }
+    const t = Number(wallT);
+    if (!Number.isFinite(t)) throw new Error("mounted wall object requires a finite wall position");
+    const objectWidth = Number(width);
+    const objectHeight = Number(height);
+    if (!Number.isFinite(objectWidth) || objectWidth <= 0) {
+        throw new Error("mounted wall object width must be a positive number");
+    }
+    if (!Number.isFinite(objectHeight) || objectHeight <= 0) {
+        throw new Error("mounted wall object height must be a positive number");
+    }
+    const objectZOffset = Number(zOffset);
+    if (!Number.isFinite(objectZOffset)) throw new Error("mounted wall object z offset must be finite");
+    return {
+        type: "placedObject",
+        id: nextMountedObjectId(),
+        category: resolvedCategory,
+        texturePath,
+        floorId: resolvedFloorId,
+        wallId: resolvedWallId,
+        mountedSectionId: resolvedWallId,
+        mountedWallLineGroupId: resolvedWallId,
+        mountedWallSectionUnitId: resolvedWallId,
+        mountedWallFacingSign: Number(mountedWallFacingSign) >= 0 ? 1 : -1,
+        wallT: Math.max(0, Math.min(1, t)),
+        width: objectWidth,
+        height: objectHeight,
+        zOffset: objectZOffset,
+        rotationAxis: "spatial",
+        placementRotation: Number.isFinite(Number(placementRotation)) ? Number(placementRotation) : 0,
+        placeableAnchorX: Number.isFinite(Number(placeableAnchorX)) ? Number(placeableAnchorX) : 0.5,
+        placeableAnchorY: Number.isFinite(Number(placeableAnchorY)) ? Number(placeableAnchorY) : 1,
+        renderDepthOffset: Number.isFinite(Number(renderDepthOffset)) ? Number(renderDepthOffset) : 0,
+        compositeLayers: Array.isArray(compositeLayers) ? clonePlainObject(compositeLayers) : null
+    };
 }
 
 function vertexEndpoint(floor, vertex) {
@@ -485,6 +572,8 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
         holes: source.holes || [],
         floorTexture: source.floorTexturePath,
         roofTexture: source.roofTexturePath,
+        roofOverhang: source.roofOverhang,
+        roofPeakHeight: source.roofPeakHeight,
         floorHeight: source.floorHeight,
         defaultWallHeight: source.defaultWallHeight,
         defaultWallTexture: source.defaultWallTexturePath,
@@ -492,7 +581,8 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
     });
     floor.name = `${source.name} copy`;
     addFloor(building, floor);
-    duplicateWallsForFloor(building, source, floor);
+    const wallIdMap = duplicateWallsForFloor(building, source, floor);
+    duplicateMountedObjectsForFloor(building, source, floor, wallIdMap);
     return floor;
 }
 
@@ -578,6 +668,7 @@ function duplicateWallsForFloor(building, sourceFloor, targetFloor) {
     const targetElevation = getFloorElevation(targetFloor);
     const targetTraversalLayer = Math.round(Number(targetFloor.level) || 0);
     const sourceWalls = building.wallSections.filter((wall) => (wall.fragmentId || wall.floorId) === sourceFloorId);
+    const wallIdMap = new Map();
 
     sourceWalls.forEach((sourceWall) => {
         const wall = clonePlainObject(sourceWall);
@@ -593,9 +684,33 @@ function duplicateWallsForFloor(building, sourceFloor, targetFloor) {
         wall.bottomZ = targetElevation;
         wall.traversalLayer = targetTraversalLayer;
         building.wallSections.push(wall);
+        wallIdMap.set(Number(sourceWall.id), Number(wall.id));
     });
 
     refreshWallSectionEndpoints(building, targetFloor);
+    return wallIdMap;
+}
+
+function duplicateMountedObjectsForFloor(building, sourceFloor, targetFloor, wallIdMap) {
+    if (!building || !Array.isArray(building.mountedWallObjects)) return;
+    const sourceFloorId = getFloorId(sourceFloor);
+    const targetFloorId = getFloorId(targetFloor);
+    getBuildingMountedObjects(building)
+        .filter((object) => object.floorId === sourceFloorId)
+        .forEach((sourceObject) => {
+            const targetWallId = wallIdMap.get(Number(sourceObject.wallId));
+            if (!Number.isFinite(targetWallId)) {
+                throw new Error(`cannot duplicate mounted object ${sourceObject.id}: missing duplicated wall ${sourceObject.wallId}`);
+            }
+            const object = clonePlainObject(sourceObject);
+            object.id = nextMountedObjectId();
+            object.floorId = targetFloorId;
+            object.wallId = targetWallId;
+            object.mountedSectionId = targetWallId;
+            object.mountedWallLineGroupId = targetWallId;
+            object.mountedWallSectionUnitId = targetWallId;
+            building.mountedWallObjects.push(object);
+        });
 }
 
 export function replaceFloorShape(building, floor, outerPolygon, holes = [], options = {}) {
@@ -619,6 +734,11 @@ export function findFloor(building, floorId) {
 export function findWall(building, wallId) {
     const id = Number(wallId);
     return getBuildingWalls(building).find((wall) => Number(wall.id) === id) || null;
+}
+
+export function findMountedObject(building, objectId) {
+    const id = Number(objectId);
+    return getBuildingMountedObjects(building).find((object) => Number(object.id) === id) || null;
 }
 
 export function ringForEndpoint(building, endpoint) {
@@ -755,6 +875,8 @@ export function normalizeImportedBuilding(raw) {
             holes: floor.holes || [],
             floorTexture: floor.floorTexture || DEFAULTS.floorTexture,
             roofTexture: floor.roofTexture || DEFAULTS.roofTexture,
+            roofOverhang: floor.roofOverhang ?? DEFAULTS.roofOverhang,
+            roofPeakHeight: floor.roofPeakHeight ?? DEFAULTS.roofPeakHeight,
             floorHeight: floor.floorHeight || (floor.defaults && Number(floor.defaults.wallHeight)) || DEFAULTS.wallHeight,
             defaultWallHeight: floor.defaults && Number(floor.defaults.wallHeight) || DEFAULTS.wallHeight,
             defaultWallTexture: floor.defaults && floor.defaults.wallTexture || DEFAULTS.wallTexture,
@@ -765,6 +887,7 @@ export function normalizeImportedBuilding(raw) {
         throw new Error("imported building is missing floorFragments array");
     }
     if (!Array.isArray(building.wallSections)) building.wallSections = [];
+    if (!Array.isArray(building.mountedWallObjects)) building.mountedWallObjects = [];
 
     building.floorFragments.forEach((floor) => {
         if (!floor.fragmentId) floor.fragmentId = floor.id || nextStringId("floor-fragment");
@@ -774,6 +897,10 @@ export function normalizeImportedBuilding(raw) {
         floor.holes = Array.isArray(floor.holes) ? floor.holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [];
         floor.floorTexturePath = floor.floorTexturePath || floor.floorTexture || DEFAULTS.floorTexture;
         floor.roofTexturePath = floor.roofTexturePath || floor.roofTexture || (floor.defaults && floor.defaults.roofTexture) || (building.defaults && building.defaults.roofTexture) || DEFAULTS.roofTexture;
+        floor.roofOverhang = Number.isFinite(Number(floor.roofOverhang)) ? Number(floor.roofOverhang) : DEFAULTS.roofOverhang;
+        floor.roofPeakHeight = Number.isFinite(Number(floor.roofPeakHeight)) && Number(floor.roofPeakHeight) >= 0
+            ? Number(floor.roofPeakHeight)
+            : DEFAULTS.roofPeakHeight;
         floor.floorHeight = Number.isFinite(Number(floor.floorHeight)) && Number(floor.floorHeight) > 0
             ? Number(floor.floorHeight)
             : (floor.defaults && Number.isFinite(Number(floor.defaults.wallHeight)) ? Number(floor.defaults.wallHeight) : DEFAULTS.wallHeight);
@@ -782,6 +909,45 @@ export function normalizeImportedBuilding(raw) {
             : (floor.defaults && Number.isFinite(Number(floor.defaults.wallHeight)) ? Number(floor.defaults.wallHeight) : DEFAULTS.wallHeight);
         floor.defaultWallTexturePath = floor.defaultWallTexturePath || (floor.defaults && floor.defaults.wallTexture) || DEFAULTS.wallTexture;
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
+    });
+    building.mountedWallObjects = building.mountedWallObjects.map((object) => {
+        const wallId = Number(object && (object.wallId ?? object.mountedWallSectionUnitId ?? object.mountedSectionId));
+        const wall = findWall(building, wallId);
+        if (!wall) {
+            throw new Error(`mounted wall object references missing wall: ${wallId}`);
+        }
+        const category = String(object.category || object.type || "").trim().toLowerCase();
+        const resolvedCategory = category === "door" ? "doors" : (category === "window" ? "windows" : category);
+        const normalized = createWallMountedObject({
+            floorId: object.floorId || wall.fragmentId || wall.floorId,
+            wallId,
+            category: resolvedCategory,
+            texturePath: object.texturePath,
+            wallT: object.wallT ?? 0.5,
+            width: object.width ?? 1,
+            height: object.height ?? 1,
+            zOffset: object.zOffset ?? object.z ?? 0,
+            placementRotation: object.placementRotation,
+            mountedWallFacingSign: object.mountedWallFacingSign,
+            placeableAnchorX: object.placeableAnchorX,
+            placeableAnchorY: object.placeableAnchorY,
+            renderDepthOffset: object.renderDepthOffset,
+            compositeLayers: object.compositeLayers
+        });
+        if (Number.isInteger(Number(object.id))) normalized.id = Number(object.id);
+        if (Number.isFinite(Number(object.x))) normalized.x = Number(object.x);
+        if (Number.isFinite(Number(object.y))) normalized.y = Number(object.y);
+        if (Number.isFinite(Number(object.z))) normalized.z = Number(object.z);
+        if (object.isOpen !== undefined) normalized.isOpen = object.isOpen === true;
+        if (object.isPassable !== undefined) normalized.isPassable = object.isPassable !== false;
+        if (object.blocksTile !== undefined) normalized.blocksTile = object.blocksTile === true;
+        if (object.castsLosShadows !== undefined) normalized.castsLosShadows = object.castsLosShadows === true;
+        if (Array.isArray(object.groundPlaneHitboxOverridePoints)) {
+            normalized.groundPlaneHitboxOverridePoints = object.groundPlaneHitboxOverridePoints
+                .filter((point) => finitePoint(point))
+                .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+        }
+        return normalized;
     });
     refreshWallSectionEndpoints(building);
     bumpIdCountersFromBuilding(building);
@@ -800,6 +966,9 @@ function bumpIdCountersFromBuilding(building) {
     });
     getBuildingWalls(building).forEach((wall) => {
         if (Number.isInteger(Number(wall.id))) wallIdCounter = Math.max(wallIdCounter, Number(wall.id) + 1);
+    });
+    getBuildingMountedObjects(building).forEach((object) => {
+        if (Number.isInteger(Number(object.id))) mountedObjectIdCounter = Math.max(mountedObjectIdCounter, Number(object.id) + 1);
     });
 }
 

@@ -407,8 +407,8 @@
       ]
     },
     {
-      "file": "tree door 2.png",
-      "texturePath": "/assets/images/doors/tree%20door%202.png",
+      "file": "tree door 2.jpg",
+      "texturePath": "/assets/images/doors/tree%20door%202.jpg",
       "width": 0.75,
       "height": 1,
       "renderDepthOffset": 0,
@@ -453,15 +453,15 @@
       ],
       "lodTextures": [
         {
-          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod096.png",
+          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod096.jpg",
           "maxDistance": 120
         },
         {
-          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod192.png",
+          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod192.jpg",
           "maxDistance": 260
         },
         {
-          "texturePath": "/assets/images/doors/tree%20door%202.png"
+          "texturePath": "/assets/images/doors/tree%20door%202.jpg"
         }
       ]
     },

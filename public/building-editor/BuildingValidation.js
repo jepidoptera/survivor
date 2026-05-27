@@ -1,6 +1,8 @@
-import { polygonArea } from "./BuildingGeometry.js";
+import { polygonArea, simplePolygonRingError } from "./BuildingGeometry.js";
 import {
     findFloor,
+    findWall,
+    getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
     getFloorElevation,
@@ -22,6 +24,8 @@ function validateRing(errors, floorId, ring, label) {
     if (Math.abs(area) < 0.000001) {
         errors.push(`floor ${floorId} ${label} has zero area`);
     }
+    const ringError = simplePolygonRingError(ring, `floor ${floorId} ${label}`);
+    if (ringError) errors.push(ringError);
     const vertexIds = new Set();
     ring.forEach((point, pointIndex) => {
         if (!point.id) errors.push(`floor ${floorId} ${label} vertex ${pointIndex} is missing id`);
@@ -91,6 +95,10 @@ export function validateBuilding(building) {
         errors.push("building wallSections must be an array");
         return errors;
     }
+    if (!Array.isArray(building.mountedWallObjects)) {
+        errors.push("building mountedWallObjects must be an array");
+        return errors;
+    }
 
     const floorIds = new Set();
     getBuildingFloors(building).forEach((floor, floorIndex) => {
@@ -103,6 +111,12 @@ export function validateBuilding(building) {
         }
         if (!Number.isFinite(Number(floor.floorHeight)) || Number(floor.floorHeight) <= 0) {
             errors.push(`floor ${floorId} floorHeight must be a positive number`);
+        }
+        if (!Number.isFinite(Number(floor.roofOverhang))) {
+            errors.push(`floor ${floorId} roofOverhang must be a finite number`);
+        }
+        if (!Number.isFinite(Number(floor.roofPeakHeight)) || Number(floor.roofPeakHeight) < 0) {
+            errors.push(`floor ${floorId} roofPeakHeight must be zero or greater`);
         }
         validateRing(errors, floorId, floor.outerPolygon, "outerPolygon");
         const holes = Array.isArray(floor.holes) ? floor.holes : [];
@@ -135,6 +149,38 @@ export function validateBuilding(building) {
         }
         if (!Number.isFinite(Number(wall.bottomZ))) {
             errors.push(`wall ${wall.id || "(missing id)"} bottomZ must be finite`);
+        }
+    });
+    const mountedObjectIds = new Set();
+    getBuildingMountedObjects(building).forEach((object) => {
+        if (object.id === undefined || object.id === null || object.id === "") {
+            errors.push("mounted wall object is missing id");
+        }
+        if (mountedObjectIds.has(String(object.id))) errors.push(`duplicate mounted wall object id: ${object.id}`);
+        mountedObjectIds.add(String(object.id));
+        if (object.category !== "doors" && object.category !== "windows") {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} category must be doors or windows`);
+        }
+        if (typeof object.texturePath !== "string" || object.texturePath.length === 0) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} texturePath must be a non-empty string`);
+        }
+        const wall = findWall(building, object.wallId ?? object.mountedWallSectionUnitId);
+        if (!wall) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} references missing wall: ${object.wallId ?? object.mountedWallSectionUnitId ?? "(missing)"}`);
+        } else if (object.floorId && String(object.floorId) !== String(wall.fragmentId || wall.floorId)) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} floorId does not match mounted wall`);
+        }
+        if (!Number.isFinite(Number(object.wallT)) || Number(object.wallT) < 0 || Number(object.wallT) > 1) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} wallT must be between 0 and 1`);
+        }
+        if (!Number.isFinite(Number(object.width)) || Number(object.width) <= 0) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} width must be a positive number`);
+        }
+        if (!Number.isFinite(Number(object.height)) || Number(object.height) <= 0) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} height must be a positive number`);
+        }
+        if (!Number.isFinite(Number(object.zOffset))) {
+            errors.push(`mounted wall object ${object.id || "(missing id)"} zOffset must be finite`);
         }
     });
     return errors;
