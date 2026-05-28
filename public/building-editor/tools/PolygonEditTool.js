@@ -5,7 +5,7 @@ export class PolygonEditTool {
     }
 
     pointerDown(worldPoint, threshold = 0, options = {}) {
-        const point = this.state.preparePoint(worldPoint);
+        const point = this.state.preparePoint(worldPoint, { preferFloorVertices: true });
         if (
             this.state.draft &&
             this.state.draft.kind === "polygonEdit" &&

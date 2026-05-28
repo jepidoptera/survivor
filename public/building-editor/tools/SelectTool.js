@@ -96,6 +96,17 @@ export class SelectTool {
                 return;
             }
         }
+        const gableHandle = this.pickGableHandle(options);
+        if (gableHandle) {
+            this.state.selectGableHandle(getFloorId(gableHandle.floor), gableHandle.gable.id, gableHandle.key, { preserveView });
+            this.drag = {
+                type: "gableHandle",
+                floorId: getFloorId(gableHandle.floor),
+                gableId: gableHandle.gable.id,
+                handle: gableHandle.key
+            };
+            return;
+        }
         const resizeHandle = this.pickMountedObjectResizeHandle(options);
         if (resizeHandle) {
             this.beginMountedObjectResize(resizeHandle, options);
@@ -143,6 +154,11 @@ export class SelectTool {
                 asset: this.assetFromMountedObject(hit.object),
                 preserveView
             };
+            return;
+        }
+        if (hit.type === "gable") {
+            this.state.selectGable(getFloorId(hit.floor), hit.gable.id, { preserveView });
+            this.drag = null;
             return;
         }
         if (hit.type === "roof") {
@@ -243,12 +259,20 @@ export class SelectTool {
         return renderer.pickMountedObjectResizeHandle(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10));
     }
 
+    pickGableHandle(options = {}) {
+        const renderer = options.renderer;
+        if (!renderer || !options.screenPoint || typeof renderer.pickGableHandleAtScreen !== "function") return null;
+        const selection = this.state.selection || {};
+        if (selection.kind !== "gable" && selection.kind !== "gableHandle") return null;
+        return renderer.pickGableHandleAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10));
+    }
+
     mountedObjectResizeBounds(object, renderer) {
         const placement = renderer.mountedObjectPlacement(object);
         if (!placement) {
             throw new Error(`selected door/window ${object && object.id} resize requires placement geometry`);
         }
-        const points = placement.points;
+        const points = Array.isArray(placement.resizePoints) ? placement.resizePoints : placement.points;
         if (!Array.isArray(points) || points.length !== 2) {
             throw new Error(`selected door/window ${object && object.id} resize requires two wall points`);
         }
@@ -259,12 +283,15 @@ export class SelectTool {
         if (!Number.isFinite(wallLength) || wallLength <= 0.000001) {
             throw new Error(`selected door/window ${object && object.id} resize requires a positive wall length`);
         }
-        const wallT = Number(object.wallT);
+        const wallT = Number.isFinite(Number(placement.resizeWallT)) ? Number(placement.resizeWallT) : Number(object.wallT);
         if (!Number.isFinite(wallT)) {
             throw new Error(`selected door/window ${object && object.id} resize requires finite wallT`);
         }
         const wallHeight = Number(placement.wallHeight);
-        const zOffset = Number(object.zOffset);
+        const wallBottomOffset = Number.isFinite(Number(placement.wallBottomZ))
+            ? Number(placement.wallBottomZ) - getFloorElevation(placement.floor)
+            : 0;
+        const zOffset = Number(object.zOffset) - wallBottomOffset;
         if (!Number.isFinite(wallHeight) || wallHeight <= 0 || !Number.isFinite(zOffset)) {
             throw new Error(`selected door/window ${object && object.id} resize requires finite wall height and z offset`);
         }
@@ -389,22 +416,38 @@ export class SelectTool {
     }
 
     placedMountedObject(original, placement, asset) {
-        if (!placement || !placement.wall || !placement.floor) {
-            throw new Error("cannot place dragged door/window without a wall placement");
+        if (!placement || !placement.floor || (!placement.wall && !placement.gable)) {
+            throw new Error("cannot place dragged door/window without a wall or gable placement");
         }
         if (!placement.valid) {
             throw new Error(placement.reason || "dragged door/window does not fit on this wall");
         }
         const floorElevation = getFloorElevation(placement.floor);
+        const targetFields = placement.mountKind === "gable"
+            ? {
+                mountKind: "gable",
+                wallId: null,
+                mountedSectionId: null,
+                mountedWallLineGroupId: null,
+                mountedWallSectionUnitId: null,
+                gableId: placement.gable.id,
+                gableSegmentIndex: placement.gableSegmentIndex
+            }
+            : {
+                mountKind: "wall",
+                wallId: placement.wall.id,
+                mountedSectionId: placement.wall.id,
+                mountedWallLineGroupId: placement.wall.id,
+                mountedWallSectionUnitId: placement.wall.id,
+                gableId: undefined,
+                gableSegmentIndex: undefined
+            };
         const object = {
             ...this.cloneMountedObject(original),
             category: asset.category,
             texturePath: asset.texturePath,
             floorId: getFloorId(placement.floor),
-            wallId: placement.wall.id,
-            mountedSectionId: placement.wall.id,
-            mountedWallLineGroupId: placement.wall.id,
-            mountedWallSectionUnitId: placement.wall.id,
+            ...targetFields,
             mountedWallFacingSign: placement.mountedWallFacingSign,
             wallT: placement.wallT,
             width: asset.width,
@@ -596,6 +639,18 @@ export class SelectTool {
             this.state.moveSelectedWallEndpoint(worldPoint, this.drag.threshold, {
                 detachVertexEndpoint: this.drag.detachVertexEndpoint === true
             });
+            return;
+        }
+        if (this.drag.type === "gableHandle") {
+            const renderer = options.renderer;
+            if (!renderer || !options.screenPoint) return;
+            const floor = this.state.selectedFloor();
+            const gable = this.state.selectedGable();
+            if (!floor || !gable) throw new Error("gable drag requires selected gable geometry");
+            const value = this.drag.handle === "height"
+                ? renderer.gableHeightAtScreen(floor, gable, options.screenPoint)
+                : renderer.gableEdgeTAtScreen(floor, gable, options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10));
+            this.state.moveSelectedGableHandle(value, options);
         }
     }
 

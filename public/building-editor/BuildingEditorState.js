@@ -2,6 +2,8 @@ import {
     addFloor,
     createEmptyBuilding,
     createFloor,
+    createRoof,
+    createGableMountedObject,
     createPerimeterWallsForFloor,
     createWall,
     createWallMountedObject,
@@ -14,8 +16,11 @@ import {
     getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
+    getFloorRoof,
     getFloorElevation,
     getFloorId,
+    getRoofGables,
+    normalizeRoofGable,
     mergePerimeterWallsAcrossDeletedVertex,
     normalizeImportedBuilding,
     replaceFloorShape,
@@ -58,6 +63,85 @@ function closestPointOnSegment(point, a, b) {
         x: Number(a.x) + t * dx,
         y: Number(a.y) + t * dy
     };
+}
+
+function perimeterCumulativeLengths(ring) {
+    const lengths = [0];
+    let total = 0;
+    for (let index = 0; index < ring.length; index++) {
+        const current = ring[index];
+        const next = ring[(index + 1) % ring.length];
+        total += Math.hypot(Number(next.x) - Number(current.x), Number(next.y) - Number(current.y));
+        lengths.push(total);
+    }
+    return lengths;
+}
+
+function normalizeGablePerimeterPosition(value, fallbackEdgeIndex = 0, fallbackT = 0) {
+    if (value && typeof value === "object") {
+        const edgeIndex = Math.floor(Number(value.edgeIndex ?? value.faceIndex));
+        const t = Number(value.t);
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || !Number.isFinite(t)) {
+            throw new Error("gable endpoint drag requires a finite roof outline position");
+        }
+        return { edgeIndex, t: Math.max(0, Math.min(1, t)) };
+    }
+    const t = Number(value);
+    if (!Number.isFinite(t)) throw new Error("gable endpoint drag requires a finite roof outline position");
+    return {
+        edgeIndex: Math.max(0, Math.floor(Number(fallbackEdgeIndex)) || 0),
+        t: Math.max(0, Math.min(1, t))
+    };
+}
+
+function gablePositionScalar(floor, position) {
+    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    if (ring.length < 3) throw new Error(`roof ${getFloorId(floor)} gable endpoints require a valid floor outline`);
+    const edgeIndex = Math.floor(Number(position && position.edgeIndex));
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= ring.length) {
+        throw new Error(`roof ${getFloorId(floor)} gable endpoint references missing outline edge`);
+    }
+    const t = Number(position && position.t);
+    if (!Number.isFinite(t) || t < 0 || t > 1) {
+        throw new Error(`roof ${getFloorId(floor)} gable endpoint t must be between zero and one`);
+    }
+    const cumulative = perimeterCumulativeLengths(ring);
+    return cumulative[edgeIndex] + (cumulative[edgeIndex + 1] - cumulative[edgeIndex]) * t;
+}
+
+function gableIntervalLength(floor, gable) {
+    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const cumulative = perimeterCumulativeLengths(ring);
+    const total = cumulative[cumulative.length - 1];
+    const start = gablePositionScalar(floor, gable.start);
+    const end = gablePositionScalar(floor, gable.end);
+    return end >= start ? end - start : total - start + end;
+}
+
+function gableIntervalParts(floor, gable) {
+    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const cumulative = perimeterCumulativeLengths(ring);
+    const total = cumulative[cumulative.length - 1];
+    const start = gablePositionScalar(floor, gable.start);
+    const end = gablePositionScalar(floor, gable.end);
+    if (end >= start) return [{ start, end }];
+    return [
+        { start, end: total },
+        { start: 0, end }
+    ];
+}
+
+function canonicalizeGableSpanToShortest(floor, gable) {
+    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const cumulative = perimeterCumulativeLengths(ring);
+    const total = cumulative[cumulative.length - 1];
+    if (!Number.isFinite(total) || total <= 0) return;
+    const forward = gableIntervalLength(floor, gable);
+    if (forward > total * 0.5) {
+        const previousStart = gable.start;
+        gable.start = gable.end;
+        gable.end = previousStart;
+    }
 }
 
 function pointIsNearSegmentEndpoint(point, a, b, threshold) {
@@ -129,6 +213,122 @@ function pointEndpoint(point) {
     };
 }
 
+function floorVertexKey(floorId, ring, holeIndex, vertexId) {
+    return `${floorId}:${ring || "outer"}:${Number.isFinite(Number(holeIndex)) ? Number(holeIndex) : -1}:${vertexId || ""}`;
+}
+
+function floorVertexKeyForEndpoint(endpoint) {
+    if (!endpoint || endpoint.kind !== "vertex" || !endpoint.fragmentId || !endpoint.vertexId) return "";
+    return floorVertexKey(endpoint.fragmentId, endpoint.ring, endpoint.holeIndex, endpoint.vertexId);
+}
+
+function originalFloorVertexMap(floor) {
+    const floorId = getFloorId(floor);
+    const vertices = new Map();
+    (Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : []).forEach((point) => {
+        if (point && point.id) vertices.set(floorVertexKey(floorId, "outer", -1, point.id), point);
+    });
+    (Array.isArray(floor && floor.holes) ? floor.holes : []).forEach((ring, holeIndex) => {
+        (Array.isArray(ring) ? ring : []).forEach((point) => {
+            if (point && point.id) vertices.set(floorVertexKey(floorId, "hole", holeIndex, point.id), point);
+        });
+    });
+    return vertices;
+}
+
+function survivingFloorVertexKeys(floor, polygonEditResult) {
+    const floorId = getFloorId(floor);
+    const keys = new Set();
+    (Array.isArray(polygonEditResult && polygonEditResult.footprint) ? polygonEditResult.footprint : []).forEach((point) => {
+        if (point && point.id) keys.add(floorVertexKey(floorId, "outer", -1, point.id));
+    });
+    (Array.isArray(polygonEditResult && polygonEditResult.holes) ? polygonEditResult.holes : []).forEach((ring, holeIndex) => {
+        (Array.isArray(ring) ? ring : []).forEach((point) => {
+            if (point && point.id) keys.add(floorVertexKey(floorId, "hole", holeIndex, point.id));
+        });
+    });
+    return keys;
+}
+
+function resultFloorVertexMap(floor, polygonEditResult) {
+    const floorId = getFloorId(floor);
+    const vertices = new Map();
+    (Array.isArray(polygonEditResult && polygonEditResult.footprint) ? polygonEditResult.footprint : []).forEach((point) => {
+        if (point && point.id) vertices.set(floorVertexKey(floorId, "outer", -1, point.id), point);
+    });
+    (Array.isArray(polygonEditResult && polygonEditResult.holes) ? polygonEditResult.holes : []).forEach((ring, holeIndex) => {
+        (Array.isArray(ring) ? ring : []).forEach((point) => {
+            if (point && point.id) vertices.set(floorVertexKey(floorId, "hole", holeIndex, point.id), point);
+        });
+    });
+    return vertices;
+}
+
+function endpointLandsOnResultVertex(endpoint, resultVertex) {
+    return endpoint &&
+        resultVertex &&
+        Math.abs(Number(endpoint.x) - Number(resultVertex.x)) <= 0.000001 &&
+        Math.abs(Number(endpoint.y) - Number(resultVertex.y)) <= 0.000001;
+}
+
+function resultOuterEdgeSurvives(polygonEditResult, startVertexId, endVertexId) {
+    const ring = Array.isArray(polygonEditResult && polygonEditResult.footprint) ? polygonEditResult.footprint : [];
+    if (!startVertexId || !endVertexId || ring.length < 2) return false;
+    for (let index = 0; index < ring.length; index++) {
+        const start = ring[index];
+        const end = ring[(index + 1) % ring.length];
+        if (start && end && start.id === startVertexId && end.id === endVertexId) return true;
+    }
+    return false;
+}
+
+function downgradeWallToPointEndpoints(wall, originalVertices) {
+    ["startPoint", "endPoint"].forEach((endpointKey) => {
+        const endpoint = wall[endpointKey];
+        if (!endpoint || endpoint.kind !== "vertex") return;
+        const point = originalVertices.get(floorVertexKeyForEndpoint(endpoint)) || endpoint;
+        if (!Number.isFinite(Number(point && point.x)) || !Number.isFinite(Number(point && point.y))) {
+            throw new Error(`cannot preserve wall ${wall.id} endpoint after floor add without finite vertex coordinates`);
+        }
+        wall[endpointKey] = pointEndpoint(point);
+    });
+    wall.role = "interior";
+    wall.attachment = null;
+}
+
+function downgradeMovedWallVertexEndpoints(building, floor, polygonEditResult) {
+    const floorId = getFloorId(floor);
+    const originalVertices = originalFloorVertexMap(floor);
+    const survivingVertices = survivingFloorVertexKeys(floor, polygonEditResult);
+    const resultVertices = resultFloorVertexMap(floor, polygonEditResult);
+    getBuildingWalls(building).forEach((wall) => {
+        if (String(wall && (wall.fragmentId || wall.floorId)) !== floorId) return;
+        const attachment = wall.attachment;
+        if (
+            wall.role === "perimeter" &&
+            attachment &&
+            attachment.kind === "fragmentEdge" &&
+            attachment.ring === "outer" &&
+            !resultOuterEdgeSurvives(polygonEditResult, attachment.startVertexId, attachment.endVertexId)
+        ) {
+            downgradeWallToPointEndpoints(wall, originalVertices);
+            return;
+        }
+        ["startPoint", "endPoint"].forEach((endpointKey) => {
+            const endpoint = wall[endpointKey];
+            if (!endpoint || endpoint.kind !== "vertex" || String(endpoint.fragmentId) !== floorId) return;
+            const key = floorVertexKeyForEndpoint(endpoint);
+            const resultVertex = resultVertices.get(key) || null;
+            if (survivingVertices.has(key) && endpointLandsOnResultVertex(endpoint, resultVertex)) return;
+            const point = originalVertices.get(key) || endpoint;
+            if (!Number.isFinite(Number(point && point.x)) || !Number.isFinite(Number(point && point.y))) {
+                throw new Error(`cannot preserve wall ${wall.id} endpoint after floor add without finite vertex coordinates`);
+            }
+            wall[endpointKey] = pointEndpoint(point);
+        });
+    });
+}
+
 function translatePoint(point, dx, dy) {
     return {
         ...point,
@@ -195,6 +395,8 @@ function createSelection(kind, fields = {}) {
         wallIds,
         mountedObjectId,
         mountedObjectIds,
+        gableId: fields.gableId !== undefined && fields.gableId !== null ? Number(fields.gableId) : null,
+        gableHandle: fields.gableHandle || null,
         wallEndpointKey: fields.wallEndpointKey || null,
         ringKind: fields.ringKind || null,
         holeIndex: Number.isFinite(Number(fields.holeIndex)) ? Number(fields.holeIndex) : -1,
@@ -731,12 +933,15 @@ export class BuildingEditorState extends EventTarget {
 
     syncInputsFromFloor(floor) {
         if (!floor) return;
+        const roof = getFloorRoof(floor);
         this.inputs.floorElevation = getFloorElevation(floor);
         this.inputs.floorHeight = floor.floorHeight;
         this.inputs.floorTexture = floor.floorTexturePath;
-        this.inputs.roofTexture = floor.roofTexturePath;
-        this.inputs.roofOverhang = floor.roofOverhang;
-        this.inputs.roofPeakHeight = floor.roofPeakHeight;
+        if (roof) {
+            this.inputs.roofTexture = roof.texturePath;
+            this.inputs.roofOverhang = roof.overhang;
+            this.inputs.roofPeakHeight = roof.peakHeight;
+        }
         this.inputs.wallHeight = floor.defaultWallHeight;
         this.inputs.wallTexture = floor.defaultWallTexturePath;
     }
@@ -822,6 +1027,9 @@ export class BuildingEditorState extends EventTarget {
         if (!floor) {
             throw new Error(`cannot select roof for missing level: ${floorId}`);
         }
+        if (!getFloorRoof(floor)) {
+            throw new Error(`cannot select missing roof for level: ${floorId}`);
+        }
         const selectedFloorId = getFloorId(floor);
         if (!options.preserveView) {
             this.selectedFloorIds = new Set([selectedFloorId]);
@@ -830,6 +1038,253 @@ export class BuildingEditorState extends EventTarget {
         this.selection = createSelection("roof", { floorId: selectedFloorId });
         this.syncInputsFromFloor(floor);
         this.emitChange();
+    }
+
+    findGable(floorOrId, gableId) {
+        const floor = typeof floorOrId === "string" ? findFloor(this.building, floorOrId) : floorOrId;
+        if (!floor) return null;
+        const id = Number(gableId);
+        return getRoofGables(floor).find((gable) => Number(gable.id) === id) || null;
+    }
+
+    selectedGable() {
+        const selection = this.selection || {};
+        if (selection.kind !== "gable" && selection.kind !== "gableHandle") return null;
+        return this.findGable(selection.floorId, selection.gableId);
+    }
+
+    selectGable(floorId, gableId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select gable for missing level: ${floorId}`);
+        const gable = this.findGable(floor, gableId);
+        if (!gable) throw new Error(`cannot select missing roof gable: ${gableId}`);
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("gable", { floorId: selectedFloorId, gableId: gable.id });
+        this.syncInputsFromFloor(floor);
+        this.emitChange();
+    }
+
+    selectGableHandle(floorId, gableId, handle, options = {}) {
+        if (handle !== "start" && handle !== "end" && handle !== "height") {
+            throw new Error(`unknown gable handle: ${handle}`);
+        }
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select gable handle for missing level: ${floorId}`);
+        const gable = this.findGable(floor, gableId);
+        if (!gable) throw new Error(`cannot select handle for missing roof gable: ${gableId}`);
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("gableHandle", { floorId: selectedFloorId, gableId: gable.id, gableHandle: handle });
+        this.syncInputsFromFloor(floor);
+        this.emitChange();
+    }
+
+    gableIntervalsOverlap(floor, first, second) {
+        if (!floor || !first || !second) return false;
+        const firstParts = gableIntervalParts(floor, first);
+        const secondParts = gableIntervalParts(floor, second);
+        return firstParts.some((left) => secondParts.some((right) => Math.max(left.start, right.start) < Math.min(left.end, right.end) - 0.000001));
+    }
+
+    assertGableDoesNotOverlap(floor, gable, ignoredGableId = null) {
+        canonicalizeGableSpanToShortest(floor, gable);
+        if (gableIntervalLength(floor, gable) <= 0.000001) {
+            throw new Error(`roof gable ${gable.id} endpoints must not coincide`);
+        }
+        const overlap = getRoofGables(floor).find((candidate) => {
+            if (ignoredGableId !== null && String(candidate.id) === String(ignoredGableId)) return false;
+            return this.gableIntervalsOverlap(floor, candidate, gable);
+        });
+        if (overlap) {
+            throw new Error(`roof gable ${gable.id} overlaps gable ${overlap.id}`);
+        }
+    }
+
+    addGableToRoof(floorId, faceIndex, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot add gable to missing roof level: ${floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot add gable to missing roof on level: ${floorId}`);
+        if (Number(roof.overhang) < 0) {
+            throw new Error("cannot add gable to a roof with negative overhang yet");
+        }
+        const resolvedFaceIndex = Math.floor(Number(faceIndex));
+        const faceCount = Array.isArray(floor.outerPolygon) ? floor.outerPolygon.length : 0;
+        if (!Number.isInteger(resolvedFaceIndex) || resolvedFaceIndex < 0 || resolvedFaceIndex >= faceCount) {
+            throw new Error(`cannot add gable to missing roof face: ${faceIndex}`);
+        }
+        const height = Math.min(3, Number(roof.peakHeight));
+        if (!Number.isFinite(height) || height <= 0) {
+            throw new Error("cannot add gable to a roof without positive peak height");
+        }
+        const start = options.start
+            ? normalizeGablePerimeterPosition(options.start)
+            : { edgeIndex: resolvedFaceIndex, t: Number.isFinite(Number(options.startT)) ? Number(options.startT) : 0 };
+        const end = options.end
+            ? normalizeGablePerimeterPosition(options.end)
+            : { edgeIndex: resolvedFaceIndex, t: Number.isFinite(Number(options.endT)) ? Number(options.endT) : 1 };
+        const gable = normalizeRoofGable({
+            start,
+            end,
+            height,
+            wallTexturePath: floor.defaultWallTexturePath,
+            roofReturn: options.roofReturn !== false
+        });
+        this.assertGableDoesNotOverlap(floor, gable);
+        roof.gables.push(gable);
+        this.selectGable(getFloorId(floor), gable.id, options);
+        return gable;
+    }
+
+    moveSelectedGableHandle(value, options = {}) {
+        const selection = this.selection || {};
+        if (selection.kind !== "gableHandle") return false;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`cannot move gable handle for missing level: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot move gable handle without a roof on level: ${selection.floorId}`);
+        const gable = this.findGable(floor, selection.gableId);
+        if (!gable) throw new Error(`selected roof gable is missing: ${selection.gableId}`);
+        const previous = JSON.parse(JSON.stringify(gable));
+        if (selection.gableHandle === "height") {
+            const height = Number(value);
+            if (!Number.isFinite(height)) throw new Error("gable height drag requires a finite height");
+            gable.height = Math.max(0, Math.min(Number(roof.peakHeight), height));
+        } else {
+            const fallback = gable[selection.gableHandle] || { edgeIndex: 0, t: 0 };
+            const position = normalizeGablePerimeterPosition(value, fallback.edgeIndex, fallback.t);
+            if (selection.gableHandle === "start") {
+                gable.start = position;
+            } else {
+                gable.end = position;
+            }
+        }
+        try {
+            this.assertGableDoesNotOverlap(floor, gable, gable.id);
+        } catch (error) {
+            Object.assign(gable, previous);
+            throw error;
+        }
+        this.emitChange();
+        return true;
+    }
+
+    deleteSelectedGable() {
+        const selection = this.selection || {};
+        if (selection.kind !== "gable" && selection.kind !== "gableHandle") return false;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`cannot delete gable for missing level: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot delete gable without a roof on level: ${selection.floorId}`);
+        const before = roof.gables.length;
+        roof.gables = roof.gables.filter((gable) => String(gable.id) !== String(selection.gableId));
+        if (roof.gables.length === before) throw new Error(`cannot delete missing roof gable: ${selection.gableId}`);
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((object) => object.mountKind !== "gable" || String(object.floorId) !== String(selection.floorId) || String(object.gableId) !== String(selection.gableId));
+        this.selectRoof(getFloorId(floor), { preserveView: true });
+        return true;
+    }
+
+    deleteSelectedRoof() {
+        const selection = this.selection || {};
+        if (selection.kind !== "roof") return false;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`cannot delete roof for missing level: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot delete missing roof for level: ${selection.floorId}`);
+        floor.roof = null;
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((object) => object.mountKind !== "gable" || String(object.floorId) !== String(selection.floorId));
+        this.selectFloor(getFloorId(floor), { preserveView: true });
+        return true;
+    }
+
+    createRoofForSelectedFloor(options = {}) {
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error("cannot create roof without a selected floor");
+        const floorId = getFloorId(floor);
+        const existingRoof = getFloorRoof(floor);
+        if (existingRoof) {
+            this.selectRoof(floorId, { preserveView: options.preserveView === true });
+            return existingRoof;
+        }
+        const texture = typeof options.texture === "string" && options.texture.length > 0
+            ? options.texture
+            : (typeof this.paintTextures.roofs === "string" && this.paintTextures.roofs.length > 0 ? this.paintTextures.roofs : this.inputs.roofTexture);
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("cannot create roof without a roof texture");
+        }
+        const overhang = Number(options.overhang ?? this.inputs.roofOverhang);
+        if (!Number.isFinite(overhang)) {
+            throw new Error("roof overhang must be a finite number");
+        }
+        const peakHeight = Number(options.peakHeight ?? this.inputs.roofPeakHeight);
+        if (!Number.isFinite(peakHeight) || peakHeight < 0) {
+            throw new Error("roof peak height must be zero or greater");
+        }
+        floor.roof = createRoof({
+            floorId,
+            texture,
+            overhang,
+            peakHeight
+        });
+        this.inputs.roofTexture = texture;
+        this.inputs.roofOverhang = overhang;
+        this.inputs.roofPeakHeight = peakHeight;
+        this.paintTextures.roofs = texture;
+        this.selectRoof(floorId, { preserveView: options.preserveView === true });
+        return floor.roof;
+    }
+
+    updateSelectedGableWallTexture(texture) {
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("gable wall texture path must be a non-empty string");
+        }
+        const gable = this.selectedGable();
+        if (!gable) throw new Error("cannot update gable wall texture without a selected gable");
+        gable.wallTexturePath = texture;
+        this.inputs.wallTexture = texture;
+        this.paintTextures.walls = texture;
+        this.emitChange();
+    }
+
+    updateSelectedGableHeight(value) {
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error("cannot update gable height without a selected roof");
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("cannot update gable height without a selected roof");
+        const gable = this.selectedGable();
+        if (!gable) throw new Error("cannot update gable height without a selected gable");
+        const height = Number(value);
+        if (!Number.isFinite(height)) throw new Error("gable height must be finite");
+        gable.height = Math.max(0, Math.min(Number(roof.peakHeight), height));
+        this.emitChange();
+    }
+
+    updateSelectedGableRoofReturn(enabled) {
+        const gable = this.selectedGable();
+        if (!gable) throw new Error("cannot update roof return without a selected gable");
+        gable.roofReturn = enabled !== false;
+        this.emitChange();
+    }
+
+    paintGable(floorOrId, gableId, texture) {
+        const floor = typeof floorOrId === "string" ? findFloor(this.building, floorOrId) : floorOrId;
+        if (!floor) throw new Error("cannot paint gable on a missing roof");
+        if (!getFloorRoof(floor)) throw new Error("cannot paint gable on a missing roof");
+        const gable = this.findGable(floor, gableId);
+        if (!gable) throw new Error(`cannot paint missing roof gable: ${gableId}`);
+        gable.wallTexturePath = texture;
+        this.inputs.wallTexture = texture;
+        this.paintTextures.walls = texture;
+        this.selectGable(getFloorId(floor), gable.id);
     }
 
     isFloorSelected(floorId) {
@@ -870,8 +1325,13 @@ export class BuildingEditorState extends EventTarget {
     lowerFloorVertexSnapPoint(point) {
         const underlay = this.floorUnderlay();
         if (!underlay) return null;
+        return this.floorVertexSnapPoint(underlay, point);
+    }
+
+    floorVertexSnapPoint(floor, point) {
+        if (!floor) return null;
         let best = null;
-        ringsForFloor(underlay).forEach((ring) => {
+        ringsForFloor(floor).forEach((ring) => {
             ring.points.forEach((vertex) => {
                 const candidate = { x: Number(vertex.x), y: Number(vertex.y) };
                 const snapDistance = distance(point, candidate);
@@ -882,6 +1342,10 @@ export class BuildingEditorState extends EventTarget {
             });
         });
         return best ? best.point : null;
+    }
+
+    selectedFloorVertexSnapPoint(point) {
+        return this.floorVertexSnapPoint(this.selectedFloor(), point);
     }
 
     beginFloorFragmentDrag(startPoint) {
@@ -1014,21 +1478,33 @@ export class BuildingEditorState extends EventTarget {
         (Array.isArray(objectIds) ? objectIds : []).forEach((id) => {
             if (!uniqueIds.some((candidate) => String(candidate) === String(id))) uniqueIds.push(id);
         });
-        if (!uniqueIds.length) return { objectIds: [], objects: [], walls: [] };
+        if (!uniqueIds.length) return { objectIds: [], objects: [], walls: [], floors: [] };
         const objects = uniqueIds.map((id) => {
             const object = findMountedObject(this.building, id);
             if (!object) throw new Error(`${label} references missing mounted object: ${id}`);
             return object;
         });
-        const walls = objects.map((object) => {
+        const walls = [];
+        const floors = objects.map((object) => {
+            if (object.mountKind === "gable") {
+                const floor = findFloor(this.building, object.floorId);
+                if (!floor) throw new Error(`${label} object ${object.id} is missing its gable floor`);
+                const gable = getRoofGables(floor).find((candidate) => String(candidate.id) === String(object.gableId));
+                if (!gable) throw new Error(`${label} object ${object.id} is missing its gable`);
+                return floor;
+            }
             const wall = findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId);
             if (!wall) throw new Error(`${label} object ${object.id} is missing its wall`);
-            return wall;
+            walls.push(wall);
+            const floor = findFloor(this.building, wall.fragmentId || wall.floorId);
+            if (!floor) throw new Error(`${label} object ${object.id} wall ${wall.id} is missing its floor`);
+            return floor;
         });
         return {
             objectIds: objects.map((object) => object.id),
             objects,
-            walls
+            walls,
+            floors
         };
     }
 
@@ -1039,7 +1515,7 @@ export class BuildingEditorState extends EventTarget {
             return false;
         }
         if (!options.preserveView) {
-            this.selectedFloorIds = new Set(resolved.walls.map((wall) => wall.floorId));
+            this.selectedFloorIds = new Set(resolved.floors.map((floor) => getFloorId(floor)));
             this.layerSelectionMode = "floor";
         }
         const firstCategory = String(resolved.objects[0].category || "").trim().toLowerCase();
@@ -1048,7 +1524,7 @@ export class BuildingEditorState extends EventTarget {
         }
         const selectedWallIds = new Set(resolved.walls.map((wall) => String(wall.id)));
         this.selection = createSelection("mountedObject", {
-            floorId: resolved.walls[0].floorId,
+            floorId: getFloorId(resolved.floors[0]),
             wallId: selectedWallIds.size === 1 ? resolved.walls[0].id : null,
             mountedObjectIds: resolved.objectIds
         });
@@ -1085,6 +1561,7 @@ export class BuildingEditorState extends EventTarget {
             const object = firstRemoved !== undefined ? findMountedObject(this.building, firstRemoved) : null;
             const wall = object ? findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId) : null;
             if (wall) this.selectLevel(wall.floorId, options);
+            else if (object && object.mountKind === "gable" && object.floorId) this.selectLevel(object.floorId, options);
             else this.selectBuilding();
             return true;
         }
@@ -1215,6 +1692,12 @@ export class BuildingEditorState extends EventTarget {
                     this.selectBuilding();
                 }
                 return true;
+            case "gableHandle":
+                this.selectGable(selection.floorId, selection.gableId, { preserveView });
+                return true;
+            case "gable":
+                this.selectRoof(selection.floorId, { preserveView });
+                return true;
             case "wall":
             case "floor":
             case "roof":
@@ -1304,8 +1787,8 @@ export class BuildingEditorState extends EventTarget {
     }
 
     addMountedWallObject(placement, asset) {
-        if (!placement || !placement.wall || !placement.floor) {
-            throw new Error("cannot place door or window without a wall placement");
+        if (!placement || !placement.floor || (!placement.wall && !placement.gable)) {
+            throw new Error("cannot place door or window without a wall or gable placement");
         }
         if (!asset || typeof asset.texturePath !== "string" || asset.texturePath.length === 0) {
             throw new Error("cannot place door or window without a selected asset");
@@ -1315,22 +1798,40 @@ export class BuildingEditorState extends EventTarget {
         }
         if (!Array.isArray(this.building.mountedWallObjects)) this.building.mountedWallObjects = [];
         const category = String(asset.category || this.mountedObjectTool.category || "").trim().toLowerCase();
-        const object = createWallMountedObject({
-            floorId: getFloorId(placement.floor),
-            wallId: placement.wall.id,
-            category,
-            texturePath: asset.texturePath,
-            wallT: placement.wallT,
-            width: asset.width,
-            height: asset.height,
-            zOffset: placement.zOffset,
-            placementRotation: placement.placementRotation,
-            mountedWallFacingSign: placement.mountedWallFacingSign,
-            placeableAnchorX: asset.anchorX,
-            placeableAnchorY: asset.anchorY,
-            renderDepthOffset: asset.renderDepthOffset,
-            compositeLayers: asset.compositeLayers
-        });
+        const object = placement.mountKind === "gable"
+            ? createGableMountedObject({
+                floorId: getFloorId(placement.floor),
+                gableId: placement.gable.id,
+                gableSegmentIndex: placement.gableSegmentIndex,
+                category,
+                texturePath: asset.texturePath,
+                wallT: placement.wallT,
+                width: asset.width,
+                height: asset.height,
+                zOffset: placement.zOffset,
+                placementRotation: placement.placementRotation,
+                mountedWallFacingSign: placement.mountedWallFacingSign,
+                placeableAnchorX: asset.anchorX,
+                placeableAnchorY: asset.anchorY,
+                renderDepthOffset: asset.renderDepthOffset,
+                compositeLayers: asset.compositeLayers
+            })
+            : createWallMountedObject({
+                floorId: getFloorId(placement.floor),
+                wallId: placement.wall.id,
+                category,
+                texturePath: asset.texturePath,
+                wallT: placement.wallT,
+                width: asset.width,
+                height: asset.height,
+                zOffset: placement.zOffset,
+                placementRotation: placement.placementRotation,
+                mountedWallFacingSign: placement.mountedWallFacingSign,
+                placeableAnchorX: asset.anchorX,
+                placeableAnchorY: asset.anchorY,
+                renderDepthOffset: asset.renderDepthOffset,
+                compositeLayers: asset.compositeLayers
+            });
         object.x = Number(placement.faceCenter.x);
         object.y = Number(placement.faceCenter.y);
         object.z = getFloorElevation(placement.floor) + Number(placement.zOffset);
@@ -1604,9 +2105,12 @@ export class BuildingEditorState extends EventTarget {
             this.inputs.floorElevation = getFloorElevation(primaryFloor);
             this.inputs.floorHeight = primaryFloor.floorHeight;
             this.inputs.floorTexture = primaryFloor.floorTexturePath;
-            this.inputs.roofTexture = primaryFloor.roofTexturePath;
-            this.inputs.roofOverhang = primaryFloor.roofOverhang;
-            this.inputs.roofPeakHeight = primaryFloor.roofPeakHeight;
+            const primaryRoof = getFloorRoof(primaryFloor);
+            if (primaryRoof) {
+                this.inputs.roofTexture = primaryRoof.texturePath;
+                this.inputs.roofOverhang = primaryRoof.overhang;
+                this.inputs.roofPeakHeight = primaryRoof.peakHeight;
+            }
             this.inputs.wallHeight = primaryFloor.defaultWallHeight;
             this.inputs.wallTexture = primaryFloor.defaultWallTexturePath;
             this.draft = null;
@@ -1715,7 +2219,9 @@ export class BuildingEditorState extends EventTarget {
     updateSelectedRoofTexture(texture) {
         const floor = this.selectedFloor();
         if (!floor) throw new Error("cannot update roof texture without a selected floor");
-        floor.roofTexturePath = texture;
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("cannot update missing roof texture");
+        roof.texturePath = texture;
         this.inputs.roofTexture = texture;
         this.paintTextures.roofs = texture;
         this.emitChange();
@@ -1728,7 +2234,12 @@ export class BuildingEditorState extends EventTarget {
         if (!Number.isFinite(overhang)) {
             throw new Error("roof overhang must be a finite number");
         }
-        floor.roofOverhang = overhang;
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("cannot update missing roof overhang");
+        if (overhang < 0 && getRoofGables(roof).length > 0) {
+            throw new Error("roof gables cannot be used with negative overhang yet");
+        }
+        roof.overhang = overhang;
         this.inputs.roofOverhang = overhang;
         this.emitChange();
     }
@@ -1740,7 +2251,15 @@ export class BuildingEditorState extends EventTarget {
         if (!Number.isFinite(peakHeight) || peakHeight < 0) {
             throw new Error("roof peak height must be zero or greater");
         }
-        floor.roofPeakHeight = peakHeight;
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("cannot update missing roof peak height");
+        if (peakHeight <= 0 && getRoofGables(roof).length > 0) {
+            throw new Error("roof gables require positive peak height");
+        }
+        roof.peakHeight = peakHeight;
+        getRoofGables(roof).forEach((gable) => {
+            gable.height = Math.min(Number(gable.height), peakHeight);
+        });
         this.inputs.roofPeakHeight = peakHeight;
         this.emitChange();
     }
@@ -1748,7 +2267,9 @@ export class BuildingEditorState extends EventTarget {
     paintRoof(floorOrId, texture) {
         const floor = typeof floorOrId === "string" ? findFloor(this.building, floorOrId) : floorOrId;
         if (!floor) throw new Error("cannot paint missing roof");
-        floor.roofTexturePath = texture;
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("cannot paint missing roof");
+        roof.texturePath = texture;
         this.inputs.roofTexture = texture;
         this.paintTextures.roofs = texture;
         this.selection = createSelection("roof", { floorId: getFloorId(floor) });
@@ -2143,12 +2664,26 @@ export class BuildingEditorState extends EventTarget {
         const floor = this.selectedFloor();
         if (!floor) throw new Error("cannot edit polygon without a selected floor");
         const result = applyFloorPolygonEdit(floor, points, operation);
-        replaceFloorShape(this.building, floor, result.footprint, result.holes, { regeneratePerimeterWalls: true });
+        const reconfigureWalls = operation !== "add";
+        if (!reconfigureWalls) {
+            downgradeMovedWallVertexEndpoints(this.building, floor, result);
+        }
+        replaceFloorShape(this.building, floor, result.footprint, result.holes, {
+            regeneratePerimeterWalls: reconfigureWalls,
+            refreshWallEndpoints: reconfigureWalls
+        });
         this.selection = createSelection("floor", { floorId: getFloorId(floor) });
         this.emitChange();
     }
 
-    preparePoint(point) {
+    preparePoint(point, options = {}) {
+        const preferFloorVertices = options.preferFloorVertices === true ||
+            this.tool === "polygon" ||
+            this.tool === "scissors";
+        if (preferFloorVertices) {
+            const selectedFloorSnap = this.selectedFloorVertexSnapPoint(point);
+            if (selectedFloorSnap) return selectedFloorSnap;
+        }
         const lowerFloorSnap = this.lowerFloorVertexSnapPoint(point);
         if (lowerFloorSnap) return lowerFloorSnap;
         return this.snapToGrid ? snapToHexAnchor(point) : { x: point.x, y: point.y };
@@ -2241,6 +2776,10 @@ export class BuildingEditorState extends EventTarget {
         const walls = objects
             .map((object) => findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId))
             .filter(Boolean);
+        const gableFloors = objects
+            .filter((object) => object.mountKind === "gable")
+            .map((object) => findFloor(this.building, object.floorId))
+            .filter(Boolean);
         this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
             .filter((candidate) => !objectIds.has(String(candidate.id)));
         const wallIds = new Set(walls.map((wall) => String(wall.id)));
@@ -2249,6 +2788,8 @@ export class BuildingEditorState extends EventTarget {
             this.selection = createSelection("wall", { floorId: wall.floorId, wallId: wall.id });
         } else if (walls.length > 0) {
             this.selection = createSelection("level", { floorId: walls[0].floorId });
+        } else if (gableFloors.length > 0) {
+            this.selection = createSelection("level", { floorId: getFloorId(gableFloors[0]) });
         } else {
             this.selection = createSelection("building");
         }
@@ -2312,6 +2853,7 @@ export class BuildingEditorState extends EventTarget {
     repairMountedObjectWallReferences(building) {
         const wallById = new Set(getBuildingWalls(building).map((wall) => String(wall.id)));
         getBuildingMountedObjects(building).forEach((object) => {
+            if (object.mountKind === "gable") return;
             const currentWallId = object.wallId ?? object.mountedWallSectionUnitId;
             if (wallById.has(String(currentWallId))) return;
             const floorId = String(object.floorId || "");

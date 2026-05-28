@@ -7,12 +7,43 @@ import {
     getBuildingWalls,
     getFloorElevation,
     getFloorId,
+    getFloorRoof,
+    getRoofGables,
     resolveEndpoint,
     wallPoints
 } from "./BuildingModel.js";
 
 function pointIsFinite(point) {
     return Number.isFinite(Number(point && point.x)) && Number.isFinite(Number(point && point.y));
+}
+
+function ringCumulativeLengths(ring) {
+    const lengths = [0];
+    let total = 0;
+    for (let index = 0; index < ring.length; index++) {
+        const current = ring[index];
+        const next = ring[(index + 1) % ring.length];
+        total += Math.hypot(Number(next.x) - Number(current.x), Number(next.y) - Number(current.y));
+        lengths.push(total);
+    }
+    return lengths;
+}
+
+function gableEndpointScalar(ring, cumulative, endpoint) {
+    const edgeIndex = Math.floor(Number(endpoint && endpoint.edgeIndex));
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= ring.length) return NaN;
+    const t = Number(endpoint && endpoint.t);
+    if (!Number.isFinite(t) || t < 0 || t > 1) return NaN;
+    return cumulative[edgeIndex] + (cumulative[edgeIndex + 1] - cumulative[edgeIndex]) * t;
+}
+
+function gableIntervalParts(totalLength, startScalar, endScalar) {
+    if (!Number.isFinite(totalLength) || totalLength <= 0) return [];
+    if (endScalar >= startScalar) return [{ start: startScalar, end: endScalar }];
+    return [
+        { start: startScalar, end: totalLength },
+        { start: 0, end: endScalar }
+    ];
 }
 
 function validateRing(errors, floorId, ring, label) {
@@ -34,6 +65,85 @@ function validateRing(errors, floorId, ring, label) {
         if (!pointIsFinite(point)) {
             errors.push(`floor ${floorId} ${label} vertex ${pointIndex} must have finite x/y`);
         }
+    });
+}
+
+function validateRoof(errors, floor) {
+    const floorId = getFloorId(floor);
+    let roof = null;
+    try {
+        roof = getFloorRoof(floor);
+    } catch (error) {
+        errors.push(error.message);
+        return;
+    }
+    if (!roof || typeof roof !== "object") {
+        return;
+    }
+    if (roof.type !== "roof") errors.push(`floor ${floorId} roof type must be roof`);
+    if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
+        errors.push(`floor ${floorId} roof texturePath must be a non-empty string`);
+    }
+    if (!Number.isFinite(Number(roof.overhang))) {
+        errors.push(`floor ${floorId} roof overhang must be a finite number`);
+    }
+    if (Number(roof.overhang) < 0 && getRoofGables(roof).length > 0) {
+        errors.push(`floor ${floorId} roof gables cannot be used with negative overhang yet`);
+    }
+    if (!Number.isFinite(Number(roof.peakHeight)) || Number(roof.peakHeight) < 0) {
+        errors.push(`floor ${floorId} roof peakHeight must be zero or greater`);
+    }
+    if (Number(roof.peakHeight) <= 0 && getRoofGables(roof).length > 0) {
+        errors.push(`floor ${floorId} roof gables require positive peakHeight`);
+    }
+    const perimeter = Array.isArray(floor.outerPolygon) ? floor.outerPolygon : [];
+    const faceCount = perimeter.length;
+    const cumulative = faceCount >= 3 ? ringCumulativeLengths(perimeter) : [];
+    const totalLength = cumulative.length ? cumulative[cumulative.length - 1] : 0;
+    const intervals = [];
+    getRoofGables(roof).forEach((gable, index) => {
+        const label = `floor ${floorId} roof gable ${gable && gable.id !== undefined ? gable.id : index}`;
+        if (!gable || typeof gable !== "object") {
+            errors.push(`${label} must be an object`);
+            return;
+        }
+        if (gable.type !== "gable") errors.push(`${label} type must be gable`);
+        if (!Number.isInteger(Number(gable.id))) errors.push(`${label} id must be an integer`);
+        const startEdgeIndex = Math.floor(Number(gable.start && gable.start.edgeIndex));
+        const endEdgeIndex = Math.floor(Number(gable.end && gable.end.edgeIndex));
+        const startT = Number(gable.start && gable.start.t);
+        const endT = Number(gable.end && gable.end.t);
+        if (!Number.isInteger(startEdgeIndex) || startEdgeIndex < 0 || startEdgeIndex >= faceCount) {
+            errors.push(`${label} start edgeIndex must reference a roof outline edge`);
+        }
+        if (!Number.isInteger(endEdgeIndex) || endEdgeIndex < 0 || endEdgeIndex >= faceCount) {
+            errors.push(`${label} end edgeIndex must reference a roof outline edge`);
+        }
+        if (!Number.isFinite(startT) || startT < 0 || startT > 1 || !Number.isFinite(endT) || endT < 0 || endT > 1) {
+            errors.push(`${label} endpoint t values must be between zero and one`);
+        }
+        const startScalar = gableEndpointScalar(perimeter, cumulative, gable.start);
+        const endScalar = gableEndpointScalar(perimeter, cumulative, gable.end);
+        const intervalLength = endScalar >= startScalar ? endScalar - startScalar : totalLength - startScalar + endScalar;
+        if (!Number.isFinite(intervalLength) || intervalLength <= 0.000001) {
+            errors.push(`${label} endpoints must not coincide`);
+        }
+        const height = Number(gable.height);
+        if (!Number.isFinite(height) || height < 0 || height > Number(roof.peakHeight) + 0.000001) {
+            errors.push(`${label} height must be between zero and roof peakHeight`);
+        }
+        if (typeof gable.wallTexturePath !== "string" || gable.wallTexturePath.length === 0) {
+            errors.push(`${label} wallTexturePath must be a non-empty string`);
+        }
+        if (gable.roofReturn !== true && gable.roofReturn !== false) {
+            errors.push(`${label} roofReturn must be a boolean`);
+        }
+        const parts = gableIntervalParts(totalLength, startScalar, endScalar);
+        intervals.forEach((interval) => {
+            const overlaps = interval.parts.some((a) => parts.some((b) => Math.max(a.start, b.start) < Math.min(a.end, b.end) - 0.000001));
+            if (overlaps) errors.push(`${label} overlaps roof gable ${interval.id}`);
+        });
+        intervals.push({ id: gable.id, parts });
     });
 }
 
@@ -112,12 +222,7 @@ export function validateBuilding(building) {
         if (!Number.isFinite(Number(floor.floorHeight)) || Number(floor.floorHeight) <= 0) {
             errors.push(`floor ${floorId} floorHeight must be a positive number`);
         }
-        if (!Number.isFinite(Number(floor.roofOverhang))) {
-            errors.push(`floor ${floorId} roofOverhang must be a finite number`);
-        }
-        if (!Number.isFinite(Number(floor.roofPeakHeight)) || Number(floor.roofPeakHeight) < 0) {
-            errors.push(`floor ${floorId} roofPeakHeight must be zero or greater`);
-        }
+        validateRoof(errors, floor);
         validateRing(errors, floorId, floor.outerPolygon, "outerPolygon");
         const holes = Array.isArray(floor.holes) ? floor.holes : [];
         holes.forEach((ring, holeIndex) => validateRing(errors, floorId, ring, `hole ${holeIndex}`));
@@ -164,11 +269,29 @@ export function validateBuilding(building) {
         if (typeof object.texturePath !== "string" || object.texturePath.length === 0) {
             errors.push(`mounted wall object ${object.id || "(missing id)"} texturePath must be a non-empty string`);
         }
-        const wall = findWall(building, object.wallId ?? object.mountedWallSectionUnitId);
-        if (!wall) {
-            errors.push(`mounted wall object ${object.id || "(missing id)"} references missing wall: ${object.wallId ?? object.mountedWallSectionUnitId ?? "(missing)"}`);
-        } else if (object.floorId && String(object.floorId) !== String(wall.fragmentId || wall.floorId)) {
-            errors.push(`mounted wall object ${object.id || "(missing id)"} floorId does not match mounted wall`);
+        if (object.mountKind === "gable") {
+            const floor = findFloor(building, object.floorId);
+            if (!floor) {
+                errors.push(`mounted wall object ${object.id || "(missing id)"} references missing gable floor: ${object.floorId || "(missing)"}`);
+            } else {
+                const gable = getRoofGables(floor).find((candidate) => String(candidate.id) === String(object.gableId));
+                if (!gable) {
+                    errors.push(`mounted wall object ${object.id || "(missing id)"} references missing gable: ${object.gableId ?? "(missing)"}`);
+                }
+            }
+            if (object.category !== "windows") {
+                errors.push(`mounted wall object ${object.id || "(missing id)"} gable mount must be a window`);
+            }
+            if (!Number.isInteger(Number(object.gableSegmentIndex)) || Number(object.gableSegmentIndex) < 0) {
+                errors.push(`mounted wall object ${object.id || "(missing id)"} gableSegmentIndex must be a zero or greater integer`);
+            }
+        } else {
+            const wall = findWall(building, object.wallId ?? object.mountedWallSectionUnitId);
+            if (!wall) {
+                errors.push(`mounted wall object ${object.id || "(missing id)"} references missing wall: ${object.wallId ?? object.mountedWallSectionUnitId ?? "(missing)"}`);
+            } else if (object.floorId && String(object.floorId) !== String(wall.fragmentId || wall.floorId)) {
+                errors.push(`mounted wall object ${object.id || "(missing id)"} floorId does not match mounted wall`);
+            }
         }
         if (!Number.isFinite(Number(object.wallT)) || Number(object.wallT) < 0 || Number(object.wallT) > 1) {
             errors.push(`mounted wall object ${object.id || "(missing id)"} wallT must be between 0 and 1`);

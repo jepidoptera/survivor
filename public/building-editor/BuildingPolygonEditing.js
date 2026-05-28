@@ -27,6 +27,36 @@ function clonePointWithId(point, prefix = "vertex", usedIds = null) {
     return { id, x: Number(point.x), y: Number(point.y) };
 }
 
+function sameXY(a, b) {
+    return Math.abs(Number(a && a.x) - Number(b && b.x)) <= 0.000001 &&
+        Math.abs(Number(a && a.y) - Number(b && b.y)) <= 0.000001;
+}
+
+function reusableFloorVertices(floor) {
+    const vertices = [];
+    (Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : []).forEach((point) => {
+        if (point && typeof point.id === "string" && point.id.length > 0) {
+            vertices.push(point);
+        }
+    });
+    (Array.isArray(floor && floor.holes) ? floor.holes : []).forEach((ring) => {
+        (Array.isArray(ring) ? ring : []).forEach((point) => {
+            if (point && typeof point.id === "string" && point.id.length > 0) {
+                vertices.push(point);
+            }
+        });
+    });
+    return vertices;
+}
+
+function cloneResultPointWithPreservedId(point, prefix, reusableVertices, usedIds) {
+    const reusable = reusableVertices.find((candidate) => !usedIds.has(candidate.id) && sameXY(candidate, point));
+    if (reusable) {
+        return clonePointWithId({ ...point, id: reusable.id }, prefix, usedIds);
+    }
+    return clonePointWithId(point, prefix, usedIds);
+}
+
 function cloneRingWithIds(points, prefix = "vertex") {
     const usedIds = new Set();
     return core.normalizeRing(points).map((point, index) => clonePointWithId(points[index] || point, prefix, usedIds));
@@ -35,9 +65,11 @@ function cloneRingWithIds(points, prefix = "vertex") {
 export function applyFloorPolygonEdit(floor, editPoints, operation) {
     if (!floor) throw new Error("cannot edit missing floor polygon");
     const result = core.applyEditToPolygon(floor.outerPolygon, floor.holes || [], editPoints, operation);
+    const reusableVertices = reusableFloorVertices(floor);
+    const usedIds = new Set();
     return {
-        footprint: result.outer.map((point) => clonePointWithId(point)),
-        holes: result.holes.map((ring) => ring.map((point) => clonePointWithId(point, "hole-vertex")))
+        footprint: result.outer.map((point) => cloneResultPointWithPreservedId(point, "vertex", reusableVertices, usedIds)),
+        holes: result.holes.map((ring) => ring.map((point) => cloneResultPointWithPreservedId(point, "hole-vertex", reusableVertices, usedIds)))
     };
 }
 

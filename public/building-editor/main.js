@@ -1,11 +1,12 @@
 import { BuildingEditorState } from "./BuildingEditorState.js";
 import { BuildingRenderer } from "./BuildingRenderer.js";
 import { PaintTool } from "./tools/PaintTool.js";
+import { GableTool } from "./tools/GableTool.js";
 import { MountedObjectTool } from "./tools/MountedObjectTool.js";
 import { PolygonEditTool } from "./tools/PolygonEditTool.js";
 import { SelectTool } from "./tools/SelectTool.js";
 import { WallTool } from "./tools/WallTool.js";
-import { findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, wallCenterlinePoints } from "./BuildingModel.js";
+import { findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const MATERIALS = {
     floors: [
@@ -56,6 +57,9 @@ const floorElevation = document.querySelector("#floorElevation");
 const floorHeight = document.querySelector("#floorHeight");
 const roofOverhang = document.querySelector("#roofOverhang");
 const roofPeakHeight = document.querySelector("#roofPeakHeight");
+const gableHeight = document.querySelector("#gableHeight");
+const gableHeightValue = document.querySelector("#gableHeightValue");
+const gableRoofReturn = document.querySelector("#gableRoofReturn");
 const wallHeight = document.querySelector("#wallHeight");
 const mountSize = document.querySelector("#mountSize");
 const mountSizeValue = document.querySelector("#mountSizeValue");
@@ -66,6 +70,8 @@ const snapToggle = document.querySelector("#snapToggle");
 const anchorToggle = document.querySelector("#anchorToggle");
 const selectedSummary = document.querySelector("#selectedSummary");
 const paintToolButton = document.querySelector('[data-tool="paint"]');
+const roofToolButton = document.querySelector(".roofToolButton");
+const roofToolIcon = document.querySelector("#roofToolIcon");
 const wallToolButton = document.querySelector(".wallToolButton");
 const wallToolIcon = document.querySelector("#wallToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
@@ -145,6 +151,7 @@ const tools = {
     scissors: new PolygonEditTool(state, "subtract"),
     wall: new WallTool(state),
     mountObject: new MountedObjectTool(state),
+    gable: new GableTool(state),
     paint: new PaintTool(state),
     select: new SelectTool(state)
 };
@@ -359,6 +366,7 @@ function draftConsumesEscape(draft) {
 function activePaintMode() {
     if (state.tool === "wall") return "walls";
     const kind = state.selection && state.selection.kind;
+    if (kind === "gable" || kind === "gableHandle") return "walls";
     if (kind === "roof") return "roofs";
     return kind === "wall" || kind === "wallEndpoint" ? "walls" : "floor";
 }
@@ -366,7 +374,7 @@ function activePaintMode() {
 function selectionCanUsePaintTool() {
     if (state.tool === "wall") return true;
     const kind = state.selection && state.selection.kind;
-    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "wall" || kind === "wallEndpoint";
+    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint";
 }
 
 function mountedObjectSettingsActive() {
@@ -559,6 +567,10 @@ function applyTextureToSelection(texturePath) {
         state.updateSelectedFloorTexture(texturePath);
         return;
     }
+    if (kind === "gable" || kind === "gableHandle") {
+        state.updateSelectedGableWallTexture(texturePath);
+        return;
+    }
     if (kind === "roof") {
         state.updateSelectedRoofTexture(texturePath);
         return;
@@ -626,6 +638,14 @@ function syncWallToolButtonTexture() {
     const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
     wallToolIcon.style.backgroundImage = texture ? `url("${texture}")` : "";
     wallToolButton.title = texture ? `Place walls: ${textureName(texture)}` : "Place walls";
+}
+
+function syncRoofToolButtonTexture() {
+    if (!roofToolButton || !roofToolIcon) return;
+    const texture = state.paintTextureForMode("roofs") || state.inputs.roofTexture;
+    roofToolIcon.style.setProperty("--roof-tool-texture", texture ? `url("${texture}")` : "");
+    roofToolButton.title = texture ? `Create roof: ${textureName(texture)}` : "Create roof";
+    roofToolButton.disabled = !state.selectedFloor();
 }
 
 function syncSelectOptions(select, values) {
@@ -901,6 +921,7 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         if (objects.length > 1) return `${objects.length} objects selected`;
         const object = objects[0];
         const category = object.category === "windows" ? "window" : "door";
+        if (object.mountKind === "gable") return `${category} ${object.id}, gable ${object.gableId}`;
         return `${category} ${object.id}, wall ${selection.wallId}`;
     }
     if (selection.kind === "building") {
@@ -927,6 +948,10 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
     if (selection.kind === "roof") {
         return `${floorId} roof`;
     }
+    if (selection.kind === "gable" || selection.kind === "gableHandle") {
+        const handleText = selection.kind === "gableHandle" && selection.gableHandle ? `, ${selection.gableHandle}` : "";
+        return `${floorId} roof, gable ${selection.gableId}${handleText}`;
+    }
     if (selection.kind === "level") {
         return `${floorId} level, elevation ${getFloorElevation(selectedFloor)}, ${floorWallCount} walls`;
     }
@@ -944,7 +969,12 @@ function syncUi() {
     mountToolButtons.forEach((button) => {
         button.dataset.active = state.tool === "mountObject" && button.dataset.mountCategory === state.mountedObjectTool.category ? "true" : "false";
     });
+    if (roofToolButton) {
+        const selection = state.selection || {};
+        roofToolButton.dataset.active = selection.kind === "roof" || selection.kind === "gable" || selection.kind === "gableHandle" ? "true" : "false";
+    }
     if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
+    syncRoofToolButtonTexture();
     syncWallToolButtonTexture();
     syncMountedToolButtonTextures();
     document.querySelectorAll("[data-selection-scope], [data-selection-exclude]").forEach((element) => {
@@ -963,10 +993,23 @@ function syncUi() {
     const selectedWalls = selectedWallsFrom(walls);
     renderLayerPanel(floors);
     if (selectedFloor) {
+        const roof = getFloorRoof(selectedFloor);
         floorElevation.value = getFloorElevation(selectedFloor);
         floorHeight.value = Number(selectedFloor.floorHeight);
-        roofOverhang.value = Number(selectedFloor.roofOverhang);
-        roofPeakHeight.value = Number(selectedFloor.roofPeakHeight);
+        if (roof) {
+            roofOverhang.value = Number(roof.overhang);
+            roofPeakHeight.value = Number(roof.peakHeight);
+        }
+        const selectedGable = state.selectedGable();
+        if (roof && selectedGable) {
+            const maxHeight = Math.max(0, Number(roof.peakHeight));
+            const value = Math.max(0, Math.min(maxHeight, Number(selectedGable.height)));
+            gableHeight.max = String(maxHeight);
+            gableHeightValue.max = String(maxHeight);
+            gableHeight.value = String(value);
+            gableHeightValue.value = Number(value).toFixed(2);
+            gableRoofReturn.checked = selectedGable.roofReturn !== false;
+        }
     }
     if (state.tool === "wall") {
         wallHeight.value = Number(state.wallTool.height);
@@ -1015,6 +1058,17 @@ document.querySelectorAll("[data-tool]").forEach((button) => {
         });
     });
 });
+
+if (roofToolButton) {
+    roofToolButton.addEventListener("click", () => {
+        withErrorBoundary(() => {
+            wallToolTexturePaletteOpen = false;
+            mountTexturePaletteOpen = false;
+            state.setTool("select");
+            state.createRoofForSelectedFloor({ preserveView: state.renderStyle() === "exterior" });
+        });
+    });
+}
 
 texturePalette.addEventListener("click", (event) => {
     const swatch = event.target.closest(".textureSwatch");
@@ -1164,6 +1218,18 @@ roofOverhang.addEventListener("change", () => {
 
 roofPeakHeight.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedRoofPeakHeight(roofPeakHeight.value));
+});
+
+gableHeight.addEventListener("input", () => {
+    withErrorBoundary(() => state.updateSelectedGableHeight(gableHeight.value));
+});
+
+gableHeightValue.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedGableHeight(gableHeightValue.value));
+});
+
+gableRoofReturn.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedGableRoofReturn(gableRoofReturn.checked));
 });
 
 wallHeight.addEventListener("change", () => {
@@ -1465,6 +1531,14 @@ document.addEventListener("keydown", (event) => {
             return;
         }
         if (state.selectedWall() && state.deleteSelectedWall()) {
+            event.preventDefault();
+            return;
+        }
+        if (state.deleteSelectedGable()) {
+            event.preventDefault();
+            return;
+        }
+        if (state.deleteSelectedRoof()) {
             event.preventDefault();
             return;
         }

@@ -12,6 +12,7 @@ const DEFAULTS = Object.freeze({
 let stringIdCounter = 1;
 let wallIdCounter = 1;
 let mountedObjectIdCounter = 1;
+let gableIdCounter = 1;
 
 function nextStringId(prefix) {
     return `${prefix}-${stringIdCounter++}`;
@@ -23,6 +24,10 @@ function nextWallId() {
 
 function nextMountedObjectId() {
     return mountedObjectIdCounter++;
+}
+
+function nextGableId() {
+    return gableIdCounter++;
 }
 
 function clonePoint(point, fallbackPrefix = "vertex") {
@@ -260,6 +265,105 @@ export function getBuildingMountedObjects(building) {
     return Array.isArray(building && building.mountedWallObjects) ? building.mountedWallObjects : [];
 }
 
+export function createRoof({
+    floorId = "",
+    texture = DEFAULTS.roofTexture,
+    overhang = DEFAULTS.roofOverhang,
+    peakHeight = DEFAULTS.roofPeakHeight,
+    gables = []
+} = {}) {
+    const roof = {
+        type: "roof",
+        id: nextStringId("roof"),
+        floorId: String(floorId || ""),
+        texturePath: texture,
+        overhang: Number(overhang),
+        peakHeight: Number(peakHeight),
+        gables: Array.isArray(gables) ? gables.map((gable) => normalizeRoofGable(gable)) : []
+    };
+    if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
+        throw new Error("building roof requires a texture path");
+    }
+    if (!Number.isFinite(roof.overhang)) {
+        throw new Error("building roof overhang must be a finite number");
+    }
+    if (!Number.isFinite(roof.peakHeight) || roof.peakHeight < 0) {
+        throw new Error("building roof peak height must be zero or greater");
+    }
+    return roof;
+}
+
+function normalizeRoofGableEndpoint(endpoint, legacyEdgeIndex, legacyT, label) {
+    const source = endpoint && typeof endpoint === "object"
+        ? endpoint
+        : { edgeIndex: legacyEdgeIndex, t: legacyT };
+    const edgeIndex = Math.floor(Number(source.edgeIndex ?? source.faceIndex));
+    const t = Number(source.t);
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0) {
+        throw new Error(`roof gable ${label} edgeIndex must be a zero or greater integer`);
+    }
+    if (!Number.isFinite(t)) {
+        throw new Error(`roof gable ${label} t must be finite`);
+    }
+    return {
+        edgeIndex,
+        t: Math.max(0, Math.min(1, t))
+    };
+}
+
+export function normalizeRoofGable(gable) {
+    if (!gable || typeof gable !== "object") {
+        throw new Error("roof gable must be an object");
+    }
+    const legacyFaceIndex = Math.floor(Number(gable.faceIndex));
+    const legacyStartT = Number(gable.startT);
+    const legacyEndT = Number(gable.endT);
+    const height = Number(gable.height);
+    const wallTexturePath = typeof gable.wallTexturePath === "string" && gable.wallTexturePath.length > 0
+        ? gable.wallTexturePath
+        : DEFAULTS.wallTexture;
+    if (!Number.isFinite(height) || height < 0) {
+        throw new Error("roof gable height must be zero or greater");
+    }
+    if (
+        (!gable.start || !gable.end) &&
+        (!Number.isInteger(legacyFaceIndex) || legacyFaceIndex < 0 || !Number.isFinite(legacyStartT) || !Number.isFinite(legacyEndT))
+    ) {
+        throw new Error("roof gable endpoints must be finite");
+    }
+    const legacyMinT = Math.min(legacyStartT, legacyEndT);
+    const legacyMaxT = Math.max(legacyStartT, legacyEndT);
+    const start = normalizeRoofGableEndpoint(gable.start, legacyFaceIndex, legacyMinT, "start");
+    const end = normalizeRoofGableEndpoint(gable.end, legacyFaceIndex, legacyMaxT, "end");
+    if (start.edgeIndex === end.edgeIndex && Math.abs(start.t - end.t) < 0.000001) {
+        throw new Error("roof gable endpoints must not coincide");
+    }
+    return {
+        type: "gable",
+        id: Number.isInteger(Number(gable.id)) ? Number(gable.id) : nextGableId(),
+        start,
+        end,
+        height,
+        wallTexturePath,
+        roofReturn: gable.roofReturn !== false
+    };
+}
+
+export function getFloorRoof(floor) {
+    if (!floor || typeof floor !== "object") return null;
+    if (!floor.roof || typeof floor.roof !== "object") {
+        return null;
+    }
+    floor.roof.floorId = getFloorId(floor);
+    if (!Array.isArray(floor.roof.gables)) floor.roof.gables = [];
+    return floor.roof;
+}
+
+export function getRoofGables(floorOrRoof) {
+    const roof = floorOrRoof && floorOrRoof.type === "roof" ? floorOrRoof : getFloorRoof(floorOrRoof);
+    return Array.isArray(roof && roof.gables) ? roof.gables : [];
+}
+
 export function getFloorId(floor) {
     return String((floor && (floor.fragmentId || floor.id)) || "");
 }
@@ -306,9 +410,12 @@ export function createFloor({
         outerPolygon: clonePoints(footprint),
         holes: Array.isArray(holes) ? holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [],
         floorTexturePath: floorTexture,
-        roofTexturePath: roofTexture,
-        roofOverhang: Number(roofOverhang),
-        roofPeakHeight: Number(roofPeakHeight),
+        roof: createRoof({
+            floorId: fragmentId,
+            texture: roofTexture,
+            overhang: roofOverhang,
+            peakHeight: roofPeakHeight
+        }),
         floorHeight: Number(floorHeight),
         defaultWallHeight: Number(defaultWallHeight),
         defaultWallTexturePath: defaultWallTexture,
@@ -321,12 +428,6 @@ export function createFloor({
     }
     if (!Number.isFinite(floor.floorHeight) || floor.floorHeight <= 0) {
         throw new Error("building floor height must be a positive number");
-    }
-    if (!Number.isFinite(floor.roofOverhang)) {
-        throw new Error("building roof overhang must be a finite number");
-    }
-    if (!Number.isFinite(floor.roofPeakHeight) || floor.roofPeakHeight < 0) {
-        throw new Error("building roof peak height must be zero or greater");
     }
     floor._createPerimeterWalls = createPerimeterWalls === true;
     return floor;
@@ -445,6 +546,77 @@ export function createWallMountedObject({
         placementRotation: Number.isFinite(Number(placementRotation)) ? Number(placementRotation) : 0,
         placeableAnchorX: Number.isFinite(Number(placeableAnchorX)) ? Number(placeableAnchorX) : 0.5,
         placeableAnchorY: Number.isFinite(Number(placeableAnchorY)) ? Number(placeableAnchorY) : 1,
+        renderDepthOffset: Number.isFinite(Number(renderDepthOffset)) ? Number(renderDepthOffset) : 0,
+        compositeLayers: Array.isArray(compositeLayers) ? clonePlainObject(compositeLayers) : null
+    };
+}
+
+export function createGableMountedObject({
+    floorId,
+    gableId,
+    gableSegmentIndex,
+    category,
+    texturePath,
+    wallT,
+    width,
+    height,
+    zOffset,
+    placementRotation = 0,
+    mountedWallFacingSign = 1,
+    placeableAnchorX = 0.5,
+    placeableAnchorY = 0.5,
+    renderDepthOffset = 0,
+    compositeLayers = null
+}) {
+    const resolvedFloorId = String(floorId || "");
+    if (!resolvedFloorId) throw new Error("gable-mounted window requires a floor fragment id");
+    const resolvedGableId = Number(gableId);
+    if (!Number.isInteger(resolvedGableId)) throw new Error("gable-mounted window requires an integer gable id");
+    const segmentIndex = Number(gableSegmentIndex);
+    if (!Number.isInteger(segmentIndex) || segmentIndex < 0) {
+        throw new Error("gable-mounted window requires a zero or greater gable segment index");
+    }
+    const resolvedCategory = String(category || "").trim().toLowerCase();
+    if (resolvedCategory !== "windows") {
+        throw new Error(`gable-mounted object category must be windows: ${resolvedCategory || "missing"}`);
+    }
+    if (typeof texturePath !== "string" || texturePath.length === 0) {
+        throw new Error("gable-mounted window requires a texture path");
+    }
+    const t = Number(wallT);
+    if (!Number.isFinite(t)) throw new Error("gable-mounted window requires a finite wall position");
+    const objectWidth = Number(width);
+    const objectHeight = Number(height);
+    if (!Number.isFinite(objectWidth) || objectWidth <= 0) {
+        throw new Error("gable-mounted window width must be a positive number");
+    }
+    if (!Number.isFinite(objectHeight) || objectHeight <= 0) {
+        throw new Error("gable-mounted window height must be a positive number");
+    }
+    const objectZOffset = Number(zOffset);
+    if (!Number.isFinite(objectZOffset)) throw new Error("gable-mounted window z offset must be finite");
+    return {
+        type: "placedObject",
+        id: nextMountedObjectId(),
+        mountKind: "gable",
+        category: resolvedCategory,
+        texturePath,
+        floorId: resolvedFloorId,
+        gableId: resolvedGableId,
+        gableSegmentIndex: segmentIndex,
+        wallId: null,
+        mountedSectionId: null,
+        mountedWallLineGroupId: null,
+        mountedWallSectionUnitId: null,
+        mountedWallFacingSign: Number(mountedWallFacingSign) >= 0 ? 1 : -1,
+        wallT: Math.max(0, Math.min(1, t)),
+        width: objectWidth,
+        height: objectHeight,
+        zOffset: objectZOffset,
+        rotationAxis: "spatial",
+        placementRotation: Number.isFinite(Number(placementRotation)) ? Number(placementRotation) : 0,
+        placeableAnchorX: Number.isFinite(Number(placeableAnchorX)) ? Number(placeableAnchorX) : 0.5,
+        placeableAnchorY: Number.isFinite(Number(placeableAnchorY)) ? Number(placeableAnchorY) : 0.5,
         renderDepthOffset: Number.isFinite(Number(renderDepthOffset)) ? Number(renderDepthOffset) : 0,
         compositeLayers: Array.isArray(compositeLayers) ? clonePlainObject(compositeLayers) : null
     };
@@ -877,23 +1049,34 @@ export function addFloor(building, floor) {
 export function duplicateFloor(building, sourceFloorId, elevation) {
     const source = findFloor(building, sourceFloorId);
     if (!source) throw new Error(`cannot duplicate missing source floor fragment: ${sourceFloorId}`);
+    const sourceRoof = getFloorRoof(source);
     const floor = createFloor({
         elevation,
         footprint: source.outerPolygon,
         holes: source.holes || [],
         floorTexture: source.floorTexturePath,
-        roofTexture: source.roofTexturePath,
-        roofOverhang: source.roofOverhang,
-        roofPeakHeight: source.roofPeakHeight,
+        roofTexture: sourceRoof ? sourceRoof.texturePath : DEFAULTS.roofTexture,
+        roofOverhang: sourceRoof ? sourceRoof.overhang : DEFAULTS.roofOverhang,
+        roofPeakHeight: sourceRoof ? sourceRoof.peakHeight : DEFAULTS.roofPeakHeight,
         floorHeight: source.floorHeight,
         defaultWallHeight: source.defaultWallHeight,
         defaultWallTexture: source.defaultWallTexturePath,
         createPerimeterWalls: false
     });
+    const gableIdMap = new Map();
+    if (sourceRoof) {
+        floor.roof.gables = getRoofGables(sourceRoof).map((gable) => {
+            const copy = normalizeRoofGable({ ...gable, id: undefined });
+            gableIdMap.set(Number(gable.id), Number(copy.id));
+            return copy;
+        });
+    } else {
+        floor.roof = null;
+    }
     floor.name = `${source.name} copy`;
     addFloor(building, floor);
     const wallIdMap = duplicateWallsForFloor(building, source, floor);
-    duplicateMountedObjectsForFloor(building, source, floor, wallIdMap);
+    duplicateMountedObjectsForFloor(building, source, floor, wallIdMap, gableIdMap);
     return floor;
 }
 
@@ -1002,13 +1185,25 @@ function duplicateWallsForFloor(building, sourceFloor, targetFloor) {
     return wallIdMap;
 }
 
-function duplicateMountedObjectsForFloor(building, sourceFloor, targetFloor, wallIdMap) {
+function duplicateMountedObjectsForFloor(building, sourceFloor, targetFloor, wallIdMap, gableIdMap = new Map()) {
     if (!building || !Array.isArray(building.mountedWallObjects)) return;
     const sourceFloorId = getFloorId(sourceFloor);
     const targetFloorId = getFloorId(targetFloor);
     getBuildingMountedObjects(building)
         .filter((object) => object.floorId === sourceFloorId)
         .forEach((sourceObject) => {
+            if (sourceObject.mountKind === "gable") {
+                const targetGableId = gableIdMap.get(Number(sourceObject.gableId));
+                if (!Number.isInteger(targetGableId)) {
+                    throw new Error(`cannot duplicate mounted object ${sourceObject.id}: missing duplicated gable ${sourceObject.gableId}`);
+                }
+                const object = clonePlainObject(sourceObject);
+                object.id = nextMountedObjectId();
+                object.floorId = targetFloorId;
+                object.gableId = targetGableId;
+                building.mountedWallObjects.push(object);
+                return;
+            }
             const targetWallId = wallIdMap.get(Number(sourceObject.wallId));
             if (!Number.isFinite(targetWallId)) {
                 throw new Error(`cannot duplicate mounted object ${sourceObject.id}: missing duplicated wall ${sourceObject.wallId}`);
@@ -1034,7 +1229,9 @@ export function replaceFloorShape(building, floor, outerPolygon, holes = [], opt
     if (options.regeneratePerimeterWalls !== false) {
         createPerimeterWallsForFloor(building, floor);
     }
-    refreshWallSectionEndpoints(building, floor);
+    if (options.refreshWallEndpoints !== false) {
+        refreshWallSectionEndpoints(building, floor);
+    }
 }
 
 export function findFloor(building, floorId) {
@@ -1068,7 +1265,11 @@ export function resolveEndpoint(building, endpoint) {
     if (endpoint.kind === "vertex") {
         const ring = ringForEndpoint(building, endpoint);
         const vertex = Array.isArray(ring) ? ring.find((point) => point.id === endpoint.vertexId) : null;
-        if (!vertex) return null;
+        if (!vertex) {
+            return Number.isFinite(Number(endpoint.x)) && Number.isFinite(Number(endpoint.y))
+                ? { x: Number(endpoint.x), y: Number(endpoint.y) }
+                : null;
+        }
         return { x: Number(vertex.x), y: Number(vertex.y) };
     }
     if (Number.isFinite(Number(endpoint.x)) && Number.isFinite(Number(endpoint.y))) {
@@ -1088,6 +1289,13 @@ export function wallCenterlinePoints(building, wall, floor = null) {
     const points = wallPoints(building, wall);
     if (points.length !== 2) return points;
     if (!wall || wall.role !== "perimeter") return points;
+    if (
+        !wall.startPoint || !wall.endPoint ||
+        wall.startPoint.kind !== "vertex" ||
+        wall.endPoint.kind !== "vertex"
+    ) {
+        return points;
+    }
     const resolvedFloor = floor || findFloor(building, wall.fragmentId || wall.floorId);
     if (!resolvedFloor) {
         throw new Error(`perimeter wall ${wall && wall.id} references missing floor fragment: ${wall && (wall.fragmentId || wall.floorId)}`);
@@ -1111,7 +1319,10 @@ export function wallCenterlinePoints(building, wall, floor = null) {
     const startIndex = outer.findIndex((point) => point && point.id === attachment.startVertexId);
     const endIndex = outer.findIndex((point) => point && point.id === attachment.endVertexId);
     if (startIndex < 0 || endIndex < 0) {
-        throw new Error(`perimeter wall ${wall.id} attachment references missing floor vertices`);
+        return points;
+    }
+    if ((startIndex + 1) % outer.length !== endIndex) {
+        return points;
     }
     return [
         { x: insetRing[startIndex].x, y: insetRing[startIndex].y },
@@ -1207,11 +1418,29 @@ export function normalizeImportedBuilding(raw) {
         floor.outerPolygon = clonePoints(floor.outerPolygon || []);
         floor.holes = Array.isArray(floor.holes) ? floor.holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [];
         floor.floorTexturePath = floor.floorTexturePath || floor.floorTexture || DEFAULTS.floorTexture;
-        floor.roofTexturePath = floor.roofTexturePath || floor.roofTexture || (floor.defaults && floor.defaults.roofTexture) || (building.defaults && building.defaults.roofTexture) || DEFAULTS.roofTexture;
-        floor.roofOverhang = Number.isFinite(Number(floor.roofOverhang)) ? Number(floor.roofOverhang) : DEFAULTS.roofOverhang;
-        floor.roofPeakHeight = Number.isFinite(Number(floor.roofPeakHeight)) && Number(floor.roofPeakHeight) >= 0
-            ? Number(floor.roofPeakHeight)
-            : DEFAULTS.roofPeakHeight;
+        const sourceRoof = floor.roof && typeof floor.roof === "object" ? floor.roof : null;
+        const hasLegacyRoofFields = floor.roofTexturePath !== undefined || floor.roofTexture !== undefined || floor.roofOverhang !== undefined || floor.roofPeakHeight !== undefined;
+        if (sourceRoof || floor.roof !== null || hasLegacyRoofFields) {
+            const roofSource = sourceRoof || {};
+            floor.roof = createRoof({
+                floorId: floor.fragmentId,
+                texture: roofSource.texturePath || roofSource.roofTexturePath || floor.roofTexturePath || floor.roofTexture || (floor.defaults && floor.defaults.roofTexture) || (building.defaults && building.defaults.roofTexture) || DEFAULTS.roofTexture,
+                overhang: Number.isFinite(Number(roofSource.overhang ?? roofSource.roofOverhang))
+                    ? Number(roofSource.overhang ?? roofSource.roofOverhang)
+                    : (Number.isFinite(Number(floor.roofOverhang)) ? Number(floor.roofOverhang) : DEFAULTS.roofOverhang),
+                peakHeight: Number.isFinite(Number(roofSource.peakHeight ?? roofSource.roofPeakHeight)) && Number(roofSource.peakHeight ?? roofSource.roofPeakHeight) >= 0
+                    ? Number(roofSource.peakHeight ?? roofSource.roofPeakHeight)
+                    : (Number.isFinite(Number(floor.roofPeakHeight)) && Number(floor.roofPeakHeight) >= 0 ? Number(floor.roofPeakHeight) : DEFAULTS.roofPeakHeight),
+                gables: Array.isArray(roofSource.gables) ? roofSource.gables : []
+            });
+            if (typeof roofSource.id === "string" && roofSource.id.length > 0) floor.roof.id = roofSource.id;
+        } else {
+            floor.roof = null;
+        }
+        delete floor.roofTexturePath;
+        delete floor.roofTexture;
+        delete floor.roofOverhang;
+        delete floor.roofPeakHeight;
         floor.floorHeight = Number.isFinite(Number(floor.floorHeight)) && Number(floor.floorHeight) > 0
             ? Number(floor.floorHeight)
             : (floor.defaults && Number.isFinite(Number(floor.defaults.wallHeight)) ? Number(floor.defaults.wallHeight) : DEFAULTS.wallHeight);
@@ -1222,7 +1451,52 @@ export function normalizeImportedBuilding(raw) {
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
     });
     building.mountedWallObjects = building.mountedWallObjects.map((object) => {
+        const rawMountKind = String(object && object.mountKind || "").trim().toLowerCase();
         const wallId = Number(object && (object.wallId ?? object.mountedWallSectionUnitId ?? object.mountedSectionId));
+        if (rawMountKind === "gable" || (!Number.isFinite(wallId) && object && object.gableId !== undefined && object.gableId !== null)) {
+            const floor = findFloor(building, object.floorId);
+            if (!floor) {
+                throw new Error(`gable-mounted window references missing floor: ${object && object.floorId}`);
+            }
+            const gableId = Number(object.gableId);
+            const gable = getRoofGables(floor).find((candidate) => Number(candidate.id) === gableId);
+            if (!gable) {
+                throw new Error(`gable-mounted window references missing gable: ${gableId}`);
+            }
+            const category = String(object.category || object.type || "").trim().toLowerCase();
+            const resolvedCategory = category === "window" ? "windows" : category;
+            const normalized = createGableMountedObject({
+                floorId: getFloorId(floor),
+                gableId,
+                gableSegmentIndex: object.gableSegmentIndex ?? 0,
+                category: resolvedCategory,
+                texturePath: object.texturePath,
+                wallT: object.wallT ?? 0.5,
+                width: object.width ?? 1,
+                height: object.height ?? 1,
+                zOffset: object.zOffset ?? object.z ?? 0,
+                placementRotation: object.placementRotation,
+                mountedWallFacingSign: object.mountedWallFacingSign,
+                placeableAnchorX: object.placeableAnchorX,
+                placeableAnchorY: object.placeableAnchorY,
+                renderDepthOffset: object.renderDepthOffset,
+                compositeLayers: object.compositeLayers
+            });
+            if (Number.isInteger(Number(object.id))) normalized.id = Number(object.id);
+            if (Number.isFinite(Number(object.x))) normalized.x = Number(object.x);
+            if (Number.isFinite(Number(object.y))) normalized.y = Number(object.y);
+            if (Number.isFinite(Number(object.z))) normalized.z = Number(object.z);
+            if (object.isOpen !== undefined) normalized.isOpen = object.isOpen === true;
+            if (object.isPassable !== undefined) normalized.isPassable = object.isPassable !== false;
+            if (object.blocksTile !== undefined) normalized.blocksTile = object.blocksTile === true;
+            if (object.castsLosShadows !== undefined) normalized.castsLosShadows = object.castsLosShadows === true;
+            if (Array.isArray(object.groundPlaneHitboxOverridePoints)) {
+                normalized.groundPlaneHitboxOverridePoints = object.groundPlaneHitboxOverridePoints
+                    .filter((point) => finitePoint(point))
+                    .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+            }
+            return normalized;
+        }
         const wall = findWall(building, wallId);
         if (!wall) {
             throw new Error(`mounted wall object references missing wall: ${wallId}`);
@@ -1268,6 +1542,7 @@ export function normalizeImportedBuilding(raw) {
 function bumpIdCountersFromBuilding(building) {
     [building.id, ...getBuildingFloors(building).flatMap((floor) => [
         floor.fragmentId,
+        floor.roof && floor.roof.id,
         ...(floor.outerPolygon || []).map((point) => point.id),
         ...(floor.holes || []).flatMap((ring) => ring.map((point) => point.id))
     ])].forEach((id) => {
@@ -1280,6 +1555,11 @@ function bumpIdCountersFromBuilding(building) {
     });
     getBuildingMountedObjects(building).forEach((object) => {
         if (Number.isInteger(Number(object.id))) mountedObjectIdCounter = Math.max(mountedObjectIdCounter, Number(object.id) + 1);
+    });
+    getBuildingFloors(building).forEach((floor) => {
+        getRoofGables(floor).forEach((gable) => {
+            if (Number.isInteger(Number(gable.id))) gableIdCounter = Math.max(gableIdCounter, Number(gable.id) + 1);
+        });
     });
 }
 

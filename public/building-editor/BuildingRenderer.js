@@ -1,8 +1,8 @@
-import { flattenPolygon, polygonCentroid } from "./BuildingGeometry.js";
+import { flattenPolygon, polygonCentroid, simplePolygonRingError } from "./BuildingGeometry.js";
 import { validateBuilding } from "./BuildingValidation.js";
 import { ADJACENT_DIRECTIONS, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
-import { findFloor, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
+import { findFloor, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, getRoofGables, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
 
 const GAME_XY_RATIO = 0.66;
 const FLOOR_TEXTURE_REPEAT = 0.1;
@@ -20,6 +20,8 @@ const SCENE_LIGHT_DIFFUSE = 0.95;
 const SCENE_LIGHT_MIN = 0.58;
 const SCENE_LIGHT_MAX = 1.36;
 const DEFAULT_WALL_TEXTURE_REPEAT = 0.1;
+const GABLE_MOUNT_WALL_THICKNESS = 0.08;
+const GABLE_ENDPOINT_VERTEX_SNAP_PIXELS = 12;
 const PICKER_DEBUG_DEPTH_BIAS = 0.05;
 const SELECTION_OUTLINE_COLOR = 0x42a5ff;
 const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
@@ -173,8 +175,9 @@ function triangulateSurface(outerRing, holeRings = []) {
         holeIndices.push(points.length);
         pushRing(ring);
     });
-    const earcutFn = (PIXI.utils && typeof PIXI.utils.earcut === "function")
-        ? PIXI.utils.earcut
+    const pixiUtils = globalThis.PIXI && globalThis.PIXI.utils;
+    const earcutFn = (pixiUtils && typeof pixiUtils.earcut === "function")
+        ? pixiUtils.earcut
         : (typeof globalThis.earcut === "function" ? globalThis.earcut : null);
     if (!earcutFn) throw new Error("textured floor rendering requires earcut");
     const indices = earcutFn(flat, holeIndices, 2);
@@ -187,13 +190,17 @@ function triangulateFloor(floor) {
 }
 
 function roofOverhang(floor) {
-    const value = Number(floor && floor.roofOverhang);
+    const roof = getFloorRoof(floor);
+    if (!roof) throw new Error(`floor ${getFloorId(floor)} has no roof`);
+    const value = Number(roof.overhang);
     if (!Number.isFinite(value)) throw new Error(`roof ${getFloorId(floor)} overhang must be finite`);
     return value;
 }
 
 function roofPeakHeight(floor) {
-    const value = Number(floor && floor.roofPeakHeight);
+    const roof = getFloorRoof(floor);
+    if (!roof) throw new Error(`floor ${getFloorId(floor)} has no roof`);
+    const value = Number(roof.peakHeight);
     if (!Number.isFinite(value) || value < 0) {
         throw new Error(`roof ${getFloorId(floor)} peak height must be zero or greater`);
     }
@@ -217,6 +224,442 @@ function roofRenderElevation(floor) {
     return floorTopElevation(floor) + ROOF_RENDER_Z_LIFT;
 }
 
+function roofTexturePath(floor) {
+    const roof = getFloorRoof(floor);
+    if (!roof) throw new Error(`floor ${getFloorId(floor)} has no roof texture`);
+    return roof.texturePath;
+}
+
+function gableWallTexturePath(floor, gable) {
+    return normalizeTexturePath(gable && gable.wallTexturePath, floor && floor.defaultWallTexturePath || "/assets/images/walls/woodwall.png");
+}
+
+function roofPerimeterRing(floor) {
+    const contactRing = ringPointsForTriangulation(floor && floor.outerPolygon);
+    if (contactRing.length < 3) return contactRing;
+    const overhang = roofOverhang(floor);
+    if (Math.abs(overhang) <= GEOMETRY_EPSILON) return contactRing;
+    const ring = offsetRing(contactRing, overhang);
+    if (!Array.isArray(ring) || ring.length !== contactRing.length) {
+        throw new Error(`roof ${getFloorId(floor)} overhang requires a valid perimeter ring`);
+    }
+    return ring;
+}
+
+function interpolatePoint(a, b, t) {
+    const clamped = Math.max(0, Math.min(1, Number(t)));
+    return {
+        x: Number(a.x) + (Number(b.x) - Number(a.x)) * clamped,
+        y: Number(a.y) + (Number(b.y) - Number(a.y)) * clamped
+    };
+}
+
+function interpolatePoint3d(a, b, t) {
+    const point = interpolatePoint(a, b, t);
+    return {
+        ...point,
+        z: Number(a.z) + (Number(b.z) - Number(a.z)) * Math.max(0, Math.min(1, Number(t)))
+    };
+}
+
+function distance3d(a, b) {
+    return Math.hypot(
+        Number(b.x) - Number(a.x),
+        Number(b.y) - Number(a.y),
+        Number(b.z) - Number(a.z)
+    );
+}
+
+function triangleArea3d(a, b, c) {
+    const abx = Number(b.x) - Number(a.x);
+    const aby = Number(b.y) - Number(a.y);
+    const abz = Number(b.z) - Number(a.z);
+    const acx = Number(c.x) - Number(a.x);
+    const acy = Number(c.y) - Number(a.y);
+    const acz = Number(c.z) - Number(a.z);
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+    return Math.hypot(nx, ny, nz) * 0.5;
+}
+
+function roofFaceWorldGeometry(floor, faceIndex) {
+    const ring = roofPerimeterRing(floor);
+    const index = Math.floor(Number(faceIndex));
+    if (!Number.isInteger(index) || index < 0 || index >= ring.length) {
+        throw new Error(`roof ${getFloorId(floor)} face index out of range: ${faceIndex}`);
+    }
+    const rimZ = roofRenderElevation(floor);
+    const peakHeight = roofPeakHeight(floor);
+    const center = polygonCentroid(ringPointsForTriangulation(floor && floor.outerPolygon));
+    return {
+        faceIndex: index,
+        edgeA: ring[index],
+        edgeB: ring[(index + 1) % ring.length],
+        peak: { x: Number(center.x), y: Number(center.y), z: rimZ + peakHeight },
+        rimZ,
+        peakHeight
+    };
+}
+
+function roofPeakWorldGeometry(floor) {
+    const rimZ = roofRenderElevation(floor);
+    const peakHeight = roofPeakHeight(floor);
+    const center = polygonCentroid(ringPointsForTriangulation(floor && floor.outerPolygon));
+    if (!Number.isFinite(Number(center && center.x)) || !Number.isFinite(Number(center && center.y))) {
+        throw new Error(`roof ${getFloorId(floor)} requires a finite peak center`);
+    }
+    return {
+        peak: { x: Number(center.x), y: Number(center.y), z: rimZ + peakHeight },
+        rimZ,
+        peakHeight
+    };
+}
+
+function gableEndpointPosition(gable, key, ringLength) {
+    const endpoint = gable && gable[key];
+    const edgeIndex = Math.floor(Number(endpoint && endpoint.edgeIndex));
+    const t = Number(endpoint && endpoint.t);
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= ringLength || !Number.isFinite(t)) {
+        throw new Error(`roof gable ${gable && gable.id} ${key} endpoint must reference the roof outline`);
+    }
+    return { edgeIndex, t: Math.max(0, Math.min(1, t)) };
+}
+
+function perimeterPointAtPosition(ring, position, label) {
+    const index = Math.floor(Number(position && position.edgeIndex));
+    if (!Array.isArray(ring) || index < 0 || index >= ring.length) {
+        throw new Error(`${label} references missing perimeter edge`);
+    }
+    return interpolatePoint(ring[index], ring[(index + 1) % ring.length], Number(position.t));
+}
+
+function perimeterPathSegments(ring, start, end, label) {
+    if (!Array.isArray(ring) || ring.length < 3) {
+        throw new Error(`${label} requires a valid perimeter ring`);
+    }
+    const segments = [];
+    let current = { ...start };
+    let guard = 0;
+    while (true) {
+        const reachesEndOnCurrentEdge = current.edgeIndex === end.edgeIndex && (guard > 0 || end.t >= current.t);
+        const segmentEnd = reachesEndOnCurrentEdge
+            ? { ...end }
+            : { edgeIndex: current.edgeIndex, t: 1 };
+        const startPoint = perimeterPointAtPosition(ring, current, `${label} segment ${segments.length} start`);
+        const endPoint = perimeterPointAtPosition(ring, segmentEnd, `${label} segment ${segments.length} end`);
+        if (Math.hypot(Number(endPoint.x) - Number(startPoint.x), Number(endPoint.y) - Number(startPoint.y)) > GEOMETRY_EPSILON) {
+            segments.push({
+                start: { ...startPoint, position: { ...current } },
+                end: { ...endPoint, position: { ...segmentEnd } }
+            });
+        }
+        if (reachesEndOnCurrentEdge) break;
+        current = { edgeIndex: (current.edgeIndex + 1) % ring.length, t: 0 };
+        guard++;
+        if (guard > ring.length) throw new Error(`${label} could not walk perimeter interval`);
+    }
+    return segments;
+}
+
+function segmentTForLineIntersection(a, b, linePoint, lineDirection) {
+    const sx = Number(b.x) - Number(a.x);
+    const sy = Number(b.y) - Number(a.y);
+    const lx = Number(lineDirection.x);
+    const ly = Number(lineDirection.y);
+    const denominator = sx * ly - sy * lx;
+    if (Math.abs(denominator) <= GEOMETRY_EPSILON) return null;
+    const dx = Number(linePoint.x) - Number(a.x);
+    const dy = Number(linePoint.y) - Number(a.y);
+    const t = (dx * ly - dy * lx) / denominator;
+    return Number.isFinite(t) ? t : null;
+}
+
+function interpolateGableSegmentPosition(a, b, t) {
+    if (!a || !b || a.edgeIndex !== b.edgeIndex) {
+        throw new Error("gable wall segment split requires endpoints on the same outline edge");
+    }
+    return {
+        edgeIndex: a.edgeIndex,
+        t: Number(a.t) + (Number(b.t) - Number(a.t)) * Math.max(0, Math.min(1, Number(t)))
+    };
+}
+
+function pointWithPositionAtSegmentT(a, b, t) {
+    const clamped = Math.max(0, Math.min(1, Number(t)));
+    return {
+        x: Number(a.x) + (Number(b.x) - Number(a.x)) * clamped,
+        y: Number(a.y) + (Number(b.y) - Number(a.y)) * clamped,
+        z: Number(a.z) + (Number(b.z) - Number(a.z)) * clamped,
+        position: interpolateGableSegmentPosition(a.position, b.position, clamped)
+    };
+}
+
+function roofPlaneFromPoints(a, b, c, label) {
+    const normal = triangleSurfaceNormal(a, b, c, label);
+    if (Math.abs(normal.z) <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} cannot clip vertical walls with a vertical roof plane`);
+    }
+    return { point: a, normal };
+}
+
+function roofPlaneZAt(plane, point, label) {
+    const z = Number(plane.point.z) -
+        (Number(plane.normal.x) * (Number(point.x) - Number(plane.point.x)) +
+            Number(plane.normal.y) * (Number(point.y) - Number(plane.point.y))) / Number(plane.normal.z);
+    if (!Number.isFinite(z)) throw new Error(`${label} produced a non-finite roof clip height`);
+    return z;
+}
+
+function gableWallTopZ(geometry, point, label) {
+    const leftZ = roofPlaneZAt(geometry.leftRoofPlane, point, `${label} left plane`);
+    const rightZ = roofPlaneZAt(geometry.rightRoofPlane, point, `${label} right plane`);
+    return Math.max(geometry.rimZ, Math.min(geometry.rimZ + geometry.height, Math.min(leftZ, rightZ)));
+}
+
+function splitGableWallBaseSegmentAtRidge(segment, geometry) {
+    const t = segmentTForLineIntersection(segment.start, segment.end, geometry.roofApex, geometry.ridgeDirection);
+    if (t === null || t <= GEOMETRY_EPSILON || t >= 1 - GEOMETRY_EPSILON) return [segment];
+    const middle = pointWithPositionAtSegmentT(segment.start, segment.end, t);
+    return [
+        { start: segment.start, end: middle },
+        { start: middle, end: segment.end }
+    ];
+}
+
+function gableRidgeWallCrossing(wallSegments, ridgePoint, ridgeDirection, label) {
+    let best = null;
+    wallSegments.forEach((segment) => {
+        const t = segmentTForLineIntersection(segment.start, segment.end, ridgePoint, ridgeDirection);
+        if (t === null || t < -GEOMETRY_EPSILON || t > 1 + GEOMETRY_EPSILON) return;
+        const point = pointWithPositionAtSegmentT(segment.start, segment.end, Math.max(0, Math.min(1, t)));
+        const distance = Math.hypot(Number(point.x) - Number(ridgePoint.x), Number(point.y) - Number(ridgePoint.y));
+        if (!best || distance < best.distance) best = { point, distance };
+    });
+    if (!best) {
+        throw new Error(`${label} ridge line does not cross the gable wall contour`);
+    }
+    return best.point;
+}
+
+function gableWorldGeometry(floor, gable) {
+    const roofRing = roofPerimeterRing(floor);
+    const floorRing = ringPointsForTriangulation(floor && floor.outerPolygon);
+    if (floorRing.length !== roofRing.length) {
+        throw new Error(`roof ${getFloorId(floor)} gable ${gable && gable.id} requires matching floor and roof perimeter rings`);
+    }
+    const start = gableEndpointPosition(gable, "start", roofRing.length);
+    const end = gableEndpointPosition(gable, "end", roofRing.length);
+    const roofBase = roofPeakWorldGeometry(floor);
+    const height = Math.max(0, Math.min(roofBase.peakHeight, Number(gable.height)));
+    const roofStartPoint = perimeterPointAtPosition(roofRing, start, `roof ${getFloorId(floor)} gable ${gable && gable.id} start`);
+    const roofEndPoint = perimeterPointAtPosition(roofRing, end, `roof ${getFloorId(floor)} gable ${gable && gable.id} end`);
+    const wallStartPoint = perimeterPointAtPosition(floorRing, start, `roof ${getFloorId(floor)} gable ${gable && gable.id} wall start`);
+    const wallEndPoint = perimeterPointAtPosition(floorRing, end, `roof ${getFloorId(floor)} gable ${gable && gable.id} wall end`);
+    const preliminaryRoofMid = {
+        x: (Number(roofStartPoint.x) + Number(roofEndPoint.x)) * 0.5,
+        y: (Number(roofStartPoint.y) + Number(roofEndPoint.y)) * 0.5
+    };
+    const edgeDx = Number(roofEndPoint.x) - Number(roofStartPoint.x);
+    const edgeDy = Number(roofEndPoint.y) - Number(roofStartPoint.y);
+    const edgeLength = Math.hypot(edgeDx, edgeDy);
+    if (edgeLength <= GEOMETRY_EPSILON) {
+        throw new Error(`roof ${getFloorId(floor)} gable ${gable && gable.id} requires non-coincident outline endpoints`);
+    }
+    const edgeUx = edgeDx / edgeLength;
+    const edgeUy = edgeDy / edgeLength;
+    const peakDx = Number(roofBase.peak.x) - Number(preliminaryRoofMid.x);
+    const peakDy = Number(roofBase.peak.y) - Number(preliminaryRoofMid.y);
+    const peakAlongEdge = peakDx * edgeUx + peakDy * edgeUy;
+    const inwardX = peakDx - edgeUx * peakAlongEdge;
+    const inwardY = peakDy - edgeUy * peakAlongEdge;
+    const inwardLength = Math.hypot(inwardX, inwardY);
+    if (inwardLength <= GEOMETRY_EPSILON) {
+        throw new Error(`roof ${getFloorId(floor)} gable ${gable && gable.id} requires an outline span with inward roof depth`);
+    }
+    const wallBaseSegments = perimeterPathSegments(floorRing, start, end, `roof ${getFloorId(floor)} gable ${gable && gable.id} wall path`)
+        .map((segment) => ({
+            start: { ...segment.start, z: roofBase.rimZ },
+            end: { ...segment.end, z: roofBase.rimZ }
+        }));
+    const ridgeDirection = { x: inwardX / inwardLength, y: inwardY / inwardLength };
+    const wallCrossing = gableRidgeWallCrossing(
+        wallBaseSegments,
+        preliminaryRoofMid,
+        ridgeDirection,
+        `roof ${getFloorId(floor)} gable ${gable && gable.id}`
+    );
+    const overhang = roofOverhang(floor);
+    const roofApex = {
+        x: Number(wallCrossing.x) - ridgeDirection.x * overhang,
+        y: Number(wallCrossing.y) - ridgeDirection.y * overhang,
+        z: roofBase.rimZ + height
+    };
+    const heightT = roofBase.peakHeight > GEOMETRY_EPSILON ? height / roofBase.peakHeight : 0;
+    const roofStart = { ...roofStartPoint, z: roofBase.rimZ };
+    const roofEnd = { ...roofEndPoint, z: roofBase.rimZ };
+    const backApexOnMainRoof = interpolatePoint3d({ x: roofApex.x, y: roofApex.y, z: roofBase.rimZ }, roofBase.peak, heightT);
+    const runLength = Math.hypot(
+        Number(backApexOnMainRoof.x) - Number(roofApex.x),
+        Number(backApexOnMainRoof.y) - Number(roofApex.y)
+    );
+    const runVector = {
+        x: inwardX / inwardLength * runLength,
+        y: inwardY / inwardLength * runLength
+    };
+    const translateRun = (point) => ({
+        x: Number(point.x) + runVector.x,
+        y: Number(point.y) + runVector.y,
+        z: Number(point.z)
+    });
+    const roofBackStart = translateRun(roofStart);
+    const roofBackEnd = translateRun(roofEnd);
+    const roofBackApex = translateRun(roofApex);
+    const baseGeometry = {
+        rimZ: roofBase.rimZ,
+        height,
+        roofApex,
+        ridgeDirection,
+        leftRoofPlane: roofPlaneFromPoints(roofStart, roofApex, roofBackApex, `roof ${getFloorId(floor)} gable ${gable && gable.id} left side`),
+        rightRoofPlane: roofPlaneFromPoints(roofApex, roofEnd, roofBackEnd, `roof ${getFloorId(floor)} gable ${gable && gable.id} right side`)
+    };
+    const wallSegments = wallBaseSegments
+        .flatMap((segment) => splitGableWallBaseSegmentAtRidge(segment, baseGeometry))
+        .map((segment, index) => {
+            const topStartZ = gableWallTopZ(baseGeometry, segment.start, `roof ${getFloorId(floor)} gable ${gable && gable.id} wall segment ${index} start`);
+            const topEndZ = gableWallTopZ(baseGeometry, segment.end, `roof ${getFloorId(floor)} gable ${gable && gable.id} wall segment ${index} end`);
+            return {
+                bottomStart: { ...segment.start, z: roofBase.rimZ },
+                bottomEnd: { ...segment.end, z: roofBase.rimZ },
+                topStart: { ...segment.start, z: topStartZ },
+                topEnd: { ...segment.end, z: topEndZ }
+            };
+        });
+    return {
+        start,
+        end,
+        rimZ: roofBase.rimZ,
+        peakHeight: roofBase.peakHeight,
+        height,
+        ridgeDirection,
+        wallCrossing,
+        leftRoofPlane: baseGeometry.leftRoofPlane,
+        rightRoofPlane: baseGeometry.rightRoofPlane,
+        roofStart,
+        roofEnd,
+        roofApex,
+        roofBackStart,
+        roofBackEnd,
+        roofBackApex,
+        roofPeak: roofBase.peak,
+        wallStart: { ...wallStartPoint, z: roofBase.rimZ },
+        wallEnd: { ...wallEndPoint, z: roofBase.rimZ },
+        wallSegments
+    };
+}
+
+function pointsCoincident(a, b) {
+    return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) <= GEOMETRY_EPSILON;
+}
+
+function gableWallSegmentLength(segment, label) {
+    const length = Math.hypot(
+        Number(segment.bottomEnd.x) - Number(segment.bottomStart.x),
+        Number(segment.bottomEnd.y) - Number(segment.bottomStart.y)
+    );
+    if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires a positive wall segment length`);
+    }
+    return length;
+}
+
+function gableWallSegmentsCollinear(a, b) {
+    if (!pointsCoincident(a.bottomEnd, b.bottomStart)) return false;
+    const ax = Number(a.bottomEnd.x) - Number(a.bottomStart.x);
+    const ay = Number(a.bottomEnd.y) - Number(a.bottomStart.y);
+    const bx = Number(b.bottomEnd.x) - Number(b.bottomStart.x);
+    const by = Number(b.bottomEnd.y) - Number(b.bottomStart.y);
+    const cross = ax * by - ay * bx;
+    const dot = ax * bx + ay * by;
+    return Math.abs(cross) <= GEOMETRY_EPSILON && dot > 0;
+}
+
+function gableMountSections(geometry, label) {
+    if (!geometry || !Array.isArray(geometry.wallSegments)) {
+        throw new Error(`${label} requires gable wall segments`);
+    }
+    const sections = [];
+    geometry.wallSegments.forEach((segment, segmentIndex) => {
+        const length = gableWallSegmentLength(segment, `${label} wall segment ${segmentIndex}`);
+        const last = sections[sections.length - 1] || null;
+        if (last && gableWallSegmentsCollinear(last.lastSegment, segment)) {
+            last.pieces.push({
+                segment,
+                segmentIndex,
+                startAlong: last.length,
+                endAlong: last.length + length
+            });
+            last.length += length;
+            last.bottomEnd = segment.bottomEnd;
+            last.topEnd = segment.topEnd;
+            last.lastSegment = segment;
+            return;
+        }
+        sections.push({
+            sectionIndex: sections.length,
+            bottomStart: segment.bottomStart,
+            bottomEnd: segment.bottomEnd,
+            topStart: segment.topStart,
+            topEnd: segment.topEnd,
+            length,
+            lastSegment: segment,
+            pieces: [{
+                segment,
+                segmentIndex,
+                startAlong: 0,
+                endAlong: length
+            }]
+        });
+    });
+    return sections;
+}
+
+function gableMountPieceForSegment(section, segmentIndex, label) {
+    const piece = section && section.pieces && section.pieces.find((candidate) => candidate.segmentIndex === segmentIndex);
+    if (!piece) throw new Error(`${label} references a segment outside its mount section`);
+    return piece;
+}
+
+function gableMountSectionForSegment(sections, segmentIndex, label) {
+    const section = sections.find((candidate) => candidate.pieces.some((piece) => piece.segmentIndex === segmentIndex));
+    if (!section) throw new Error(`${label} references missing gable wall segment ${segmentIndex}`);
+    return section;
+}
+
+function gableMountPieceAtAlong(section, along, label) {
+    const clamped = Math.max(0, Math.min(Number(section.length), Number(along)));
+    const piece = section.pieces.find((candidate) => (
+        clamped >= candidate.startAlong - GEOMETRY_EPSILON &&
+        clamped <= candidate.endAlong + GEOMETRY_EPSILON
+    )) || section.pieces[section.pieces.length - 1];
+    if (!piece) throw new Error(`${label} cannot resolve mount section position`);
+    return { piece, along: clamped };
+}
+
+function gableMountPointAtAlong(section, along, label) {
+    const resolved = gableMountPieceAtAlong(section, along, label);
+    const pieceLength = resolved.piece.endAlong - resolved.piece.startAlong;
+    const localT = pieceLength > GEOMETRY_EPSILON
+        ? (resolved.along - resolved.piece.startAlong) / pieceLength
+        : 0;
+    return {
+        segmentIndex: resolved.piece.segmentIndex,
+        wallT: Math.max(0, Math.min(1, localT)),
+        point: interpolatePoint(resolved.piece.segment.bottomStart, resolved.piece.segment.bottomEnd, localT),
+        topZ: Number(resolved.piece.segment.topStart.z) + (Number(resolved.piece.segment.topEnd.z) - Number(resolved.piece.segment.topStart.z)) * Math.max(0, Math.min(1, localT))
+    };
+}
+
 function ringCumulativeLengths(ring) {
     const lengths = [0];
     let total = 0;
@@ -230,6 +673,20 @@ function ringCumulativeLengths(ring) {
 }
 
 function distancePointToLineSegment(point, a, b) {
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= GEOMETRY_EPSILON) {
+        return Math.hypot(Number(point.x) - Number(a.x), Number(point.y) - Number(a.y));
+    }
+    const t = Math.max(0, Math.min(1, ((Number(point.x) - Number(a.x)) * dx + (Number(point.y) - Number(a.y)) * dy) / lengthSquared));
+    return Math.hypot(
+        Number(point.x) - (Number(a.x) + dx * t),
+        Number(point.y) - (Number(a.y) + dy * t)
+    );
+}
+
+function distancePointToScreenSegment(point, a, b) {
     const dx = Number(b.x) - Number(a.x);
     const dy = Number(b.y) - Number(a.y);
     const lengthSquared = dx * dx + dy * dy;
@@ -265,6 +722,103 @@ function triangleSurfaceNormal(a, b, c, label) {
     return { x: nx / length, y: ny / length, z: nz / length };
 }
 
+function averageSurfaceNormals(a, b, label) {
+    const nx = Number(a && a.x) + Number(b && b.x);
+    const ny = Number(a && a.y) + Number(b && b.y);
+    const nz = Number(a && a.z) + Number(b && b.z);
+    const length = Math.hypot(nx, ny, nz);
+    if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires compatible gable side normals`);
+    }
+    return { x: nx / length, y: ny / length, z: nz / length };
+}
+
+function clipRingToPoints(ring, label) {
+    if (!Array.isArray(ring) || ring.length < 4) {
+        throw new Error(`${label} requires a closed polygon ring`);
+    }
+    const points = ring.map((point, index) => {
+        const x = Number(Array.isArray(point) ? point[0] : point && point.x);
+        const y = Number(Array.isArray(point) ? point[1] : point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point at index ${index}`);
+        }
+        return { x, y };
+    });
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (Math.hypot(Number(first.x) - Number(last.x), Number(first.y) - Number(last.y)) <= GEOMETRY_EPSILON) {
+        points.pop();
+    }
+    if (points.length < 3) throw new Error(`${label} requires at least three unique points`);
+    return points;
+}
+
+function roofTriangleBarycentric(point, a, b, c, label) {
+    const px = Number(point.x);
+    const py = Number(point.y);
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    const cx = Number(c.x);
+    const cy = Number(c.y);
+    const denominator = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(denominator) <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires a non-degenerate source triangle`);
+    }
+    const wa = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denominator;
+    const wb = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denominator;
+    return { a: wa, b: wb, c: 1 - wa - wb };
+}
+
+function interpolateRoofTrianglePoint(point, a, b, c, label) {
+    const weights = roofTriangleBarycentric(point, a, b, c, label);
+    const blend = (key) => Number(a[key]) * weights.a + Number(b[key]) * weights.b + Number(c[key]) * weights.c;
+    return {
+        x: Number(point.x),
+        y: Number(point.y),
+        z: blend("z"),
+        u: blend("u"),
+        v: blend("v")
+    };
+}
+
+function perimeterPathPoints(segments, label) {
+    if (!Array.isArray(segments) || segments.length < 1) {
+        throw new Error(`${label} requires at least one perimeter segment`);
+    }
+    return [
+        segments[0].start,
+        ...segments.map((segment) => segment.end)
+    ];
+}
+
+function gableRoofClipPolygon(floor, geometry, label) {
+    if (roofOverhang(floor) <= GEOMETRY_EPSILON) return null;
+    const roofRing = roofPerimeterRing(floor);
+    const floorRing = ringPointsForTriangulation(floor && floor.outerPolygon);
+    if (roofRing.length !== floorRing.length) {
+        throw new Error(`${label} roof return clip requires matching floor and roof perimeter rings`);
+    }
+    const roofPath = perimeterPathPoints(
+        perimeterPathSegments(roofRing, geometry.start, geometry.end, `${label} roof return outer path`),
+        `${label} roof return outer path`
+    );
+    const floorPath = perimeterPathPoints(
+        perimeterPathSegments(floorRing, geometry.start, geometry.end, `${label} roof return inner path`),
+        `${label} roof return inner path`
+    );
+    const ring = closedClipRing([
+        ...roofPath,
+        ...floorPath.reverse()
+    ], `${label} roof return clip footprint`);
+    if (Math.abs(clipRingSignedArea(ring)) <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} roof clip footprint has zero area`);
+    }
+    return [ring];
+}
+
 function triangulatePitchedRoof(floor) {
     const floorId = getFloorId(floor);
     const holes = Array.isArray(floor && floor.holes) ? floor.holes.filter((ring) => Array.isArray(ring) && ring.length >= 3) : [];
@@ -292,7 +846,64 @@ function triangulatePitchedRoof(floor) {
         );
         indices.push(start, start + 1, start + 2);
     };
-    const addTexturedFan = (ring) => {
+    const addGableRoofPatch = (geometry, label) => {
+        if (
+            triangleArea3d(geometry.roofStart, geometry.roofApex, geometry.roofBackApex) <= GEOMETRY_EPSILON ||
+            triangleArea3d(geometry.roofApex, geometry.roofEnd, geometry.roofBackEnd) <= GEOMETRY_EPSILON
+        ) {
+            return;
+        }
+        const runRepeat = distance3d(geometry.roofApex, geometry.roofBackApex) * ROOF_TEXTURE_REPEAT;
+        const leftSlopeRepeat = distance3d(geometry.roofStart, geometry.roofApex) * ROOF_TEXTURE_REPEAT;
+        const rightSlopeRepeat = distance3d(geometry.roofEnd, geometry.roofApex) * ROOF_TEXTURE_REPEAT;
+        const leftNormal = triangleSurfaceNormal(geometry.roofStart, geometry.roofApex, geometry.roofBackApex, `${label} left side`);
+        const rightNormal = triangleSurfaceNormal(geometry.roofApex, geometry.roofEnd, geometry.roofBackEnd, `${label} right side`);
+        const ridgeNormal = averageSurfaceNormals(leftNormal, rightNormal, `${label} ridge`);
+        const start = points.length;
+        points.push(
+            { ...geometry.roofStart, u: 0, v: leftSlopeRepeat, normal: leftNormal },
+            { ...geometry.roofApex, u: 0, v: 0, normal: ridgeNormal },
+            { ...geometry.roofBackApex, u: runRepeat, v: 0, normal: ridgeNormal },
+            { ...geometry.roofBackStart, u: runRepeat, v: leftSlopeRepeat, normal: leftNormal },
+            { ...geometry.roofEnd, u: 0, v: rightSlopeRepeat, normal: rightNormal },
+            { ...geometry.roofBackEnd, u: runRepeat, v: rightSlopeRepeat, normal: rightNormal }
+        );
+        indices.push(
+            start, start + 1, start + 2,
+            start, start + 2, start + 3,
+            start + 1, start + 4, start + 5,
+            start + 1, start + 5, start + 2
+        );
+    };
+    const addClippedRoofTriangle = (a, b, c, clipPolygons, label) => {
+        const source = [[closedClipRing([a, b, c], `${label} source`)]];
+        let clipped = null;
+        try {
+            clipped = polygonClipper(`roof ${floorId} gable clipping`).difference(source, ...clipPolygons);
+        } catch (error) {
+            throw new Error(`${label} roof clipping failed: ${error.message}`);
+        }
+        if (!Array.isArray(clipped)) {
+            throw new Error(`${label} roof clipping returned malformed geometry`);
+        }
+        clipped.forEach((polygon, polygonIndex) => {
+            if (!Array.isArray(polygon) || polygon.length < 1) {
+                throw new Error(`${label} roof clipping returned malformed polygon ${polygonIndex}`);
+            }
+            const outer = clipRingToPoints(polygon[0], `${label} clipped polygon ${polygonIndex}`);
+            const holes = polygon.slice(1).map((ring, holeIndex) => clipRingToPoints(ring, `${label} clipped polygon ${polygonIndex} hole ${holeIndex}`));
+            const triangulation = triangulateSurface(outer, holes);
+            if (!triangulation) return;
+            for (let index = 0; index < triangulation.indices.length; index += 3) {
+                addTriangle(
+                    interpolateRoofTrianglePoint(triangulation.points[triangulation.indices[index]], a, b, c, label),
+                    interpolateRoofTrianglePoint(triangulation.points[triangulation.indices[index + 1]], a, b, c, label),
+                    interpolateRoofTrianglePoint(triangulation.points[triangulation.indices[index + 2]], a, b, c, label)
+                );
+            }
+        });
+    };
+    const addTexturedFan = (ring, clipPolygons = []) => {
         const cumulative = ringCumulativeLengths(ring);
         const ringLength = ring.length;
         for (let index = 0; index < ringLength; index++) {
@@ -304,15 +915,21 @@ function triangulatePitchedRoof(floor) {
             const uCenter = (uA + uB) * 0.5;
             const slopeDistance = Math.hypot(distancePointToLineSegment(center, a, b), peakHeight);
             const vCenter = Math.max(1, slopeDistance * ROOF_TEXTURE_REPEAT);
-            addTriangle(
-                { x: Number(a.x), y: Number(a.y), z: rimZ, u: uA, v: 0 },
-                { x: Number(b.x), y: Number(b.y), z: rimZ, u: uB, v: 0 },
-                { x: Number(center.x), y: Number(center.y), z: rimZ + peakHeight, u: uCenter, v: vCenter }
-            );
+            const roofA = { x: Number(a.x), y: Number(a.y), z: rimZ, u: uA, v: 0 };
+            const roofB = { x: Number(b.x), y: Number(b.y), z: rimZ, u: uB, v: 0 };
+            const roofPeak = { x: Number(center.x), y: Number(center.y), z: rimZ + peakHeight, u: uCenter, v: vCenter };
+            if (clipPolygons.length > 0) {
+                addClippedRoofTriangle(roofA, roofB, roofPeak, clipPolygons, `roof ${floorId} face ${index}`);
+            } else {
+                addTriangle(roofA, roofB, roofPeak);
+            }
         }
     };
 
     if (overhang < -GEOMETRY_EPSILON) {
+        if (getRoofGables(floor).length > 0) {
+            throw new Error(`roof ${floorId} gables cannot render with negative overhang yet`);
+        }
         const innerRing = offsetRing(contactRing, overhang);
         if (!Array.isArray(innerRing) || innerRing.length !== contactRing.length) {
             throw new Error(`roof ${floorId} negative overhang requires a valid inset ring`);
@@ -348,7 +965,18 @@ function triangulatePitchedRoof(floor) {
     if (!Array.isArray(outerRing) || outerRing.length < 3) {
         throw new Error(`roof ${floorId} overhang requires a valid outer ring`);
     }
-    addTexturedFan(outerRing);
+    const gableGeometries = getRoofGables(floor).map((gable) => ({
+        gable,
+        geometry: gableWorldGeometry(floor, gable)
+    }));
+    const roofClipPolygons = gableGeometries
+        .filter((entry) => entry.gable.roofReturn === false)
+        .map((entry) => gableRoofClipPolygon(floor, entry.geometry, `roof ${floorId} gable ${entry.gable.id}`))
+        .filter(Boolean);
+    addTexturedFan(outerRing, roofClipPolygons);
+    gableGeometries.forEach(({ gable, geometry }) => {
+        addGableRoofPatch(geometry, `roof ${floorId} gable ${gable.id}`);
+    });
     return { points, indices: new Uint16Array(indices) };
 }
 
@@ -359,10 +987,21 @@ function triangulateRoof(floor) {
 }
 
 function roofMeshSignature(floor) {
+    const roof = getFloorRoof(floor);
+    if (!roof) return `${getFloorId(floor)};no-roof`;
     return [
-        surfaceMeshSignature(floor, floor.roofTexturePath, roofRenderElevation(floor)),
+        surfaceMeshSignature(floor, roof.texturePath, roofRenderElevation(floor)),
         Number(roofOverhang(floor)).toFixed(4),
-        Number(roofPeakHeight(floor)).toFixed(4)
+        Number(roofPeakHeight(floor)).toFixed(4),
+        getRoofGables(floor).map((gable) => [
+            gable.id,
+            gable.start && gable.start.edgeIndex,
+            Number(gable.start && gable.start.t).toFixed(4),
+            gable.end && gable.end.edgeIndex,
+            Number(gable.end && gable.end.t).toFixed(4),
+            Number(gable.height).toFixed(4),
+            gable.roofReturn === false ? "no-return" : "return"
+        ].join(",")).join("|")
     ].join(";");
 }
 
@@ -413,10 +1052,10 @@ function wallTextureRepeatY(texturePath) {
     return Number.isFinite(repeatY) && repeatY > 0 ? repeatY : DEFAULT_WALL_TEXTURE_REPEAT;
 }
 
-function polygonClipper() {
+function polygonClipper(label = "polygon clipping") {
     const clipper = globalThis.polygonClipping;
     if (!clipper || typeof clipper.difference !== "function" || typeof clipper.intersection !== "function") {
-        throw new Error("collapsed wall rendering requires polygon-clipping");
+        throw new Error(`${label} requires polygon-clipping`);
     }
     return clipper;
 }
@@ -492,6 +1131,54 @@ function wallProfilePoints(building, wall, floor, options = {}) {
 
 function wallFootprintPolygon(building, wall, floor, options = {}) {
     return [closedClipRing(wallProfilePoints(building, wall, floor, options), `wall ${wall && wall.id} footprint`)];
+}
+
+function wallIsOuterPerimeterForFloor(wall, floorId) {
+    const attachment = wall && wall.attachment;
+    return wall && wall.role === "perimeter" &&
+        String(wall.fragmentId || wall.floorId) === floorId &&
+        attachment &&
+        attachment.kind === "fragmentEdge" &&
+        attachment.ring === "outer" &&
+        attachment.fragmentId === floorId;
+}
+
+function completeUniformPerimeterInsetDistance(floor, wallsForFloor) {
+    const floorId = getFloorId(floor);
+    const outer = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    if (outer.length < 3) return null;
+    const perimeterWalls = (Array.isArray(wallsForFloor) ? wallsForFloor : [])
+        .filter((wall) => wallIsOuterPerimeterForFloor(wall, floorId));
+    if (perimeterWalls.length !== outer.length) return null;
+    const wallsByEdge = new Map();
+    perimeterWalls.forEach((wall) => {
+        const attachment = wall.attachment;
+        const edgeKey = `${attachment.startVertexId}->${attachment.endVertexId}`;
+        if (wallsByEdge.has(edgeKey)) {
+            throw new Error(`floor ${floorId} has duplicate perimeter walls for edge ${edgeKey}`);
+        }
+        wallsByEdge.set(edgeKey, wall);
+    });
+    let thickness = null;
+    for (let index = 0; index < outer.length; index++) {
+        const start = outer[index];
+        const end = outer[(index + 1) % outer.length];
+        if (!start || !start.id || !end || !end.id) {
+            throw new Error(`floor ${floorId} perimeter open area requires stable vertex ids`);
+        }
+        const wall = wallsByEdge.get(`${start.id}->${end.id}`);
+        if (!wall) return null;
+        const wallThickness = Number(wall.thickness);
+        if (!Number.isFinite(wallThickness) || wallThickness <= 0) {
+            throw new Error(`floor ${floorId} perimeter wall ${wall.id} requires a positive thickness`);
+        }
+        if (thickness === null) {
+            thickness = wallThickness;
+        } else if (Math.abs(thickness - wallThickness) > GEOMETRY_EPSILON) {
+            return null;
+        }
+    }
+    return -thickness * (1 + COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE) * 0.5;
 }
 
 function wallProfilePolygonFromProfile(profile, label) {
@@ -791,6 +1478,7 @@ export class BuildingRenderer {
         this.pickerDebugLabels = new PIXI.Container();
         this.floorMeshById = new Map();
         this.roofMeshById = new Map();
+        this.gableWallMeshById = new Map();
         this.wallUnitById = new Map();
         this.mountedObjectMeshById = new Map();
         this.mountedObjectPreviewMesh = null;
@@ -1261,7 +1949,7 @@ export class BuildingRenderer {
     createRoofMesh(floor, triangulation) {
         return this.createSurfaceMesh(floor, triangulation, {
             z: roofRenderElevation(floor),
-            texturePath: floor.roofTexturePath,
+            texturePath: roofTexturePath(floor),
             textureFallback: "/assets/images/roofs/slate.png",
             textureRepeat: ROOF_TEXTURE_REPEAT,
             namePrefix: "buildingEditorRoofMesh"
@@ -1312,7 +2000,7 @@ export class BuildingRenderer {
 
     updateRoofMeshUniforms(mesh, floor, alpha) {
         this.updateSurfaceMeshUniforms(mesh, floor, alpha, {
-            texturePath: floor.roofTexturePath,
+            texturePath: roofTexturePath(floor),
             textureFallback: "/assets/images/roofs/slate.png"
         });
     }
@@ -1342,6 +2030,11 @@ export class BuildingRenderer {
 
     syncRoofMesh(floor, alpha) {
         const floorId = getFloorId(floor);
+        if (!getFloorRoof(floor)) {
+            const entry = this.roofMeshById.get(floorId);
+            if (entry && entry.mesh) entry.mesh.visible = false;
+            return null;
+        }
         const signature = roofMeshSignature(floor);
         let entry = this.roofMeshById.get(floorId);
         if (!entry || entry.signature !== signature) {
@@ -1360,6 +2053,145 @@ export class BuildingRenderer {
             this.buildingUnit.addChild(entry.mesh);
         }
         this.updateRoofMeshUniforms(entry.mesh, floor, alpha);
+        return entry.mesh;
+    }
+
+    gableWallSignature(floor, gable) {
+        const roof = getFloorRoof(floor);
+        const texturePath = gableWallTexturePath(floor, gable);
+        return [
+            getFloorId(floor),
+            gable.id,
+            gable.start && gable.start.edgeIndex,
+            Number(gable.start && gable.start.t).toFixed(4),
+            gable.end && gable.end.edgeIndex,
+            Number(gable.end && gable.end.t).toFixed(4),
+            Number(gable.height).toFixed(4),
+            Number(roof.overhang).toFixed(4),
+            Number(roof.peakHeight).toFixed(4),
+            texturePath,
+            Number(wallTextureRepeatX(texturePath)).toFixed(4),
+            Number(wallTextureRepeatY(texturePath)).toFixed(4)
+        ].join(";");
+    }
+
+    gableWallPerimeterDistanceAt(floor, position) {
+        const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+        const index = Math.floor(Number(position && position.edgeIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= ring.length) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture coordinates require a valid outline edge`);
+        }
+        const start = ring[index];
+        const end = ring[(index + 1) % ring.length];
+        if (!start || !start.id || !end || !end.id) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture coordinates require stable perimeter vertex ids`);
+        }
+        const baseDistance = this.perimeterDistanceByVertexId(floor).get(start.id);
+        if (!Number.isFinite(baseDistance)) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture coordinates reference missing vertex ${start.id}`);
+        }
+        const edgeLength = Math.hypot(Number(end.x) - Number(start.x), Number(end.y) - Number(start.y));
+        if (!Number.isFinite(edgeLength) || edgeLength <= GEOMETRY_EPSILON) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture coordinates require a non-zero perimeter edge`);
+        }
+        return baseDistance + edgeLength * Math.max(0, Math.min(1, Number(position && position.t)));
+    }
+
+    gableWallTexturePhaseOffset(floor, position) {
+        const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+        const index = Math.floor(Number(position && position.edgeIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= ring.length) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture phase requires a valid outline edge`);
+        }
+        const start = ring[index];
+        const end = ring[(index + 1) % ring.length];
+        if (!start || !start.id || !end || !end.id) {
+            throw new Error(`roof ${getFloorId(floor)} gable wall texture phase requires stable perimeter vertex ids`);
+        }
+        const floorId = getFloorId(floor);
+        const matchingWall = getBuildingWalls(this.state.building).find((wall) => {
+            const attachment = wall && wall.attachment;
+            return wallIsOuterPerimeterForFloor(wall, floorId) &&
+                attachment.startVertexId === start.id &&
+                attachment.endVertexId === end.id;
+        });
+        const offset = Number(matchingWall && matchingWall.texturePhaseA);
+        return Number.isFinite(offset) ? offset : 0;
+    }
+
+    triangulateRoof(floor) {
+        return triangulateRoof(floor);
+    }
+
+    triangulateGableWall(floor, gable) {
+        const geometry = gableWorldGeometry(floor, gable);
+        const texturePath = gableWallTexturePath(floor, gable);
+        const repeatX = wallTextureRepeatX(texturePath);
+        const repeatY = wallTextureRepeatY(texturePath);
+        const points = [];
+        const indices = [];
+        const wallUv = (point, position) => ({
+            u: this.gableWallPerimeterDistanceAt(floor, position) * repeatX + this.gableWallTexturePhaseOffset(floor, position),
+            v: -Number(point.z) * repeatY
+        });
+        const addWallTriangle = (a, b, c, label) => {
+            if (triangleArea3d(a, b, c) <= GEOMETRY_EPSILON) return;
+            const normal = triangleSurfaceNormal(a, b, c, label);
+            const offset = points.length;
+            points.push(
+                { ...a, normal, ...wallUv(a, a.position) },
+                { ...b, normal, ...wallUv(b, b.position) },
+                { ...c, normal, ...wallUv(c, c.position) }
+            );
+            indices.push(offset, offset + 1, offset + 2);
+        };
+        geometry.wallSegments.forEach((segment, index) => {
+            addWallTriangle(
+                segment.bottomStart,
+                segment.bottomEnd,
+                segment.topEnd,
+                `roof ${getFloorId(floor)} gable ${gable.id} wall segment ${index} lower`
+            );
+            addWallTriangle(
+                segment.bottomStart,
+                segment.topEnd,
+                segment.topStart,
+                `roof ${getFloorId(floor)} gable ${gable.id} wall segment ${index} upper`
+            );
+        });
+        return { points, indices: new Uint16Array(indices) };
+    }
+
+    syncGableWallMesh(floor, gable, alpha) {
+        const id = `${getFloorId(floor)}:${gable.id}`;
+        const signature = this.gableWallSignature(floor, gable);
+        let entry = this.gableWallMeshById.get(id);
+        if (!entry || entry.signature !== signature) {
+            if (entry && entry.mesh) {
+                if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
+                entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
+            }
+            const triangulation = this.triangulateGableWall(floor, gable);
+            const texturePath = gableWallTexturePath(floor, gable);
+            const mesh = this.createSurfaceMesh(floor, triangulation, {
+                z: roofRenderElevation(floor),
+                texturePath,
+                textureFallback: "/assets/images/walls/woodwall.png",
+                textureRepeat: wallTextureRepeatX(texturePath),
+                namePrefix: "buildingEditorGableWallMesh"
+            });
+            if (!mesh) throw new Error(`roof ${getFloorId(floor)} gable ${gable.id} wall mesh could not be created`);
+            this.buildingUnit.addChild(mesh);
+            entry = { signature, mesh };
+            this.gableWallMeshById.set(id, entry);
+        } else if (entry.mesh.parent !== this.buildingUnit) {
+            this.buildingUnit.addChild(entry.mesh);
+        }
+        const texturePath = gableWallTexturePath(floor, gable);
+        this.updateSurfaceMeshUniforms(entry.mesh, floor, alpha, {
+            texturePath,
+            textureFallback: "/assets/images/walls/woodwall.png"
+        });
         return entry.mesh;
     }
 
@@ -1564,6 +2396,26 @@ export class BuildingRenderer {
         });
     }
 
+    completePerimeterOpenAreaPolygon(floor, wallsForFloor) {
+        const floorId = getFloorId(floor);
+        const insetDistance = completeUniformPerimeterInsetDistance(floor, wallsForFloor);
+        if (insetDistance === null) return null;
+        const outer = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+        const innerRing = offsetRing(outer, insetDistance);
+        if (!Array.isArray(innerRing) || innerRing.length !== outer.length) {
+            throw new Error(`floor ${floorId} perimeter open area could not resolve an inset ring`);
+        }
+        const ringError = simplePolygonRingError(innerRing, `floor ${floorId} perimeter open-area ring`);
+        if (ringError) {
+            throw new Error(`floor ${floorId} perimeter open area is invalid: ${ringError}`);
+        }
+        return [
+            closedClipRing(innerRing, `floor ${floorId} perimeter open area`),
+            ...(Array.isArray(floor && floor.holes) ? floor.holes : [])
+                .map((ring, index) => closedClipRing(ring, `floor ${floorId} hole ${index}`))
+        ];
+    }
+
     floorOpenAreaScreenGeometry(floor, wallEntries = null) {
         const floorId = getFloorId(floor);
         if (this.collapsedWallGeometryByFloorId.has(floorId)) {
@@ -1574,7 +2426,11 @@ export class BuildingRenderer {
         const wallsForFloor = Array.isArray(wallEntries)
             ? wallEntries.filter((entry) => entry && getFloorId(entry.floor) === floorId).map((entry) => entry.wall)
             : getBuildingWalls(this.state.building).filter((wall) => String(wall.fragmentId || wall.floorId) === floorId);
-        const wallFootprints = wallsForFloor.map((wall) => {
+        const perimeterOpenAreaPolygon = this.completePerimeterOpenAreaPolygon(floor, wallsForFloor);
+        const wallsToSubtract = perimeterOpenAreaPolygon
+            ? wallsForFloor.filter((wall) => !wallIsOuterPerimeterForFloor(wall, floorId))
+            : wallsForFloor;
+        const wallFootprints = wallsToSubtract.map((wall) => {
             try {
                 const profile = this.wallProfileForRender(wall, wallEntries);
                 return {
@@ -1592,15 +2448,15 @@ export class BuildingRenderer {
                 throw new Error(`collapsed wall open-area footprint failed for floor ${floorId}, wall ${wall && wall.id}: ${error.message}`);
             }
         });
-        let openArea = [floorPolygon];
+        let openArea = perimeterOpenAreaPolygon ? [perimeterOpenAreaPolygon] : [floorPolygon];
         if (wallFootprints.length > 0) {
             try {
-                openArea = clipper.difference(floorPolygon, ...wallFootprints.map((entry) => entry.footprint));
+                openArea = clipper.difference(openArea, ...wallFootprints.map((entry) => entry.footprint));
             } catch (error) {
                 for (let index = 0; index < wallFootprints.length; index++) {
                     const entry = wallFootprints[index];
                     try {
-                        clipper.difference(floorPolygon, ...wallFootprints.slice(0, index + 1).map((item) => item.footprint));
+                        clipper.difference(openArea, ...wallFootprints.slice(0, index + 1).map((item) => item.footprint));
                     } catch (innerError) {
                         throw new Error(`collapsed wall open-area clipping failed for floor ${floorId} after adding wall ${entry.wall && entry.wall.id}: ${innerError.message}`);
                     }
@@ -1679,6 +2535,132 @@ export class BuildingRenderer {
             }));
     }
 
+    gableScreenGeometry(floor, gable, label) {
+        const geometry = gableWorldGeometry(floor, gable);
+        const rings = [
+            [geometry.roofStart, geometry.roofApex, geometry.roofBackApex, geometry.roofBackStart],
+            [geometry.roofApex, geometry.roofEnd, geometry.roofBackEnd, geometry.roofBackApex],
+            ...geometry.wallSegments
+                .filter((segment) => Math.max(
+                    Number(segment.topStart.z) - Number(segment.bottomStart.z),
+                    Number(segment.topEnd.z) - Number(segment.bottomEnd.z)
+                ) > GEOMETRY_EPSILON)
+                .map((segment) => [segment.bottomStart, segment.bottomEnd, segment.topEnd, segment.topStart])
+        ].map((points, index) => closedClipRing(
+            points.map((point) => this.worldToScreen(point, point.z)),
+            `${label} part ${index}`
+        ));
+        return rings.map((ring, index) => {
+            if (!looksLikeClipRing(ring)) {
+                throw new Error(`${label} projected malformed gable ring ${index}`);
+            }
+            return [ring];
+        });
+    }
+
+    gableHandles(floor, gable) {
+        const geometry = gableWorldGeometry(floor, gable);
+        return [
+            { key: "start", point: geometry.roofStart, screen: this.worldToScreen(geometry.roofStart, geometry.roofStart.z), gable, floor },
+            { key: "end", point: geometry.roofEnd, screen: this.worldToScreen(geometry.roofEnd, geometry.roofEnd.z), gable, floor },
+            { key: "height", point: geometry.roofApex, screen: this.worldToScreen(geometry.roofApex, geometry.roofApex.z), gable, floor }
+        ];
+    }
+
+    pickGableHandleAtScreen(screenPoint, thresholdPixels = 10) {
+        const point = screenPointToClipPoint(screenPoint, "gable handle pick");
+        const selection = this.state.selection || {};
+        const selectedFloorId = selection.floorId ? String(selection.floorId) : "";
+        const selectedGableId = selection.gableId !== null && selection.gableId !== undefined ? String(selection.gableId) : "";
+        let best = null;
+        this.renderedFloors().forEach((floor) => {
+            if (selectedFloorId && getFloorId(floor) !== selectedFloorId) return;
+            getRoofGables(floor).forEach((gable) => {
+                if (selectedGableId && String(gable.id) !== selectedGableId) return;
+                this.gableHandles(floor, gable).forEach((handle) => {
+                    const distance = Math.hypot(point[0] - Number(handle.screen.x), point[1] - Number(handle.screen.y));
+                    if (distance > thresholdPixels) return;
+                    if (!best || distance < best.distance) best = { ...handle, distance };
+                });
+            });
+        });
+        return best;
+    }
+
+    gableEdgeTAtScreen(floor, gable, screenPoint, snapPixels = GABLE_ENDPOINT_VERTEX_SNAP_PIXELS) {
+        const ring = roofPerimeterRing(floor);
+        const geometry = gableWorldGeometry(floor, gable);
+        const snapThreshold = Number.isFinite(Number(snapPixels)) && Number(snapPixels) >= 0
+            ? Number(snapPixels)
+            : GABLE_ENDPOINT_VERTEX_SNAP_PIXELS;
+        let snappedVertex = null;
+        ring.forEach((vertex, index) => {
+            const screen = this.worldToScreen(vertex, geometry.rimZ);
+            const distance = Math.hypot(Number(screenPoint.x) - Number(screen.x), Number(screenPoint.y) - Number(screen.y));
+            if (distance > snapThreshold) return;
+            if (!snappedVertex || distance < snappedVertex.distance) {
+                snappedVertex = { edgeIndex: index, t: 0, distance };
+            }
+        });
+        if (snappedVertex) {
+            return { edgeIndex: snappedVertex.edgeIndex, t: snappedVertex.t };
+        }
+        let best = null;
+        for (let index = 0; index < ring.length; index++) {
+            const a = this.worldToScreen(ring[index], geometry.rimZ);
+            const b = this.worldToScreen(ring[(index + 1) % ring.length], geometry.rimZ);
+            const dx = Number(b.x) - Number(a.x);
+            const dy = Number(b.y) - Number(a.y);
+            const lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared <= GEOMETRY_EPSILON) continue;
+            const t = Math.max(0, Math.min(1, ((Number(screenPoint.x) - Number(a.x)) * dx + (Number(screenPoint.y) - Number(a.y)) * dy) / lengthSquared));
+            const x = Number(a.x) + dx * t;
+            const y = Number(a.y) + dy * t;
+            const distance = Math.hypot(Number(screenPoint.x) - x, Number(screenPoint.y) - y);
+            if (!best || distance < best.distance) best = { edgeIndex: index, t, distance };
+        }
+        if (!best) throw new Error(`roof ${getFloorId(floor)} gable ${gable.id} endpoint drag requires a valid roof outline`);
+        return { edgeIndex: best.edgeIndex, t: best.t };
+    }
+
+    gableHeightAtScreen(floor, gable, screenPoint) {
+        const geometry = gableWorldGeometry(floor, gable);
+        const baseScreen = this.worldToScreen({
+            x: geometry.roofApex.x,
+            y: geometry.roofApex.y
+        }, geometry.rimZ);
+        const pixelsPerZ = Number(this.state.camera.zoom) * GAME_XY_RATIO;
+        if (!Number.isFinite(pixelsPerZ) || pixelsPerZ <= 0) {
+            throw new Error("gable height drag requires a positive camera zoom");
+        }
+        return Math.max(0, Math.min(geometry.peakHeight, (Number(baseScreen.y) - Number(screenPoint.y)) / pixelsPerZ));
+    }
+
+    pickRoofFaceAtScreen(screenPoint) {
+        const point = screenPointToClipPoint(screenPoint, "roof face screen pick");
+        let best = null;
+        this.renderedFloors().forEach((floor) => {
+            if (!getFloorRoof(floor)) return;
+            const ring = roofPerimeterRing(floor);
+            if (ring.length < 3) return;
+            const z = roofRenderElevation(floor);
+            for (let index = 0; index < ring.length; index++) {
+                const face = roofFaceWorldGeometry(floor, index);
+                const ringScreen = closedClipRing([
+                    this.worldToScreen(face.edgeA, z),
+                    this.worldToScreen(face.edgeB, z),
+                    this.worldToScreen(face.peak, face.peak.z)
+                ], `roof ${getFloorId(floor)} face ${index} pick`);
+                if (!pointInClipRing(point, ringScreen)) continue;
+                const depthMetric = this.surfaceDepthMetricAtScreen(screenPoint, z);
+                if (!best || depthMetric > best.depthMetric) {
+                    best = { type: "roofFace", floor, faceIndex: index, depthMetric };
+                }
+            }
+        });
+        return best;
+    }
+
     surfaceEntryScreenGeometry(entry, label) {
         if (!entry || !entry.floor) throw new Error(`${label} requires a surface entry with a floor`);
         return entry.type === "roof"
@@ -1739,6 +2721,7 @@ export class BuildingRenderer {
         const includeWalls = options.includeWalls !== false;
         const includeSurfaces = options.includeSurfaces !== false;
         const includeMountedObjects = options.includeMountedObjects !== false;
+        const includeGables = options.includeGables !== false;
         const considerHit = (hit) => {
             if (!hit) return;
             if (!best ||
@@ -1781,9 +2764,36 @@ export class BuildingRenderer {
                 });
             }
         }
+        if (includeGables) {
+            for (const floor of this.renderedFloors()) {
+                for (const gable of getRoofGables(floor)) {
+                    const projection = this.gableScreenGeometry(floor, gable, `roof ${getFloorId(floor)} gable ${gable.id} screen pick`);
+                    if (!pointInClipGeometry(point, projection)) continue;
+                    const geometry = gableWorldGeometry(floor, gable);
+                    considerHit({
+                        type: "gable",
+                        floor,
+                        gable,
+                        depthMetric: Math.max(
+                            this.worldDepthMetric(geometry.roofStart, geometry.roofStart.z),
+                            this.worldDepthMetric(geometry.roofEnd, geometry.roofEnd.z),
+                            this.worldDepthMetric(geometry.roofApex, geometry.roofApex.z),
+                            this.worldDepthMetric(geometry.roofPeak, geometry.roofPeak.z),
+                            ...geometry.wallSegments.flatMap((segment) => [
+                                this.worldDepthMetric(segment.bottomStart, segment.bottomStart.z),
+                                this.worldDepthMetric(segment.bottomEnd, segment.bottomEnd.z),
+                                this.worldDepthMetric(segment.topStart, segment.topStart.z),
+                                this.worldDepthMetric(segment.topEnd, segment.topEnd.z)
+                            ])
+                        ),
+                        priority: 35
+                    });
+                }
+            }
+        }
         if (includeMountedObjects) {
             for (const candidate of this.lastMountedObjectPickEntries) {
-                if (!candidate || !candidate.object || !candidate.wall || !candidate.floor) {
+                if (!candidate || !candidate.object || !candidate.floor || (!candidate.wall && candidate.mountKind !== "gable")) {
                     throw new Error("mounted object screen picking encountered an invalid render entry");
                 }
                 const projection = this.mountedObjectScreenGeometry(candidate);
@@ -1804,6 +2814,7 @@ export class BuildingRenderer {
         if (bestMountedObject) return { ...bestMountedObject, type: "mountedObject" };
         if (!best) return null;
         if (best.type === "wall") return { type: "wall", wall: best.wall, floor: best.floor };
+        if (best.type === "gable") return { type: "gable", gable: best.gable, floor: best.floor };
         return { type: best.type, floor: best.floor };
     }
 
@@ -1882,6 +2893,9 @@ export class BuildingRenderer {
         } else if (hit.type === "mountedObject") {
             labelText = `${hit.object.category === "windows" ? "window" : "door"} ${hit.object.id}`;
             rings = clipGeometryRings(this.mountedObjectScreenGeometry(hit), `${labelText} hover`);
+        } else if (hit.type === "gable") {
+            labelText = `gable ${hit.gable.id}`;
+            rings = this.gableScreenGeometry(hit.floor, hit.gable, `${labelText} hover`).flat();
         } else if (hit.type === "floor" || hit.type === "roof") {
             const floorId = getFloorId(hit.floor);
             labelText = `${hit.type} ${floorId}`;
@@ -2150,6 +3164,7 @@ export class BuildingRenderer {
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
         const liveFloorMeshIds = new Set();
         const liveRoofMeshIds = new Set();
+        const liveGableWallIds = new Set();
         const liveWallIds = new Set();
         const wallEntries = [];
         const wallEntriesByFloorId = new Map();
@@ -2167,8 +3182,8 @@ export class BuildingRenderer {
                 });
             }
             const selection = this.state.selection || {};
-            const selectedRoofVisible = selection.kind === "roof" && selection.floorId === getFloorId(floor);
-            if (exterior || selectedRoofVisible) {
+            const selectedRoofVisible = (selection.kind === "roof" || selection.kind === "gable" || selection.kind === "gableHandle") && selection.floorId === getFloorId(floor);
+            if (getFloorRoof(floor) && (exterior || selectedRoofVisible)) {
                 const roofMesh = this.syncRoofMesh(floor, 1);
                 if (roofMesh) {
                     liveRoofMeshIds.add(getFloorId(floor));
@@ -2178,6 +3193,10 @@ export class BuildingRenderer {
                         z: roofRenderElevation(floor)
                     });
                 }
+                getRoofGables(floor).forEach((gable) => {
+                    this.syncGableWallMesh(floor, gable, 1);
+                    liveGableWallIds.add(`${getFloorId(floor)}:${gable.id}`);
+                });
             }
         });
         getBuildingWalls(this.state.building).forEach((wall) => {
@@ -2205,6 +3224,9 @@ export class BuildingRenderer {
         }
         for (const [floorId, entry] of this.roofMeshById.entries()) {
             if (!liveRoofMeshIds.has(floorId) && entry && entry.mesh) entry.mesh.visible = false;
+        }
+        for (const [gableKey, entry] of this.gableWallMeshById.entries()) {
+            if (!liveGableWallIds.has(gableKey) && entry && entry.mesh) entry.mesh.visible = false;
         }
         for (const [wallId, entry] of this.wallUnitById.entries()) {
             if (!liveWallIds.has(wallId) && entry && entry.mesh) entry.mesh.visible = false;
@@ -2305,8 +3327,240 @@ export class BuildingRenderer {
         });
     }
 
+    gableMountedObjectPlacementFromSegment(object, floor, gable, segmentIndex, wallT, options = {}) {
+        const geometry = gableWorldGeometry(floor, gable);
+        const segment = geometry.wallSegments[segmentIndex];
+        if (!segment) {
+            throw new Error(`mounted wall object ${object && object.id} references missing gable wall segment ${segmentIndex}`);
+        }
+        const sections = gableMountSections(geometry, `roof ${getFloorId(floor)} gable ${gable && gable.id}`);
+        const section = gableMountSectionForSegment(sections, segmentIndex, `mounted wall object ${object && object.id}`);
+        const piece = gableMountPieceForSegment(section, segmentIndex, `mounted wall object ${object && object.id}`);
+        const segmentLength = piece.endAlong - piece.startAlong;
+        const sectionAlong = piece.startAlong + segmentLength * Math.max(0, Math.min(1, Number(wallT)));
+        const sectionT = section.length > GEOMETRY_EPSILON ? sectionAlong / section.length : 0;
+        const a = section.bottomStart;
+        const b = section.bottomEnd;
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const length = Math.hypot(dx, dy);
+        if (!(length > GEOMETRY_EPSILON)) {
+            throw new Error(`mounted wall object ${object && object.id} gable segment ${segmentIndex} has zero length`);
+        }
+        const t = Math.max(0, Math.min(1, Number(wallT)));
+        if (!Number.isFinite(t)) throw new Error(`mounted wall object ${object && object.id} wallT must be finite`);
+        const ux = dx / length;
+        const uy = dy / length;
+        const nx = -uy;
+        const ny = ux;
+        const facingSign = Number(options.mountedWallFacingSign ?? (object && object.mountedWallFacingSign)) >= 0 ? 1 : -1;
+        const wallCenter = {
+            x: Number(a.x) + dx * sectionT,
+            y: Number(a.y) + dy * sectionT
+        };
+        const halfThickness = GABLE_MOUNT_WALL_THICKNESS * 0.5;
+        const faceCenter = {
+            x: wallCenter.x + nx * halfThickness * facingSign,
+            y: wallCenter.y + ny * halfThickness * facingSign
+        };
+        const topAtSectionAlong = (along) => gableMountPointAtAlong(section, along, `mounted wall object ${object && object.id}`).topZ;
+        const width = Number(options.width ?? (object && object.width));
+        const height = Number(options.height ?? (object && object.height));
+        const halfWidth = Number.isFinite(width) && width > 0 ? width * 0.5 : 0;
+        const availableHeight = Math.max(0, Math.min(
+            topAtSectionAlong(sectionAlong - halfWidth),
+            topAtSectionAlong(sectionAlong + halfWidth)
+        ) - geometry.rimZ);
+        return {
+            object,
+            mountKind: "gable",
+            gable,
+            gableId: gable.id,
+            gableSegmentIndex: segmentIndex,
+            floor,
+            points: [segment.bottomStart, segment.bottomEnd],
+            wallT: t,
+            wallLength: length,
+            resizePoints: [section.bottomStart, section.bottomEnd],
+            resizeWallT: sectionT,
+            resizeWallLength: section.length,
+            wallCenter,
+            faceCenter,
+            sectionDirX: ux,
+            sectionDirY: uy,
+            sectionNormalX: nx,
+            sectionNormalY: ny,
+            mountedWallFacingSign: facingSign,
+            wallThickness: GABLE_MOUNT_WALL_THICKNESS,
+            wallHeight: availableHeight,
+            wallBottomZ: geometry.rimZ,
+            zOffset: Number(options.zOffset ?? (object && object.zOffset)) || 0,
+            placementRotation: Number(options.placementRotation ?? (object && object.placementRotation)) || (Math.atan2(uy, ux) * 180 / Math.PI),
+            availableHeight,
+            valid: height > 0 ? availableHeight + GEOMETRY_EPSILON >= height : true
+        };
+    }
+
+    resolveGableMountedPlacementCandidate(floor, gable, asset, screenPoint, options = {}) {
+        if (!floor || !gable || !asset || !screenPoint) return null;
+        const category = String(asset.category || "").trim().toLowerCase();
+        if (category !== "windows") return null;
+        const width = Number(asset.width);
+        const height = Number(asset.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+            throw new Error("selected gable window asset requires positive width and height");
+        }
+        const geometry = gableWorldGeometry(floor, gable);
+        const sections = gableMountSections(geometry, `roof ${getFloorId(floor)} gable ${gable && gable.id}`);
+        const point = screenPointToClipPoint(screenPoint, "gable-mounted window placement");
+        let best = null;
+        geometry.wallSegments.forEach((segment, segmentIndex) => {
+            const section = gableMountSectionForSegment(sections, segmentIndex, `roof ${getFloorId(floor)} gable ${gable && gable.id}`);
+            const piece = gableMountPieceForSegment(section, segmentIndex, `roof ${getFloorId(floor)} gable ${gable && gable.id}`);
+            const bottomStart = this.worldToScreen(segment.bottomStart, segment.bottomStart.z);
+            const bottomEnd = this.worldToScreen(segment.bottomEnd, segment.bottomEnd.z);
+            const topEnd = this.worldToScreen(segment.topEnd, segment.topEnd.z);
+            const topStart = this.worldToScreen(segment.topStart, segment.topStart.z);
+            const polygon = closedClipRing([bottomStart, bottomEnd, topEnd, topStart], `roof ${getFloorId(floor)} gable ${gable.id} wall segment ${segmentIndex} placement`);
+            const inside = pointInClipRing(point, polygon);
+            const edgeDistance = Math.min(
+                distancePointToScreenSegment(screenPoint, bottomStart, bottomEnd),
+                distancePointToScreenSegment(screenPoint, bottomEnd, topEnd),
+                distancePointToScreenSegment(screenPoint, topEnd, topStart),
+                distancePointToScreenSegment(screenPoint, topStart, bottomStart)
+            );
+            if (!inside && edgeDistance > 12) return;
+            const screenDx = Number(bottomEnd.x) - Number(bottomStart.x);
+            const screenDy = Number(bottomEnd.y) - Number(bottomStart.y);
+            const screenLengthSquared = screenDx * screenDx + screenDy * screenDy;
+            if (screenLengthSquared <= GEOMETRY_EPSILON) return;
+            let wallT = Math.max(0, Math.min(1, ((Number(screenPoint.x) - Number(bottomStart.x)) * screenDx + (Number(screenPoint.y) - Number(bottomStart.y)) * screenDy) / screenLengthSquared));
+            const halfWidth = width * 0.5;
+            let sectionAlong = piece.startAlong + (piece.endAlong - piece.startAlong) * wallT;
+            const fitsSectionWidth = width <= section.length + GEOMETRY_EPSILON;
+            sectionAlong = fitsSectionWidth
+                ? Math.max(halfWidth, Math.min(section.length - halfWidth, sectionAlong))
+                : Math.max(0, Math.min(section.length, sectionAlong));
+            const sectionStartScreen = this.worldToScreen(section.bottomStart, section.bottomStart.z);
+            const sectionEndScreen = this.worldToScreen(section.bottomEnd, section.bottomEnd.z);
+            const faceMinX = Math.min(Number(sectionStartScreen.x), Number(sectionEndScreen.x));
+            const faceMaxX = Math.max(Number(sectionStartScreen.x), Number(sectionEndScreen.x));
+            const faceSpanX = faceMaxX - faceMinX;
+            const centerSnapPx = Number.isFinite(Number(options.centerSnapPx)) ? Number(options.centerSnapPx) : 10;
+            let centerDistPx = Infinity;
+            if (faceSpanX > 0.0001) {
+                centerDistPx = Math.abs(Number(screenPoint.x) - (faceMinX + faceMaxX) * 0.5);
+            } else {
+                centerDistPx = Math.abs(Number(screenPoint.y) - (Number(sectionStartScreen.y) + Number(sectionEndScreen.y)) * 0.5);
+            }
+            let centerSnapActive = false;
+            if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
+                sectionAlong = fitsSectionWidth
+                    ? Math.max(halfWidth, Math.min(section.length - halfWidth, section.length * 0.5))
+                    : section.length * 0.5;
+                centerSnapActive = true;
+            }
+            const sectionPoint = gableMountPointAtAlong(section, sectionAlong, `roof ${getFloorId(floor)} gable ${gable.id} placement`);
+            segmentIndex = sectionPoint.segmentIndex;
+            wallT = sectionPoint.wallT;
+            const placementBase = this.gableMountedObjectPlacementFromSegment(
+                { id: "preview", width, height, category, mountedWallFacingSign: 1 },
+                floor,
+                gable,
+                segmentIndex,
+                wallT,
+                { width, height, placementRotation: Math.atan2(Number(segment.bottomEnd.y) - Number(segment.bottomStart.y), Number(segment.bottomEnd.x) - Number(segment.bottomStart.x)) * 180 / Math.PI }
+            );
+            const frontDepth = this.worldDepthMetric({
+                x: placementBase.wallCenter.x + placementBase.sectionNormalX * GABLE_MOUNT_WALL_THICKNESS * 0.5,
+                y: placementBase.wallCenter.y + placementBase.sectionNormalY * GABLE_MOUNT_WALL_THICKNESS * 0.5
+            }, geometry.rimZ + placementBase.availableHeight * 0.5);
+            const backDepth = this.worldDepthMetric({
+                x: placementBase.wallCenter.x - placementBase.sectionNormalX * GABLE_MOUNT_WALL_THICKNESS * 0.5,
+                y: placementBase.wallCenter.y - placementBase.sectionNormalY * GABLE_MOUNT_WALL_THICKNESS * 0.5
+            }, geometry.rimZ + placementBase.availableHeight * 0.5);
+            const mountedWallFacingSign = frontDepth >= backDepth ? 1 : -1;
+            const pixelsPerZ = Number(this.state.camera.zoom) * GAME_XY_RATIO;
+            if (!Number.isFinite(pixelsPerZ) || pixelsPerZ <= 0) {
+                throw new Error("gable-mounted window placement requires a positive camera zoom");
+            }
+            const bottomAtCenter = this.worldToScreen(placementBase.wallCenter, geometry.rimZ);
+            const mouseAnchorZ = geometry.rimZ + (Number(bottomAtCenter.y) - Number(screenPoint.y)) / pixelsPerZ;
+            const anchorY = Number.isFinite(Number(asset.anchorY ?? asset.placeableAnchorY))
+                ? Number(asset.anchorY ?? asset.placeableAnchorY)
+                : 0.5;
+            const minAnchorZ = geometry.rimZ + (1 - anchorY) * height;
+            const maxAnchorZ = geometry.rimZ + placementBase.availableHeight - anchorY * height;
+            const fitsWidth = fitsSectionWidth;
+            const fitsHeight = maxAnchorZ + GEOMETRY_EPSILON >= minAnchorZ;
+            const centerAnchorZ = geometry.rimZ + placementBase.availableHeight * 0.5;
+            const centerDistanceZPx = Math.abs(mouseAnchorZ - centerAnchorZ) * pixelsPerZ;
+            const verticalCenterSnapActive = fitsHeight && Number.isFinite(centerDistanceZPx) && centerDistanceZPx <= centerSnapPx;
+            const snappedAnchorZ = verticalCenterSnapActive
+                ? Math.max(minAnchorZ, Math.min(maxAnchorZ, centerAnchorZ))
+                : fitsHeight
+                ? Math.max(minAnchorZ, Math.min(maxAnchorZ, mouseAnchorZ))
+                : minAnchorZ;
+            const placement = this.gableMountedObjectPlacementFromSegment(
+                { id: "preview", width, height, category, mountedWallFacingSign },
+                floor,
+                gable,
+                segmentIndex,
+                wallT,
+                {
+                    width,
+                    height,
+                    zOffset: snappedAnchorZ - getFloorElevation(floor),
+                    mountedWallFacingSign,
+                    placementRotation: placementBase.placementRotation
+                }
+            );
+            placement.valid = fitsWidth && fitsHeight;
+            placement.reason = !fitsWidth
+                ? "window is wider than this gable wall span"
+                : (!fitsHeight ? "window is taller than this gable wall span" : "");
+            placement.centerSnapActive = centerSnapActive;
+            placement.verticalCenterSnapActive = verticalCenterSnapActive;
+            placement.verticalSnapKind = verticalCenterSnapActive ? "wallCenter" : null;
+            placement.verticalSnapZ = snappedAnchorZ;
+            const hitScore = inside ? edgeDistance : edgeDistance + 100;
+            if (!best || hitScore < best.hitScore) best = { ...placement, hitScore };
+        });
+        if (!best) return null;
+        const halfWidth = width * 0.5;
+        const hitboxHalfThickness = GABLE_MOUNT_WALL_THICKNESS * 0.5;
+        best.groundPlaneHitboxOverridePoints = [
+            { x: best.wallCenter.x - best.sectionDirX * halfWidth + best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y - best.sectionDirY * halfWidth + best.sectionNormalY * hitboxHalfThickness },
+            { x: best.wallCenter.x + best.sectionDirX * halfWidth + best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y + best.sectionDirY * halfWidth + best.sectionNormalY * hitboxHalfThickness },
+            { x: best.wallCenter.x + best.sectionDirX * halfWidth - best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y + best.sectionDirY * halfWidth - best.sectionNormalY * hitboxHalfThickness },
+            { x: best.wallCenter.x - best.sectionDirX * halfWidth - best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y - best.sectionDirY * halfWidth - best.sectionNormalY * hitboxHalfThickness }
+        ];
+        return best;
+    }
+
     mountedObjectPlacement(object) {
         if (!object) return null;
+        if (object.mountKind === "gable") {
+            const floor = findFloor(this.state.building, object.floorId);
+            if (!floor) throw new Error(`mounted wall object ${object.id} references missing gable floor ${object.floorId}`);
+            if (!this.state.isFloorSelected(getFloorId(floor))) return null;
+            const gable = getRoofGables(floor).find((candidate) => String(candidate.id) === String(object.gableId));
+            if (!gable) throw new Error(`mounted wall object ${object.id} references missing gable ${object.gableId}`);
+            return this.gableMountedObjectPlacementFromSegment(
+                object,
+                floor,
+                gable,
+                Number(object.gableSegmentIndex),
+                object.wallT,
+                {
+                    width: object.width,
+                    height: object.height,
+                    zOffset: object.zOffset,
+                    mountedWallFacingSign: object.mountedWallFacingSign,
+                    placementRotation: object.placementRotation
+                }
+            );
+        }
         const wall = findWall(this.state.building, object.wallId ?? object.mountedWallSectionUnitId);
         if (!wall) throw new Error(`mounted wall object ${object.id} references missing wall ${object.wallId}`);
         const floor = findFloor(this.state.building, wall.fragmentId || wall.floorId);
@@ -2350,6 +3604,7 @@ export class BuildingRenderer {
             mountedWallFacingSign: facingSign,
             wallThickness: halfThickness * 2,
             wallHeight: Number(wall.height),
+            wallBottomZ: getFloorElevation(floor),
             zOffset: Number(object.zOffset) || 0,
             placementRotation: Number(object.placementRotation) || (Math.atan2(uy, ux) * 180 / Math.PI)
         };
@@ -2648,7 +3903,7 @@ export class BuildingRenderer {
                 this.buildingUnit.addChild(mesh);
             }
             this.updateMountedObjectMesh(mesh, object, placement, {
-                alphaMultiplier: this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1
+                alphaMultiplier: placement.mountKind === "gable" ? 1 : (this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1)
             });
             this.lastMountedObjectPickEntries.push({
                 ...placement,
@@ -2742,6 +3997,13 @@ export class BuildingRenderer {
             });
             return;
         }
+        if (selection.kind === "gable" || selection.kind === "gableHandle") {
+            const floor = this.state.selectedFloor();
+            const gable = this.state.selectedGable();
+            if (!floor || !gable) throw new Error("gable selection outline is missing selected gable");
+            this.drawClipGeometryOutline(gfx, this.gableScreenGeometry(floor, gable, `gable ${gable.id} selection outline`), `gable ${gable.id} selection outline`);
+            return;
+        }
         const floor = this.state.selectedFloor();
         if (!floor) {
             throw new Error(`${selection.kind} selection outline is missing a selected floor`);
@@ -2764,6 +4026,10 @@ export class BuildingRenderer {
         const selectionKind = this.state.selection && this.state.selection.kind;
         if (selectionKind === "mountedObject") {
             this.drawSelectedMountedObjectResizeHandles(gfx);
+            return;
+        }
+        if (selectionKind === "gable" || selectionKind === "gableHandle") {
+            this.drawSelectedGableHandles(gfx);
             return;
         }
         if (!floor) return;
@@ -2812,6 +4078,26 @@ export class BuildingRenderer {
                 }
                 gfx.endFill();
             });
+        });
+    }
+
+    drawSelectedGableHandles(gfx) {
+        const floor = this.state.selectedFloor();
+        const gable = this.state.selectedGable();
+        if (!floor || !gable) return;
+        this.gableHandles(floor, gable).forEach((handle) => {
+            const selected = this.state.selection &&
+                this.state.selection.kind === "gableHandle" &&
+                this.state.selection.gableHandle === handle.key;
+            const point = handle.screen;
+            gfx.beginFill(selected ? 0xffffff : 0xc9d1d8, 1);
+            gfx.lineStyle(selected ? 3 : 2, selected ? 0xffd27a : 0x111820, 1);
+            if (handle.key === "height") {
+                gfx.drawRect(Number(point.x) - 5, Number(point.y) - 5, 10, 10);
+            } else {
+                gfx.drawCircle(Number(point.x), Number(point.y), selected ? 7 : 5);
+            }
+            gfx.endFill();
         });
     }
 

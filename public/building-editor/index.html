@@ -18,13 +18,13 @@
         <main class="workspace">
             <div class="controlBar">
                 <div class="toolCluster" aria-label="building editor tools">
-                    <button type="button" data-tool="polygon" data-tool-exclude="mountObject wall" data-selection-exclude="roof" class="iconTool" title="Add floor polygon">
+                    <button type="button" data-tool="polygon" data-tool-exclude="mountObject wall" data-selection-exclude="roof gable gableHandle" class="iconTool" title="Add floor polygon">
                         <img src="/assets/images/thumbnails/polygon.png" alt="">
                     </button>
-                    <button type="button" data-tool="scissors" data-tool-exclude="mountObject wall" data-selection-exclude="roof" class="iconTool" title="Cut floor hole">
+                    <button type="button" data-tool="scissors" data-tool-exclude="mountObject wall" data-selection-exclude="roof gable gableHandle" class="iconTool" title="Cut floor hole">
                         <img src="/assets/images/thumbnails/scissors.png" alt="">
                     </button>
-                    <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof wall wallEndpoint" class="iconTool" title="Paint texture">🎨</button>
+                    <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof gable gableHandle wall wallEndpoint" class="iconTool" title="Paint texture">🎨</button>
                     <div id="texturePalette" class="texturePalette" hidden></div>
                 </div>
                 <label data-selection-scope="level floor floorVertex">
@@ -43,6 +43,16 @@
                     Peak height
                     <input id="roofPeakHeight" type="number" min="0" step="0.1">
                 </label>
+                <label data-selection-scope="gable gableHandle">
+                    Gable height
+                    <input id="gableHeight" type="range" min="0" max="3" step="0.1">
+                </label>
+                <input id="gableHeightValue" class="toolValue" data-selection-scope="gable gableHandle" type="number" min="0" max="3" step="0.1" title="Gable height value">
+                <label class="checkLabel" data-selection-scope="gable gableHandle">
+                    <input id="gableRoofReturn" type="checkbox" checked>
+                    Roof return
+                </label>
+                <button type="button" data-tool="gable" data-selection-scope="roof gable gableHandle">Gable</button>
                 <button type="button" id="duplicateFloor" data-selection-scope="level floor floorVertex">Duplicate Level</button>
                 <label data-selection-scope="wall wallEndpoint">
                     Wall height
@@ -60,17 +70,24 @@
                 <input id="mountAspectValue" class="toolValue" data-tool-scope="mountObject" type="number" min="0.05" max="25" step="0.01" title="Aspect ratio value">
                 <button type="button" id="mountTextureButton" data-tool-scope="mountObject" class="iconTool" title="Paint texture">🎨</button>
                 <div id="mountTexturePalette" class="texturePalette" hidden></div>
-                <label class="checkLabel" data-tool-exclude="mountObject" data-selection-exclude="roof">
+                <label class="checkLabel" data-tool-exclude="mountObject" data-selection-exclude="roof gable gableHandle">
                     <input id="snapToggle" type="checkbox" checked>
                     Snap to grid
                 </label>
-                <label class="checkLabel" data-tool-exclude="mountObject" data-selection-exclude="roof">
+                <label class="checkLabel" data-tool-exclude="mountObject" data-selection-exclude="roof gable gableHandle">
                     <input id="anchorToggle" type="checkbox">
                     Show anchors
                 </label>
             </div>
             <div class="stageFrame">
                 <div class="sideToolbar" aria-label="wall fixture tools">
+                    <button type="button" class="iconTool sideToolButton roofToolButton" title="Create roof">
+                        <span id="roofToolIcon" class="roofToolIcon" aria-hidden="true">
+                            <span class="roofToolFace roofToolFaceTextured"></span>
+                            <span class="roofToolFace roofToolFaceShade"></span>
+                            <span class="roofToolRidge"></span>
+                        </span>
+                    </button>
                     <button type="button" class="iconTool sideToolButton wallToolButton" data-tool="wall" title="Place walls">
                         <span id="wallToolIcon" class="wallToolIcon" aria-hidden="true"></span>
                     </button>

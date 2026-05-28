@@ -70,6 +70,16 @@ export function mountedObjectPlacementAt(state, asset, worldPoint, threshold, op
         typeof renderer.pickAtScreen === "function"
         ? renderer.pickAtScreen(screenPoint, { includeMountedObjects: false, includeSurfaces: false })
         : null;
+    const category = String(asset.category || state.mountedObjectTool.category || "").toLowerCase();
+    if (screenHit && screenHit.type === "gable") {
+        if (category !== "windows") return null;
+        if (!renderer || typeof renderer.resolveGableMountedPlacementCandidate !== "function") {
+            throw new Error("gable-mounted window placement requires renderer gable placement geometry");
+        }
+        return renderer.resolveGableMountedPlacementCandidate(screenHit.floor, screenHit.gable, asset, screenPoint, {
+            ignoredObjectId: options.ignoredObjectId ?? null
+        });
+    }
     const hit = screenHit && screenHit.type === "wall"
         ? screenHit
         : state.pickWallAt(worldPoint, threshold);
@@ -87,7 +97,6 @@ export function mountedObjectPlacementAt(state, asset, worldPoint, threshold, op
         throw new Error("missing shared wall-mounted place object placement helper");
     }
     if (!renderer || !screenPoint) return null;
-    const category = String(asset.category || state.mountedObjectTool.category || "").toLowerCase();
     const anchorY = Number.isFinite(Number(asset.anchorY ?? asset.placeableAnchorY))
         ? Number(asset.anchorY ?? asset.placeableAnchorY)
         : (category === "windows" ? 0.5 : 1);
