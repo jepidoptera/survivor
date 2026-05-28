@@ -151,6 +151,18 @@ export class SelectTool {
             return;
         }
         if (hit.type === "floor") {
+            const floorId = getFloorId(hit.floor);
+            if (
+                this.state.selection &&
+                this.state.selection.kind === "floor" &&
+                this.state.selection.floorId === floorId
+            ) {
+                const drag = this.state.beginFloorFragmentDrag(worldPoint);
+                if (drag) {
+                    this.drag = { type: "floorFragment", snapshot: drag };
+                    return;
+                }
+            }
             this.state.selectFloor(getFloorId(hit.floor), { preserveView });
             this.drag = null;
         }
@@ -574,6 +586,10 @@ export class SelectTool {
         }
         if (this.drag.type === "floorVertex" || this.drag.type === "selectedFloorVertex") {
             this.state.moveSelectedFloorVertex(worldPoint);
+            return;
+        }
+        if (this.drag.type === "floorFragment") {
+            this.state.moveFloorFragmentDrag(this.drag.snapshot, worldPoint, { snapDistance: threshold });
             return;
         }
         if (this.drag.type === "wallEndpoint") {

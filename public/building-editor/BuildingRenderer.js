@@ -1018,7 +1018,8 @@ export class BuildingRenderer {
         const anchors = this.gridAnchorLayer;
         gfx.clear();
         anchors.clear();
-        const bounds = this.visibleWorldBounds(0);
+        const gridZ = this.activePlaneZ();
+        const bounds = this.visibleWorldBounds(gridZ);
         const topLeft = { x: bounds.minX, y: bounds.minY };
         const bottomRight = { x: bounds.maxX, y: bounds.maxY };
         const range = visibleHexRange(topLeft, bottomRight);
@@ -1027,20 +1028,20 @@ export class BuildingRenderer {
         for (let x = range.minX; x <= range.maxX; x++) {
             for (let y = range.minY; y <= range.maxY; y++) {
                 const center = offsetToWorld({ x, y });
-                const corners = hexCorners(center).map((point) => this.worldToScreen(point, 0));
+                const corners = hexCorners(center).map((point) => this.worldToScreen(point, gridZ));
                 gfx.drawPolygon(flattenPolygon(corners));
             }
         }
 
         if (!this.state.showSnapAnchors) {
-            this.drawAxes(gfx, topLeft, bottomRight);
+            this.drawAxes(gfx, topLeft, bottomRight, gridZ);
             return;
         }
 
         anchors.beginFill(0x607782, 0.5);
         for (let x = range.minX; x <= range.maxX; x++) {
             for (let y = range.minY; y <= range.maxY; y++) {
-                const center = this.worldToScreen(offsetToWorld({ x, y }), 0);
+                const center = this.worldToScreen(offsetToWorld({ x, y }), gridZ);
                 anchors.drawCircle(center.x, center.y, 1.35);
             }
         }
@@ -1061,22 +1062,22 @@ export class BuildingRenderer {
                     midpointKeys.add(key);
                     const a = offsetToWorld({ x, y });
                     const b = offsetToWorld({ x: bx, y: by });
-                    const screen = this.worldToScreen({ x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }, 0);
+                    const screen = this.worldToScreen({ x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }, gridZ);
                     anchors.drawCircle(screen.x, screen.y, 0.95);
                 });
             }
         }
         anchors.endFill();
 
-        this.drawAxes(gfx, topLeft, bottomRight);
+        this.drawAxes(gfx, topLeft, bottomRight, gridZ);
     }
 
-    drawAxes(gfx, topLeft, bottomRight) {
+    drawAxes(gfx, topLeft, bottomRight, worldZ = 0) {
         gfx.lineStyle(1, 0x52616b, 0.36);
-        const xAxisA = this.worldToScreen({ x: topLeft.x, y: 0 }, 0);
-        const xAxisB = this.worldToScreen({ x: bottomRight.x, y: 0 }, 0);
-        const yAxisA = this.worldToScreen({ x: 0, y: topLeft.y }, 0);
-        const yAxisB = this.worldToScreen({ x: 0, y: bottomRight.y }, 0);
+        const xAxisA = this.worldToScreen({ x: topLeft.x, y: 0 }, worldZ);
+        const xAxisB = this.worldToScreen({ x: bottomRight.x, y: 0 }, worldZ);
+        const yAxisA = this.worldToScreen({ x: 0, y: topLeft.y }, worldZ);
+        const yAxisB = this.worldToScreen({ x: 0, y: bottomRight.y }, worldZ);
         gfx.moveTo(xAxisA.x, xAxisA.y);
         gfx.lineTo(xAxisB.x, xAxisB.y);
         gfx.moveTo(yAxisA.x, yAxisA.y);
@@ -2213,7 +2214,8 @@ export class BuildingRenderer {
     drawFloorUnderlay(gfx) {
         const floor = typeof this.state.floorUnderlay === "function" ? this.state.floorUnderlay() : null;
         if (!floor) return;
-        const elevation = getFloorElevation(floor);
+        const selectedFloor = this.state.selectedFloor();
+        const elevation = selectedFloor ? getFloorElevation(selectedFloor) : getFloorElevation(floor);
         const drawRing = (ring, color, alpha) => {
             if (!Array.isArray(ring) || ring.length < 3) return;
             const points = ring.map((point) => this.worldToScreen(point, elevation));

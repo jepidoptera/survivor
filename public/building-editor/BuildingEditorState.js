@@ -884,6 +884,103 @@ export class BuildingEditorState extends EventTarget {
         return best ? best.point : null;
     }
 
+    beginFloorFragmentDrag(startPoint) {
+        const floor = this.selectedFloor();
+        if (!floor || !Array.isArray(floor.outerPolygon) || floor.outerPolygon.length < 3) return null;
+        const floorId = getFloorId(floor);
+        const wallIds = new Set(getBuildingWalls(this.building)
+            .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId)
+            .map((wall) => String(wall.id)));
+        return {
+            floorId,
+            startPoint: { x: Number(startPoint.x), y: Number(startPoint.y) },
+            midpoint: polygonCentroid(floor.outerPolygon),
+            outerPolygon: floor.outerPolygon.map((point) => ({ ...point })),
+            holes: (Array.isArray(floor.holes) ? floor.holes : []).map((ring) => ring.map((point) => ({ ...point }))),
+            walls: getBuildingWalls(this.building)
+                .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId)
+                .map((wall) => ({
+                    id: wall.id,
+                    startPoint: cloneEndpoint(wall.startPoint),
+                    endPoint: cloneEndpoint(wall.endPoint)
+                })),
+            mountedObjects: getBuildingMountedObjects(this.building)
+                .filter((object) => wallIds.has(String(object.wallId ?? object.mountedWallSectionUnitId)) || String(object.floorId) === floorId)
+                .map((object) => ({
+                    id: object.id,
+                    x: Number(object.x),
+                    y: Number(object.y),
+                    groundPlaneHitboxOverridePoints: Array.isArray(object.groundPlaneHitboxOverridePoints)
+                        ? object.groundPlaneHitboxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+                        : null
+                }))
+        };
+    }
+
+    floorFragmentMoveDelta(drag, point, options = {}) {
+        const dx = Number(point.x) - Number(drag.startPoint.x);
+        const dy = Number(point.y) - Number(drag.startPoint.y);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+            throw new Error("floor fragment drag requires finite coordinates");
+        }
+        const floor = findFloor(this.building, drag.floorId);
+        const underlay = this.floorBelow(floor);
+        if (!underlay || !Array.isArray(underlay.outerPolygon) || underlay.outerPolygon.length < 3) {
+            return { dx, dy, snapped: false };
+        }
+        const snapDistance = Number.isFinite(Number(options.snapDistance)) && Number(options.snapDistance) > 0
+            ? Number(options.snapDistance)
+            : FLOOR_MIDPOINT_SNAP_DISTANCE;
+        const movedMidpoint = {
+            x: Number(drag.midpoint.x) + dx,
+            y: Number(drag.midpoint.y) + dy
+        };
+        const targetMidpoint = polygonCentroid(underlay.outerPolygon);
+        if (distance(movedMidpoint, targetMidpoint) > snapDistance) {
+            return { dx, dy, snapped: false };
+        }
+        return {
+            dx: dx + Number(targetMidpoint.x) - Number(movedMidpoint.x),
+            dy: dy + Number(targetMidpoint.y) - Number(movedMidpoint.y),
+            snapped: true
+        };
+    }
+
+    moveFloorFragmentDrag(drag, point, options = {}) {
+        if (!drag || !drag.floorId) return false;
+        const floor = findFloor(this.building, drag.floorId);
+        if (!floor) throw new Error(`cannot move missing floor fragment: ${drag.floorId}`);
+        const delta = this.floorFragmentMoveDelta(drag, point, options);
+        floor.outerPolygon = drag.outerPolygon.map((vertex) => translatePoint(vertex, delta.dx, delta.dy));
+        floor.holes = drag.holes.map((ring) => ring.map((vertex) => translatePoint(vertex, delta.dx, delta.dy)));
+        const wallSnapshots = new Map(drag.walls.map((wall) => [String(wall.id), wall]));
+        getBuildingWalls(this.building).forEach((wall) => {
+            const snapshot = wallSnapshots.get(String(wall.id));
+            if (!snapshot) return;
+            wall.startPoint = translateEndpoint(snapshot.startPoint, delta.dx, delta.dy);
+            wall.endPoint = translateEndpoint(snapshot.endPoint, delta.dx, delta.dy);
+            const hasEdgeEndpoint = (wall.startPoint && wall.startPoint.kind === "edge") ||
+                (wall.endPoint && wall.endPoint.kind === "edge");
+            if (hasEdgeEndpoint || (wall.attachment && wall.attachment.kind === "lineBoundaryClip")) {
+                syncWallLineBoundaryAttachment(wall);
+            }
+        });
+        const mountedSnapshots = new Map(drag.mountedObjects.map((object) => [String(object.id), object]));
+        getBuildingMountedObjects(this.building).forEach((object) => {
+            const snapshot = mountedSnapshots.get(String(object.id));
+            if (!snapshot) return;
+            if (Number.isFinite(snapshot.x)) object.x = snapshot.x + delta.dx;
+            if (Number.isFinite(snapshot.y)) object.y = snapshot.y + delta.dy;
+            if (Array.isArray(snapshot.groundPlaneHitboxOverridePoints)) {
+                object.groundPlaneHitboxOverridePoints = snapshot.groundPlaneHitboxOverridePoints
+                    .map((hitboxPoint) => translatePoint(hitboxPoint, delta.dx, delta.dy));
+            }
+        });
+        refreshWallSectionEndpoints(this.building, floor);
+        this.emitChange();
+        return true;
+    }
+
     selectWall(wallId, options = {}) {
         this.selectWalls([wallId], options);
     }
