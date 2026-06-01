@@ -21,6 +21,11 @@ async function loadWallTool() {
     return import("../public/building-editor/tools/WallTool.js");
 }
 
+function loadWallSectionUnit() {
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    return globalThis.WallSectionUnit;
+}
+
 async function loadPolygonEditTool() {
     return import("../public/building-editor/tools/PolygonEditTool.js");
 }
@@ -895,76 +900,157 @@ test("shed roof direction snaps to perpendicular base-polygon edge hits", async 
     assert.ok(Math.abs(floor.roof.shedDirection.y) < 0.000001);
 });
 
-test("shed roofs clip real wall render profiles to the roof plane", async () => {
-    const previousWallSectionUnit = globalThis.WallSectionUnit;
-    try {
-        globalThis.WallSectionUnit = {
-            _getWallTextureRepeatConfig() {
-                return { repeatsPerMapUnitX: 0.1, repeatsPerMapUnitY: 0.1 };
-            }
-        };
-        const { model, building, floor } = await createTestBuilding();
-        const { BuildingRenderer } = await loadRenderer();
-        const wall = model.getBuildingWalls(building)[0];
-        floor.roof.mode = "shed";
-        floor.roof.peakHeight = 4;
-        floor.roof.shedDirection = { x: 1, y: 0 };
-        const renderer = Object.create(BuildingRenderer.prototype);
-        renderer.state = { building };
+test("shed roofs write real wall top profiles to the roof plane", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building)[0];
+    const originalHeight = Number(wall.height);
 
-        const triangulation = renderer.triangulateShedClippedWall(wall, floor, null);
-        const topPoints = triangulation.points.filter((point) => Number(point.z) > model.getFloorElevation(floor) + 0.000001);
-        const lowTop = topPoints.filter((point) => Number(point.x) < 1);
-        const highTop = topPoints.filter((point) => Number(point.x) > 9);
+    state.updateSelectedRoofMode("shed");
+    state.updateSelectedRoofPeakHeight(4);
+    const center = state.roofShedBaseCenter(floor);
+    state.selectRoofShedDirection(floor.fragmentId);
+    assert.equal(state.moveSelectedRoofShedDirection({ x: center.x + 3, y: center.y }), true);
 
-        assert.ok(lowTop.length > 0);
-        assert.ok(highTop.length > 0);
-        assert.ok(Math.max(...highTop.map((point) => Number(point.z))) > Math.max(...lowTop.map((point) => Number(point.z))) + 3);
-        triangulation.points.forEach((point) => {
-            const roofZ = 3.03 + Math.max(0, Math.min(1, Number(point.x) / 10)) * 4;
-            assert.ok(Number(point.z) <= roofZ - 0.0019 || Math.abs(Number(point.z) - model.getFloorElevation(floor)) < 0.000001);
-        });
-    } finally {
-        if (typeof previousWallSectionUnit === "undefined") {
-            delete globalThis.WallSectionUnit;
-        } else {
-            globalThis.WallSectionUnit = previousWallSectionUnit;
-        }
-    }
+    const profile = wall.topProfile;
+    assert.equal(profile.kind, "stations");
+    assert.equal(profile.generatedBy.type, "roof");
+    assert.equal(profile.generatedBy.mode, "shed");
+    assert.equal(profile.generatedBy.plane.kind, "shedPlane");
+    assert.equal(profile.generatedBy.originalHeight, originalHeight);
+    assert.equal(profile.stations.length, 2);
+
+    const wallPoints = model.wallPoints(state.building, wall);
+    const [a, b] = wallPoints;
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    const length = Math.hypot(dx, dy);
+    const nx = -dy / length;
+    const ny = dx / length;
+    const half = Number(wall.thickness) * 0.5;
+    const corners = [
+        { x: Number(a.x) + nx * half, y: Number(a.y) + ny * half },
+        { x: Number(b.x) + nx * half, y: Number(b.y) + ny * half },
+        { x: Number(b.x) - nx * half, y: Number(b.y) - ny * half },
+        { x: Number(a.x) - nx * half, y: Number(a.y) - ny * half }
+    ];
+    const bottomZ = model.getFloorElevation(floor);
+    const range = state.roofShedProjectionRange(floor);
+    const expected = corners.map((point) => state.roofShedTopZAt(floor, point, range) - bottomZ);
+
+    assert.ok(Math.abs(profile.stations[0].leftHeight - expected[0]) < 0.000001);
+    assert.ok(Math.abs(profile.stations[1].leftHeight - expected[1]) < 0.000001);
+    assert.ok(Math.abs(profile.stations[1].rightHeight - expected[2]) < 0.000001);
+    assert.ok(Math.abs(profile.stations[0].rightHeight - expected[3]) < 0.000001);
+    assert.ok(profile.stations[1].leftHeight > profile.stations[0].leftHeight + 3);
+    assert.equal(wall.height, Math.max(...expected));
+
+    state.updateSelectedRoofMode("dome");
+    assert.equal(wall.topProfile, null);
+    assert.equal(wall.height, originalHeight);
 });
 
-test("collapsed shed-clipped walls render only their clipped cap", async () => {
-    const previousWallSectionUnit = globalThis.WallSectionUnit;
-    try {
-        globalThis.WallSectionUnit = {
-            _getWallTextureRepeatConfig() {
-                return { repeatsPerMapUnitX: 0.1, repeatsPerMapUnitY: 0.1 };
-            }
-        };
-        const { model, building, floor } = await createTestBuilding();
-        const { BuildingRenderer } = await loadRenderer();
-        const wall = model.getBuildingWalls(building)[0];
-        floor.roof.mode = "shed";
-        floor.roof.peakHeight = 4;
-        floor.roof.shedDirection = { x: 1, y: 0 };
-        const renderer = Object.create(BuildingRenderer.prototype);
-        renderer.state = { building };
+test("shed roof generated wall profiles evaluate at mitered wall top corners", async () => {
+    const WallSectionUnit = loadWallSectionUnit();
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
 
-        const full = renderer.triangulateShedClippedWall(wall, floor, null);
-        const collapsed = renderer.triangulateShedClippedWall(wall, floor, null, { bottomFaceOnly: true });
-        const bottomZ = model.getFloorElevation(floor);
+    state.updateSelectedRoofMode("shed");
+    state.updateSelectedRoofPeakHeight(4);
+    const center = state.roofShedBaseCenter(floor);
+    state.selectRoofShedDirection(floor.fragmentId);
+    assert.equal(state.moveSelectedRoofShedDirection({ x: center.x + 3, y: center.y }), true);
 
-        assert.ok(collapsed.points.length < full.points.length);
-        assert.equal(collapsed.indices.length, 6);
-        collapsed.points.forEach((point) => {
-            assert.ok(Number(point.z) > bottomZ);
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    const floorId = model.getFloorId(floor);
+    const bottomZ = model.getFloorElevation(floor);
+    const entries = model.getBuildingWalls(state.building)
+        .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId)
+        .map((wall) => {
+            const points = model.wallPoints(state.building, wall);
+            const unit = new WallSectionUnit(
+                { ...points[0], _splitVertex: true },
+                { ...points[1], _splitVertex: true },
+                {
+                    id: wall.id,
+                    height: Number(wall.height),
+                    thickness: Number(wall.thickness),
+                    bottomZ,
+                    topProfile: wall.topProfile,
+                    deferSetup: true,
+                    suppressAutoScriptingName: true
+                }
+            );
+            return { wall, floor, entry: { unit } };
         });
-    } finally {
-        if (typeof previousWallSectionUnit === "undefined") {
-            delete globalThis.WallSectionUnit;
-        } else {
-            globalThis.WallSectionUnit = previousWallSectionUnit;
+
+    renderer.miterWallEntriesForFloor(entries);
+    const range = state.roofShedProjectionRange(floor);
+    let checkedTopVertices = 0;
+    entries.forEach(({ entry }) => {
+        const mesh = entry.unit.mesh3d;
+        assert.equal(mesh.kind, "wallSectionProfiledPrism");
+        for (let triangle = 0; triangle < mesh.indices.length / 3; triangle++) {
+            if (mesh.faceKinds[triangle] !== "top") continue;
+            for (let corner = 0; corner < 3; corner++) {
+                const vertex = Number(mesh.indices[triangle * 3 + corner]) * 3;
+                const point = {
+                    x: Number(mesh.vertices[vertex]),
+                    y: Number(mesh.vertices[vertex + 1])
+                };
+                const z = Number(mesh.vertices[vertex + 2]);
+                assert.ok(Math.abs(z - state.roofShedTopZAt(floor, point, range)) < 0.000001);
+                checkedTopVertices++;
+            }
         }
+    });
+    assert.ok(checkedTopVertices > 0);
+});
+
+test("profiled wall units render sloped tops and collapse to the top cap", async () => {
+    const WallSectionUnit = loadWallSectionUnit();
+    const unit = new WallSectionUnit(
+        { x: 0, y: 0, _splitVertex: true },
+        { x: 10, y: 0, _splitVertex: true },
+        {
+            height: 4,
+            thickness: 1,
+            bottomZ: 0,
+            topProfile: {
+                kind: "stations",
+                stations: [
+                    { t: 0, leftHeight: 1, rightHeight: 0.8 },
+                    { t: 1, leftHeight: 4, rightHeight: 3.8 }
+                ]
+            },
+            deferSetup: true,
+            suppressAutoScriptingName: true
+        }
+    );
+
+    const mesh = unit.rebuildMesh3d();
+    assert.equal(mesh.kind, "wallSectionProfiledPrism");
+    assert.ok(mesh.faceKinds.includes("top"));
+    const zValues = [];
+    for (let index = 2; index < mesh.vertices.length; index += 3) {
+        zValues.push(Number(mesh.vertices[index]));
+    }
+    assert.equal(Math.min(...zValues), 0);
+    assert.equal(Math.max(...zValues), 4);
+    assert.ok(zValues.includes(0.8));
+
+    const full = unit._buildDepthGeometry({});
+    const collapsed = unit._buildDepthGeometry({ bottomFaceOnly: true });
+    assert.ok(collapsed.positions.length < full.positions.length);
+    assert.equal(collapsed.indices.length, 6);
+    for (let index = 2; index < collapsed.positions.length; index += 3) {
+        assert.ok(Math.abs(Number(collapsed.positions[index]) - 0.025) < 0.000001);
     }
 });
 

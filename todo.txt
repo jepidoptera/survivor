@@ -84,8 +84,23 @@ X refactor renderer
     -acute wall corners clip to sight lines - no false corners in visible space.
     -walls transition from upright to flat as the player changes angle to the wall
 
+building editor:
+X sliders should also have text input
+X click to move/ drag corners to resize windows/doors
+X include all window textures
+X keep size and aspect ratio settings in localstorage
+X copy default settings from last clicked object
+X deselect object when tool is selected.
+X make roofs optional
+X dedicated wall tool
+X multiple roof types
+/ add and subtract polygon tools are editable until you hit finalize. they can be resized without changing shape, rotated, and the edges are draggable.
+/ "snap direction" option
+X multiple save slots
+  posts and beams
+
 problems:
-X animals running through walls
+X animals running through walls (some node link blocks were missing)
 X windows visible through roof
 X rugs don't place correctly
 X walls don't always connect
@@ -123,13 +138,13 @@ X wizard draws on top of hat
   powerups come back once you leave the area
 / section loading is too slow
   npcs can't cross fragments
-  partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
+X partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
 X cutting a hole in a floor causes walls to stop working
 X floor fragment edges slow but don't stop movement
   trees can't place within building footprint rectangle
 X rugs on an upper floor are visible in the building overlay
   inside and outside doors have opposite handles
-  
+
 
 
 large trigger area architecture checklist:

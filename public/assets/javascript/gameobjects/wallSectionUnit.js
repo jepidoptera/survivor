@@ -259,6 +259,7 @@ void main(void) {
             this.endPoint = null;
             this.height = Number.isFinite(options.height) ? Math.max(0, Number(options.height)) : 1;
             this.thickness = Number.isFinite(options.thickness) ? Math.max(0.001, Number(options.thickness)) : 0.1;
+            this.topProfile = WallSectionUnit.normalizeTopProfile(options.topProfile, this.height);
             this.bottomZ = Number.isFinite(options.bottomZ) ? Number(options.bottomZ) : 0;
             this.traversalLayer = Number.isFinite(options.traversalLayer)
                 ? Math.round(Number(options.traversalLayer))
@@ -558,6 +559,97 @@ void main(void) {
         static _normalizeDirection(direction) {
             const d = Number.isFinite(direction) ? Math.round(Number(direction)) : 0;
             return ((d % 12) + 12) % 12;
+        }
+
+        static normalizeTopProfile(topProfile, fallbackHeight = 1) {
+            if (topProfile === undefined || topProfile === null) return null;
+            if (!topProfile || typeof topProfile !== "object") {
+                throw new Error("wall topProfile must be an object");
+            }
+            const source = Array.isArray(topProfile.stations)
+                ? topProfile.stations
+                : (Array.isArray(topProfile.points) ? topProfile.points : []);
+            if (source.length === 0) {
+                throw new Error("wall topProfile must include at least one station");
+            }
+            const stations = source.map(station => {
+                const t = Number(station && station.t);
+                const height = Number(station && station.height);
+                const leftHeight = Number(station && station.leftHeight !== undefined ? station.leftHeight : height);
+                const rightHeight = Number(station && station.rightHeight !== undefined ? station.rightHeight : height);
+                if (!Number.isFinite(t) || !Number.isFinite(leftHeight) || !Number.isFinite(rightHeight)) {
+                    throw new Error("wall topProfile stations require finite t, leftHeight, and rightHeight values");
+                }
+                if (t < 0 || t > 1 || leftHeight < 0 || rightHeight < 0) {
+                    throw new Error("wall topProfile station t must be within 0..1 and heights must be non-negative");
+                }
+                return {
+                    t,
+                    leftHeight,
+                    rightHeight
+                };
+            }).sort((a, b) => a.t - b.t);
+            const deduped = [];
+            for (let i = 0; i < stations.length; i++) {
+                const previous = deduped[deduped.length - 1];
+                if (previous && Math.abs(previous.t - stations[i].t) <= EPS) {
+                    previous.leftHeight = stations[i].leftHeight;
+                    previous.rightHeight = stations[i].rightHeight;
+                } else {
+                    deduped.push({ ...stations[i] });
+                }
+            }
+            if (deduped.length === 1) {
+                const only = deduped[0];
+                deduped[0] = { ...only, t: 0 };
+                deduped.push({ ...only, t: 1 });
+            }
+            if (deduped[0].t > EPS) deduped.unshift({ ...deduped[0], t: 0 });
+            else deduped[0].t = 0;
+            const lastIndex = deduped.length - 1;
+            if (deduped[lastIndex].t < 1 - EPS) deduped.push({ ...deduped[lastIndex], t: 1 });
+            else deduped[lastIndex].t = 1;
+            const fallback = Number.isFinite(Number(fallbackHeight)) ? Math.max(0, Number(fallbackHeight)) : 1;
+            const flat = deduped.length === 2 && deduped.every(station =>
+                Math.abs(station.leftHeight - fallback) <= EPS &&
+                Math.abs(station.rightHeight - fallback) <= EPS
+            );
+            if (flat && !topProfile.generatedBy) return null;
+            const normalized = {
+                kind: "stations",
+                stations: deduped
+            };
+            if (topProfile.generatedBy && typeof topProfile.generatedBy === "object") {
+                normalized.generatedBy = JSON.parse(JSON.stringify(topProfile.generatedBy));
+            }
+            return normalized;
+        }
+
+        static _topProfilePlaneHeightAt(topProfile, point, bottomZ) {
+            const generatedBy = topProfile && topProfile.generatedBy;
+            const plane = generatedBy && generatedBy.mode === "shed" && generatedBy.plane;
+            if (!plane || typeof plane !== "object") return null;
+            const direction = plane.direction || {};
+            const dx = Number(direction.x);
+            const dy = Number(direction.y);
+            const minProjection = Number(plane.minProjection);
+            const maxProjection = Number(plane.maxProjection);
+            const baseZ = Number(plane.baseZ);
+            const peakHeight = Number(plane.peakHeight);
+            if (
+                !Number.isFinite(dx) ||
+                !Number.isFinite(dy) ||
+                !Number.isFinite(minProjection) ||
+                !Number.isFinite(maxProjection) ||
+                !Number.isFinite(baseZ) ||
+                !Number.isFinite(peakHeight) ||
+                maxProjection - minProjection <= EPS
+            ) {
+                throw new Error("generated shed wall topProfile has an invalid plane");
+            }
+            const projection = Number(point.x) * dx + Number(point.y) * dy;
+            const t = Math.max(0, Math.min(1, (projection - minProjection) / (maxProjection - minProjection)));
+            return Math.max(0, baseZ + peakHeight * t - bottomZ);
         }
 
         static _numericEqual(a, b, eps = EPS) {
@@ -2706,6 +2798,84 @@ void main(void) {
             return this.groundPlaneHitbox;
         }
 
+        _profilePointAt(profile, side, t) {
+            const clamped = Math.max(0, Math.min(1, Number(t)));
+            const start = side === "left" ? profile.aLeft : profile.aRight;
+            const end = side === "left" ? profile.bLeft : profile.bRight;
+            return {
+                x: Number(start.x) + (Number(end.x) - Number(start.x)) * clamped,
+                y: Number(start.y) + (Number(end.y) - Number(start.y)) * clamped
+            };
+        }
+
+        _pushTriangleMesh(vertices, indices, faceKinds, a, b, c, faceKind) {
+            const start = Math.floor(vertices.length / 3);
+            vertices.push(
+                Number(a.x), Number(a.y), Number(a.z),
+                Number(b.x), Number(b.y), Number(b.z),
+                Number(c.x), Number(c.y), Number(c.z)
+            );
+            indices.push(start, start + 1, start + 2);
+            faceKinds.push(faceKind || "side");
+        }
+
+        _pushQuadMesh(vertices, indices, faceKinds, a, b, c, d, faceKind) {
+            this._pushTriangleMesh(vertices, indices, faceKinds, a, b, c, faceKind);
+            this._pushTriangleMesh(vertices, indices, faceKinds, a, c, d, faceKind);
+        }
+
+        _rebuildProfiledMesh3d(profile, perimeter) {
+            const topProfile = WallSectionUnit.normalizeTopProfile(this.topProfile, this.height);
+            if (!topProfile || !Array.isArray(topProfile.stations) || topProfile.stations.length < 2) return null;
+            const bottomZ = Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0;
+            const vertices = [];
+            const indices = [];
+            const faceKinds = [];
+            const stations = topProfile.stations;
+            const stationPoints = stations.map(station => {
+                const t = Number(station.t);
+                const left = this._profilePointAt(profile, "left", t);
+                const right = this._profilePointAt(profile, "right", t);
+                const leftPlaneHeight = WallSectionUnit._topProfilePlaneHeightAt(topProfile, left, bottomZ);
+                const rightPlaneHeight = WallSectionUnit._topProfilePlaneHeightAt(topProfile, right, bottomZ);
+                const leftHeight = leftPlaneHeight === null ? Number(station.leftHeight) : leftPlaneHeight;
+                const rightHeight = rightPlaneHeight === null ? Number(station.rightHeight) : rightPlaneHeight;
+                return {
+                    t,
+                    leftBottom: { ...left, z: bottomZ },
+                    rightBottom: { ...right, z: bottomZ },
+                    leftTop: { ...left, z: bottomZ + leftHeight },
+                    rightTop: { ...right, z: bottomZ + rightHeight }
+                };
+            });
+            for (let index = 0; index < stationPoints.length - 1; index++) {
+                const a = stationPoints[index];
+                const b = stationPoints[index + 1];
+                this._pushQuadMesh(vertices, indices, faceKinds, a.leftBottom, b.leftBottom, b.leftTop, a.leftTop, "side");
+                this._pushQuadMesh(vertices, indices, faceKinds, b.rightBottom, a.rightBottom, a.rightTop, b.rightTop, "side");
+                this._pushQuadMesh(vertices, indices, faceKinds, a.leftTop, b.leftTop, b.rightTop, a.rightTop, "top");
+            }
+            const first = stationPoints[0];
+            const last = stationPoints[stationPoints.length - 1];
+            this._pushQuadMesh(vertices, indices, faceKinds, first.rightBottom, first.leftBottom, first.leftTop, first.rightTop, "side");
+            this._pushQuadMesh(vertices, indices, faceKinds, last.leftBottom, last.rightBottom, last.rightTop, last.leftTop, "side");
+            return {
+                kind: "wallSectionProfiledPrism",
+                id: this.id,
+                vertices,
+                indices,
+                faceKinds,
+                center: { ...this.center },
+                direction: this.direction,
+                lineAxis: this.lineAxis,
+                height: this.height,
+                thickness: this.thickness,
+                topProfile,
+                startKey: WallSectionUnit.endpointKey(this.startPoint),
+                endKey: WallSectionUnit.endpointKey(this.endPoint)
+            };
+        }
+
         generateLosOcclusionSpan(wizardRef, helpers = {}) {
             if (!wizardRef || !Number.isFinite(wizardRef.x) || !Number.isFinite(wizardRef.y)) return [];
 
@@ -2975,6 +3145,14 @@ void main(void) {
 
             this._rebuildGroundPlaneHitboxFromBasePerimeter(perimeter);
 
+            const profile = this.getWallProfile();
+            const profiledMesh = profile ? this._rebuildProfiledMesh3d(profile, perimeter) : null;
+            if (profiledMesh) {
+                this.mesh3d = profiledMesh;
+                this._depthGeometryCache = null;
+                return this.mesh3d;
+            }
+
             const z0 = Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0;
             const z1 = z0 + Math.max(0, Number(this.height) || 0);
 
@@ -3033,6 +3211,7 @@ void main(void) {
             const mesh3d = this.getRenderMesh();
             const vertices = mesh3d && Array.isArray(mesh3d.vertices) ? mesh3d.vertices : null;
             const indices = mesh3d && Array.isArray(mesh3d.indices) ? mesh3d.indices : null;
+            const faceKinds = Array.isArray(mesh3d && mesh3d.faceKinds) ? mesh3d.faceKinds : null;
             if (!vertices || !indices || vertices.length < 9 || indices.length < 3 || (vertices.length % 3) !== 0) {
                 return null;
             }
@@ -3061,6 +3240,27 @@ void main(void) {
             const sectionHeight = Number.isFinite(this.height) ? Number(this.height) : 1;
             const sectionThickness = Number.isFinite(this.thickness) ? Number(this.thickness) : 0.1;
             const sectionBottomZ = Number.isFinite(this.bottomZ) ? Number(this.bottomZ) : 0;
+            const topProfilePlane = this.topProfile && this.topProfile.generatedBy && this.topProfile.generatedBy.plane
+                ? this.topProfile.generatedBy.plane
+                : null;
+            const topProfilePlaneKey = topProfilePlane
+                ? [
+                    topProfilePlane.kind || "",
+                    Number(topProfilePlane.direction && topProfilePlane.direction.x).toFixed(6),
+                    Number(topProfilePlane.direction && topProfilePlane.direction.y).toFixed(6),
+                    Number(topProfilePlane.minProjection).toFixed(6),
+                    Number(topProfilePlane.maxProjection).toFixed(6),
+                    Number(topProfilePlane.baseZ).toFixed(6),
+                    Number(topProfilePlane.peakHeight).toFixed(6)
+                ].join(",")
+                : "no-plane";
+            const topProfileKey = this.topProfile && Array.isArray(this.topProfile.stations)
+                ? `${this.topProfile.stations.map(station => [
+                    Number(station.t).toFixed(6),
+                    Number(station.leftHeight).toFixed(6),
+                    Number(station.rightHeight).toFixed(6)
+                ].join(",")).join(";")}|${topProfilePlaneKey}`
+                : "flat";
             const geometryKey = [
                 Number.isFinite(sx) ? sx.toFixed(6) : "nan",
                 Number.isFinite(sy) ? sy.toFixed(6) : "nan",
@@ -3069,6 +3269,7 @@ void main(void) {
                 sectionHeight.toFixed(6),
                 sectionThickness.toFixed(6),
                 sectionBottomZ.toFixed(6),
+                topProfileKey,
                 Number(repeatX).toFixed(6),
                 Number(repeatY).toFixed(6),
                 Number.isFinite(this.texturePhaseA) ? Number(this.texturePhaseA).toFixed(6) : "nan",
@@ -3266,22 +3467,27 @@ void main(void) {
             // Expand indexed triangles so we can color/tint faces independently.
             const nPerim = Math.floor((vertices.length / 3) * 0.5);
             const topFaceTriCount = Math.max(0, nPerim - 2);
+            const triCount = Math.floor(indices.length / 3);
             const topTextureVMin = 0;
             const topTextureVMax = 0.125;
             const topTextureVSpan = topTextureVMax - topTextureVMin;
             let topAcrossMin = Infinity;
             let topAcrossMax = -Infinity;
-            for (let i = 0; i < nPerim; i++) {
-                const across = Number(acrossPerVertex[i]);
-                if (!Number.isFinite(across)) continue;
-                if (across < topAcrossMin) topAcrossMin = across;
-                if (across > topAcrossMax) topAcrossMax = across;
+            for (let tri = 0; tri < triCount; tri++) {
+                const isTopFaceTri = faceKinds ? faceKinds[tri] === "top" : tri < topFaceTriCount;
+                if (!isTopFaceTri) continue;
+                for (let c = 0; c < 3; c++) {
+                    const srcVertex = Number(indices[tri * 3 + c]) || 0;
+                    const across = Number(acrossPerVertex[srcVertex]);
+                    if (!Number.isFinite(across)) continue;
+                    if (across < topAcrossMin) topAcrossMin = across;
+                    if (across > topAcrossMax) topAcrossMax = across;
+                }
             }
             if (!Number.isFinite(topAcrossMin) || !Number.isFinite(topAcrossMax) || Math.abs(topAcrossMax - topAcrossMin) < 1e-6) {
                 topAcrossMin = -0.5;
                 topAcrossMax = 0.5;
             }
-            const triCount = Math.floor(indices.length / 3);
             const expandedPositions = new Float32Array(triCount * 3 * 3);
             const expandedUvs = new Float32Array(triCount * 3 * 2);
             const expandedColors = new Float32Array(triCount * 3 * 4);
@@ -3291,7 +3497,7 @@ void main(void) {
             const topLighten = 1.25;
 
             for (let tri = 0; tri < triCount; tri++) {
-                const isTopFaceTri = tri < topFaceTriCount;
+                const isTopFaceTri = faceKinds ? faceKinds[tri] === "top" : tri < topFaceTriCount;
                 if (horizontalFaceOnly && !isTopFaceTri) continue;
                 const colorR = isTopFaceTri ? topLighten : 1;
                 const colorG = isTopFaceTri ? topLighten : 1;

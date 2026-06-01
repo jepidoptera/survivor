@@ -71,6 +71,8 @@ const ROOF_SNAP_DISTANCE = 0.35;
 const ROOF_PEAK_SNAP_DISTANCE = 0.35;
 const ROOF_SHED_DIRECTION_HANDLE_LENGTH = 1.25;
 const ROOF_SHED_DIRECTION_SNAP_DISTANCE = 0.25;
+const ROOF_RENDER_Z_LIFT = 0.03;
+const SHED_WALL_ROOF_GAP = 0.002;
 const ROOF_SNAP_IMPORTANCE = Object.freeze({
     perimeterWallOuterCorner: 4,
     lowerFloorVertex: 3,
@@ -581,6 +583,7 @@ export class BuildingEditorState extends EventTarget {
     }
 
     emitChange() {
+        this.syncGeneratedWallTopProfiles();
         this.dispatchEvent(new CustomEvent("change"));
     }
 
@@ -1381,6 +1384,112 @@ export class BuildingEditorState extends EventTarget {
             throw new Error(`shed roof ${getFloorId(floor)} overhang requires a valid base polygon`);
         }
         return expanded.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+    }
+
+    roofShedProjectionRange(floor) {
+        const ring = this.roofShedBasePolygon(floor);
+        const direction = getRoofShedDirection(floor);
+        let min = Infinity;
+        let max = -Infinity;
+        ring.forEach((point) => {
+            const value = Number(point.x) * Number(direction.x) + Number(point.y) * Number(direction.y);
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+        });
+        if (!Number.isFinite(min) || !Number.isFinite(max) || max - min <= 0.000001) {
+            throw new Error(`shed roof ${getFloorId(floor)} direction has no run across the roof polygon`);
+        }
+        return { min, max, direction };
+    }
+
+    roofShedWallPlane(floor, range = null) {
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("shed roof wall clipping requires a roof");
+        const resolvedRange = range || this.roofShedProjectionRange(floor);
+        return {
+            kind: "shedPlane",
+            direction: {
+                x: Number(resolvedRange.direction.x),
+                y: Number(resolvedRange.direction.y)
+            },
+            minProjection: Number(resolvedRange.min),
+            maxProjection: Number(resolvedRange.max),
+            baseZ: roofSnapPlaneElevation(floor) + normalizeRoofElevationOffset(roof.elevationOffset, "shed roof elevation offset") + ROOF_RENDER_Z_LIFT - SHED_WALL_ROOF_GAP,
+            peakHeight: Number(roof.peakHeight),
+            clearance: SHED_WALL_ROOF_GAP
+        };
+    }
+
+    roofShedTopZAt(floor, point, range = null) {
+        const plane = this.roofShedWallPlane(floor, range);
+        const projection = Number(point.x) * Number(plane.direction.x) + Number(point.y) * Number(plane.direction.y);
+        const t = Math.max(0, Math.min(1, (projection - plane.minProjection) / (plane.maxProjection - plane.minProjection)));
+        return plane.baseZ + Number(plane.peakHeight) * t;
+    }
+
+    shedWallTopProfileForWall(floor, wall, range = null) {
+        const points = wallPoints(this.building, wall);
+        if (!Array.isArray(points) || points.length !== 2) return null;
+        const profile = wallFootprintCornersFromCenterline(points, Number(wall.thickness), `wall ${wall.id} shed top profile`);
+        const bottomZ = getFloorElevation(floor);
+        const priorGeneratedHeight = wall.topProfile && wall.topProfile.generatedBy
+            ? Number(wall.topProfile.generatedBy.originalHeight)
+            : NaN;
+        const zAt = (point) => Math.max(0, this.roofShedTopZAt(floor, point, range) - bottomZ);
+        const plane = this.roofShedWallPlane(floor, range);
+        return {
+            kind: "stations",
+            generatedBy: {
+                type: "roof",
+                mode: "shed",
+                roofId: String(getFloorRoof(floor).id || ""),
+                floorId: getFloorId(floor),
+                plane,
+                originalHeight: Number.isFinite(priorGeneratedHeight)
+                    ? priorGeneratedHeight
+                    : Number(wall.height)
+            },
+            stations: [
+                {
+                    t: 0,
+                    leftHeight: zAt(profile[0]),
+                    rightHeight: zAt(profile[3])
+                },
+                {
+                    t: 1,
+                    leftHeight: zAt(profile[1]),
+                    rightHeight: zAt(profile[2])
+                }
+            ]
+        };
+    }
+
+    syncGeneratedWallTopProfiles() {
+        getBuildingFloors(this.building).forEach((floor) => {
+            const roof = getFloorRoof(floor);
+            const isShed = !!roof && String(roof.mode || "peak").trim().toLowerCase() === "shed";
+            const floorId = getFloorId(floor);
+            const range = isShed ? this.roofShedProjectionRange(floor) : null;
+            getBuildingWalls(this.building).forEach((wall) => {
+                if (String(wall.fragmentId || wall.floorId) !== floorId) return;
+                if (isShed) {
+                    wall.topProfile = this.shedWallTopProfileForWall(floor, wall, range);
+                    const maxHeight = wall.topProfile.stations.reduce((max, station) => Math.max(max, station.leftHeight, station.rightHeight), 0);
+                    wall.height = Math.max(0.001, maxHeight);
+                    return;
+                }
+                const generated = wall.topProfile && wall.topProfile.generatedBy && wall.topProfile.generatedBy.type === "roof";
+                if (generated) {
+                    const originalHeight = Number(wall.topProfile.generatedBy.originalHeight);
+                    wall.topProfile = null;
+                    if (Number.isFinite(originalHeight) && originalHeight > 0) {
+                        wall.height = originalHeight;
+                    } else if (Number.isFinite(Number(floor.defaultWallHeight)) && Number(floor.defaultWallHeight) > 0) {
+                        wall.height = Number(floor.defaultWallHeight);
+                    }
+                }
+            });
+        });
     }
 
     roofShedBaseCenter(floor) {

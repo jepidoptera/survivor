@@ -120,6 +120,73 @@ function normalizeDirectionPoint(direction, label) {
     return { x: x / length, y: y / length };
 }
 
+function normalizeWallTopProfile(topProfile, fallbackHeight = DEFAULTS.wallHeight) {
+    if (topProfile === undefined || topProfile === null) return null;
+    if (!topProfile || typeof topProfile !== "object") {
+        throw new Error("wall topProfile must be an object");
+    }
+    const stationsSource = Array.isArray(topProfile.stations)
+        ? topProfile.stations
+        : (Array.isArray(topProfile.points) ? topProfile.points : []);
+    if (stationsSource.length === 0) return null;
+    const stations = stationsSource.map((station) => {
+        const t = Number(station && station.t);
+        const height = Number(station && station.height);
+        const leftHeight = Number(station && station.leftHeight !== undefined ? station.leftHeight : height);
+        const rightHeight = Number(station && station.rightHeight !== undefined ? station.rightHeight : height);
+        if (!Number.isFinite(t) || t < 0 || t > 1) {
+            throw new Error("wall topProfile station t must be between zero and one");
+        }
+        if (!Number.isFinite(leftHeight) || leftHeight < 0 || !Number.isFinite(rightHeight) || rightHeight < 0) {
+            throw new Error("wall topProfile station heights must be zero or greater");
+        }
+        return { t, leftHeight, rightHeight };
+    }).sort((a, b) => a.t - b.t);
+    const deduped = [];
+    stations.forEach((station) => {
+        const previous = deduped[deduped.length - 1];
+        if (previous && Math.abs(previous.t - station.t) <= 0.000001) {
+            previous.leftHeight = station.leftHeight;
+            previous.rightHeight = station.rightHeight;
+            return;
+        }
+        deduped.push(station);
+    });
+    if (deduped.length === 1) {
+        const only = deduped[0];
+        deduped.unshift({ ...only, t: 0 });
+        deduped[1] = { ...only, t: 1 };
+    }
+    if (deduped[0].t > 0.000001) {
+        deduped.unshift({ ...deduped[0], t: 0 });
+    } else {
+        deduped[0].t = 0;
+    }
+    const lastIndex = deduped.length - 1;
+    if (deduped[lastIndex].t < 0.999999) {
+        deduped.push({ ...deduped[lastIndex], t: 1 });
+    } else {
+        deduped[lastIndex].t = 1;
+    }
+    const fallback = Number(fallbackHeight);
+    const flatHeight = Number.isFinite(fallback) && fallback >= 0 ? fallback : DEFAULTS.wallHeight;
+    const flat = deduped.length === 2 &&
+        deduped.every((station) => Math.abs(station.leftHeight - flatHeight) <= 0.000001 && Math.abs(station.rightHeight - flatHeight) <= 0.000001);
+    if (flat && !topProfile.generatedBy) return null;
+    const result = {
+        kind: "stations",
+        stations: deduped.map((station) => ({
+            t: Number(station.t),
+            leftHeight: Number(station.leftHeight),
+            rightHeight: Number(station.rightHeight)
+        }))
+    };
+    if (topProfile.generatedBy && typeof topProfile.generatedBy === "object") {
+        result.generatedBy = clonePlainObject(topProfile.generatedBy);
+    }
+    return result;
+}
+
 function normalizeRoofDomeLevels(levels) {
     const value = Math.floor(Number(levels));
     if (!Number.isInteger(value) || value < 1) {
@@ -595,6 +662,7 @@ export function createWall({
     height = DEFAULTS.wallHeight,
     texture = DEFAULTS.wallTexture,
     thickness = DEFAULTS.wallThickness,
+    topProfile = null,
     bottomZ = 0,
     traversalLayer = 0,
     role = "interior",
@@ -622,6 +690,7 @@ export function createWall({
         endPoint: endpoints[1],
         height: Number(height),
         thickness: Number(thickness),
+        topProfile: null,
         bottomZ: Number(bottomZ),
         traversalLayer: Math.round(Number(traversalLayer) || 0),
         wallTexturePath: texture,
@@ -635,6 +704,7 @@ export function createWall({
     if (!Number.isFinite(wall.thickness) || wall.thickness <= 0) {
         throw new Error("wall section thickness must be a positive number");
     }
+    wall.topProfile = normalizeWallTopProfile(topProfile, wall.height);
     if (!Number.isFinite(wall.bottomZ)) {
         throw new Error("wall section bottomZ must be finite");
     }
@@ -799,6 +869,7 @@ function perimeterWallSettings(wall, preserveIdentity = false) {
     const settings = {
         height: Number(wall.height),
         thickness: Number(wall.thickness),
+        topProfile: normalizeWallTopProfile(wall.topProfile, wall.height),
         wallTexturePath: wall.wallTexturePath,
         texturePhaseA: Number.isFinite(Number(wall.texturePhaseA)) ? Number(wall.texturePhaseA) : undefined,
         texturePhaseB: Number.isFinite(Number(wall.texturePhaseB)) ? Number(wall.texturePhaseB) : undefined,
@@ -813,6 +884,7 @@ function applyPerimeterWallSettings(wall, settings) {
     if (Number.isInteger(Number(settings.id))) wall.id = Number(settings.id);
     if (Number.isFinite(Number(settings.height)) && Number(settings.height) > 0) wall.height = Number(settings.height);
     if (Number.isFinite(Number(settings.thickness)) && Number(settings.thickness) > 0) wall.thickness = Number(settings.thickness);
+    wall.topProfile = normalizeWallTopProfile(settings.topProfile, wall.height);
     if (typeof settings.wallTexturePath === "string" && settings.wallTexturePath.length > 0) {
         wall.wallTexturePath = settings.wallTexturePath;
     }
@@ -1607,6 +1679,7 @@ export function normalizeImportedBuilding(raw) {
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
     });
     building.wallSections.forEach((wall) => {
+        wall.topProfile = normalizeWallTopProfile(wall.topProfile, wall.height);
         if (!Number.isFinite(Number(wall.thickness)) || Number(wall.thickness) <= 0) {
             wall.thickness = Number(building.defaults && building.defaults.wallThickness) || DEFAULTS.wallThickness;
         }

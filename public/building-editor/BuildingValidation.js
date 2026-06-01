@@ -283,6 +283,33 @@ export function validateBuilding(building) {
         if (!Number.isFinite(Number(wall.bottomZ))) {
             errors.push(`wall ${wall.id || "(missing id)"} bottomZ must be finite`);
         }
+        if (wall.topProfile !== null && wall.topProfile !== undefined) {
+            if (!wall.topProfile || typeof wall.topProfile !== "object") {
+                errors.push(`wall ${wall.id || "(missing id)"} topProfile must be an object`);
+            } else {
+                const stations = Array.isArray(wall.topProfile.stations) ? wall.topProfile.stations : [];
+                if (String(wall.topProfile.kind || "") !== "stations") {
+                    errors.push(`wall ${wall.id || "(missing id)"} topProfile kind must be stations`);
+                }
+                if (stations.length < 2) {
+                    errors.push(`wall ${wall.id || "(missing id)"} topProfile must have at least two stations`);
+                }
+                stations.forEach((station, stationIndex) => {
+                    const t = Number(station && station.t);
+                    const leftHeight = Number(station && station.leftHeight);
+                    const rightHeight = Number(station && station.rightHeight);
+                    if (!Number.isFinite(t) || t < 0 || t > 1) {
+                        errors.push(`wall ${wall.id || "(missing id)"} topProfile station ${stationIndex} t must be between zero and one`);
+                    }
+                    if (!Number.isFinite(leftHeight) || leftHeight < 0 || !Number.isFinite(rightHeight) || rightHeight < 0) {
+                        errors.push(`wall ${wall.id || "(missing id)"} topProfile station ${stationIndex} heights must be zero or greater`);
+                    }
+                    if (stationIndex > 0 && Number(stations[stationIndex - 1].t) >= t) {
+                        errors.push(`wall ${wall.id || "(missing id)"} topProfile station ${stationIndex} t must be greater than the previous station`);
+                    }
+                });
+            }
+        }
     });
     const mountedObjectIds = new Set();
     getBuildingMountedObjects(building).forEach((object) => {

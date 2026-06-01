@@ -16,7 +16,6 @@ const FLOOR_DEPTH_NEAR_METRIC = -128;
 const FLOOR_DEPTH_FAR_METRIC = 256;
 const FLOOR_DEPTH_BIAS = 0.015;
 const GEOMETRY_EPSILON = 0.000001;
-const SHED_WALL_ROOF_GAP = 0.002;
 const COLLAPSED_WALL_INTERSECTION_AREA_EPSILON = 0.25;
 const COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE = 1.01;
 const COLLAPSED_WALL_FRONT_DEPTH_EPSILON = 0.05;
@@ -357,10 +356,6 @@ function shedRoofZAt(floor, point, range = null) {
     const projection = Number(point.x) * resolvedRange.direction.x + Number(point.y) * resolvedRange.direction.y;
     const t = (projection - resolvedRange.min) / (resolvedRange.max - resolvedRange.min);
     return roofRenderElevation(floor) + Math.max(0, Math.min(1, t)) * roofPeakHeight(floor);
-}
-
-function shedWallTopZAt(floor, point) {
-    return shedRoofZAt(floor, point) - SHED_WALL_ROOF_GAP;
 }
 
 function shedRoofPerimeterRing(floor) {
@@ -1247,12 +1242,34 @@ function surfaceMeshSignatureFromRings(surfaceId, outerRing, holeRings, textureP
 
 function wallRenderSignature(building, wall, floor) {
     const renderPoints = wallCenterlinePoints(building, wall, floor);
+    const plane = wall && wall.topProfile && wall.topProfile.generatedBy && wall.topProfile.generatedBy.plane
+        ? wall.topProfile.generatedBy.plane
+        : null;
+    const planeSignature = plane
+        ? [
+            plane.kind || "",
+            Number(plane.direction && plane.direction.x).toFixed(4),
+            Number(plane.direction && plane.direction.y).toFixed(4),
+            Number(plane.minProjection).toFixed(4),
+            Number(plane.maxProjection).toFixed(4),
+            Number(plane.baseZ).toFixed(4),
+            Number(plane.peakHeight).toFixed(4)
+        ].join(",")
+        : "no-plane";
+    const topProfile = wall && wall.topProfile && Array.isArray(wall.topProfile.stations)
+        ? `${wall.topProfile.stations.map((station) => [
+            Number(station.t).toFixed(4),
+            Number(station.leftHeight).toFixed(4),
+            Number(station.rightHeight).toFixed(4)
+        ].join(",")).join("|")};${planeSignature}`
+        : "flat";
     return [
         wall.id,
         getFloorId(floor),
         getFloorElevation(floor),
         Number(wall.height).toFixed(4),
         Number(wall.thickness).toFixed(4),
+        topProfile,
         normalizeTexturePath(wall.wallTexturePath, ""),
         renderPoints.map((point) => `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`).join("|")
     ].join(";");
@@ -1416,6 +1433,91 @@ function wallProfilePolygonFromProfile(profile, label) {
         }
         return { x: Number(point.x), y: Number(point.y) };
     });
+}
+
+function wallTopStations(wall) {
+    const profile = wall && wall.topProfile;
+    if (profile !== null && profile !== undefined) {
+        const stations = Array.isArray(profile.stations) ? profile.stations : null;
+        if (!stations || stations.length < 2) {
+            throw new Error(`wall ${wall && wall.id} topProfile requires at least two stations`);
+        }
+        const normalized = stations.map((station, index) => {
+            const t = Number(station && station.t);
+            const leftHeight = Number(station && station.leftHeight);
+            const rightHeight = Number(station && station.rightHeight);
+            if (!Number.isFinite(t) || t < 0 || t > 1) {
+                throw new Error(`wall ${wall && wall.id} topProfile station ${index} has invalid t`);
+            }
+            if (!Number.isFinite(leftHeight) || leftHeight < 0 || !Number.isFinite(rightHeight) || rightHeight < 0) {
+                throw new Error(`wall ${wall && wall.id} topProfile station ${index} has invalid heights`);
+            }
+            return { t, leftHeight, rightHeight };
+        }).sort((a, b) => a.t - b.t);
+        for (let index = 1; index < normalized.length; index++) {
+            if (normalized[index].t <= normalized[index - 1].t) {
+                throw new Error(`wall ${wall && wall.id} topProfile station t values must be strictly increasing`);
+            }
+        }
+        return normalized;
+    }
+    const height = Number(wall && wall.height);
+    if (!Number.isFinite(height) || height <= 0) {
+        throw new Error(`wall ${wall && wall.id} top profile requires a positive height`);
+    }
+    return [
+        { t: 0, leftHeight: height, rightHeight: height },
+        { t: 1, leftHeight: height, rightHeight: height }
+    ];
+}
+
+function wallProfilePointAt(profile, side, t) {
+    const clamped = Math.max(0, Math.min(1, Number(t)));
+    const start = side === "left" ? profile.aLeft : profile.aRight;
+    const end = side === "left" ? profile.bLeft : profile.bRight;
+    return {
+        x: Number(start.x) + (Number(end.x) - Number(start.x)) * clamped,
+        y: Number(start.y) + (Number(end.y) - Number(start.y)) * clamped
+    };
+}
+
+function wallTopProfilePlane(wall) {
+    const generatedBy = wall && wall.topProfile && wall.topProfile.generatedBy;
+    const plane = generatedBy && generatedBy.mode === "shed" && generatedBy.plane;
+    if (!plane || typeof plane !== "object") return null;
+    const direction = plane.direction || {};
+    const normalized = {
+        kind: String(plane.kind || ""),
+        direction: {
+            x: Number(direction.x),
+            y: Number(direction.y)
+        },
+        minProjection: Number(plane.minProjection),
+        maxProjection: Number(plane.maxProjection),
+        baseZ: Number(plane.baseZ),
+        peakHeight: Number(plane.peakHeight)
+    };
+    if (
+        normalized.kind !== "shedPlane" ||
+        !Number.isFinite(normalized.direction.x) ||
+        !Number.isFinite(normalized.direction.y) ||
+        !Number.isFinite(normalized.minProjection) ||
+        !Number.isFinite(normalized.maxProjection) ||
+        !Number.isFinite(normalized.baseZ) ||
+        !Number.isFinite(normalized.peakHeight) ||
+        normalized.maxProjection - normalized.minProjection <= GEOMETRY_EPSILON
+    ) {
+        throw new Error(`wall ${wall && wall.id} generated shed topProfile has an invalid plane`);
+    }
+    return normalized;
+}
+
+function wallTopHeightAt(wall, point, fallbackHeight, bottomZ) {
+    const plane = wallTopProfilePlane(wall);
+    if (!plane) return fallbackHeight;
+    const projection = Number(point.x) * plane.direction.x + Number(point.y) * plane.direction.y;
+    const t = Math.max(0, Math.min(1, (projection - plane.minProjection) / (plane.maxProjection - plane.minProjection)));
+    return Math.max(0, plane.baseZ + plane.peakHeight * t - bottomZ);
 }
 
 function scalePolygonAboutCentroid(points, scale, label) {
@@ -2797,30 +2899,51 @@ export class BuildingRenderer {
     }
 
     wallScreenImagePolygon(wall, floor, wallEntries = null) {
-        if (this.wallShouldUseShedRoofClip(floor)) {
-            const profile = this.wallRenderProfile(wall, floor, wallEntries, `wall ${wall && wall.id} shed-clipped screen image`);
-            if (!profile) return [];
-            const bottomZ = getFloorElevation(floor);
-            const top = (point) => ({ ...point, z: shedWallTopZAt(floor, point) });
-            return [
-                [profile.aLeft, profile.bLeft, top(profile.bLeft), top(profile.aLeft)],
-                [profile.aRight, profile.bRight, top(profile.bRight), top(profile.aRight)],
-                [profile.aRight, profile.aLeft, top(profile.aLeft), top(profile.aRight)],
-                [profile.bLeft, profile.bRight, top(profile.bRight), top(profile.bLeft)]
-            ].map((ring, index) => [closedClipRing(ring.map((point) => this.worldToScreen(point, Number.isFinite(Number(point.z)) ? Number(point.z) : bottomZ)), `wall ${wall && wall.id} shed screen face ${index}`)]);
-        }
         const baseZ = getFloorElevation(floor);
-        const height = Number(wall && wall.height);
-        if (!Number.isFinite(height) || height <= 0) {
-            throw new Error(`wall ${wall && wall.id} screen image requires a positive height`);
+        const profile = this.wallRenderProfile(wall, floor, wallEntries, `wall ${wall && wall.id} mitered screen image`);
+        const stations = wallTopStations(wall);
+        const rings = [];
+        const toScreenRing = (points, label) => [[closedClipRing(points.map((point) => this.worldToScreen(point, point.z)), label)]];
+        const stationPoint = (station) => {
+            const left = wallProfilePointAt(profile, "left", station.t);
+            const right = wallProfilePointAt(profile, "right", station.t);
+            const leftHeight = wallTopHeightAt(wall, left, station.leftHeight, baseZ);
+            const rightHeight = wallTopHeightAt(wall, right, station.rightHeight, baseZ);
+            return {
+                leftBottom: { ...left, z: baseZ },
+                rightBottom: { ...right, z: baseZ },
+                leftTop: { ...left, z: baseZ + leftHeight },
+                rightTop: { ...right, z: baseZ + rightHeight }
+            };
+        };
+        const resolved = stations.map(stationPoint);
+        for (let index = 0; index < resolved.length - 1; index++) {
+            const a = resolved[index];
+            const b = resolved[index + 1];
+            rings.push(...toScreenRing([a.leftBottom, b.leftBottom, b.leftTop, a.leftTop], `wall ${wall && wall.id} screen left ${index}`));
+            rings.push(...toScreenRing([b.rightBottom, a.rightBottom, a.rightTop, b.rightTop], `wall ${wall && wall.id} screen right ${index}`));
+            rings.push(...toScreenRing([a.leftTop, b.leftTop, b.rightTop, a.rightTop], `wall ${wall && wall.id} screen top ${index}`));
         }
-        const profile = this.wallRenderProfilePoints(wall, floor, wallEntries, `wall ${wall && wall.id} mitered screen image`);
-        const projected = [];
-        profile.forEach((point) => {
-            projected.push(this.worldToScreen(point, baseZ));
-            projected.push(this.worldToScreen(point, baseZ + height));
+        const first = resolved[0];
+        const last = resolved[resolved.length - 1];
+        rings.push(...toScreenRing([first.rightBottom, first.leftBottom, first.leftTop, first.rightTop], `wall ${wall && wall.id} screen start cap`));
+        rings.push(...toScreenRing([last.leftBottom, last.rightBottom, last.rightTop, last.leftTop], `wall ${wall && wall.id} screen end cap`));
+        return rings;
+    }
+
+    wallScreenTopProfilePoints(wall, floor, wallEntries = null) {
+        const baseZ = getFloorElevation(floor);
+        const profile = this.wallRenderProfile(wall, floor, wallEntries, `wall ${wall && wall.id} top profile`);
+        return wallTopStations(wall).flatMap((station) => {
+            const left = wallProfilePointAt(profile, "left", station.t);
+            const right = wallProfilePointAt(profile, "right", station.t);
+            const leftHeight = wallTopHeightAt(wall, left, station.leftHeight, baseZ);
+            const rightHeight = wallTopHeightAt(wall, right, station.rightHeight, baseZ);
+            return [
+                { ...left, z: baseZ + leftHeight },
+                { ...right, z: baseZ + rightHeight }
+            ];
         });
-        return [closedClipRing(convexHull(projected, `wall ${wall && wall.id} screen image`), `wall ${wall && wall.id} screen image`)];
     }
 
     wallScreenCollapsedGeometry(wall, floor, wallEntries = null) {
@@ -3148,19 +3271,15 @@ export class BuildingRenderer {
 
     wallScreenPickDepthMetric(wall, floor, wallEntries = null) {
         const baseZ = getFloorElevation(floor);
-        const height = Number(wall && wall.height);
-        if (!Number.isFinite(height) || height <= 0) {
-            throw new Error(`wall ${wall && wall.id} screen picking requires a positive height`);
-        }
         const profile = this.wallRenderProfilePoints(wall, floor, wallEntries, `wall ${wall && wall.id} screen pick profile`);
         if (this.shouldDrawWallCollapsed(wall, floor, wallEntries)) {
             return profile.reduce((best, point) => Math.max(best, this.worldDepthMetric(point, baseZ)), -Infinity);
         }
-        return profile.reduce((best, point) => Math.max(
-            best,
-            this.worldDepthMetric(point, baseZ),
-            this.worldDepthMetric(point, baseZ + height)
-        ), -Infinity);
+        const topPoints = this.wallScreenTopProfilePoints(wall, floor, wallEntries);
+        return [
+            ...profile.map((point) => ({ ...point, z: baseZ })),
+            ...topPoints
+        ].reduce((best, point) => Math.max(best, this.worldDepthMetric(point, point.z)), -Infinity);
     }
 
     pickWallAtScreen(screenPoint) {
@@ -3509,6 +3628,7 @@ export class BuildingRenderer {
                     id: Number.isInteger(Number(wall.id)) ? Number(wall.id) : undefined,
                     height: Number(wall.height),
                     thickness: Number(wall.thickness),
+                    topProfile: wall.topProfile || null,
                     bottomZ: baseZ,
                     traversalLayer: Number.isFinite(Number(wall.traversalLayer))
                         ? Math.round(Number(wall.traversalLayer))
@@ -3528,14 +3648,6 @@ export class BuildingRenderer {
     renderWallUnit(wall, floor, alpha, wallEntries = null) {
         const entry = this.ensureWallUnit(wall, floor);
         if (!entry) return null;
-        if (this.wallShouldUseShedRoofClip(floor)) {
-            if (entry.mesh) entry.mesh.visible = false;
-            const mesh = this.syncShedClippedWallMesh(wall, floor, alpha, wallEntries, {
-                bottomFaceOnly: this.shouldDrawWallCollapsed(wall, floor, wallEntries)
-            });
-            entry.mesh = mesh;
-            return mesh;
-        }
         this.hideShedClippedWallMesh(wall);
         this.updateWallTexturePhase(entry.unit, wall, floor);
         const selected = this.state.isWallSelected(wall);
@@ -3565,117 +3677,10 @@ export class BuildingRenderer {
         return mesh;
     }
 
-    wallShouldUseShedRoofClip(floor) {
-        const roof = getFloorRoof(floor);
-        return !!roof && String(roof.mode || "peak").trim().toLowerCase() === "shed";
-    }
-
     hideShedClippedWallMesh(wall) {
         const wallId = String(wall && wall.id);
         const entry = this.clippedWallMeshById && this.clippedWallMeshById.get(wallId);
         if (entry && entry.mesh) entry.mesh.visible = false;
-    }
-
-    shedClippedWallSignature(wall, floor, wallEntries, options = {}) {
-        const profile = this.wallRenderProfile(wall, floor, wallEntries, `wall ${wall && wall.id} shed clip signature`);
-        const zFor = (point) => shedWallTopZAt(floor, point);
-        return [
-            wallRenderSignature(this.state.building, wall, floor),
-            "shed-clip",
-            options.bottomFaceOnly === true ? "collapsed" : "full",
-            roofMeshSignature(floor),
-            profile ? [profile.aLeft, profile.bLeft, profile.bRight, profile.aRight]
-                .map((point) => `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)},${zFor(point).toFixed(4)}`)
-                .join("|") : "no-profile"
-        ].join(";");
-    }
-
-    triangulateShedClippedWall(wall, floor, wallEntries, options = {}) {
-        const profile = this.wallRenderProfile(wall, floor, wallEntries, `wall ${wall && wall.id} shed-clipped profile`);
-        if (!profile) return null;
-        const texturePath = normalizeTexturePath(wall && wall.wallTexturePath, "/assets/images/walls/stonewall.png");
-        const repeatX = wallTextureRepeatX(texturePath);
-        const repeatY = wallTextureRepeatY(texturePath);
-        const bottomZ = getFloorElevation(floor);
-        const points = [];
-        const indices = [];
-        const pushTriangle = (a, b, c, label) => {
-            if (triangleArea3d(a, b, c) <= GEOMETRY_EPSILON) return;
-            const normal = triangleSurfaceNormal(a, b, c, label);
-            const start = points.length;
-            points.push({ ...a, normal }, { ...b, normal }, { ...c, normal });
-            indices.push(start, start + 1, start + 2);
-        };
-        const topPoint = (point) => ({ ...point, z: shedWallTopZAt(floor, point) });
-        const bottomPoint = (point) => ({ ...point, z: bottomZ });
-        const wallLength = Math.hypot(Number(profile.bLeft.x) - Number(profile.aLeft.x), Number(profile.bLeft.y) - Number(profile.aLeft.y));
-        const heightAt = (top) => Math.max(0, Number(top.z) - bottomZ);
-        const addLongFace = (a, b, topA, topB, label) => {
-            const length = Math.hypot(Number(b.x) - Number(a.x), Number(b.y) - Number(a.y));
-            const bottomA = { ...bottomPoint(a), u: 0, v: 0 };
-            const bottomB = { ...bottomPoint(b), u: length * repeatX, v: 0 };
-            const upperB = { ...topB, u: length * repeatX, v: heightAt(topB) * repeatY };
-            const upperA = { ...topA, u: 0, v: heightAt(topA) * repeatY };
-            pushTriangle(bottomA, bottomB, upperB, `${label} lower`);
-            pushTriangle(bottomA, upperB, upperA, `${label} upper`);
-        };
-        const addCapFace = (a, b, topA, topB, label) => {
-            const length = Math.hypot(Number(b.x) - Number(a.x), Number(b.y) - Number(a.y));
-            const bottomA = { ...bottomPoint(a), u: 0, v: 0 };
-            const bottomB = { ...bottomPoint(b), u: length * repeatX, v: 0 };
-            const upperB = { ...topB, u: length * repeatX, v: heightAt(topB) * repeatY };
-            const upperA = { ...topA, u: 0, v: heightAt(topA) * repeatY };
-            pushTriangle(bottomA, bottomB, upperB, `${label} lower`);
-            pushTriangle(bottomA, upperB, upperA, `${label} upper`);
-        };
-        const aLeftTop = topPoint(profile.aLeft);
-        const bLeftTop = topPoint(profile.bLeft);
-        const bRightTop = topPoint(profile.bRight);
-        const aRightTop = topPoint(profile.aRight);
-        if (options.bottomFaceOnly !== true) {
-            addLongFace(profile.aLeft, profile.bLeft, aLeftTop, bLeftTop, `wall ${wall.id} shed left face`);
-            addLongFace(profile.bRight, profile.aRight, bRightTop, aRightTop, `wall ${wall.id} shed right face`);
-            addCapFace(profile.aRight, profile.aLeft, aRightTop, aLeftTop, `wall ${wall.id} shed start cap`);
-            addCapFace(profile.bLeft, profile.bRight, bLeftTop, bRightTop, `wall ${wall.id} shed end cap`);
-        }
-        const topUv = (point) => ({ ...point, u: Number(point.x) * repeatX, v: Number(point.y) * repeatX });
-        pushTriangle(topUv(aLeftTop), topUv(bLeftTop), topUv(bRightTop), `wall ${wall.id} shed top lower`);
-        pushTriangle(topUv(aLeftTop), topUv(bRightTop), topUv(aRightTop), `wall ${wall.id} shed top upper`);
-        return points.length >= 3 ? { points, indices: new Uint16Array(indices) } : null;
-    }
-
-    syncShedClippedWallMesh(wall, floor, alpha, wallEntries, options = {}) {
-        const wallId = String(wall.id);
-        const signature = this.shedClippedWallSignature(wall, floor, wallEntries, options);
-        let entry = this.clippedWallMeshById.get(wallId);
-        if (!entry || entry.signature !== signature) {
-            if (entry && entry.mesh) {
-                if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-            }
-            const texturePath = normalizeTexturePath(wall.wallTexturePath, "/assets/images/walls/stonewall.png");
-            const mesh = this.createSurfaceMesh(floor, this.triangulateShedClippedWall(wall, floor, wallEntries, options), {
-                z: getFloorElevation(floor),
-                texturePath,
-                textureFallback: "/assets/images/walls/stonewall.png",
-                textureRepeat: wallTextureRepeatX(texturePath),
-                namePrefix: "buildingEditorShedClippedWallMesh"
-            });
-            if (!mesh) throw new Error(`shed roof clipped wall ${wall.id} mesh could not be created`);
-            this.buildingUnit.addChild(mesh);
-            entry = { signature, mesh };
-            this.clippedWallMeshById.set(wallId, entry);
-        } else if (entry.mesh.parent !== this.buildingUnit) {
-            this.buildingUnit.addChild(entry.mesh);
-        }
-        const selected = this.state.isWallSelected(wall);
-        this.updateSurfaceMeshUniforms(entry.mesh, floor, alpha, {
-            texturePath: normalizeTexturePath(wall.wallTexturePath, "/assets/images/walls/stonewall.png"),
-            textureFallback: "/assets/images/walls/stonewall.png",
-            lightFactor: selected ? 1.12 : 1
-        });
-        entry.mesh.visible = true;
-        return entry.mesh;
     }
 
     shouldUseExteriorPerimeterTextureU(wall) {
