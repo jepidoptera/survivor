@@ -64,7 +64,18 @@ uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
 uniform float uLayerBaseZ;
+uniform float uCameraRotation;
+uniform vec2 uCameraRotationCenter;
 varying vec2 vUvs;
+vec2 rotateAround(vec2 point, vec2 center, float angle) {
+    float cosR = cos(angle);
+    float sinR = sin(angle);
+    vec2 rel = point - center;
+    return vec2(
+        rel.x * cosR - rel.y * sinR,
+        rel.x * sinR + rel.y * cosR
+    ) + center;
+}
 void main(void) {
     float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
     float anchorDy = uWrapAnchorWorld.y - uCameraWorld.y;
@@ -80,8 +91,12 @@ void main(void) {
     }
     float localDx = aWorldPosition.x - uWrapAnchorWorld.x;
     float localDy = aWorldPosition.y - uWrapAnchorWorld.y;
-    float camDx = anchorDx + localDx;
-    float camDy = anchorDy + localDy;
+    vec2 projectedWorld = vec2(uCameraWorld.x + anchorDx + localDx, uCameraWorld.y + anchorDy + localDy);
+    if (abs(uCameraRotation) > 0.000001) {
+        projectedWorld = rotateAround(projectedWorld, uCameraRotationCenter, uCameraRotation);
+    }
+    float camDx = projectedWorld.x - uCameraWorld.x;
+    float camDy = projectedWorld.y - uCameraWorld.y;
     float camDz = (aWorldPosition.z + uLayerBaseZ) - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
@@ -115,6 +130,8 @@ uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
 uniform float uLayerBaseZ;
+uniform float uCameraRotation;
+uniform vec2 uCameraRotationCenter;
 varying vec2 vUvs;
 float shortestDelta(float fromV, float toV, float sizeV, float wrapEnabled) {
     if (wrapEnabled < 0.5 || sizeV <= 0.0) return toV - fromV;
@@ -124,18 +141,35 @@ float shortestDelta(float fromV, float toV, float sizeV, float wrapEnabled) {
     else if (d < -halfSize) d += sizeV;
     return d;
 }
+vec2 rotateAround(vec2 point, vec2 center, float angle) {
+    float cosR = cos(angle);
+    float sinR = sin(angle);
+    vec2 rel = point - center;
+    return vec2(
+        rel.x * cosR - rel.y * sinR,
+        rel.x * sinR + rel.y * cosR
+    ) + center;
+}
 void main(void) {
     float anchorWrappedX = uWrapAnchorWorld.x + shortestDelta(uWrapAnchorWorld.x, uModelOrigin.x, uWorldSize.x, uWrapEnabled.x);
     float anchorWrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, uModelOrigin.y, uWorldSize.y, uWrapEnabled.y);
-    float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWrappedX, uWorldSize.x, uWrapEnabled.x);
-    float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWrappedY, uWorldSize.y, uWrapEnabled.y);
+    vec2 anchorWorld = vec2(anchorWrappedX, anchorWrappedY);
+    if (abs(uCameraRotation) > 0.000001) {
+        anchorWorld = rotateAround(anchorWorld, uCameraRotationCenter, uCameraRotation);
+    }
+    float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWorld.x, uWorldSize.x, uWrapEnabled.x);
+    float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWorld.y, uWorldSize.y, uWrapEnabled.y);
     float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
     float screenY = (anchorCamDy - ((uModelOrigin.z + uLayerBaseZ) - uCameraZ)) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
 
     float worldY = uModelOrigin.y + aDepthWorld.y;
     float worldZ = uModelOrigin.z + aDepthWorld.z + uLayerBaseZ;
     float wrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, worldY, uWorldSize.y, uWrapEnabled.y);
-    float camDy = shortestDelta(uCameraWorld.y, wrappedY, uWorldSize.y, uWrapEnabled.y);
+    vec2 depthWorld = vec2(uModelOrigin.x + aDepthWorld.x, wrappedY);
+    if (abs(uCameraRotation) > 0.000001) {
+        depthWorld = rotateAround(depthWorld, uCameraRotationCenter, uCameraRotation);
+    }
+    float camDy = shortestDelta(uCameraWorld.y, depthWorld.y, uWorldSize.y, uWrapEnabled.y);
     float camDz = worldZ - uCameraZ;
 
     float sx = max(1.0, uScreenSize.x);
@@ -1671,6 +1705,8 @@ void main(void) {
                     uWrapEnabled: new Float32Array([0, 0]),
                     uWrapAnchorWorld: new Float32Array([0, 0]),
                     uLayerBaseZ: 0,
+                    uCameraRotation: 0,
+                    uCameraRotationCenter: new Float32Array([0, 0]),
                     uSampler: PIXI.Texture.WHITE,
                     uPickColor: new Float32Array([1, 1, 1]),
                     uAlphaCutoff: 0.08
@@ -1975,6 +2011,18 @@ void main(void) {
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
                         record.shader.uniforms.uDepthRange[1] = Number(depthRange && depthRange.invSpan) || 1;
+                        if (Number.isFinite(record.shader.uniforms.uCameraRotation)) {
+                            record.shader.uniforms.uCameraRotation = Number(camera && camera.rotation) || 0;
+                        }
+                        if (
+                            record.shader.uniforms.uCameraRotationCenter &&
+                            typeof record.shader.uniforms.uCameraRotationCenter.length === "number" &&
+                            record.shader.uniforms.uCameraRotationCenter.length >= 2
+                        ) {
+                            const rotationCenter = (camera && camera.rotationCenter) || null;
+                            record.shader.uniforms.uCameraRotationCenter[0] = Number(rotationCenter && rotationCenter.x) || 0;
+                            record.shader.uniforms.uCameraRotationCenter[1] = Number(rotationCenter && rotationCenter.y) || 0;
+                        }
                         if (Number.isFinite(record.shader.uniforms.uLayerBaseZ)) {
                             const sourceLayerBaseZ = Number(
                                 displayObj &&

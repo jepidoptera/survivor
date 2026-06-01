@@ -13,16 +13,23 @@ import {
     findFloor,
     findMountedObject,
     findWall,
+    floorVertexWallInsetPoint,
     getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
     getFloorRoof,
+    getRoofContactPolygon,
+    getRoofDomeLevels,
+    getRoofPeakPoint,
+    getRoofShedDirection,
+    defaultRoofPeakPointForFloor,
     getFloorElevation,
     getFloorId,
     getRoofGables,
     normalizeRoofGable,
     mergePerimeterWallsAcrossDeletedVertex,
     normalizeImportedBuilding,
+    offsetRing,
     replaceFloorShape,
     refreshWallSectionEndpoints,
     serializeBuilding,
@@ -52,6 +59,24 @@ const CORRUPT_SAVE_BACKUP_KEY_PREFIX = `${STORAGE_KEY}-corrupt-backup`;
 const STACKED_VERTEX_TOLERANCE = 0.0001;
 const LOWER_FLOOR_VERTEX_SNAP_DISTANCE = 0.25;
 const FLOOR_MIDPOINT_SNAP_DISTANCE = 0.25;
+const WALL_THICKNESS_MIN = 0.125;
+const WALL_THICKNESS_MAX = 1;
+const CANONICAL_DIRECTION_COUNT = 12;
+const WALL_SNAP_IMPORTANCE = Object.freeze({
+    floorVertex: 4,
+    wallEndpoint: 2,
+    floorEdge: 1
+});
+const ROOF_SNAP_DISTANCE = 0.35;
+const ROOF_PEAK_SNAP_DISTANCE = 0.35;
+const ROOF_SHED_DIRECTION_HANDLE_LENGTH = 1.25;
+const ROOF_SHED_DIRECTION_SNAP_DISTANCE = 0.25;
+const ROOF_SNAP_IMPORTANCE = Object.freeze({
+    perimeterWallOuterCorner: 4,
+    lowerFloorVertex: 3,
+    columnCorner: 2,
+    interiorWallCorner: 1
+});
 
 function closestPointOnSegment(point, a, b) {
     const dx = Number(b.x) - Number(a.x);
@@ -95,7 +120,7 @@ function normalizeGablePerimeterPosition(value, fallbackEdgeIndex = 0, fallbackT
 }
 
 function gablePositionScalar(floor, position) {
-    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const ring = getRoofContactPolygon(floor);
     if (ring.length < 3) throw new Error(`roof ${getFloorId(floor)} gable endpoints require a valid floor outline`);
     const edgeIndex = Math.floor(Number(position && position.edgeIndex));
     if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= ring.length) {
@@ -110,7 +135,7 @@ function gablePositionScalar(floor, position) {
 }
 
 function gableIntervalLength(floor, gable) {
-    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const ring = getRoofContactPolygon(floor);
     const cumulative = perimeterCumulativeLengths(ring);
     const total = cumulative[cumulative.length - 1];
     const start = gablePositionScalar(floor, gable.start);
@@ -119,7 +144,7 @@ function gableIntervalLength(floor, gable) {
 }
 
 function gableIntervalParts(floor, gable) {
-    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const ring = getRoofContactPolygon(floor);
     const cumulative = perimeterCumulativeLengths(ring);
     const total = cumulative[cumulative.length - 1];
     const start = gablePositionScalar(floor, gable.start);
@@ -132,7 +157,7 @@ function gableIntervalParts(floor, gable) {
 }
 
 function canonicalizeGableSpanToShortest(floor, gable) {
-    const ring = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+    const ring = getRoofContactPolygon(floor);
     const cumulative = perimeterCumulativeLengths(ring);
     const total = cumulative[cumulative.length - 1];
     if (!Number.isFinite(total) || total <= 0) return;
@@ -153,8 +178,16 @@ function sameXY(a, b, tolerance = STACKED_VERTEX_TOLERANCE) {
         Math.abs(Number(a && a.y) - Number(b && b.y)) <= tolerance;
 }
 
+function isFloorVertexEndpoint(endpoint) {
+    return endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex");
+}
+
+function wallHasFloorVertexEndpoint(wall) {
+    return isFloorVertexEndpoint(wall && wall.startPoint) || isFloorVertexEndpoint(wall && wall.endPoint);
+}
+
 function endpointVertexKey(endpoint) {
-    if (!endpoint || endpoint.kind !== "vertex" || !endpoint.vertexId) return "";
+    if (!isFloorVertexEndpoint(endpoint) || !endpoint.vertexId) return "";
     return [
         endpoint.fragmentId || "",
         endpoint.ring || "",
@@ -218,7 +251,7 @@ function floorVertexKey(floorId, ring, holeIndex, vertexId) {
 }
 
 function floorVertexKeyForEndpoint(endpoint) {
-    if (!endpoint || endpoint.kind !== "vertex" || !endpoint.fragmentId || !endpoint.vertexId) return "";
+    if (!isFloorVertexEndpoint(endpoint) || !endpoint.fragmentId || !endpoint.vertexId) return "";
     return floorVertexKey(endpoint.fragmentId, endpoint.ring, endpoint.holeIndex, endpoint.vertexId);
 }
 
@@ -285,7 +318,7 @@ function resultOuterEdgeSurvives(polygonEditResult, startVertexId, endVertexId) 
 function downgradeWallToPointEndpoints(wall, originalVertices) {
     ["startPoint", "endPoint"].forEach((endpointKey) => {
         const endpoint = wall[endpointKey];
-        if (!endpoint || endpoint.kind !== "vertex") return;
+        if (!isFloorVertexEndpoint(endpoint)) return;
         const point = originalVertices.get(floorVertexKeyForEndpoint(endpoint)) || endpoint;
         if (!Number.isFinite(Number(point && point.x)) || !Number.isFinite(Number(point && point.y))) {
             throw new Error(`cannot preserve wall ${wall.id} endpoint after floor add without finite vertex coordinates`);
@@ -316,7 +349,7 @@ function downgradeMovedWallVertexEndpoints(building, floor, polygonEditResult) {
         }
         ["startPoint", "endPoint"].forEach((endpointKey) => {
             const endpoint = wall[endpointKey];
-            if (!endpoint || endpoint.kind !== "vertex" || String(endpoint.fragmentId) !== floorId) return;
+            if (!isFloorVertexEndpoint(endpoint) || String(endpoint.fragmentId) !== floorId) return;
             const key = floorVertexKeyForEndpoint(endpoint);
             const resultVertex = resultVertices.get(key) || null;
             if (survivingVertices.has(key) && endpointLandsOnResultVertex(endpoint, resultVertex)) return;
@@ -371,6 +404,73 @@ function syncWallLineBoundaryAttachment(wall) {
     };
 }
 
+function normalizeEditorWallThickness(value, context) {
+    const thickness = Number(value);
+    if (!Number.isFinite(thickness) || thickness < WALL_THICKNESS_MIN || thickness > WALL_THICKNESS_MAX) {
+        throw new Error(`${context} must be between ${WALL_THICKNESS_MIN} and ${WALL_THICKNESS_MAX}`);
+    }
+    return thickness;
+}
+
+function snapPointToCanonicalDirection(origin, point) {
+    if (!origin || !point) return point;
+    const ox = Number(origin.x);
+    const oy = Number(origin.y);
+    const px = Number(point.x);
+    const py = Number(point.y);
+    if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(px) || !Number.isFinite(py)) {
+        throw new Error("direction snapping requires finite points");
+    }
+    const dx = px - ox;
+    const dy = py - oy;
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.000001) return { x: px, y: py };
+    const step = (Math.PI * 2) / CANONICAL_DIRECTION_COUNT;
+    const snappedAngle = Math.round(Math.atan2(dy, dx) / step) * step;
+    return {
+        x: ox + Math.cos(snappedAngle) * length,
+        y: oy + Math.sin(snappedAngle) * length
+    };
+}
+
+function roofSnapPlaneElevation(floor) {
+    const floorHeight = Number(floor && floor.floorHeight);
+    if (!Number.isFinite(floorHeight) || floorHeight <= 0) {
+        throw new Error(`roof snap plane requires a positive floor height for ${getFloorId(floor)}`);
+    }
+    return getFloorElevation(floor) + floorHeight;
+}
+
+function normalizeRoofElevationOffset(value, context = "roof elevation offset") {
+    const offset = Number(value);
+    if (!Number.isFinite(offset)) throw new Error(`${context} must be a finite number`);
+    return offset;
+}
+
+function wallFootprintCornersFromCenterline(points, thickness, label) {
+    if (!Array.isArray(points) || points.length !== 2) {
+        throw new Error(`${label} requires two wall points`);
+    }
+    const wallThickness = Number(thickness);
+    if (!Number.isFinite(wallThickness) || wallThickness <= 0) {
+        throw new Error(`${label} requires a positive wall thickness`);
+    }
+    const [a, b] = points;
+    const dx = Number(b.x) - Number(a.x);
+    const dy = Number(b.y) - Number(a.y);
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.000001) throw new Error(`${label} requires non-coincident wall points`);
+    const nx = -dy / length;
+    const ny = dx / length;
+    const half = wallThickness * 0.5;
+    return [
+        { x: Number(a.x) + nx * half, y: Number(a.y) + ny * half },
+        { x: Number(b.x) + nx * half, y: Number(b.y) + ny * half },
+        { x: Number(b.x) - nx * half, y: Number(b.y) - ny * half },
+        { x: Number(a.x) - nx * half, y: Number(a.y) - ny * half }
+    ];
+}
+
 function createSelection(kind, fields = {}) {
     const wallIds = Array.isArray(fields.wallIds)
         ? fields.wallIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
@@ -387,10 +487,14 @@ function createSelection(kind, fields = {}) {
     const floorId = fields.floorId !== undefined && fields.floorId !== null
         ? String(fields.floorId)
         : (fields.levelId !== undefined && fields.levelId !== null ? String(fields.levelId) : null);
+    const roofFloorIds = Array.isArray(fields.roofFloorIds)
+        ? fields.roofFloorIds.map((id) => String(id))
+        : (kind === "roof" && floorId ? [floorId] : []);
     return {
         kind,
         floorId,
         levelId: floorId,
+        roofFloorIds,
         wallId,
         wallIds,
         mountedObjectId,
@@ -413,6 +517,7 @@ export class BuildingEditorState extends EventTarget {
         this.layerSelectionMode = "floor";
         this.selection = createSelection("building");
         this.snapToGrid = true;
+        this.snapDirection = false;
         this.showSnapAnchors = false;
         this.shiftKeyDown = false;
         this.paintTextures = {
@@ -433,23 +538,28 @@ export class BuildingEditorState extends EventTarget {
         };
         this.wallTool = {
             height: DEFAULTS.wallHeight,
-            texture: DEFAULTS.wallTexture
+            texture: DEFAULTS.wallTexture,
+            thickness: DEFAULTS.wallThickness
         };
         this.gridSize = DEFAULTS.gridSize;
-        this.camera = { x: 0, y: 0, z: 0, zoom: 72, rotation: 0, rotationCenter: { x: 0, y: 0 } };
+        this.camera = { x: 0, y: 0, z: 0, zoom: 72, rotation: 0, pitch: Math.PI / 4, rotationCenter: { x: 0, y: 0 } };
         this.draft = null;
         this.floorVertexDrag = null;
         this.hoverWorldPoint = null;
         this.renderError = "";
+        this.polygonToolElevation = 0;
         this.inputs = {
             floorElevation: 0,
             floorHeight: DEFAULTS.wallHeight,
             floorTexture: DEFAULTS.floorTexture,
             roofTexture: DEFAULTS.roofTexture,
+            roofMode: DEFAULTS.roofMode,
             roofOverhang: DEFAULTS.roofOverhang,
             roofPeakHeight: DEFAULTS.roofPeakHeight,
+            roofDomeLevels: DEFAULTS.roofDomeLevels,
             wallHeight: DEFAULTS.wallHeight,
-            wallTexture: DEFAULTS.wallTexture
+            wallTexture: DEFAULTS.wallTexture,
+            wallThickness: DEFAULTS.wallThickness
         };
         this.createStarterFloor();
     }
@@ -479,6 +589,10 @@ export class BuildingEditorState extends EventTarget {
             this.setWallToolActive();
             return;
         }
+        if (tool === "polygon" || tool === "scissors") {
+            const selectedFloor = this.selectedFloor();
+            if (selectedFloor) this.polygonToolElevation = getFloorElevation(selectedFloor);
+        }
         this.tool = tool;
         this.draft = null;
         this.emitChange();
@@ -499,6 +613,7 @@ export class BuildingEditorState extends EventTarget {
         }
         this.inputs.wallHeight = this.wallTool.height;
         this.inputs.wallTexture = this.wallTool.texture;
+        this.inputs.wallThickness = this.wallTool.thickness;
         this.paintTextures.walls = this.wallTool.texture;
         this.saveWallToolSettingsToBrowser();
         this.emitChange();
@@ -517,6 +632,7 @@ export class BuildingEditorState extends EventTarget {
         if (this.tool === "wall") {
             this.inputs.wallHeight = this.wallTool.height;
             this.inputs.wallTexture = this.wallTool.texture;
+            this.inputs.wallThickness = this.wallTool.thickness;
             this.paintTextures.walls = this.wallTool.texture;
         }
         if (options.emit !== false) this.emitChange();
@@ -541,6 +657,7 @@ export class BuildingEditorState extends EventTarget {
         }
         this.wallTool.height = height;
         this.wallTool.texture = wall.wallTexturePath;
+        this.wallTool.thickness = normalizeEditorWallThickness(wall.thickness, `wall ${wall.id} thickness`);
     }
 
     updateWallToolHeight(value) {
@@ -565,10 +682,19 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
+    updateWallToolThickness(value) {
+        const thickness = normalizeEditorWallThickness(value, "wall tool thickness");
+        this.wallTool.thickness = thickness;
+        this.inputs.wallThickness = thickness;
+        this.saveWallToolSettingsToBrowser();
+        this.emitChange();
+    }
+
     wallToolSettingsSnapshot() {
         return {
             height: this.wallTool.height,
-            texture: this.wallTool.texture
+            texture: this.wallTool.texture,
+            thickness: this.wallTool.thickness
         };
     }
 
@@ -585,6 +711,9 @@ export class BuildingEditorState extends EventTarget {
         }
         const height = Number(payload.height);
         const texture = String(payload.texture || "");
+        const thickness = payload.thickness === undefined
+            ? DEFAULTS.wallThickness
+            : normalizeEditorWallThickness(payload.thickness, "stored wall tool thickness");
         if (!Number.isFinite(height) || height <= 0) {
             throw new Error("stored wall tool settings require a positive height");
         }
@@ -593,9 +722,11 @@ export class BuildingEditorState extends EventTarget {
         }
         this.wallTool.height = height;
         this.wallTool.texture = texture;
+        this.wallTool.thickness = thickness;
         if (this.tool === "wall") {
             this.inputs.wallHeight = height;
             this.inputs.wallTexture = texture;
+            this.inputs.wallThickness = thickness;
             this.paintTextures.walls = texture;
         }
         this.emitChange();
@@ -891,6 +1022,62 @@ export class BuildingEditorState extends EventTarget {
         return objectIds.length === 1 ? findMountedObject(this.building, objectIds[0]) : null;
     }
 
+    selectedRoofFloorIds() {
+        const kind = this.selection && this.selection.kind;
+        if (kind !== "roof" && kind !== "roofVertex" && kind !== "roofPeak" && kind !== "roofShedDirection") return [];
+        if (kind !== "roof") return this.selection.floorId ? [String(this.selection.floorId)] : [];
+        if (Array.isArray(this.selection.roofFloorIds) && this.selection.roofFloorIds.length > 0) {
+            return this.selection.roofFloorIds.map((id) => String(id));
+        }
+        return this.selection.floorId ? [String(this.selection.floorId)] : [];
+    }
+
+    selectedRoofEntries() {
+        return this.selectedRoofFloorIds().map((floorId) => {
+            const floor = findFloor(this.building, floorId);
+            if (!floor) throw new Error(`selected roof is missing its floor: ${floorId}`);
+            const roof = getFloorRoof(floor);
+            if (!roof) throw new Error(`selected roof is missing from floor: ${floorId}`);
+            return { floor, roof };
+        });
+    }
+
+    editableRoofEntries(label = "selected roof") {
+        if (this.selection && this.selection.kind === "roof") {
+            const entries = this.selectedRoofEntries();
+            if (!entries.length) throw new Error(`${label} is missing`);
+            return entries;
+        }
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error(`${label} requires a selected floor`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`${label} is missing`);
+        return [{ floor, roof }];
+    }
+
+    selectedRoofFloors() {
+        return this.selectedRoofEntries().map((entry) => entry.floor);
+    }
+
+    selectedRoofVertex() {
+        const selection = this.selection || {};
+        if (selection.kind !== "roofVertex") return null;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`selected roof vertex is missing its floor: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`selected roof vertex is missing its roof: ${selection.floorId}`);
+        const ring = getRoofContactPolygon(roof);
+        const vertexIndex = Math.floor(Number(selection.vertexIndex));
+        if (!Number.isInteger(vertexIndex) || vertexIndex < 0 || vertexIndex >= ring.length) {
+            throw new Error(`selected roof vertex index is invalid: ${selection.vertexIndex}`);
+        }
+        return { floor, roof, ring, vertexIndex, point: ring[vertexIndex] };
+    }
+
+    isRoofSelected(floorId) {
+        return this.selectedRoofFloorIds().some((id) => id === String(floorId));
+    }
+
     selectedMountedObjectIds() {
         const kind = this.selection && this.selection.kind;
         if (kind !== "mountedObject") return [];
@@ -925,6 +1112,11 @@ export class BuildingEditorState extends EventTarget {
         });
     }
 
+    selectedWallsCanToggleVertexInset() {
+        const walls = this.selectedWalls();
+        return walls.length > 0 && walls.every((wall) => wallHasFloorVertexEndpoint(wall));
+    }
+
     isWallSelected(wall) {
         if (!wall) return false;
         const ids = new Set(this.selectedWallIds().map((id) => String(id)));
@@ -935,15 +1127,21 @@ export class BuildingEditorState extends EventTarget {
         if (!floor) return;
         const roof = getFloorRoof(floor);
         this.inputs.floorElevation = getFloorElevation(floor);
+        this.polygonToolElevation = getFloorElevation(floor);
         this.inputs.floorHeight = floor.floorHeight;
         this.inputs.floorTexture = floor.floorTexturePath;
         if (roof) {
             this.inputs.roofTexture = roof.texturePath;
+            this.inputs.roofMode = roof.mode || DEFAULTS.roofMode;
             this.inputs.roofOverhang = roof.overhang;
             this.inputs.roofPeakHeight = roof.peakHeight;
+            this.inputs.roofDomeLevels = getRoofDomeLevels(roof);
         }
         this.inputs.wallHeight = floor.defaultWallHeight;
         this.inputs.wallTexture = floor.defaultWallTexturePath;
+        this.inputs.wallThickness = Number.isFinite(Number(this.building.defaults && this.building.defaults.wallThickness))
+            ? Number(this.building.defaults.wallThickness)
+            : DEFAULTS.wallThickness;
     }
 
     buildingCenter() {
@@ -1007,6 +1205,39 @@ export class BuildingEditorState extends EventTarget {
         this.selectFloor(floorId);
     }
 
+    renameFloor(floorId, name) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot rename missing floor: ${floorId}`);
+        const nextName = String(name || "").trim();
+        if (!nextName) throw new Error("floor name must not be empty");
+        floor.name = nextName;
+        this.emitChange();
+    }
+
+    moveFloorInLayerPanel(floorId, targetFloorId, position = "before") {
+        const floors = [...getBuildingFloors(this.building)].sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        if (!Array.isArray(this.building.floorFragments)) {
+            throw new Error("cannot reorder floors without a floor fragment list");
+        }
+        const movingIndex = floors.findIndex((floor) => getFloorId(floor) === String(floorId || ""));
+        if (movingIndex < 0) throw new Error(`cannot reorder missing floor: ${floorId}`);
+        const targetIndex = floors.findIndex((floor) => getFloorId(floor) === String(targetFloorId || ""));
+        if (targetIndex < 0) throw new Error(`cannot reorder before missing floor: ${targetFloorId}`);
+        const baseElevation = floors.length > 0 ? getFloorElevation(floors[0]) : 0;
+        const [moving] = floors.splice(movingIndex, 1);
+        const targetIndexAfterRemoval = floors.findIndex((floor) => getFloorId(floor) === String(targetFloorId || ""));
+        const insertIndex = position === "after" ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
+        floors.splice(insertIndex, 0, moving);
+        let elevation = baseElevation;
+        floors.forEach((floor) => {
+            setFloorElevation(floor, elevation);
+            elevation += Number(floor.floorHeight);
+        });
+        this.building.floorFragments = floors;
+        floors.forEach((floor) => refreshWallSectionEndpoints(this.building, floor));
+        this.emitChange();
+    }
+
     selectLevel(floorId, options = {}) {
         const floor = findFloor(this.building, floorId);
         if (!floor) {
@@ -1022,22 +1253,231 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
-    selectRoof(floorId, options = {}) {
-        const floor = findFloor(this.building, floorId);
-        if (!floor) {
-            throw new Error(`cannot select roof for missing level: ${floorId}`);
+    resolveRoofSelection(floorIds, label = "roof selection") {
+        const uniqueIds = [];
+        (Array.isArray(floorIds) ? floorIds : []).forEach((floorId) => {
+            if (!uniqueIds.some((id) => String(id) === String(floorId))) uniqueIds.push(String(floorId));
+        });
+        if (!uniqueIds.length) return { floorIds: [], floors: [], roofs: [] };
+        const floors = uniqueIds.map((floorId) => {
+            const floor = findFloor(this.building, floorId);
+            if (!floor) throw new Error(`${label} references missing floor: ${floorId}`);
+            const roof = getFloorRoof(floor);
+            if (!roof) throw new Error(`${label} references missing roof for level: ${floorId}`);
+            return floor;
+        });
+        return {
+            floorIds: floors.map((floor) => getFloorId(floor)),
+            floors,
+            roofs: floors.map((floor) => getFloorRoof(floor))
+        };
+    }
+
+    applyRoofSelection(floorIds, options = {}) {
+        const resolved = this.resolveRoofSelection(floorIds, "roof selection");
+        if (!resolved.floorIds.length) {
+            this.selectBuilding();
+            return false;
         }
-        if (!getFloorRoof(floor)) {
-            throw new Error(`cannot select missing roof for level: ${floorId}`);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(resolved.floorIds);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("roof", { floorId: resolved.floorIds[0], roofFloorIds: resolved.floorIds });
+        this.syncInputsFromFloor(resolved.floors[0]);
+        this.emitChange();
+        return true;
+    }
+
+    selectRoof(floorId, options = {}) {
+        return this.applyRoofSelection([floorId], options);
+    }
+
+    selectRoofs(floorIds, options = {}) {
+        return this.applyRoofSelection(floorIds, options);
+    }
+
+    addRoofToSelection(floorId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot add roof for missing level: ${floorId}`);
+        if (!getFloorRoof(floor)) throw new Error(`cannot add missing roof for level: ${floorId}`);
+        const nextFloorIds = [...this.selectedRoofFloorIds()];
+        const selectedFloorId = getFloorId(floor);
+        if (!nextFloorIds.some((id) => id === selectedFloorId)) nextFloorIds.push(selectedFloorId);
+        return this.applyRoofSelection(nextFloorIds, options);
+    }
+
+    removeRoofFromSelection(floorId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot remove roof for missing level: ${floorId}`);
+        if (!getFloorRoof(floor)) throw new Error(`cannot remove missing roof for level: ${floorId}`);
+        const removeId = getFloorId(floor);
+        const previousFloorIds = this.selectedRoofFloorIds();
+        const nextFloorIds = previousFloorIds.filter((id) => id !== removeId);
+        if (nextFloorIds.length === previousFloorIds.length) return false;
+        if (!nextFloorIds.length) {
+            this.selectLevel(removeId, options);
+            return true;
+        }
+        return this.applyRoofSelection(nextFloorIds, options);
+    }
+
+    defaultRoofContactPolygon(floor) {
+        const source = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+        if (source.length < 3) throw new Error(`cannot create roof contact polygon without a valid floor outline: ${getFloorId(floor)}`);
+        return source.map((point) => ({
+            ...point,
+            ...(
+                this.roofVertexSnapPoint(floor, point, 1) ||
+                { x: Number(point.x), y: Number(point.y) }
+            )
+        }));
+    }
+
+    defaultRoofPeakPoint(floor) {
+        return defaultRoofPeakPointForFloor(floor);
+    }
+
+    selectRoofPeak(floorId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select roof peak for missing level: ${floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot select roof peak without a roof: ${floorId}`);
+        getRoofPeakPoint(floor);
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("roofPeak", { floorId: selectedFloorId });
+        this.syncInputsFromFloor(floor);
+        this.emitChange();
+    }
+
+    roofShedDirectionPoint(floor) {
+        if (!floor) throw new Error("shed roof direction handle requires a floor");
+        const center = this.roofShedBaseCenter(floor);
+        const direction = getRoofShedDirection(floor);
+        return {
+            x: Number(center.x) + Number(direction.x) * ROOF_SHED_DIRECTION_HANDLE_LENGTH,
+            y: Number(center.y) + Number(direction.y) * ROOF_SHED_DIRECTION_HANDLE_LENGTH
+        };
+    }
+
+    roofShedBasePolygon(floor) {
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error("shed roof base polygon requires a roof");
+        const ring = getRoofContactPolygon(floor);
+        if (!Array.isArray(ring) || ring.length < 3) {
+            throw new Error(`shed roof ${getFloorId(floor)} requires a valid contact polygon`);
+        }
+        const overhang = Number(roof.overhang);
+        if (!Number.isFinite(overhang)) throw new Error("shed roof overhang must be finite");
+        if (Math.abs(overhang) <= 0.000001) {
+            return ring.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+        }
+        const expanded = offsetRing(ring, overhang);
+        if (!Array.isArray(expanded) || expanded.length !== ring.length) {
+            throw new Error(`shed roof ${getFloorId(floor)} overhang requires a valid base polygon`);
+        }
+        return expanded.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+    }
+
+    roofShedBaseCenter(floor) {
+        return polygonCentroid(this.roofShedBasePolygon(floor));
+    }
+
+    roofShedDirectionSnapCandidates(floor) {
+        const base = this.roofShedBasePolygon(floor);
+        const center = this.roofShedBaseCenter(floor);
+        const candidates = [];
+        for (let index = 0; index < base.length; index++) {
+            const a = base[index];
+            const b = base[(index + 1) % base.length];
+            const dx = Number(b.x) - Number(a.x);
+            const dy = Number(b.y) - Number(a.y);
+            const lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared <= 0.000001) continue;
+            const t = ((Number(center.x) - Number(a.x)) * dx + (Number(center.y) - Number(a.y)) * dy) / lengthSquared;
+            if (t < -0.000001 || t > 1.000001) continue;
+            const intersection = {
+                x: Number(a.x) + dx * Math.max(0, Math.min(1, t)),
+                y: Number(a.y) + dy * Math.max(0, Math.min(1, t))
+            };
+            const vx = intersection.x - Number(center.x);
+            const vy = intersection.y - Number(center.y);
+            const distanceToCenter = Math.hypot(vx, vy);
+            if (distanceToCenter <= 0.000001) continue;
+            const direction = { x: vx / distanceToCenter, y: vy / distanceToCenter };
+            candidates.push({
+                edgeIndex: index,
+                direction,
+                intersection,
+                point: {
+                    x: Number(center.x) + direction.x * ROOF_SHED_DIRECTION_HANDLE_LENGTH,
+                    y: Number(center.y) + direction.y * ROOF_SHED_DIRECTION_HANDLE_LENGTH
+                }
+            });
+        }
+        return candidates;
+    }
+
+    selectRoofShedDirection(floorId, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select shed roof direction for missing level: ${floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot select shed roof direction without a roof: ${floorId}`);
+        if (String(roof.mode || "peak") !== "shed") throw new Error("cannot select shed direction on a non-shed roof");
+        getRoofShedDirection(roof);
+        const selectedFloorId = getFloorId(floor);
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([selectedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("roofShedDirection", { floorId: selectedFloorId });
+        this.syncInputsFromFloor(floor);
+        this.emitChange();
+    }
+
+    selectRoofVertex(floorId, vertexIndex, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select roof vertex for missing level: ${floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot select roof vertex without a roof: ${floorId}`);
+        const ring = getRoofContactPolygon(roof);
+        const index = Math.floor(Number(vertexIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= ring.length) {
+            throw new Error(`cannot select missing roof vertex: ${vertexIndex}`);
         }
         const selectedFloorId = getFloorId(floor);
         if (!options.preserveView) {
             this.selectedFloorIds = new Set([selectedFloorId]);
             this.layerSelectionMode = "floor";
         }
-        this.selection = createSelection("roof", { floorId: selectedFloorId });
+        this.selection = createSelection("roofVertex", { floorId: selectedFloorId, vertexIndex: index });
         this.syncInputsFromFloor(floor);
         this.emitChange();
+    }
+
+    selectedRoofPeak() {
+        const selection = this.selection || {};
+        if (selection.kind !== "roofPeak") return null;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`selected roof peak is missing its floor: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`selected roof peak is missing its roof: ${selection.floorId}`);
+        return { floor, roof, point: getRoofPeakPoint(floor) };
+    }
+
+    selectedRoofShedDirection() {
+        const selection = this.selection || {};
+        if (selection.kind !== "roofShedDirection") return null;
+        const floor = findFloor(this.building, selection.floorId);
+        if (!floor) throw new Error(`selected shed roof direction is missing its floor: ${selection.floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`selected shed roof direction is missing its roof: ${selection.floorId}`);
+        if (String(roof.mode || "peak") !== "shed") throw new Error("selected shed roof direction requires a shed roof");
+        return { floor, roof, direction: getRoofShedDirection(roof) };
     }
 
     findGable(floorOrId, gableId) {
@@ -1112,11 +1552,12 @@ export class BuildingEditorState extends EventTarget {
         if (!floor) throw new Error(`cannot add gable to missing roof level: ${floorId}`);
         const roof = getFloorRoof(floor);
         if (!roof) throw new Error(`cannot add gable to missing roof on level: ${floorId}`);
+        if (String(roof.mode || "peak") !== "peak") throw new Error("gables can only be added to peak roofs");
         if (Number(roof.overhang) < 0) {
             throw new Error("cannot add gable to a roof with negative overhang yet");
         }
         const resolvedFaceIndex = Math.floor(Number(faceIndex));
-        const faceCount = Array.isArray(floor.outerPolygon) ? floor.outerPolygon.length : 0;
+        const faceCount = getRoofContactPolygon(roof).length;
         if (!Number.isInteger(resolvedFaceIndex) || resolvedFaceIndex < 0 || resolvedFaceIndex >= faceCount) {
             throw new Error(`cannot add gable to missing roof face: ${faceIndex}`);
         }
@@ -1195,14 +1636,19 @@ export class BuildingEditorState extends EventTarget {
     deleteSelectedRoof() {
         const selection = this.selection || {};
         if (selection.kind !== "roof") return false;
-        const floor = findFloor(this.building, selection.floorId);
-        if (!floor) throw new Error(`cannot delete roof for missing level: ${selection.floorId}`);
-        const roof = getFloorRoof(floor);
-        if (!roof) throw new Error(`cannot delete missing roof for level: ${selection.floorId}`);
-        floor.roof = null;
+        const entries = this.selectedRoofEntries();
+        if (!entries.length) return false;
+        const floorIds = new Set(entries.map((entry) => getFloorId(entry.floor)));
+        entries.forEach((entry) => {
+            entry.floor.roof = null;
+        });
         this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
-            .filter((object) => object.mountKind !== "gable" || String(object.floorId) !== String(selection.floorId));
-        this.selectFloor(getFloorId(floor), { preserveView: true });
+            .filter((object) => object.mountKind !== "gable" || !floorIds.has(String(object.floorId)));
+        if (floorIds.size === 1) {
+            this.selectFloor([...floorIds][0], { preserveView: true });
+        } else {
+            this.selectBuilding();
+        }
         return true;
     }
 
@@ -1229,15 +1675,24 @@ export class BuildingEditorState extends EventTarget {
         if (!Number.isFinite(peakHeight) || peakHeight < 0) {
             throw new Error("roof peak height must be zero or greater");
         }
+        const elevationOffset = options.elevation !== undefined
+            ? normalizeRoofElevationOffset(Number(options.elevation) - roofSnapPlaneElevation(floor), "roof elevation offset")
+            : normalizeRoofElevationOffset(options.elevationOffset ?? DEFAULTS.roofElevationOffset, "roof elevation offset");
         floor.roof = createRoof({
             floorId,
+            mode: options.mode || DEFAULTS.roofMode,
             texture,
             overhang,
-            peakHeight
+            peakHeight,
+            domeLevels: options.domeLevels ?? this.inputs.roofDomeLevels,
+            peakPoint: options.peakPoint || this.defaultRoofPeakPoint(floor),
+            elevationOffset,
+            contactPolygon: Array.isArray(options.contactPolygon) ? options.contactPolygon : this.defaultRoofContactPolygon(floor)
         });
         this.inputs.roofTexture = texture;
         this.inputs.roofOverhang = overhang;
         this.inputs.roofPeakHeight = peakHeight;
+        this.inputs.roofDomeLevels = getRoofDomeLevels(floor.roof);
         this.paintTextures.roofs = texture;
         this.selectRoof(floorId, { preserveView: options.preserveView === true });
         return floor.roof;
@@ -1289,6 +1744,41 @@ export class BuildingEditorState extends EventTarget {
 
     isFloorSelected(floorId) {
         return this.selectedFloorIds.has(String(floorId || ""));
+    }
+
+    highlightedLayerFloorIds() {
+        const selection = this.selection || {};
+        const floorIds = new Set();
+        const addFloorId = (floorId) => {
+            if (floorId !== undefined && floorId !== null && floorId !== "") floorIds.add(String(floorId));
+        };
+        if (selection.kind === "wall" || selection.kind === "wallEndpoint") {
+            this.selectedWalls().forEach((wall) => addFloorId(wall.fragmentId || wall.floorId));
+            return floorIds;
+        }
+        if (selection.kind === "mountedObject") {
+            this.selectedMountedObjects().forEach((object) => {
+                if (object.mountKind === "gable") {
+                    addFloorId(object.floorId);
+                    return;
+                }
+                const wall = findWall(this.building, object.wallId ?? object.mountedWallSectionUnitId);
+                if (wall) addFloorId(wall.fragmentId || wall.floorId);
+                else addFloorId(object.floorId);
+            });
+            return floorIds;
+        }
+        if (selection.kind === "roof" || selection.kind === "roofVertex" || selection.kind === "roofPeak") {
+            this.selectedRoofFloorIds().forEach(addFloorId);
+            return floorIds;
+        }
+        if (selection.kind === "building") return floorIds;
+        addFloorId(selection.floorId || selection.levelId);
+        return floorIds;
+    }
+
+    isLayerFloorHighlighted(floorId) {
+        return this.highlightedLayerFloorIds().has(String(floorId || ""));
     }
 
     allFloorsSelected() {
@@ -1346,6 +1836,18 @@ export class BuildingEditorState extends EventTarget {
 
     selectedFloorVertexSnapPoint(point) {
         return this.floorVertexSnapPoint(this.selectedFloor(), point);
+    }
+
+    floorAtElevation(elevation) {
+        const targetElevation = Number(elevation);
+        if (!Number.isFinite(targetElevation)) {
+            throw new Error("floor elevation lookup requires a finite elevation");
+        }
+        return getBuildingFloors(this.building).find((floor) => Math.abs(getFloorElevation(floor) - targetElevation) <= 0.000001) || null;
+    }
+
+    polygonToolFloor() {
+        return this.floorAtElevation(this.polygonToolElevation);
     }
 
     beginFloorFragmentDrag(startPoint) {
@@ -1610,6 +2112,7 @@ export class BuildingEditorState extends EventTarget {
         });
         this.inputs.wallHeight = resolved.walls[0].height;
         this.inputs.wallTexture = resolved.walls[0].wallTexturePath;
+        this.inputs.wallThickness = resolved.walls[0].thickness;
         this.emitChange();
         return true;
     }
@@ -1670,6 +2173,7 @@ export class BuildingEditorState extends EventTarget {
         this.selection = createSelection("wallEndpoint", { floorId: wall.floorId, wallId: wall.id, wallEndpointKey: endpointKey });
         this.inputs.wallHeight = wall.height;
         this.inputs.wallTexture = wall.wallTexturePath;
+        this.inputs.wallThickness = wall.thickness;
         this.emitChange();
     }
 
@@ -1679,6 +2183,11 @@ export class BuildingEditorState extends EventTarget {
         switch (selection.kind) {
             case "floorVertex":
                 this.selectFloor(selection.floorId, { preserveView });
+                return true;
+            case "roofVertex":
+            case "roofPeak":
+            case "roofShedDirection":
+                this.selectRoof(selection.floorId, { preserveView });
                 return true;
             case "wallEndpoint":
                 this.selectWall(selection.wallId, { preserveView });
@@ -1729,6 +2238,7 @@ export class BuildingEditorState extends EventTarget {
             points,
             height: wallSettings.height,
             texture: wallSettings.texture,
+            thickness: wallSettings.thickness,
             bottomZ: getFloorElevation(floor),
             traversalLayer: floor.level,
             role: "interior"
@@ -1742,12 +2252,14 @@ export class BuildingEditorState extends EventTarget {
         if (this.tool === "wall") {
             return {
                 height: this.wallTool.height,
-                texture: this.wallTool.texture
+                texture: this.wallTool.texture,
+                thickness: this.wallTool.thickness
             };
         }
         return {
             height: this.inputs.wallHeight,
-            texture: this.inputs.wallTexture
+            texture: this.inputs.wallTexture,
+            thickness: this.inputs.wallThickness
         };
     }
 
@@ -1772,6 +2284,7 @@ export class BuildingEditorState extends EventTarget {
             endPoint: cloneEndpoint(endEndpoint),
             height: wallSettings.height,
             texture: wallSettings.texture,
+            thickness: wallSettings.thickness,
             bottomZ: getFloorElevation(floor),
             traversalLayer: floor.level,
             role: "interior",
@@ -1856,11 +2369,15 @@ export class BuildingEditorState extends EventTarget {
         }
         const floorId = getFloorId(floor);
         const ignoredVertexEndpoint = options.ignoreVertexEndpoint || null;
+        const wallSettings = this.wallCreationSettings();
+        const snapThickness = Number.isFinite(Number(options.wallThickness))
+            ? Number(options.wallThickness)
+            : (Number.isFinite(Number(wallSettings.thickness)) ? Number(wallSettings.thickness) : DEFAULTS.wallThickness);
         const matchesIgnoredVertex = (endpoint, ringKind = null, holeIndex = -1, vertexId = null) => (
             ignoredVertexEndpoint &&
-            ignoredVertexEndpoint.kind === "vertex" &&
+            isFloorVertexEndpoint(ignoredVertexEndpoint) &&
             endpoint &&
-            endpoint.kind === "vertex" &&
+            isFloorVertexEndpoint(endpoint) &&
             endpoint.fragmentId === ignoredVertexEndpoint.fragmentId &&
             endpoint.fragmentId === floorId &&
             endpoint.ring === (ringKind || ignoredVertexEndpoint.ring) &&
@@ -1870,35 +2387,55 @@ export class BuildingEditorState extends EventTarget {
         let best = null;
         const consider = (candidate) => {
             if (!candidate || !Number.isFinite(candidate.distance) || candidate.distance > threshold) return;
+            const importance = Number.isFinite(Number(candidate.importance)) && Number(candidate.importance) > 0
+                ? Number(candidate.importance)
+                : 1;
+            const weightedDistance = candidate.distance / importance;
             if (
                 !best ||
-                candidate.priority < best.priority ||
-                (candidate.priority === best.priority && candidate.distance < best.distance - 0.000001)
+                weightedDistance < best.weightedDistance - 0.000001 ||
+                (Math.abs(weightedDistance - best.weightedDistance) <= 0.000001 && importance > best.importance) ||
+                (Math.abs(weightedDistance - best.weightedDistance) <= 0.000001 && importance === best.importance && candidate.distance < best.distance - 0.000001)
             ) {
-                best = candidate;
+                best = { ...candidate, importance, weightedDistance };
             }
         };
 
         ringsForFloor(floor).forEach((ring) => {
             ring.points.forEach((vertex) => {
-                if (matchesIgnoredVertex({
-                    kind: "vertex",
+                const baseEndpoint = {
                     fragmentId: floorId,
                     ring: ring.ringKind,
                     holeIndex: ring.holeIndex,
                     vertexId: vertex.id
-                }, ring.ringKind, ring.holeIndex, vertex.id)) return;
-                const candidatePoint = { x: Number(vertex.x), y: Number(vertex.y) };
+                };
+                const rawEndpoint = { kind: "vertex", ...baseEndpoint };
+                if (!matchesIgnoredVertex(rawEndpoint, ring.ringKind, ring.holeIndex, vertex.id)) {
+                    const candidatePoint = { x: Number(vertex.x), y: Number(vertex.y) };
+                    consider({
+                        importance: WALL_SNAP_IMPORTANCE.floorVertex,
+                        distance: distance(point, candidatePoint),
+                        point: candidatePoint,
+                        endpoint: {
+                            ...rawEndpoint,
+                            x: candidatePoint.x,
+                            y: candidatePoint.y
+                        },
+                        kind: "vertex"
+                    });
+                }
+
+                const insetEndpoint = { kind: "vertex", inset: true, ...baseEndpoint };
+                if (matchesIgnoredVertex(insetEndpoint, ring.ringKind, ring.holeIndex, vertex.id)) return;
+                const insetVertex = floorVertexWallInsetPoint(floor, ring.ringKind, ring.holeIndex, vertex.id, snapThickness);
+                if (!insetVertex) return;
+                const candidatePoint = { x: Number(insetVertex.x), y: Number(insetVertex.y) };
                 consider({
-                    priority: 0,
+                    importance: WALL_SNAP_IMPORTANCE.floorVertex,
                     distance: distance(point, candidatePoint),
                     point: candidatePoint,
                     endpoint: {
-                        kind: "vertex",
-                        fragmentId: floorId,
-                        ring: ring.ringKind,
-                        holeIndex: ring.holeIndex,
-                        vertexId: vertex.id,
+                        ...insetEndpoint,
                         x: candidatePoint.x,
                         y: candidatePoint.y
                     },
@@ -1918,11 +2455,11 @@ export class BuildingEditorState extends EventTarget {
             ].forEach((entry) => {
                 if (matchesIgnoredVertex(entry.endpoint)) return;
                 const candidatePoint = { x: Number(entry.point.x), y: Number(entry.point.y) };
-                const endpoint = entry.endpoint && entry.endpoint.kind === "vertex"
+                const endpoint = isFloorVertexEndpoint(entry.endpoint)
                     ? cloneEndpoint(entry.endpoint)
                     : pointEndpoint(candidatePoint);
                 consider({
-                    priority: 1,
+                    importance: WALL_SNAP_IMPORTANCE.wallEndpoint,
                     distance: distance(point, candidatePoint),
                     point: candidatePoint,
                     endpoint,
@@ -1938,7 +2475,7 @@ export class BuildingEditorState extends EventTarget {
                 const candidatePoint = closestPointOnSegment(point, a, b);
                 if (pointIsNearSegmentEndpoint(candidatePoint, a, b, threshold)) continue;
                 consider({
-                    priority: 2,
+                    importance: WALL_SNAP_IMPORTANCE.floorEdge,
                     distance: distanceToSegment(point, a, b),
                     point: candidatePoint,
                     endpoint: {
@@ -1954,12 +2491,24 @@ export class BuildingEditorState extends EventTarget {
             }
         });
 
-        if (best) {
-            return { point: best.point, endpoint: best.endpoint, kind: best.kind };
-        }
+        const result = best
+            ? { point: best.point, endpoint: best.endpoint, kind: best.kind }
+            : (() => {
+                const prepared = this.preparePoint(point);
+                return { point: prepared, endpoint: pointEndpoint(prepared), kind: "point" };
+            })();
+        return this.applyDirectionSnapToEndpoint(result, options.directionOrigin);
+    }
 
-        const prepared = this.preparePoint(point);
-        return { point: prepared, endpoint: pointEndpoint(prepared), kind: "point" };
+    applyDirectionSnapToEndpoint(result, origin) {
+        if (!this.snapDirection || !origin || !result || !result.point) return result;
+        const snappedPoint = snapPointToCanonicalDirection(origin, result.point);
+        if (distance(snappedPoint, result.point) <= 0.000001) return result;
+        return {
+            point: snappedPoint,
+            endpoint: pointEndpoint(snappedPoint),
+            kind: "point"
+        };
     }
 
     pickWallEndpoint(point, threshold) {
@@ -1987,11 +2536,17 @@ export class BuildingEditorState extends EventTarget {
         const endpointKey = this.selection.wallEndpointKey;
         if (!wall || (endpointKey !== "startPoint" && endpointKey !== "endPoint")) return false;
         const detachVertexEndpoint = options.detachVertexEndpoint === true ||
-            (wall.role === "perimeter" && wall[endpointKey] && wall[endpointKey].kind === "vertex");
+            (wall.role === "perimeter" && isFloorVertexEndpoint(wall[endpointKey]));
         const previousEndpoint = cloneEndpoint(wall[endpointKey]);
+        const currentPoints = wallPoints(this.building, wall);
+        const directionOrigin = currentPoints.length === 2
+            ? (endpointKey === "startPoint" ? currentPoints[1] : currentPoints[0])
+            : null;
         const nextEndpoint = this.snapWallEndpoint(point, threshold, {
             ignoreWallId: wall.id,
-            ignoreVertexEndpoint: detachVertexEndpoint ? previousEndpoint : null
+            ignoreVertexEndpoint: detachVertexEndpoint ? previousEndpoint : null,
+            directionOrigin,
+            wallThickness: wall.thickness
         }).endpoint;
         const previousAttachment = wall.attachment ? JSON.parse(JSON.stringify(wall.attachment)) : null;
         const previousRole = wall.role;
@@ -2108,11 +2663,16 @@ export class BuildingEditorState extends EventTarget {
             const primaryRoof = getFloorRoof(primaryFloor);
             if (primaryRoof) {
                 this.inputs.roofTexture = primaryRoof.texturePath;
+                this.inputs.roofMode = primaryRoof.mode || DEFAULTS.roofMode;
                 this.inputs.roofOverhang = primaryRoof.overhang;
                 this.inputs.roofPeakHeight = primaryRoof.peakHeight;
+                this.inputs.roofDomeLevels = getRoofDomeLevels(primaryRoof);
             }
             this.inputs.wallHeight = primaryFloor.defaultWallHeight;
             this.inputs.wallTexture = primaryFloor.defaultWallTexturePath;
+            this.inputs.wallThickness = Number.isFinite(Number(this.building.defaults && this.building.defaults.wallThickness))
+                ? Number(this.building.defaults.wallThickness)
+                : DEFAULTS.wallThickness;
             this.draft = null;
             this.floorVertexDrag = null;
             this.emitChange();
@@ -2141,6 +2701,18 @@ export class BuildingEditorState extends EventTarget {
         this.building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
         refreshWallSectionEndpoints(this.building, floor);
         this.inputs.floorElevation = elevation;
+        this.emitChange();
+    }
+
+    updatePolygonToolElevation(value) {
+        const elevation = Number(value);
+        if (!Number.isFinite(elevation)) {
+            throw new Error("polygon elevation must be a finite number");
+        }
+        this.polygonToolElevation = elevation;
+        if (this.draft && this.draft.kind === "polygonEdit") {
+            this.draft.elevation = elevation;
+        }
         this.emitChange();
     }
 
@@ -2187,6 +2759,51 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
+    updateSelectedWallThickness(value) {
+        const thickness = normalizeEditorWallThickness(value, "wall thickness");
+        if (this.tool === "wall") {
+            this.updateWallToolThickness(thickness);
+            return;
+        }
+        const walls = this.selectedWalls();
+        if (!walls.length) {
+            throw new Error("cannot update wall thickness without a selected wall");
+        }
+        walls.forEach((wall) => {
+            wall.thickness = thickness;
+            const floor = findFloor(this.building, wall.fragmentId || wall.floorId);
+            if (floor) refreshWallSectionEndpoints(this.building, floor);
+        });
+        this.inputs.wallThickness = thickness;
+        this.emitChange();
+    }
+
+    updateSelectedWallVertexInset(inset) {
+        const walls = this.selectedWalls();
+        if (!walls.length || !walls.every((wall) => wallHasFloorVertexEndpoint(wall))) {
+            throw new Error("cannot change vertex inset without selected walls that have vertex endpoints");
+        }
+        const changedFloorIds = new Set();
+        walls.forEach((wall) => {
+            ["startPoint", "endPoint"].forEach((endpointKey) => {
+                const endpoint = wall[endpointKey];
+                if (!isFloorVertexEndpoint(endpoint)) return;
+                endpoint.kind = "vertex";
+                if (inset === true) {
+                    endpoint.inset = true;
+                } else {
+                    delete endpoint.inset;
+                }
+            });
+            changedFloorIds.add(wall.fragmentId || wall.floorId);
+        });
+        changedFloorIds.forEach((floorId) => {
+            const floor = findFloor(this.building, floorId);
+            if (floor) refreshWallSectionEndpoints(this.building, floor);
+        });
+        this.emitChange();
+    }
+
     updateSelectedWallTexture(texture) {
         if (this.tool === "wall") {
             this.updateWallToolTexture(texture);
@@ -2217,50 +2834,108 @@ export class BuildingEditorState extends EventTarget {
     }
 
     updateSelectedRoofTexture(texture) {
-        const floor = this.selectedFloor();
-        if (!floor) throw new Error("cannot update roof texture without a selected floor");
-        const roof = getFloorRoof(floor);
-        if (!roof) throw new Error("cannot update missing roof texture");
-        roof.texturePath = texture;
+        const entries = this.editableRoofEntries("cannot update roof texture");
+        if (!entries.length) throw new Error("cannot update roof texture without a selected roof");
+        entries.forEach(({ roof }) => {
+            roof.texturePath = texture;
+        });
         this.inputs.roofTexture = texture;
         this.paintTextures.roofs = texture;
         this.emitChange();
     }
 
+    updateSelectedRoofMode(value) {
+        const entries = this.editableRoofEntries("cannot update roof mode");
+        const mode = String(value || "").trim().toLowerCase();
+        if (mode !== "peak" && mode !== "shed" && mode !== "dome") {
+            throw new Error(`unknown roof mode: ${value}`);
+        }
+        const changedFloorIds = new Set();
+        entries.forEach(({ floor, roof }) => {
+            roof.mode = mode;
+            if (mode !== "peak") {
+                roof.gables = [];
+                changedFloorIds.add(getFloorId(floor));
+            }
+            if (mode === "shed") {
+                roof.shedDirection = getRoofShedDirection(roof);
+            }
+            if (mode === "dome") {
+                roof.domeLevels = getRoofDomeLevels(roof);
+            }
+        });
+        if (changedFloorIds.size > 0) {
+            this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+                .filter((object) => object.mountKind !== "gable" || !changedFloorIds.has(String(object.floorId)));
+        }
+        this.inputs.roofMode = mode;
+        this.emitChange();
+    }
+
     updateSelectedRoofOverhang(value) {
-        const floor = this.selectedFloor();
-        if (!floor) throw new Error("cannot update roof overhang without a selected floor");
+        const entries = this.editableRoofEntries("cannot update roof overhang");
+        if (!entries.length) throw new Error("cannot update roof overhang without a selected roof");
         const overhang = Number(value);
         if (!Number.isFinite(overhang)) {
             throw new Error("roof overhang must be a finite number");
         }
-        const roof = getFloorRoof(floor);
-        if (!roof) throw new Error("cannot update missing roof overhang");
-        if (overhang < 0 && getRoofGables(roof).length > 0) {
+        if (overhang < 0 && entries.some(({ roof }) => getRoofGables(roof).length > 0)) {
             throw new Error("roof gables cannot be used with negative overhang yet");
         }
-        roof.overhang = overhang;
+        entries.forEach(({ roof }) => {
+            roof.overhang = overhang;
+        });
         this.inputs.roofOverhang = overhang;
         this.emitChange();
     }
 
     updateSelectedRoofPeakHeight(value) {
-        const floor = this.selectedFloor();
-        if (!floor) throw new Error("cannot update roof peak height without a selected floor");
+        const entries = this.editableRoofEntries("cannot update roof peak height");
+        if (!entries.length) throw new Error("cannot update roof peak height without a selected roof");
         const peakHeight = Number(value);
         if (!Number.isFinite(peakHeight) || peakHeight < 0) {
             throw new Error("roof peak height must be zero or greater");
         }
-        const roof = getFloorRoof(floor);
-        if (!roof) throw new Error("cannot update missing roof peak height");
-        if (peakHeight <= 0 && getRoofGables(roof).length > 0) {
+        if (peakHeight <= 0 && entries.some(({ roof }) => getRoofGables(roof).length > 0)) {
             throw new Error("roof gables require positive peak height");
         }
-        roof.peakHeight = peakHeight;
-        getRoofGables(roof).forEach((gable) => {
-            gable.height = Math.min(Number(gable.height), peakHeight);
+        entries.forEach(({ roof }) => {
+            roof.peakHeight = peakHeight;
+            getRoofGables(roof).forEach((gable) => {
+                gable.height = Math.min(Number(gable.height), peakHeight);
+            });
         });
         this.inputs.roofPeakHeight = peakHeight;
+        this.emitChange();
+    }
+
+    updateSelectedRoofDomeLevels(value) {
+        const entries = this.editableRoofEntries("cannot update roof dome levels");
+        if (!entries.length) throw new Error("cannot update roof dome levels without a selected roof");
+        const levels = Math.floor(Number(value));
+        if (!Number.isInteger(levels) || levels < 1) {
+            throw new Error("roof dome levels must be a positive integer");
+        }
+        entries.forEach(({ roof }) => {
+            roof.domeLevels = levels;
+        });
+        this.inputs.roofDomeLevels = levels;
+        this.emitChange();
+    }
+
+    moveSelectedRoofsVerticalDelta(originalOffsets, deltaZ, options = {}) {
+        const originalsByFloorId = new Map((Array.isArray(originalOffsets) ? originalOffsets : [])
+            .map((entry) => [String(entry.floorId), normalizeRoofElevationOffset(entry.elevationOffset, "roof drag starting elevation offset")]));
+        if (!originalsByFloorId.size) throw new Error("roof drag requires starting offsets");
+        const snapDistance = Number.isFinite(Number(options.snapDistance)) ? Math.max(0, Number(options.snapDistance)) : 0;
+        this.selectedRoofEntries().forEach(({ floor, roof }) => {
+            const floorId = getFloorId(floor);
+            if (!originalsByFloorId.has(floorId)) throw new Error(`roof drag is missing starting offset for ${floorId}`);
+            let nextOffset = originalsByFloorId.get(floorId) + Number(deltaZ);
+            if (!Number.isFinite(nextOffset)) throw new Error("roof drag produced a non-finite elevation offset");
+            if (snapDistance > 0 && Math.abs(nextOffset) <= snapDistance) nextOffset = 0;
+            roof.elevationOffset = nextOffset;
+        });
         this.emitChange();
     }
 
@@ -2621,6 +3296,225 @@ export class BuildingEditorState extends EventTarget {
         return true;
     }
 
+    roofVertexSnapCandidates(floor) {
+        if (!floor) throw new Error("roof vertex snapping requires a floor");
+        const floorId = getFloorId(floor);
+        const floorCenter = polygonCentroid(floor.outerPolygon || []);
+        const candidates = [];
+        const addCandidate = (point, kind, importance) => {
+            if (!Number.isFinite(Number(point && point.x)) || !Number.isFinite(Number(point && point.y))) return;
+            candidates.push({
+                point: { x: Number(point.x), y: Number(point.y) },
+                kind,
+                importance
+            });
+        };
+        getBuildingWalls(this.building).forEach((wall) => {
+            const wallFloorId = wall.fragmentId || wall.floorId;
+            if (wallFloorId !== floorId) return;
+            const points = wallPoints(this.building, wall);
+            if (points.length !== 2) return;
+            const corners = wallFootprintCornersFromCenterline(points, wall.thickness, `wall ${wall.id} roof snap corners`);
+            if (wall.role === "perimeter") {
+                const firstSide = [corners[0], corners[1]];
+                const secondSide = [corners[2], corners[3]];
+                const sideDistance = (side) => {
+                    const midpoint = {
+                        x: (Number(side[0].x) + Number(side[1].x)) * 0.5,
+                        y: (Number(side[0].y) + Number(side[1].y)) * 0.5
+                    };
+                    return Math.hypot(midpoint.x - Number(floorCenter.x), midpoint.y - Number(floorCenter.y));
+                };
+                const outerSide = sideDistance(firstSide) >= sideDistance(secondSide) ? firstSide : secondSide;
+                outerSide.forEach((corner) => addCandidate(corner, "perimeterWallOuterCorner", ROOF_SNAP_IMPORTANCE.perimeterWallOuterCorner));
+                return;
+            }
+            corners.forEach((corner) => addCandidate(corner, "interiorWallCorner", ROOF_SNAP_IMPORTANCE.interiorWallCorner));
+        });
+        (Array.isArray(floor.outerPolygon) ? floor.outerPolygon : []).forEach((point) => {
+            addCandidate(point, "lowerFloorVertex", ROOF_SNAP_IMPORTANCE.lowerFloorVertex);
+        });
+        return candidates;
+    }
+
+    roofVertexSnapPoint(floor, point, threshold = ROOF_SNAP_DISTANCE) {
+        let best = null;
+        this.roofVertexSnapCandidates(floor).forEach((candidate) => {
+            const d = distance(point, candidate.point);
+            if (d > threshold) return;
+            const weightedDistance = d / candidate.importance;
+            if (
+                !best ||
+                weightedDistance < best.weightedDistance - 0.000001 ||
+                (Math.abs(weightedDistance - best.weightedDistance) <= 0.000001 && candidate.importance > best.importance)
+            ) {
+                best = { ...candidate, distance: d, weightedDistance };
+            }
+        });
+        return best ? best.point : null;
+    }
+
+    prepareRoofVertexPoint(floor, point) {
+        const snapped = this.roofVertexSnapPoint(floor, point);
+        if (snapped) return snapped;
+        return this.snapToGrid ? snapToHexAnchor(point) : { x: point.x, y: point.y };
+    }
+
+    prepareRoofPeakPoint(floor, point) {
+        if (!floor) throw new Error("roof peak snapping requires a floor");
+        const center = this.defaultRoofPeakPoint(floor);
+        if (distance(point, center) <= ROOF_PEAK_SNAP_DISTANCE) return center;
+        return this.snapToGrid ? snapToHexAnchor(point) : { x: point.x, y: point.y };
+    }
+
+    deleteGablesTouchingRoofVertex(roof, deletedVertexIndex, originalRingLength) {
+        const index = Math.floor(Number(deletedVertexIndex));
+        const ringLength = Math.floor(Number(originalRingLength));
+        if (!Number.isInteger(index) || !Number.isInteger(ringLength) || ringLength < 3) {
+            throw new Error("roof vertex deletion requires a valid original ring");
+        }
+        const previousEdge = (index - 1 + ringLength) % ringLength;
+        roof.gables = getRoofGables(roof).filter((gable) => {
+            const startEdge = Math.floor(Number(gable.start && gable.start.edgeIndex));
+            const endEdge = Math.floor(Number(gable.end && gable.end.edgeIndex));
+            return startEdge !== previousEdge && startEdge !== index && endEdge !== previousEdge && endEdge !== index;
+        }).map((gable) => {
+            const remap = (position) => {
+                const edgeIndex = Math.floor(Number(position.edgeIndex));
+                return {
+                    ...position,
+                    edgeIndex: edgeIndex > index ? edgeIndex - 1 : edgeIndex
+                };
+            };
+            return { ...gable, start: remap(gable.start), end: remap(gable.end) };
+        });
+    }
+
+    moveSelectedRoofVertex(point) {
+        const selected = this.selectedRoofVertex();
+        const nextPoint = this.prepareRoofVertexPoint(selected.floor, point);
+        const nextRing = selected.ring.map((vertex, index) => (
+            index === selected.vertexIndex ? { ...vertex, x: Number(nextPoint.x), y: Number(nextPoint.y) } : { ...vertex }
+        ));
+        const error = simplePolygonRingError(nextRing, `roof ${getFloorId(selected.floor)} contact polygon`);
+        if (error) throw new Error(`cannot move roof vertex: ${error}`);
+        selected.roof.contactPolygon = nextRing;
+        this.emitChange();
+        return true;
+    }
+
+    moveSelectedRoofPeak(point) {
+        const selected = this.selectedRoofPeak();
+        if (!selected) return false;
+        const nextPoint = this.prepareRoofPeakPoint(selected.floor, point);
+        selected.roof.peakPoint = { x: Number(nextPoint.x), y: Number(nextPoint.y) };
+        this.emitChange();
+        return true;
+    }
+
+    moveSelectedRoofShedDirection(point) {
+        const selected = this.selectedRoofShedDirection();
+        if (!selected) return false;
+        const center = this.roofShedBaseCenter(selected.floor);
+        const dx = Number(point.x) - Number(center.x);
+        const dy = Number(point.y) - Number(center.y);
+        const length = Math.hypot(dx, dy);
+        if (!Number.isFinite(length) || length <= 0.000001) return false;
+        const rawDirection = { x: dx / length, y: dy / length };
+        const rawHandlePoint = {
+            x: Number(center.x) + rawDirection.x * ROOF_SHED_DIRECTION_HANDLE_LENGTH,
+            y: Number(center.y) + rawDirection.y * ROOF_SHED_DIRECTION_HANDLE_LENGTH
+        };
+        const snap = this.roofShedDirectionSnapCandidates(selected.floor)
+            .map((candidate) => ({ ...candidate, distance: distance(rawHandlePoint, candidate.point) }))
+            .filter((candidate) => candidate.distance <= ROOF_SHED_DIRECTION_SNAP_DISTANCE)
+            .sort((a, b) => a.distance - b.distance)[0] || null;
+        selected.roof.shedDirection = snap ? snap.direction : rawDirection;
+        this.emitChange();
+        return true;
+    }
+
+    remapGablesForInsertedRoofVertex(roof, edgeIndex, edgeT) {
+        const insertionEdge = Math.floor(Number(edgeIndex));
+        const t = Number(edgeT);
+        if (!Number.isInteger(insertionEdge) || insertionEdge < 0 || !Number.isFinite(t) || t <= 0 || t >= 1) {
+            throw new Error("roof vertex insertion requires a valid edge split point");
+        }
+        roof.gables = getRoofGables(roof).map((gable) => {
+            const remap = (position) => {
+                const positionEdge = Math.floor(Number(position.edgeIndex));
+                const positionT = Number(position.t);
+                if (positionEdge < insertionEdge) return { ...position };
+                if (positionEdge > insertionEdge) return { ...position, edgeIndex: positionEdge + 1 };
+                if (positionT <= t) return { edgeIndex: positionEdge, t: Math.max(0, Math.min(1, positionT / t)) };
+                return { edgeIndex: positionEdge + 1, t: Math.max(0, Math.min(1, (positionT - t) / (1 - t))) };
+            };
+            return { ...gable, start: remap(gable.start), end: remap(gable.end) };
+        });
+    }
+
+    insertRoofVertexOnKnownEdge(floorId, insertAfterIndex, point, edgeT = null) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot insert roof vertex on missing floor: ${floorId}`);
+        const roof = getFloorRoof(floor);
+        if (!roof) throw new Error(`cannot insert roof vertex without a roof: ${floorId}`);
+        const ring = getRoofContactPolygon(roof);
+        if (!Array.isArray(ring) || ring.length < 3) throw new Error(`cannot insert roof vertex into invalid contact polygon: ${floorId}`);
+        const edgeIndex = Math.floor(Number(insertAfterIndex));
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= ring.length) {
+            throw new Error(`cannot insert roof vertex on missing edge: ${insertAfterIndex}`);
+        }
+        const edgeStart = ring[edgeIndex];
+        const edgeEnd = ring[(edgeIndex + 1) % ring.length];
+        const dx = Number(edgeEnd.x) - Number(edgeStart.x);
+        const dy = Number(edgeEnd.y) - Number(edgeStart.y);
+        const lengthSquared = dx * dx + dy * dy;
+        if (lengthSquared <= 0.000001) throw new Error("cannot insert roof vertex on a zero-length edge");
+        const t = edgeT === null || edgeT === undefined
+            ? ((Number(point.x) - Number(edgeStart.x)) * dx + (Number(point.y) - Number(edgeStart.y)) * dy) / lengthSquared
+            : Number(edgeT);
+        if (!Number.isFinite(t) || t <= 0.000001 || t >= 0.999999) {
+            throw new Error("cannot insert roof vertex at an existing roof vertex");
+        }
+        const preparedPoint = {
+            x: Number(edgeStart.x) + dx * t,
+            y: Number(edgeStart.y) + dy * t
+        };
+        const result = insertVertexOnRingEdge(ring, edgeIndex, preparedPoint);
+        const error = simplePolygonRingError(result.ring, `roof ${getFloorId(floor)} contact polygon`);
+        if (error) throw new Error(`cannot insert roof vertex: ${error}`);
+        roof.contactPolygon = result.ring;
+        this.remapGablesForInsertedRoofVertex(roof, edgeIndex, t);
+        this.selection = createSelection("roofVertex", {
+            floorId: getFloorId(floor),
+            vertexIndex: result.vertexIndex
+        });
+        this.emitChange();
+        return true;
+    }
+
+    deleteSelectedRoofVertex() {
+        const selection = this.selection || {};
+        if (selection.kind !== "roofVertex") return false;
+        const selected = this.selectedRoofVertex();
+        const floorId = getFloorId(selected.floor);
+        if (selected.ring.length - 1 < 3) {
+            selected.floor.roof = null;
+            this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+                .filter((object) => object.mountKind !== "gable" || String(object.floorId) !== floorId);
+            this.selectFloor(floorId, { preserveView: true });
+            return true;
+        }
+        this.deleteGablesTouchingRoofVertex(selected.roof, selected.vertexIndex, selected.ring.length);
+        selected.roof.contactPolygon = selected.ring
+            .filter((_point, index) => index !== selected.vertexIndex)
+            .map((point) => ({ ...point, x: Number(point.x), y: Number(point.y) }));
+        const nextIndex = Math.min(selected.vertexIndex, selected.roof.contactPolygon.length - 1);
+        this.selection = createSelection("roofVertex", { floorId, vertexIndex: nextIndex });
+        this.emitChange();
+        return true;
+    }
+
     deleteSelectedFloorVertex() {
         const floor = this.selectedFloor();
         const selection = this.selection;
@@ -2660,9 +3554,8 @@ export class BuildingEditorState extends EventTarget {
         return true;
     }
 
-    applyPolygonDraftToSelectedFloor(points, operation) {
-        const floor = this.selectedFloor();
-        if (!floor) throw new Error("cannot edit polygon without a selected floor");
+    applyPolygonDraftToFloor(floor, points, operation) {
+        if (!floor) throw new Error("cannot edit polygon without a target floor");
         const result = applyFloorPolygonEdit(floor, points, operation);
         const reconfigureWalls = operation !== "add";
         if (!reconfigureWalls) {
@@ -2676,21 +3569,170 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
+    applyPolygonDraftAtElevation(points, operation, elevation) {
+        const targetElevation = Number(elevation);
+        if (!Number.isFinite(targetElevation)) {
+            throw new Error("polygon finalize requires a finite elevation");
+        }
+        const floor = this.floorAtElevation(targetElevation);
+        if (!floor) {
+            if (operation !== "add") {
+                throw new Error(`cannot subtract polygon without a floor at elevation ${targetElevation}`);
+            }
+            const error = simplePolygonRingError(points, "new floor polygon");
+            if (error) throw new Error(`cannot create floor from polygon draft: ${error}`);
+            const nextFloor = createFloor({
+                elevation: targetElevation,
+                footprint: points,
+                defaultWallHeight: Number(this.inputs.wallHeight) || DEFAULTS.wallHeight,
+                floorHeight: Number(this.inputs.floorHeight) || DEFAULTS.wallHeight,
+                floorTexture: this.paintTextures.floor,
+                roofTexture: this.paintTextures.roofs,
+                defaultWallTexture: this.paintTextures.walls,
+                createPerimeterWalls: true
+            });
+            addFloor(this.building, nextFloor);
+            this.selectFloor(getFloorId(nextFloor));
+            return;
+        }
+        this.applyPolygonDraftToFloor(floor, points, operation);
+    }
+
+    applyPolygonDraftToSelectedFloor(points, operation) {
+        const floor = this.selectedFloor();
+        if (!floor) throw new Error("cannot edit polygon without a selected floor");
+        this.applyPolygonDraftToFloor(floor, points, operation);
+    }
+
+    activePolygonDraft() {
+        return this.draft && this.draft.kind === "polygonEdit" ? this.draft : null;
+    }
+
+    canFinalizePolygonDraft() {
+        const draft = this.activePolygonDraft();
+        return !!(draft && draft.completed === true && Array.isArray(draft.points) && draft.points.length >= 3);
+    }
+
+    pickPolygonDraftVertex(point, threshold) {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points)) return null;
+        let best = null;
+        draft.points.forEach((vertex, vertexIndex) => {
+            const d = distance(point, vertex);
+            if (d <= threshold && (!best || d < best.distance)) {
+                best = { vertexIndex, vertex, distance: d };
+            }
+        });
+        return best;
+    }
+
+    selectPolygonDraftVertex(vertexIndex) {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points)) return false;
+        const index = Math.floor(Number(vertexIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= draft.points.length) {
+            throw new Error(`cannot select missing polygon draft vertex: ${vertexIndex}`);
+        }
+        draft.selectedVertexIndex = index;
+        this.emitChange();
+        return true;
+    }
+
+    clearPolygonDraftVertexSelection() {
+        const draft = this.activePolygonDraft();
+        if (!draft) return false;
+        draft.selectedVertexIndex = -1;
+        this.emitChange();
+        return true;
+    }
+
+    moveSelectedPolygonDraftVertex(point) {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points)) return false;
+        const index = Math.floor(Number(draft.selectedVertexIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= draft.points.length) return false;
+        draft.points[index] = this.preparePoint(point, { preferFloorVertices: true });
+        this.emitChange();
+        return true;
+    }
+
+    polygonDraftEdgeAt(point, threshold) {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points) || draft.points.length < 2) return null;
+        let best = null;
+        for (let index = 0; index < draft.points.length; index++) {
+            const nextIndex = (index + 1) % draft.points.length;
+            const hit = distanceToSegment(point, draft.points[index], draft.points[nextIndex]);
+            if (hit <= threshold && (!best || hit < best.distance)) {
+                best = { insertAfterIndex: index, distance: hit };
+            }
+        }
+        return best;
+    }
+
+    insertPolygonDraftVertexOnEdge(point, threshold) {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points) || draft.completed !== true) return false;
+        const edge = this.polygonDraftEdgeAt(point, threshold);
+        if (!edge) return false;
+        const nextPoint = this.preparePoint(point, { preferFloorVertices: true });
+        draft.points.splice(edge.insertAfterIndex + 1, 0, nextPoint);
+        draft.selectedVertexIndex = edge.insertAfterIndex + 1;
+        this.emitChange();
+        return true;
+    }
+
+    deleteSelectedPolygonDraftVertex() {
+        const draft = this.activePolygonDraft();
+        if (!draft || !Array.isArray(draft.points)) return false;
+        const index = Math.floor(Number(draft.selectedVertexIndex));
+        if (!Number.isInteger(index) || index < 0 || index >= draft.points.length) return false;
+        draft.points.splice(index, 1);
+        if (draft.points.length < 3) draft.completed = false;
+        draft.selectedVertexIndex = Math.min(index, draft.points.length - 1);
+        this.emitChange();
+        return true;
+    }
+
     preparePoint(point, options = {}) {
         const preferFloorVertices = options.preferFloorVertices === true ||
             this.tool === "polygon" ||
             this.tool === "scissors";
         if (preferFloorVertices) {
-            const selectedFloorSnap = this.selectedFloorVertexSnapPoint(point);
-            if (selectedFloorSnap) return selectedFloorSnap;
+            const targetFloor = (this.tool === "polygon" || this.tool === "scissors")
+                ? this.polygonToolFloor()
+                : this.selectedFloor();
+            const targetFloorSnap = this.floorVertexSnapPoint(targetFloor, point);
+            if (targetFloorSnap) return targetFloorSnap;
         }
         const lowerFloorSnap = this.lowerFloorVertexSnapPoint(point);
         if (lowerFloorSnap) return lowerFloorSnap;
         return this.snapToGrid ? snapToHexAnchor(point) : { x: point.x, y: point.y };
     }
 
+    prepareLinePoint(point, origin, options = {}) {
+        const prepared = this.preparePoint(point, options);
+        return this.snapDirection && origin
+            ? snapPointToCanonicalDirection(origin, prepared)
+            : prepared;
+    }
+
     updateHoverPoint(point) {
-        this.hoverWorldPoint = point ? this.preparePoint(point) : null;
+        if (!point) {
+            this.hoverWorldPoint = null;
+            this.emitChange();
+            return;
+        }
+        const draft = this.draft;
+        const origin = draft &&
+            draft.kind === "polygonEdit" &&
+            Array.isArray(draft.points) &&
+            draft.points.length > 0
+            ? draft.points[draft.points.length - 1]
+            : null;
+        this.hoverWorldPoint = origin
+            ? this.prepareLinePoint(point, origin, { preferFloorVertices: true })
+            : this.preparePoint(point);
         this.emitChange();
     }
 
@@ -2744,27 +3786,46 @@ export class BuildingEditorState extends EventTarget {
     }
 
     deleteSelectedWall() {
-        const wall = this.selectedWall();
-        if (!wall) return false;
-        const floor = findFloor(this.building, wall.floorId);
-        if (!floor) throw new Error(`selected wall has missing floor: ${wall.floorId}`);
-        const deletedEndpoints = [wall.startPoint, wall.endPoint];
-        const adjacentWall = getBuildingWalls(this.building).find((candidate) => {
-            if (String(candidate.id) === String(wall.id)) return false;
-            if (String(candidate.floorId || candidate.fragmentId) !== String(wall.floorId || wall.fragmentId)) return false;
-            return deletedEndpoints.some((deletedEndpoint) => (
-                endpointsShareVertex(deletedEndpoint, candidate.startPoint) ||
-                endpointsShareVertex(deletedEndpoint, candidate.endPoint)
-            ));
-        }) || null;
-        this.building.wallSections = getBuildingWalls(this.building).filter((candidate) => String(candidate.id) !== String(wall.id));
+        const walls = this.selectedWalls();
+        if (!walls.length) return false;
+        const wallIds = new Set(walls.map((wall) => String(wall.id)));
+        const floorIds = new Set(walls.map((wall) => String(wall.fragmentId || wall.floorId)));
+        walls.forEach((wall) => {
+            if (!findFloor(this.building, wall.fragmentId || wall.floorId)) {
+                throw new Error(`selected wall has missing floor: ${wall.floorId}`);
+            }
+        });
+        const adjacentWall = walls.length === 1
+            ? (() => {
+                const wall = walls[0];
+                const deletedEndpoints = [wall.startPoint, wall.endPoint];
+                return getBuildingWalls(this.building).find((candidate) => {
+                    if (wallIds.has(String(candidate.id))) return false;
+                    if (String(candidate.floorId || candidate.fragmentId) !== String(wall.floorId || wall.fragmentId)) return false;
+                    return deletedEndpoints.some((deletedEndpoint) => (
+                        endpointsShareVertex(deletedEndpoint, candidate.startPoint) ||
+                        endpointsShareVertex(deletedEndpoint, candidate.endPoint)
+                    ));
+                }) || null;
+            })()
+            : null;
+        this.building.wallSections = getBuildingWalls(this.building).filter((candidate) => !wallIds.has(String(candidate.id)));
         this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
-            .filter((object) => String(object.wallId ?? object.mountedWallSectionUnitId) !== String(wall.id));
+            .filter((object) => !wallIds.has(String(object.wallId ?? object.mountedWallSectionUnitId)));
         if (adjacentWall) {
             this.selectWall(adjacentWall.id, { preserveView: this.renderStyle() === "exterior" });
             return true;
         }
-        this.selection = createSelection("floor", { floorId: getFloorId(floor) });
+        if (floorIds.size === 1) {
+            const floorId = [...floorIds][0];
+            this.selectedFloorIds = new Set([floorId]);
+            this.layerSelectionMode = "floor";
+            this.selection = createSelection("floor", { floorId });
+        } else {
+            this.selectedFloorIds = new Set(getBuildingFloors(this.building).map((floor) => getFloorId(floor)));
+            this.layerSelectionMode = "all";
+            this.selection = createSelection("building");
+        }
         this.emitChange();
         return true;
     }
@@ -2908,11 +3969,15 @@ export class BuildingEditorState extends EventTarget {
     }
 
     saveToBrowser() {
+        this.assertValidForSave();
+        localStorage.setItem(STORAGE_KEY, this.serialize());
+    }
+
+    assertValidForSave() {
         const errors = validateBuilding(this.building);
         if (errors.length) {
             throw new Error(`cannot save invalid building: ${errors[0]}`);
         }
-        localStorage.setItem(STORAGE_KEY, this.serialize());
     }
 
     hasBrowserSave() {
@@ -2927,7 +3992,8 @@ export class BuildingEditorState extends EventTarget {
         this.import(stored);
     }
 
-    reset() {
+    reset(options = {}) {
+        const createStarterFloor = options.createStarterFloor !== false;
         this.building = createEmptyBuilding();
         this.tool = "select";
         this.selectedFloorIds = new Set();
@@ -2937,8 +4003,10 @@ export class BuildingEditorState extends EventTarget {
         this.floorVertexDrag = null;
         this.hoverWorldPoint = null;
         this.renderError = "";
+        this.snapDirection = false;
         this.camera.rotation = 0;
-        this.createStarterFloor();
+        this.camera.pitch = Math.PI / 4;
+        if (createStarterFloor) this.createStarterFloor();
         this.centerCameraOnSelectedFloor();
         this.emitChange();
     }
@@ -2950,6 +4018,7 @@ export class BuildingEditorState extends EventTarget {
             this.camera.y = 0;
             this.camera.z = 0;
             this.camera.rotation = 0;
+            this.camera.pitch = Math.PI / 4;
             this.camera.rotationCenter = { x: 0, y: 0 };
             this.emitChange();
             return;

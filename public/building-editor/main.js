@@ -6,7 +6,7 @@ import { MountedObjectTool } from "./tools/MountedObjectTool.js";
 import { PolygonEditTool } from "./tools/PolygonEditTool.js";
 import { SelectTool } from "./tools/SelectTool.js";
 import { WallTool } from "./tools/WallTool.js";
-import { findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
+import { DEFAULTS, findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const MATERIALS = {
     floors: [
@@ -54,19 +54,28 @@ const texturePalette = document.querySelector("#texturePalette");
 const mountTexturePalette = document.querySelector("#mountTexturePalette");
 const windowContextMenu = document.querySelector("#windowContextMenu");
 const floorElevation = document.querySelector("#floorElevation");
+const polygonElevation = document.querySelector("#polygonElevation");
+const polygonFinalize = document.querySelector("#polygonFinalize");
 const floorHeight = document.querySelector("#floorHeight");
+const roofMode = document.querySelector("#roofMode");
 const roofOverhang = document.querySelector("#roofOverhang");
 const roofPeakHeight = document.querySelector("#roofPeakHeight");
+const roofDomeLevels = document.querySelector("#roofDomeLevels");
 const gableHeight = document.querySelector("#gableHeight");
 const gableHeightValue = document.querySelector("#gableHeightValue");
 const gableRoofReturn = document.querySelector("#gableRoofReturn");
 const wallHeight = document.querySelector("#wallHeight");
+const wallThickness = document.querySelector("#wallThickness");
+const wallThicknessValue = document.querySelector("#wallThicknessValue");
+const wallInsetEndpoints = document.querySelector("#wallInsetEndpoints");
+const wallProtrudeEndpoints = document.querySelector("#wallProtrudeEndpoints");
 const mountSize = document.querySelector("#mountSize");
 const mountSizeValue = document.querySelector("#mountSizeValue");
 const mountAspect = document.querySelector("#mountAspect");
 const mountAspectValue = document.querySelector("#mountAspectValue");
 const mountTextureButton = document.querySelector("#mountTextureButton");
 const snapToggle = document.querySelector("#snapToggle");
+const snapDirectionToggle = document.querySelector("#snapDirectionToggle");
 const anchorToggle = document.querySelector("#anchorToggle");
 const selectedSummary = document.querySelector("#selectedSummary");
 const paintToolButton = document.querySelector('[data-tool="paint"]');
@@ -75,6 +84,16 @@ const roofToolIcon = document.querySelector("#roofToolIcon");
 const wallToolButton = document.querySelector(".wallToolButton");
 const wallToolIcon = document.querySelector("#wallToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
+const buildingOpenDialog = document.querySelector("#buildingOpenDialog");
+const buildingOpenMessage = document.querySelector("#buildingOpenMessage");
+const buildingSaveList = document.querySelector("#buildingSaveList");
+const openNewBuildingButton = document.querySelector("#openNewBuilding");
+const closeBuildingOpenDialogButton = document.querySelector("#closeBuildingOpenDialog");
+const buildingNameDialog = document.querySelector("#buildingNameDialog");
+const buildingNameForm = document.querySelector("#buildingNameForm");
+const buildingNameInput = document.querySelector("#buildingNameInput");
+const buildingNameMessage = document.querySelector("#buildingNameMessage");
+const cancelBuildingNameButton = document.querySelector("#cancelBuildingName");
 
 const webglContextAttributes = {
     alpha: false,
@@ -111,17 +130,8 @@ stageHost.appendChild(app.view);
 app.stage.interactive = true;
 
 const state = new BuildingEditorState();
-let loadedBrowserSaveOnStartup = false;
-let browserSaveStartupError = null;
-if (state.hasBrowserSave()) {
-    try {
-        state.loadFromBrowser();
-        loadedBrowserSaveOnStartup = true;
-    } catch (error) {
-        console.error(error);
-        browserSaveStartupError = error;
-    }
-}
+let currentBuildingName = "";
+let buildingOpenDialogCanClose = false;
 window.__buildingEditorDebugState = state;
 window.repairBuildingEditorBrowserSave = (options = {}) => {
     try {
@@ -161,6 +171,7 @@ let touchGesture = null;
 let hasCenteredInitialFloor = false;
 let rotatingView = false;
 let rotatePointerX = null;
+let lastZTapTime = 0;
 let lastStagePointer = null;
 let layerPanelSignature = "";
 let texturePaletteSignature = "";
@@ -168,12 +179,15 @@ let wallToolTexturePaletteOpen = false;
 let mountTexturePaletteSignature = "";
 let mountTexturePaletteOpen = false;
 let windowContext = null;
+let layerDrag = null;
 
 const MOUNTED_OBJECT_ASSETS = {
     doors: [],
     windows: []
 };
 const MOUNT_ASPECT_LOG_BASE = 2;
+const Z_DOUBLE_TAP_MS = 320;
+const CAMERA_PITCH_WHEEL_SPEED = 0.004;
 
 function resizeStage() {
     const width = Math.max(320, stageHost.clientWidth);
@@ -202,6 +216,163 @@ function withErrorBoundary(fn) {
         console.error(error);
         setStatus(error.message, true);
     }
+}
+
+async function withAsyncErrorBoundary(fn) {
+    try {
+        await fn();
+    } catch (error) {
+        console.error(error);
+        setStatus(error.message, true);
+    }
+}
+
+const BUILDING_EDITOR_SAVE_API = "/api/building-editor/buildings";
+
+function normalizeBuildingEditorName(rawName) {
+    const name = String(rawName === undefined || rawName === null ? "" : rawName).trim();
+    if (!name || name.length > 80) return "";
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/.test(name)) return "";
+    if (name.endsWith(".json")) return "";
+    return name;
+}
+
+function requireBuildingEditorName(rawName) {
+    const name = normalizeBuildingEditorName(rawName);
+    if (!name) {
+        throw new Error("building names must use letters, numbers, spaces, underscores, or hyphens, and must not include .json");
+    }
+    return name;
+}
+
+async function readJsonResponse(response, context) {
+    let payload = null;
+    try {
+        payload = await response.json();
+    } catch (error) {
+        throw new Error(`${context} returned non-JSON response`);
+    }
+    if (!response.ok || !payload || payload.ok !== true) {
+        const reason = payload && payload.reason ? payload.reason : `HTTP ${response.status}`;
+        throw new Error(`${context} failed: ${reason}`);
+    }
+    return payload;
+}
+
+function setModalMessage(element, message, isError = false) {
+    element.textContent = message || "";
+    element.dataset.error = isError ? "true" : "false";
+}
+
+function formatBuildingModifiedTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+    });
+}
+
+function renderBuildingSaveList(buildings) {
+    buildingSaveList.replaceChildren();
+    if (!Array.isArray(buildings)) {
+        throw new Error("building save list response is missing buildings array");
+    }
+    if (buildings.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "modalMessage";
+        empty.textContent = "No saved buildings yet.";
+        buildingSaveList.appendChild(empty);
+        return;
+    }
+    buildings.forEach((building) => {
+        const name = requireBuildingEditorName(building && building.name);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "buildingSaveButton";
+        button.dataset.buildingName = name;
+
+        const nameElement = document.createElement("span");
+        nameElement.className = "buildingSaveName";
+        nameElement.textContent = name;
+
+        const metaElement = document.createElement("span");
+        metaElement.className = "buildingSaveMeta";
+        metaElement.textContent = formatBuildingModifiedTime(building.modifiedTime);
+
+        button.append(nameElement, metaElement);
+        buildingSaveList.appendChild(button);
+    });
+}
+
+async function showBuildingOpenDialog({ canClose = true } = {}) {
+    buildingOpenDialogCanClose = canClose;
+    closeBuildingOpenDialogButton.hidden = !canClose;
+    buildingOpenDialog.hidden = false;
+    setModalMessage(buildingOpenMessage, "Loading saved buildings...");
+    buildingSaveList.replaceChildren();
+    const response = await fetch(BUILDING_EDITOR_SAVE_API);
+    const payload = await readJsonResponse(response, "building save list");
+    renderBuildingSaveList(payload.buildings);
+    setModalMessage(buildingOpenMessage, "Choose a saved building or start a new one.");
+}
+
+function closeBuildingOpenDialog() {
+    if (!buildingOpenDialogCanClose) return;
+    buildingOpenDialog.hidden = true;
+}
+
+function showBuildingNameDialog() {
+    state.reset({ createStarterFloor: false });
+    currentBuildingName = "";
+    buildingNameInput.value = "";
+    setModalMessage(buildingNameMessage, "This name becomes the save file name.");
+    buildingNameDialog.hidden = false;
+    buildingOpenDialog.hidden = true;
+    requestAnimationFrame(() => buildingNameInput.focus());
+}
+
+function closeBuildingNameDialog() {
+    buildingNameDialog.hidden = true;
+}
+
+async function loadBuildingFromServer(name) {
+    const buildingName = requireBuildingEditorName(name);
+    const response = await fetch(`${BUILDING_EDITOR_SAVE_API}/${encodeURIComponent(buildingName)}`);
+    const payload = await readJsonResponse(response, `building "${buildingName}"`);
+    if (!payload.data || typeof payload.data !== "object") {
+        throw new Error(`building "${buildingName}" response is missing building data`);
+    }
+    payload.data.name = buildingName;
+    state.import(payload.data);
+    currentBuildingName = buildingName;
+    buildingOpenDialog.hidden = true;
+    setStatus(`opened ${buildingName}`);
+}
+
+function createNewBuildingWithName(rawName) {
+    const buildingName = requireBuildingEditorName(rawName);
+    state.building.name = buildingName;
+    currentBuildingName = buildingName;
+    closeBuildingNameDialog();
+    setStatus(`created new empty building: ${buildingName}`);
+}
+
+async function saveCurrentBuildingToServer() {
+    const buildingName = requireBuildingEditorName(currentBuildingName);
+    state.building.name = buildingName;
+    state.assertValidForSave();
+    const payload = JSON.parse(state.serialize());
+    const response = await fetch(`${BUILDING_EDITOR_SAVE_API}/${encodeURIComponent(buildingName)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+    await readJsonResponse(response, `save "${buildingName}"`);
+    setStatus(`saved ${buildingName}`);
 }
 
 function normalizeImagePathList(values, folder) {
@@ -355,6 +526,23 @@ function rotateViewFromScreenX(screenX) {
     rotatePointerX = Number(screenX);
 }
 
+function rotateCameraPitchFromWheel(deltaY) {
+    state.camera.pitch = renderer.clampCameraPitch(
+        (Number.isFinite(Number(state.camera.pitch)) ? Number(state.camera.pitch) : renderer.defaultCameraPitch()) +
+        Number(deltaY) * CAMERA_PITCH_WHEEL_SPEED
+    );
+    renderer.render();
+}
+
+function resetCameraOrientation() {
+    state.camera.rotation = 0;
+    state.camera.pitch = renderer.defaultCameraPitch();
+    rotatePointerX = null;
+    state.updateCameraRotationCenter();
+    renderer.render();
+    setStatus("view orientation reset");
+}
+
 function activeTool() {
     return tools[state.tool] || tools.select;
 }
@@ -367,14 +555,14 @@ function activePaintMode() {
     if (state.tool === "wall") return "walls";
     const kind = state.selection && state.selection.kind;
     if (kind === "gable" || kind === "gableHandle") return "walls";
-    if (kind === "roof") return "roofs";
+    if (kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection") return "roofs";
     return kind === "wall" || kind === "wallEndpoint" ? "walls" : "floor";
 }
 
 function selectionCanUsePaintTool() {
     if (state.tool === "wall") return true;
     const kind = state.selection && state.selection.kind;
-    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint";
+    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint";
 }
 
 function mountedObjectSettingsActive() {
@@ -580,6 +768,7 @@ function applyTextureToSelection(texturePath) {
 
 function selectionScopeMatches(element) {
     if (mountedObjectSettingsActive()) return false;
+    if (state.tool === "polygon" || state.tool === "scissors") return false;
     const exclude = element.dataset.selectionExclude;
     const kind = state.selection && state.selection.kind;
     if (exclude && exclude.split(/\s+/).includes(kind)) return false;
@@ -706,15 +895,16 @@ function createLayerPreview(floor) {
 }
 
 function createLayerCard({ floor = null, selectAll = false, selected = false, allSelected = false }) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "layerCard";
-    button.dataset.selected = selected ? "true" : "false";
+    const card = document.createElement("div");
+    card.className = "layerCard";
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    card.dataset.selected = selected ? "true" : "false";
     if (selectAll) {
-        button.dataset.layerSelectAll = "true";
-        button.dataset.allSelected = allSelected ? "true" : "false";
+        card.dataset.layerSelectAll = "true";
+        card.dataset.allSelected = allSelected ? "true" : "false";
     } else {
-        button.dataset.floorId = getFloorId(floor);
+        card.dataset.floorId = getFloorId(floor);
     }
 
     if (selectAll) {
@@ -734,27 +924,30 @@ function createLayerCard({ floor = null, selectAll = false, selected = false, al
             rect.setAttribute("stroke-width", "1.5");
             svg.appendChild(rect);
         });
-        button.appendChild(svg);
+        card.appendChild(svg);
     } else {
-        button.appendChild(createLayerPreview(floor));
+        card.appendChild(createLayerPreview(floor));
     }
 
     const label = document.createElement("span");
     const name = document.createElement("span");
     name.className = "layerName";
-    name.textContent = selectAll ? "whole building" : getFloorId(floor);
+    name.textContent = selectAll ? "whole building" : (floor.name || getFloorId(floor));
+    if (!selectAll) name.dataset.renameFloorId = getFloorId(floor);
     const meta = document.createElement("span");
     meta.className = "layerMeta";
     meta.textContent = selectAll ? "exterior view" : `z ${getFloorElevation(floor)} h ${Number(floor.floorHeight)}`;
     label.appendChild(name);
     label.appendChild(meta);
-    button.appendChild(label);
-    return button;
+    card.appendChild(label);
+    return card;
 }
 
 function createLayerRow(floor, selected) {
     const row = document.createElement("div");
     row.className = "layerRow";
+    row.draggable = true;
+    row.dataset.floorRowId = getFloorId(floor);
     row.appendChild(createLayerCard({ floor, selected }));
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
@@ -864,6 +1057,7 @@ function layerGeometrySignature(floor) {
     const rings = [floor.outerPolygon || [], ...(Array.isArray(floor.holes) ? floor.holes : [])];
     return [
         getFloorId(floor),
+        floor.name || "",
         getFloorElevation(floor),
         Number(floor.floorHeight),
         ...rings.map((ring) => ring.map((point) => `${point.id || ""}:${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`).join("|"))
@@ -879,17 +1073,21 @@ function updateLayerPanelSelection(floors) {
     }
     floors.forEach((floor) => {
         const card = layerPanel.querySelector(`[data-floor-id="${CSS.escape(getFloorId(floor))}"]`);
-        if (card) card.dataset.selected = !allSelected && state.isFloorSelected(getFloorId(floor)) ? "true" : "false";
+        if (card) card.dataset.selected = state.isLayerFloorHighlighted(getFloorId(floor)) ? "true" : "false";
     });
 }
 
+function layerPanelFloors(floors) {
+    return [...floors].reverse();
+}
+
 function renderLayerPanel(floors) {
-    const nextSignature = floors
+    const panelFloors = layerPanelFloors(floors);
+    const nextSignature = panelFloors
         .map((floor) => layerGeometrySignature(floor))
-        .sort()
         .join("||") || "empty";
     if (nextSignature === layerPanelSignature) {
-        updateLayerPanelSelection(floors);
+        updateLayerPanelSelection(panelFloors);
         return;
     }
     layerPanelSignature = nextSignature;
@@ -900,17 +1098,76 @@ function renderLayerPanel(floors) {
         selected: allSelected,
         allSelected
     }));
-    [...floors]
-        .sort((a, b) => getFloorElevation(b) - getFloorElevation(a))
-        .forEach((floor) => {
-            layerPanel.appendChild(createLayerRow(floor, !allSelected && state.isFloorSelected(getFloorId(floor))));
-        });
+    panelFloors.forEach((floor) => {
+        layerPanel.appendChild(createLayerRow(floor, state.isLayerFloorHighlighted(getFloorId(floor))));
+    });
+}
+
+function beginLayerRename(nameElement, floorId) {
+    const floor = findFloor(state.building, floorId);
+    if (!floor) throw new Error(`cannot rename missing floor: ${floorId}`);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "layerNameInput";
+    input.value = floor.name || getFloorId(floor);
+    input.setAttribute("aria-label", "Floor name");
+    let finished = false;
+    const finish = (commit) => {
+        if (finished) return;
+        finished = true;
+        if (commit) {
+            state.renameFloor(floorId, input.value);
+        } else {
+            renderLayerPanel(getBuildingFloors(state.building));
+        }
+    };
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("pointerdown", (event) => event.stopPropagation());
+    input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+            event.preventDefault();
+            finish(true);
+        } else if (event.key === "Escape") {
+            event.preventDefault();
+            finish(false);
+        }
+    });
+    input.addEventListener("blur", () => finish(true));
+    nameElement.replaceWith(input);
+    input.focus();
+    input.select();
+}
+
+function clearLayerDragMarkers() {
+    layerPanel.querySelectorAll(".layerRow[data-drop-position]").forEach((row) => {
+        delete row.dataset.dropPosition;
+    });
+}
+
+function layerDropTargetFromEvent(event) {
+    const row = event.target.closest(".layerRow");
+    if (!row || !layerPanel.contains(row) || !row.dataset.floorRowId) return null;
+    const rect = row.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height * 0.5 ? "before" : "after";
+    return { row, floorId: row.dataset.floorRowId, position };
+}
+
+function modelDropPositionFromPanelPosition(position) {
+    return position === "before" ? "after" : "before";
 }
 
 function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
     const selection = state.selection || { kind: "building" };
+    if (state.tool === "polygon" || state.tool === "scissors") {
+        const draft = state.activePolygonDraft();
+        const action = state.tool === "polygon" ? "add polygon" : "cut polygon";
+        if (draft && draft.completed === true) return `${action}, ${draft.points.length} editable vertices`;
+        if (draft && Array.isArray(draft.points) && draft.points.length > 0) return `${action}, ${draft.points.length} point${draft.points.length === 1 ? "" : "s"}`;
+        return `${action}, elevation ${Number(state.polygonToolElevation)}`;
+    }
     if (state.tool === "wall") {
-        return `wall tool, height ${Number(state.wallTool.height)}`;
+        return `wall tool, height ${Number(state.wallTool.height)}, thickness ${Number(state.wallTool.thickness)}`;
     }
     if (state.tool === "mountObject") {
         return `${state.mountedObjectTool.category === "windows" ? "window" : "door"} tool`;
@@ -934,7 +1191,7 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
     }
     if (selectedWall) {
         const endpointText = selection.kind === "wallEndpoint" && selection.wallEndpointKey ? `, ${selection.wallEndpointKey}` : "";
-        return `wall ${selectedWall.id}${endpointText}, level ${selectedWall.floorId}, height ${selectedWall.height}`;
+        return `wall ${selectedWall.id}${endpointText}, level ${selectedWall.floorId}, height ${selectedWall.height}, thickness ${selectedWall.thickness}`;
     }
     if (!selectedFloor) return "nothing selected";
     const floorId = getFloorId(selectedFloor);
@@ -946,7 +1203,23 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         return `${floorId} floor, ${floorWallCount} walls`;
     }
     if (selection.kind === "roof") {
-        return `${floorId} roof`;
+        const roofFloorIds = state.selectedRoofFloorIds();
+        if (roofFloorIds.length > 1) return `${roofFloorIds.length} roofs selected`;
+        const roof = selectedFloor ? getFloorRoof(selectedFloor) : null;
+        const offsetText = roof && Number.isFinite(Number(roof.elevationOffset)) && Math.abs(Number(roof.elevationOffset)) > 0.000001
+            ? `, offset ${Number(roof.elevationOffset).toFixed(2)}`
+            : "";
+        const modeText = roof && roof.mode ? ` ${roof.mode}` : "";
+        return `${floorId}${modeText} roof${offsetText}`;
+    }
+    if (selection.kind === "roofVertex") {
+        return `${floorId} roof, contact vertex ${selection.vertexIndex}`;
+    }
+    if (selection.kind === "roofPeak") {
+        return `${floorId} roof, peak`;
+    }
+    if (selection.kind === "roofShedDirection") {
+        return `${floorId} roof, shed direction`;
     }
     if (selection.kind === "gable" || selection.kind === "gableHandle") {
         const handleText = selection.kind === "gableHandle" && selection.gableHandle ? `, ${selection.gableHandle}` : "";
@@ -971,7 +1244,7 @@ function syncUi() {
     });
     if (roofToolButton) {
         const selection = state.selection || {};
-        roofToolButton.dataset.active = selection.kind === "roof" || selection.kind === "gable" || selection.kind === "gableHandle" ? "true" : "false";
+        roofToolButton.dataset.active = selection.kind === "roof" || selection.kind === "roofVertex" || selection.kind === "roofPeak" || selection.kind === "roofShedDirection" || selection.kind === "gable" || selection.kind === "gableHandle" ? "true" : "false";
     }
     if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
     syncRoofToolButtonTexture();
@@ -991,14 +1264,21 @@ function syncUi() {
     const floors = getBuildingFloors(state.building);
     const walls = getBuildingWalls(state.building);
     const selectedWalls = selectedWallsFrom(walls);
+    const showVertexEndpointControls = state.tool !== "wall" && state.selectedWallsCanToggleVertexInset();
+    if (wallInsetEndpoints) wallInsetEndpoints.hidden = wallInsetEndpoints.hidden || !showVertexEndpointControls;
+    if (wallProtrudeEndpoints) wallProtrudeEndpoints.hidden = wallProtrudeEndpoints.hidden || !showVertexEndpointControls;
+    if (polygonElevation) polygonElevation.value = Number(state.polygonToolElevation);
+    if (polygonFinalize) polygonFinalize.disabled = !state.canFinalizePolygonDraft();
     renderLayerPanel(floors);
     if (selectedFloor) {
         const roof = getFloorRoof(selectedFloor);
         floorElevation.value = getFloorElevation(selectedFloor);
         floorHeight.value = Number(selectedFloor.floorHeight);
         if (roof) {
+            roofMode.value = roof.mode || "peak";
             roofOverhang.value = Number(roof.overhang);
             roofPeakHeight.value = Number(roof.peakHeight);
+            if (roofDomeLevels) roofDomeLevels.value = Number(roof.domeLevels ?? DEFAULTS.roofDomeLevels);
         }
         const selectedGable = state.selectedGable();
         if (roof && selectedGable) {
@@ -1013,9 +1293,14 @@ function syncUi() {
     }
     if (state.tool === "wall") {
         wallHeight.value = Number(state.wallTool.height);
+        wallThickness.value = Number(state.wallTool.thickness);
+        wallThicknessValue.value = Number(state.wallTool.thickness).toFixed(3);
         if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.wallTool.texture)}`;
     } else if (selectedWalls.length > 0) {
         wallHeight.value = sharedWallValue(selectedWalls, (wall) => wall.height, state.inputs.wallHeight);
+        const selectedThickness = sharedWallValue(selectedWalls, (wall) => wall.thickness, state.inputs.wallThickness);
+        wallThickness.value = Number(selectedThickness);
+        wallThicknessValue.value = Number(selectedThickness).toFixed(3);
     } else if (selectedFloor) {
         wallHeight.value = selectedFloor.defaultWallHeight;
     }
@@ -1029,6 +1314,7 @@ function syncUi() {
     }
     selectedSummary.textContent = summarizeSelection(selectedFloor, selectedWall, floors, walls);
     snapToggle.checked = state.snapToGrid;
+    snapDirectionToggle.checked = state.snapDirection;
     anchorToggle.checked = state.showSnapAnchors;
     jsonText.value = state.serialize();
 
@@ -1161,33 +1447,53 @@ document.querySelector("#duplicateFloor").addEventListener("click", () => {
     withErrorBoundary(() => state.duplicateSelectedFloor());
 });
 
-document.querySelector("#saveBrowser").addEventListener("click", () => {
-    withErrorBoundary(() => {
-        state.saveToBrowser();
-        setStatus("saved in browser storage");
-    });
+document.querySelector("#saveBuilding").addEventListener("click", () => {
+    withAsyncErrorBoundary(() => saveCurrentBuildingToServer());
 });
 
-document.querySelector("#loadBrowser").addEventListener("click", () => {
-    withErrorBoundary(() => state.loadFromBrowser());
+document.querySelector("#openBuilding").addEventListener("click", () => {
+    withAsyncErrorBoundary(() => showBuildingOpenDialog({ canClose: true }));
 });
 
-document.querySelector("#resetBrowser").addEventListener("click", () => {
-    if (!window.confirm("Reset the building editor to the default box and overwrite the browser save?")) return;
-    withErrorBoundary(() => {
-        state.reset();
-        state.saveToBrowser();
-        renderer.render();
-        syncUi();
-        setStatus("reset to default building and saved");
-    });
+document.querySelector("#newBuilding").addEventListener("click", () => {
+    withErrorBoundary(() => showBuildingNameDialog());
 });
 
-document.querySelector("#importJson").addEventListener("click", () => {
-    withErrorBoundary(() => state.import(jsonText.value));
+buildingSaveList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-building-name]");
+    if (!button || !buildingSaveList.contains(button)) return;
+    withAsyncErrorBoundary(() => loadBuildingFromServer(button.dataset.buildingName));
+});
+
+openNewBuildingButton.addEventListener("click", () => {
+    withErrorBoundary(() => showBuildingNameDialog());
+});
+
+closeBuildingOpenDialogButton.addEventListener("click", () => {
+    closeBuildingOpenDialog();
+});
+
+buildingNameForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    withErrorBoundary(() => createNewBuildingWithName(buildingNameInput.value));
+});
+
+cancelBuildingNameButton.addEventListener("click", () => {
+    closeBuildingNameDialog();
+    if (!currentBuildingName) {
+        showBuildingOpenDialog({ canClose: false }).catch((error) => {
+            console.error(error);
+            setStatus(error.message, true);
+        });
+    }
 });
 
 layerPanel.addEventListener("click", (event) => {
+    const renameTarget = event.target.closest("[data-rename-floor-id]");
+    if (renameTarget && layerPanel.contains(renameTarget)) {
+        withErrorBoundary(() => beginLayerRename(renameTarget, renameTarget.dataset.renameFloorId));
+        return;
+    }
     const deleteButton = event.target.closest("[data-delete-floor-id]");
     if (deleteButton && layerPanel.contains(deleteButton)) {
         withErrorBoundary(() => state.deleteFloor(deleteButton.dataset.deleteFloorId));
@@ -1196,6 +1502,7 @@ layerPanel.addEventListener("click", (event) => {
     const card = event.target.closest(".layerCard");
     if (!card || !layerPanel.contains(card)) return;
     withErrorBoundary(() => {
+        if (state.tool !== "select") state.setTool("select");
         if (card.dataset.layerSelectAll === "true") {
             state.selectAllFloors();
             return;
@@ -1204,12 +1511,83 @@ layerPanel.addEventListener("click", (event) => {
     });
 });
 
+layerPanel.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest(".layerCard");
+    if (!card || !layerPanel.contains(card)) return;
+    event.preventDefault();
+    withErrorBoundary(() => {
+        if (state.tool !== "select") state.setTool("select");
+        if (card.dataset.layerSelectAll === "true") {
+            state.selectAllFloors();
+        } else {
+            state.selectFloor(card.dataset.floorId);
+        }
+    });
+});
+
+layerPanel.addEventListener("dragstart", (event) => {
+    const row = event.target.closest(".layerRow");
+    if (!row || !layerPanel.contains(row) || !row.dataset.floorRowId) return;
+    layerDrag = { floorId: row.dataset.floorRowId };
+    row.dataset.dragging = "true";
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", row.dataset.floorRowId);
+});
+
+layerPanel.addEventListener("dragover", (event) => {
+    if (!layerDrag) return;
+    const target = layerDropTargetFromEvent(event);
+    if (!target || target.floorId === layerDrag.floorId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    clearLayerDragMarkers();
+    target.row.dataset.dropPosition = target.position;
+});
+
+layerPanel.addEventListener("dragleave", (event) => {
+    if (!layerDrag || layerPanel.contains(event.relatedTarget)) return;
+    clearLayerDragMarkers();
+});
+
+layerPanel.addEventListener("drop", (event) => {
+    if (!layerDrag) return;
+    const target = layerDropTargetFromEvent(event);
+    if (!target || target.floorId === layerDrag.floorId) return;
+    event.preventDefault();
+    withErrorBoundary(() => {
+        state.moveFloorInLayerPanel(layerDrag.floorId, target.floorId, modelDropPositionFromPanelPosition(target.position));
+    });
+    layerDrag = null;
+    clearLayerDragMarkers();
+});
+
+layerPanel.addEventListener("dragend", () => {
+    layerPanel.querySelectorAll(".layerRow[data-dragging]").forEach((row) => {
+        delete row.dataset.dragging;
+    });
+    clearLayerDragMarkers();
+    layerDrag = null;
+});
+
 floorElevation.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedFloorElevation(floorElevation.value));
 });
 
+polygonElevation.addEventListener("change", () => {
+    withErrorBoundary(() => state.updatePolygonToolElevation(polygonElevation.value));
+});
+
+polygonFinalize.addEventListener("click", () => {
+    withErrorBoundary(() => activeTool().finish());
+});
+
 floorHeight.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedFloorHeight(floorHeight.value));
+});
+
+roofMode.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedRoofMode(roofMode.value));
 });
 
 roofOverhang.addEventListener("change", () => {
@@ -1219,6 +1597,12 @@ roofOverhang.addEventListener("change", () => {
 roofPeakHeight.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedRoofPeakHeight(roofPeakHeight.value));
 });
+
+if (roofDomeLevels) {
+    roofDomeLevels.addEventListener("change", () => {
+        withErrorBoundary(() => state.updateSelectedRoofDomeLevels(roofDomeLevels.value));
+    });
+}
 
 gableHeight.addEventListener("input", () => {
     withErrorBoundary(() => state.updateSelectedGableHeight(gableHeight.value));
@@ -1236,8 +1620,29 @@ wallHeight.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedWallHeight(wallHeight.value));
 });
 
+wallThickness.addEventListener("input", () => {
+    withErrorBoundary(() => state.updateSelectedWallThickness(wallThickness.value));
+});
+
+wallThicknessValue.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedWallThickness(wallThicknessValue.value));
+});
+
+wallInsetEndpoints.addEventListener("click", () => {
+    withErrorBoundary(() => state.updateSelectedWallVertexInset(true));
+});
+
+wallProtrudeEndpoints.addEventListener("click", () => {
+    withErrorBoundary(() => state.updateSelectedWallVertexInset(false));
+});
+
 snapToggle.addEventListener("change", () => {
     state.snapToGrid = snapToggle.checked;
+    state.emitChange();
+});
+
+snapDirectionToggle.addEventListener("change", () => {
+    state.snapDirection = snapDirectionToggle.checked;
     state.emitChange();
 });
 
@@ -1373,6 +1778,10 @@ stageHost.addEventListener("wheel", (event) => {
     closeWindowContextMenu();
     event.preventDefault();
     const delta = wheelDeltaPixels(event);
+    if (rotatingView) {
+        rotateCameraPitchFromWheel(delta.y);
+        return;
+    }
     if (event.ctrlKey) {
         const factor = Math.exp(-delta.y * 0.01);
         zoomAtScreenPoint(screenPointFromClient(event.clientX, event.clientY), state.camera.zoom * factor);
@@ -1508,6 +1917,17 @@ document.addEventListener("keydown", (event) => {
         return;
     }
     if (key === "z") {
+        if (!event.repeat) {
+            const now = performance.now();
+            if (now - lastZTapTime <= Z_DOUBLE_TAP_MS) {
+                resetCameraOrientation();
+                rotatingView = false;
+                lastZTapTime = 0;
+                event.preventDefault();
+                return;
+            }
+            lastZTapTime = now;
+        }
         if (!rotatingView) {
             rotatingView = true;
             rotatePointerX = lastStagePointer ? lastStagePointer.x : null;
@@ -1525,12 +1945,18 @@ document.addEventListener("keydown", (event) => {
         }
         return;
     }
+    if ((event.key === "Delete" || event.key === "Backspace") && (state.tool === "polygon" || state.tool === "scissors")) {
+        if (state.deleteSelectedPolygonDraftVertex()) {
+            event.preventDefault();
+        }
+        return;
+    }
     if ((event.key === "Delete" || event.key === "Backspace") && state.tool === "select") {
         if (state.deleteSelectedMountedObject()) {
             event.preventDefault();
             return;
         }
-        if (state.selectedWall() && state.deleteSelectedWall()) {
+        if (state.deleteSelectedWall()) {
             event.preventDefault();
             return;
         }
@@ -1539,6 +1965,10 @@ document.addEventListener("keydown", (event) => {
             return;
         }
         if (state.deleteSelectedRoof()) {
+            event.preventDefault();
+            return;
+        }
+        if (state.deleteSelectedRoofVertex()) {
             event.preventDefault();
             return;
         }
@@ -1577,6 +2007,7 @@ window.addEventListener("blur", () => {
     state.shiftKeyDown = false;
     rotatingView = false;
     rotatePointerX = null;
+    lastZTapTime = 0;
 });
 
 function isTextEditingTarget(target) {
@@ -1595,11 +2026,11 @@ try {
     setStatus(error.message, true);
 }
 syncUi();
-if (loadedBrowserSaveOnStartup) {
-    setStatus("loaded browser-saved building");
-} else if (browserSaveStartupError) {
-    setStatus(`could not load browser-saved building: ${browserSaveStartupError.message}`, true);
-}
+showBuildingOpenDialog({ canClose: false }).catch((error) => {
+    console.error(error);
+    setStatus(error.message, true);
+    setModalMessage(buildingOpenMessage, error.message, true);
+});
 loadWallTextures().catch((error) => {
     console.error(error);
     setStatus(error.message, true);

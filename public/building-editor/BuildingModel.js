@@ -2,10 +2,14 @@ const DEFAULTS = Object.freeze({
     floorTexture: "/assets/images/flooring/woodfloor.png",
     wallTexture: "/assets/images/walls/woodwall.png",
     roofTexture: "/assets/images/roofs/slate.png",
+    roofMode: "peak",
     roofOverhang: 0,
     roofPeakHeight: 0,
+    roofDomeLevels: 4,
+    roofElevationOffset: 0,
+    roofShedDirection: Object.freeze({ x: 0, y: -1 }),
     wallHeight: 3,
-    wallThickness: 0.1,
+    wallThickness: 0.25,
     gridSize: 1
 });
 
@@ -41,6 +45,11 @@ function clonePoints(points, fallbackPrefix = "vertex") {
     return points.map((point) => clonePoint(point, fallbackPrefix));
 }
 
+function cloneFinitePoint(point, label) {
+    if (!finitePoint(point)) throw new Error(`${label} must be a finite point`);
+    return { x: Number(point.x), y: Number(point.y) };
+}
+
 function cloneEndpoint(endpoint) {
     if (!endpoint || typeof endpoint !== "object") return null;
     return JSON.parse(JSON.stringify(endpoint));
@@ -69,6 +78,54 @@ function polygonArea(points) {
         area += current.x * next.y - next.x * current.y;
     }
     return area * 0.5;
+}
+
+function polygonCentroidPoint(points) {
+    const ring = ringPoints(points);
+    if (ring.length < 3) {
+        const totals = ring.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+        return ring.length > 0 ? { x: totals.x / ring.length, y: totals.y / ring.length } : { x: 0, y: 0 };
+    }
+    let doubleArea = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let index = 0; index < ring.length; index++) {
+        const current = ring[index];
+        const next = ring[(index + 1) % ring.length];
+        const crossValue = current.x * next.y - next.x * current.y;
+        doubleArea += crossValue;
+        cx += (current.x + next.x) * crossValue;
+        cy += (current.y + next.y) * crossValue;
+    }
+    if (Math.abs(doubleArea) <= 0.000001) {
+        const totals = ring.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+        return { x: totals.x / ring.length, y: totals.y / ring.length };
+    }
+    return { x: cx / (3 * doubleArea), y: cy / (3 * doubleArea) };
+}
+
+function normalizeRoofMode(mode) {
+    const value = String(mode || DEFAULTS.roofMode).trim().toLowerCase();
+    if (value === "peak" || value === "shed" || value === "dome") return value;
+    throw new Error(`unknown roof mode: ${mode}`);
+}
+
+function normalizeDirectionPoint(direction, label) {
+    const x = Number(direction && direction.x);
+    const y = Number(direction && direction.y);
+    const length = Math.hypot(x, y);
+    if (!Number.isFinite(length) || length <= 0.000001) {
+        throw new Error(`${label} requires a non-zero direction`);
+    }
+    return { x: x / length, y: y / length };
+}
+
+function normalizeRoofDomeLevels(levels) {
+    const value = Math.floor(Number(levels));
+    if (!Number.isInteger(value) || value < 1) {
+        throw new Error("building roof dome levels must be a positive integer");
+    }
+    return value;
 }
 
 function cross(a, b) {
@@ -124,6 +181,25 @@ export function offsetRing(ring, distance) {
             y: point.y + (currentLine.point.y - points[index].y)
         };
     });
+}
+
+export function floorVertexWallInsetPoint(floor, ringKind, holeIndex, vertexId, wallThickness = DEFAULTS.wallThickness) {
+    if (!floor) return null;
+    const thickness = Number(wallThickness);
+    if (!Number.isFinite(thickness) || thickness <= 0) {
+        throw new Error("inset floor vertex snap requires a positive wall thickness");
+    }
+    const ring = ringKind === "hole"
+        ? (Array.isArray(floor.holes) ? floor.holes[Math.floor(Number(holeIndex))] : null)
+        : floor.outerPolygon;
+    const vertexIndex = Array.isArray(ring) ? ring.findIndex((point) => point && point.id === vertexId) : -1;
+    if (vertexIndex < 0) return null;
+    const distance = thickness * 0.5;
+    const points = offsetRing(ring, ringKind === "hole" ? distance : -distance);
+    const insetPoint = points[vertexIndex];
+    return insetPoint && finitePoint(insetPoint)
+        ? { x: Number(insetPoint.x), y: Number(insetPoint.y) }
+        : null;
 }
 
 function normalizeVector(vector) {
@@ -221,7 +297,7 @@ function refreshLineBoundaryClipEndpoints(building, wall) {
 
     const key = edgeKeys[0];
     const oppositeKey = key === "startPoint" ? "endPoint" : "startPoint";
-    const oppositeEndpoint = resolveEndpoint(building, wall[oppositeKey]) || wall[oppositeKey];
+    const oppositeEndpoint = resolveEndpoint(building, wall[oppositeKey], wall) || wall[oppositeKey];
     const intersection = nearestIntersectionToEndpoint(intersections, wall[key], oppositeEndpoint);
     if (!intersection) {
         throw new Error(`line-boundary wall ${wall.id} edge endpoint would coincide with its opposite endpoint`);
@@ -241,6 +317,7 @@ export function createEmptyBuilding() {
             floorTexture: DEFAULTS.floorTexture,
             wallTexture: DEFAULTS.wallTexture,
             roofTexture: DEFAULTS.roofTexture,
+            roofMode: DEFAULTS.roofMode,
             roofOverhang: DEFAULTS.roofOverhang,
             roofPeakHeight: DEFAULTS.roofPeakHeight,
             wallHeight: DEFAULTS.wallHeight,
@@ -267,18 +344,30 @@ export function getBuildingMountedObjects(building) {
 
 export function createRoof({
     floorId = "",
+    mode = DEFAULTS.roofMode,
     texture = DEFAULTS.roofTexture,
     overhang = DEFAULTS.roofOverhang,
     peakHeight = DEFAULTS.roofPeakHeight,
+    domeLevels = DEFAULTS.roofDomeLevels,
+    peakPoint = null,
+    elevationOffset = DEFAULTS.roofElevationOffset,
+    shedDirection = DEFAULTS.roofShedDirection,
+    contactPolygon = [],
     gables = []
 } = {}) {
     const roof = {
         type: "roof",
         id: nextStringId("roof"),
         floorId: String(floorId || ""),
+        mode: normalizeRoofMode(mode),
         texturePath: texture,
         overhang: Number(overhang),
         peakHeight: Number(peakHeight),
+        domeLevels: normalizeRoofDomeLevels(domeLevels),
+        peakPoint: peakPoint ? cloneFinitePoint(peakPoint, "building roof peak point") : null,
+        elevationOffset: Number(elevationOffset),
+        shedDirection: normalizeDirectionPoint(shedDirection, "building shed roof direction"),
+        contactPolygon: Array.isArray(contactPolygon) ? clonePoints(contactPolygon, "roof-contact") : [],
         gables: Array.isArray(gables) ? gables.map((gable) => normalizeRoofGable(gable)) : []
     };
     if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
@@ -289,6 +378,12 @@ export function createRoof({
     }
     if (!Number.isFinite(roof.peakHeight) || roof.peakHeight < 0) {
         throw new Error("building roof peak height must be zero or greater");
+    }
+    if (!Number.isFinite(roof.elevationOffset)) {
+        throw new Error("building roof elevation offset must be a finite number");
+    }
+    if (!Array.isArray(roof.contactPolygon)) {
+        throw new Error("building roof contact polygon must be an array");
     }
     return roof;
 }
@@ -355,8 +450,57 @@ export function getFloorRoof(floor) {
         return null;
     }
     floor.roof.floorId = getFloorId(floor);
+    if (!Array.isArray(floor.roof.contactPolygon) || floor.roof.contactPolygon.length === 0) {
+        floor.roof.contactPolygon = clonePoints(floor.outerPolygon || [], "roof-contact");
+    }
+    floor.roof.mode = normalizeRoofMode(floor.roof.mode);
+    floor.roof.domeLevels = normalizeRoofDomeLevels(floor.roof.domeLevels ?? DEFAULTS.roofDomeLevels);
+    floor.roof.shedDirection = normalizeDirectionPoint(floor.roof.shedDirection || DEFAULTS.roofShedDirection, "building shed roof direction");
+    if (!finitePoint(floor.roof.peakPoint)) {
+        floor.roof.peakPoint = defaultRoofPeakPointForFloor(floor);
+    } else {
+        floor.roof.peakPoint = cloneFinitePoint(floor.roof.peakPoint, "building roof peak point");
+    }
     if (!Array.isArray(floor.roof.gables)) floor.roof.gables = [];
     return floor.roof;
+}
+
+export function getRoofContactPolygon(floorOrRoof) {
+    const roof = floorOrRoof && floorOrRoof.type === "roof" ? floorOrRoof : getFloorRoof(floorOrRoof);
+    return Array.isArray(roof && roof.contactPolygon) ? roof.contactPolygon : [];
+}
+
+export function defaultRoofPeakPointForFloor(floor) {
+    const contactPolygon = floor && floor.roof && Array.isArray(floor.roof.contactPolygon) && floor.roof.contactPolygon.length >= 3
+        ? floor.roof.contactPolygon
+        : (floor && floor.outerPolygon);
+    return polygonCentroidPoint(contactPolygon || []);
+}
+
+export function getRoofPeakPoint(floorOrRoof) {
+    const roof = floorOrRoof && floorOrRoof.type === "roof" ? floorOrRoof : getFloorRoof(floorOrRoof);
+    if (!roof) return null;
+    if (!finitePoint(roof.peakPoint)) {
+        if (floorOrRoof && floorOrRoof.type === "roof") {
+            throw new Error(`roof ${roof.id || "(missing id)"} peak point is missing`);
+        }
+        roof.peakPoint = defaultRoofPeakPointForFloor(floorOrRoof);
+    }
+    return roof.peakPoint;
+}
+
+export function getRoofShedDirection(floorOrRoof) {
+    const roof = floorOrRoof && floorOrRoof.type === "roof" ? floorOrRoof : getFloorRoof(floorOrRoof);
+    if (!roof) return null;
+    roof.shedDirection = normalizeDirectionPoint(roof.shedDirection || DEFAULTS.roofShedDirection, "building shed roof direction");
+    return roof.shedDirection;
+}
+
+export function getRoofDomeLevels(floorOrRoof) {
+    const roof = floorOrRoof && floorOrRoof.type === "roof" ? floorOrRoof : getFloorRoof(floorOrRoof);
+    if (!roof) return DEFAULTS.roofDomeLevels;
+    roof.domeLevels = normalizeRoofDomeLevels(roof.domeLevels ?? DEFAULTS.roofDomeLevels);
+    return roof.domeLevels;
 }
 
 export function getRoofGables(floorOrRoof) {
@@ -387,8 +531,11 @@ export function createFloor({
     holes = [],
     floorTexture = DEFAULTS.floorTexture,
     roofTexture = DEFAULTS.roofTexture,
+    roofMode = DEFAULTS.roofMode,
     roofOverhang = DEFAULTS.roofOverhang,
     roofPeakHeight = DEFAULTS.roofPeakHeight,
+    roofDomeLevels = DEFAULTS.roofDomeLevels,
+    roofElevationOffset = DEFAULTS.roofElevationOffset,
     floorHeight = DEFAULTS.wallHeight,
     defaultWallHeight = DEFAULTS.wallHeight,
     defaultWallTexture = DEFAULTS.wallTexture,
@@ -412,9 +559,14 @@ export function createFloor({
         floorTexturePath: floorTexture,
         roof: createRoof({
             floorId: fragmentId,
+            mode: roofMode,
             texture: roofTexture,
             overhang: roofOverhang,
-            peakHeight: roofPeakHeight
+            peakHeight: roofPeakHeight,
+            domeLevels: roofDomeLevels,
+            elevationOffset: roofElevationOffset,
+            shedDirection: DEFAULTS.roofShedDirection,
+            contactPolygon: []
         }),
         floorHeight: Number(floorHeight),
         defaultWallHeight: Number(defaultWallHeight),
@@ -423,6 +575,8 @@ export function createFloor({
         beams: []
     };
     setFloorElevation(floor, elevation);
+    floor.roof.contactPolygon = clonePoints(floor.outerPolygon, "roof-contact");
+    floor.roof.peakPoint = defaultRoofPeakPointForFloor(floor);
     if (!Number.isFinite(floor.defaultWallHeight) || floor.defaultWallHeight <= 0) {
         throw new Error("building floor default wall height must be a positive number");
     }
@@ -634,6 +788,13 @@ function vertexEndpoint(floor, vertex) {
     };
 }
 
+function insetVertexEndpoint(floor, vertex) {
+    return {
+        ...vertexEndpoint(floor, vertex),
+        inset: true
+    };
+}
+
 function perimeterWallSettings(wall, preserveIdentity = false) {
     const settings = {
         height: Number(wall.height),
@@ -681,8 +842,8 @@ function setPerimeterWallEdge(building, floor, wall, startVertex, endVertex) {
     const fragmentId = getFloorId(floor);
     wall.floorId = fragmentId;
     wall.fragmentId = fragmentId;
-    wall.startPoint = vertexEndpoint(floor, startVertex);
-    wall.endPoint = vertexEndpoint(floor, endVertex);
+    wall.startPoint = insetVertexEndpoint(floor, startVertex);
+    wall.endPoint = insetVertexEndpoint(floor, endVertex);
     wall.attachment = {
         kind: "fragmentEdge",
         fragmentId,
@@ -699,8 +860,8 @@ function setPerimeterWallEdge(building, floor, wall, startVertex, endVertex) {
 function createPerimeterWallForEdge(building, floor, startVertex, endVertex, settings = null) {
     const wall = createWall({
         floorId: getFloorId(floor),
-        startPoint: vertexEndpoint(floor, startVertex),
-        endPoint: vertexEndpoint(floor, endVertex),
+        startPoint: insetVertexEndpoint(floor, startVertex),
+        endPoint: insetVertexEndpoint(floor, endVertex),
         height: settings && Number.isFinite(Number(settings.height)) ? Number(settings.height) : floor.floorHeight,
         texture: settings && typeof settings.wallTexturePath === "string" ? settings.wallTexturePath : floor.defaultWallTexturePath,
         thickness: settings && Number.isFinite(Number(settings.thickness)) ? Number(settings.thickness) : DEFAULTS.wallThickness,
@@ -1011,8 +1172,8 @@ export function createPerimeterWallsForFloor(building, floor) {
             null;
         const wall = createWall({
             floorId: fragmentId,
-            startPoint: vertexEndpoint(floor, vertex),
-            endPoint: vertexEndpoint(floor, next),
+            startPoint: insetVertexEndpoint(floor, vertex),
+            endPoint: insetVertexEndpoint(floor, next),
             height: preservedSettings && Number.isFinite(Number(preservedSettings.height))
                 ? Number(preservedSettings.height)
                 : floor.floorHeight,
@@ -1029,6 +1190,7 @@ export function createPerimeterWallsForFloor(building, floor) {
             }
         });
         applyPerimeterWallSettings(wall, preservedSettings);
+        refreshWallEndpointCoordinatesForWall(building, wall);
         building.wallSections.push(wall);
     });
 }
@@ -1056,8 +1218,11 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
         holes: source.holes || [],
         floorTexture: source.floorTexturePath,
         roofTexture: sourceRoof ? sourceRoof.texturePath : DEFAULTS.roofTexture,
+        roofMode: sourceRoof ? sourceRoof.mode : DEFAULTS.roofMode,
         roofOverhang: sourceRoof ? sourceRoof.overhang : DEFAULTS.roofOverhang,
         roofPeakHeight: sourceRoof ? sourceRoof.peakHeight : DEFAULTS.roofPeakHeight,
+        roofDomeLevels: sourceRoof ? sourceRoof.domeLevels : DEFAULTS.roofDomeLevels,
+        roofElevationOffset: sourceRoof ? sourceRoof.elevationOffset : DEFAULTS.roofElevationOffset,
         floorHeight: source.floorHeight,
         defaultWallHeight: source.defaultWallHeight,
         defaultWallTexture: source.defaultWallTexturePath,
@@ -1070,6 +1235,10 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
             gableIdMap.set(Number(gable.id), Number(copy.id));
             return copy;
         });
+        floor.roof.contactPolygon = clonePoints(getRoofContactPolygon(sourceRoof), "roof-contact");
+        floor.roof.peakPoint = cloneFinitePoint(getRoofPeakPoint(sourceRoof), "duplicated roof peak point");
+        floor.roof.shedDirection = normalizeDirectionPoint(getRoofShedDirection(sourceRoof), "duplicated shed roof direction");
+        floor.roof.domeLevels = normalizeRoofDomeLevels(sourceRoof.domeLevels ?? DEFAULTS.roofDomeLevels);
     } else {
         floor.roof = null;
     }
@@ -1121,7 +1290,11 @@ function remapDuplicatedEndpoint(endpoint, sourceFloorId, targetFloorId, vertexI
     const copy = cloneEndpoint(endpoint);
     if (!copy) throw new Error(`cannot duplicate wall ${sourceWallId}: ${endpointKey} is missing`);
     if (copy.fragmentId === sourceFloorId) copy.fragmentId = targetFloorId;
-    if (copy.kind === "vertex") {
+    if (copy.kind === "vertex" || copy.kind === "insetVertex") {
+        if (copy.kind === "insetVertex") {
+            copy.kind = "vertex";
+            copy.inset = true;
+        }
         if (!copy.vertexId) throw new Error(`cannot duplicate wall ${sourceWallId}: ${endpointKey} vertex endpoint is missing vertexId`);
         const remapped = vertexIdMap.get(copy.vertexId);
         if (!remapped) {
@@ -1260,15 +1433,23 @@ export function ringForEndpoint(building, endpoint) {
     return null;
 }
 
-export function resolveEndpoint(building, endpoint) {
+export function resolveEndpoint(building, endpoint, wall = null) {
     if (!endpoint || typeof endpoint !== "object") return null;
-    if (endpoint.kind === "vertex") {
+    if (endpoint.kind === "vertex" || endpoint.kind === "insetVertex") {
         const ring = ringForEndpoint(building, endpoint);
-        const vertex = Array.isArray(ring) ? ring.find((point) => point.id === endpoint.vertexId) : null;
+        const vertexIndex = Array.isArray(ring) ? ring.findIndex((point) => point.id === endpoint.vertexId) : -1;
+        const vertex = vertexIndex >= 0 ? ring[vertexIndex] : null;
         if (!vertex) {
             return Number.isFinite(Number(endpoint.x)) && Number.isFinite(Number(endpoint.y))
                 ? { x: Number(endpoint.x), y: Number(endpoint.y) }
                 : null;
+        }
+        if (endpoint.inset === true || endpoint.kind === "insetVertex") {
+            const floor = findFloor(building, endpoint.fragmentId);
+            const thickness = Number.isFinite(Number(wall && wall.thickness))
+                ? Number(wall.thickness)
+                : (Number.isFinite(Number(endpoint.thickness)) ? Number(endpoint.thickness) : DEFAULTS.wallThickness);
+            return floorVertexWallInsetPoint(floor, endpoint.ring, endpoint.holeIndex, endpoint.vertexId, thickness);
         }
         return { x: Number(vertex.x), y: Number(vertex.y) };
     }
@@ -1279,55 +1460,14 @@ export function resolveEndpoint(building, endpoint) {
 }
 
 export function wallPoints(building, wall) {
-    const start = resolveEndpoint(building, wall && wall.startPoint);
-    const end = resolveEndpoint(building, wall && wall.endPoint);
+    const start = resolveEndpoint(building, wall && wall.startPoint, wall);
+    const end = resolveEndpoint(building, wall && wall.endPoint, wall);
     if (!start || !end) return [];
     return [start, end];
 }
 
 export function wallCenterlinePoints(building, wall, floor = null) {
-    const points = wallPoints(building, wall);
-    if (points.length !== 2) return points;
-    if (!wall || wall.role !== "perimeter") return points;
-    if (
-        !wall.startPoint || !wall.endPoint ||
-        wall.startPoint.kind !== "vertex" ||
-        wall.endPoint.kind !== "vertex"
-    ) {
-        return points;
-    }
-    const resolvedFloor = floor || findFloor(building, wall.fragmentId || wall.floorId);
-    if (!resolvedFloor) {
-        throw new Error(`perimeter wall ${wall && wall.id} references missing floor fragment: ${wall && (wall.fragmentId || wall.floorId)}`);
-    }
-    const attachment = wall.attachment;
-    if (!attachment || attachment.kind !== "fragmentEdge" || attachment.ring !== "outer") {
-        throw new Error(`perimeter wall ${wall.id} requires a fragmentEdge outer attachment`);
-    }
-    const outer = Array.isArray(resolvedFloor.outerPolygon) ? resolvedFloor.outerPolygon : [];
-    if (outer.length < 3) {
-        throw new Error(`perimeter wall ${wall.id} references a floor without an outer polygon`);
-    }
-    const thickness = Number(wall.thickness);
-    if (!Number.isFinite(thickness) || thickness <= 0) {
-        throw new Error(`perimeter wall ${wall.id} requires a positive thickness`);
-    }
-    const insetRing = offsetRing(outer, -thickness * 0.5);
-    if (insetRing.length !== outer.length) {
-        throw new Error(`perimeter wall ${wall.id} could not resolve inset wall centerline`);
-    }
-    const startIndex = outer.findIndex((point) => point && point.id === attachment.startVertexId);
-    const endIndex = outer.findIndex((point) => point && point.id === attachment.endVertexId);
-    if (startIndex < 0 || endIndex < 0) {
-        return points;
-    }
-    if ((startIndex + 1) % outer.length !== endIndex) {
-        return points;
-    }
-    return [
-        { x: insetRing[startIndex].x, y: insetRing[startIndex].y },
-        { x: insetRing[endIndex].x, y: insetRing[endIndex].y }
-    ];
+    return wallPoints(building, wall);
 }
 
 export function refreshWallEndpointCoordinatesForWall(building, wall) {
@@ -1335,7 +1475,7 @@ export function refreshWallEndpointCoordinatesForWall(building, wall) {
     if (building) refreshLineBoundaryClipEndpoints(building, wall);
     ["startPoint", "endPoint"].forEach((key) => {
         const endpoint = wall[key];
-        const resolved = building ? resolveEndpoint(building, endpoint) : endpoint;
+        const resolved = building ? resolveEndpoint(building, endpoint, wall) : endpoint;
         if (endpoint && resolved && Number.isFinite(resolved.x) && Number.isFinite(resolved.y)) {
             endpoint.x = Number(resolved.x);
             endpoint.y = Number(resolved.y);
@@ -1363,7 +1503,7 @@ export function fallbackDeletedVertexEndpointsToPoint(building, fragmentId, vert
             const endpoint = wall[key];
             if (
                 endpoint &&
-                endpoint.kind === "vertex" &&
+                (endpoint.kind === "vertex" || endpoint.kind === "insetVertex") &&
                 endpoint.fragmentId === fragmentId &&
                 endpoint.vertexId === vertexId
             ) {
@@ -1417,13 +1557,15 @@ export function normalizeImportedBuilding(raw) {
         if (!Array.isArray(floor.outerPolygon) && Array.isArray(floor.footprint)) floor.outerPolygon = floor.footprint;
         floor.outerPolygon = clonePoints(floor.outerPolygon || []);
         floor.holes = Array.isArray(floor.holes) ? floor.holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [];
+        floor.name = String(floor.name || "").trim() || "floor";
         floor.floorTexturePath = floor.floorTexturePath || floor.floorTexture || DEFAULTS.floorTexture;
         const sourceRoof = floor.roof && typeof floor.roof === "object" ? floor.roof : null;
-        const hasLegacyRoofFields = floor.roofTexturePath !== undefined || floor.roofTexture !== undefined || floor.roofOverhang !== undefined || floor.roofPeakHeight !== undefined;
+        const hasLegacyRoofFields = floor.roofTexturePath !== undefined || floor.roofTexture !== undefined || floor.roofMode !== undefined || floor.roofOverhang !== undefined || floor.roofPeakHeight !== undefined || floor.roofElevationOffset !== undefined;
         if (sourceRoof || floor.roof !== null || hasLegacyRoofFields) {
             const roofSource = sourceRoof || {};
             floor.roof = createRoof({
                 floorId: floor.fragmentId,
+                mode: roofSource.mode || roofSource.roofMode || floor.roofMode || (floor.defaults && floor.defaults.roofMode) || (building.defaults && building.defaults.roofMode) || DEFAULTS.roofMode,
                 texture: roofSource.texturePath || roofSource.roofTexturePath || floor.roofTexturePath || floor.roofTexture || (floor.defaults && floor.defaults.roofTexture) || (building.defaults && building.defaults.roofTexture) || DEFAULTS.roofTexture,
                 overhang: Number.isFinite(Number(roofSource.overhang ?? roofSource.roofOverhang))
                     ? Number(roofSource.overhang ?? roofSource.roofOverhang)
@@ -1431,6 +1573,17 @@ export function normalizeImportedBuilding(raw) {
                 peakHeight: Number.isFinite(Number(roofSource.peakHeight ?? roofSource.roofPeakHeight)) && Number(roofSource.peakHeight ?? roofSource.roofPeakHeight) >= 0
                     ? Number(roofSource.peakHeight ?? roofSource.roofPeakHeight)
                     : (Number.isFinite(Number(floor.roofPeakHeight)) && Number(floor.roofPeakHeight) >= 0 ? Number(floor.roofPeakHeight) : DEFAULTS.roofPeakHeight),
+                domeLevels: roofSource.domeLevels ?? roofSource.roofDomeLevels ?? DEFAULTS.roofDomeLevels,
+                elevationOffset: Number.isFinite(Number(roofSource.elevationOffset ?? roofSource.roofElevationOffset))
+                    ? Number(roofSource.elevationOffset ?? roofSource.roofElevationOffset)
+                    : (Number.isFinite(Number(floor.roofElevationOffset)) ? Number(floor.roofElevationOffset) : DEFAULTS.roofElevationOffset),
+                peakPoint: finitePoint(roofSource.peakPoint)
+                    ? roofSource.peakPoint
+                    : defaultRoofPeakPointForFloor({ ...floor, roof: { contactPolygon: roofSource.contactPolygon || floor.outerPolygon } }),
+                shedDirection: roofSource.shedDirection || roofSource.slopeDirection || roofSource.direction || DEFAULTS.roofShedDirection,
+                contactPolygon: Array.isArray(roofSource.contactPolygon) && roofSource.contactPolygon.length > 0
+                    ? roofSource.contactPolygon
+                    : floor.outerPolygon,
                 gables: Array.isArray(roofSource.gables) ? roofSource.gables : []
             });
             if (typeof roofSource.id === "string" && roofSource.id.length > 0) floor.roof.id = roofSource.id;
@@ -1439,8 +1592,10 @@ export function normalizeImportedBuilding(raw) {
         }
         delete floor.roofTexturePath;
         delete floor.roofTexture;
+        delete floor.roofMode;
         delete floor.roofOverhang;
         delete floor.roofPeakHeight;
+        delete floor.roofElevationOffset;
         floor.floorHeight = Number.isFinite(Number(floor.floorHeight)) && Number(floor.floorHeight) > 0
             ? Number(floor.floorHeight)
             : (floor.defaults && Number.isFinite(Number(floor.defaults.wallHeight)) ? Number(floor.defaults.wallHeight) : DEFAULTS.wallHeight);
@@ -1448,7 +1603,30 @@ export function normalizeImportedBuilding(raw) {
             ? Number(floor.defaultWallHeight)
             : (floor.defaults && Number.isFinite(Number(floor.defaults.wallHeight)) ? Number(floor.defaults.wallHeight) : DEFAULTS.wallHeight);
         floor.defaultWallTexturePath = floor.defaultWallTexturePath || (floor.defaults && floor.defaults.wallTexture) || DEFAULTS.wallTexture;
+        delete floor.wallInset;
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
+    });
+    building.wallSections.forEach((wall) => {
+        if (!Number.isFinite(Number(wall.thickness)) || Number(wall.thickness) <= 0) {
+            wall.thickness = Number(building.defaults && building.defaults.wallThickness) || DEFAULTS.wallThickness;
+        }
+        ["startPoint", "endPoint"].forEach((endpointKey) => {
+            const endpoint = wall[endpointKey];
+            if (endpoint && endpoint.kind === "insetVertex") {
+                endpoint.kind = "vertex";
+                endpoint.inset = true;
+            }
+        });
+        const attachment = wall && wall.attachment;
+        if (wall.role === "perimeter" && attachment && attachment.kind === "fragmentEdge") {
+            ["startPoint", "endPoint"].forEach((endpointKey) => {
+                const endpoint = wall[endpointKey];
+                if (endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex")) {
+                    endpoint.kind = "vertex";
+                    endpoint.inset = true;
+                }
+            });
+        }
     });
     building.mountedWallObjects = building.mountedWallObjects.map((object) => {
         const rawMountKind = String(object && object.mountKind || "").trim().toLowerCase();
@@ -1543,6 +1721,7 @@ function bumpIdCountersFromBuilding(building) {
     [building.id, ...getBuildingFloors(building).flatMap((floor) => [
         floor.fragmentId,
         floor.roof && floor.roof.id,
+        ...(getRoofContactPolygon(floor) || []).map((point) => point.id),
         ...(floor.outerPolygon || []).map((point) => point.id),
         ...(floor.holes || []).flatMap((ring) => ring.map((point) => point.id))
     ])].forEach((id) => {

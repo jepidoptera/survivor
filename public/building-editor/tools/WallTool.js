@@ -37,7 +37,9 @@ export class WallTool {
 
     pointerMove(worldPoint) {
         if (!this.drag) return;
-        const current = this.state.snapWallEndpoint(worldPoint, this.drag.threshold);
+        const current = this.state.snapWallEndpoint(worldPoint, this.drag.threshold, {
+            directionOrigin: this.drag.start.point
+        });
         this.drag.current = current;
         this.state.draft = {
             kind: "wall",
@@ -49,7 +51,11 @@ export class WallTool {
 
     pointerUp(worldPoint) {
         if (!this.drag) return;
-        const current = worldPoint ? this.state.snapWallEndpoint(worldPoint, this.drag.threshold) : this.drag.current;
+        const current = worldPoint
+            ? this.state.snapWallEndpoint(worldPoint, this.drag.threshold, {
+                directionOrigin: this.drag.start.point
+            })
+            : this.drag.current;
         const start = this.drag.start;
         this.drag = null;
         this.state.draft = null;

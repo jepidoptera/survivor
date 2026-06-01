@@ -9,6 +9,8 @@
     const WALL_DEPTH_NEAR_METRIC = -128;
     const WALL_DEPTH_FAR_METRIC = 256;
     const WALL_BOTTOM_FACE_ONLY_DEPTH_LIFT = 0.025;
+    const CAMERA_DEFAULT_PITCH = Math.PI / 4;
+    const CAMERA_PITCH_BASE = Math.SQRT1_2;
     const WALL_DEPTH_VS = `
 precision highp float;
 attribute vec3 aWorldPosition;
@@ -20,6 +22,7 @@ uniform vec2 uCameraWorld;
 uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
+uniform float uCameraPitch;
 uniform vec2 uDepthRange;
 uniform float uCameraRotation;
 uniform vec2 uCameraRotationCenter;
@@ -38,11 +41,13 @@ void main(void) {
     float camDx = rotatedWorld.x - uCameraWorld.x;
     float camDy = rotatedWorld.y - uCameraWorld.y;
     float camDz = aWorldPosition.z - uCameraZ;
+    float pitchFloor = cos(uCameraPitch) / ${CAMERA_PITCH_BASE.toFixed(16)};
+    float pitchHeight = sin(uCameraPitch) / ${CAMERA_PITCH_BASE.toFixed(16)};
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
-    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
-    float depthMetric = camDy + camDz;
+    float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -3430,6 +3435,7 @@ void main(void) {
                 uCameraZ: 0,
                 uViewScale: 1,
                 uXyRatio: 1,
+                uCameraPitch: CAMERA_DEFAULT_PITCH,
                 uDepthRange: new Float32Array([0, 1]),
                 uCameraRotation: 0,
                 uCameraRotationCenter: new Float32Array([0, 0]),
@@ -3508,6 +3514,9 @@ void main(void) {
             u.uCameraZ = Number(camera && camera.z) || 0;
             u.uViewScale = viewscale;
             u.uXyRatio = xyratio;
+            u.uCameraPitch = Number.isFinite(options.cameraPitch)
+                ? Number(options.cameraPitch)
+                : (Number.isFinite(camera && camera.pitch) ? Number(camera.pitch) : CAMERA_DEFAULT_PITCH);
             u.uDepthRange[0] = farMetric;
             u.uDepthRange[1] = invSpan;
             u.uCameraRotation = Number.isFinite(options.cameraRotation)

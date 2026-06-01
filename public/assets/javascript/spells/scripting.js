@@ -448,20 +448,16 @@
             return false;
         }
 
-        if (actorContext.fragmentId || targetContext.fragmentId) {
-            return !!(
-                actorContext.fragmentId &&
-                targetContext.fragmentId &&
-                actorContext.fragmentId === targetContext.fragmentId
-            );
+        // Only enforce fragment/surface matching when BOTH sides have an id.
+        // If only one side has an id (e.g. wizard is on a named ground fragment but
+        // the object is an untagged ground-level prop), the untagged side is on the
+        // default ground plane and the layer check above is the sole discriminator.
+        if (actorContext.fragmentId && targetContext.fragmentId) {
+            return actorContext.fragmentId === targetContext.fragmentId;
         }
 
-        if (actorContext.surfaceId || targetContext.surfaceId) {
-            return !!(
-                actorContext.surfaceId &&
-                targetContext.surfaceId &&
-                actorContext.surfaceId === targetContext.surfaceId
-            );
+        if (actorContext.surfaceId && targetContext.surfaceId) {
+            return actorContext.surfaceId === targetContext.surfaceId;
         }
 
         return true;

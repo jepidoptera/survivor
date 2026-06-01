@@ -37,11 +37,105 @@ export class SelectTool {
 
     pointerDown(worldPoint, threshold, options = {}) {
         const preserveView = this.state.renderStyle() === "exterior";
+        const roofPeakHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickRoofPeakAtScreen === "function"
+            ? options.renderer.pickRoofPeakAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
+            : null;
+        if (roofPeakHit) {
+            this.state.selectRoofPeak(getFloorId(roofPeakHit.floor), { preserveView });
+            this.drag = {
+                type: "roofPeak",
+                floorId: getFloorId(roofPeakHit.floor),
+                startScreen: { x: Number(options.screenPoint.x), y: Number(options.screenPoint.y) },
+                originalPoint: { x: Number(roofPeakHit.point.x), y: Number(roofPeakHit.point.y) }
+            };
+            return;
+        }
+        const shedDirectionHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickRoofShedDirectionAtScreen === "function"
+            ? options.renderer.pickRoofShedDirectionAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
+            : null;
+        if (shedDirectionHit) {
+            this.state.selectRoofShedDirection(getFloorId(shedDirectionHit.floor), { preserveView });
+            this.state.draft = { kind: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor) };
+            this.state.emitChange();
+            this.drag = { type: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor) };
+            return;
+        }
+        const roofVertexHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickRoofContactVertexAtScreen === "function"
+            ? options.renderer.pickRoofContactVertexAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
+            : null;
+        if (roofVertexHit) {
+            this.state.selectRoofVertex(getFloorId(roofVertexHit.floor), roofVertexHit.vertexIndex, { preserveView });
+            this.drag = { type: "roofVertex", floorId: getFloorId(roofVertexHit.floor), vertexIndex: roofVertexHit.vertexIndex };
+            return;
+        }
+        const roofEdgeHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickRoofContactEdgeAtScreen === "function"
+            ? options.renderer.pickRoofContactEdgeAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
+            : null;
+        if (roofEdgeHit) {
+            this.state.insertRoofVertexOnKnownEdge(
+                getFloorId(roofEdgeHit.floor),
+                roofEdgeHit.insertAfterIndex,
+                roofEdgeHit.point,
+                roofEdgeHit.t
+            );
+            this.drag = { type: "roofVertex", floorId: getFloorId(roofEdgeHit.floor), vertexIndex: this.state.selection.vertexIndex };
+            return;
+        }
+        const gableHandle = this.pickGableHandle(options);
+        if (gableHandle) {
+            this.state.selectGableHandle(getFloorId(gableHandle.floor), gableHandle.gable.id, gableHandle.key, { preserveView });
+            this.drag = {
+                type: "gableHandle",
+                floorId: getFloorId(gableHandle.floor),
+                gableId: gableHandle.gable.id,
+                handle: gableHandle.key
+            };
+            return;
+        }
+        const resizeHandle = this.pickMountedObjectResizeHandle(options);
+        if (resizeHandle) {
+            this.beginMountedObjectResize(resizeHandle, options);
+            return;
+        }
+        const endpointHit = this.state.pickWallEndpoint(worldPoint, threshold);
+        if (endpointHit) {
+            const endpoint = endpointHit.wall[endpointHit.endpointKey];
+            this.state.selectWallEndpoint(endpointHit.wall.id, endpointHit.endpointKey);
+            this.drag = {
+                type: "wallEndpoint",
+                threshold,
+                detachVertexEndpoint: endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex")
+            };
+            return;
+        }
+        const vertexHit = this.state.pickSelectedFloorVertex(worldPoint, threshold);
+        if (vertexHit) {
+            this.selectFloorVertexHit(vertexHit, { preserveView });
+            return;
+        }
         const screenHit = options.renderer &&
             options.screenPoint &&
             typeof options.renderer.pickAtScreen === "function"
             ? options.renderer.pickAtScreen(options.screenPoint)
             : null;
+        const hasScreenPicker = !!(options.renderer && options.screenPoint && typeof options.renderer.pickAtScreen === "function");
+        if ((options.controlKey || options.shiftKey) && this.state.selection && this.state.selection.kind === "roof") {
+            const roofHit = screenHit && screenHit.type === "roof" ? screenHit : null;
+            if (roofHit) {
+                if (options.controlKey) this.state.removeRoofFromSelection(getFloorId(roofHit.floor), { preserveView });
+                else this.state.addRoofToSelection(getFloorId(roofHit.floor), { preserveView });
+            }
+            this.drag = null;
+            return;
+        }
         if (options.controlKey && this.state.selectedMountedObjectIds().length > 0) {
             if (screenHit && screenHit.type === "mountedObject") {
                 this.state.removeMountedObjectFromSelection(screenHit.object.id, { preserveView });
@@ -57,7 +151,7 @@ export class SelectTool {
             return;
         }
         if (options.controlKey && this.state.selectedWallIds().length > 0) {
-            const fallbackWallHit = !screenHit || screenHit.type !== "wall"
+            const fallbackWallHit = !hasScreenPicker && (!screenHit || screenHit.type !== "wall")
                 ? this.state.pickWallAt(worldPoint, threshold)
                 : null;
             const wallHit = screenHit && screenHit.type === "wall"
@@ -70,7 +164,7 @@ export class SelectTool {
             return;
         }
         if (options.shiftKey && this.state.selectedWallIds().length > 0) {
-            const fallbackWallHit = !screenHit || screenHit.type !== "wall"
+            const fallbackWallHit = !hasScreenPicker && (!screenHit || screenHit.type !== "wall")
                 ? this.state.pickWallAt(worldPoint, threshold)
                 : null;
             const wallHit = screenHit && screenHit.type === "wall"
@@ -96,39 +190,7 @@ export class SelectTool {
                 return;
             }
         }
-        const gableHandle = this.pickGableHandle(options);
-        if (gableHandle) {
-            this.state.selectGableHandle(getFloorId(gableHandle.floor), gableHandle.gable.id, gableHandle.key, { preserveView });
-            this.drag = {
-                type: "gableHandle",
-                floorId: getFloorId(gableHandle.floor),
-                gableId: gableHandle.gable.id,
-                handle: gableHandle.key
-            };
-            return;
-        }
-        const resizeHandle = this.pickMountedObjectResizeHandle(options);
-        if (resizeHandle) {
-            this.beginMountedObjectResize(resizeHandle, options);
-            return;
-        }
-        const endpointHit = this.state.pickWallEndpoint(worldPoint, threshold);
-        if (endpointHit) {
-            const endpoint = endpointHit.wall[endpointHit.endpointKey];
-            this.state.selectWallEndpoint(endpointHit.wall.id, endpointHit.endpointKey);
-            this.drag = {
-                type: "wallEndpoint",
-                threshold,
-                detachVertexEndpoint: endpoint && endpoint.kind === "vertex"
-            };
-            return;
-        }
-        const vertexHit = this.state.pickSelectedFloorVertex(worldPoint, threshold);
-        if (vertexHit) {
-            this.selectFloorVertexHit(vertexHit, { preserveView });
-            return;
-        }
-        const hit = screenHit || this.state.pick(worldPoint, threshold);
+        const hit = hasScreenPicker ? screenHit : this.state.pick(worldPoint, threshold);
         if (!hit) {
             this.state.selectBuilding();
             this.drag = null;
@@ -162,7 +224,12 @@ export class SelectTool {
             return;
         }
         if (hit.type === "roof") {
-            this.state.selectRoof(getFloorId(hit.floor), { preserveView });
+            const floorId = getFloorId(hit.floor);
+            if (this.state.isRoofSelected(floorId)) {
+                this.beginRoofVerticalDrag(options);
+                return;
+            }
+            this.state.selectRoof(floorId, { preserveView });
             this.drag = null;
             return;
         }
@@ -611,6 +678,21 @@ export class SelectTool {
         this.state.emitChange();
     }
 
+    beginRoofVerticalDrag(options = {}) {
+        if (!options.screenPoint) throw new Error("roof vertical drag requires a screen point");
+        const originals = this.state.selectedRoofEntries().map(({ floor, roof }) => ({
+            floorId: getFloorId(floor),
+            elevationOffset: Number(roof.elevationOffset) || 0
+        }));
+        if (!originals.length) throw new Error("roof vertical drag requires selected roofs");
+        this.drag = {
+            type: "roofVertical",
+            startScreenY: Number(options.screenPoint.y),
+            originals,
+            preserveView: this.state.renderStyle() === "exterior"
+        };
+    }
+
     pointerMove(worldPoint, threshold, options = {}) {
         if (!this.drag) return;
         if (this.drag.type === "mountedObjectPending") {
@@ -625,6 +707,41 @@ export class SelectTool {
         }
         if (this.drag.type === "mountedObjectResize") {
             this.updateMountedObjectResize(options);
+            return;
+        }
+        if (this.drag.type === "roofVertical") {
+            if (!options.renderer || !options.screenPoint) return;
+            const screenDelta = { x: 0, y: Number(options.screenPoint.y) - Number(this.drag.startScreenY) };
+            const worldDelta = options.renderer.screenDeltaToWorldDelta(screenDelta);
+            const deltaZ = -Number(worldDelta.y);
+            this.state.moveSelectedRoofsVerticalDelta(this.drag.originals, deltaZ, { snapDistance: threshold });
+            return;
+        }
+        if (this.drag.type === "roofVertex") {
+            const renderer = options.renderer;
+            if (!renderer || !options.screenPoint || typeof renderer.roofContactWorldPointAtScreen !== "function") return;
+            const floor = this.state.selectedFloor();
+            if (!floor) throw new Error("roof vertex drag requires a selected floor");
+            this.state.moveSelectedRoofVertex(renderer.roofContactWorldPointAtScreen(floor, options.screenPoint));
+            return;
+        }
+        if (this.drag.type === "roofPeak") {
+            const renderer = options.renderer;
+            if (!renderer || !options.screenPoint || typeof renderer.roofPeakWorldPointAtScreen !== "function") return;
+            const floor = this.state.selectedFloor();
+            if (!floor) throw new Error("roof peak drag requires a selected floor");
+            this.state.moveSelectedRoofPeak(renderer.roofPeakWorldPointAtScreen(floor, options.screenPoint, {
+                startScreen: this.drag.startScreen,
+                originalPoint: this.drag.originalPoint
+            }));
+            return;
+        }
+        if (this.drag.type === "roofShedDirection") {
+            const renderer = options.renderer;
+            if (!renderer || !options.screenPoint || typeof renderer.roofShedDirectionWorldPointAtScreen !== "function") return;
+            const floor = this.state.selectedFloor();
+            if (!floor) throw new Error("shed roof direction drag requires a selected floor");
+            this.state.moveSelectedRoofShedDirection(renderer.roofShedDirectionWorldPointAtScreen(floor, options.screenPoint));
             return;
         }
         if (this.drag.type === "floorVertex" || this.drag.type === "selectedFloorVertex") {
@@ -660,6 +777,12 @@ export class SelectTool {
             return;
         }
         if (this.drag && this.drag.type === "mountedObjectResize") {
+            this.drag = null;
+            this.state.emitChange();
+            return;
+        }
+        if (this.drag && this.drag.type === "roofShedDirection") {
+            this.state.draft = null;
             this.drag = null;
             this.state.emitChange();
             return;

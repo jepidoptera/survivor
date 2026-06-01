@@ -67,6 +67,7 @@ app.get('/api/assets/images/:folder', (req, res) => {
 const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile.json');
 const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backups');
 const sectionWorldSavesRoot = path.join(__dirname, 'public', 'assets', 'saves');
+const buildingEditorSavesDir = path.join(__dirname, 'public', 'assets', 'saves', 'building-editor');
 
 function normalizeSaveSlotName(rawSlot) {
     const slot = String(rawSlot === undefined || rawSlot === null ? '' : rawSlot).trim();
@@ -97,6 +98,59 @@ function resolveSectionWorldDirForSlot(slotName) {
     const normalizedSlot = normalizeSaveSlotName(slotName);
     if (!normalizedSlot) return null;
     return path.join(sectionWorldSavesRoot, normalizedSlot);
+}
+
+function normalizeBuildingEditorBuildingName(rawName) {
+    const name = String(rawName === undefined || rawName === null ? '' : rawName).trim();
+    if (!name || name.length > 80) return '';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/.test(name)) return '';
+    if (name.endsWith('.json')) return '';
+    return name;
+}
+
+function resolveBuildingEditorSavePath(rawName) {
+    const name = normalizeBuildingEditorBuildingName(rawName);
+    if (!name) return null;
+    return {
+        name,
+        fileName: `${name}.json`,
+        savePath: path.join(buildingEditorSavesDir, `${name}.json`),
+        responsePath: `/assets/saves/building-editor/${encodeURIComponent(name)}.json`
+    };
+}
+
+function isValidBuildingEditorPayload(payload) {
+    return !!(
+        payload &&
+        typeof payload === 'object' &&
+        !Array.isArray(payload) &&
+        payload.schema === 'survivor-building-v1' &&
+        Array.isArray(payload.floorFragments) &&
+        Array.isArray(payload.wallSections) &&
+        Array.isArray(payload.mountedWallObjects)
+    );
+}
+
+function listBuildingEditorSaves() {
+    if (!fs.existsSync(buildingEditorSavesDir)) return [];
+    return fs.readdirSync(buildingEditorSavesDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+        .map(entry => {
+            const name = entry.name.slice(0, -'.json'.length);
+            const normalizedName = normalizeBuildingEditorBuildingName(name);
+            if (!normalizedName || normalizedName !== name) return null;
+            const filePath = path.join(buildingEditorSavesDir, entry.name);
+            const stats = fs.statSync(filePath);
+            return {
+                name,
+                file: entry.name,
+                path: `/assets/saves/building-editor/${encodeURIComponent(entry.name)}`,
+                modifiedTime: stats.mtime.toISOString(),
+                size: stats.size
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function isValidSectionCoordRecord(section) {
@@ -303,6 +357,55 @@ app.get('/api/savefile', (req, res) => {
     }
 });
 
+app.get('/api/building-editor/buildings', (req, res) => {
+    try {
+        return res.json({ ok: true, buildings: listBuildingEditorSaves() });
+    } catch (e) {
+        console.error('Failed to list building editor saves:', e);
+        return res.status(500).json({ ok: false, reason: 'list-failed' });
+    }
+});
+
+app.get('/api/building-editor/buildings/:name', (req, res) => {
+    try {
+        const paths = resolveBuildingEditorSavePath(req.params.name);
+        if (!paths) {
+            return res.status(400).json({ ok: false, reason: 'invalid-name' });
+        }
+        if (!fs.existsSync(paths.savePath)) {
+            return res.status(404).json({ ok: false, reason: 'missing' });
+        }
+        const raw = fs.readFileSync(paths.savePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!isValidBuildingEditorPayload(parsed)) {
+            return res.status(500).json({ ok: false, reason: 'invalid-building-file' });
+        }
+        return res.json({ ok: true, name: paths.name, path: paths.responsePath, data: parsed });
+    } catch (e) {
+        console.error('Failed to read building editor save:', e);
+        return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
+app.post('/api/building-editor/buildings/:name', (req, res) => {
+    try {
+        const paths = resolveBuildingEditorSavePath(req.params.name);
+        if (!paths) {
+            return res.status(400).json({ ok: false, reason: 'invalid-name' });
+        }
+        const payload = req.body;
+        if (!isValidBuildingEditorPayload(payload)) {
+            return res.status(400).json({ ok: false, reason: 'invalid-payload' });
+        }
+        fs.mkdirSync(buildingEditorSavesDir, { recursive: true });
+        fs.writeFileSync(paths.savePath, JSON.stringify(payload, null, 2), 'utf8');
+        return res.json({ ok: true, name: paths.name, path: paths.responsePath });
+    } catch (e) {
+        console.error('Failed to write building editor save:', e);
+        return res.status(500).json({ ok: false, reason: 'write-failed' });
+    }
+});
+
 app.post('/api/sectionworld', (req, res) => {
     try {
         const requestedSlot = (typeof req.query.slot === 'string') ? req.query.slot : '';
@@ -388,9 +491,13 @@ if (require.main === module) {
 
 module.exports = {
     app,
+    buildingEditorSavesDir,
     defaultJsonBodyLimit,
+    listBuildingEditorSaves,
     loadSectionWorldSlot,
+    normalizeBuildingEditorBuildingName,
     normalizeSaveSlotName,
+    resolveBuildingEditorSavePath,
     resolveSectionWorldDirForSlot,
     saveSectionWorldSlot,
     sectionWorldJsonBodyLimit

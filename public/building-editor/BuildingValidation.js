@@ -8,7 +8,11 @@ import {
     getFloorElevation,
     getFloorId,
     getFloorRoof,
+    getRoofContactPolygon,
+    getRoofDomeLevels,
     getRoofGables,
+    getRoofPeakPoint,
+    getRoofShedDirection,
     resolveEndpoint,
     wallPoints
 } from "./BuildingModel.js";
@@ -81,6 +85,13 @@ function validateRoof(errors, floor) {
         return;
     }
     if (roof.type !== "roof") errors.push(`floor ${floorId} roof type must be roof`);
+    const mode = String(roof.mode || "peak").trim().toLowerCase();
+    if (mode !== "peak" && mode !== "shed" && mode !== "dome") {
+        errors.push(`floor ${floorId} roof mode must be peak, shed, or dome`);
+    }
+    if (mode !== "peak" && getRoofGables(roof).length > 0) {
+        errors.push(`floor ${floorId} roof gables require peak mode`);
+    }
     if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
         errors.push(`floor ${floorId} roof texturePath must be a non-empty string`);
     }
@@ -93,10 +104,27 @@ function validateRoof(errors, floor) {
     if (!Number.isFinite(Number(roof.peakHeight)) || Number(roof.peakHeight) < 0) {
         errors.push(`floor ${floorId} roof peakHeight must be zero or greater`);
     }
+    try {
+        getRoofDomeLevels(roof);
+    } catch (error) {
+        errors.push(`floor ${floorId} ${error.message}`);
+    }
+    if (!Number.isFinite(Number(roof.elevationOffset))) {
+        errors.push(`floor ${floorId} roof elevationOffset must be a finite number`);
+    }
+    const peakPoint = getRoofPeakPoint(floor);
+    if (!pointIsFinite(peakPoint)) {
+        errors.push(`floor ${floorId} roof peakPoint must be finite`);
+    }
+    const shedDirection = getRoofShedDirection(floor);
+    if (!pointIsFinite(shedDirection) || Math.hypot(Number(shedDirection && shedDirection.x), Number(shedDirection && shedDirection.y)) <= 0.000001) {
+        errors.push(`floor ${floorId} roof shedDirection must be finite`);
+    }
     if (Number(roof.peakHeight) <= 0 && getRoofGables(roof).length > 0) {
         errors.push(`floor ${floorId} roof gables require positive peakHeight`);
     }
-    const perimeter = Array.isArray(floor.outerPolygon) ? floor.outerPolygon : [];
+    const perimeter = getRoofContactPolygon(floor);
+    validateRing(errors, floorId, perimeter, "roof contactPolygon");
     const faceCount = perimeter.length;
     const cumulative = faceCount >= 3 ? ringCumulativeLengths(perimeter) : [];
     const totalLength = cumulative.length ? cumulative[cumulative.length - 1] : 0;
@@ -160,10 +188,10 @@ function validateEndpoint(errors, building, wall, key) {
     if (!endpoint.kind) {
         errors.push(`${endpointLabel(wall, key)} is missing kind`);
     }
-    if (endpoint.kind === "vertex") {
+    if (endpoint.kind === "vertex" || endpoint.kind === "insetVertex") {
         if (!endpoint.fragmentId) errors.push(`${endpointLabel(wall, key)} vertex endpoint is missing fragmentId`);
         if (!endpoint.vertexId) errors.push(`${endpointLabel(wall, key)} vertex endpoint is missing vertexId`);
-        if (!resolveEndpoint(building, endpoint)) {
+        if (!resolveEndpoint(building, endpoint, wall)) {
             errors.push(`${endpointLabel(wall, key)} references missing floor vertex`);
         }
     } else if (endpoint.kind === "edge") {
@@ -184,7 +212,7 @@ function validateEndpoint(errors, building, wall, key) {
     } else if (endpoint.kind !== "point") {
         errors.push(`${endpointLabel(wall, key)} has unknown kind: ${endpoint.kind}`);
     }
-    if (!pointIsFinite(resolveEndpoint(building, endpoint) || endpoint)) {
+    if (!pointIsFinite(resolveEndpoint(building, endpoint, wall) || endpoint)) {
         errors.push(`${endpointLabel(wall, key)} must resolve to finite x/y`);
     }
 }
