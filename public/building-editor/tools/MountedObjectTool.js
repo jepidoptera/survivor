@@ -1,40 +1,5 @@
 import { findFloor, getBuildingMountedObjects, getFloorElevation, wallCenterlinePoints } from "../BuildingModel.js";
-
-function wallProfileFromCenterline(points, thickness) {
-    const geometry = globalThis.WallGeometry;
-    if (!geometry || typeof geometry.baseProfileFromEndpoints !== "function") {
-        throw new Error("missing shared wall geometry profile helper");
-    }
-    return geometry.baseProfileFromEndpoints(points[0], points[1], thickness);
-}
-
-function editorWallPlacementAdapter(wall, floor, points, renderer) {
-    const bottomZ = getFloorElevation(floor);
-    return {
-        id: wall.id,
-        type: "wallSection",
-        startPoint: points[0],
-        endPoint: points[1],
-        height: Number(wall.height),
-        thickness: Number(wall.thickness),
-        bottomZ,
-        getWallProfile() {
-            return wallProfileFromCenterline(points, wall.thickness);
-        },
-        getWallPositionAtScreenPoint(screenX, screenY, options = {}) {
-            const geometry = globalThis.WallGeometry;
-            if (!geometry || typeof geometry.wallPositionAtScreenPoint !== "function") {
-                throw new Error("missing shared wall geometry screen-position helper");
-            }
-            return geometry.wallPositionAtScreenPoint(this, screenX, screenY, {
-                ...options,
-                direction: Number.isFinite(Number(wall.direction)) ? Number(wall.direction) : 0,
-                getWallProfile: () => this.getWallProfile(),
-                toScreenPoint: (point, z) => renderer.worldToScreen(point, z)
-            });
-        }
-    };
-}
+import { editorWallPlacementAdapter } from "../WallScreenPlacement.js";
 
 function sameLevelWindowSnapTargets(building, floor, ignoredObjectId = null) {
     if (!floor) return [];

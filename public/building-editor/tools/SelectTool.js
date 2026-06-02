@@ -1,4 +1,5 @@
 import { getBuildingMountedObjects, getFloorElevation, getFloorId } from "../BuildingModel.js";
+// Note: beam/column methods come from BuildingEditorState (accessed via this.state)
 import { ringsForFloor } from "../BuildingPolygonEditing.js";
 import { mountedObjectPlacementAt } from "./MountedObjectTool.js";
 
@@ -150,6 +151,34 @@ export class SelectTool {
             this.drag = null;
             return;
         }
+        if (options.controlKey && this.state.selectedColumnIds().length > 0) {
+            if (screenHit && screenHit.type === "column") {
+                this.state.removeColumnFromSelection(screenHit.column.id, { preserveView });
+            }
+            this.drag = null;
+            return;
+        }
+        if (options.shiftKey && this.state.selectedColumnIds().length > 0) {
+            if (screenHit && screenHit.type === "column") {
+                this.state.addColumnToSelection(screenHit.column.id, { preserveView });
+            }
+            this.drag = null;
+            return;
+        }
+        if (options.controlKey && this.state.selectedBeamIds().length > 0) {
+            if (screenHit && screenHit.type === "beam") {
+                this.state.removeBeamFromSelection(screenHit.beam.id, { preserveView });
+            }
+            this.drag = null;
+            return;
+        }
+        if (options.shiftKey && this.state.selectedBeamIds().length > 0) {
+            if (screenHit && screenHit.type === "beam") {
+                this.state.addBeamToSelection(screenHit.beam.id, { preserveView });
+            }
+            this.drag = null;
+            return;
+        }
         if (options.controlKey && this.state.selectedWallIds().length > 0) {
             const fallbackWallHit = !hasScreenPicker && (!screenHit || screenHit.type !== "wall")
                 ? this.state.pickWallAt(worldPoint, threshold)
@@ -231,6 +260,27 @@ export class SelectTool {
             }
             this.state.selectRoof(floorId, { preserveView });
             this.drag = null;
+            return;
+        }
+        if (hit.type === "beam") {
+            const floorId = getFloorId(hit.floor);
+            if (this.state.isBeamSelected(hit.beam.id)) {
+                this.beginBeamVerticalDrag(options);
+                return;
+            }
+            this.state.selectBeam(floorId, hit.beam.id, { preserveView });
+            this.drag = null;
+            return;
+        }
+        if (hit.type === "column") {
+            const floorId = getFloorId(hit.floor);
+            this.state.selectColumn(floorId, hit.column.id, { preserveView });
+            this.drag = {
+                type: "columnPositionPending",
+                columnId: hit.column.id,
+                startScreen: options.screenPoint ? { x: Number(options.screenPoint.x), y: Number(options.screenPoint.y) } : null,
+                threshold
+            };
             return;
         }
         if (hit.type === "floor") {
@@ -572,6 +622,14 @@ export class SelectTool {
         return Math.hypot(dx, dy) >= 3;
     }
 
+    shouldStartColumnDrag(options = {}) {
+        if (!this.drag || this.drag.type !== "columnPositionPending") return false;
+        if (!this.drag.startScreen || !options.screenPoint) return true;
+        const dx = Number(options.screenPoint.x) - Number(this.drag.startScreen.x);
+        const dy = Number(options.screenPoint.y) - Number(this.drag.startScreen.y);
+        return Math.hypot(dx, dy) >= 3;
+    }
+
     finishMountedObjectDrag(worldPoint, threshold, options = {}) {
         if (this.drag.type === "mountedObjectPending") {
             this.drag = null;
@@ -693,11 +751,29 @@ export class SelectTool {
         };
     }
 
+    beginBeamVerticalDrag(options = {}) {
+        if (!options.screenPoint) throw new Error("beam vertical drag requires a screen point");
+        const beams = typeof this.state.selectedBeams === "function" ? this.state.selectedBeams() : [this.state.selectedBeam()].filter(Boolean);
+        if (!beams.length) throw new Error("beam vertical drag requires a selected beam");
+        this.drag = {
+            type: "beamVertical",
+            startScreenY: Number(options.screenPoint.y),
+            originals: beams.map((beam) => ({ beamId: beam.id, bottomZ: Number(beam.bottomZ) }))
+        };
+    }
+
     pointerMove(worldPoint, threshold, options = {}) {
         if (!this.drag) return;
         if (this.drag.type === "mountedObjectPending") {
             if (this.shouldStartMountedObjectDrag(options)) {
                 this.beginMountedObjectDrag(worldPoint, threshold, options);
+            }
+            return;
+        }
+        if (this.drag.type === "columnPositionPending") {
+            if (this.shouldStartColumnDrag(options)) {
+                this.drag = { type: "columnPosition", threshold };
+                this.state.moveSelectedColumn(worldPoint, threshold, options);
             }
             return;
         }
@@ -756,6 +832,22 @@ export class SelectTool {
             this.state.moveSelectedWallEndpoint(worldPoint, this.drag.threshold, {
                 detachVertexEndpoint: this.drag.detachVertexEndpoint === true
             });
+            return;
+        }
+        if (this.drag.type === "beamVertical") {
+            if (!options.renderer || !options.screenPoint) return;
+            const screenDelta = { x: 0, y: Number(options.screenPoint.y) - Number(this.drag.startScreenY) };
+            const worldDelta = options.renderer.screenDeltaToWorldDelta(screenDelta);
+            const deltaZ = -Number(worldDelta.y);
+            this.state.moveSelectedBeamVertical(this.drag.originals, deltaZ, { snapDistance: threshold });
+            return;
+        }
+        if (this.drag.type === "beamEndpoint") {
+            this.state.moveSelectedBeamEndpoint(worldPoint, threshold, options);
+            return;
+        }
+        if (this.drag.type === "columnPosition") {
+            this.state.moveSelectedColumn(worldPoint, threshold, options);
             return;
         }
         if (this.drag.type === "gableHandle") {

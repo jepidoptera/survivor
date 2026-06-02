@@ -3418,6 +3418,10 @@ void main(void) {
                     pushPoint(cx, cy);
                 }
             }
+            if (item && item.type === "beam") {
+                pushPoint(item.startX, item.startY);
+                pushPoint(item.endX, item.endY);
+            }
             if (item && item.type === "straightStair") {
                 const stair = item.stair || null;
                 const lowerPoint = stair && stair.lowerPoint ? stair.lowerPoint : item.lowerPoint;
@@ -14595,6 +14599,21 @@ void main(void) {
                     } else if (useMazeLosClipping) {
                         displayObj = null;
                     }
+                }
+                if (
+                    (item.type === "beam" || item.type === "column") &&
+                    typeof item.getDepthMeshDisplayObject === "function"
+                ) {
+                    const depthDisplay = item.getDepthMeshDisplayObject({
+                        camera: this.camera,
+                        app: ctx.app,
+                        viewscale: this.camera.viewscale,
+                        xyratio: this.camera.xyratio,
+                        tint: 0xFFFFFF,
+                        alpha: this.getScriptDisplayAlpha ? this.getScriptDisplayAlpha(item) : 1,
+                        brightness: Number.isFinite(item.brightness) ? Number(item.brightness) : 0
+                    });
+                    if (depthDisplay) displayObj = depthDisplay;
                 }
                 if (wallBottomOutlineOnly && item._depthDisplayMesh) {
                     if (item._depthDisplayMesh.parent) {

@@ -21,9 +21,18 @@ async function loadWallTool() {
     return import("../public/building-editor/tools/WallTool.js");
 }
 
+async function loadColumnTool() {
+    return import("../public/building-editor/tools/ColumnTool.js");
+}
+
 function loadWallSectionUnit() {
     require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
     return globalThis.WallSectionUnit;
+}
+
+function loadColumnUnit() {
+    require("../public/assets/javascript/gameobjects/columnUnit.js");
+    return globalThis.ColumnUnit;
 }
 
 async function loadPolygonEditTool() {
@@ -81,6 +90,19 @@ function triangulationXyArea(triangulation) {
         ) * 0.5;
     }
     return area;
+}
+
+function assertPointSetsAlmostEqual(actual, expected, epsilon = 0.000001) {
+    assert.equal(actual.length, expected.length);
+    const unmatched = actual.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+    expected.forEach((expectedPoint) => {
+        const index = unmatched.findIndex((point) => (
+            Math.abs(point.x - Number(expectedPoint.x)) <= epsilon &&
+            Math.abs(point.y - Number(expectedPoint.y)) <= epsilon
+        ));
+        assert.notEqual(index, -1, `missing point ${Number(expectedPoint.x)},${Number(expectedPoint.y)}`);
+        unmatched.splice(index, 1);
+    });
 }
 
 test("splitting a perimeter wall preserves untouched wall ids and remounts objects onto the split side", async () => {
@@ -431,6 +453,33 @@ test("wall endpoint snapping uses weighted distance between snap target types", 
     assert.equal(snap.kind, "wallEndpoint");
 });
 
+test("vertex-attached wall endpoint can move to a partial point on the same floor edge", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    state.snapToGrid = false;
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building)[0];
+    state.selectWall(wall.id);
+    state.updateSelectedWallVertexInset(false);
+    const startVertex = floor.outerPolygon.find((vertex) => vertex.id === wall.startPoint.vertexId);
+    const endVertex = floor.outerPolygon.find((vertex) => vertex.id === wall.endPoint.vertexId);
+    const target = {
+        x: Number(startVertex.x) + (Number(endVertex.x) - Number(startVertex.x)) * 0.35,
+        y: Number(startVertex.y) + (Number(endVertex.y) - Number(startVertex.y)) * 0.35
+    };
+
+    state.selectWallEndpoint(wall.id, "startPoint");
+    state.moveSelectedWallEndpoint(target, 1, { detachVertexEndpoint: true });
+
+    assert.equal(wall.startPoint.kind, "edge");
+    assert.equal(wall.startPoint.boundaryPoint, true);
+    assert.equal(wall.attachment, null);
+    assert.ok(Math.abs(Number(wall.startPoint.x) - target.x) < 0.000001);
+    assert.ok(Math.abs(Number(wall.startPoint.y) - target.y) < 0.000001);
+    assert.notEqual(wall.startPoint.vertexId, startVertex.id);
+});
+
 test("selected vertex wall endpoints can be inset or protruded", async () => {
     const { BuildingEditorState } = await loadState();
     const model = await loadModel();
@@ -442,7 +491,7 @@ test("selected vertex wall endpoints can be inset or protruded", async () => {
     assert.equal(state.selectedWallsCanToggleVertexInset(), true);
     state.updateSelectedWallVertexInset(false);
     assert.equal(wall.startPoint.kind, "vertex");
-    assert.equal(wall.startPoint.inset, undefined);
+    assert.equal(wall.startPoint.inset, false);
     let points = model.wallPoints(state.building, wall);
     assert.equal(points[0].x, Number(floor.outerPolygon[0].x));
     assert.equal(points[0].y, Number(floor.outerPolygon[0].y));
@@ -453,6 +502,27 @@ test("selected vertex wall endpoints can be inset or protruded", async () => {
     points = model.wallPoints(state.building, wall);
     assert.notEqual(points[0].x, Number(floor.outerPolygon[0].x));
     assert.notEqual(points[0].y, Number(floor.outerPolygon[0].y));
+});
+
+test("protruded perimeter vertex endpoints survive save and load normalization", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const wall = model.getBuildingWalls(state.building)[0];
+    const floor = state.selectedFloor();
+    state.selectWall(wall.id);
+
+    state.updateSelectedWallVertexInset(false);
+    const saved = state.serialize();
+    const loaded = model.normalizeImportedBuilding(saved);
+    const loadedWall = model.getBuildingWalls(loaded).find((candidate) => Number(candidate.id) === Number(wall.id));
+
+    assert.equal(loadedWall.startPoint.kind, "vertex");
+    assert.equal(loadedWall.startPoint.inset, false);
+    assert.equal(loadedWall.endPoint.inset, false);
+    const points = model.wallPoints(loaded, loadedWall);
+    assert.equal(points[0].x, Number(floor.outerPolygon[0].x));
+    assert.equal(points[0].y, Number(floor.outerPolygon[0].y));
 });
 
 test("snap direction constrains wall drags to twelve canonical directions", async () => {
@@ -707,6 +777,122 @@ test("roofs save editable contact vertices separately from derived overhang", as
     assert.deepEqual(validateBuilding(state.building), []);
 });
 
+test("roof vertex snapping uses one mitered perimeter corner per inset wall corner", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+
+    const candidates = state.roofVertexSnapCandidates(floor);
+    const perimeterCorners = candidates.filter((candidate) => candidate.kind === "perimeterWallOuterCorner");
+    const lowerVertices = candidates.filter((candidate) => candidate.kind === "lowerFloorVertex");
+
+    assert.equal(perimeterCorners.length, floor.outerPolygon.length);
+    assert.equal(lowerVertices.length, 0);
+    assertPointSetsAlmostEqual(perimeterCorners.map((candidate) => candidate.point), floor.outerPolygon);
+});
+
+test("roof vertex snapping uses protruded perimeter wall miters instead of floor corners", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const walls = model.getBuildingWalls(state.building)
+        .filter((wall) => String(wall.fragmentId || wall.floorId) === model.getFloorId(floor));
+
+    state.selectWalls(walls.map((wall) => wall.id));
+    state.updateSelectedWallVertexInset(false);
+
+    const candidates = state.roofVertexSnapCandidates(floor);
+    const perimeterCorners = candidates.filter((candidate) => candidate.kind === "perimeterWallOuterCorner");
+    const lowerVertices = candidates.filter((candidate) => candidate.kind === "lowerFloorVertex");
+    const expected = model.offsetRing(floor.outerPolygon, Number(walls[0].thickness) * 0.5);
+
+    assert.equal(perimeterCorners.length, floor.outerPolygon.length);
+    assert.equal(lowerVertices.length, 0);
+    assertPointSetsAlmostEqual(perimeterCorners.map((candidate) => candidate.point), expected);
+});
+
+test("walls save resolved footprint and top geometry for render-time mesh building", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const { validateBuilding } = await import("../public/building-editor/BuildingValidation.js");
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+    const walls = model.getBuildingWalls(state.building)
+        .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId);
+
+    state.selectWalls(walls.map((wall) => wall.id));
+    state.updateSelectedWallVertexInset(false);
+
+    const saved = JSON.parse(state.serialize());
+    const savedWalls = model.getBuildingWalls(saved)
+        .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId);
+    assert.equal(savedWalls.length, walls.length);
+    savedWalls.forEach((wall) => {
+        assert.equal(wall.resolvedGeometry.version, 1);
+        ["aLeft", "aRight", "bLeft", "bRight"].forEach((key) => {
+            assert.equal(Number.isFinite(Number(wall.resolvedGeometry.profile[key].x)), true);
+            assert.equal(Number.isFinite(Number(wall.resolvedGeometry.profile[key].y)), true);
+        });
+        assert.ok(wall.resolvedGeometry.topStations.length >= 2);
+        wall.resolvedGeometry.topStations.forEach((station) => {
+            assert.equal(Number.isFinite(Number(station.left.z)), true);
+            assert.equal(Number.isFinite(Number(station.right.z)), true);
+        });
+    });
+    assert.deepEqual(validateBuilding(saved), []);
+
+    const expectedOuterCorners = model.offsetRing(floor.outerPolygon, Number(walls[0].thickness) * 0.5);
+    const savedProfileCorners = savedWalls.flatMap((wall) => {
+        const profile = wall.resolvedGeometry.profile;
+        return [profile.aLeft, profile.aRight, profile.bLeft, profile.bRight];
+    });
+    expectedOuterCorners.forEach((expected) => {
+        assert.ok(savedProfileCorners.some((point) => (
+            Math.abs(Number(point.x) - Number(expected.x)) < 0.000001 &&
+            Math.abs(Number(point.y) - Number(expected.y)) < 0.000001
+        )), `missing saved resolved corner ${expected.x},${expected.y}`);
+    });
+
+    const imported = model.normalizeImportedBuilding(state.serialize());
+    assert.deepEqual(validateBuilding(imported), []);
+});
+
+test("renderer wall units rebuild from saved mitered geometry on creation", async () => {
+    loadWallSectionUnit();
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+    const walls = model.getBuildingWalls(state.building)
+        .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId);
+
+    state.selectWalls(walls.map((wall) => wall.id));
+    state.updateSelectedWallVertexInset(false);
+
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    renderer.wallUnitById = new Map();
+
+    const wall = walls[0];
+    const entry = renderer.ensureWallUnit(wall, floor);
+    const vertices = entry.unit.mesh3d.vertices;
+    const profile = model.getWallResolvedGeometry(wall).profile;
+    const meshPoints = [];
+    for (let index = 0; index < vertices.length; index += 3) {
+        meshPoints.push({ x: Number(vertices[index]), y: Number(vertices[index + 1]) });
+    }
+    [profile.aLeft, profile.aRight, profile.bLeft, profile.bRight].forEach((expected) => {
+        assert.ok(meshPoints.some((point) => (
+            Math.abs(point.x - Number(expected.x)) < 0.000001 &&
+            Math.abs(point.y - Number(expected.y)) < 0.000001
+        )), `renderer mesh is missing resolved miter corner ${expected.x},${expected.y}`);
+    });
+});
+
 test("peak roofs store a draggable peak point with center snapping", async () => {
     const { BuildingEditorState } = await loadState();
     const model = await loadModel();
@@ -788,6 +974,96 @@ test("shed roofs raise vertices along direction without moving roof polygon xy",
     }
 });
 
+test("shed roof texture top is oriented toward the high side", async () => {
+    const previousEarcut = globalThis.earcut;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { floor } = await createTestBuilding();
+        const { BuildingRenderer } = await loadRenderer();
+        floor.roof.mode = "shed";
+        floor.roof.overhang = 0;
+        floor.roof.peakHeight = 2;
+        floor.roof.shedDirection = { x: 0, y: 1 };
+        const renderer = Object.create(BuildingRenderer.prototype);
+        const triangulation = renderer.triangulateRoof(floor);
+        const low = triangulation.points.filter((point) => Math.abs(Number(point.y)) < 0.000001);
+        const high = triangulation.points.filter((point) => Math.abs(Number(point.y) - 10) < 0.000001);
+
+        assert.ok(low.length > 0);
+        assert.ok(high.length > 0);
+        high.forEach((point) => {
+            assert.ok(Math.abs(Number(point.v)) < 0.000001);
+        });
+        low.forEach((point) => {
+            assert.ok(Number(point.v) > 0);
+        });
+
+        const leftHigh = high.find((point) => Math.abs(Number(point.x)) < 0.000001);
+        const rightHigh = high.find((point) => Math.abs(Number(point.x) - 10) < 0.000001);
+        assert.ok(leftHigh);
+        assert.ok(rightHigh);
+        assert.ok(Math.abs(Number(rightHigh.u) - Number(leftHigh.u)) > 0.000001);
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+    }
+});
+
+test("roof UVs use repeatsPerMapUnitX and repeatsPerMapUnitY from the texture manifest", async () => {
+    const previousEarcut = globalThis.earcut;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { floor } = await createTestBuilding();
+        const { BuildingRenderer } = await loadRenderer();
+        floor.roof.mode = "shed";
+        floor.roof.overhang = 0;
+        floor.roof.peakHeight = 0;
+        floor.roof.texturePath = "/assets/images/roofs/test-repeat.png";
+        floor.roof.shedDirection = { x: 0, y: 1 };
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.roofTextureConfigCache = {
+            byPath: new Map([[
+                "/assets/images/roofs/test-repeat.png",
+                {
+                    texturePath: "/assets/images/roofs/test-repeat.png",
+                    repeatsPerMapUnitX: 0.01,
+                    repeatsPerMapUnitY: 0.01
+                }
+            ]]),
+            byFile: new Map(),
+            defaultRepeatX: 0.5,
+            defaultRepeatY: 0.5
+        };
+        renderer.roofTextureConfigError = "";
+        const triangulation = renderer.triangulateRoof(floor);
+        const low = triangulation.points.filter((point) => Math.abs(Number(point.y)) < 0.000001);
+        const high = triangulation.points.filter((point) => Math.abs(Number(point.y) - 10) < 0.000001);
+        const leftHigh = high.find((point) => Math.abs(Number(point.x)) < 0.000001);
+        const rightHigh = high.find((point) => Math.abs(Number(point.x) - 10) < 0.000001);
+
+        assert.ok(low.length > 0);
+        assert.ok(high.length > 0);
+        assert.ok(leftHigh);
+        assert.ok(rightHigh);
+        assert.ok(Math.abs(Math.abs(Number(rightHigh.u) - Number(leftHigh.u)) - 0.1) < 0.000001);
+        low.forEach((point) => {
+            assert.ok(Math.abs(Number(point.v) - 0.1) < 0.000001);
+        });
+        high.forEach((point) => {
+            assert.ok(Math.abs(Number(point.v)) < 0.000001);
+        });
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+    }
+});
+
 test("dome roofs build equidistant z levels on a hemispherical curve", async () => {
     const previousEarcut = globalThis.earcut;
     try {
@@ -825,6 +1101,59 @@ test("dome roofs build equidistant z levels on a hemispherical curve", async () 
             globalThis.earcut = previousEarcut;
         }
     }
+});
+
+test("dome roof facets use planar UVs oriented toward the top", async () => {
+    const { floor } = await createTestBuilding();
+    const { BuildingRenderer } = await loadRenderer();
+    floor.roof.mode = "dome";
+    floor.roof.overhang = 0;
+    floor.roof.peakHeight = 4;
+    floor.roof.domeLevels = 4;
+    floor.roof.texturePath = "/assets/images/roofs/dome-repeat-test.png";
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.roofTextureConfigCache = {
+        byPath: new Map([[
+            "/assets/images/roofs/dome-repeat-test.png",
+            {
+                texturePath: "/assets/images/roofs/dome-repeat-test.png",
+                repeatsPerMapUnitX: 0.01,
+                repeatsPerMapUnitY: 0.01
+            }
+        ]]),
+        byFile: new Map(),
+        defaultRepeatX: 0.5,
+        defaultRepeatY: 0.5
+    };
+    renderer.roofTextureConfigError = "";
+
+    const triangulation = renderer.triangulateRoof(floor);
+    let checkedSlopedFacet = false;
+    for (let index = 0; index < triangulation.points.length; index += 3) {
+        const triangle = triangulation.points.slice(index, index + 3);
+        const zValues = triangle.map((point) => Number(point.z));
+        const minZ = Math.min(...zValues);
+        const maxZ = Math.max(...zValues);
+        if (maxZ - minZ <= 0.000001) continue;
+        const vValues = triangle.map((point) => Number(point.v));
+        const uValues = triangle.map((point) => Number(point.u));
+
+        triangle.forEach((point) => {
+            assert.ok(Number.isFinite(Number(point.u)));
+            assert.ok(Number.isFinite(Number(point.v)));
+        });
+        triangle
+            .filter((point) => Math.abs(Number(point.z) - maxZ) <= 0.000001)
+            .forEach((point) => assert.ok(Math.abs(Number(point.v)) < 0.000001));
+        triangle
+            .filter((point) => Math.abs(Number(point.z) - maxZ) > 0.000001)
+            .forEach((point) => assert.ok(Number(point.v) > 0));
+        assert.ok(Math.max(...uValues) - Math.min(...uValues) > 0);
+        assert.ok(Math.max(...vValues) - Math.min(...vValues) >= (maxZ - minZ) * 0.01 - 0.000001);
+        assert.ok(Math.max(...vValues) - Math.min(...vValues) < 0.1);
+        checkedSlopedFacet = true;
+    }
+    assert.equal(checkedSlopedFacet, true);
 });
 
 test("building editor camera pitch preserves default projection and round-trips screen points", async () => {
@@ -990,7 +1319,10 @@ test("shed roof generated wall profiles evaluate at mitered wall top corners", a
             return { wall, floor, entry: { unit } };
         });
 
-    renderer.miterWallEntriesForFloor(entries);
+    entries.forEach(({ wall, entry }) => {
+        renderer.applyResolvedGeometryToWallUnit(entry.unit, wall);
+        entry.unit.rebuildMesh3d();
+    });
     const range = state.roofShedProjectionRange(floor);
     let checkedTopVertices = 0;
     entries.forEach(({ entry }) => {
@@ -1432,4 +1764,941 @@ test("gable window horizontal resize uses the merged straight span across the ri
     const bounds = tool.mountedObjectResizeBounds(window, renderer);
 
     assert.ok(bounds.maxWidth > 5.9);
+});
+
+test("createBeam produces a valid beam record with defaults", async () => {
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const beam = model.createBeam({
+        floorId: floor.fragmentId,
+        startAttachment: { kind: "free", x: 1, y: 1 },
+        endAttachment: { kind: "free", x: 5, y: 1 }
+    });
+    assert.equal(beam.type, "beam");
+    assert.ok(Number.isInteger(beam.id));
+    assert.equal(beam.floorId, floor.fragmentId);
+    assert.equal(beam.thickness, 0.001);
+    assert.equal(beam.height, 0.2);
+    assert.equal(beam.startOverhang, 0);
+    assert.equal(beam.endOverhang, 0);
+    assert.equal(beam.startAttachment.kind, "free");
+    assert.equal(beam.endAttachment.kind, "free");
+    assert.throws(() => model.createBeam({ floorId: floor.fragmentId, thickness: 0.0009 }),
+        /thickness must be at least/);
+    assert.throws(() => model.createBeam({ floorId: floor.fragmentId, height: -1 }),
+        /height must be a positive/);
+    void (building);
+});
+
+test("createColumn produces a valid column record with defaults", async () => {
+    const model = await loadModel();
+    const { floor } = await createTestBuilding();
+    const col = model.createColumn({
+        floorId: floor.fragmentId,
+        position: { x: 3, y: 3 },
+        floorDefaultWallHeight: 3
+    });
+    assert.equal(col.type, "column");
+    assert.ok(Number.isInteger(col.id));
+    assert.equal(col.floorId, floor.fragmentId);
+    assert.equal(col.sideCount, 4);
+    assert.equal(col.size, 0.125);
+    assert.equal(col.width, 0.25);
+    assert.equal(col.depth, 0.25);
+    assert.equal(col.height, 3);
+    assert.equal(col.heightMode, "fixed");
+    assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, sideCount: 2 }),
+        /sideCount must be between/);
+    assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, sideCount: 13 }),
+        /sideCount must be between/);
+    assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, size: -1 }),
+        /width.*must be a positive/);
+});
+
+test("column tool defaults to host wall height and one millimeter extra thickness", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { ColumnTool } = await loadColumnTool();
+    const { model, building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    wall.height = 4.25;
+    wall.thickness = 0.375;
+    const pts = model.wallPoints(building, wall);
+    const point = {
+        x: (pts[0].x + pts[1].x) * 0.5,
+        y: (pts[0].y + pts[1].y) * 0.5
+    };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const tool = new ColumnTool(state);
+
+    tool.pointerDown(point, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    const [column] = model.getFloorColumns(floor);
+    assert.ok(column, "column was placed");
+    assert.equal(column.height, 4.25);
+    assert.equal(column.heightMode, "wall");
+    assert.equal(column.sideCount, 4);
+    assert.ok(Math.abs(column.depth - 0.376) < 0.0000001);
+    assert.equal(column.width, 0.25);
+    assert.equal(column.wallId, wall.id);
+});
+
+test("wall-hosted columns follow wall height and generated roof profiles", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+    const wall = model.getBuildingWalls(state.building)[0];
+    const pts = model.wallPoints(state.building, wall);
+    const column = state.addColumnToFloor(floorId, {
+        wallId: wall.id,
+        position: {
+            x: (Number(pts[0].x) + Number(pts[1].x)) * 0.5,
+            y: (Number(pts[0].y) + Number(pts[1].y)) * 0.5
+        },
+        height: 1,
+        bottomZ: model.getFloorElevation(floor)
+    });
+
+    assert.equal(column.height, wall.height);
+
+    state.selectWall(wall.id);
+    state.updateSelectedWallHeight(4.5);
+    assert.equal(column.height, 4.5);
+
+    state.selectFloor(floorId);
+    state.updateSelectedRoofMode("shed");
+    state.updateSelectedRoofPeakHeight(4);
+    const center = state.roofShedBaseCenter(floor);
+    state.selectRoofShedDirection(floorId);
+    assert.equal(state.moveSelectedRoofShedDirection({ x: center.x + 3, y: center.y }), true);
+    const shedHeight = column.height;
+    assert.notEqual(shedHeight, 4.5);
+
+    state.updateSelectedRoofPeakHeight(1);
+    assert.notEqual(column.height, shedHeight);
+
+    state.updateSelectedRoofMode("dome");
+    assert.equal(column.height, 4.5);
+});
+
+test("column height can be fixed and reset to wall-pegged", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+    const wall = model.getBuildingWalls(state.building)[0];
+    const pts = model.wallPoints(state.building, wall);
+    const column = state.addColumnToFloor(floorId, {
+        wallId: wall.id,
+        position: {
+            x: (Number(pts[0].x) + Number(pts[1].x)) * 0.5,
+            y: (Number(pts[0].y) + Number(pts[1].y)) * 0.5
+        },
+        bottomZ: model.getFloorElevation(floor)
+    });
+
+    assert.equal(column.heightMode, "wall");
+    assert.equal(column.height, wall.height);
+
+    state.selectColumn(floorId, column.id);
+    state.updateSelectedColumnHeight("2.25");
+    assert.equal(column.heightMode, "fixed");
+    assert.equal(column.height, 2.25);
+
+    state.selectWall(wall.id);
+    state.updateSelectedWallHeight(4.75);
+    assert.equal(column.height, 2.25);
+
+    state.selectColumn(floorId, column.id);
+    state.updateSelectedColumnHeight("");
+    assert.equal(column.heightMode, "wall");
+    assert.equal(column.height, 4.75);
+});
+
+test("column tool depth is actual depth and clamps to host wall minimum", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { ColumnTool } = await loadColumnTool();
+    const { model, building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    wall.thickness = 0.25;
+    const pts = model.wallPoints(building, wall);
+    const point = {
+        x: (pts[0].x + pts[1].x) * 0.5,
+        y: (pts[0].y + pts[1].y) * 0.5
+    };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    state.updateColumnToolThickness(0.5);
+    state.updateColumnToolWidth(0.4);
+
+    new ColumnTool(state).pointerDown(point, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    const [column] = model.getFloorColumns(floor);
+    assert.equal(column.depth, 0.5);
+    assert.equal(column.width, 0.4);
+    assert.equal(column.wallId, wall.id);
+
+    state.deleteSelectedColumn();
+    state.updateColumnToolThickness(0.1);
+    new ColumnTool(state).pointerDown(point, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    const [clamped] = model.getFloorColumns(floor);
+    assert.ok(Math.abs(clamped.depth - 0.251) < 0.000001);
+});
+
+test("column tool preserves exterior view when placing on an exterior wall", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { ColumnTool } = await loadColumnTool();
+    const { model, building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const pts = model.wallPoints(building, wall);
+    const point = {
+        x: (pts[0].x + pts[1].x) * 0.5,
+        y: (pts[0].y + pts[1].y) * 0.5
+    };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectBuilding();
+    assert.equal(state.renderStyle(), "exterior");
+
+    new ColumnTool(state).pointerDown(point, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    assert.equal(state.renderStyle(), "exterior");
+    assert.equal(state.selectedColumn().wallId, wall.id);
+});
+
+test("column tool snaps anywhere on an exterior wall picked by screen hit", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { ColumnTool } = await loadColumnTool();
+    const { model, building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const tool = new ColumnTool(state);
+
+    tool.pointerMove({ x: 5, y: 4 }, 0.001, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    assert.equal(state.draft.kind, "column");
+    const pts = model.wallPoints(building, wall);
+    const a = pts[0], b = pts[1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t = Math.max(0, Math.min(1, ((5 - a.x) * dx + (4 - a.y) * dy) / lenSq));
+    assert.ok(Math.abs(state.draft.position.x - (a.x + dx * t)) < 0.000001);
+    assert.ok(Math.abs(state.draft.position.y - (a.y + dy * t)) < 0.000001);
+    assert.equal(state.draft.wallId, wall.id);
+});
+
+test("column tool prefers screen-picked wall endpoints over wall centerline projection", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { ColumnTool } = await loadColumnTool();
+    const { model, building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const pts = model.wallPoints(building, wall);
+    const endpoint = pts[0];
+    const nearEndpoint = { x: endpoint.x + 0.05, y: endpoint.y + 0.05 };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+
+    new ColumnTool(state).pointerMove(nearEndpoint, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "wall", wall, floor };
+            }
+        }
+    });
+
+    assert.equal(state.draft.kind, "column");
+    assert.ok(Math.abs(state.draft.position.x - endpoint.x) < 0.000001);
+    assert.ok(Math.abs(state.draft.position.y - endpoint.y) < 0.000001);
+    assert.equal(state.draft.wallId, wall.id);
+});
+
+test("wall-attached columns use the shed roof plane for clipped top heights", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building)[0];
+
+    state.updateSelectedRoofMode("shed");
+    state.updateSelectedRoofPeakHeight(4);
+    const center = state.roofShedBaseCenter(floor);
+    state.selectRoofShedDirection(floor.fragmentId);
+    assert.equal(state.moveSelectedRoofShedDirection({ x: center.x + 3, y: center.y }), true);
+
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        wallId: wall.id,
+        position: { x: 0, y: -1.5 },
+        size: 0.125,
+        height: 4,
+        bottomZ: model.getFloorElevation(floor)
+    });
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    const topHeights = renderer.columnTopHeightsForRender(column, floor);
+    const verts = model.columnVertices(column);
+    const expected = verts.map((point) => state.roofShedTopZAt(floor, point) - model.getFloorElevation(floor));
+
+    assert.equal(topHeights.length, verts.length);
+    assert.ok(topHeights.some((value, index) => Math.abs(value - topHeights[(index + 1) % topHeights.length]) > 0.000001));
+    topHeights.forEach((value, index) => {
+        assert.ok(Math.abs(value - expected[index]) < 0.000001);
+    });
+});
+
+test("repositioned columns without wall attachment still clip to shed roof plane", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building)[0];
+
+    state.updateSelectedRoofMode("shed");
+    state.updateSelectedRoofPeakHeight(4);
+    const center = state.roofShedBaseCenter(floor);
+    state.selectRoofShedDirection(floor.fragmentId);
+    assert.equal(state.moveSelectedRoofShedDirection({ x: center.x + 3, y: center.y }), true);
+
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        wallId: wall.id,
+        position: { x: 0, y: -1.5 },
+        size: 0.125,
+        height: 4,
+        bottomZ: model.getFloorElevation(floor)
+    });
+    state.selectColumn(floor.fragmentId, column.id);
+    assert.equal(state.moveSelectedColumn({ x: 0.4, y: 0 }, 0.001, {
+        screenPoint: { x: 10, y: 10 },
+        renderer: {
+            pickAtScreen() {
+                return { type: "floor", floor };
+            }
+        }
+    }), true);
+    assert.equal(column.wallId, null);
+
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    const topHeights = renderer.columnTopHeightsForRender(column, floor);
+    const verts = model.columnVertices(column);
+    const expected = verts.map((point) => state.roofShedTopZAt(floor, point) - model.getFloorElevation(floor));
+
+    assert.equal(topHeights.length, verts.length);
+    assert.ok(topHeights.some((value, index) => Math.abs(value - topHeights[(index + 1) % topHeights.length]) > 0.000001));
+    topHeights.forEach((value, index) => {
+        assert.ok(Math.abs(value - expected[index]) < 0.000001);
+    });
+});
+
+test("columns can be multi-selected, bulk edited, and bulk deleted", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const first = state.addColumnToFloor(floor.fragmentId, { position: { x: 1, y: 1 } });
+    const second = state.addColumnToFloor(floor.fragmentId, { position: { x: 2, y: 2 } });
+    const third = state.addColumnToFloor(floor.fragmentId, { position: { x: 3, y: 3 } });
+
+    state.selectColumn(floor.fragmentId, first.id);
+    state.addColumnToSelection(second.id);
+
+    assert.deepEqual(state.selectedColumnIds().map(Number), [first.id, second.id]);
+    assert.equal(state.isColumnSelected(first.id), true);
+    assert.equal(state.isColumnSelected(second.id), true);
+    assert.equal(state.isColumnSelected(third.id), false);
+
+    state.updateSelectedColumnSideCount(6);
+    state.updateSelectedColumnThickness(0.5);
+    assert.equal(first.sideCount, 6);
+    assert.equal(second.sideCount, 6);
+    assert.equal(third.sideCount, 4);
+    assert.equal(first.depth, 0.5);
+    assert.equal(second.depth, 0.5);
+    state.updateSelectedColumnWidth(0.4);
+    assert.equal(first.width, 0.4);
+    assert.equal(second.width, 0.4);
+    assert.equal(first.size, 0.2);
+    assert.equal(second.size, 0.2);
+
+    state.removeColumnFromSelection(first.id);
+    assert.deepEqual(state.selectedColumnIds().map(Number), [second.id]);
+    state.addColumnsToSelection([first.id, third.id]);
+    assert.deepEqual(state.selectedColumnIds().map(Number), [second.id, first.id, third.id]);
+
+    assert.equal(state.deleteSelectedColumn(), true);
+    assert.equal(state.findColumnInFloor(floor.fragmentId, first.id), null);
+    assert.equal(state.findColumnInFloor(floor.fragmentId, second.id), null);
+    assert.equal(state.findColumnInFloor(floor.fragmentId, third.id), null);
+});
+
+test("activating the column tool copies settings from the selected hosted column", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    wall.thickness = 0.375;
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        wallId: wall.id,
+        position: { x: 1, y: 1 },
+        width: 0.4,
+        depth: 0.5,
+        sideCount: 6,
+        texturePath: "/assets/images/walls/stone.png"
+    });
+    state.selectColumn(floor.fragmentId, column.id);
+
+    state.setTool("column");
+
+    assert.equal(state.tool, "column");
+    assert.ok(Math.abs(state.columnTool.thickness - 0.5) < 0.000001);
+    assert.equal(state.columnTool.width, 0.4);
+    assert.equal(state.columnTool.sideCount, 6);
+    assert.equal(state.columnTool.texture, "/assets/images/walls/stone.png");
+    assert.deepEqual(state.selectedColumnIds().map(Number), [column.id]);
+});
+
+test("activating the column tool copies freestanding column settings relative to default wall thickness", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        wallId: null,
+        position: { x: 1, y: 1 },
+        width: 0.55,
+        depth: 0.6,
+        sideCount: 5,
+        texturePath: "/assets/images/walls/plaster.png"
+    });
+    state.selectColumn(floor.fragmentId, column.id);
+
+    state.setTool("column");
+
+    assert.ok(Math.abs(state.columnTool.thickness - 0.6) < 0.000001);
+    assert.equal(state.columnTool.width, 0.55);
+    assert.equal(state.columnTool.sideCount, 5);
+    assert.equal(state.columnTool.texture, "/assets/images/walls/plaster.png");
+});
+
+test("renderer draws selection outlines for every selected column", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const first = state.addColumnToFloor(floor.fragmentId, { position: { x: 1, y: 1 } });
+    const second = state.addColumnToFloor(floor.fragmentId, { position: { x: 2, y: 2 } });
+    state.selectColumns([first.id, second.id]);
+    const outlineLabels = [];
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    renderer.selectionOutlineLayer = { clear() {} };
+    renderer.columnScreenOutlineRings = (column) => [{ columnId: column.id }];
+    renderer.drawClipGeometryOutline = (_gfx, _rings, label) => outlineLabels.push(label);
+
+    renderer.drawSelectionOutline();
+
+    assert.deepEqual(outlineLabels, [
+        `column ${first.id} selection outline`,
+        `column ${second.id} selection outline`
+    ]);
+});
+
+test("select tool shift-adds and control-removes columns", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const first = state.addColumnToFloor(floor.fragmentId, { position: { x: 1, y: 1 } });
+    const second = state.addColumnToFloor(floor.fragmentId, { position: { x: 2, y: 2 } });
+    const selectTool = new SelectTool(state);
+    const screenPoint = { x: 10, y: 10 };
+
+    state.selectColumn(floor.fragmentId, first.id);
+    selectTool.pointerDown({ x: 2, y: 2 }, 0.5, {
+        shiftKey: true,
+        screenPoint,
+        renderer: {
+            pickAtScreen() {
+                return { type: "column", column: second, floor };
+            }
+        }
+    });
+    assert.deepEqual(state.selectedColumnIds().map(Number), [first.id, second.id]);
+
+    selectTool.pointerDown({ x: 1, y: 1 }, 0.5, {
+        controlKey: true,
+        screenPoint,
+        renderer: {
+            pickAtScreen() {
+                return { type: "column", column: first, floor };
+            }
+        }
+    });
+    assert.deepEqual(state.selectedColumnIds().map(Number), [second.id]);
+});
+
+test("select tool click-selecting a column does not move it off its wall", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const originalPosition = { x: 1, y: 1 };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        position: originalPosition,
+        wallId: wall.id
+    });
+    const selectTool = new SelectTool(state);
+    let pickMode = "column";
+    const renderer = {
+        pickAtScreen() {
+            if (pickMode === "column") return { type: "column", column, floor };
+            return { type: "floor", floor };
+        }
+    };
+
+    selectTool.pointerDown(originalPosition, 0.5, {
+        screenPoint: { x: 10, y: 10 },
+        renderer
+    });
+    pickMode = "floor";
+    selectTool.pointerMove({ x: originalPosition.x + 0.2, y: originalPosition.y + 0.2 }, 0.5, {
+        screenPoint: { x: 11, y: 11 },
+        renderer
+    });
+    selectTool.pointerUp({ x: originalPosition.x + 0.2, y: originalPosition.y + 0.2 }, 0.5, {
+        screenPoint: { x: 11, y: 11 },
+        renderer
+    });
+
+    assert.deepEqual(column.position, originalPosition);
+    assert.equal(column.wallId, wall.id);
+    assert.deepEqual(state.selectedColumnIds().map(Number), [column.id]);
+});
+
+test("select tool moves selected columns onto screen-picked walls regardless snap threshold", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        position: { x: 1, y: 1 },
+        wallId: null
+    });
+    const selectTool = new SelectTool(state);
+    const screenPoint = { x: 10, y: 10 };
+    let pickMode = "column";
+    const renderer = {
+        pickAtScreen(_screenPoint, pickOptions = {}) {
+            if (pickMode === "column") return { type: "column", column, floor };
+            assert.equal(pickOptions.includeMountedObjects, false);
+            assert.equal(pickOptions.includeColumns, false);
+            assert.equal(pickOptions.includeBeams, false);
+            return { type: "wall", wall, floor };
+        }
+    };
+
+    selectTool.pointerDown({ x: 1, y: 1 }, 0.001, { screenPoint, renderer });
+    pickMode = "wall";
+    selectTool.pointerMove({ x: 5, y: 4 }, 0.001, { screenPoint: { x: 16, y: 10 }, renderer });
+
+    const pts = model.wallPoints(building, wall);
+    const a = pts[0], b = pts[1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t = Math.max(0, Math.min(1, ((5 - a.x) * dx + (4 - a.y) * dy) / lenSq));
+    assert.ok(Math.abs(column.position.x - (a.x + dx * t)) < 0.000001);
+    assert.ok(Math.abs(column.position.y - (a.y + dy * t)) < 0.000001);
+    assert.equal(column.wallId, wall.id);
+});
+
+test("selected column wall drags use screen-space wall position instead of floor world point", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const pts = model.wallPoints(building, wall);
+    const targetT = 0.25;
+    const targetPoint = {
+        x: pts[0].x + (pts[1].x - pts[0].x) * targetT,
+        y: pts[0].y + (pts[1].y - pts[0].y) * targetT
+    };
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        position: { x: 1, y: 1 },
+        wallId: null
+    });
+    const selectTool = new SelectTool(state);
+    const startScreenPoint = { x: 10, y: 10 };
+    let pickMode = "column";
+    const renderer = {
+        worldToScreen(point, z = 0) {
+            return { x: Number(point.x) * 100, y: Number(point.y) * 100 - Number(z) * 10 };
+        },
+        pickAtScreen(_screenPoint, pickOptions = {}) {
+            if (pickMode === "column") return { type: "column", column, floor };
+            assert.equal(pickOptions.includeColumns, false);
+            assert.equal(pickOptions.includeBeams, false);
+            return { type: "wall", wall, floor };
+        }
+    };
+
+    selectTool.pointerDown({ x: 1, y: 1 }, 0.001, { screenPoint: startScreenPoint, renderer });
+    pickMode = "wall";
+    selectTool.pointerMove({ x: pts[1].x, y: pts[1].y + 100 }, 0.001, {
+        screenPoint: { x: renderer.worldToScreen(targetPoint, 0).x, y: startScreenPoint.y + 10 },
+        renderer
+    });
+
+    assert.ok(Math.abs(column.position.x - targetPoint.x) < 0.000001);
+    assert.ok(Math.abs(column.position.y - targetPoint.y) < 0.000001);
+    assert.equal(column.wallId, wall.id);
+});
+
+test("select tool moves selected columns to screen-picked wall endpoints first", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const endpoint = model.wallPoints(building, wall)[0];
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const column = state.addColumnToFloor(floor.fragmentId, {
+        position: { x: 1, y: 1 },
+        wallId: null
+    });
+    const selectTool = new SelectTool(state);
+    const screenPoint = { x: 10, y: 10 };
+    let pickMode = "column";
+    const renderer = {
+        pickAtScreen() {
+            if (pickMode === "column") return { type: "column", column, floor };
+            return { type: "wall", wall, floor };
+        }
+    };
+
+    selectTool.pointerDown({ x: 1, y: 1 }, 0.5, { screenPoint, renderer });
+    pickMode = "wall";
+    selectTool.pointerMove({ x: endpoint.x + 0.05, y: endpoint.y + 0.05 }, 0.5, { screenPoint: { x: 16, y: 10 }, renderer });
+
+    assert.ok(Math.abs(column.position.x - endpoint.x) < 0.000001);
+    assert.ok(Math.abs(column.position.y - endpoint.y) < 0.000001);
+    assert.equal(column.wallId, wall.id);
+});
+
+test("columnVertices returns correct polygon for a square column", async () => {
+    const model = await loadModel();
+    const col = model.createColumn({
+        floorId: "test",
+        position: { x: 0, y: 0 },
+        sideCount: 4,
+        width: 1,
+        depth: 1,
+        rotation: 0,
+        height: 3
+    });
+    const verts = model.columnVertices(col);
+    assert.equal(verts.length, 4);
+    verts.forEach((v) => {
+        const r = Math.hypot(v.x, v.y);
+        assert.ok(Math.abs(r - 0.5 / Math.cos(Math.PI / 4)) < 0.000001, `circumradius mismatch: ${r}`);
+    });
+    let minFaceToCenter = Infinity;
+    for (let i = 0; i < 4; i++) {
+        const a = verts[i], b = verts[(i + 1) % 4];
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        minFaceToCenter = Math.min(minFaceToCenter, Math.hypot(mx, my));
+    }
+    assert.ok(Math.abs(minFaceToCenter - 0.5) < 0.000001, `apothem should equal half width, got ${minFaceToCenter}`);
+});
+
+test("column depth UVs use wall texture repeat config", async () => {
+    const WallSectionUnit = loadWallSectionUnit();
+    const ColumnUnit = loadColumnUnit();
+    WallSectionUnit._wallTextureConfigCache = WallSectionUnit._buildWallTextureConfigMaps({
+        items: [{
+            texturePath: "/assets/images/walls/custom-column-test.png",
+            repeatsPerMapUnitX: 0.25,
+            repeatsPerMapUnitY: 0.5
+        }]
+    });
+
+    const column = new ColumnUnit({
+        x: 0,
+        y: 0,
+        sideCount: 4,
+        size: 1,
+        height: 3,
+        bottomZ: 0,
+        texturePath: "/assets/images/walls/custom-column-test.png",
+        deferSetup: true
+    });
+    column.rebuildMesh3d();
+    const geometry = column._buildDepthGeometry();
+    const uValues = [];
+    const vValues = [];
+    for (let index = 0; index < geometry.uvs.length; index += 2) {
+        uValues.push(Number(geometry.uvs[index]));
+        vValues.push(Number(geometry.uvs[index + 1]));
+    }
+
+    assert.ok(Math.abs(Math.max(...uValues) - 1.5) < 0.000001);
+    assert.ok(Math.abs(Math.max(...vValues) - 1.5) < 0.000001);
+});
+
+test("validateBuilding reports beam and column errors", async () => {
+    const model = await loadModel();
+    const { model: _m, building, floor } = await createTestBuilding();
+    const { validateBuilding } = await import("../public/building-editor/BuildingValidation.js");
+    floor.beams.push({ type: "beam", id: 999, floorId: floor.fragmentId, thickness: 0.0001, height: 0.2, bottomZ: 0, startAttachment: { kind: "free" }, endAttachment: { kind: "free" } });
+    let errors = validateBuilding(building);
+    assert.ok(errors.some((e) => /thickness must be at least/.test(e)), "should report bad thickness");
+    floor.beams.length = 0;
+    floor.columns.push({ type: "column", id: 998, floorId: floor.fragmentId, position: { x: 0, y: 0 }, sideCount: 2, size: 0.1, height: 3, bottomZ: 0, rotation: 0 });
+    errors = validateBuilding(building);
+    assert.ok(errors.some((e) => /sideCount must be an integer between 3 and 12/.test(e)), "should report bad sideCount");
+    void _m;
+});
+
+test("beam round-trips through normalizeImportedBuilding", async () => {
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const beam = model.createBeam({ floorId: floor.fragmentId, startAttachment: { kind: "free", x: 1, y: 1 }, endAttachment: { kind: "column", hostId: 7 }, bottomZ: 1.5, thickness: 0.1, height: 0.3 });
+    floor.beams.push(beam);
+    const json = model.serializeBuilding(building);
+    const restored = model.normalizeImportedBuilding(json);
+    const restoredFloor = model.getBuildingFloors(restored)[0];
+    const restoredBeam = model.getFloorBeams(restoredFloor)[0];
+    assert.equal(restoredBeam.type, "beam");
+    assert.equal(restoredBeam.id, beam.id);
+    assert.equal(restoredBeam.bottomZ, 1.5);
+    assert.equal(restoredBeam.thickness, 0.1);
+    assert.equal(restoredBeam.height, 0.3);
+    assert.equal(restoredBeam.endAttachment.kind, "column");
+    assert.equal(restoredBeam.endAttachment.hostId, 7);
+});
+
+test("beams can be multi-selected, moved vertically, and bulk deleted", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const first = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 1 },
+        endAttachment: { kind: "free", x: 3, y: 1 },
+        bottomZ: 1
+    });
+    const second = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 2 },
+        endAttachment: { kind: "free", x: 3, y: 2 },
+        bottomZ: 2
+    });
+    const third = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 3 },
+        endAttachment: { kind: "free", x: 3, y: 3 },
+        bottomZ: 3
+    });
+
+    state.selectBeam(floor.fragmentId, first.id);
+    state.addBeamToSelection(second.id);
+
+    assert.deepEqual(state.selectedBeamIds().map(Number), [first.id, second.id]);
+    assert.equal(state.isBeamSelected(first.id), true);
+    assert.equal(state.isBeamSelected(second.id), true);
+    assert.equal(state.isBeamSelected(third.id), false);
+
+    state.moveSelectedBeamVertical([
+        { beamId: first.id, bottomZ: first.bottomZ },
+        { beamId: second.id, bottomZ: second.bottomZ }
+    ], 0.5);
+    assert.equal(first.bottomZ, 1.5);
+    assert.equal(second.bottomZ, 2.5);
+    assert.equal(third.bottomZ, 3);
+
+    state.deleteSelectedBeam();
+    assert.deepEqual(state.selectedBeamIds(), []);
+    assert.deepEqual(floor.beams.map((beam) => beam.id), [third.id]);
+});
+
+test("renderer draws selection outlines for every selected beam", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const first = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 1 },
+        endAttachment: { kind: "free", x: 3, y: 1 }
+    });
+    const second = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 2 },
+        endAttachment: { kind: "free", x: 3, y: 2 }
+    });
+    state.selectBeams([first.id, second.id]);
+    const outlineLabels = [];
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    renderer.selectionOutlineLayer = { clear() {} };
+    renderer.beamScreenOutlineRings = (beam) => [{ beamId: beam.id }];
+    renderer.drawClipGeometryOutline = (_gfx, _rings, label) => outlineLabels.push(label);
+
+    renderer.drawSelectionOutline();
+
+    assert.deepEqual(outlineLabels, [
+        `beam ${first.id} selection outline`,
+        `beam ${second.id} selection outline`
+    ]);
+});
+
+test("selected beam endpoint drags use screen-picked walls instead of the beam itself", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const wall = model.getBuildingWalls(building)[0];
+    const state = new BuildingEditorState();
+    state.building = building;
+    state.selectFloor(floor.fragmentId);
+    const beam = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "free", x: 1, y: 1 },
+        endAttachment: { kind: "free", x: 8, y: 8 }
+    });
+    state.selectBeamEndpoint(floor.fragmentId, beam.id, "startAttachment");
+    const renderer = {
+        pickAtScreen(_screenPoint, pickOptions = {}) {
+            if (pickOptions.includeBeams !== false) return { type: "beam", beam, floor };
+            assert.equal(pickOptions.includeMountedObjects, false);
+            assert.equal(pickOptions.includeColumns, false);
+            assert.equal(pickOptions.includeBeams, false);
+            return { type: "wall", wall, floor };
+        }
+    };
+
+    assert.equal(state.moveSelectedBeamEndpoint({ x: 5, y: 4 }, 0.001, {
+        screenPoint: { x: 10, y: 10 },
+        renderer
+    }), true);
+
+    assert.equal(beam.startAttachment.kind, "wall");
+    assert.equal(beam.startAttachment.hostId, wall.id);
+    assert.ok(Number.isFinite(Number(beam.startAttachment.t)));
+});
+
+test("deleting a wall with only one beam endpoint orphans the beam but does not delete it", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    await new Promise((resolve) => {
+        const orig = state.emitChange.bind(state);
+        state.emitChange = () => { orig(); resolve(); };
+        state.emitChange();
+    });
+    const { createFloor: cf, createPerimeterWallsForFloor: cpw, getBuildingWalls: gbw, getFloorBeams } = await loadModel();
+    const floor = cf({ footprint: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }] });
+    state.building.floorFragments.push(floor);
+    cpw(state.building, floor);
+    const wall = gbw(state.building)[0];
+    const beam = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "wall", hostId: wall.id, t: 0.5 },
+        endAttachment: { kind: "free", x: 5, y: 5 }
+    });
+    state.selectWall(wall.id);
+    state.deleteSelectedWall();
+    const remaining = getFloorBeams(floor);
+    assert.equal(remaining.length, 1, "beam should survive when only one end is on deleted wall");
+    assert.equal(remaining[0].id, beam.id);
+    assert.equal(remaining[0].startAttachment.kind, "free", "orphaned end should become free");
+    assert.equal(remaining[0].endAttachment.kind, "free", "other end unchanged");
+});
+
+test("deleting a wall that hosts both beam endpoints deletes the beam", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const { createFloor: cf, createPerimeterWallsForFloor: cpw, getBuildingWalls: gbw, getFloorBeams } = await loadModel();
+    const floor = cf({ footprint: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }] });
+    state.building.floorFragments.push(floor);
+    cpw(state.building, floor);
+    const wall = gbw(state.building)[0];
+    state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "wall", hostId: wall.id, t: 0.3 },
+        endAttachment: { kind: "wall", hostId: wall.id, t: 0.7 }
+    });
+    state.selectWall(wall.id);
+    state.deleteSelectedWall();
+    const remaining = getFloorBeams(floor);
+    assert.equal(remaining.length, 0, "beam should be deleted when both ends are on deleted wall");
+});
+
+test("deleting a column orphans beam attachments pointing to it", async () => {
+    const { BuildingEditorState } = await loadState();
+    const state = new BuildingEditorState();
+    const { createFloor: cf, getFloorBeams } = await loadModel();
+    const floor = cf({ footprint: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }] });
+    state.building.floorFragments.push(floor);
+    const col = state.addColumnToFloor(floor.fragmentId, { position: { x: 2, y: 2 }, height: 3 });
+    const beam = state.addBeamToFloor(floor.fragmentId, {
+        startAttachment: { kind: "column", hostId: col.id },
+        endAttachment: { kind: "free", x: 8, y: 2 }
+    });
+    state.selectColumn(floor.fragmentId, col.id);
+    state.deleteSelectedColumn();
+    const remaining = getFloorBeams(floor);
+    assert.equal(remaining.length, 1, "beam survives column deletion");
+    assert.equal(remaining[0].id, beam.id);
+    assert.equal(remaining[0].startAttachment.kind, "free", "column-attached end becomes free");
 });

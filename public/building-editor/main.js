@@ -6,26 +6,9 @@ import { MountedObjectTool } from "./tools/MountedObjectTool.js";
 import { PolygonEditTool } from "./tools/PolygonEditTool.js";
 import { SelectTool } from "./tools/SelectTool.js";
 import { WallTool } from "./tools/WallTool.js";
-import { DEFAULTS, findFloor, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
-
-const MATERIALS = {
-    floors: [
-        "/assets/images/flooring/black.png",
-        "/assets/images/flooring/cave.jpg",
-        "/assets/images/flooring/cobblestones.png",
-        "/assets/images/flooring/dirt.jpg",
-        "/assets/images/flooring/woodfloor.png"
-    ],
-    roofs: [
-        "/assets/images/roofs/slate.png",
-        "/assets/images/roofs/smallshingles.png",
-        "/assets/images/roofs/thatch.png"
-    ],
-    walls: [
-        "/assets/images/walls/stonewall.png",
-        "/assets/images/walls/woodwall.png"
-    ]
-};
+import { BeamTool } from "./tools/BeamTool.js";
+import { ColumnTool } from "./tools/ColumnTool.js";
+import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const PAINT_TEXTURES = {
     floor: [
@@ -35,15 +18,8 @@ const PAINT_TEXTURES = {
         "/assets/images/flooring/cobblestones.png",
         "/assets/images/flooring/dirt.jpg"
     ],
-    roofs: [
-        "/assets/images/roofs/slate.png",
-        "/assets/images/roofs/smallshingles.png",
-        "/assets/images/roofs/thatch.png"
-    ],
-    walls: [
-        "/assets/images/walls/stonewall.png",
-        "/assets/images/walls/woodwall.png"
-    ]
+    roofs: [],
+    walls: []
 };
 
 const stageHost = document.querySelector("#stageHost");
@@ -67,6 +43,12 @@ const gableRoofReturn = document.querySelector("#gableRoofReturn");
 const wallHeight = document.querySelector("#wallHeight");
 const wallThickness = document.querySelector("#wallThickness");
 const wallThicknessValue = document.querySelector("#wallThicknessValue");
+const columnThickness = document.querySelector("#columnThickness");
+const columnThicknessValue = document.querySelector("#columnThicknessValue");
+const columnWidth = document.querySelector("#columnWidth");
+const columnWidthValue = document.querySelector("#columnWidthValue");
+const columnHeight = document.querySelector("#columnHeight");
+const columnSideCount = document.querySelector("#columnSideCount");
 const wallInsetEndpoints = document.querySelector("#wallInsetEndpoints");
 const wallProtrudeEndpoints = document.querySelector("#wallProtrudeEndpoints");
 const mountSize = document.querySelector("#mountSize");
@@ -83,6 +65,10 @@ const roofToolButton = document.querySelector(".roofToolButton");
 const roofToolIcon = document.querySelector("#roofToolIcon");
 const wallToolButton = document.querySelector(".wallToolButton");
 const wallToolIcon = document.querySelector("#wallToolIcon");
+const beamToolButton = document.querySelector(".beamToolButton");
+const beamToolIcon = document.querySelector("#beamToolIcon");
+const columnToolButton = document.querySelector(".columnToolButton");
+const columnToolIcon = document.querySelector("#columnToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
 const buildingOpenDialog = document.querySelector("#buildingOpenDialog");
 const buildingOpenMessage = document.querySelector("#buildingOpenMessage");
@@ -163,7 +149,9 @@ const tools = {
     mountObject: new MountedObjectTool(state),
     gable: new GableTool(state),
     paint: new PaintTool(state),
-    select: new SelectTool(state)
+    select: new SelectTool(state),
+    beam: new BeamTool(state),
+    column: new ColumnTool(state)
 };
 
 let panning = null;
@@ -176,6 +164,7 @@ let lastStagePointer = null;
 let layerPanelSignature = "";
 let texturePaletteSignature = "";
 let wallToolTexturePaletteOpen = false;
+let columnToolTexturePaletteOpen = false;
 let mountTexturePaletteSignature = "";
 let mountTexturePaletteOpen = false;
 let windowContext = null;
@@ -383,25 +372,32 @@ function normalizeImagePathList(values, folder) {
         .sort((a, b) => textureName(a).localeCompare(textureName(b)));
 }
 
-async function loadWallTextureManifest() {
-    const response = await fetch("/assets/images/walls/items.json", { cache: "no-cache" });
+async function loadTextureManifest(folder) {
+    const response = await fetch(`/assets/images/${encodeURIComponent(folder)}/items.json`, { cache: "no-cache" });
     if (!response.ok) {
-        throw new Error("could not load wall texture manifest");
+        throw new Error(`could not load ${folder} texture manifest`);
     }
     const payload = await response.json();
-    const files = normalizeImagePathList((payload.items || []).map((item) => item && item.texturePath), "walls");
+    const files = normalizeImagePathList((payload.items || []).map((item) => item && item.texturePath), folder);
     if (!files.length) {
-        throw new Error("wall texture manifest is empty");
+        throw new Error(`${folder} texture manifest is empty`);
     }
     return files;
 }
 
-async function loadWallTextures() {
-    const textures = await loadWallTextureManifest();
-    MATERIALS.walls = textures;
-    PAINT_TEXTURES.walls = textures;
+async function loadPaintTextures(folder, mode) {
+    const textures = await loadTextureManifest(folder);
+    PAINT_TEXTURES[mode] = textures;
     texturePaletteSignature = "";
     syncUi();
+}
+
+async function loadWallTextures() {
+    await loadPaintTextures("walls", "walls");
+}
+
+async function loadRoofTextures() {
+    await loadPaintTextures("roofs", "roofs");
 }
 
 function mergeMountedAssetDefaults(category, defaults, item) {
@@ -553,16 +549,17 @@ function draftConsumesEscape(draft) {
 
 function activePaintMode() {
     if (state.tool === "wall") return "walls";
+    if (state.tool === "column") return "walls";
     const kind = state.selection && state.selection.kind;
     if (kind === "gable" || kind === "gableHandle") return "walls";
     if (kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection") return "roofs";
-    return kind === "wall" || kind === "wallEndpoint" ? "walls" : "floor";
+    return kind === "wall" || kind === "wallEndpoint" || kind === "column" ? "walls" : "floor";
 }
 
 function selectionCanUsePaintTool() {
-    if (state.tool === "wall") return true;
+    if (state.tool === "wall" || state.tool === "column") return true;
     const kind = state.selection && state.selection.kind;
-    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint";
+    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint" || kind === "column";
 }
 
 function mountedObjectSettingsActive() {
@@ -680,6 +677,70 @@ function wallGroupForContext(group) {
     throw new Error(`unknown wall selection group: ${group}`);
 }
 
+function sameHorizontalPoint(a, b, tolerance = 0.08) {
+    return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) <= tolerance;
+}
+
+function columnGroupForContext(group) {
+    if (!windowContext || windowContext.type !== "column" || windowContext.columnId === undefined || windowContext.columnId === null) {
+        throw new Error("column context menu is missing its source column");
+    }
+    const source = getBuildingColumns(state.building)
+        .find((column) => String(column.id) === String(windowContext.columnId));
+    if (!source) {
+        throw new Error("column context menu source is no longer a column");
+    }
+    const columns = getBuildingColumns(state.building);
+    if (group === "level") {
+        return columns.filter((column) => String(column.floorId) === String(source.floorId));
+    }
+    if (group === "column") {
+        return columns.filter((column) => sameHorizontalPoint(column.position, source.position));
+    }
+    if (group === "texture") {
+        return columns.filter((column) => column.texturePath === source.texturePath);
+    }
+    if (group === "all") {
+        return columns;
+    }
+    throw new Error(`unknown column selection group: ${group}`);
+}
+
+function sameBeamColumn(a, b) {
+    const aPoints = state.beamWorldPoints(a);
+    const bPoints = state.beamWorldPoints(b);
+    if (!aPoints || !bPoints) {
+        throw new Error("beam column selection requires resolvable beam endpoints");
+    }
+    return (sameHorizontalPoint(aPoints.start, bPoints.start) && sameHorizontalPoint(aPoints.end, bPoints.end)) ||
+        (sameHorizontalPoint(aPoints.start, bPoints.end) && sameHorizontalPoint(aPoints.end, bPoints.start));
+}
+
+function beamGroupForContext(group) {
+    if (!windowContext || windowContext.type !== "beam" || windowContext.beamId === undefined || windowContext.beamId === null) {
+        throw new Error("beam context menu is missing its source beam");
+    }
+    const source = getBuildingBeams(state.building)
+        .find((beam) => String(beam.id) === String(windowContext.beamId));
+    if (!source) {
+        throw new Error("beam context menu source is no longer a beam");
+    }
+    const beams = getBuildingBeams(state.building);
+    if (group === "level") {
+        return beams.filter((beam) => String(beam.floorId) === String(source.floorId));
+    }
+    if (group === "column") {
+        return beams.filter((beam) => sameBeamColumn(source, beam));
+    }
+    if (group === "texture") {
+        return beams.filter((beam) => beam.texturePath === source.texturePath);
+    }
+    if (group === "all") {
+        return beams;
+    }
+    throw new Error(`unknown beam selection group: ${group}`);
+}
+
 function applyWindowContextSelection(group, mode) {
     if (!windowContext) throw new Error("selection context menu is missing its source");
     const preserveView = state.renderStyle() === "exterior";
@@ -695,6 +756,34 @@ function applyWindowContextSelection(group, mode) {
             return;
         }
         state.selectWalls(wallIds, { preserveView });
+        return;
+    }
+    if (windowContext.type === "column") {
+        const columnIds = columnGroupForContext(group).map((column) => column.id);
+        if (!columnIds.length) return;
+        if (mode === "remove") {
+            state.removeColumnsFromSelection(columnIds, { preserveView });
+            return;
+        }
+        if (mode === "add") {
+            state.addColumnsToSelection(columnIds, { preserveView });
+            return;
+        }
+        state.selectColumns(columnIds, { preserveView });
+        return;
+    }
+    if (windowContext.type === "beam") {
+        const beamIds = beamGroupForContext(group).map((beam) => beam.id);
+        if (!beamIds.length) return;
+        if (mode === "remove") {
+            state.removeBeamsFromSelection(beamIds, { preserveView });
+            return;
+        }
+        if (mode === "add") {
+            state.addBeamsToSelection(beamIds, { preserveView });
+            return;
+        }
+        state.selectBeams(beamIds, { preserveView });
         return;
     }
     const objectIds = windowGroupForContext(group).map((object) => object.id);
@@ -736,6 +825,32 @@ function showWallContextMenu(screenPoint, sourceWall, mode) {
     windowContextMenu.hidden = false;
 }
 
+function showColumnContextMenu(screenPoint, sourceColumn, mode) {
+    windowContext = {
+        type: "column",
+        columnId: sourceColumn.id,
+        mode
+    };
+    const left = Math.max(8, Math.min(Number(screenPoint.x), window.innerWidth - 170));
+    const top = Math.max(8, Math.min(Number(screenPoint.y), window.innerHeight - 170));
+    windowContextMenu.style.left = `${left}px`;
+    windowContextMenu.style.top = `${top}px`;
+    windowContextMenu.hidden = false;
+}
+
+function showBeamContextMenu(screenPoint, sourceBeam, mode) {
+    windowContext = {
+        type: "beam",
+        beamId: sourceBeam.id,
+        mode
+    };
+    const left = Math.max(8, Math.min(Number(screenPoint.x), window.innerWidth - 170));
+    const top = Math.max(8, Math.min(Number(screenPoint.y), window.innerHeight - 170));
+    windowContextMenu.style.left = `${left}px`;
+    windowContextMenu.style.top = `${top}px`;
+    windowContextMenu.hidden = false;
+}
+
 function closeWindowContextMenu() {
     windowContextMenu.hidden = true;
     windowContext = null;
@@ -744,6 +859,10 @@ function closeWindowContextMenu() {
 function applyTextureToSelection(texturePath) {
     if (state.tool === "wall") {
         state.updateWallToolTexture(texturePath);
+        return;
+    }
+    if (state.tool === "column") {
+        state.updateColumnToolTexture(texturePath);
         return;
     }
     const kind = state.selection && state.selection.kind;
@@ -763,6 +882,10 @@ function applyTextureToSelection(texturePath) {
         state.updateSelectedRoofTexture(texturePath);
         return;
     }
+    if (kind === "column") {
+        state.updateSelectedColumnTexture(texturePath);
+        return;
+    }
     throw new Error(`cannot paint texture for ${kind || "empty"} selection`);
 }
 
@@ -776,6 +899,9 @@ function selectionScopeMatches(element) {
     if (!scope) return true;
     if (state.tool === "wall") {
         return scope.split(/\s+/).includes("wall");
+    }
+    if (state.tool === "column") {
+        return scope.split(/\s+/).includes("column");
     }
     return scope.split(/\s+/).includes(kind);
 }
@@ -801,10 +927,50 @@ function selectedWallsFrom(walls) {
     });
 }
 
-function sharedWallValue(selectedWalls, readValue, fallback) {
-    if (!selectedWalls.length) return fallback;
-    const firstValue = readValue(selectedWalls[0]);
-    return selectedWalls.every((wall) => readValue(wall) === firstValue) ? firstValue : fallback;
+function sharedSelectionValue(items, readValue) {
+    if (!items.length) return null;
+    const firstValue = readValue(items[0]);
+    return items.every((item) => readValue(item) === firstValue) ? firstValue : null;
+}
+
+function syncRangeAndValueInput(rangeInput, valueInput, sharedValue, fallbackValue, format = (value) => String(value)) {
+    const rangeValue = sharedValue !== null && sharedValue !== undefined ? sharedValue : fallbackValue;
+    if (rangeInput && rangeValue !== null && rangeValue !== undefined && Number.isFinite(Number(rangeValue))) {
+        rangeInput.value = Number(rangeValue);
+    }
+    if (!valueInput) return;
+    valueInput.value = sharedValue !== null && sharedValue !== undefined && Number.isFinite(Number(sharedValue))
+        ? format(Number(sharedValue))
+        : "";
+}
+
+function syncNumberInput(input, sharedValue, format = (value) => String(value)) {
+    if (!input) return;
+    input.value = sharedValue !== null && sharedValue !== undefined && Number.isFinite(Number(sharedValue))
+        ? format(Number(sharedValue))
+        : "";
+}
+
+function columnDepthValue(column) {
+    return Number(column.depth ?? Number(column.size) * 2);
+}
+
+function columnWidthValueFor(column) {
+    return Number(column.width ?? Number(column.size) * 2);
+}
+
+function columnExplicitHeightValue(column) {
+    const mode = String(column.heightMode || (column.wallId !== null && column.wallId !== undefined ? "wall" : "fixed")).trim().toLowerCase();
+    return mode === "wall" ? null : Number(column.height);
+}
+
+function mountedObjectAspectRatioValue(object) {
+    const width = Number(object.width);
+    const height = Number(object.height);
+    if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        throw new Error("selected door/window requires positive width and height");
+    }
+    return width / height;
 }
 
 function syncMountedToolButtonTextures() {
@@ -827,6 +993,20 @@ function syncWallToolButtonTexture() {
     const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
     wallToolIcon.style.backgroundImage = texture ? `url("${texture}")` : "";
     wallToolButton.title = texture ? `Place walls: ${textureName(texture)}` : "Place walls";
+}
+
+function syncBeamToolButtonTexture() {
+    if (!beamToolIcon) return;
+    const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
+    beamToolIcon.style.setProperty("--beam-tool-texture", texture ? `url("${texture}")` : "none");
+    if (beamToolButton) beamToolButton.title = texture ? `Place beams: ${textureName(texture)}` : "Place beams";
+}
+
+function syncColumnToolButtonTexture() {
+    if (!columnToolIcon) return;
+    const texture = state.columnTool && state.columnTool.texture ? state.columnTool.texture : state.inputs.columnTexture;
+    columnToolIcon.style.setProperty("--column-tool-texture", texture ? `url("${texture}")` : "none");
+    if (columnToolButton) columnToolButton.title = texture ? `Place columns: ${textureName(texture)}` : "Place columns";
 }
 
 function syncRoofToolButtonTexture() {
@@ -967,9 +1147,15 @@ function textureName(path) {
 function renderTexturePalette() {
     const mode = activePaintMode();
     const textures = PAINT_TEXTURES[mode] || [];
-    const selected = state.tool === "wall" ? state.wallTool.texture : state.paintTextureForMode(mode);
+    const selectedColumn = state.selectedColumn();
+    const selected = state.tool === "wall"
+        ? state.wallTool.texture
+        : (state.tool === "column"
+            ? state.columnTool.texture
+            : (selectedColumn && mode === "walls" ? selectedColumn.texturePath : state.paintTextureForMode(mode)));
     if (state.tool !== "wall") wallToolTexturePaletteOpen = false;
-    texturePalette.hidden = !((state.tool === "paint" || wallToolTexturePaletteOpen) && selectionCanUsePaintTool());
+    if (state.tool !== "column") columnToolTexturePaletteOpen = false;
+    texturePalette.hidden = !((state.tool === "paint" || wallToolTexturePaletteOpen || columnToolTexturePaletteOpen) && selectionCanUsePaintTool());
     texturePalette.setAttribute("aria-label", `${mode === "walls" ? "wall" : (mode === "roofs" ? "roof" : "floor")} textures`);
     texturePalette.style.setProperty("--texture-column-count", String(Math.max(1, textures.length)));
     positionTexturePalette();
@@ -1193,6 +1379,26 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         const endpointText = selection.kind === "wallEndpoint" && selection.wallEndpointKey ? `, ${selection.wallEndpointKey}` : "";
         return `wall ${selectedWall.id}${endpointText}, level ${selectedWall.floorId}, height ${selectedWall.height}, thickness ${selectedWall.thickness}`;
     }
+    if (selection.kind === "column") {
+        const columns = state.selectedColumns();
+        if (columns.length > 1) {
+            const floorIds = new Set(columns.map((column) => column.floorId));
+            return `${columns.length} columns selected, ${floorIds.size} level${floorIds.size === 1 ? "" : "s"}`;
+        }
+        const column = columns[0];
+        if (!column) throw new Error(`selected column is missing from editor column list: ${selection.columnId}`);
+        return `column ${column.id}, level ${column.floorId}, height ${column.height}, depth ${Number(column.depth ?? Number(column.size) * 2).toFixed(3)}, width ${Number(column.width ?? Number(column.size) * 2).toFixed(3)}, sides ${column.sideCount}`;
+    }
+    if (selection.kind === "beam") {
+        const beams = state.selectedBeams();
+        if (beams.length > 1) {
+            const floorIds = new Set(beams.map((beam) => beam.floorId));
+            return `${beams.length} beams selected, ${floorIds.size} level${floorIds.size === 1 ? "" : "s"}`;
+        }
+        const beam = beams[0];
+        if (!beam) throw new Error(`selected beam is missing from editor beam list: ${selection.beamId}`);
+        return `beam ${beam.id}, level ${beam.floorId}, height ${beam.height}, thickness ${beam.thickness}`;
+    }
     if (!selectedFloor) return "nothing selected";
     const floorId = getFloorId(selectedFloor);
     const floorWallCount = walls.filter((wall) => (wall.fragmentId || wall.floorId) === floorId).length;
@@ -1249,6 +1455,8 @@ function syncUi() {
     if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
     syncRoofToolButtonTexture();
     syncWallToolButtonTexture();
+    syncBeamToolButtonTexture();
+    syncColumnToolButtonTexture();
     syncMountedToolButtonTextures();
     document.querySelectorAll("[data-selection-scope], [data-selection-exclude]").forEach((element) => {
         element.hidden = !selectionScopeMatches(element);
@@ -1264,6 +1472,15 @@ function syncUi() {
     const floors = getBuildingFloors(state.building);
     const walls = getBuildingWalls(state.building);
     const selectedWalls = selectedWallsFrom(walls);
+    const selectionKind = state.selection && state.selection.kind;
+    const selectedRoofEntries = (() => {
+        if (selectionKind === "roof" || selectionKind === "roofVertex" || selectionKind === "roofPeak" || selectionKind === "roofShedDirection") {
+            return state.selectedRoofEntries();
+        }
+        if (!selectedFloor) return [];
+        const roof = getFloorRoof(selectedFloor);
+        return roof ? [{ floor: selectedFloor, roof }] : [];
+    })();
     const showVertexEndpointControls = state.tool !== "wall" && state.selectedWallsCanToggleVertexInset();
     if (wallInsetEndpoints) wallInsetEndpoints.hidden = wallInsetEndpoints.hidden || !showVertexEndpointControls;
     if (wallProtrudeEndpoints) wallProtrudeEndpoints.hidden = wallProtrudeEndpoints.hidden || !showVertexEndpointControls;
@@ -1274,12 +1491,6 @@ function syncUi() {
         const roof = getFloorRoof(selectedFloor);
         floorElevation.value = getFloorElevation(selectedFloor);
         floorHeight.value = Number(selectedFloor.floorHeight);
-        if (roof) {
-            roofMode.value = roof.mode || "peak";
-            roofOverhang.value = Number(roof.overhang);
-            roofPeakHeight.value = Number(roof.peakHeight);
-            if (roofDomeLevels) roofDomeLevels.value = Number(roof.domeLevels ?? DEFAULTS.roofDomeLevels);
-        }
         const selectedGable = state.selectedGable();
         if (roof && selectedGable) {
             const maxHeight = Math.max(0, Number(roof.peakHeight));
@@ -1291,26 +1502,91 @@ function syncUi() {
             gableRoofReturn.checked = selectedGable.roofReturn !== false;
         }
     }
+    if (selectedRoofEntries.length > 0) {
+        const sharedMode = sharedSelectionValue(selectedRoofEntries, ({ roof }) => roof.mode || "peak");
+        roofMode.value = sharedMode || "";
+        syncNumberInput(roofOverhang, sharedSelectionValue(selectedRoofEntries, ({ roof }) => Number(roof.overhang)));
+        syncNumberInput(roofPeakHeight, sharedSelectionValue(selectedRoofEntries, ({ roof }) => Number(roof.peakHeight)));
+        if (roofDomeLevels) {
+            syncNumberInput(roofDomeLevels, sharedSelectionValue(selectedRoofEntries, ({ roof }) => Number(roof.domeLevels ?? DEFAULTS.roofDomeLevels)));
+        }
+    }
     if (state.tool === "wall") {
         wallHeight.value = Number(state.wallTool.height);
         wallThickness.value = Number(state.wallTool.thickness);
         wallThicknessValue.value = Number(state.wallTool.thickness).toFixed(3);
         if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.wallTool.texture)}`;
+    } else if (state.tool === "column") {
+        const toolThickness = Number(state.columnTool.thickness);
+        columnThickness.value = toolThickness;
+        columnThicknessValue.value = toolThickness.toFixed(3);
+        columnWidth.value = Number(state.columnTool.width);
+        columnWidthValue.value = Number(state.columnTool.width).toFixed(3);
+        if (columnHeight) {
+            columnHeight.value = state.columnTool.heightMode === "fixed" && Number.isFinite(Number(state.columnTool.height))
+                ? Number(state.columnTool.height)
+                : "";
+        }
+        columnSideCount.value = Number(state.columnTool.sideCount);
+        if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.columnTool.texture)}`;
     } else if (selectedWalls.length > 0) {
-        wallHeight.value = sharedWallValue(selectedWalls, (wall) => wall.height, state.inputs.wallHeight);
-        const selectedThickness = sharedWallValue(selectedWalls, (wall) => wall.thickness, state.inputs.wallThickness);
-        wallThickness.value = Number(selectedThickness);
-        wallThicknessValue.value = Number(selectedThickness).toFixed(3);
+        syncNumberInput(wallHeight, sharedSelectionValue(selectedWalls, (wall) => Number(wall.height)));
+        syncRangeAndValueInput(
+            wallThickness,
+            wallThicknessValue,
+            sharedSelectionValue(selectedWalls, (wall) => Number(wall.thickness)),
+            Number(selectedWalls[0].thickness),
+            (value) => value.toFixed(3)
+        );
     } else if (selectedFloor) {
         wallHeight.value = selectedFloor.defaultWallHeight;
     }
-    const mountAsset = state.selectedMountedObjectAsset();
-    if (mountAsset) {
-        mountSize.value = Number(mountAsset.size);
-        mountAspect.value = aspectRatioToSliderValue(mountAsset.aspectRatio);
-        mountSizeValue.value = Number(mountAsset.size).toFixed(2);
-        mountAspectValue.value = Number(mountAsset.aspectRatio).toFixed(2);
-        mountTextureButton.title = `Paint texture: ${textureName(mountAsset.texturePath)}`;
+    const selectedColumns = state.selectedColumns();
+    if (state.tool !== "column" && selectedColumns.length > 0) {
+        syncRangeAndValueInput(
+            columnThickness,
+            columnThicknessValue,
+            sharedSelectionValue(selectedColumns, columnDepthValue),
+            columnDepthValue(selectedColumns[0]),
+            (value) => value.toFixed(3)
+        );
+        syncRangeAndValueInput(
+            columnWidth,
+            columnWidthValue,
+            sharedSelectionValue(selectedColumns, columnWidthValueFor),
+            columnWidthValueFor(selectedColumns[0]),
+            (value) => value.toFixed(3)
+        );
+        syncNumberInput(columnHeight, sharedSelectionValue(selectedColumns, columnExplicitHeightValue), (value) => String(value));
+        syncNumberInput(columnSideCount, sharedSelectionValue(selectedColumns, (column) => Number(column.sideCount)));
+        const sharedTexture = sharedSelectionValue(selectedColumns, (column) => column.texturePath);
+        if (paintToolButton) paintToolButton.title = sharedTexture
+            ? `Paint texture: ${textureName(sharedTexture)}`
+            : "Paint texture: mixed";
+    }
+    const selectedMountedObjects = state.tool !== "mountObject" ? state.selectedMountedObjects() : [];
+    if (selectedMountedObjects.length > 0) {
+        const sharedSize = sharedSelectionValue(selectedMountedObjects, (object) => Number(object.height));
+        const sharedAspect = sharedSelectionValue(selectedMountedObjects, mountedObjectAspectRatioValue);
+        const sizeForSlider = sharedSize !== null && sharedSize !== undefined ? sharedSize : Number(selectedMountedObjects[0].height);
+        const aspectForSlider = sharedAspect !== null && sharedAspect !== undefined ? sharedAspect : mountedObjectAspectRatioValue(selectedMountedObjects[0]);
+        mountSize.value = Number(sizeForSlider);
+        mountAspect.value = aspectRatioToSliderValue(aspectForSlider);
+        syncNumberInput(mountSizeValue, sharedSize, (value) => value.toFixed(2));
+        syncNumberInput(mountAspectValue, sharedAspect, (value) => value.toFixed(2));
+        const sharedTexture = sharedSelectionValue(selectedMountedObjects, (object) => object.texturePath);
+        mountTextureButton.title = sharedTexture
+            ? `Paint texture: ${textureName(sharedTexture)}`
+            : "Paint texture: mixed";
+    } else {
+        const mountAsset = state.selectedMountedObjectAsset();
+        if (mountAsset) {
+            mountSize.value = Number(mountAsset.size);
+            mountAspect.value = aspectRatioToSliderValue(mountAsset.aspectRatio);
+            mountSizeValue.value = Number(mountAsset.size).toFixed(2);
+            mountAspectValue.value = Number(mountAsset.aspectRatio).toFixed(2);
+            mountTextureButton.title = `Paint texture: ${textureName(mountAsset.texturePath)}`;
+        }
     }
     selectedSummary.textContent = summarizeSelection(selectedFloor, selectedWall, floors, walls);
     snapToggle.checked = state.snapToGrid;
@@ -1339,7 +1615,13 @@ document.querySelectorAll("[data-tool]").forEach((button) => {
                 renderTexturePalette();
                 return;
             }
+            if (button.dataset.tool === "paint" && state.tool === "column") {
+                columnToolTexturePaletteOpen = !columnToolTexturePaletteOpen;
+                renderTexturePalette();
+                return;
+            }
             wallToolTexturePaletteOpen = false;
+            columnToolTexturePaletteOpen = false;
             state.setTool(state.tool === button.dataset.tool ? "select" : button.dataset.tool);
         });
     });
@@ -1349,6 +1631,7 @@ if (roofToolButton) {
     roofToolButton.addEventListener("click", () => {
         withErrorBoundary(() => {
             wallToolTexturePaletteOpen = false;
+            columnToolTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
             state.setTool("select");
             state.createRoofForSelectedFloor({ preserveView: state.renderStyle() === "exterior" });
@@ -1365,7 +1648,8 @@ texturePalette.addEventListener("click", (event) => {
         state.setPaintTexture(mode, texturePath);
         applyTextureToSelection(texturePath);
         wallToolTexturePaletteOpen = false;
-        if (state.tool !== "wall") {
+        columnToolTexturePaletteOpen = false;
+        if (state.tool !== "wall" && state.tool !== "column") {
             state.setTool("select");
         }
     });
@@ -1377,6 +1661,8 @@ mountToolButtons.forEach((button) => {
     });
     button.addEventListener("click", () => {
         withErrorBoundary(() => {
+            wallToolTexturePaletteOpen = false;
+            columnToolTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
             state.setMountedObjectToolCategory(button.dataset.mountCategory);
         });
@@ -1628,6 +1914,32 @@ wallThicknessValue.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedWallThickness(wallThicknessValue.value));
 });
 
+columnThickness.addEventListener("input", () => {
+    withErrorBoundary(() => state.updateSelectedColumnThickness(columnThickness.value));
+});
+
+columnThicknessValue.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedColumnThickness(columnThicknessValue.value));
+});
+
+columnWidth.addEventListener("input", () => {
+    withErrorBoundary(() => state.updateSelectedColumnWidth(columnWidth.value));
+});
+
+columnWidthValue.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedColumnWidth(columnWidthValue.value));
+});
+
+if (columnHeight) {
+    columnHeight.addEventListener("change", () => {
+        withErrorBoundary(() => state.updateSelectedColumnHeight(columnHeight.value));
+    });
+}
+
+columnSideCount.addEventListener("change", () => {
+    withErrorBoundary(() => state.updateSelectedColumnSideCount(columnSideCount.value));
+});
+
 wallInsetEndpoints.addEventListener("click", () => {
     withErrorBoundary(() => state.updateSelectedWallVertexInset(true));
 });
@@ -1688,6 +2000,24 @@ app.stage.on("pointerdown", (event) => {
                 showWallContextMenu(
                     menuPoint,
                     hit.wall,
+                    windowSelectionModeFromEvent(original, "replace")
+                );
+                panning = null;
+                return;
+            }
+            if (hit && hit.type === "column") {
+                showColumnContextMenu(
+                    menuPoint,
+                    hit.column,
+                    windowSelectionModeFromEvent(original, "replace")
+                );
+                panning = null;
+                return;
+            }
+            if (hit && hit.type === "beam") {
+                showBeamContextMenu(
+                    menuPoint,
+                    hit.beam,
                     windowSelectionModeFromEvent(original, "replace")
                 );
                 panning = null;
@@ -1976,6 +2306,14 @@ document.addEventListener("keydown", (event) => {
             event.preventDefault();
             return;
         }
+        if (state.deleteSelectedColumn()) {
+            event.preventDefault();
+            return;
+        }
+        if (state.deleteSelectedBeam()) {
+            event.preventDefault();
+            return;
+        }
     }
     if (key === "a") {
         state.setTool("polygon");
@@ -2032,6 +2370,10 @@ showBuildingOpenDialog({ canClose: false }).catch((error) => {
     setModalMessage(buildingOpenMessage, error.message, true);
 });
 loadWallTextures().catch((error) => {
+    console.error(error);
+    setStatus(error.message, true);
+});
+loadRoofTextures().catch((error) => {
     console.error(error);
     setStatus(error.message, true);
 });

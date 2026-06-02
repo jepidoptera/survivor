@@ -7,6 +7,8 @@
     <script src="/pixi.js/pixi.js"></script>
     <script src="/assets/javascript/wallGeometry.js"></script>
     <script src="/assets/javascript/gameobjects/wallSectionUnit.js"></script>
+    <script src="/assets/javascript/gameobjects/columnUnit.js"></script>
+    <script src="/assets/javascript/gameobjects/beamUnit.js"></script>
     <script src="/assets/javascript/placeObjectPlacement.js"></script>
     <script src="/assets/javascript/rendering/ScenePicker.js"></script>
     <script src="/vendor/earcut/dist/earcut.min.js"></script>
@@ -19,7 +21,7 @@
         <main class="workspace">
             <div class="controlBar">
                 <div class="toolCluster" aria-label="building editor tools">
-                    <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof gable gableHandle wall wallEndpoint" class="iconTool" title="Paint texture">🎨</button>
+                    <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof gable gableHandle wall wallEndpoint column" class="iconTool" title="Paint texture">🎨</button>
                     <div id="texturePalette" class="texturePalette" hidden></div>
                 </div>
                 <label data-tool-scope="polygon scissors">
@@ -77,6 +79,24 @@
                 <input id="wallThicknessValue" class="toolValue" data-selection-scope="wall wallEndpoint" type="number" min="0.125" max="1" step="0.025" title="Wall thickness value">
                 <button type="button" id="wallInsetEndpoints" data-selection-scope="wall wallEndpoint" title="Inset vertex endpoints">Inset</button>
                 <button type="button" id="wallProtrudeEndpoints" data-selection-scope="wall wallEndpoint" title="Protrude vertex endpoints">Protrude</button>
+                <label data-selection-scope="column">
+                    Depth
+                    <input id="columnThickness" type="range" min="0.001" max="1" step="0.001">
+                </label>
+                <input id="columnThicknessValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="1" step="0.001" title="Column depth value">
+                <label data-selection-scope="column">
+                    Width
+                    <input id="columnWidth" type="range" min="0.001" max="1" step="0.001">
+                </label>
+                <input id="columnWidthValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="1" step="0.001" title="Column width value">
+                <label data-selection-scope="column">
+                    Height
+                    <input id="columnHeight" type="number" min="0.001" step="0.1" placeholder="wall">
+                </label>
+                <label data-selection-scope="column">
+                    Sides
+                    <input id="columnSideCount" type="number" min="3" max="12" step="1">
+                </label>
                 <label data-tool-scope="mountObject">
                     Size
                     <input id="mountSize" type="range" min="0.2" max="5" step="0.05">
@@ -125,6 +145,12 @@
                     </button>
                     <button type="button" class="iconTool sideToolButton scissorsToolButton" data-tool="scissors" title="Cut floor hole">
                         <img src="/assets/images/thumbnails/scissors.png" alt="">
+                    </button>
+                    <button type="button" class="iconTool sideToolButton beamToolButton" data-tool="beam" title="Place beams">
+                        <span id="beamToolIcon" class="beamToolIcon" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" class="iconTool sideToolButton columnToolButton" data-tool="column" title="Place columns">
+                        <span id="columnToolIcon" class="columnToolIcon" aria-hidden="true"></span>
                     </button>
                 </div>
                 <div id="stageHost" tabindex="0"></div>

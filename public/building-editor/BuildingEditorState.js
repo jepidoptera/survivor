@@ -1,5 +1,9 @@
+import "../assets/javascript/wallGeometry.js";
 import {
     addFloor,
+    columnVertices,
+    createBeam,
+    createColumn,
     createEmptyBuilding,
     createFloor,
     createRoof,
@@ -14,9 +18,13 @@ import {
     findMountedObject,
     findWall,
     floorVertexWallInsetPoint,
+    getBuildingBeams,
+    getBuildingColumns,
     getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
+    getFloorBeams,
+    getFloorColumns,
     getFloorRoof,
     getRoofContactPolygon,
     getRoofDomeLevels,
@@ -26,20 +34,24 @@ import {
     getFloorElevation,
     getFloorId,
     getRoofGables,
+    getWallResolvedGeometry,
     normalizeRoofGable,
     mergePerimeterWallsAcrossDeletedVertex,
     normalizeImportedBuilding,
     offsetRing,
     replaceFloorShape,
+    refreshWallResolvedGeometry,
     refreshWallSectionEndpoints,
     serializeBuilding,
     splitPerimeterWallAtVertex,
     setFloorElevation,
+    wallMiterEndpointKey,
     wallPoints
 } from "./BuildingModel.js";
 import { distance, distanceToSegment, nearestFloorVertex, nearestWall, pointInPolygon, repairSimplePolygonRing, simplePolygonRingError } from "./BuildingGeometry.js";
 import { polygonCentroid } from "./BuildingGeometry.js";
 import { validateBuilding } from "./BuildingValidation.js";
+import { wallPlacementPointAtScreen } from "./WallScreenPlacement.js";
 import { nearestHexAnchor, snapToHexAnchor } from "./BuildingHexGrid.js";
 import {
     applyFloorPolygonEdit,
@@ -73,6 +85,9 @@ const ROOF_SHED_DIRECTION_HANDLE_LENGTH = 1.25;
 const ROOF_SHED_DIRECTION_SNAP_DISTANCE = 0.25;
 const ROOF_RENDER_Z_LIFT = 0.03;
 const SHED_WALL_ROOF_GAP = 0.002;
+const DEFAULT_COLUMN_EXTRA_THICKNESS = 0.001;
+const DEFAULT_COLUMN_WIDTH = 0.25;
+const COLUMN_DIMENSION_MAX = 1;
 const ROOF_SNAP_IMPORTANCE = Object.freeze({
     perimeterWallOuterCorner: 4,
     lowerFloorVertex: 3,
@@ -119,6 +134,38 @@ function normalizeGablePerimeterPosition(value, fallbackEdgeIndex = 0, fallbackT
         edgeIndex: Math.max(0, Math.floor(Number(fallbackEdgeIndex)) || 0),
         t: Math.max(0, Math.min(1, t))
     };
+}
+
+function normalizeColumnExtraThickness(value, label = "column thickness") {
+    const thickness = Number(value);
+    if (!Number.isFinite(thickness) || thickness <= 0) {
+        throw new Error(`${label} must be a positive number`);
+    }
+    return Math.min(COLUMN_DIMENSION_MAX, thickness);
+}
+
+function normalizeColumnWidth(value, label = "column width") {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) {
+        throw new Error(`${label} must be a positive number`);
+    }
+    return Math.min(COLUMN_DIMENSION_MAX, width);
+}
+
+function normalizeColumnSideCount(value, label = "column side count") {
+    const sideCount = Math.round(Number(value));
+    if (!Number.isInteger(sideCount) || sideCount < 3 || sideCount > 12) {
+        throw new Error(`${label} must be an integer between 3 and 12`);
+    }
+    return sideCount;
+}
+
+function normalizeColumnHeight(value, label = "column height") {
+    const height = Number(value);
+    if (!Number.isFinite(height) || height <= 0) {
+        throw new Error(`${label} must be a positive number`);
+    }
+    return height;
 }
 
 function gablePositionScalar(floor, position) {
@@ -173,6 +220,21 @@ function canonicalizeGableSpanToShortest(floor, gable) {
 
 function pointIsNearSegmentEndpoint(point, a, b, threshold) {
     return distance(point, a) <= threshold || distance(point, b) <= threshold;
+}
+
+function pointIsNearNonIgnoredSegmentEndpoint(point, a, b, threshold, ignoredVertexEndpoint, ring, floorId) {
+    const endpointIsIgnored = (vertex) => !!(
+        ignoredVertexEndpoint &&
+        isFloorVertexEndpoint(ignoredVertexEndpoint) &&
+        vertex &&
+        vertex.id === ignoredVertexEndpoint.vertexId &&
+        String(ignoredVertexEndpoint.fragmentId) === String(floorId) &&
+        String(ignoredVertexEndpoint.ring || "outer") === String(ring.ringKind || "outer") &&
+        Number(ignoredVertexEndpoint.holeIndex ?? -1) === Number(ring.holeIndex ?? -1)
+    );
+    if (!endpointIsIgnored(a) && distance(point, a) <= threshold) return true;
+    if (!endpointIsIgnored(b) && distance(point, b) <= threshold) return true;
+    return false;
 }
 
 function sameXY(a, b, tolerance = STACKED_VERTEX_TOLERANCE) {
@@ -387,8 +449,9 @@ function endpointIsFinite(endpoint) {
 }
 
 function syncWallLineBoundaryAttachment(wall) {
-    const hasEdgeEndpoint = (wall.startPoint && wall.startPoint.kind === "edge") || (wall.endPoint && wall.endPoint.kind === "edge");
-    if (!hasEdgeEndpoint) {
+    const edgeEndpoints = [wall.startPoint, wall.endPoint].filter((endpoint) => endpoint && endpoint.kind === "edge");
+    const hasLineClippedEdgeEndpoint = edgeEndpoints.some((endpoint) => endpoint.boundaryPoint !== true);
+    if (!hasLineClippedEdgeEndpoint) {
         wall.attachment = null;
         return;
     }
@@ -473,6 +536,18 @@ function wallFootprintCornersFromCenterline(points, thickness, label) {
     ];
 }
 
+function dedupeCandidates(candidates) {
+    const byKey = new Map();
+    candidates.forEach((candidate) => {
+        const key = `${Number(candidate.point.x).toFixed(6)},${Number(candidate.point.y).toFixed(6)}`;
+        const existing = byKey.get(key);
+        if (!existing || Number(candidate.importance) > Number(existing.importance)) {
+            byKey.set(key, candidate);
+        }
+    });
+    return Array.from(byKey.values());
+}
+
 function createSelection(kind, fields = {}) {
     const wallIds = Array.isArray(fields.wallIds)
         ? fields.wallIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
@@ -486,6 +561,18 @@ function createSelection(kind, fields = {}) {
     const mountedObjectId = fields.mountedObjectId !== undefined && fields.mountedObjectId !== null
         ? fields.mountedObjectId
         : (mountedObjectIds.length === 1 ? mountedObjectIds[0] : null);
+    const columnIds = Array.isArray(fields.columnIds)
+        ? fields.columnIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
+        : (fields.columnId !== undefined && fields.columnId !== null ? [fields.columnId] : []);
+    const columnId = fields.columnId !== undefined && fields.columnId !== null
+        ? fields.columnId
+        : (columnIds.length === 1 ? columnIds[0] : null);
+    const beamIds = Array.isArray(fields.beamIds)
+        ? fields.beamIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
+        : (fields.beamId !== undefined && fields.beamId !== null ? [fields.beamId] : []);
+    const beamId = fields.beamId !== undefined && fields.beamId !== null
+        ? fields.beamId
+        : (beamIds.length === 1 ? beamIds[0] : null);
     const floorId = fields.floorId !== undefined && fields.floorId !== null
         ? String(fields.floorId)
         : (fields.levelId !== undefined && fields.levelId !== null ? String(fields.levelId) : null);
@@ -504,6 +591,11 @@ function createSelection(kind, fields = {}) {
         gableId: fields.gableId !== undefined && fields.gableId !== null ? Number(fields.gableId) : null,
         gableHandle: fields.gableHandle || null,
         wallEndpointKey: fields.wallEndpointKey || null,
+        beamId: beamId !== undefined && beamId !== null ? Number(beamId) : null,
+        beamIds,
+        beamEndpointKey: fields.beamEndpointKey || null,
+        columnId: columnId !== undefined && columnId !== null ? Number(columnId) : null,
+        columnIds,
         ringKind: fields.ringKind || null,
         holeIndex: Number.isFinite(Number(fields.holeIndex)) ? Number(fields.holeIndex) : -1,
         vertexIndex: Number.isFinite(Number(fields.vertexIndex)) ? Number(fields.vertexIndex) : -1
@@ -543,6 +635,14 @@ export class BuildingEditorState extends EventTarget {
             texture: DEFAULTS.wallTexture,
             thickness: DEFAULTS.wallThickness
         };
+        this.columnTool = {
+            thickness: DEFAULT_COLUMN_EXTRA_THICKNESS,
+            width: DEFAULT_COLUMN_WIDTH,
+            height: null,
+            heightMode: "wall",
+            sideCount: 4,
+            texture: DEFAULTS.wallTexture
+        };
         this.gridSize = DEFAULTS.gridSize;
         this.camera = { x: 0, y: 0, z: 0, zoom: 72, rotation: 0, pitch: Math.PI / 4, rotationCenter: { x: 0, y: 0 } };
         this.draft = null;
@@ -561,7 +661,12 @@ export class BuildingEditorState extends EventTarget {
             roofDomeLevels: DEFAULTS.roofDomeLevels,
             wallHeight: DEFAULTS.wallHeight,
             wallTexture: DEFAULTS.wallTexture,
-            wallThickness: DEFAULTS.wallThickness
+            wallThickness: DEFAULTS.wallThickness,
+            columnThickness: DEFAULT_COLUMN_EXTRA_THICKNESS,
+            columnWidth: DEFAULT_COLUMN_WIDTH,
+            columnHeight: null,
+            columnSideCount: 4,
+            columnTexture: DEFAULTS.wallTexture
         };
         this.createStarterFloor();
     }
@@ -584,12 +689,17 @@ export class BuildingEditorState extends EventTarget {
 
     emitChange() {
         this.syncGeneratedWallTopProfiles();
+        refreshWallResolvedGeometry(this.building);
         this.dispatchEvent(new CustomEvent("change"));
     }
 
     setTool(tool) {
         if (tool === "wall") {
             this.setWallToolActive();
+            return;
+        }
+        if (tool === "column") {
+            this.setColumnToolActive();
             return;
         }
         if (tool === "polygon" || tool === "scissors") {
@@ -1464,6 +1574,82 @@ export class BuildingEditorState extends EventTarget {
         };
     }
 
+    wallProfileHeightAtT(wall, t) {
+        const profile = wall && wall.topProfile;
+        if (!profile) {
+            const height = Number(wall && wall.height);
+            if (!Number.isFinite(height) || height <= 0) {
+                throw new Error(`wall ${wall && wall.id} requires a positive height for hosted columns`);
+            }
+            return height;
+        }
+        const stations = Array.isArray(profile.stations) ? profile.stations : [];
+        if (stations.length < 2) {
+            throw new Error(`wall ${wall && wall.id} topProfile requires at least two stations for hosted columns`);
+        }
+        const clampedT = Math.max(0, Math.min(1, Number(t)));
+        let previous = stations[0];
+        for (let index = 1; index < stations.length; index++) {
+            const next = stations[index];
+            const previousT = Number(previous.t);
+            const nextT = Number(next.t);
+            if (!Number.isFinite(previousT) || !Number.isFinite(nextT) || nextT <= previousT) {
+                throw new Error(`wall ${wall && wall.id} topProfile stations must have increasing finite t values`);
+            }
+            if (clampedT <= nextT || index === stations.length - 1) {
+                const localT = Math.max(0, Math.min(1, (clampedT - previousT) / (nextT - previousT)));
+                const leftA = Number(previous.leftHeight);
+                const rightA = Number(previous.rightHeight);
+                const leftB = Number(next.leftHeight);
+                const rightB = Number(next.rightHeight);
+                if (![leftA, rightA, leftB, rightB].every(Number.isFinite)) {
+                    throw new Error(`wall ${wall && wall.id} topProfile station heights must be finite`);
+                }
+                const leftHeight = leftA + (leftB - leftA) * localT;
+                const rightHeight = rightA + (rightB - rightA) * localT;
+                return Math.max(0.001, leftHeight, rightHeight);
+            }
+            previous = next;
+        }
+        throw new Error(`wall ${wall && wall.id} topProfile could not be evaluated for hosted columns`);
+    }
+
+    hostedColumnHeightForWall(column, wall) {
+        if (!column || !wall) throw new Error("hosted column height requires a column and wall");
+        const points = wallPoints(this.building, wall);
+        if (!Array.isArray(points) || points.length !== 2) {
+            throw new Error(`column ${column.id} host wall ${wall.id} requires a two-point centerline`);
+        }
+        const a = points[0];
+        const b = points[1];
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const lenSq = dx * dx + dy * dy;
+        if (!Number.isFinite(lenSq) || lenSq <= 0.000001) {
+            throw new Error(`column ${column.id} host wall ${wall.id} cannot have zero length`);
+        }
+        const position = column.position || {};
+        const t = ((Number(position.x) - Number(a.x)) * dx + (Number(position.y) - Number(a.y)) * dy) / lenSq;
+        return this.wallProfileHeightAtT(wall, t);
+    }
+
+    syncWallHostedColumnHeights() {
+        const wallsById = new Map(getBuildingWalls(this.building).map((wall) => [String(wall.id), wall]));
+        getBuildingFloors(this.building).forEach((floor) => {
+            const floorId = getFloorId(floor);
+            getFloorColumns(floor).forEach((column) => {
+                if (column.wallId === undefined || column.wallId === null || column.wallId === "") return;
+                if (String(column.heightMode || "wall").trim().toLowerCase() === "fixed") return;
+                const wall = wallsById.get(String(column.wallId));
+                if (!wall) throw new Error(`column ${column.id} references missing host wall ${column.wallId}`);
+                if (String(wall.fragmentId || wall.floorId) !== String(floorId)) {
+                    throw new Error(`column ${column.id} host wall ${column.wallId} is not on floor ${floorId}`);
+                }
+                column.height = this.hostedColumnHeightForWall(column, wall);
+            });
+        });
+    }
+
     syncGeneratedWallTopProfiles() {
         getBuildingFloors(this.building).forEach((floor) => {
             const roof = getFloorRoof(floor);
@@ -1490,6 +1676,7 @@ export class BuildingEditorState extends EventTarget {
                 }
             });
         });
+        this.syncWallHostedColumnHeights();
     }
 
     roofShedBaseCenter(floor) {
@@ -2582,7 +2769,7 @@ export class BuildingEditorState extends EventTarget {
                 const a = ring.points[index];
                 const b = ring.points[(index + 1) % ring.points.length];
                 const candidatePoint = closestPointOnSegment(point, a, b);
-                if (pointIsNearSegmentEndpoint(candidatePoint, a, b, threshold)) continue;
+                if (pointIsNearNonIgnoredSegmentEndpoint(candidatePoint, a, b, threshold, ignoredVertexEndpoint, ring, floorId)) continue;
                 consider({
                     importance: WALL_SNAP_IMPORTANCE.floorEdge,
                     distance: distanceToSegment(point, a, b),
@@ -2592,6 +2779,7 @@ export class BuildingEditorState extends EventTarget {
                         fragmentId: floorId,
                         ring: ring.ringKind,
                         holeIndex: ring.holeIndex,
+                        boundaryPoint: options.boundaryPointEdgeSnap === true,
                         x: candidatePoint.x,
                         y: candidatePoint.y
                     },
@@ -2655,7 +2843,8 @@ export class BuildingEditorState extends EventTarget {
             ignoreWallId: wall.id,
             ignoreVertexEndpoint: detachVertexEndpoint ? previousEndpoint : null,
             directionOrigin,
-            wallThickness: wall.thickness
+            wallThickness: wall.thickness,
+            boundaryPointEdgeSnap: true
         }).endpoint;
         const previousAttachment = wall.attachment ? JSON.parse(JSON.stringify(wall.attachment)) : null;
         const previousRole = wall.role;
@@ -2901,7 +3090,7 @@ export class BuildingEditorState extends EventTarget {
                 if (inset === true) {
                     endpoint.inset = true;
                 } else {
-                    delete endpoint.inset;
+                    endpoint.inset = false;
                 }
             });
             changedFloorIds.add(wall.fragmentId || wall.floorId);
@@ -3410,6 +3599,8 @@ export class BuildingEditorState extends EventTarget {
         const floorId = getFloorId(floor);
         const floorCenter = polygonCentroid(floor.outerPolygon || []);
         const candidates = [];
+        const perimeterMiterGroups = new Map();
+        const coveredLowerVertexKeys = new Set();
         const addCandidate = (point, kind, importance) => {
             if (!Number.isFinite(Number(point && point.x)) || !Number.isFinite(Number(point && point.y))) return;
             candidates.push({
@@ -3418,32 +3609,69 @@ export class BuildingEditorState extends EventTarget {
                 importance
             });
         };
+        const addPerimeterMiterEndpoint = (wall, endpointKey, sharedPoint, corners) => {
+            const endpoint = wall && wall[endpointKey];
+            const groupKey = wallMiterEndpointKey(wall, endpointKey, sharedPoint, floor);
+            const layer = Number.isFinite(Number(wall.traversalLayer))
+                ? Math.round(Number(wall.traversalLayer))
+                : Math.round(getFloorElevation(floor) / 3);
+            const indexKey = `${groupKey}|layer:${layer}`;
+            const lowerVertexKey = isFloorVertexEndpoint(endpoint) &&
+                String(endpoint.fragmentId) === floorId &&
+                endpoint.ring === "outer" &&
+                endpoint.vertexId
+                ? floorVertexKey(floorId, "outer", -1, endpoint.vertexId)
+                : "";
+            if (!perimeterMiterGroups.has(indexKey)) perimeterMiterGroups.set(indexKey, []);
+            perimeterMiterGroups.get(indexKey).push({
+                wallId: wall.id,
+                sharedPoint,
+                corners,
+                lowerVertexKey
+            });
+        };
         getBuildingWalls(this.building).forEach((wall) => {
             const wallFloorId = wall.fragmentId || wall.floorId;
             if (wallFloorId !== floorId) return;
             const points = wallPoints(this.building, wall);
             if (points.length !== 2) return;
-            const corners = wallFootprintCornersFromCenterline(points, wall.thickness, `wall ${wall.id} roof snap corners`);
             if (wall.role === "perimeter") {
-                const firstSide = [corners[0], corners[1]];
-                const secondSide = [corners[2], corners[3]];
-                const sideDistance = (side) => {
-                    const midpoint = {
-                        x: (Number(side[0].x) + Number(side[1].x)) * 0.5,
-                        y: (Number(side[0].y) + Number(side[1].y)) * 0.5
-                    };
-                    return Math.hypot(midpoint.x - Number(floorCenter.x), midpoint.y - Number(floorCenter.y));
-                };
-                const outerSide = sideDistance(firstSide) >= sideDistance(secondSide) ? firstSide : secondSide;
-                outerSide.forEach((corner) => addCandidate(corner, "perimeterWallOuterCorner", ROOF_SNAP_IMPORTANCE.perimeterWallOuterCorner));
+                const profile = getWallResolvedGeometry(wall).profile;
+                addPerimeterMiterEndpoint(wall, "startPoint", points[0], [profile.aLeft, profile.aRight]);
+                addPerimeterMiterEndpoint(wall, "endPoint", points[1], [profile.bLeft, profile.bRight]);
                 return;
             }
+            const corners = wallFootprintCornersFromCenterline(points, wall.thickness, `wall ${wall.id} roof snap corners`);
             corners.forEach((corner) => addCandidate(corner, "interiorWallCorner", ROOF_SNAP_IMPORTANCE.interiorWallCorner));
         });
+        perimeterMiterGroups.forEach((group) => {
+            if (group.length < 2) return;
+            let outerCorner = null;
+            group.forEach((entry) => {
+                (Array.isArray(entry.corners) ? entry.corners : []).forEach((corner) => {
+                    if (!Number.isFinite(Number(corner && corner.x)) || !Number.isFinite(Number(corner && corner.y))) return;
+                    const distanceFromCenter = Math.hypot(
+                        Number(corner.x) - Number(floorCenter.x),
+                        Number(corner.y) - Number(floorCenter.y)
+                    );
+                    if (!outerCorner || distanceFromCenter > outerCorner.distanceFromCenter) {
+                        outerCorner = { point: corner, distanceFromCenter };
+                    }
+                });
+            });
+            if (!outerCorner) {
+                throw new Error(`roof vertex snapping could not resolve perimeter wall miter at ${group[0].sharedPoint.x},${group[0].sharedPoint.y}`);
+            }
+            group.forEach((entry) => {
+                if (entry.lowerVertexKey) coveredLowerVertexKeys.add(entry.lowerVertexKey);
+            });
+            addCandidate(outerCorner.point, "perimeterWallOuterCorner", ROOF_SNAP_IMPORTANCE.perimeterWallOuterCorner);
+        });
         (Array.isArray(floor.outerPolygon) ? floor.outerPolygon : []).forEach((point) => {
+            if (point && point.id && coveredLowerVertexKeys.has(floorVertexKey(floorId, "outer", -1, point.id))) return;
             addCandidate(point, "lowerFloorVertex", ROOF_SNAP_IMPORTANCE.lowerFloorVertex);
         });
-        return candidates;
+        return dedupeCandidates(candidates);
     }
 
     roofVertexSnapPoint(floor, point, threshold = ROOF_SNAP_DISTANCE) {
@@ -3921,6 +4149,29 @@ export class BuildingEditorState extends EventTarget {
         this.building.wallSections = getBuildingWalls(this.building).filter((candidate) => !wallIds.has(String(candidate.id)));
         this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
             .filter((object) => !wallIds.has(String(object.wallId ?? object.mountedWallSectionUnitId)));
+        getBuildingFloors(this.building).forEach((floor) => {
+            getFloorColumns(floor).forEach((column) => {
+                if (wallIds.has(String(column.wallId))) column.wallId = null;
+            });
+            const beamsToDelete = new Set();
+            getFloorBeams(floor).forEach((beam) => {
+                const startOnDeleted = beam.startAttachment && beam.startAttachment.kind === "wall" && wallIds.has(String(beam.startAttachment.hostId));
+                const endOnDeleted = beam.endAttachment && beam.endAttachment.kind === "wall" && wallIds.has(String(beam.endAttachment.hostId));
+                if (startOnDeleted && endOnDeleted) {
+                    beamsToDelete.add(Number(beam.id));
+                } else {
+                    if (startOnDeleted) {
+                        const pts = this.beamWorldPoints(beam);
+                        beam.startAttachment = pts ? { kind: "free", x: pts.start.x, y: pts.start.y } : { kind: "free", x: 0, y: 0 };
+                    }
+                    if (endOnDeleted) {
+                        const pts = this.beamWorldPoints(beam);
+                        beam.endAttachment = pts ? { kind: "free", x: pts.end.x, y: pts.end.y } : { kind: "free", x: 0, y: 0 };
+                    }
+                }
+            });
+            if (beamsToDelete.size) floor.beams = getFloorBeams(floor).filter((b) => !beamsToDelete.has(Number(b.id)));
+        });
         if (adjacentWall) {
             this.selectWall(adjacentWall.id, { preserveView: this.renderStyle() === "exterior" });
             return true;
@@ -3962,6 +4213,1061 @@ export class BuildingEditorState extends EventTarget {
             this.selection = createSelection("level", { floorId: getFloorId(gableFloors[0]) });
         } else {
             this.selection = createSelection("building");
+        }
+        this.emitChange();
+        return true;
+    }
+
+    // ── Beam helpers ────────────────────────────────────────────────────────
+
+    findBeam(floorId, beamId) {
+        const floor = findFloor(this.building, floorId);
+        return (floor && getFloorBeams(floor).find((b) => Number(b.id) === Number(beamId))) || null;
+    }
+
+    findBeamById(beamId) {
+        for (const floor of getBuildingFloors(this.building)) {
+            const beam = getFloorBeams(floor).find((b) => Number(b.id) === Number(beamId));
+            if (beam) return { beam, floor };
+        }
+        return null;
+    }
+
+    selectedBeam() {
+        const beamIds = this.selectedBeamIds();
+        if (!beamIds.length) return null;
+        const found = this.findBeamById(beamIds[0]);
+        return found ? found.beam : null;
+    }
+
+    selectedBeamIds() {
+        if (!this.selection || this.selection.kind !== "beam") return [];
+        if (Array.isArray(this.selection.beamIds) && this.selection.beamIds.length > 0) {
+            return this.selection.beamIds;
+        }
+        return this.selection.beamId !== null && this.selection.beamId !== undefined ? [this.selection.beamId] : [];
+    }
+
+    selectedBeams() {
+        return this.selectedBeamIds().map((beamId) => {
+            const entry = this.findBeamById(beamId);
+            if (!entry) throw new Error(`selected beam is missing from building: ${beamId}`);
+            return entry.beam;
+        });
+    }
+
+    isBeamSelected(beamId) {
+        return this.selectedBeamIds().some((id) => Number(id) === Number(beamId));
+    }
+
+    selectBeam(floorId, beamId, options = {}) {
+        return this.selectBeams([beamId], options);
+    }
+
+    resolveBeamSelection(beamIds, label = "beam selection") {
+        const uniqueIds = [];
+        (Array.isArray(beamIds) ? beamIds : []).forEach((id) => {
+            if (!uniqueIds.some((candidate) => String(candidate) === String(id))) uniqueIds.push(id);
+        });
+        if (!uniqueIds.length) return { beamIds: [], beams: [], floors: [] };
+        const entries = uniqueIds.map((id) => {
+            const entry = this.findBeamById(id);
+            if (!entry) throw new Error(`${label} references missing beam: ${id}`);
+            return entry;
+        });
+        return {
+            beamIds: entries.map((entry) => entry.beam.id),
+            beams: entries.map((entry) => entry.beam),
+            floors: entries.map((entry) => entry.floor)
+        };
+    }
+
+    applyBeamSelection(beamIds, options = {}) {
+        const resolved = this.resolveBeamSelection(beamIds, "beam selection");
+        if (!resolved.beamIds.length) {
+            this.selectBuilding();
+            return false;
+        }
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(resolved.floors.map((floor) => getFloorId(floor)));
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("beam", {
+            floorId: getFloorId(resolved.floors[0]),
+            beamIds: resolved.beamIds
+        });
+        this.emitChange();
+        return true;
+    }
+
+    selectBeams(beamIds, options = {}) {
+        return this.applyBeamSelection(beamIds, options);
+    }
+
+    addBeamsToSelection(beamIds, options = {}) {
+        const nextBeamIds = [...this.selectedBeamIds()];
+        (Array.isArray(beamIds) ? beamIds : []).forEach((beamId) => {
+            const entry = this.findBeamById(beamId);
+            if (!entry) throw new Error(`cannot add missing beam to selection: ${beamId}`);
+            if (!nextBeamIds.some((id) => String(id) === String(entry.beam.id))) nextBeamIds.push(entry.beam.id);
+        });
+        return this.applyBeamSelection(nextBeamIds, options);
+    }
+
+    removeBeamsFromSelection(beamIds, options = {}) {
+        const removeIds = new Set((Array.isArray(beamIds) ? beamIds : []).map((id) => String(id)));
+        removeIds.forEach((beamId) => {
+            if (!this.findBeamById(beamId)) throw new Error(`cannot remove missing beam from selection: ${beamId}`);
+        });
+        const previousIds = this.selectedBeamIds();
+        const nextBeamIds = previousIds.filter((id) => !removeIds.has(String(id)));
+        if (nextBeamIds.length === previousIds.length) return false;
+        if (!nextBeamIds.length) {
+            const firstRemoved = [...removeIds][0];
+            const entry = firstRemoved !== undefined ? this.findBeamById(firstRemoved) : null;
+            if (entry) this.selectLevel(getFloorId(entry.floor), options);
+            else this.selectBuilding();
+            return true;
+        }
+        return this.applyBeamSelection(nextBeamIds, options);
+    }
+
+    addBeamToSelection(beamId, options = {}) {
+        this.addBeamsToSelection([beamId], options);
+        return true;
+    }
+
+    removeBeamFromSelection(beamId, options = {}) {
+        return this.removeBeamsFromSelection([beamId], options);
+    }
+
+    addBeamToFloor(floorId, beamOptions = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot add beam to missing floor: ${floorId}`);
+        const beam = createBeam({ floorId: getFloorId(floor), ...beamOptions });
+        if (!Array.isArray(floor.beams)) floor.beams = [];
+        floor.beams.push(beam);
+        this.selection = createSelection("beam", { floorId: getFloorId(floor), beamId: beam.id });
+        this.selectedFloorIds = new Set([getFloorId(floor)]);
+        this.layerSelectionMode = "floor";
+        this.emitChange();
+        return beam;
+    }
+
+    deleteSelectedBeam() {
+        const beamIds = this.selectedBeamIds();
+        if (!beamIds.length) return false;
+        const selectedIds = new Set(beamIds.map((id) => String(id)));
+        const entries = beamIds.map((beamId) => this.findBeamById(beamId)).filter(Boolean);
+        if (!entries.length) return false;
+        const floors = new Set(entries.map((entry) => entry.floor));
+        floors.forEach((floor) => {
+            floor.beams = getFloorBeams(floor).filter((b) => !selectedIds.has(String(b.id)));
+        });
+        this.selection = createSelection("floor", { floorId: getFloorId(entries[0].floor) });
+        this.emitChange();
+        return true;
+    }
+
+    moveSelectedBeamVertical(originalStates, deltaZ, options = {}) {
+        const beams = this.selectedBeams();
+        if (!beams.length) return false;
+        const snapDistance = Number.isFinite(Number(options.snapDistance)) ? Math.max(0, Number(options.snapDistance)) : 0;
+        let changed = false;
+        beams.forEach((beam) => {
+            const origEntry = Array.isArray(originalStates)
+                ? originalStates.find((e) => Number(e.beamId) === Number(beam.id))
+                : null;
+            if (!origEntry) return;
+            let nextZ = Number(origEntry.bottomZ) + Number(deltaZ);
+            if (!Number.isFinite(nextZ)) return;
+            if (snapDistance > 0) {
+                const snapped = this._snapBeamBottomZ(beam, nextZ, snapDistance);
+                if (snapped !== null) nextZ = snapped;
+            }
+            beam.bottomZ = nextZ;
+            changed = true;
+        });
+        if (!changed) return false;
+        this.emitChange();
+        return true;
+    }
+
+    _snapBeamBottomZ(beam, candidateZ, threshold) {
+        const snapPoints = [];
+        const addHostSnaps = (attachment) => {
+            if (!attachment) return;
+            if (attachment.kind === "wall") {
+                const wall = findWall(this.building, attachment.hostId);
+                if (wall) {
+                    snapPoints.push(Number(wall.bottomZ));
+                    snapPoints.push(Number(wall.bottomZ) + Number(wall.height) - Number(beam.height));
+                }
+            } else if (attachment.kind === "column") {
+                const col = this._findColumnById(attachment.hostId);
+                if (col) {
+                    snapPoints.push(Number(col.bottomZ));
+                    snapPoints.push(Number(col.bottomZ) + Number(col.height) - Number(beam.height));
+                }
+            }
+        };
+        addHostSnaps(beam.startAttachment);
+        addHostSnaps(beam.endAttachment);
+        const startAttKey = this._beamAttachmentMatchKey(beam.startAttachment);
+        const endAttKey = this._beamAttachmentMatchKey(beam.endAttachment);
+        getBuildingBeams(this.building).forEach((other) => {
+            if (Number(other.id) === Number(beam.id)) return;
+            const otherStartKey = this._beamAttachmentMatchKey(other.startAttachment);
+            const otherEndKey = this._beamAttachmentMatchKey(other.endAttachment);
+            if ((startAttKey && (otherStartKey === startAttKey || otherEndKey === startAttKey)) ||
+                (endAttKey && (otherStartKey === endAttKey || otherEndKey === endAttKey))) {
+                snapPoints.push(Number(other.bottomZ));
+            }
+        });
+        let best = null;
+        let bestDist = Infinity;
+        for (const sp of snapPoints) {
+            if (!Number.isFinite(sp)) continue;
+            const d = Math.abs(candidateZ - sp);
+            if (d < threshold && d < bestDist) { bestDist = d; best = sp; }
+        }
+        return best;
+    }
+
+    _beamAttachmentMatchKey(attachment) {
+        if (!attachment || attachment.kind === "free") return null;
+        if (attachment.kind === "column") return `column:${attachment.hostId}`;
+        if (attachment.kind === "wall") return `wall:${attachment.hostId}:${Number(attachment.t).toFixed(6)}`;
+        return null;
+    }
+
+    selectBeamEndpoint(floorId, beamId, endpointKey, options = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot select beam endpoint for missing floor: ${floorId}`);
+        const beam = this.findBeam(floorId, beamId);
+        if (!beam) throw new Error(`cannot select endpoint of missing beam: ${beamId}`);
+        if (endpointKey !== "startAttachment" && endpointKey !== "endAttachment") {
+            throw new Error(`unknown beam endpoint key: ${endpointKey}`);
+        }
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([getFloorId(floor)]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("beam", { floorId: getFloorId(floor), beamId: beam.id, beamEndpointKey: endpointKey });
+        this.emitChange();
+    }
+
+    moveSelectedBeamEndpoint(worldPoint, threshold, options = {}) {
+        const beam = this.selectedBeam();
+        const endpointKey = this.selection && this.selection.beamEndpointKey;
+        if (!beam || (endpointKey !== "startAttachment" && endpointKey !== "endAttachment")) return false;
+        const floor = this.findBeamById(beam.id);
+        if (!floor) return false;
+        const snap = this.resolveBeamEndpointSnap(worldPoint, threshold, beam.floorId, options);
+        const previousAttachment = JSON.parse(JSON.stringify(beam[endpointKey]));
+        if (snap) {
+            if (snap.snapKind === "columnTop") {
+                beam[endpointKey] = { kind: "column", hostId: snap.hostId };
+            } else if (snap.snapKind === "wallEndpoint" || snap.snapKind === "wallCenterline") {
+                beam[endpointKey] = { kind: "wall", hostId: snap.hostId, t: Number(snap.t) };
+            } else if (snap.snapKind === "beamEndpoint") {
+                const otherBeam = getFloorBeams(findFloor(this.building, beam.floorId) || {}).find((b) => Number(b.id) === Number(snap.beamId));
+                if (otherBeam) {
+                    const pts = this.beamWorldPoints(otherBeam);
+                    if (pts) beam[endpointKey] = { kind: "free", x: snap.x, y: snap.y };
+                }
+            } else {
+                beam[endpointKey] = { kind: "free", x: snap.x, y: snap.y };
+            }
+        } else {
+            beam[endpointKey] = { kind: "free", x: Number(worldPoint.x), y: Number(worldPoint.y) };
+        }
+        const pts = this.beamWorldPoints(beam);
+        if (!pts || Math.hypot(pts.end.x - pts.start.x, pts.end.y - pts.start.y) < 0.000001) {
+            beam[endpointKey] = previousAttachment;
+            return false;
+        }
+        this.emitChange();
+        return true;
+    }
+
+    beamWorldPoints(beam) {
+        const resolveAttachment = (attachment, overhang, otherAttachment) => {
+            if (!attachment) return null;
+            if (attachment.kind === "wall") {
+                const wall = findWall(this.building, attachment.hostId);
+                if (!wall) return null;
+                const pts = wallPoints(this.building, wall);
+                if (!pts || pts.length < 2) return null;
+                const t = Number.isFinite(Number(attachment.t)) ? Number(attachment.t) : 0;
+                return {
+                    x: pts[0].x + (pts[1].x - pts[0].x) * t,
+                    y: pts[0].y + (pts[1].y - pts[0].y) * t,
+                    z: Number(beam.bottomZ)
+                };
+            }
+            if (attachment.kind === "column") {
+                const col = this._findColumnById(attachment.hostId);
+                if (!col) return null;
+                return { x: col.position.x, y: col.position.y, z: Number(beam.bottomZ) };
+            }
+            if (attachment.kind === "free") {
+                return { x: Number(attachment.x) || 0, y: Number(attachment.y) || 0, z: Number(beam.bottomZ) };
+            }
+            return null;
+        };
+        const start = resolveAttachment(beam.startAttachment, beam.startOverhang, beam.endAttachment);
+        const end = resolveAttachment(beam.endAttachment, beam.endOverhang, beam.startAttachment);
+        if (!start || !end) return null;
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.000001) return { start, end };
+        const ux = dx / len;
+        const uy = dy / len;
+        return {
+            start: { x: start.x - ux * Number(beam.startOverhang), y: start.y - uy * Number(beam.startOverhang), z: start.z },
+            end: { x: end.x + ux * Number(beam.endOverhang), y: end.y + uy * Number(beam.endOverhang), z: end.z }
+        };
+    }
+
+    snapBeamEndpoint(point, threshold, floorId) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) return null;
+        let best = null;
+        let bestDist = Infinity;
+
+        const trySnap = (candidate) => {
+            if (!candidate) return;
+            const d = Math.hypot(Number(point.x) - candidate.x, Number(point.y) - candidate.y);
+            if (d < bestDist) { bestDist = d; best = candidate; }
+        };
+
+        if (bestDist > threshold) {
+            getFloorColumns(floor).forEach((col) => {
+                trySnap({ x: col.position.x, y: col.position.y, snapKind: "columnTop", hostId: col.id });
+            });
+        }
+
+        if (bestDist > threshold) {
+            getBuildingWalls(this.building)
+                .filter((w) => String(w.fragmentId || w.floorId) === String(getFloorId(floor)))
+                .forEach((wall) => {
+                    const pts = wallPoints(this.building, wall);
+                    if (!pts || pts.length < 2) return;
+                    for (let i = 0; i < pts.length; i++) {
+                        const p = pts[i];
+                        const d = Math.hypot(Number(point.x) - p.x, Number(point.y) - p.y);
+                        if (d < threshold && d < bestDist) {
+                            bestDist = d;
+                            best = { x: p.x, y: p.y, snapKind: "wallEndpoint", hostId: wall.id, t: i === 0 ? 0 : 1 };
+                        }
+                    }
+                });
+        }
+
+        if (bestDist > threshold) {
+            getBuildingWalls(this.building)
+                .filter((w) => String(w.fragmentId || w.floorId) === String(getFloorId(floor)))
+                .forEach((wall) => {
+                    const pts = wallPoints(this.building, wall);
+                    if (!pts || pts.length < 2) return;
+                    const ax = pts[0].x, ay = pts[0].y, bx = pts[1].x, by = pts[1].y;
+                    const dx = bx - ax, dy = by - ay;
+                    const lenSq = dx * dx + dy * dy;
+                    if (lenSq < 0.000001) return;
+                    const t = Math.max(0, Math.min(1, ((point.x - ax) * dx + (point.y - ay) * dy) / lenSq));
+                    const px = ax + t * dx, py = ay + t * dy;
+                    const d = Math.hypot(Number(point.x) - px, Number(point.y) - py);
+                    if (d < threshold && d < bestDist) {
+                        bestDist = d;
+                        best = { x: px, y: py, snapKind: "wallCenterline", hostId: wall.id, t };
+                    }
+                });
+        }
+
+        if (bestDist > threshold) {
+            getFloorBeams(floor).forEach((other) => {
+                const pts = this.beamWorldPoints(other);
+                if (!pts) return;
+                for (const p of [pts.start, pts.end]) {
+                    const d = Math.hypot(Number(point.x) - p.x, Number(point.y) - p.y);
+                    if (d < threshold && d < bestDist) {
+                        bestDist = d;
+                        best = { x: p.x, y: p.y, snapKind: "beamEndpoint", beamId: other.id };
+                    }
+                }
+            });
+        }
+
+        return best;
+    }
+
+    screenPickedWall(options = {}, floorId = null) {
+        const screenHit = options.renderer &&
+            options.screenPoint &&
+            typeof options.renderer.pickAtScreen === "function"
+            ? options.renderer.pickAtScreen(options.screenPoint, {
+                includeMountedObjects: false,
+                includeColumns: false,
+                includeBeams: false
+            })
+            : null;
+        if (!screenHit || screenHit.type !== "wall" || !screenHit.wall) return null;
+        const wallFloorId = screenHit.floor
+            ? getFloorId(screenHit.floor)
+            : (screenHit.wall.fragmentId || screenHit.wall.floorId);
+        if (floorId !== null && floorId !== undefined && String(wallFloorId) !== String(floorId)) return null;
+        return screenHit.wall;
+    }
+
+    snapBeamEndpointToWall(point, wall, threshold = 0) {
+        if (!wall) throw new Error("beam wall snapping requires a wall");
+        const pts = wallPoints(this.building, wall);
+        if (!pts || pts.length < 2) {
+            throw new Error(`beam wall snapping requires two-point wall centerline for wall ${wall.id}`);
+        }
+        const snapThreshold = Math.max(0, Number(threshold) || 0);
+        let bestEndpoint = null;
+        let bestEndpointDist = Infinity;
+        if (snapThreshold > 0) {
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                const d = Math.hypot(Number(point.x) - Number(p.x), Number(point.y) - Number(p.y));
+                if (d < snapThreshold && d < bestEndpointDist) {
+                    bestEndpointDist = d;
+                    bestEndpoint = { point: p, t: i === 0 ? 0 : 1 };
+                }
+            }
+            if (bestEndpoint) {
+                return {
+                    x: Number(bestEndpoint.point.x),
+                    y: Number(bestEndpoint.point.y),
+                    snapKind: "wallEndpoint",
+                    hostId: wall.id,
+                    t: bestEndpoint.t
+                };
+            }
+        }
+        const a = pts[0];
+        const b = pts[1];
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const lenSq = dx * dx + dy * dy;
+        if (!Number.isFinite(lenSq) || lenSq <= 0.000001) {
+            throw new Error(`beam wall snapping cannot use zero-length wall ${wall.id}`);
+        }
+        const t = Math.max(0, Math.min(1, ((Number(point.x) - Number(a.x)) * dx + (Number(point.y) - Number(a.y)) * dy) / lenSq));
+        return {
+            x: Number(a.x) + dx * t,
+            y: Number(a.y) + dy * t,
+            snapKind: "wallCenterline",
+            hostId: wall.id,
+            t
+        };
+    }
+
+    resolveBeamEndpointSnap(point, threshold, floorId, options = {}) {
+        const wall = this.screenPickedWall(options, floorId);
+        const floor = wall ? findFloor(this.building, wall.fragmentId || wall.floorId || floorId) : null;
+        const screenSnap = wall && floor
+            ? wallPlacementPointAtScreen(this, wall, floor, options.screenPoint, options.renderer, {
+                worldX: Number(point.x),
+                worldY: Number(point.y)
+            })
+            : null;
+        if (!wall) return this.snapBeamEndpoint(point, threshold, floorId);
+        const snap = screenSnap || this.snapBeamEndpointToWall(point, wall, threshold);
+        return { ...snap, hostId: wall.id };
+    }
+
+    resolveColumnSnap(point, threshold, floorId, options = {}) {
+        const wall = this.screenPickedWall(options, floorId);
+        const floor = wall ? findFloor(this.building, wall.fragmentId || wall.floorId || floorId) : null;
+        const screenSnap = wall && floor
+            ? wallPlacementPointAtScreen(this, wall, floor, options.screenPoint, options.renderer, {
+                worldX: Number(point.x),
+                worldY: Number(point.y)
+            })
+            : null;
+        return wall
+            ? (screenSnap || this.snapColumnToWall(point, wall, threshold))
+            : this.snapColumnPosition(point, threshold, floorId);
+    }
+
+    snapColumnPosition(point, threshold, floorId) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) return null;
+        let best = null;
+        let bestDist = Infinity;
+
+        getBuildingWalls(this.building)
+            .filter((w) => String(w.fragmentId || w.floorId) === String(getFloorId(floor)))
+            .forEach((wall) => {
+                const pts = wallPoints(this.building, wall);
+                if (!pts || pts.length < 2) return;
+                for (const p of pts) {
+                    const d = Math.hypot(Number(point.x) - p.x, Number(point.y) - p.y);
+                    if (d < threshold && d < bestDist) {
+                        bestDist = d;
+                        best = { x: p.x, y: p.y, snapKind: "wallEndpoint", wall };
+                    }
+                }
+            });
+
+        if (bestDist > threshold) {
+            getBuildingWalls(this.building)
+                .filter((w) => String(w.fragmentId || w.floorId) === String(getFloorId(floor)))
+                .forEach((wall) => {
+                    const pts = wallPoints(this.building, wall);
+                    if (!pts || pts.length < 2) return;
+                    const ax = pts[0].x, ay = pts[0].y, bx = pts[1].x, by = pts[1].y;
+                    const dx = bx - ax, dy = by - ay;
+                    const lenSq = dx * dx + dy * dy;
+                    if (lenSq < 0.000001) return;
+                    const t = Math.max(0, Math.min(1, ((point.x - ax) * dx + (point.y - ay) * dy) / lenSq));
+                    const px = ax + t * dx, py = ay + t * dy;
+                    const d = Math.hypot(Number(point.x) - px, Number(point.y) - py);
+                    if (d < threshold && d < bestDist) {
+                        bestDist = d;
+                        best = { x: px, y: py, snapKind: "wallCenterline", wall };
+                    }
+                });
+        }
+
+        if (bestDist > threshold) {
+            for (const v of (floor.outerPolygon || [])) {
+                const d = Math.hypot(Number(point.x) - v.x, Number(point.y) - v.y);
+                if (d < threshold && d < bestDist) {
+                    bestDist = d;
+                    best = { x: v.x, y: v.y, snapKind: "floorVertex", vertexId: v.id };
+                }
+            }
+        }
+
+        if (bestDist > threshold) {
+            const ring = floor.outerPolygon || [];
+            for (let i = 0; i < ring.length; i++) {
+                const a = ring[i], b = ring[(i + 1) % ring.length];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const lenSq = dx * dx + dy * dy;
+                if (lenSq < 0.000001) continue;
+                const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lenSq));
+                const px = a.x + t * dx, py = a.y + t * dy;
+                const d = Math.hypot(Number(point.x) - px, Number(point.y) - py);
+                if (d < threshold && d < bestDist) {
+                    bestDist = d;
+                    best = { x: px, y: py, snapKind: "floorEdge" };
+                }
+            }
+        }
+
+        return best;
+    }
+
+    snapColumnToWall(point, wall, threshold = 0) {
+        if (!wall) throw new Error("column wall snapping requires a wall");
+        const pts = wallPoints(this.building, wall);
+        if (!pts || pts.length < 2) {
+            throw new Error(`column wall snapping requires two-point wall centerline for wall ${wall.id}`);
+        }
+        const a = pts[0];
+        const b = pts[1];
+        const snapThreshold = Math.max(0, Number(threshold) || 0);
+        let bestEndpoint = null;
+        let bestEndpointDist = Infinity;
+        if (snapThreshold > 0) {
+            for (const p of pts) {
+                const d = Math.hypot(Number(point.x) - Number(p.x), Number(point.y) - Number(p.y));
+                if (d < snapThreshold && d < bestEndpointDist) {
+                    bestEndpointDist = d;
+                    bestEndpoint = p;
+                }
+            }
+            if (bestEndpoint) {
+                return {
+                    x: Number(bestEndpoint.x),
+                    y: Number(bestEndpoint.y),
+                    snapKind: "wallEndpoint",
+                    wall
+                };
+            }
+        }
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const lenSq = dx * dx + dy * dy;
+        if (!Number.isFinite(lenSq) || lenSq <= 0.000001) {
+            throw new Error(`column wall snapping cannot use zero-length wall ${wall.id}`);
+        }
+        const t = Math.max(0, Math.min(1, ((Number(point.x) - Number(a.x)) * dx + (Number(point.y) - Number(a.y)) * dy) / lenSq));
+        return {
+            x: Number(a.x) + dx * t,
+            y: Number(a.y) + dy * t,
+            snapKind: "wallCenterline",
+            wall
+        };
+    }
+
+    isExteriorWall(wall) {
+        return !!(
+            wall &&
+            wall.role === "perimeter" &&
+            wall.attachment &&
+            wall.attachment.kind === "fragmentEdge" &&
+            wall.attachment.ring === "outer"
+        );
+    }
+
+    columnRotationForFloorVertex(floor, vertexId) {
+        const ring = floor && floor.outerPolygon;
+        if (!Array.isArray(ring)) return 0;
+        const idx = ring.findIndex((v) => v.id === vertexId);
+        if (idx < 0) return 0;
+        const prev = ring[(idx - 1 + ring.length) % ring.length];
+        const curr = ring[idx];
+        const next = ring[(idx + 1) % ring.length];
+        const angleIn = Math.atan2(curr.y - prev.y, curr.x - prev.x);
+        const angleOut = Math.atan2(next.y - curr.y, next.x - curr.x);
+        const bisector = (angleIn + angleOut) / 2;
+        return bisector + Math.PI / 2;
+    }
+
+    columnRotationForWall(wall) {
+        const pts = wallPoints(this.building, wall);
+        if (!pts || pts.length < 2) throw new Error(`column rotation requires two-point wall centerline for wall ${wall && wall.id}`);
+        return Math.atan2(Number(pts[1].y) - Number(pts[0].y), Number(pts[1].x) - Number(pts[0].x));
+    }
+
+    // ── Column helpers ───────────────────────────────────────────────────────
+
+    _findColumnById(columnId) {
+        const entry = this._findColumnEntryById(columnId);
+        return entry ? entry.column : null;
+    }
+
+    _findColumnEntryById(columnId) {
+        for (const floor of getBuildingFloors(this.building)) {
+            const col = getFloorColumns(floor).find((c) => Number(c.id) === Number(columnId));
+            if (col) return { column: col, floor };
+        }
+        return null;
+    }
+
+    findColumnInFloor(floorId, columnId) {
+        const floor = findFloor(this.building, floorId);
+        return (floor && getFloorColumns(floor).find((c) => Number(c.id) === Number(columnId))) || null;
+    }
+
+    selectedColumn() {
+        const columnIds = this.selectedColumnIds();
+        return columnIds.length ? this._findColumnById(columnIds[0]) : null;
+    }
+
+    selectedColumnIds() {
+        if (!this.selection || this.selection.kind !== "column") return [];
+        if (Array.isArray(this.selection.columnIds) && this.selection.columnIds.length > 0) {
+            return this.selection.columnIds;
+        }
+        return this.selection.columnId !== null && this.selection.columnId !== undefined ? [this.selection.columnId] : [];
+    }
+
+    selectedColumns() {
+        return this.selectedColumnIds().map((columnId) => {
+            const entry = this._findColumnEntryById(columnId);
+            if (!entry) throw new Error(`selected column is missing from building: ${columnId}`);
+            return entry.column;
+        });
+    }
+
+    isColumnSelected(columnId) {
+        return this.selectedColumnIds().some((id) => Number(id) === Number(columnId));
+    }
+
+    selectColumn(floorId, columnId, options = {}) {
+        this.selectColumns([columnId], options);
+    }
+
+    resolveColumnSelection(columnIds, label = "column selection") {
+        const uniqueIds = [];
+        (Array.isArray(columnIds) ? columnIds : []).forEach((id) => {
+            if (!uniqueIds.some((candidate) => String(candidate) === String(id))) uniqueIds.push(id);
+        });
+        if (!uniqueIds.length) return { columnIds: [], columns: [], floors: [] };
+        const entries = uniqueIds.map((id) => {
+            const entry = this._findColumnEntryById(id);
+            if (!entry) throw new Error(`${label} references missing column: ${id}`);
+            return entry;
+        });
+        return {
+            columnIds: entries.map((entry) => entry.column.id),
+            columns: entries.map((entry) => entry.column),
+            floors: entries.map((entry) => entry.floor)
+        };
+    }
+
+    applyColumnSelection(columnIds, options = {}) {
+        const resolved = this.resolveColumnSelection(columnIds, "column selection");
+        if (!resolved.columnIds.length) {
+            this.selectBuilding();
+            return false;
+        }
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set(resolved.floors.map((floor) => getFloorId(floor)));
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("column", {
+            floorId: getFloorId(resolved.floors[0]),
+            columnIds: resolved.columnIds
+        });
+        this.emitChange();
+        return true;
+    }
+
+    selectColumns(columnIds, options = {}) {
+        return this.applyColumnSelection(columnIds, options);
+    }
+
+    addColumnsToSelection(columnIds, options = {}) {
+        const nextColumnIds = [...this.selectedColumnIds()];
+        (Array.isArray(columnIds) ? columnIds : []).forEach((columnId) => {
+            const entry = this._findColumnEntryById(columnId);
+            if (!entry) throw new Error(`cannot add missing column to selection: ${columnId}`);
+            if (!nextColumnIds.some((id) => String(id) === String(entry.column.id))) nextColumnIds.push(entry.column.id);
+        });
+        return this.applyColumnSelection(nextColumnIds, options);
+    }
+
+    removeColumnsFromSelection(columnIds, options = {}) {
+        const removeIds = new Set((Array.isArray(columnIds) ? columnIds : []).map((id) => String(id)));
+        removeIds.forEach((columnId) => {
+            if (!this._findColumnById(columnId)) throw new Error(`cannot remove missing column from selection: ${columnId}`);
+        });
+        const previousIds = this.selectedColumnIds();
+        const nextColumnIds = previousIds.filter((id) => !removeIds.has(String(id)));
+        if (nextColumnIds.length === previousIds.length) return false;
+        if (!nextColumnIds.length) {
+            const firstRemoved = [...removeIds][0];
+            const entry = firstRemoved !== undefined ? this._findColumnEntryById(firstRemoved) : null;
+            if (entry) this.selectLevel(getFloorId(entry.floor), options);
+            else this.selectBuilding();
+            return true;
+        }
+        return this.applyColumnSelection(nextColumnIds, options);
+    }
+
+    addColumnToSelection(columnId, options = {}) {
+        this.addColumnsToSelection([columnId], options);
+        return true;
+    }
+
+    removeColumnFromSelection(columnId, options = {}) {
+        return this.removeColumnsFromSelection([columnId], options);
+    }
+
+    columnCreationSettings(hostWall = null) {
+        const hostFloor = hostWall
+            ? findFloor(this.building, hostWall.fragmentId || hostWall.floorId)
+            : this.selectedFloor();
+        const fallbackHeight = hostFloor && Number.isFinite(Number(hostFloor.defaultWallHeight)) && Number(hostFloor.defaultWallHeight) > 0
+            ? Number(hostFloor.defaultWallHeight)
+            : DEFAULTS.wallHeight;
+        return {
+            height: this.columnTool.heightMode === "fixed" && Number.isFinite(Number(this.columnTool.height)) && Number(this.columnTool.height) > 0
+                ? Number(this.columnTool.height)
+                : (hostWall && Number.isFinite(Number(hostWall.height)) && Number(hostWall.height) > 0
+                    ? Number(hostWall.height)
+                    : fallbackHeight),
+            heightMode: this.columnTool.heightMode === "fixed" ? "fixed" : (hostWall ? "wall" : "fixed"),
+            thickness: this.columnTool.thickness,
+            width: this.columnTool.width,
+            sideCount: this.columnTool.sideCount,
+            texture: this.columnTool.texture
+        };
+    }
+
+    minimumColumnDepthForWall(wall) {
+        if (!wall) return DEFAULT_COLUMN_EXTRA_THICKNESS;
+        const wallThickness = Number.isFinite(Number(wall.thickness))
+            ? Number(wall.thickness)
+            : DEFAULTS.wallThickness;
+        return Math.min(COLUMN_DIMENSION_MAX, wallThickness + DEFAULT_COLUMN_EXTRA_THICKNESS);
+    }
+
+    minimumColumnDepth(column) {
+        const wall = column && column.wallId !== undefined && column.wallId !== null && column.wallId !== ""
+            ? findWall(this.building, column.wallId)
+            : null;
+        return this.minimumColumnDepthForWall(wall);
+    }
+
+    clampColumnDepthForWall(value, wall, label = "column depth") {
+        return Math.max(this.minimumColumnDepthForWall(wall), normalizeColumnExtraThickness(value, label));
+    }
+
+    updateColumnToolThickness(value) {
+        const thickness = normalizeColumnExtraThickness(value, "column tool thickness");
+        this.columnTool.thickness = thickness;
+        this.inputs.columnThickness = thickness;
+        this.emitChange();
+    }
+
+    updateColumnToolSideCount(value) {
+        const sideCount = normalizeColumnSideCount(value, "column tool side count");
+        this.columnTool.sideCount = sideCount;
+        this.inputs.columnSideCount = sideCount;
+        this.emitChange();
+    }
+
+    updateColumnToolWidth(value) {
+        const width = normalizeColumnWidth(value, "column tool width");
+        this.columnTool.width = width;
+        this.inputs.columnWidth = width;
+        this.emitChange();
+    }
+
+    updateColumnToolHeight(value) {
+        const raw = String(value ?? "").trim();
+        if (raw === "") {
+            this.columnTool.height = null;
+            this.columnTool.heightMode = "wall";
+            this.inputs.columnHeight = null;
+            this.emitChange();
+            return;
+        }
+        const height = normalizeColumnHeight(raw, "column tool height");
+        this.columnTool.height = height;
+        this.columnTool.heightMode = "fixed";
+        this.inputs.columnHeight = height;
+        this.emitChange();
+    }
+
+    updateColumnToolTexture(texture) {
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("column tool texture path must be a non-empty string");
+        }
+        this.columnTool.texture = texture;
+        this.inputs.columnTexture = texture;
+        this.paintTextures.walls = texture;
+        this.emitChange();
+    }
+
+    copyColumnToTool(column) {
+        if (!column) return false;
+        const actualThickness = Number.isFinite(Number(column.depth)) && Number(column.depth) > 0
+            ? Number(column.depth)
+            : Number(column.size) * 2;
+        if (!Number.isFinite(actualThickness) || actualThickness <= 0) {
+            throw new Error(`cannot copy invalid column thickness from column ${column.id}`);
+        }
+        this.columnTool.thickness = normalizeColumnExtraThickness(actualThickness, "copied column depth");
+        this.columnTool.width = normalizeColumnWidth(column.width ?? Number(column.size) * 2, "copied column width");
+        if (String(column.heightMode || (column.wallId !== null && column.wallId !== undefined ? "wall" : "fixed")).trim().toLowerCase() === "wall") {
+            this.columnTool.height = null;
+            this.columnTool.heightMode = "wall";
+        } else {
+            this.columnTool.height = normalizeColumnHeight(column.height, "copied column height");
+            this.columnTool.heightMode = "fixed";
+        }
+        this.columnTool.sideCount = normalizeColumnSideCount(column.sideCount, "copied column side count");
+        const texturePath = column.texturePath || DEFAULTS.wallTexture;
+        if (typeof texturePath !== "string" || texturePath.length === 0) {
+            throw new Error(`cannot copy invalid column texture from column ${column.id}`);
+        }
+        this.columnTool.texture = texturePath;
+        this.inputs.columnThickness = this.columnTool.thickness;
+        this.inputs.columnWidth = this.columnTool.width;
+        this.inputs.columnHeight = this.columnTool.heightMode === "fixed" ? this.columnTool.height : null;
+        this.inputs.columnSideCount = this.columnTool.sideCount;
+        this.inputs.columnTexture = this.columnTool.texture;
+        this.paintTextures.walls = this.columnTool.texture;
+        return true;
+    }
+
+    setColumnToolActive() {
+        const selectedColumn = this.selectedColumn();
+        if (selectedColumn) this.copyColumnToTool(selectedColumn);
+        this.tool = "column";
+        this.draft = null;
+        this.emitChange();
+    }
+
+    updateSelectedColumnThickness(value) {
+        if (this.tool === "column") {
+            this.updateColumnToolThickness(value);
+            return;
+        }
+        const columns = this.selectedColumns();
+        if (!columns.length) throw new Error("cannot update column thickness without a selected column");
+        const requestedDepth = normalizeColumnExtraThickness(value, "column depth");
+        columns.forEach((col) => {
+            col.depth = Math.max(this.minimumColumnDepth(col), requestedDepth);
+        });
+        this.inputs.columnThickness = columns.length === 1 ? columns[0].depth : requestedDepth;
+        this.emitChange();
+    }
+
+    updateSelectedColumnWidth(value) {
+        if (this.tool === "column") {
+            this.updateColumnToolWidth(value);
+            return;
+        }
+        const columns = this.selectedColumns();
+        if (!columns.length) throw new Error("cannot update column width without a selected column");
+        const width = normalizeColumnWidth(value, "column width");
+        columns.forEach((col) => {
+            col.width = width;
+            col.size = width * 0.5;
+        });
+        this.inputs.columnWidth = width;
+        this.emitChange();
+    }
+
+    updateSelectedColumnHeight(value) {
+        if (this.tool === "column") {
+            this.updateColumnToolHeight(value);
+            return;
+        }
+        const columns = this.selectedColumns();
+        if (!columns.length) throw new Error("cannot update column height without a selected column");
+        const raw = String(value ?? "").trim();
+        if (raw === "") {
+            columns.forEach((col) => {
+                if (col.wallId === undefined || col.wallId === null || col.wallId === "") {
+                    throw new Error(`column ${col.id} cannot peg height without a host wall`);
+                }
+                col.heightMode = "wall";
+            });
+            this.inputs.columnHeight = null;
+            this.emitChange();
+            return;
+        }
+        const height = normalizeColumnHeight(raw, "column height");
+        columns.forEach((col) => {
+            col.height = height;
+            col.heightMode = "fixed";
+        });
+        this.inputs.columnHeight = height;
+        this.emitChange();
+    }
+
+    updateSelectedColumnSideCount(value) {
+        if (this.tool === "column") {
+            this.updateColumnToolSideCount(value);
+            return;
+        }
+        const columns = this.selectedColumns();
+        if (!columns.length) throw new Error("cannot update column side count without a selected column");
+        const sideCount = normalizeColumnSideCount(value, "column side count");
+        columns.forEach((col) => {
+            col.sideCount = sideCount;
+        });
+        this.inputs.columnSideCount = sideCount;
+        this.emitChange();
+    }
+
+    updateSelectedColumnTexture(texture) {
+        if (this.tool === "column") {
+            this.updateColumnToolTexture(texture);
+            return;
+        }
+        const columns = this.selectedColumns();
+        if (!columns.length) throw new Error("cannot update column texture without a selected column");
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("column texture path must be a non-empty string");
+        }
+        columns.forEach((col) => {
+            col.texturePath = texture;
+        });
+        this.inputs.columnTexture = texture;
+        this.paintTextures.walls = texture;
+        this.emitChange();
+    }
+
+    addColumnToFloor(floorId, columnOptions = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot add column to missing floor: ${floorId}`);
+        const preserveView = columnOptions.preserveView === true;
+        const hostWall = columnOptions.wallId !== undefined && columnOptions.wallId !== null && columnOptions.wallId !== ""
+            ? findWall(this.building, columnOptions.wallId)
+            : null;
+        const requestedDepth = columnOptions.depth ?? columnOptions.thickness ?? (
+            columnOptions.size !== undefined ? Number(columnOptions.size) * 2 : DEFAULT_COLUMN_EXTRA_THICKNESS
+        );
+        const resolvedOptions = {
+            ...columnOptions,
+            depth: this.clampColumnDepthForWall(
+                requestedDepth,
+                hostWall,
+                "column depth"
+            )
+        };
+        const col = createColumn({
+            floorId: getFloorId(floor),
+            floorDefaultWallHeight: floor.defaultWallHeight,
+            bottomZ: getFloorElevation(floor),
+            ...resolvedOptions
+        });
+        if (!Array.isArray(floor.columns)) floor.columns = [];
+        floor.columns.push(col);
+        this.selection = createSelection("column", { floorId: getFloorId(floor), columnId: col.id });
+        if (!preserveView) {
+            this.selectedFloorIds = new Set([getFloorId(floor)]);
+            this.layerSelectionMode = "floor";
+        }
+        this.emitChange();
+        return col;
+    }
+
+    deleteSelectedColumn() {
+        const columnIds = this.selectedColumnIds();
+        if (!columnIds.length) return false;
+        const selectedIds = new Set(columnIds.map((id) => String(id)));
+        const entries = columnIds.map((columnId) => this._findColumnEntryById(columnId)).filter(Boolean);
+        if (!entries.length) return false;
+        const floors = new Set(entries.map((entry) => entry.floor));
+        floors.forEach((floor) => {
+            floor.columns = getFloorColumns(floor).filter((c) => !selectedIds.has(String(c.id)));
+        });
+        getBuildingFloors(this.building).forEach((floor) => getFloorBeams(floor).forEach((beam) => {
+            if (beam.startAttachment && beam.startAttachment.kind === "column" &&
+                selectedIds.has(String(beam.startAttachment.hostId))) {
+                const pts = this.beamWorldPoints(beam);
+                beam.startAttachment = pts
+                    ? { kind: "free", x: pts.start.x, y: pts.start.y }
+                    : { kind: "free", x: 0, y: 0 };
+            }
+            if (beam.endAttachment && beam.endAttachment.kind === "column" &&
+                selectedIds.has(String(beam.endAttachment.hostId))) {
+                const pts = this.beamWorldPoints(beam);
+                beam.endAttachment = pts
+                    ? { kind: "free", x: pts.end.x, y: pts.end.y }
+                    : { kind: "free", x: 0, y: 0 };
+            }
+        }));
+        const firstFloor = entries[0].floor;
+        this.selection = createSelection("floor", { floorId: getFloorId(firstFloor) });
+        this.emitChange();
+        return true;
+    }
+
+    moveSelectedColumn(worldPoint, threshold, options = {}) {
+        const col = this.selectedColumn();
+        if (!col) return false;
+        const floor = findFloor(this.building, col.floorId);
+        if (!floor) return false;
+        const snap = this.resolveColumnSnap(worldPoint, threshold, col.floorId, options);
+        const pt = snap || worldPoint;
+        col.position = { x: Number(pt.x), y: Number(pt.y) };
+        col.wallId = snap && snap.wall ? snap.wall.id : null;
+        if (col.wallId !== null) {
+            col.depth = this.clampColumnDepthForWall(col.depth, snap.wall, "column depth");
+            col.rotation = this.columnRotationForWall(snap.wall);
+            if (!col.heightMode) col.heightMode = "wall";
+        } else if (String(col.heightMode || "").trim().toLowerCase() === "wall") {
+            col.heightMode = "fixed";
+        }
+        if (!snap?.wall && snap && snap.snapKind === "floorVertex" && snap.vertexId) {
+            col.rotation = this.columnRotationForFloorVertex(floor, snap.vertexId);
         }
         this.emitChange();
         return true;

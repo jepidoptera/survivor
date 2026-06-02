@@ -1,8 +1,9 @@
+import "../assets/javascript/wallGeometry.js";
 import { flattenPolygon, polygonCentroid, simplePolygonRingError } from "./BuildingGeometry.js";
 import { validateBuilding } from "./BuildingValidation.js";
 import { ADJACENT_DIRECTIONS, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
-import { findFloor, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
+import { columnVertices, findFloor, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorBeams, getFloorColumns, getFloorElevation, getFloorId, getFloorRoof, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, getWallResolvedGeometry, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
 
 const GAME_XY_RATIO = 0.66;
 const CAMERA_DEFAULT_PITCH = Math.PI / 4;
@@ -10,7 +11,8 @@ const CAMERA_MIN_PITCH = Math.PI / 12;
 const CAMERA_MAX_PITCH = Math.PI * 5 / 12;
 const CAMERA_PITCH_BASE = Math.SQRT1_2;
 const FLOOR_TEXTURE_REPEAT = 0.1;
-const ROOF_TEXTURE_REPEAT = 0.5;
+const DEFAULT_ROOF_TEXTURE_REPEAT = 0.5;
+const ROOF_TEXTURE_CONFIG_URL = "/assets/images/roofs/items.json";
 const ROOF_RENDER_Z_LIFT = 0.03;
 const FLOOR_DEPTH_NEAR_METRIC = -128;
 const FLOOR_DEPTH_FAR_METRIC = 256;
@@ -26,6 +28,8 @@ const SCENE_LIGHT_MAX = 1.36;
 const DEFAULT_WALL_TEXTURE_REPEAT = 0.1;
 const GABLE_MOUNT_WALL_THICKNESS = 0.08;
 const GABLE_ENDPOINT_VERTEX_SNAP_PIXELS = 12;
+const GRID_SCREEN_OVERSCAN_PIXELS = 96;
+const GRID_HEXES_PER_GRAPHICS_CHUNK = 600;
 const PICKER_DEBUG_DEPTH_BIAS = 0.05;
 const SELECTION_OUTLINE_COLOR = 0x42a5ff;
 const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
@@ -48,6 +52,7 @@ uniform vec2 uCameraRotationCenter;
 uniform vec3 uLightVector;
 uniform float uLightDiffuse;
 uniform vec2 uLightClamp;
+uniform float uOverheadSlopeLighting;
 varying vec2 vUvs;
 varying float vLightFactor;
 void main(void) {
@@ -85,7 +90,9 @@ void main(void) {
     float lightDot = dot(normal, light);
     float upwardWeight = smoothstep(0.25, 0.75, abs(normal.z));
     float overheadBaseline = light.z * upwardWeight;
-    vLightFactor = clamp(1.0 + (lightDot - overheadBaseline) * uLightDiffuse, uLightClamp.x, uLightClamp.y);
+    float directionalLightFactor = clamp(1.0 + (lightDot - overheadBaseline) * uLightDiffuse, uLightClamp.x, uLightClamp.y);
+    float slopeLightFactor = mix(uLightClamp.x, 1.0, smoothstep(0.0, 1.0, clamp(normal.z, 0.0, 1.0)));
+    vLightFactor = mix(directionalLightFactor, slopeLightFactor, clamp(uOverheadSlopeLighting, 0.0, 1.0));
     vUvs = aUvs;
 }
 `;
@@ -277,6 +284,36 @@ function roofTexturePath(floor) {
     const roof = getFloorRoof(floor);
     if (!roof) throw new Error(`floor ${getFloorId(floor)} has no roof texture`);
     return roof.texturePath;
+}
+
+function normalizeTextureConfigPath(texturePath) {
+    if (typeof texturePath !== "string" || texturePath.length === 0) return "";
+    const raw = texturePath.split("?")[0].split("#")[0];
+    if (raw.startsWith("/")) return raw;
+    try {
+        if (typeof window !== "undefined" && window.location && window.location.origin) {
+            return new URL(raw, window.location.origin).pathname || raw;
+        }
+    } catch (_) {}
+    return raw;
+}
+
+function normalizeRoofTextureRepeatConfig(config = {}) {
+    const fallback = Number.isFinite(Number(config.repeatsPerMapUnit))
+        ? Math.max(0.0001, Number(config.repeatsPerMapUnit))
+        : DEFAULT_ROOF_TEXTURE_REPEAT;
+    const x = Number.isFinite(Number(config.repeatsPerMapUnitX))
+        ? Math.max(0.0001, Number(config.repeatsPerMapUnitX))
+        : fallback;
+    const y = Number.isFinite(Number(config.repeatsPerMapUnitY))
+        ? Math.max(0.0001, Number(config.repeatsPerMapUnitY))
+        : fallback;
+    return { repeatsPerMapUnitX: x, repeatsPerMapUnitY: y };
+}
+
+function roofTextureRepeatSignature(config) {
+    const repeat = normalizeRoofTextureRepeatConfig(config);
+    return `${repeat.repeatsPerMapUnitX.toFixed(6)}:${repeat.repeatsPerMapUnitY.toFixed(6)}`;
 }
 
 function gableWallTexturePath(floor, gable) {
@@ -874,6 +911,113 @@ function triangleSurfaceNormal(a, b, c, label) {
     return { x: nx / length, y: ny / length, z: nz / length };
 }
 
+function vector3Between(a, b) {
+    return {
+        x: Number(b.x) - Number(a.x),
+        y: Number(b.y) - Number(a.y),
+        z: Number(b.z) - Number(a.z)
+    };
+}
+
+function dot3(a, b) {
+    return Number(a.x) * Number(b.x) + Number(a.y) * Number(b.y) + Number(a.z) * Number(b.z);
+}
+
+function cross3(a, b) {
+    return {
+        x: Number(a.y) * Number(b.z) - Number(a.z) * Number(b.y),
+        y: Number(a.z) * Number(b.x) - Number(a.x) * Number(b.z),
+        z: Number(a.x) * Number(b.y) - Number(a.y) * Number(b.x)
+    };
+}
+
+function normalizeVector3(vector, label) {
+    const length = Math.hypot(Number(vector.x), Number(vector.y), Number(vector.z));
+    if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires a non-zero vector`);
+    }
+    return {
+        x: Number(vector.x) / length,
+        y: Number(vector.y) / length,
+        z: Number(vector.z) / length
+    };
+}
+
+function midpoint3(points, label) {
+    if (!Array.isArray(points) || points.length === 0) {
+        throw new Error(`${label} requires at least one point`);
+    }
+    const sum = points.reduce((acc, point) => ({
+        x: acc.x + Number(point.x),
+        y: acc.y + Number(point.y),
+        z: acc.z + Number(point.z)
+    }), { x: 0, y: 0, z: 0 });
+    const count = points.length;
+    return { x: sum.x / count, y: sum.y / count, z: sum.z / count };
+}
+
+function domeFacetUvPoints(a, b, c, normal, label, repeatX, repeatY) {
+    const vertices = [a, b, c].map((point, index) => {
+        const x = Number(point.x);
+        const y = Number(point.y);
+        const z = Number(point.z);
+        if (![x, y, z].every(Number.isFinite)) {
+            throw new Error(`${label} vertex ${index} requires finite xyz for texture coordinates`);
+        }
+        return { ...point, x, y, z };
+    });
+    const minZ = Math.min(...vertices.map((point) => point.z));
+    const maxZ = Math.max(...vertices.map((point) => point.z));
+    let origin = vertices[0];
+    let vAxis = null;
+    let uCandidate = null;
+    if (maxZ - minZ > GEOMETRY_EPSILON) {
+        const top = vertices.filter((point) => Math.abs(point.z - maxZ) <= GEOMETRY_EPSILON);
+        const lower = vertices.filter((point) => Math.abs(point.z - maxZ) > GEOMETRY_EPSILON);
+        origin = midpoint3(top, `${label} top edge`);
+        const lowerMid = midpoint3(lower, `${label} lower edge`);
+        if (top.length >= 2) {
+            uCandidate = vector3Between(top[0], top[1]);
+            const topAxis = normalizeVector3(uCandidate, `${label} top texture axis`);
+            vAxis = normalizeVector3(cross3(topAxis, normal), `${label} downslope texture axis`);
+            if (dot3(vAxis, vector3Between(origin, lowerMid)) < 0) {
+                vAxis = { x: -vAxis.x, y: -vAxis.y, z: -vAxis.z };
+            }
+        } else {
+            uCandidate = vector3Between(lower[0], lower[lower.length - 1]);
+            const lowerAxis = normalizeVector3(uCandidate, `${label} lower texture axis`);
+            vAxis = normalizeVector3(cross3(lowerAxis, normal), `${label} downslope texture axis`);
+            if (dot3(vAxis, vector3Between(origin, lowerMid)) < 0) {
+                vAxis = { x: -vAxis.x, y: -vAxis.y, z: -vAxis.z };
+            }
+        }
+    } else {
+        uCandidate = vector3Between(vertices[0], vertices[1]);
+        if (Math.hypot(uCandidate.x, uCandidate.y, uCandidate.z) <= GEOMETRY_EPSILON) {
+            uCandidate = vector3Between(vertices[0], vertices[2]);
+        }
+        const uAxisFlat = normalizeVector3(uCandidate, `${label} flat texture u axis`);
+        vAxis = normalizeVector3(cross3(uAxisFlat, normal), `${label} flat texture v axis`);
+    }
+    let uAxis = normalizeVector3(cross3(normal, vAxis), `${label} texture u axis`);
+    if (uCandidate && dot3(uAxis, uCandidate) < 0) {
+        uAxis = { x: -uAxis.x, y: -uAxis.y, z: -uAxis.z };
+    }
+    const coords = vertices.map((point) => ({
+        point,
+        rawU: dot3(vector3Between(origin, point), uAxis),
+        rawV: dot3(vector3Between(origin, point), vAxis)
+    }));
+    const minU = Math.min(...coords.map((coord) => coord.rawU));
+    const flatFacet = maxZ - minZ <= GEOMETRY_EPSILON;
+    const minV = flatFacet ? Math.min(...coords.map((coord) => coord.rawV)) : 0;
+    return coords.map((coord) => ({
+        ...coord.point,
+        u: (coord.rawU - minU) * repeatX,
+        v: Math.max(0, coord.rawV - minV) * repeatY
+    }));
+}
+
 function averageSurfaceNormals(a, b, label) {
     const nx = Number(a && a.x) + Number(b && b.x);
     const ny = Number(a && a.y) + Number(b && b.y);
@@ -971,11 +1115,14 @@ function gableRoofClipPolygon(floor, geometry, label) {
     return [ring];
 }
 
-function triangulatePitchedRoof(floor) {
+function triangulatePitchedRoof(floor, textureRepeatConfig = null) {
     const floorId = getFloorId(floor);
     if (roofMode(floor) !== "peak") {
         throw new Error(`roof ${floorId} mode ${roofMode(floor)} cannot use peak triangulation`);
     }
+    const repeatConfig = normalizeRoofTextureRepeatConfig(textureRepeatConfig);
+    const repeatX = repeatConfig.repeatsPerMapUnitX;
+    const repeatY = repeatConfig.repeatsPerMapUnitY;
     const holes = Array.isArray(floor && floor.holes) ? floor.holes.filter((ring) => Array.isArray(ring) && ring.length >= 3) : [];
     if (holes.length > 0) {
         throw new Error(`roof ${floorId} with overhang or peak height cannot render floor holes yet`);
@@ -1005,9 +1152,9 @@ function triangulatePitchedRoof(floor) {
         ) {
             return;
         }
-        const runRepeat = distance3d(geometry.roofApex, geometry.roofBackApex) * ROOF_TEXTURE_REPEAT;
-        const leftSlopeRepeat = distance3d(geometry.roofStart, geometry.roofApex) * ROOF_TEXTURE_REPEAT;
-        const rightSlopeRepeat = distance3d(geometry.roofEnd, geometry.roofApex) * ROOF_TEXTURE_REPEAT;
+        const runRepeat = distance3d(geometry.roofApex, geometry.roofBackApex) * repeatX;
+        const leftSlopeRepeat = distance3d(geometry.roofStart, geometry.roofApex) * repeatY;
+        const rightSlopeRepeat = distance3d(geometry.roofEnd, geometry.roofApex) * repeatY;
         const leftNormal = triangleSurfaceNormal(geometry.roofStart, geometry.roofApex, geometry.roofBackApex, `${label} left side`);
         const rightNormal = triangleSurfaceNormal(geometry.roofApex, geometry.roofEnd, geometry.roofBackEnd, `${label} right side`);
         const ridgeNormal = averageSurfaceNormals(leftNormal, rightNormal, `${label} ridge`);
@@ -1064,11 +1211,11 @@ function triangulatePitchedRoof(floor) {
             const b = ring[next];
             const zA = Number.isFinite(Number(a.z)) ? Number(a.z) : rimZ;
             const zB = Number.isFinite(Number(b.z)) ? Number(b.z) : rimZ;
-            const uA = cumulative[index] * ROOF_TEXTURE_REPEAT;
-            const uB = cumulative[index + 1] * ROOF_TEXTURE_REPEAT;
+            const uA = cumulative[index] * repeatX;
+            const uB = cumulative[index + 1] * repeatX;
             const uCenter = (uA + uB) * 0.5;
             const slopeDistance = Math.hypot(distancePointToLineSegment(peakPoint, a, b), peakHeight);
-            const vCenter = Math.max(1, slopeDistance * ROOF_TEXTURE_REPEAT);
+            const vCenter = Math.max(1, slopeDistance * repeatY);
             const roofA = { x: Number(a.x), y: Number(a.y), z: zA, u: uA, v: 0 };
             const roofB = { x: Number(b.x), y: Number(b.y), z: zB, u: uB, v: 0 };
             const roofPeak = { x: peakPoint.x, y: peakPoint.y, z: rimZ + peakHeight, u: uCenter, v: vCenter };
@@ -1099,8 +1246,11 @@ function triangulatePitchedRoof(floor) {
     return { points, indices: new Uint16Array(indices) };
 }
 
-function triangulateShedRoof(floor) {
+function triangulateShedRoof(floor, textureRepeatConfig = null) {
     const floorId = getFloorId(floor);
+    const repeatConfig = normalizeRoofTextureRepeatConfig(textureRepeatConfig);
+    const repeatX = repeatConfig.repeatsPerMapUnitX;
+    const repeatY = repeatConfig.repeatsPerMapUnitY;
     const ring = shedRoofPerimeterRing(floor);
     if (ring.length < 3) return null;
     const triangulation = triangulateSurface(ring, []);
@@ -1113,17 +1263,35 @@ function triangulateShedRoof(floor) {
         y: -slope * range.direction.y / normalLength,
         z: 1 / normalLength
     };
+    const slopeRunScale = Math.hypot(1, slope);
+    const uAxis = {
+        x: -range.direction.y,
+        y: range.direction.x
+    };
+    let minU = Infinity;
+    triangulation.points.forEach((point) => {
+        const uProjection = Number(point.x) * uAxis.x + Number(point.y) * uAxis.y;
+        minU = Math.min(minU, uProjection);
+    });
+    if (!Number.isFinite(minU)) {
+        throw new Error(`roof ${floorId} shed texture orientation requires finite roof points`);
+    }
     const points = triangulation.points.map((point) => ({
         x: Number(point.x),
         y: Number(point.y),
         z: shedRoofZAt(floor, point, range),
+        u: ((Number(point.x) * uAxis.x + Number(point.y) * uAxis.y) - minU) * repeatX,
+        v: (range.max - (Number(point.x) * range.direction.x + Number(point.y) * range.direction.y)) * slopeRunScale * repeatY,
         normal
     }));
     return { points, indices: triangulation.indices };
 }
 
-function triangulateDomeRoof(floor) {
+function triangulateDomeRoof(floor, textureRepeatConfig = null) {
     const floorId = getFloorId(floor);
+    const repeatConfig = normalizeRoofTextureRepeatConfig(textureRepeatConfig);
+    const repeatX = repeatConfig.repeatsPerMapUnitX;
+    const repeatY = repeatConfig.repeatsPerMapUnitY;
     const baseRing = domeRoofBaseRing(floor);
     if (baseRing.length < 3) return null;
     const peakHeight = roofPeakHeight(floor);
@@ -1160,11 +1328,12 @@ function triangulateDomeRoof(floor) {
     const pushTriangle = (a, b, c, label) => {
         if (triangleArea3d(a, b, c) <= GEOMETRY_EPSILON) return;
         const normal = triangleSurfaceNormal(a, b, c, label);
+        const uvPoints = domeFacetUvPoints(a, b, c, normal, label, repeatX, repeatY);
         const start = points.length;
         points.push(
-            { ...a, normal },
-            { ...b, normal },
-            { ...c, normal }
+            { ...uvPoints[0], normal },
+            { ...uvPoints[1], normal },
+            { ...uvPoints[2], normal }
         );
         indices.push(start, start + 1, start + 2);
     };
@@ -1194,20 +1363,21 @@ function triangulateDomeRoof(floor) {
     return indices.length >= 3 ? { points, indices: new Uint16Array(indices) } : null;
 }
 
-function triangulateRoof(floor) {
-    if (roofMode(floor) === "shed") return triangulateShedRoof(floor);
-    if (roofMode(floor) === "dome") return triangulateDomeRoof(floor);
+function triangulateRoof(floor, textureRepeatConfig = null) {
+    if (roofMode(floor) === "shed") return triangulateShedRoof(floor, textureRepeatConfig);
+    if (roofMode(floor) === "dome") return triangulateDomeRoof(floor, textureRepeatConfig);
     if (roofMode(floor) !== "peak") throw new Error(`roof ${getFloorId(floor)} mode ${roofMode(floor)} is not renderable yet`);
     const hasOverhang = Math.abs(roofOverhang(floor)) > GEOMETRY_EPSILON;
     const hasPeak = roofPeakHeight(floor) > GEOMETRY_EPSILON;
-    return hasOverhang || hasPeak ? triangulatePitchedRoof(floor) : triangulateSurface(getRoofContactPolygon(floor), []);
+    return hasOverhang || hasPeak ? triangulatePitchedRoof(floor, textureRepeatConfig) : triangulateSurface(getRoofContactPolygon(floor), []);
 }
 
-function roofMeshSignature(floor) {
+function roofMeshSignature(floor, textureRepeatConfig = null) {
     const roof = getFloorRoof(floor);
     if (!roof) return `${getFloorId(floor)};no-roof`;
     return [
         surfaceMeshSignatureFromRings(getFloorId(floor), getRoofContactPolygon(floor), [], roof.texturePath, roofRenderElevation(floor)),
+        roofTextureRepeatSignature(textureRepeatConfig),
         String(roof.mode || "peak"),
         `${Number(getRoofPeakPoint(floor).x).toFixed(4)},${Number(getRoofPeakPoint(floor).y).toFixed(4)}`,
         `${Number(getRoofShedDirection(floor).x).toFixed(4)},${Number(getRoofShedDirection(floor).y).toFixed(4)}`,
@@ -1242,34 +1412,11 @@ function surfaceMeshSignatureFromRings(surfaceId, outerRing, holeRings, textureP
 
 function wallRenderSignature(building, wall, floor) {
     const renderPoints = wallCenterlinePoints(building, wall, floor);
-    const plane = wall && wall.topProfile && wall.topProfile.generatedBy && wall.topProfile.generatedBy.plane
-        ? wall.topProfile.generatedBy.plane
-        : null;
-    const planeSignature = plane
-        ? [
-            plane.kind || "",
-            Number(plane.direction && plane.direction.x).toFixed(4),
-            Number(plane.direction && plane.direction.y).toFixed(4),
-            Number(plane.minProjection).toFixed(4),
-            Number(plane.maxProjection).toFixed(4),
-            Number(plane.baseZ).toFixed(4),
-            Number(plane.peakHeight).toFixed(4)
-        ].join(",")
-        : "no-plane";
-    const topProfile = wall && wall.topProfile && Array.isArray(wall.topProfile.stations)
-        ? `${wall.topProfile.stations.map((station) => [
-            Number(station.t).toFixed(4),
-            Number(station.leftHeight).toFixed(4),
-            Number(station.rightHeight).toFixed(4)
-        ].join(",")).join("|")};${planeSignature}`
-        : "flat";
+    const resolvedGeometry = getWallResolvedGeometry(wall);
     return [
         wall.id,
         getFloorId(floor),
-        getFloorElevation(floor),
-        Number(wall.height).toFixed(4),
-        Number(wall.thickness).toFixed(4),
-        topProfile,
+        resolvedGeometry.signature,
         normalizeTexturePath(wall.wallTexturePath, ""),
         renderPoints.map((point) => `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`).join("|")
     ].join(";");
@@ -1342,34 +1489,12 @@ function wallProfilePoints(building, wall, floor, options = {}) {
         const scale = Number.isFinite(Number(options.footprintScale)) ? Number(options.footprintScale) : 1;
         return scale === 1 ? points : scalePolygonAboutCentroid(points, scale, `wall ${wall && wall.id} mitered footprint`);
     }
-    const points = wallCenterlinePoints(building, wall, floor);
-    if (points.length !== 2) {
-        throw new Error(`wall ${wall && wall.id} footprint requires exactly two centerline points`);
-    }
-    const [a, b] = points;
-    const thickness = Number(wall && wall.thickness);
-    if (!Number.isFinite(thickness) || thickness <= 0) {
-        throw new Error(`wall ${wall && wall.id} footprint requires a positive thickness`);
-    }
-    const dx = Number(b.x) - Number(a.x);
-    const dy = Number(b.y) - Number(a.y);
-    const length = Math.hypot(dx, dy);
-    if (length <= GEOMETRY_EPSILON) {
-        throw new Error(`wall ${wall && wall.id} footprint endpoints must not be coincident`);
-    }
-    const nx = -dy / length;
-    const ny = dx / length;
+    const points = wallProfilePolygonFromProfile(getWallResolvedGeometry(wall).profile, `wall ${wall && wall.id} resolved footprint`);
     const scale = Number.isFinite(Number(options.thicknessScale)) ? Number(options.thicknessScale) : 1;
     if (scale <= 0) {
         throw new Error(`wall ${wall && wall.id} footprint requires a positive thickness scale`);
     }
-    const halfThickness = thickness * scale * 0.5;
-    return [
-        { x: Number(a.x) + nx * halfThickness, y: Number(a.y) + ny * halfThickness },
-        { x: Number(b.x) + nx * halfThickness, y: Number(b.y) + ny * halfThickness },
-        { x: Number(b.x) - nx * halfThickness, y: Number(b.y) - ny * halfThickness },
-        { x: Number(a.x) - nx * halfThickness, y: Number(a.y) - ny * halfThickness }
-    ];
+    return scale === 1 ? points : scalePolygonAboutCentroid(points, scale, `wall ${wall && wall.id} resolved footprint`);
 }
 
 function wallFootprintPolygon(building, wall, floor, options = {}) {
@@ -1604,23 +1729,6 @@ function clipRingSignedArea(ring) {
     return area * 0.5;
 }
 
-function lineIntersection2d(pointA, directionA, pointB, directionB) {
-    const denominator = Number(directionA.x) * Number(directionB.y) - Number(directionA.y) * Number(directionB.x);
-    if (Math.abs(denominator) <= GEOMETRY_EPSILON) return null;
-    const dx = Number(pointB.x) - Number(pointA.x);
-    const dy = Number(pointB.y) - Number(pointA.y);
-    const t = (dx * Number(directionB.y) - dy * Number(directionB.x)) / denominator;
-    return {
-        x: Number(pointA.x) + Number(directionA.x) * t,
-        y: Number(pointA.y) + Number(directionA.y) * t
-    };
-}
-
-function sideLinePerpendicularCenterHit(point, direction, center) {
-    const perpendicular = { x: -Number(direction.y), y: Number(direction.x) };
-    return lineIntersection2d(point, direction, center, perpendicular);
-}
-
 function flattenClipRing(ring, label) {
     if (!Array.isArray(ring) || ring.length < 4) {
         throw new Error(`${label} requires a closed polygon-clipping ring`);
@@ -1799,7 +1907,12 @@ export class BuildingRenderer {
         this.app = app;
         this.state = state;
         this.root = new PIXI.Container();
-        this.gridLayer = new PIXI.Graphics();
+        this.gridLayer = new PIXI.Container();
+        this.gridLayer.name = "buildingEditorGridLayer";
+        this.gridHexLayers = [];
+        this.gridAxisLayer = new PIXI.Graphics();
+        this.gridAxisLayer.name = "buildingEditorGridAxisLayer";
+        this.gridLayer.addChild(this.gridAxisLayer);
         this.gridAnchorLayer = new PIXI.Graphics();
         this.buildingUnit = new PIXI.Container();
         this.buildingUnit.name = "buildingEditorGameStyleBuildingUnit";
@@ -1816,6 +1929,7 @@ export class BuildingRenderer {
         this.roofMeshById = new Map();
         this.gableWallMeshById = new Map();
         this.wallUnitById = new Map();
+        this.columnUnitById = new Map();
         this.clippedWallMeshById = new Map();
         this.mountedObjectMeshById = new Map();
         this.mountedObjectPreviewMesh = null;
@@ -1829,6 +1943,9 @@ export class BuildingRenderer {
         this.lastWallPickEntries = [];
         this.lastSurfacePickEntries = [];
         this.lastMountedObjectPickEntries = [];
+        this.roofTextureConfigCache = null;
+        this.roofTextureConfigPromise = null;
+        this.roofTextureConfigError = "";
         this.screenPickerDebug = false;
         this.screenPickerDebugPoint = null;
         this.root.addChild(
@@ -1846,6 +1963,17 @@ export class BuildingRenderer {
             this.pickerDebugLabels
         );
         this.app.stage.addChild(this.root);
+        void this.ensureRoofTextureConfigLoaded().then(() => {
+            if (this.state && typeof this.state.setRenderError === "function") {
+                this.render();
+            }
+        }).catch((error) => {
+            console.error(error);
+            this.roofTextureConfigError = error.message;
+            if (this.state && typeof this.state.setRenderError === "function") {
+                this.state.setRenderError(error.message);
+            }
+        });
     }
 
     defaultCameraPitch() {
@@ -2092,14 +2220,15 @@ export class BuildingRenderer {
         return Number(pixels) / (zoom * GAME_XY_RATIO * cameraPitchProjectionFactors(this.state.camera).floor);
     }
 
-    visibleWorldBounds(worldZ = 0) {
+    visibleWorldBounds(worldZ = 0, screenMarginPixels = 0) {
         const width = this.app.screen.width;
         const height = this.app.screen.height;
+        const margin = Number.isFinite(Number(screenMarginPixels)) ? Math.max(0, Number(screenMarginPixels)) : 0;
         const corners = [
-            this.screenToWorld({ x: 0, y: 0 }, worldZ),
-            this.screenToWorld({ x: width, y: 0 }, worldZ),
-            this.screenToWorld({ x: width, y: height }, worldZ),
-            this.screenToWorld({ x: 0, y: height }, worldZ)
+            this.screenToWorld({ x: -margin, y: -margin }, worldZ),
+            this.screenToWorld({ x: width + margin, y: -margin }, worldZ),
+            this.screenToWorld({ x: width + margin, y: height + margin }, worldZ),
+            this.screenToWorld({ x: -margin, y: height + margin }, worldZ)
         ];
         return corners.reduce((acc, point) => ({
             minX: Math.min(acc.minX, point.x),
@@ -2109,28 +2238,70 @@ export class BuildingRenderer {
         }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
     }
 
+    clearGridHexLayers() {
+        const layers = Array.isArray(this.gridHexLayers) ? this.gridHexLayers : [];
+        layers.forEach((layer) => {
+            if (layer && typeof layer.clear === "function") layer.clear();
+            if (layer) layer.visible = false;
+        });
+        if (this.gridAxisLayer && typeof this.gridAxisLayer.clear === "function") {
+            this.gridAxisLayer.clear();
+            this.gridAxisLayer.visible = true;
+        }
+    }
+
+    gridHexLayerAt(index) {
+        if (!this.gridLayer || typeof PIXI === "undefined" || typeof PIXI.Graphics !== "function") {
+            throw new Error("building editor grid rendering requires a PIXI grid layer");
+        }
+        if (!Array.isArray(this.gridHexLayers)) this.gridHexLayers = [];
+        let layer = this.gridHexLayers[index];
+        if (!layer) {
+            layer = new PIXI.Graphics();
+            layer.name = `buildingEditorGridHexLayer:${index}`;
+            this.gridHexLayers[index] = layer;
+            if (typeof this.gridLayer.addChild === "function") {
+                this.gridLayer.addChild(layer);
+                if (this.gridAxisLayer && typeof this.gridLayer.addChild === "function") {
+                    this.gridLayer.addChild(this.gridAxisLayer);
+                }
+            }
+        }
+        layer.visible = true;
+        if (typeof layer.clear === "function") layer.clear();
+        layer.lineStyle(1, 0x263640, 0.58);
+        return layer;
+    }
+
     drawGrid() {
-        const gfx = this.gridLayer;
         const anchors = this.gridAnchorLayer;
-        gfx.clear();
+        this.clearGridHexLayers();
         anchors.clear();
         const gridZ = this.activePlaneZ();
-        const bounds = this.visibleWorldBounds(gridZ);
+        const bounds = this.visibleWorldBounds(gridZ, GRID_SCREEN_OVERSCAN_PIXELS);
         const topLeft = { x: bounds.minX, y: bounds.minY };
         const bottomRight = { x: bounds.maxX, y: bounds.maxY };
         const range = visibleHexRange(topLeft, bottomRight);
 
-        gfx.lineStyle(1, 0x263640, 0.58);
+        let gfx = null;
+        let chunkIndex = -1;
+        let chunkHexCount = GRID_HEXES_PER_GRAPHICS_CHUNK;
         for (let x = range.minX; x <= range.maxX; x++) {
             for (let y = range.minY; y <= range.maxY; y++) {
+                if (chunkHexCount >= GRID_HEXES_PER_GRAPHICS_CHUNK) {
+                    chunkIndex += 1;
+                    chunkHexCount = 0;
+                    gfx = this.gridHexLayerAt(chunkIndex);
+                }
                 const center = offsetToWorld({ x, y });
                 const corners = hexCorners(center).map((point) => this.worldToScreen(point, gridZ));
                 gfx.drawPolygon(flattenPolygon(corners));
+                chunkHexCount += 1;
             }
         }
 
         if (!this.state.showSnapAnchors) {
-            this.drawAxes(gfx, topLeft, bottomRight, gridZ);
+            this.drawAxes(this.gridAxisLayer, topLeft, bottomRight, gridZ);
             return;
         }
 
@@ -2165,7 +2336,7 @@ export class BuildingRenderer {
         }
         anchors.endFill();
 
-        this.drawAxes(gfx, topLeft, bottomRight, gridZ);
+        this.drawAxes(this.gridAxisLayer, topLeft, bottomRight, gridZ);
     }
 
     drawAxes(gfx, topLeft, bottomRight, worldZ = 0) {
@@ -2240,6 +2411,7 @@ export class BuildingRenderer {
         });
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
+            .addAttribute("aUvs", new Float32Array((positions.length / 3) * 2), 2)
             .addIndex(indices);
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
         mesh.name = name;
@@ -2294,12 +2466,118 @@ export class BuildingRenderer {
         return texture;
     }
 
+    buildRoofTextureConfigMaps(doc) {
+        if (!doc || typeof doc !== "object") {
+            throw new Error("roof texture manifest must be an object");
+        }
+        const defaults = doc.defaults && typeof doc.defaults === "object" ? doc.defaults : {};
+        const defaultRepeat = normalizeRoofTextureRepeatConfig(defaults);
+        const cfg = {
+            byPath: new Map(),
+            byFile: new Map(),
+            defaultRepeatX: defaultRepeat.repeatsPerMapUnitX,
+            defaultRepeatY: defaultRepeat.repeatsPerMapUnitY
+        };
+        const items = Array.isArray(doc.items) ? doc.items : [];
+        if (!items.length) throw new Error("roof texture manifest is empty");
+        items.forEach((item, index) => {
+            if (!item || typeof item !== "object") {
+                throw new Error(`roof texture manifest item ${index} must be an object`);
+            }
+            const texturePath = normalizeTextureConfigPath(item.texturePath);
+            if (!texturePath) throw new Error(`roof texture manifest item ${index} is missing texturePath`);
+            const fallbackRepeat = Number.isFinite(Number(item.repeatsPerMapUnit))
+                ? Math.max(0.0001, Number(item.repeatsPerMapUnit))
+                : null;
+            const repeatsPerMapUnitX = Number.isFinite(Number(item.repeatsPerMapUnitX))
+                ? Math.max(0.0001, Number(item.repeatsPerMapUnitX))
+                : (fallbackRepeat || cfg.defaultRepeatX);
+            const repeatsPerMapUnitY = Number.isFinite(Number(item.repeatsPerMapUnitY))
+                ? Math.max(0.0001, Number(item.repeatsPerMapUnitY))
+                : (fallbackRepeat || cfg.defaultRepeatY);
+            const entry = { texturePath, repeatsPerMapUnitX, repeatsPerMapUnitY };
+            cfg.byPath.set(texturePath, entry);
+            const file = typeof item.file === "string" && item.file.length > 0
+                ? item.file.toLowerCase()
+                : "";
+            if (file) cfg.byFile.set(file, entry);
+            const textureFile = (texturePath.split("/").pop() || "").toLowerCase();
+            if (textureFile) cfg.byFile.set(textureFile, entry);
+        });
+        return cfg;
+    }
+
+    ensureRoofTextureConfigLoaded() {
+        if (this.roofTextureConfigCache) return Promise.resolve(this.roofTextureConfigCache);
+        if (this.roofTextureConfigPromise) return this.roofTextureConfigPromise;
+        if (typeof fetch !== "function" || typeof window === "undefined" || !window.location) {
+            this.roofTextureConfigCache = {
+                byPath: new Map(),
+                byFile: new Map(),
+                defaultRepeatX: DEFAULT_ROOF_TEXTURE_REPEAT,
+                defaultRepeatY: DEFAULT_ROOF_TEXTURE_REPEAT
+            };
+            return Promise.resolve(this.roofTextureConfigCache);
+        }
+        this.roofTextureConfigError = "";
+        this.roofTextureConfigPromise = fetch(ROOF_TEXTURE_CONFIG_URL, { cache: "no-cache" })
+            .then((response) => {
+                if (!response || !response.ok) {
+                    throw new Error("could not load roof texture manifest");
+                }
+                return response.json();
+            })
+            .then((doc) => {
+                this.roofTextureConfigCache = this.buildRoofTextureConfigMaps(doc);
+                this.roofTextureConfigError = "";
+                return this.roofTextureConfigCache;
+            })
+            .catch((error) => {
+                this.roofTextureConfigError = error.message;
+                throw error;
+            })
+            .finally(() => {
+                this.roofTextureConfigPromise = null;
+            });
+        return this.roofTextureConfigPromise;
+    }
+
+    roofTextureRepeatConfig(texturePath) {
+        if (this.roofTextureConfigError) {
+            throw new Error(this.roofTextureConfigError);
+        }
+        if (!this.roofTextureConfigCache) {
+            void this.ensureRoofTextureConfigLoaded();
+        }
+        const normalized = normalizeTextureConfigPath(normalizeTexturePath(texturePath, "/assets/images/roofs/slate.png"));
+        const file = (normalized.split("/").pop() || "").toLowerCase();
+        const cache = this.roofTextureConfigCache || null;
+        const entry = (cache && cache.byPath && cache.byPath.get(normalized)) ||
+            (cache && cache.byFile && cache.byFile.get(file)) ||
+            null;
+        return {
+            texturePath: entry && entry.texturePath ? entry.texturePath : normalized,
+            repeatsPerMapUnitX: entry && Number.isFinite(Number(entry.repeatsPerMapUnitX))
+                ? Math.max(0.0001, Number(entry.repeatsPerMapUnitX))
+                : (cache && Number.isFinite(Number(cache.defaultRepeatX)) ? Number(cache.defaultRepeatX) : DEFAULT_ROOF_TEXTURE_REPEAT),
+            repeatsPerMapUnitY: entry && Number.isFinite(Number(entry.repeatsPerMapUnitY))
+                ? Math.max(0.0001, Number(entry.repeatsPerMapUnitY))
+                : (cache && Number.isFinite(Number(cache.defaultRepeatY)) ? Number(cache.defaultRepeatY) : DEFAULT_ROOF_TEXTURE_REPEAT)
+        };
+    }
+
     createSurfaceMesh(floor, triangulation, options = {}) {
         if (!triangulation || !triangulation.points || triangulation.points.length < 3) return null;
         const z = Number(options.z);
         if (!Number.isFinite(z)) throw new Error(`cannot create surface mesh for ${getFloorId(floor)} without finite z`);
         const texturePath = normalizeTexturePath(options.texturePath, options.textureFallback);
         const textureRepeat = Number.isFinite(Number(options.textureRepeat)) ? Number(options.textureRepeat) : FLOOR_TEXTURE_REPEAT;
+        const textureRepeatX = Number.isFinite(Number(options.textureRepeatX))
+            ? Math.max(0.0001, Number(options.textureRepeatX))
+            : textureRepeat;
+        const textureRepeatY = Number.isFinite(Number(options.textureRepeatY))
+            ? Math.max(0.0001, Number(options.textureRepeatY))
+            : textureRepeat;
         const positions = new Float32Array(triangulation.points.length * 3);
         const normals = new Float32Array(triangulation.points.length * 3);
         const uvs = new Float32Array(triangulation.points.length * 2);
@@ -2313,8 +2591,8 @@ export class BuildingRenderer {
             normals[index * 3 + 1] = Number.isFinite(Number(normal.y)) ? Number(normal.y) : 0;
             normals[index * 3 + 2] = Number.isFinite(Number(normal.z)) ? Number(normal.z) : 1;
             const hasCustomUv = Number.isFinite(Number(point.u)) && Number.isFinite(Number(point.v));
-            uvs[index * 2] = hasCustomUv ? Number(point.u) : Number(point.x) * textureRepeat;
-            uvs[index * 2 + 1] = hasCustomUv ? Number(point.v) : Number(point.y) * textureRepeat;
+            uvs[index * 2] = hasCustomUv ? Number(point.u) : Number(point.x) * textureRepeatX;
+            uvs[index * 2 + 1] = hasCustomUv ? Number(point.v) : Number(point.y) * textureRepeatY;
         });
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
@@ -2338,6 +2616,7 @@ export class BuildingRenderer {
             uLightVector: new Float32Array([0, 0, 1]),
             uLightDiffuse: SCENE_LIGHT_DIFFUSE,
             uLightClamp: new Float32Array([SCENE_LIGHT_MIN, SCENE_LIGHT_MAX]),
+            uOverheadSlopeLighting: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
             uSampler: this.getSurfaceTexture(texturePath, options.textureFallback)
@@ -2359,12 +2638,14 @@ export class BuildingRenderer {
         });
     }
 
-    createRoofMesh(floor, triangulation) {
+    createRoofMesh(floor, triangulation, textureRepeatConfig = null) {
+        const repeatConfig = normalizeRoofTextureRepeatConfig(textureRepeatConfig);
         return this.createSurfaceMesh(floor, triangulation, {
             z: roofRenderElevation(floor),
             texturePath: roofTexturePath(floor),
             textureFallback: "/assets/images/roofs/slate.png",
-            textureRepeat: ROOF_TEXTURE_REPEAT,
+            textureRepeatX: repeatConfig.repeatsPerMapUnitX,
+            textureRepeatY: repeatConfig.repeatsPerMapUnitY,
             namePrefix: "buildingEditorRoofMesh"
         });
     }
@@ -2398,6 +2679,7 @@ export class BuildingRenderer {
         const lightFactor = Number.isFinite(Number(options.lightFactor))
             ? Math.max(SCENE_LIGHT_MIN, Math.min(SCENE_LIGHT_MAX, Number(options.lightFactor)))
             : 1;
+        u.uOverheadSlopeLighting = options.overheadSlopeLighting === true ? 1 : 0;
         u.uTint[0] = lightFactor;
         u.uTint[1] = lightFactor;
         u.uTint[2] = lightFactor;
@@ -2415,7 +2697,8 @@ export class BuildingRenderer {
     updateRoofMeshUniforms(mesh, floor, alpha) {
         this.updateSurfaceMeshUniforms(mesh, floor, alpha, {
             texturePath: roofTexturePath(floor),
-            textureFallback: "/assets/images/roofs/slate.png"
+            textureFallback: "/assets/images/roofs/slate.png",
+            overheadSlopeLighting: true
         });
     }
 
@@ -2449,16 +2732,17 @@ export class BuildingRenderer {
             if (entry && entry.mesh) entry.mesh.visible = false;
             return null;
         }
-        const signature = roofMeshSignature(floor);
+        const textureRepeatConfig = this.roofTextureRepeatConfig(roofTexturePath(floor));
+        const signature = roofMeshSignature(floor, textureRepeatConfig);
         let entry = this.roofMeshById.get(floorId);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
                 if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
                 entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
             }
-            const triangulation = triangulateRoof(floor);
+            const triangulation = triangulateRoof(floor, textureRepeatConfig);
             if (!triangulation) return null;
-            const mesh = this.createRoofMesh(floor, triangulation);
+            const mesh = this.createRoofMesh(floor, triangulation, textureRepeatConfig);
             if (!mesh) return null;
             this.buildingUnit.addChild(mesh);
             entry = { signature, mesh };
@@ -2530,7 +2814,7 @@ export class BuildingRenderer {
     }
 
     triangulateRoof(floor) {
-        return triangulateRoof(floor);
+        return triangulateRoof(floor, this.roofTextureRepeatConfig(roofTexturePath(floor)));
     }
 
     triangulateGableWall(floor, gable) {
@@ -2636,174 +2920,34 @@ export class BuildingRenderer {
     wallProfileForRender(wall, wallEntries) {
         const entry = this.wallEntryForWall(wall, wallEntries);
         const unit = entry && entry.entry && entry.entry.unit;
-        if (!unit || typeof unit.getWallProfile !== "function") return null;
+        if (!unit || typeof unit.getWallProfile !== "function") return getWallResolvedGeometry(wall).profile;
         return unit.getWallProfile();
     }
 
-    wallMiterEndpointKey(wall, endpointKey, point, floor) {
-        const endpoint = wall && wall[endpointKey];
-        const floorId = getFloorId(floor);
-        if (endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex")) {
-            if (!endpoint.vertexId || !endpoint.fragmentId || !endpoint.ring) {
-                throw new Error(`wall ${wall && wall.id} ${endpointKey} vertex endpoint is missing miter metadata`);
-            }
-            return [
-                endpoint.inset === true || endpoint.kind === "insetVertex" ? "vertex-inset" : "vertex",
-                endpoint.fragmentId,
-                endpoint.ring,
-                Number.isFinite(Number(endpoint.holeIndex)) ? Number(endpoint.holeIndex) : -1,
-                endpoint.vertexId
-            ].join(":");
-        }
-        if (!finite2dPoint(point)) {
-            throw new Error(`wall ${wall && wall.id} ${endpointKey} cannot be mitered without a finite endpoint`);
-        }
-        return `point:${floorId}:${Number(point.x).toFixed(6)},${Number(point.y).toFixed(6)}`;
-    }
-
-    miterWallEntriesForFloor(wallEntries) {
-        if (!Array.isArray(wallEntries) || wallEntries.length === 0) return;
+    applyResolvedGeometryToWallUnit(unit, wall) {
         const WallSectionUnit = globalThis.WallSectionUnit;
         if (!WallSectionUnit || typeof WallSectionUnit.endpointKey !== "function") {
-            throw new Error("building editor mitered wall rendering requires WallSectionUnit.endpointKey");
+            throw new Error("building editor resolved wall rendering requires WallSectionUnit.endpointKey");
         }
-        const groups = new Map();
-        wallEntries.forEach((entry) => {
-            const unit = entry && entry.entry && entry.entry.unit;
-            const wall = entry && entry.wall;
-            const floor = entry && entry.floor;
-            if (!unit || !wall || !floor) return;
-            unit._joineryCorners = {};
-            unit._visibleNeighborMiterProfileCache = null;
-            const authoredPoints = wallPoints(this.state.building, wall);
-            if (authoredPoints.length !== 2) return;
-            [
-                {
-                    endpointKey: "startPoint",
-                    sharedEnd: "start",
-                    point: authoredPoints[0],
-                    farPoint: authoredPoints[1],
-                    runtimePoint: unit.startPoint,
-                    runtimeFarPoint: unit.endPoint
-                },
-                {
-                    endpointKey: "endPoint",
-                    sharedEnd: "end",
-                    point: authoredPoints[1],
-                    farPoint: authoredPoints[0],
-                    runtimePoint: unit.endPoint,
-                    runtimeFarPoint: unit.startPoint
-                }
-            ].forEach((endpoint) => {
-                const groupKey = this.wallMiterEndpointKey(wall, endpoint.endpointKey, endpoint.point, floor);
-                const layer = Number.isFinite(Number(wall.traversalLayer))
-                    ? Math.round(Number(wall.traversalLayer))
-                    : Math.round(getFloorElevation(floor) / 3);
-                const indexKey = `${groupKey}|layer:${layer}`;
-                if (!groups.has(indexKey)) groups.set(indexKey, []);
-                groups.get(indexKey).push({
-                    wall,
-                    unit,
-                    sharedEnd: endpoint.sharedEnd,
-                    sharedPoint: endpoint.point,
-                    farPoint: endpoint.farPoint,
-                    profileSharedPoint: endpoint.runtimePoint,
-                    profileFarPoint: endpoint.runtimeFarPoint,
-                    runtimeEndpointKey: WallSectionUnit.endpointKey(endpoint.runtimePoint)
-                });
-            });
-        });
-
-        for (const group of groups.values()) {
-            this.applyMiterGroup(group);
-        }
-
-        wallEntries.forEach((entry) => {
-            const unit = entry && entry.entry && entry.entry.unit;
-            if (unit && typeof unit.rebuildMesh3d === "function") unit.rebuildMesh3d();
-        });
-    }
-
-    applyMiterGroup(group) {
-        if (!Array.isArray(group) || group.length < 2) return;
-        const entries = group.map((item) => {
-            const sharedPoint = finite2dPoint(item.profileSharedPoint) ? item.profileSharedPoint : item.sharedPoint;
-            const farPoint = finite2dPoint(item.profileFarPoint) ? item.profileFarPoint : item.farPoint;
-            const dx = Number(farPoint.x) - Number(sharedPoint.x);
-            const dy = Number(farPoint.y) - Number(sharedPoint.y);
-            const length = Math.hypot(dx, dy);
-            if (length <= GEOMETRY_EPSILON) return null;
-            const ux = dx / length;
-            const uy = dy / length;
-            const leftN = { x: -uy, y: ux };
-            const halfT = Math.max(0.001, Number(item.wall.thickness) || 0.001) * 0.5;
-            return {
-                ...item,
-                awayDir: { x: ux, y: uy },
-                angle: Math.atan2(uy, ux),
-                leftFace: {
-                    x: Number(sharedPoint.x) + leftN.x * halfT,
-                    y: Number(sharedPoint.y) + leftN.y * halfT
-                },
-                rightFace: {
-                    x: Number(sharedPoint.x) - leftN.x * halfT,
-                    y: Number(sharedPoint.y) - leftN.y * halfT
-                },
-                leftLabel: item.sharedEnd === "start" ? "posN" : "negN",
-                rightLabel: item.sharedEnd === "start" ? "negN" : "posN"
-            };
-        }).filter(Boolean);
-        if (entries.length < 2) return;
-        const center = {
-            x: Number(entries[0].sharedPoint.x),
-            y: Number(entries[0].sharedPoint.y)
+        if (!unit) throw new Error(`wall ${wall && wall.id} cannot apply resolved geometry without a WallSectionUnit`);
+        const profile = getWallResolvedGeometry(wall).profile;
+        const startKey = WallSectionUnit.endpointKey(unit.startPoint);
+        const endKey = WallSectionUnit.endpointKey(unit.endPoint);
+        unit._joineryCorners = {};
+        unit._joineryCorners[startKey] = {
+            sharedEnd: "start",
+            center: { x: Number(unit.startPoint.x), y: Number(unit.startPoint.y) },
+            posN: { ...profile.aLeft },
+            negN: { ...profile.aRight }
         };
-        if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) {
-            throw new Error("wall miter group requires a finite center");
-        }
-        entries.sort((a, b) => {
-            const angleDelta = b.angle - a.angle;
-            if (Math.abs(angleDelta) > GEOMETRY_EPSILON) return angleDelta;
-            return (Number(a.wall.id) || 0) - (Number(b.wall.id) || 0);
-        });
-
-        const ringCorners = new Array(entries.length).fill(null);
-        for (let index = 0; index < entries.length; index++) {
-            const current = entries[index];
-            const next = entries[(index + 1) % entries.length];
-            let hit = lineIntersection2d(current.rightFace, current.awayDir, next.leftFace, next.awayDir);
-            if (!hit) {
-                const currentHit = sideLinePerpendicularCenterHit(current.rightFace, current.awayDir, center);
-                const nextHit = sideLinePerpendicularCenterHit(next.leftFace, next.awayDir, center);
-                if (currentHit && nextHit) {
-                    const separation = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
-                    if (separation <= 0.0001) {
-                        hit = {
-                            x: (currentHit.x + nextHit.x) * 0.5,
-                            y: (currentHit.y + nextHit.y) * 0.5
-                        };
-                    }
-                }
-            }
-            if (hit) ringCorners[index] = hit;
-        }
-
-        entries.forEach((entry, index) => {
-            if (!entry.runtimeEndpointKey) {
-                throw new Error(`wall ${entry.wall && entry.wall.id} miter endpoint is missing a runtime key`);
-            }
-            entry.unit._joineryCorners = entry.unit._joineryCorners || {};
-            const store = {
-                sharedEnd: entry.sharedEnd,
-                center: { x: center.x, y: center.y }
-            };
-            const rightCorner = ringCorners[index];
-            const leftCorner = ringCorners[(index - 1 + entries.length) % entries.length];
-            if (rightCorner) store[entry.rightLabel] = rightCorner;
-            if (leftCorner) store[entry.leftLabel] = leftCorner;
-            entry.unit._joineryCorners[entry.runtimeEndpointKey] = store;
-            entry.unit._visibleNeighborMiterProfileCache = null;
-        });
+        unit._joineryCorners[endKey] = {
+            sharedEnd: "end",
+            center: { x: Number(unit.endPoint.x), y: Number(unit.endPoint.y) },
+            posN: { ...profile.bLeft },
+            negN: { ...profile.bRight }
+        };
+        unit._visibleNeighborMiterProfileCache = null;
+        if (typeof unit.rebuildMesh3d === "function") unit.rebuildMesh3d();
     }
 
     completePerimeterOpenAreaPolygon(floor, wallsForFloor) {
@@ -3283,12 +3427,12 @@ export class BuildingRenderer {
     }
 
     pickWallAtScreen(screenPoint) {
-        const hit = this.pickAtScreen(screenPoint, { includeSurfaces: false });
+        const hit = this.pickAtScreen(screenPoint, { includeSurfaces: false, includeColumns: false });
         return hit && hit.type === "wall" ? hit : null;
     }
 
     pickSurfaceAtScreen(screenPoint) {
-        const hit = this.pickAtScreen(screenPoint, { includeWalls: false });
+        const hit = this.pickAtScreen(screenPoint, { includeWalls: false, includeColumns: false });
         return hit && (hit.type === "floor" || hit.type === "roof") ? hit : null;
     }
 
@@ -3297,13 +3441,15 @@ export class BuildingRenderer {
         const includeSurfaces = options.includeSurfaces !== false;
         const includeMountedObjects = options.includeMountedObjects !== false;
         const includeGables = options.includeGables !== false;
+        const includeColumns = options.includeColumns !== false;
+        const includeBeams = options.includeBeams !== false;
         const items = [];
-        const push = (key, type, payload, displayObj) => {
+        const push = (key, type, payload, displayObj, forceInclude = false) => {
             if (!displayObj) return;
             items.push({
                 item: this.editorPickItem(key, type, payload),
                 displayObj,
-                forceInclude: false
+                forceInclude: !!forceInclude
             });
         };
         if (includeSurfaces) {
@@ -3358,6 +3504,25 @@ export class BuildingRenderer {
                 );
             }
         }
+        if (includeBeams) {
+            for (const candidate of (this.lastBeamPickEntries || [])) {
+                if (candidate && candidate.beam && candidate.floor && candidate.mesh) {
+                    push(`beam:${candidate.beam.id}`, "beam",
+                        { type: "beam", beam: candidate.beam, floor: candidate.floor },
+                        candidate.mesh);
+                }
+            }
+        }
+        if (includeColumns) {
+            for (const candidate of (this.lastColumnPickEntries || [])) {
+                if (candidate && candidate.column && candidate.floor && candidate.mesh) {
+                    push(`column:${candidate.column.id}`, "column",
+                        { type: "column", column: candidate.column, floor: candidate.floor },
+                        candidate.mesh,
+                        true);
+                }
+            }
+        }
         return items;
     }
 
@@ -3404,6 +3569,14 @@ export class BuildingRenderer {
             if (!payload.floor) throw new Error(`building editor ${item.editorPickType} pick item is missing its floor`);
             return { type: item.editorPickType, floor: payload.floor };
         }
+        if (item.editorPickType === "beam") {
+            if (!payload.beam || !payload.floor) throw new Error("building editor beam pick item is missing its payload");
+            return { type: "beam", beam: payload.beam, floor: payload.floor };
+        }
+        if (item.editorPickType === "column") {
+            if (!payload.column || !payload.floor) throw new Error("building editor column pick item is missing its payload");
+            return { type: "column", column: payload.column, floor: payload.floor };
+        }
         throw new Error(`unknown building editor screen pick item type: ${item.editorPickType}`);
     }
 
@@ -3439,7 +3612,9 @@ export class BuildingRenderer {
             throw new Error("cannot create picker debug surface mesh without a valid surface entry");
         }
         const floor = entry.floor;
-        const triangulation = entry.type === "roof" ? triangulateRoof(floor) : triangulateFloor(floor);
+        const triangulation = entry.type === "roof"
+            ? triangulateRoof(floor, this.roofTextureRepeatConfig(roofTexturePath(floor)))
+            : triangulateFloor(floor);
         if (!triangulation) {
             throw new Error(`screen picker debug surface ${entry.type} ${getFloorId(floor)} requires triangulatable geometry`);
         }
@@ -3509,6 +3684,12 @@ export class BuildingRenderer {
                 : this.surfaceScreenGeometry(hit.floor, z, `${hit.type} ${floorId} hover`);
             // Flatten one polygon level below.
             rings = rings.flat();
+        } else if (hit.type === "beam") {
+            labelText = `beam ${hit.beam.id}`;
+            rings = this.beamScreenOutlineRings(hit.beam, hit.floor);
+        } else if (hit.type === "column") {
+            labelText = `column ${hit.column.id}`;
+            rings = this.columnScreenOutlineRings(hit.column);
         } else {
             throw new Error(`cannot draw hover outline for unknown pick hit type: ${hit.type}`);
         }
@@ -3639,6 +3820,7 @@ export class BuildingRenderer {
                     suppressAutoScriptingName: true
                 }
             );
+            this.applyResolvedGeometryToWallUnit(unit, wall);
             entry = { signature, unit, mesh: null };
             this.wallUnitById.set(wallId, entry);
         }
@@ -3671,6 +3853,87 @@ export class BuildingRenderer {
         if (!mesh) {
             throw new Error(`WallSectionUnit failed to create depth mesh for wall ${wall.id}`);
         }
+        if (mesh.parent !== this.buildingUnit) this.buildingUnit.addChild(mesh);
+        mesh.visible = true;
+        entry.mesh = mesh;
+        return mesh;
+    }
+
+    columnTopHeightsForRender(column, floor) {
+        const verts = columnVertices(column);
+        if (!verts || verts.length < 3) {
+            throw new Error(`column ${column.id} roof clipping requires at least three vertices`);
+        }
+        const bottomZ = Number(column.bottomZ);
+        if (!Number.isFinite(bottomZ)) throw new Error(`column ${column.id} roof clipping requires finite bottomZ`);
+        if (column && column.wallId !== undefined && column.wallId !== null && column.wallId !== "") {
+            const wall = findWall(this.state.building, column.wallId);
+            if (!wall) throw new Error(`column ${column.id} references missing wall ${column.wallId} for roof clipping`);
+            if (String(wall.fragmentId || wall.floorId) !== String(getFloorId(floor))) {
+                throw new Error(`column ${column.id} wall ${column.wallId} is not on floor ${getFloorId(floor)}`);
+            }
+            if (wallTopProfilePlane(wall)) {
+                return verts.map((point) => Math.max(0.001, wallTopHeightAt(wall, point, Number(column.height), bottomZ)));
+            }
+        }
+        const roof = getFloorRoof(floor);
+        if (!roof || String(roof.mode || "peak").trim().toLowerCase() !== "shed") return null;
+        if (!this.state || typeof this.state.roofShedTopZAt !== "function") {
+            throw new Error(`column ${column.id} shed roof clipping requires roofShedTopZAt`);
+        }
+        return verts.map((point) => Math.max(0.001, Number(this.state.roofShedTopZAt(floor, point)) - bottomZ));
+    }
+
+    ensureColumnUnit(column, floor) {
+        const ColumnUnit = globalThis.ColumnUnit;
+        if (typeof ColumnUnit !== "function") return null;
+        const pos = column.position || {};
+        const topHeights = this.columnTopHeightsForRender(column, floor);
+        const topHeightSig = Array.isArray(topHeights) ? topHeights.map((value) => Number(value).toFixed(6)).join(",") : "";
+        const sig = `${pos.x},${pos.y}|${column.sideCount}|${column.width ?? ""}|${column.depth ?? ""}|${column.size}|${column.rotation}|${column.height}|${column.bottomZ}|${column.texturePath}|${column.wallId ?? ""}|${topHeightSig}`;
+        const colId = String(column.id);
+        let entry = this.columnUnitById.get(colId);
+        if (!entry || entry.signature !== sig) {
+            if (entry && entry.unit && typeof entry.unit.remove === "function") entry.unit.remove();
+            const unit = new ColumnUnit({
+                id: Number.isInteger(Number(column.id)) ? Number(column.id) : undefined,
+                x: Number(pos.x),
+                y: Number(pos.y),
+                sideCount: column.sideCount,
+                size: column.size,
+                width: column.width,
+                depth: column.depth,
+                rotation: column.rotation,
+                height: column.height,
+                topHeights,
+                bottomZ: column.bottomZ,
+                texturePath: column.texturePath,
+                deferSetup: true
+            });
+            unit.rebuildMesh3d();
+            entry = { signature: sig, unit, mesh: null };
+            this.columnUnitById.set(colId, entry);
+        }
+        return entry;
+    }
+
+    renderColumnUnit(column, floor, alpha) {
+        const entry = this.ensureColumnUnit(column, floor);
+        if (!entry) return null;
+        const selected = this.state.isColumnSelected(column.id);
+        const mesh = entry.unit.getDepthMeshDisplayObject({
+            camera: this.gameCamera(),
+            app: this.app,
+            viewscale: Number(this.state.camera.zoom),
+            xyratio: GAME_XY_RATIO,
+            cameraPitch: cameraPitch(this.state.camera),
+            cameraRotation: Number(this.state.camera.rotation) || 0,
+            cameraRotationCenter: this.state.camera.rotationCenter || this.state.buildingCenter(),
+            tint: selected ? 0xffd27a : 0xffffff,
+            alpha,
+            brightness: selected ? 12 : 0
+        });
+        if (!mesh) return null;
         if (mesh.parent !== this.buildingUnit) this.buildingUnit.addChild(mesh);
         mesh.visible = true;
         entry.mesh = mesh;
@@ -3752,7 +4015,6 @@ export class BuildingRenderer {
         const entry = this.ensureWallUnit(wall, floor);
         if (!entry) return null;
         const wallEntries = [{ wall, floor, entry }];
-        this.miterWallEntriesForFloor(wallEntries);
         return this.renderWallUnit(wall, floor, alpha, wallEntries);
     }
 
@@ -3774,6 +4036,8 @@ export class BuildingRenderer {
         this.lastSurfacePickEntries = [];
         this.lastMountedObjectPickEntries = [];
         this.lastGablePickEntries = [];
+        this.lastBeamPickEntries = [];
+        this.lastColumnPickEntries = [];
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
         const liveFloorMeshIds = new Set();
@@ -3781,7 +4045,6 @@ export class BuildingRenderer {
         const liveGableWallIds = new Set();
         const liveWallIds = new Set();
         const wallEntries = [];
-        const wallEntriesByFloorId = new Map();
         const exterior = this.state.renderStyle() === "exterior";
         this.buildingUnit.alpha = exterior ? 0.92 : 1;
         floors.forEach((floor) => {
@@ -3830,14 +4093,8 @@ export class BuildingRenderer {
             if (!entry) return;
             const wallEntry = { wall, floor, entry };
             wallEntries.push(wallEntry);
-            const floorId = getFloorId(floor);
-            if (!wallEntriesByFloorId.has(floorId)) wallEntriesByFloorId.set(floorId, []);
-            wallEntriesByFloorId.get(floorId).push(wallEntry);
             liveWallIds.add(String(wall.id));
         });
-        for (const entries of wallEntriesByFloorId.values()) {
-            this.miterWallEntriesForFloor(entries);
-        }
         this.lastWallPickEntries = wallEntries;
         wallEntries.forEach((entry) => {
             entry.mesh = this.renderWallUnit(entry.wall, entry.floor, 1, wallEntries);
@@ -3858,6 +4115,23 @@ export class BuildingRenderer {
         for (const [wallId, entry] of this.clippedWallMeshById.entries()) {
             if (!liveWallIds.has(wallId) && entry && entry.mesh) entry.mesh.visible = false;
         }
+        const liveColumnIds = new Set();
+        floors.forEach((floor) => {
+            getFloorBeams(floor).forEach((beam) => {
+                const mesh = this.createBeamPickMesh(beam, floor);
+                if (mesh) this.lastBeamPickEntries.push({ beam, floor, mesh });
+            });
+            getFloorColumns(floor).forEach((column) => {
+                const pickMesh = this.createColumnPickMesh(column, floor);
+                this.lastColumnPickEntries.push({ column, floor, mesh: pickMesh });
+                this.renderColumnUnit(column, floor, 1);
+                liveColumnIds.add(String(column.id));
+            });
+        });
+        for (const [colId, entry] of this.columnUnitById.entries()) {
+            if (!liveColumnIds.has(colId) && entry && entry.mesh) entry.mesh.visible = false;
+        }
+        this.drawBeams();
     }
 
     drawFloorUnderlay(gfx) {
@@ -4428,6 +4702,7 @@ export class BuildingRenderer {
             uLightVector: new Float32Array([0, 0, 1]),
             uLightDiffuse: SCENE_LIGHT_DIFFUSE,
             uLightClamp: new Float32Array([SCENE_LIGHT_MIN, SCENE_LIGHT_MAX]),
+            uOverheadSlopeLighting: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
             uSampler: texture
@@ -4643,6 +4918,27 @@ export class BuildingRenderer {
             });
             return;
         }
+        if (selection.kind === "beam") {
+            const beams = typeof this.state.selectedBeams === "function" ? this.state.selectedBeams() : [this.state.selectedBeam()].filter(Boolean);
+            beams.forEach((beam) => {
+                const floor = this.state.findBeamById(beam.id);
+                if (floor) this.drawClipGeometryOutline(gfx, this.beamScreenOutlineRings(beam, floor.floor), `beam ${beam.id} selection outline`);
+            });
+            if (!beams.length) {
+                throw new Error("beam selection outline is missing selected beams");
+            }
+            return;
+        }
+        if (selection.kind === "column") {
+            const columns = this.state.selectedColumns();
+            if (!columns.length) {
+                throw new Error("column selection outline is missing selected columns");
+            }
+            columns.forEach((col) => {
+                this.drawClipGeometryOutline(gfx, this.columnScreenOutlineRings(col), `column ${col.id} selection outline`);
+            });
+            return;
+        }
         const floor = this.state.selectedFloor();
         if (!floor) {
             throw new Error(`${selection.kind} selection outline is missing a selected floor`);
@@ -4675,6 +4971,21 @@ export class BuildingRenderer {
         const elevation = getFloorElevation(floor);
         if (selectionKind === "wall" || selectionKind === "wallEndpoint") {
             this.drawSelectedWallEndpointHandles(gfx, elevation);
+            return;
+        }
+        if (selectionKind === "beam") {
+            this.drawSelectedBeamEndpointHandles(gfx);
+            return;
+        }
+        if (selectionKind === "column") {
+            const columns = this.state.selectedColumns();
+            columns.forEach((col) => {
+                const screen = this.worldToScreen(col.position, col.bottomZ);
+                gfx.beginFill(0xffd27a, 1);
+                gfx.lineStyle(2, 0x111820, 1);
+                gfx.drawCircle(screen.x, screen.y, 6);
+                gfx.endFill();
+            });
             return;
         }
         if (selectionKind !== "floor" && selectionKind !== "floorVertex") return;
@@ -4928,6 +5239,33 @@ export class BuildingRenderer {
             }
             return;
         }
+        if (draft && draft.kind === "column" && draft.position) {
+            const verts = columnVertices(draft);
+            if (verts && verts.length >= 3) {
+                const bz = Number.isFinite(draft.bottomZ) ? draft.bottomZ : this.activePlaneZ();
+                const tz = bz + (Number.isFinite(draft.height) ? draft.height : 3);
+                const n = verts.length;
+                const bScreen = verts.map((v) => this.worldToScreen(v, bz));
+                const tScreen = verts.map((v) => this.worldToScreen(v, tz));
+                gfx.lineStyle(2, 0x9fe4d5, 0.95);
+                gfx.beginFill(0x9fe4d5, 0.18);
+                gfx.moveTo(bScreen[0].x, bScreen[0].y);
+                for (let i = 1; i < n; i++) gfx.lineTo(bScreen[i].x, bScreen[i].y);
+                gfx.closePath();
+                gfx.moveTo(tScreen[0].x, tScreen[0].y);
+                for (let i = 1; i < n; i++) gfx.lineTo(tScreen[i].x, tScreen[i].y);
+                gfx.closePath();
+                for (let i = 0; i < n; i++) {
+                    const b0 = bScreen[i], b1 = bScreen[(i + 1) % n];
+                    const t0 = tScreen[i], t1 = tScreen[(i + 1) % n];
+                    gfx.moveTo(b0.x, b0.y); gfx.lineTo(b1.x, b1.y);
+                    gfx.lineTo(t1.x, t1.y); gfx.lineTo(t0.x, t0.y);
+                    gfx.closePath();
+                }
+                gfx.endFill();
+            }
+            return;
+        }
         if (!draft || !Array.isArray(draft.points) || !draft.points.length) return;
         const z = this.activePlaneZ();
         const color = draft.kind === "wall"
@@ -4952,6 +5290,206 @@ export class BuildingRenderer {
             gfx.beginFill(0x111820, 1);
             const selected = draft.kind === "polygonEdit" && Number(draft.selectedVertexIndex) === index;
             gfx.lineStyle(selected ? 3 : 2, selected ? 0xffd27a : color, 1);
+            gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
+            gfx.endFill();
+        });
+    }
+
+    // ── Beam and Column rendering ────────────────────────────────────────────
+
+    _beamBoxVertices(beam, floor) {
+        const pts = this.state.beamWorldPoints(beam);
+        if (!pts) return null;
+        const dx = pts.end.x - pts.start.x;
+        const dy = pts.end.y - pts.start.y;
+        const len = Math.hypot(dx, dy);
+        if (len < GEOMETRY_EPSILON) return null;
+        const px = -dy / len;
+        const py = dx / len;
+        const wall = beam.startAttachment && beam.startAttachment.kind === "wall"
+            ? (() => { try { return this.state.building.wallSections.find((w) => Number(w.id) === Number(beam.startAttachment.hostId)); } catch (e) { return null; } })()
+            : null;
+        const renderedThickness = wall ? wall.thickness + 0.001 : beam.thickness;
+        const hw = renderedThickness * 0.5;
+        const bz = pts.start.z;
+        const tz = bz + beam.height;
+        return [
+            { x: pts.start.x + px * hw, y: pts.start.y + py * hw, zB: bz, zT: tz },
+            { x: pts.start.x - px * hw, y: pts.start.y - py * hw, zB: bz, zT: tz },
+            { x: pts.end.x - px * hw, y: pts.end.y - py * hw, zB: bz, zT: tz },
+            { x: pts.end.x + px * hw, y: pts.end.y + py * hw, zB: bz, zT: tz }
+        ];
+    }
+
+    createBeamPickMesh(beam, floor) {
+        const verts = this._beamBoxVertices(beam, floor);
+        if (!verts) return null;
+        const pos = new Float32Array(8 * 3);
+        verts.forEach((v, i) => {
+            pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.zB;
+        });
+        verts.forEach((v, i) => {
+            pos[(i + 4) * 3] = v.x; pos[(i + 4) * 3 + 1] = v.y; pos[(i + 4) * 3 + 2] = v.zT;
+        });
+        const idx = new Uint16Array([
+            0,1,2, 0,2,3,
+            4,5,6, 4,6,7,
+            0,1,5, 0,5,4,
+            1,2,6, 1,6,5,
+            2,3,7, 2,7,6,
+            3,0,4, 3,4,7
+        ]);
+        try {
+            return this.createSolidDepthMesh(`beam:${beam.id}`, pos, idx, debugWallColor(beam.id));
+        } catch (e) {
+            return null;
+        }
+    }
+
+    createColumnPickMesh(column, floor) {
+        const verts = columnVertices(column);
+        if (!verts || verts.length < 3) {
+            throw new Error(`screen picker column ${column && column.id} requires at least three vertices`);
+        }
+        const n = verts.length;
+        const bz = Number(column.bottomZ);
+        const height = Number(column.height);
+        if (!Number.isFinite(bz) || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`screen picker column ${column && column.id} requires finite positive height and bottomZ`);
+        }
+        const topHeights = this.columnTopHeightsForRender(column, floor);
+        const pos = new Float32Array(n * 2 * 3);
+        for (let i = 0; i < n; i++) {
+            if (!Number.isFinite(Number(verts[i].x)) || !Number.isFinite(Number(verts[i].y))) {
+                throw new Error(`screen picker column ${column && column.id} has a non-finite vertex`);
+            }
+            pos[i * 3] = verts[i].x; pos[i * 3 + 1] = verts[i].y; pos[i * 3 + 2] = bz;
+            pos[(i + n) * 3] = verts[i].x;
+            pos[(i + n) * 3 + 1] = verts[i].y;
+            pos[(i + n) * 3 + 2] = bz + (topHeights ? topHeights[i] : height);
+        }
+        const triCount = (n - 2) * 2 + n * 2;
+        const idx = new Uint16Array(triCount * 3);
+        let t = 0;
+        for (let i = 1; i < n - 1; i++) { idx[t++] = 0; idx[t++] = i; idx[t++] = i + 1; }
+        for (let i = 1; i < n - 1; i++) { idx[t++] = n; idx[t++] = n + i + 1; idx[t++] = n + i; }
+        for (let i = 0; i < n; i++) {
+            const a = i, b = (i + 1) % n;
+            idx[t++] = a; idx[t++] = b; idx[t++] = n + b;
+            idx[t++] = a; idx[t++] = n + b; idx[t++] = n + a;
+        }
+        return this.createSolidDepthMesh(`column:${column.id}`, pos, idx, debugWallColor(column.id + 10000));
+    }
+
+    drawBeams() {
+        const gfx = this.wallLayer;
+        const floors = this.renderedFloors();
+        const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        getBuildingFloors(this.state.building).forEach((floor) => {
+            if (!floorIds.has(getFloorId(floor))) return;
+            getFloorBeams(floor).forEach((beam) => {
+                const verts = this._beamBoxVertices(beam, floor);
+                if (!verts) return;
+                const selected = this.state.isBeamSelected(beam.id);
+                const color = selected ? 0xffd27a : 0xd4aa70;
+                const outlineColor = selected ? 0xfff0b8 : 0x111820;
+                const bVerts = verts.map((v) => this.worldToScreen(v, v.zB));
+                const tVerts = verts.map((v) => this.worldToScreen(v, v.zT));
+                gfx.lineStyle(selected ? 2 : 1, outlineColor, selected ? 0.95 : 0.5);
+                gfx.beginFill(color, selected ? 0.72 : 0.52);
+                [[bVerts[0], bVerts[1], bVerts[2], bVerts[3]],
+                 [tVerts[0], tVerts[1], tVerts[2], tVerts[3]],
+                 [bVerts[0], bVerts[1], tVerts[1], tVerts[0]],
+                 [bVerts[1], bVerts[2], tVerts[2], tVerts[1]],
+                 [bVerts[2], bVerts[3], tVerts[3], tVerts[2]],
+                 [bVerts[3], bVerts[0], tVerts[0], tVerts[3]]
+                ].forEach((face) => {
+                    gfx.moveTo(face[0].x, face[0].y);
+                    for (let i = 1; i < face.length; i++) gfx.lineTo(face[i].x, face[i].y);
+                    gfx.closePath();
+                });
+                gfx.endFill();
+            });
+        });
+    }
+
+    drawColumns() {
+        const gfx = this.wallLayer;
+        const floors = this.renderedFloors();
+        const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        getBuildingFloors(this.state.building).forEach((floor) => {
+            if (!floorIds.has(getFloorId(floor))) return;
+            getFloorColumns(floor).forEach((column) => {
+                const verts = columnVertices(column);
+                if (!verts || verts.length < 3) return;
+                const selected = this.state.isColumnSelected(column.id);
+                const color = selected ? 0xffd27a : 0xb0a090;
+                const outlineColor = selected ? 0xfff0b8 : 0x111820;
+                const bz = column.bottomZ;
+                const tz = bz + column.height;
+                const bScreen = verts.map((v) => this.worldToScreen(v, bz));
+                const tScreen = verts.map((v) => this.worldToScreen(v, tz));
+                const n = verts.length;
+                gfx.lineStyle(selected ? 2 : 1, outlineColor, selected ? 0.95 : 0.5);
+                gfx.beginFill(color, selected ? 0.72 : 0.52);
+                gfx.moveTo(bScreen[0].x, bScreen[0].y);
+                for (let i = 1; i < n; i++) gfx.lineTo(bScreen[i].x, bScreen[i].y);
+                gfx.closePath();
+                gfx.moveTo(tScreen[0].x, tScreen[0].y);
+                for (let i = 1; i < n; i++) gfx.lineTo(tScreen[i].x, tScreen[i].y);
+                gfx.closePath();
+                for (let i = 0; i < n; i++) {
+                    const b0 = bScreen[i], b1 = bScreen[(i + 1) % n];
+                    const t0 = tScreen[i], t1 = tScreen[(i + 1) % n];
+                    gfx.moveTo(b0.x, b0.y); gfx.lineTo(b1.x, b1.y);
+                    gfx.lineTo(t1.x, t1.y); gfx.lineTo(t0.x, t0.y);
+                    gfx.closePath();
+                }
+                gfx.endFill();
+            });
+        });
+    }
+
+    beamScreenOutlineRings(beam, floor) {
+        const verts = this._beamBoxVertices(beam, floor);
+        if (!verts) return [];
+        const bz = verts[0].zB, tz = verts[0].zT;
+        const points = [
+            ...verts.map((v) => this.worldToScreen(v, bz)),
+            ...verts.slice().reverse().map((v) => this.worldToScreen(v, tz))
+        ];
+        const ring = points.map((s) => [s.x, s.y]);
+        ring.push(ring[0]);
+        return [ring];
+    }
+
+    columnScreenOutlineRings(column) {
+        const verts = columnVertices(column);
+        if (!verts || verts.length < 3) return [];
+        const bz = column.bottomZ, tz = bz + column.height;
+        const points = [
+            ...verts.map((v) => this.worldToScreen(v, bz)),
+            ...verts.slice().reverse().map((v) => this.worldToScreen(v, tz))
+        ];
+        const ring = points.map((s) => [s.x, s.y]);
+        ring.push(ring[0]);
+        return [ring];
+    }
+
+    drawSelectedBeamEndpointHandles(gfx) {
+        const beam = this.state.selectedBeam();
+        if (!beam) return;
+        const pts = this.state.beamWorldPoints(beam);
+        if (!pts) return;
+        const sel = this.state.selection;
+        [
+            { point: pts.start, key: "startAttachment" },
+            { point: pts.end, key: "endAttachment" }
+        ].forEach(({ point, key }) => {
+            const selected = sel && sel.beamEndpointKey === key;
+            const screen = this.worldToScreen(point, point.z);
+            gfx.beginFill(selected ? 0xffffff : 0xffd27a, 1);
+            gfx.lineStyle(selected ? 3 : 2, selected ? 0xffd27a : 0x111820, 1);
             gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
             gfx.endFill();
         });

@@ -170,10 +170,135 @@
         return Number.isFinite(t) ? Number(t) : null;
     }
 
+    function lineIntersection(pointA, directionA, pointB, directionB, eps = DEFAULT_EPS) {
+        const denominator = Number(directionA && directionA.x) * Number(directionB && directionB.y) -
+            Number(directionA && directionA.y) * Number(directionB && directionB.x);
+        if (Math.abs(denominator) <= eps) return null;
+        const dx = Number(pointB && pointB.x) - Number(pointA && pointA.x);
+        const dy = Number(pointB && pointB.y) - Number(pointA && pointA.y);
+        const t = (dx * Number(directionB && directionB.y) - dy * Number(directionB && directionB.x)) / denominator;
+        const u = (dx * Number(directionA && directionA.y) - dy * Number(directionA && directionA.x)) / denominator;
+        return {
+            x: Number(pointA && pointA.x) + Number(directionA && directionA.x) * t,
+            y: Number(pointA && pointA.y) + Number(directionA && directionA.y) * t,
+            t,
+            u
+        };
+    }
+
+    function sideLinePerpendicularCenterHit(point, direction, center, eps = DEFAULT_EPS) {
+        const dx = Number(direction && direction.x);
+        const dy = Number(direction && direction.y);
+        const length = Math.hypot(dx, dy);
+        if (!(length > eps)) return null;
+        const unitDirection = { x: dx / length, y: dy / length };
+        const perpendicular = { x: -unitDirection.y, y: unitDirection.x };
+        return lineIntersection(point, unitDirection, center, perpendicular, eps);
+    }
+
+    function solveEndpointJoinery(entries, options = {}) {
+        const eps = Number.isFinite(Number(options.eps)) ? Number(options.eps) : DEFAULT_EPS;
+        const prepared = (Array.isArray(entries) ? entries : [])
+            .map((entry, inputIndex) => {
+                const sharedPoint = entry && entry.sharedPoint;
+                const farPoint = entry && entry.farPoint;
+                const sx = finiteNumber(sharedPoint && sharedPoint.x);
+                const sy = finiteNumber(sharedPoint && sharedPoint.y);
+                const fx = finiteNumber(farPoint && farPoint.x);
+                const fy = finiteNumber(farPoint && farPoint.y);
+                if (sx === null || sy === null || fx === null || fy === null) return null;
+                const dx = fx - sx;
+                const dy = fy - sy;
+                const length = Math.hypot(dx, dy);
+                if (!(length > eps)) return null;
+                const ux = dx / length;
+                const uy = dy / length;
+                const leftN = { x: -uy, y: ux };
+                const halfT = Math.max(0.001, Number(entry && entry.thickness) || 0.001) * 0.5;
+                const sharedEnd = entry && entry.sharedEnd === "end" ? "end" : "start";
+                return {
+                    ...entry,
+                    inputIndex,
+                    sharedEnd,
+                    sharedPoint: { x: sx, y: sy },
+                    farPoint: { x: fx, y: fy },
+                    awayDir: { x: ux, y: uy },
+                    angle: Math.atan2(uy, ux),
+                    leftFace: {
+                        x: sx + leftN.x * halfT,
+                        y: sy + leftN.y * halfT
+                    },
+                    rightFace: {
+                        x: sx - leftN.x * halfT,
+                        y: sy - leftN.y * halfT
+                    },
+                    leftLabel: sharedEnd === "start" ? "posN" : "negN",
+                    rightLabel: sharedEnd === "start" ? "negN" : "posN"
+                };
+            })
+            .filter(Boolean);
+
+        if (prepared.length < 2) {
+            return { entries: prepared, ringCorners: [], stores: [] };
+        }
+
+        prepared.sort((a, b) => {
+            const angleDelta = b.angle - a.angle;
+            if (Math.abs(angleDelta) > eps) return angleDelta;
+            const idDelta = Number(a.wallId) - Number(b.wallId);
+            if (Number.isFinite(idDelta) && Math.abs(idDelta) > eps) return idDelta;
+            return a.inputIndex - b.inputIndex;
+        });
+
+        const centerSource = options.center || prepared[0].sharedPoint;
+        const center = { x: Number(centerSource && centerSource.x), y: Number(centerSource && centerSource.y) };
+        if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) {
+            throw new Error("wall endpoint joinery requires a finite center");
+        }
+
+        const ringCorners = new Array(prepared.length).fill(null);
+        for (let index = 0; index < prepared.length; index++) {
+            const current = prepared[index];
+            const next = prepared[(index + 1) % prepared.length];
+            let hit = lineIntersection(current.rightFace, current.awayDir, next.leftFace, next.awayDir, eps);
+            if (!hit) {
+                const currentHit = sideLinePerpendicularCenterHit(current.rightFace, current.awayDir, center, eps);
+                const nextHit = sideLinePerpendicularCenterHit(next.leftFace, next.awayDir, center, eps);
+                if (currentHit && nextHit) {
+                    const separation = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
+                    if (separation <= 0.0001) {
+                        hit = {
+                            x: (currentHit.x + nextHit.x) * 0.5,
+                            y: (currentHit.y + nextHit.y) * 0.5
+                        };
+                    }
+                }
+            }
+            if (hit) ringCorners[index] = { x: Number(hit.x), y: Number(hit.y) };
+        }
+
+        const stores = prepared.map((entry, index) => {
+            const store = {
+                sharedEnd: entry.sharedEnd,
+                center: { x: center.x, y: center.y }
+            };
+            const rightCorner = ringCorners[index];
+            const leftCorner = ringCorners[(index - 1 + prepared.length) % prepared.length];
+            if (rightCorner) store[entry.rightLabel] = rightCorner;
+            if (leftCorner) store[entry.leftLabel] = leftCorner;
+            return { entry, store };
+        });
+
+        return { entries: prepared, ringCorners, stores };
+    }
+
     const api = {
         baseProfileFromEndpoints,
+        lineIntersection,
         normalizeDirection,
         parameterForWorldPointOnSection,
+        sideLinePerpendicularCenterHit,
+        solveEndpointJoinery,
         wallPositionAtScreenPoint
     };
 

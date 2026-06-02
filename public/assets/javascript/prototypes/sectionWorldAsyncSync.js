@@ -696,6 +696,22 @@
                                             bumpProfile(profileKey, "loaded", 1, roofMs);
                                         }
                                     }
+                                } else if (!runtimeObj && entry && entry.record && entry.record.type === "beam" &&
+                                    globalScope.BeamUnit && typeof globalScope.BeamUnit.loadJson === "function") {
+                                    runtimeObj = globalScope.BeamUnit.loadJson(entry.record, map, { deferSetup: true });
+                                    if (runtimeObj) {
+                                        if (typeof runtimeObj.addToMapNodes === "function") runtimeObj.addToMapNodes();
+                                        if (typeof runtimeObj.rebuildMesh3d === "function") runtimeObj.rebuildMesh3d();
+                                        bumpProfile(profileKey, "loaded", 1, 0);
+                                    }
+                                } else if (!runtimeObj && entry && entry.record && entry.record.type === "column" &&
+                                    globalScope.ColumnUnit && typeof globalScope.ColumnUnit.loadJson === "function") {
+                                    runtimeObj = globalScope.ColumnUnit.loadJson(entry.record, map, { deferSetup: true });
+                                    if (runtimeObj) {
+                                        if (typeof runtimeObj.addToMapNodes === "function") runtimeObj.addToMapNodes();
+                                        if (typeof runtimeObj.rebuildMesh3d === "function") runtimeObj.rebuildMesh3d();
+                                        bumpProfile(profileKey, "loaded", 1, 0);
+                                    }
                                 } else if (!runtimeObj && globalScope.StaticObject && typeof globalScope.StaticObject.loadJson === "function") {
                                     const staticStart = prototypeNow();
                                     runtimeObj = globalScope.StaticObject.loadJson(entry.record, map, {

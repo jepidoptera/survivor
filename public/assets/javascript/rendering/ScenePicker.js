@@ -4,6 +4,10 @@
     const PICK_RENDER_BASE_SCALE = 0.5;
     const PICK_RENDER_DEBUG_SCALE = 1;
     const PICK_FLOOR_LAYER_DEFAULT_HEIGHT_UNITS = 3;
+    const PICK_CAMERA_DEFAULT_PITCH = Math.PI / 4;
+    const PICK_CAMERA_MIN_PITCH = Math.PI / 12;
+    const PICK_CAMERA_MAX_PITCH = Math.PI * 5 / 12;
+    const PICK_CAMERA_PITCH_BASE = Math.SQRT1_2;
     const PICK_PREVIEW_BLACK_KEY_FS = `
 precision mediump float;
 varying vec2 vTextureCoord;
@@ -50,6 +54,12 @@ void main(void) {
         );
     }
 
+    function pickerCameraPitch(camera) {
+        const pitch = Number(camera && camera.pitch);
+        if (!Number.isFinite(pitch)) return PICK_CAMERA_DEFAULT_PITCH;
+        return Math.max(PICK_CAMERA_MIN_PITCH, Math.min(PICK_CAMERA_MAX_PITCH, pitch));
+    }
+
     const PICK_WORLD_MESH_VS = `
 precision mediump float;
 attribute vec3 aWorldPosition;
@@ -59,6 +69,7 @@ uniform vec2 uCameraWorld;
 uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
+uniform float uCameraPitch;
 uniform vec2 uDepthRange;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
@@ -100,9 +111,11 @@ void main(void) {
     float camDz = (aWorldPosition.z + uLayerBaseZ) - uCameraZ;
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
+    float pitchFloor = cos(uCameraPitch) / ${PICK_CAMERA_PITCH_BASE.toFixed(16)};
+    float pitchHeight = sin(uCameraPitch) / ${PICK_CAMERA_PITCH_BASE.toFixed(16)};
     float screenX = camDx * uViewScale;
-    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
-    float depthMetric = camDy + camDz;
+    float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -124,6 +137,7 @@ uniform vec2 uCameraWorld;
 uniform float uCameraZ;
 uniform float uViewScale;
 uniform float uXyRatio;
+uniform float uCameraPitch;
 uniform vec2 uDepthRange;
 uniform vec3 uModelOrigin;
 uniform vec2 uWorldSize;
@@ -159,8 +173,11 @@ void main(void) {
     }
     float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWorld.x, uWorldSize.x, uWrapEnabled.x);
     float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWorld.y, uWorldSize.y, uWrapEnabled.y);
+    float pitchFloor = cos(uCameraPitch) / ${PICK_CAMERA_PITCH_BASE.toFixed(16)};
+    float pitchHeight = sin(uCameraPitch) / ${PICK_CAMERA_PITCH_BASE.toFixed(16)};
+    float anchorCamDz = (uModelOrigin.z + uLayerBaseZ) - uCameraZ;
     float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
-    float screenY = (anchorCamDy - ((uModelOrigin.z + uLayerBaseZ) - uCameraZ)) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
+    float screenY = (anchorCamDy * pitchFloor - anchorCamDz * pitchHeight) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
 
     float worldY = uModelOrigin.y + aDepthWorld.y;
     float worldZ = uModelOrigin.z + aDepthWorld.z + uLayerBaseZ;
@@ -174,7 +191,7 @@ void main(void) {
 
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
-    float depthMetric = camDy + camDz;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -1699,6 +1716,7 @@ void main(void) {
                     uCameraZ: 0,
                     uViewScale: 1,
                     uXyRatio: 1,
+                    uCameraPitch: PICK_CAMERA_DEFAULT_PITCH,
                     uDepthRange: new Float32Array([0, 1]),
                     uModelOrigin: new Float32Array([0, 0, 0]),
                     uWorldSize: new Float32Array([0, 0]),
@@ -1997,6 +2015,7 @@ void main(void) {
                         record.shader.uniforms.uCameraWorld[0] = Number(camera && camera.x) || 0;
                         record.shader.uniforms.uCameraWorld[1] = Number(camera && camera.y) || 0;
                         record.shader.uniforms.uCameraZ = Number(camera && camera.z) || 0;
+                        record.shader.uniforms.uCameraPitch = pickerCameraPitch(camera);
                         record.shader.uniforms.uWorldSize[0] = (mapRef && Number.isFinite(mapRef.worldWidth) && mapRef.worldWidth > 0)
                             ? Number(mapRef.worldWidth)
                             : 0;
@@ -2133,7 +2152,7 @@ void main(void) {
                     const forceInclude = !!rec.forceInclude;
                     if (item.gone || item.vanishing) continue;
                     if (!this.isRenderablePickDisplayObject(displayObj)) continue;
-                    if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) continue;
+                    if (!displayObj.parent && !forceInclude) continue;
                     if (!forceInclude && !displayObj.visible) continue;
                     const entry = {
                         item,

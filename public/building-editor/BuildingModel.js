@@ -1,3 +1,5 @@
+import "../assets/javascript/wallGeometry.js";
+
 const DEFAULTS = Object.freeze({
     floorTexture: "/assets/images/flooring/woodfloor.png",
     wallTexture: "/assets/images/walls/woodwall.png",
@@ -17,6 +19,8 @@ let stringIdCounter = 1;
 let wallIdCounter = 1;
 let mountedObjectIdCounter = 1;
 let gableIdCounter = 1;
+let beamIdCounter = 1;
+let columnIdCounter = 1;
 
 function nextStringId(prefix) {
     return `${prefix}-${stringIdCounter++}`;
@@ -32,6 +36,14 @@ function nextMountedObjectId() {
 
 function nextGableId() {
     return gableIdCounter++;
+}
+
+function nextBeamId() {
+    return beamIdCounter++;
+}
+
+function nextColumnId() {
+    return columnIdCounter++;
 }
 
 function clonePoint(point, fallbackPrefix = "vertex") {
@@ -409,6 +421,22 @@ export function getBuildingMountedObjects(building) {
     return Array.isArray(building && building.mountedWallObjects) ? building.mountedWallObjects : [];
 }
 
+export function getBuildingBeams(building) {
+    return getBuildingFloors(building).flatMap((floor) => Array.isArray(floor.beams) ? floor.beams : []);
+}
+
+export function getBuildingColumns(building) {
+    return getBuildingFloors(building).flatMap((floor) => Array.isArray(floor.columns) ? floor.columns : []);
+}
+
+export function getFloorBeams(floor) {
+    return Array.isArray(floor && floor.beams) ? floor.beams : [];
+}
+
+export function getFloorColumns(floor) {
+    return Array.isArray(floor && floor.columns) ? floor.columns : [];
+}
+
 export function createRoof({
     floorId = "",
     mode = DEFAULTS.roofMode,
@@ -639,7 +667,8 @@ export function createFloor({
         defaultWallHeight: Number(defaultWallHeight),
         defaultWallTexturePath: defaultWallTexture,
         posts: [],
-        beams: []
+        beams: [],
+        columns: []
     };
     setFloorElevation(floor, elevation);
     floor.roof.contactPolygon = clonePoints(floor.outerPolygon, "roof-contact");
@@ -710,6 +739,133 @@ export function createWall({
     }
     refreshWallEndpointCoordinatesForWall(null, wall);
     return wall;
+}
+
+export function createBeam({
+    floorId,
+    startAttachment = null,
+    endAttachment = null,
+    startOverhang = 0,
+    endOverhang = 0,
+    bottomZ = 0,
+    thickness = 0.001,
+    height = 0.2,
+    texturePath = DEFAULTS.wallTexture
+}) {
+    const resolvedFloorId = String(floorId || "");
+    if (!resolvedFloorId) throw new Error("beam requires a floor fragment id");
+    const resolvedThickness = Number(thickness);
+    if (!Number.isFinite(resolvedThickness) || resolvedThickness < 0.001) {
+        throw new Error("beam thickness must be at least 0.001");
+    }
+    const resolvedHeight = Number(height);
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) {
+        throw new Error("beam height must be a positive number");
+    }
+    const resolvedBottomZ = Number(bottomZ);
+    if (!Number.isFinite(resolvedBottomZ)) throw new Error("beam bottomZ must be finite");
+    return {
+        type: "beam",
+        id: nextBeamId(),
+        floorId: resolvedFloorId,
+        startAttachment: startAttachment ? JSON.parse(JSON.stringify(startAttachment)) : { kind: "free", x: 0, y: 0 },
+        endAttachment: endAttachment ? JSON.parse(JSON.stringify(endAttachment)) : { kind: "free", x: 0, y: 0 },
+        startOverhang: Math.max(0, Number(startOverhang) || 0),
+        endOverhang: Math.max(0, Number(endOverhang) || 0),
+        bottomZ: resolvedBottomZ,
+        thickness: resolvedThickness,
+        height: resolvedHeight,
+        texturePath: String(texturePath || DEFAULTS.wallTexture)
+    };
+}
+
+export function columnVertices(column) {
+    const cx = Number(column && column.position && column.position.x) || 0;
+    const cy = Number(column && column.position && column.position.y) || 0;
+    const n = Math.round(Number(column && column.sideCount) || 4);
+    const legacySize = Number(column && column.size) || 0.125;
+    const width = Number.isFinite(Number(column && column.width)) && Number(column.width) > 0
+        ? Number(column.width)
+        : legacySize * 2;
+    const depth = Number.isFinite(Number(column && column.depth)) && Number(column.depth) > 0
+        ? Number(column.depth)
+        : legacySize * 2;
+    const rot = Number(column && column.rotation) || 0;
+    const scale = 1 / Math.cos(Math.PI / n);
+    const vertices = [];
+    for (let i = 0; i < n; i++) {
+        const angle = Math.PI / n + (i * 2 * Math.PI) / n;
+        const localX = (width * 0.5 * scale) * Math.cos(angle);
+        const localY = (depth * 0.5 * scale) * Math.sin(angle);
+        vertices.push({
+            x: cx + localX * Math.cos(rot) - localY * Math.sin(rot),
+            y: cy + localX * Math.sin(rot) + localY * Math.cos(rot)
+        });
+    }
+    return vertices;
+}
+
+export function createColumn({
+    floorId,
+    position,
+    sideCount = 4,
+    size = 0.125,
+    width = null,
+    depth = null,
+    rotation = 0,
+    height = null,
+    heightMode = null,
+    bottomZ = 0,
+    traversalLayer = 0,
+    texturePath = DEFAULTS.wallTexture,
+    wallId = null,
+    floorDefaultWallHeight = null
+}) {
+    const resolvedFloorId = String(floorId || "");
+    if (!resolvedFloorId) throw new Error("column requires a floor fragment id");
+    if (!finitePoint(position)) throw new Error("column requires a finite position");
+    const resolvedSideCount = Math.round(Number(sideCount) || 4);
+    if (resolvedSideCount < 3 || resolvedSideCount > 12) {
+        throw new Error("column sideCount must be between 3 and 12");
+    }
+    const legacySize = Number(size);
+    const resolvedWidth = Number(width ?? (Number.isFinite(legacySize) ? legacySize * 2 : 0.25));
+    const resolvedDepth = Number(depth ?? (Number.isFinite(legacySize) ? legacySize * 2 : 0.25));
+    if (!Number.isFinite(resolvedWidth) || resolvedWidth <= 0 || resolvedWidth > 1) {
+        throw new Error("column width must be a positive number no greater than 1");
+    }
+    if (!Number.isFinite(resolvedDepth) || resolvedDepth <= 0 || resolvedDepth > 1) {
+        throw new Error("column depth must be a positive number no greater than 1");
+    }
+    const resolvedHeight = Number(height ?? floorDefaultWallHeight ?? DEFAULTS.wallHeight);
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) {
+        throw new Error("column height must be a positive number");
+    }
+    const resolvedBottomZ = Number(bottomZ);
+    if (!Number.isFinite(resolvedBottomZ)) throw new Error("column bottomZ must be finite");
+    const resolvedWallId = wallId === undefined || wallId === null || wallId === ""
+        ? null
+        : (Number.isFinite(Number(wallId)) ? Number(wallId) : String(wallId));
+    const resolvedHeightMode = String(heightMode || "").trim().toLowerCase() === "fixed"
+        ? "fixed"
+        : (resolvedWallId !== null ? "wall" : "fixed");
+    return {
+        type: "column",
+        id: nextColumnId(),
+        floorId: resolvedFloorId,
+        wallId: resolvedWallId,
+        heightMode: resolvedHeightMode,
+        position: { x: Number(position.x), y: Number(position.y) },
+        sideCount: resolvedSideCount,
+        size: resolvedWidth * 0.5,
+        width: resolvedWidth,
+        depth: resolvedDepth,
+        rotation: Number(rotation) || 0,
+        height: resolvedHeight,
+        bottomZ: resolvedBottomZ,
+        traversalLayer: Math.round(Number(traversalLayer) || 0),
+        texturePath: String(texturePath || DEFAULTS.wallTexture)
+    };
 }
 
 export function createWallMountedObject({
@@ -1265,6 +1421,7 @@ export function createPerimeterWallsForFloor(building, floor) {
         refreshWallEndpointCoordinatesForWall(building, wall);
         building.wallSections.push(wall);
     });
+    refreshWallResolvedGeometry(building, floor);
 }
 
 export function addFloor(building, floor) {
@@ -1556,6 +1713,194 @@ export function refreshWallEndpointCoordinatesForWall(building, wall) {
     return true;
 }
 
+export function wallMiterEndpointKey(wall, endpointKey, point, floor) {
+    const endpoint = wall && wall[endpointKey];
+    const floorId = getFloorId(floor);
+    if (endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex")) {
+        if (!endpoint.vertexId || !endpoint.fragmentId || !endpoint.ring) {
+            throw new Error(`wall ${wall && wall.id} ${endpointKey} vertex endpoint is missing miter metadata`);
+        }
+        return [
+            endpoint.inset === true || endpoint.kind === "insetVertex" ? "vertex-inset" : "vertex",
+            endpoint.fragmentId,
+            endpoint.ring,
+            Number.isFinite(Number(endpoint.holeIndex)) ? Number(endpoint.holeIndex) : -1,
+            endpoint.vertexId
+        ].join(":");
+    }
+    if (!finitePoint(point)) {
+        throw new Error(`wall ${wall && wall.id} ${endpointKey} cannot be mitered without a finite endpoint`);
+    }
+    return `point:${floorId}:${Number(point.x).toFixed(6)},${Number(point.y).toFixed(6)}`;
+}
+
+function cloneResolvedPoint(point) {
+    if (!finitePoint(point)) throw new Error("resolved wall geometry point must be finite");
+    return { x: Number(point.x), y: Number(point.y) };
+}
+
+function applyResolvedJoineryStore(profile, store) {
+    if (!profile || !store) return;
+    if (store.sharedEnd === "start") {
+        if (finitePoint(store.posN)) profile.aLeft = cloneResolvedPoint(store.posN);
+        if (finitePoint(store.negN)) profile.aRight = cloneResolvedPoint(store.negN);
+        return;
+    }
+    if (store.sharedEnd === "end") {
+        if (finitePoint(store.posN)) profile.bLeft = cloneResolvedPoint(store.posN);
+        if (finitePoint(store.negN)) profile.bRight = cloneResolvedPoint(store.negN);
+    }
+}
+
+function wallProfilePointAt(profile, side, t) {
+    const clampedT = Math.max(0, Math.min(1, Number(t)));
+    const start = side === "left" ? profile.aLeft : profile.aRight;
+    const end = side === "left" ? profile.bLeft : profile.bRight;
+    return {
+        x: Number(start.x) + (Number(end.x) - Number(start.x)) * clampedT,
+        y: Number(start.y) + (Number(end.y) - Number(start.y)) * clampedT
+    };
+}
+
+function resolvedWallTopStations(wall, profile) {
+    const bottomZ = Number(wall && wall.bottomZ);
+    if (!Number.isFinite(bottomZ)) throw new Error(`wall ${wall && wall.id} resolved geometry requires finite bottomZ`);
+    const topProfile = normalizeWallTopProfile(wall && wall.topProfile, wall && wall.height);
+    const stations = topProfile && Array.isArray(topProfile.stations)
+        ? topProfile.stations
+        : [
+            { t: 0, leftHeight: Number(wall.height), rightHeight: Number(wall.height) },
+            { t: 1, leftHeight: Number(wall.height), rightHeight: Number(wall.height) }
+        ];
+    return stations.map((station) => {
+        const t = Number(station.t);
+        const leftHeight = Number(station.leftHeight);
+        const rightHeight = Number(station.rightHeight);
+        if (!Number.isFinite(t) || !Number.isFinite(leftHeight) || !Number.isFinite(rightHeight)) {
+            throw new Error(`wall ${wall && wall.id} resolved geometry top stations must be finite`);
+        }
+        const left = wallProfilePointAt(profile, "left", t);
+        const right = wallProfilePointAt(profile, "right", t);
+        return {
+            t,
+            left: { x: left.x, y: left.y, z: bottomZ + leftHeight },
+            right: { x: right.x, y: right.y, z: bottomZ + rightHeight }
+        };
+    });
+}
+
+function wallResolvedGeometrySignature(wall, floor, profile, topStations) {
+    return [
+        wall && wall.id,
+        getFloorId(floor),
+        Number(wall && wall.bottomZ).toFixed(6),
+        Number(wall && wall.height).toFixed(6),
+        Number(wall && wall.thickness).toFixed(6),
+        ["aLeft", "bLeft", "bRight", "aRight"].map((key) => `${Number(profile[key].x).toFixed(6)},${Number(profile[key].y).toFixed(6)}`).join("|"),
+        topStations.map((station) => [
+            Number(station.t).toFixed(6),
+            Number(station.left.x).toFixed(6),
+            Number(station.left.y).toFixed(6),
+            Number(station.left.z).toFixed(6),
+            Number(station.right.x).toFixed(6),
+            Number(station.right.y).toFixed(6),
+            Number(station.right.z).toFixed(6)
+        ].join(",")).join("|")
+    ].join(";");
+}
+
+function setWallResolvedGeometry(wall, floor, profile) {
+    const resolvedProfile = {
+        aLeft: cloneResolvedPoint(profile.aLeft),
+        aRight: cloneResolvedPoint(profile.aRight),
+        bLeft: cloneResolvedPoint(profile.bLeft),
+        bRight: cloneResolvedPoint(profile.bRight)
+    };
+    const topStations = resolvedWallTopStations(wall, resolvedProfile);
+    wall.resolvedGeometry = {
+        version: 1,
+        profile: resolvedProfile,
+        bottomZ: Number(wall.bottomZ),
+        topStations,
+        signature: wallResolvedGeometrySignature(wall, floor, resolvedProfile, topStations)
+    };
+}
+
+export function getWallResolvedGeometry(wall) {
+    const geometry = wall && wall.resolvedGeometry;
+    const profile = geometry && geometry.profile;
+    if (!geometry || geometry.version !== 1 || !profile) {
+        throw new Error(`wall ${wall && wall.id} is missing resolved geometry`);
+    }
+    ["aLeft", "aRight", "bLeft", "bRight"].forEach((key) => {
+        if (!finitePoint(profile[key])) throw new Error(`wall ${wall && wall.id} resolved geometry is missing ${key}`);
+    });
+    if (!Array.isArray(geometry.topStations) || geometry.topStations.length < 2) {
+        throw new Error(`wall ${wall && wall.id} resolved geometry requires top stations`);
+    }
+    return geometry;
+}
+
+export function refreshWallResolvedGeometry(building, floor = null) {
+    if (!building) return;
+    const targetFloorIds = floor ? new Set([getFloorId(floor)]) : null;
+    const profilesByWall = new Map();
+    const groups = new Map();
+    getBuildingWalls(building).forEach((wall) => {
+        const wallFloorId = String(wall && (wall.fragmentId || wall.floorId) || "");
+        if (targetFloorIds && !targetFloorIds.has(wallFloorId)) return;
+        const wallFloor = floor && getFloorId(floor) === wallFloorId ? floor : findFloor(building, wallFloorId);
+        if (!wallFloor) {
+            throw new Error(`wall ${wall && wall.id} resolved geometry requires a floor fragment`);
+        }
+        const points = wallPoints(building, wall);
+        if (points.length !== 2) {
+            throw new Error(`wall ${wall && wall.id} resolved geometry requires exactly two endpoints`);
+        }
+        const wallGeometry = globalThis.WallGeometry;
+        if (!wallGeometry || typeof wallGeometry.baseProfileFromEndpoints !== "function" || typeof wallGeometry.solveEndpointJoinery !== "function") {
+            throw new Error("resolved wall geometry requires WallGeometry helpers");
+        }
+        const profile = wallGeometry.baseProfileFromEndpoints(points[0], points[1], wall.thickness);
+        if (!profile) {
+            throw new Error(`wall ${wall && wall.id} resolved geometry requires non-coincident endpoints`);
+        }
+        profilesByWall.set(wall, { floor: wallFloor, profile });
+        [
+            { endpointKey: "startPoint", sharedEnd: "start", sharedPoint: points[0], farPoint: points[1] },
+            { endpointKey: "endPoint", sharedEnd: "end", sharedPoint: points[1], farPoint: points[0] }
+        ].forEach((entry) => {
+            const groupKey = wallMiterEndpointKey(wall, entry.endpointKey, entry.sharedPoint, wallFloor);
+            const layer = Number.isFinite(Number(wall.traversalLayer))
+                ? Math.round(Number(wall.traversalLayer))
+                : Math.round(getFloorElevation(wallFloor) / 3);
+            const indexKey = `${groupKey}|layer:${layer}`;
+            if (!groups.has(indexKey)) groups.set(indexKey, []);
+            groups.get(indexKey).push({
+                wall,
+                wallId: wall.id,
+                sharedEnd: entry.sharedEnd,
+                sharedPoint: entry.sharedPoint,
+                farPoint: entry.farPoint,
+                thickness: wall.thickness
+            });
+        });
+    });
+    const wallGeometry = globalThis.WallGeometry;
+    groups.forEach((group) => {
+        if (group.length < 2) return;
+        const solved = wallGeometry.solveEndpointJoinery(group, { center: group[0].sharedPoint });
+        solved.stores.forEach(({ entry, store }) => {
+            const target = profilesByWall.get(entry.wall);
+            if (!target) return;
+            applyResolvedJoineryStore(target.profile, store);
+        });
+    });
+    profilesByWall.forEach(({ floor: wallFloor, profile }, wall) => {
+        setWallResolvedGeometry(wall, wallFloor, profile);
+    });
+}
+
 export function refreshWallSectionEndpoints(building, floor = null) {
     const fragmentId = floor ? getFloorId(floor) : "";
     getBuildingWalls(building).forEach((wall) => {
@@ -1566,6 +1911,7 @@ export function refreshWallSectionEndpoints(building, floor = null) {
             wall.traversalLayer = Math.round(Number(floor.level) || 0);
         }
     });
+    refreshWallResolvedGeometry(building, floor);
 }
 
 export function fallbackDeletedVertexEndpointsToPoint(building, fragmentId, vertexId) {
@@ -1677,6 +2023,52 @@ export function normalizeImportedBuilding(raw) {
         floor.defaultWallTexturePath = floor.defaultWallTexturePath || (floor.defaults && floor.defaults.wallTexture) || DEFAULTS.wallTexture;
         delete floor.wallInset;
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
+        if (!Array.isArray(floor.beams)) floor.beams = [];
+        if (!Array.isArray(floor.columns)) floor.columns = [];
+        floor.beams = floor.beams.map((raw) => {
+            const beam = {
+                type: "beam",
+                id: Number.isInteger(Number(raw.id)) ? Number(raw.id) : nextBeamId(),
+                floorId: floor.fragmentId,
+                startAttachment: raw.startAttachment ? JSON.parse(JSON.stringify(raw.startAttachment)) : { kind: "free", x: 0, y: 0 },
+                endAttachment: raw.endAttachment ? JSON.parse(JSON.stringify(raw.endAttachment)) : { kind: "free", x: 0, y: 0 },
+                startOverhang: Math.max(0, Number(raw.startOverhang) || 0),
+                endOverhang: Math.max(0, Number(raw.endOverhang) || 0),
+                bottomZ: Number.isFinite(Number(raw.bottomZ)) ? Number(raw.bottomZ) : 0,
+                thickness: Number(raw.thickness) >= 0.001 ? Number(raw.thickness) : 0.001,
+                height: Number(raw.height) > 0 ? Number(raw.height) : 0.2,
+                texturePath: String(raw.texturePath || DEFAULTS.wallTexture)
+            };
+            return beam;
+        });
+        floor.columns = floor.columns.map((raw) => {
+            const sc = Math.round(Number(raw.sideCount) || 4);
+            const legacySize = Number(raw.size) > 0 ? Number(raw.size) : 0.125;
+            const width = Number(raw.width) > 0 ? Math.min(1, Number(raw.width)) : legacySize * 2;
+            const depth = Number(raw.depth) > 0 ? Math.min(1, Number(raw.depth)) : legacySize * 2;
+            const column = {
+                type: "column",
+                id: Number.isInteger(Number(raw.id)) ? Number(raw.id) : nextColumnId(),
+                floorId: floor.fragmentId,
+                wallId: raw.wallId === undefined || raw.wallId === null || raw.wallId === ""
+                    ? null
+                    : (Number.isFinite(Number(raw.wallId)) ? Number(raw.wallId) : String(raw.wallId)),
+                heightMode: String(raw.heightMode || "").trim().toLowerCase() === "fixed"
+                    ? "fixed"
+                    : (raw.wallId === undefined || raw.wallId === null || raw.wallId === "" ? "fixed" : "wall"),
+                position: finitePoint(raw.position) ? { x: Number(raw.position.x), y: Number(raw.position.y) } : { x: 0, y: 0 },
+                sideCount: sc >= 3 && sc <= 12 ? sc : 4,
+                size: width * 0.5,
+                width,
+                depth,
+                rotation: Number.isFinite(Number(raw.rotation)) ? Number(raw.rotation) : 0,
+                height: Number(raw.height) > 0 ? Number(raw.height) : floor.defaultWallHeight,
+                bottomZ: Number.isFinite(Number(raw.bottomZ)) ? Number(raw.bottomZ) : getFloorElevation(floor),
+                traversalLayer: Math.round(Number(raw.traversalLayer) || 0),
+                texturePath: String(raw.texturePath || DEFAULTS.wallTexture)
+            };
+            return column;
+        });
     });
     building.wallSections.forEach((wall) => {
         wall.topProfile = normalizeWallTopProfile(wall.topProfile, wall.height);
@@ -1696,7 +2088,7 @@ export function normalizeImportedBuilding(raw) {
                 const endpoint = wall[endpointKey];
                 if (endpoint && (endpoint.kind === "vertex" || endpoint.kind === "insetVertex")) {
                     endpoint.kind = "vertex";
-                    endpoint.inset = true;
+                    endpoint.inset = endpoint.inset === false ? false : true;
                 }
             });
         }
@@ -1811,6 +2203,12 @@ function bumpIdCountersFromBuilding(building) {
     getBuildingFloors(building).forEach((floor) => {
         getRoofGables(floor).forEach((gable) => {
             if (Number.isInteger(Number(gable.id))) gableIdCounter = Math.max(gableIdCounter, Number(gable.id) + 1);
+        });
+        getFloorBeams(floor).forEach((beam) => {
+            if (Number.isInteger(Number(beam.id))) beamIdCounter = Math.max(beamIdCounter, Number(beam.id) + 1);
+        });
+        getFloorColumns(floor).forEach((column) => {
+            if (Number.isInteger(Number(column.id))) columnIdCounter = Math.max(columnIdCounter, Number(column.id) + 1);
         });
     });
 }

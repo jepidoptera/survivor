@@ -5,6 +5,8 @@ import {
     getBuildingMountedObjects,
     getBuildingFloors,
     getBuildingWalls,
+    getFloorBeams,
+    getFloorColumns,
     getFloorElevation,
     getFloorId,
     getFloorRoof,
@@ -19,6 +21,10 @@ import {
 
 function pointIsFinite(point) {
     return Number.isFinite(Number(point && point.x)) && Number.isFinite(Number(point && point.y));
+}
+
+function point3dIsFinite(point) {
+    return pointIsFinite(point) && Number.isFinite(Number(point && point.z));
 }
 
 function ringCumulativeLengths(ring) {
@@ -198,6 +204,9 @@ function validateEndpoint(errors, building, wall, key) {
         if (!pointIsFinite(endpoint)) {
             errors.push(`${endpointLabel(wall, key)} edge endpoint must have current finite x/y`);
         }
+        if (endpoint.boundaryPoint === true) {
+            return;
+        }
         if (!wall.attachment || wall.attachment.kind !== "lineBoundaryClip") {
             errors.push(`${endpointLabel(wall, key)} edge endpoint requires lineBoundaryClip attachment`);
         } else {
@@ -214,6 +223,45 @@ function validateEndpoint(errors, building, wall, key) {
     }
     if (!pointIsFinite(resolveEndpoint(building, endpoint, wall) || endpoint)) {
         errors.push(`${endpointLabel(wall, key)} must resolve to finite x/y`);
+    }
+}
+
+function validateResolvedWallGeometry(errors, wall) {
+    const label = `wall ${wall.id || "(missing id)"} resolvedGeometry`;
+    const geometry = wall.resolvedGeometry;
+    if (!geometry || typeof geometry !== "object") {
+        errors.push(`${label} is missing`);
+        return;
+    }
+    if (geometry.version !== 1) errors.push(`${label} version must be 1`);
+    const profile = geometry.profile;
+    if (!profile || typeof profile !== "object") {
+        errors.push(`${label} profile is missing`);
+    } else {
+        ["aLeft", "aRight", "bLeft", "bRight"].forEach((key) => {
+            if (!pointIsFinite(profile[key])) errors.push(`${label} profile ${key} must have finite x/y`);
+        });
+    }
+    if (!Number.isFinite(Number(geometry.bottomZ))) {
+        errors.push(`${label} bottomZ must be finite`);
+    }
+    const topStations = Array.isArray(geometry.topStations) ? geometry.topStations : [];
+    if (topStations.length < 2) {
+        errors.push(`${label} requires at least two top stations`);
+    }
+    topStations.forEach((station, stationIndex) => {
+        if (!Number.isFinite(Number(station && station.t)) || Number(station.t) < 0 || Number(station.t) > 1) {
+            errors.push(`${label} top station ${stationIndex} t must be between zero and one`);
+        }
+        if (!point3dIsFinite(station && station.left)) {
+            errors.push(`${label} top station ${stationIndex} left must have finite x/y/z`);
+        }
+        if (!point3dIsFinite(station && station.right)) {
+            errors.push(`${label} top station ${stationIndex} right must have finite x/y/z`);
+        }
+    });
+    if (typeof geometry.signature !== "string" || geometry.signature.length === 0) {
+        errors.push(`${label} signature must be a non-empty string`);
     }
 }
 
@@ -283,6 +331,7 @@ export function validateBuilding(building) {
         if (!Number.isFinite(Number(wall.bottomZ))) {
             errors.push(`wall ${wall.id || "(missing id)"} bottomZ must be finite`);
         }
+        validateResolvedWallGeometry(errors, wall);
         if (wall.topProfile !== null && wall.topProfile !== undefined) {
             if (!wall.topProfile || typeof wall.topProfile !== "object") {
                 errors.push(`wall ${wall.id || "(missing id)"} topProfile must be an object`);
@@ -361,5 +410,68 @@ export function validateBuilding(building) {
             errors.push(`mounted wall object ${object.id || "(missing id)"} zOffset must be finite`);
         }
     });
+
+    const beamIds = new Set();
+    getBuildingFloors(building).forEach((floor) => {
+        const floorId = getFloorId(floor);
+        getFloorBeams(floor).forEach((beam) => {
+            const label = `beam ${beam.id ?? "(missing id)"} on floor ${floorId}`;
+            if (beam.id === undefined || beam.id === null || beam.id === "") errors.push(`${label} is missing id`);
+            if (beamIds.has(String(beam.id))) errors.push(`duplicate beam id: ${beam.id}`);
+            beamIds.add(String(beam.id));
+            if (beam.type !== "beam") errors.push(`${label} type must be beam`);
+            if (Number(beam.thickness) < 0.001) errors.push(`${label} thickness must be at least 0.001`);
+            if (!Number.isFinite(Number(beam.height)) || Number(beam.height) <= 0) {
+                errors.push(`${label} height must be a positive number`);
+            }
+            if (!Number.isFinite(Number(beam.bottomZ))) errors.push(`${label} bottomZ must be finite`);
+            ["startAttachment", "endAttachment"].forEach((key) => {
+                const att = beam[key];
+                if (!att || typeof att !== "object") {
+                    errors.push(`${label} ${key} must be an object`);
+                } else if (!["wall", "column", "free"].includes(att.kind)) {
+                    errors.push(`${label} ${key} kind must be wall, column, or free`);
+                }
+            });
+        });
+    });
+
+    const columnIds = new Set();
+    getBuildingFloors(building).forEach((floor) => {
+        const floorId = getFloorId(floor);
+        getFloorColumns(floor).forEach((column) => {
+            const label = `column ${column.id ?? "(missing id)"} on floor ${floorId}`;
+            if (column.id === undefined || column.id === null || column.id === "") errors.push(`${label} is missing id`);
+            if (columnIds.has(String(column.id))) errors.push(`duplicate column id: ${column.id}`);
+            columnIds.add(String(column.id));
+            if (column.type !== "column") errors.push(`${label} type must be column`);
+            if (!Number.isInteger(Number(column.sideCount)) || Number(column.sideCount) < 3 || Number(column.sideCount) > 12) {
+                errors.push(`${label} sideCount must be an integer between 3 and 12`);
+            }
+            if (!Number.isFinite(Number(column.size)) || Number(column.size) <= 0) {
+                errors.push(`${label} size (apothem) must be a positive number`);
+            }
+            if (!Number.isFinite(Number(column.width)) || Number(column.width) <= 0 || Number(column.width) > 1) {
+                errors.push(`${label} width must be a positive number no greater than 1`);
+            }
+            if (!Number.isFinite(Number(column.depth)) || Number(column.depth) <= 0 || Number(column.depth) > 1) {
+                errors.push(`${label} depth must be a positive number no greater than 1`);
+            }
+            if (!Number.isFinite(Number(column.height)) || Number(column.height) <= 0) {
+                errors.push(`${label} height must be a positive number`);
+            }
+            if (!Number.isFinite(Number(column.bottomZ))) errors.push(`${label} bottomZ must be finite`);
+            if (!pointIsFinite(column.position)) errors.push(`${label} position must have finite x and y`);
+            if (column.wallId !== undefined && column.wallId !== null && column.wallId !== "") {
+                const wall = getBuildingWalls(building).find((candidate) => String(candidate.id) === String(column.wallId));
+                if (!wall) {
+                    errors.push(`${label} references missing wall ${column.wallId}`);
+                } else if (String(wall.fragmentId || wall.floorId) !== String(floorId)) {
+                    errors.push(`${label} wallId must reference a wall on the same floor`);
+                }
+            }
+        });
+    });
+
     return errors;
 }

@@ -1584,19 +1584,6 @@ void main(void) {
             return false;
         }
 
-        // Fallback for parallel/collinear side lines: intersect a wall side line
-        // with the line perpendicular to that side direction through the joint
-        // center. This keeps the corner ON the wall face plane.
-        static _sideLinePerpendicularCenterHit(origin, dir, centerPoint) {
-            if (!origin || !dir || !centerPoint) return null;
-            if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y)) return null;
-            const dlen = Math.hypot(dir.x, dir.y);
-            if (!(dlen > EPS)) return null;
-            const unitDir = { x: dir.x / dlen, y: dir.y / dlen };
-            const perp = { x: -unitDir.y, y: unitDir.x };
-            return WallSectionUnit._lineIntersection(origin, unitDir, centerPoint, perp);
-        }
-
         static _chooseMidpointBridgeNode(mapRef, midpoint, towardEntity = null) {
             if (!WallSectionUnit._isNodeMidpoint(midpoint)) return null;
 
@@ -3882,7 +3869,11 @@ void main(void) {
                 const halfT = Math.max(0.001, Number(wall.thickness) || 0.001) * 0.5;
                 entries.push({
                     wall,
+                    wallId: wall.id,
                     sharedEnd,
+                    sharedPoint,
+                    farPoint,
+                    thickness: wall.thickness,
                     awayDir: { x: ux, y: uy },
                     angle: Math.atan2(uy, ux),
                     leftFace: {
@@ -3906,43 +3897,12 @@ void main(void) {
             });
             const selfIdx = entries.findIndex(entry => entry && entry.wall === this);
             if (selfIdx < 0) return null;
-
-            const ringCorners = new Array(entries.length).fill(null);
-            for (let i = 0; i < entries.length; i++) {
-                const current = entries[i];
-                const next = entries[(i + 1) % entries.length];
-                let hit = WallSectionUnit._lineIntersection(
-                    current.rightFace,
-                    current.awayDir,
-                    next.leftFace,
-                    next.awayDir
-                );
-                if (!hit) {
-                    const currentHit = WallSectionUnit._sideLinePerpendicularCenterHit(current.rightFace, current.awayDir, center);
-                    const nextHit = WallSectionUnit._sideLinePerpendicularCenterHit(next.leftFace, next.awayDir, center);
-                    if (currentHit && nextHit) {
-                        const sep = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
-                        if (sep <= 1e-4) {
-                            hit = {
-                                x: (currentHit.x + nextHit.x) * 0.5,
-                                y: (currentHit.y + nextHit.y) * 0.5
-                            };
-                        }
-                    }
-                }
-                if (hit) ringCorners[i] = { x: hit.x, y: hit.y };
+            if (!globalScope.WallGeometry || typeof globalScope.WallGeometry.solveEndpointJoinery !== "function") {
+                throw new Error("wall joinery requires WallGeometry.solveEndpointJoinery");
             }
-
-            const selfEntry = entries[selfIdx];
-            const rightCorner = ringCorners[selfIdx];
-            const leftCorner = ringCorners[(selfIdx - 1 + entries.length) % entries.length];
-            const out = {
-                sharedEnd: selfEntry.sharedEnd,
-                center: { x: center.x, y: center.y }
-            };
-            if (rightCorner) out[selfEntry.rightLabel] = rightCorner;
-            if (leftCorner) out[selfEntry.leftLabel] = leftCorner;
-            return out;
+            const solved = globalScope.WallGeometry.solveEndpointJoinery(entries, { center, eps: EPS });
+            const self = solved.stores.find(({ entry }) => entry && entry.wall === this);
+            return self ? self.store : null;
         }
 
         getWallProfileWithVisibleNeighborMiter(visibleWallIdSet) {
@@ -5508,7 +5468,11 @@ void main(void) {
 
                     entries.push({
                         wall,
+                        wallId: wall.id,
                         sharedEnd,
+                        sharedPoint,
+                        farPoint,
+                        thickness: wall.thickness,
                         awayDir,
                         angle: Math.atan2(awayDir.y, awayDir.x),
                         leftFace:  { x: sharedPoint.x + leftN.x * halfT, y: sharedPoint.y + leftN.y * halfT },
@@ -5550,55 +5514,14 @@ void main(void) {
                     }
                 }
 
-                // Sort clockwise
-                entries.sort((a, b) => {
-                    const d = b.angle - a.angle;
-                    if (Math.abs(d) > EPS) return d;
-                    return (a.wall.id || 0) - (b.wall.id || 0);
-                });
-
-                // Reset + center corners
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
+                if (!globalScope.WallGeometry || typeof globalScope.WallGeometry.solveEndpointJoinery !== "function") {
+                    throw new Error("wall joinery requires WallGeometry.solveEndpointJoinery");
+                }
+                const solved = globalScope.WallGeometry.solveEndpointJoinery(entries, { center, eps: EPS });
+                for (let i = 0; i < solved.stores.length; i++) {
+                    const { entry, store } = solved.stores[i];
                     entry.wall._joineryCorners = entry.wall._joineryCorners || {};
-                    entry.wall._joineryCorners[endpointKey] = {
-                        sharedEnd: entry.sharedEnd,
-                        center: { x: center.x, y: center.y }
-                    };
-                }
-
-                // Compute ring corners
-                const ringCorners = new Array(entries.length).fill(null);
-                for (let i = 0; i < entries.length; i++) {
-                    const current = entries[i];
-                    const next = entries[(i + 1) % entries.length];
-                    let hit = WallSectionUnit._lineIntersection(
-                        current.rightFace, current.awayDir,
-                        next.leftFace, next.awayDir
-                    );
-                    if (!hit) {
-                        const currentHit = WallSectionUnit._sideLinePerpendicularCenterHit(
-                            current.rightFace, current.awayDir, center);
-                        const nextHit = WallSectionUnit._sideLinePerpendicularCenterHit(
-                            next.leftFace, next.awayDir, center);
-                        if (currentHit && nextHit) {
-                            const sep = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
-                            if (sep <= 1e-4) {
-                                hit = { x: (currentHit.x + nextHit.x) * 0.5, y: (currentHit.y + nextHit.y) * 0.5 };
-                            }
-                        }
-                    }
-                    if (hit) ringCorners[i] = { x: hit.x, y: hit.y };
-                }
-
-                // Assign corners
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
-                    const rightCorner = ringCorners[i];
-                    const leftCorner  = ringCorners[(i - 1 + entries.length) % entries.length];
-                    const store = entry.wall._joineryCorners[endpointKey];
-                    if (rightCorner) store[entry.rightLabel] = rightCorner;
-                    if (leftCorner)  store[entry.leftLabel]  = leftCorner;
+                    entry.wall._joineryCorners[endpointKey] = store;
                 }
 
                 // Commit geometry
@@ -5682,7 +5605,11 @@ void main(void) {
 
                     entries.push({
                         wall,
+                        wallId: wall.id,
                         sharedEnd,
+                        sharedPoint,
+                        farPoint,
+                        thickness: wall.thickness,
                         awayDir,
                         angle: Math.atan2(awayDir.y, awayDir.x),
                         // Local center-out faces.
@@ -5736,78 +5663,14 @@ void main(void) {
                     }
                 }
 
-                // Sort clockwise by radial angle (descending atan2 angle).
-                entries.sort((a, b) => {
-                    const d = b.angle - a.angle;
-                    if (Math.abs(d) > EPS) return d;
-                    return (a.wall.id || 0) - (b.wall.id || 0);
-                });
-
-                // Reset endpoint corner state and place center corner for each wall.
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
+                if (!globalScope.WallGeometry || typeof globalScope.WallGeometry.solveEndpointJoinery !== "function") {
+                    throw new Error("wall joinery requires WallGeometry.solveEndpointJoinery");
+                }
+                const solved = globalScope.WallGeometry.solveEndpointJoinery(entries, { center, eps: EPS });
+                for (let i = 0; i < solved.stores.length; i++) {
+                    const { entry, store } = solved.stores[i];
                     entry.wall._joineryCorners = entry.wall._joineryCorners || {};
-                    entry.wall._joineryCorners[endpointKey] = {
-                        sharedEnd: entry.sharedEnd,
-                        center: { x: center.x, y: center.y }
-                    };
-                }
-
-                // For each adjacent pair in clockwise order:
-                // current right face intersects next left face.
-                const ringCorners = new Array(entries.length).fill(null);
-                for (let i = 0; i < entries.length; i++) {
-                    const current = entries[i];
-                    const next = entries[(i + 1) % entries.length];
-
-                    let hit = WallSectionUnit._lineIntersection(
-                        current.rightFace,
-                        current.awayDir,
-                        next.leftFace,
-                        next.awayDir
-                    );
-
-                    if (!hit) {
-                        // Special-case fallback for parallel face rays: use each
-                        // face ray's hit against a perpendicular-through-center line.
-                        const currentHit = WallSectionUnit._sideLinePerpendicularCenterHit(
-                            current.rightFace,
-                            current.awayDir,
-                            center
-                        );
-                        const nextHit = WallSectionUnit._sideLinePerpendicularCenterHit(
-                            next.leftFace,
-                            next.awayDir,
-                            center
-                        );
-
-                        if (currentHit && nextHit) {
-                            const sep = Math.hypot(currentHit.x - nextHit.x, currentHit.y - nextHit.y);
-                            if (sep <= 1e-4) {
-                                hit = {
-                                    x: (currentHit.x + nextHit.x) * 0.5,
-                                    y: (currentHit.y + nextHit.y) * 0.5
-                                };
-                            }
-                        }
-                    }
-
-                    if (hit) {
-                        ringCorners[i] = { x: hit.x, y: hit.y };
-                    }
-                }
-
-                // Assign corners:
-                // - right corner of wall i is corner between i and i+1
-                // - left corner of wall i is corner between i-1 and i
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
-                    const rightCorner = ringCorners[i];
-                    const leftCorner = ringCorners[(i - 1 + entries.length) % entries.length];
-                    const store = entry.wall._joineryCorners[endpointKey];
-
-                    if (rightCorner) store[entry.rightLabel] = rightCorner;
-                    if (leftCorner) store[entry.leftLabel] = leftCorner;
+                    entry.wall._joineryCorners[endpointKey] = store;
                 }
 
                 // Commit solve to geometry.
@@ -8358,6 +8221,8 @@ void main(void) {
     // Eager pre-load avoids first-interaction stalls when async config resolves.
     WallSectionUnit._ensureWallTextureConfigLoaded();
 
+    WallSectionUnit._DEPTH_VS = WALL_DEPTH_VS;
+    WallSectionUnit._DEPTH_FS = WALL_DEPTH_FS;
     globalScope.WallSectionUnit = WallSectionUnit;
     globalScope.setWallSectionDirectionalBlockingDebug = function (enabled) {
         WallSectionUnit.setShowDirectionalBlockingDebug(enabled);

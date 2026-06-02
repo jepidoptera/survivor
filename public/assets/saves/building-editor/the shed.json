@@ -53,11 +53,11 @@
         "type": "roof",
         "id": "roof-14",
         "floorId": "floor-fragment-9",
-        "mode": "shed",
-        "texturePath": "/assets/images/roofs/slate.png",
-        "overhang": 0.5,
-        "peakHeight": 2,
-        "domeLevels": 4,
+        "mode": "dome",
+        "texturePath": "/assets/images/roofs/thatch.png",
+        "overhang": 1,
+        "peakHeight": 6,
+        "domeLevels": 10,
         "peakPoint": {
           "x": -0.8660000000000001,
           "y": -0.4999999999999999
@@ -95,7 +95,189 @@
       "defaultWallHeight": 3,
       "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
       "posts": [],
-      "beams": []
+      "beams": [],
+      "columns": [
+        {
+          "type": "column",
+          "id": 1,
+          "floorId": "floor-fragment-9",
+          "wallId": 8,
+          "heightMode": "wall",
+          "position": {
+            "x": 3.339,
+            "y": -5.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 0,
+          "height": 5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 2,
+          "floorId": "floor-fragment-9",
+          "wallId": 5,
+          "heightMode": "wall",
+          "position": {
+            "x": -5.071,
+            "y": -5.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 1.5707963267948966,
+          "height": 5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 3,
+          "floorId": "floor-fragment-9",
+          "wallId": 7,
+          "heightMode": "wall",
+          "position": {
+            "x": 3.3390000000000004,
+            "y": 4.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 0,
+          "height": 5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 4,
+          "floorId": "floor-fragment-9",
+          "wallId": 6,
+          "heightMode": "fixed",
+          "position": {
+            "x": -0.8825787340932347,
+            "y": 4.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 0,
+          "height": 1.5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 6,
+          "floorId": "floor-fragment-9",
+          "wallId": 5,
+          "heightMode": "fixed",
+          "position": {
+            "x": -5.071,
+            "y": 1.2710711950272646
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 1.5707963267948966,
+          "height": 1.5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 7,
+          "floorId": "floor-fragment-9",
+          "wallId": 5,
+          "heightMode": "wall",
+          "position": {
+            "x": -5.071,
+            "y": -1.8280401303745761
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 1.5707963267948966,
+          "height": 5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 8,
+          "floorId": "floor-fragment-9",
+          "wallId": 7,
+          "heightMode": "fixed",
+          "position": {
+            "x": 3.3390000000000004,
+            "y": -0.38452634875472835
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": -1.5707963267948968,
+          "height": 1.5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 9,
+          "floorId": "floor-fragment-9",
+          "wallId": 8,
+          "heightMode": "fixed",
+          "position": {
+            "x": -0.6763440793861171,
+            "y": -5.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 3.141592653589793,
+          "height": 1.5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        },
+        {
+          "type": "column",
+          "id": 10,
+          "floorId": "floor-fragment-9",
+          "wallId": 6,
+          "heightMode": "wall",
+          "position": {
+            "x": -5.071,
+            "y": 4.375
+          },
+          "sideCount": 4,
+          "size": 0.375,
+          "width": 0.75,
+          "depth": 0.75,
+          "rotation": 0,
+          "height": 5,
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/stonewall.png"
+        }
+      ]
     }
   ],
   "wallSections": [
@@ -128,7 +310,7 @@
       "thickness": 0.25,
       "bottomZ": 0,
       "traversalLayer": 0,
-      "wallTexturePath": "/assets/images/walls/woodwall.png",
+      "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
         "kind": "fragmentEdge",
@@ -137,7 +319,59 @@
         "startVertexId": "vertex-10",
         "endVertexId": "vertex-11"
       },
-      "openings": []
+      "openings": [],
+      "topProfile": null,
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.196,
+            "y": -5.5
+          },
+          "aRight": {
+            "x": -4.946,
+            "y": -5.25
+          },
+          "bLeft": {
+            "x": -5.196,
+            "y": 4.5
+          },
+          "bRight": {
+            "x": -4.946,
+            "y": 4.25
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.196,
+              "y": -5.5,
+              "z": 5
+            },
+            "right": {
+              "x": -4.946,
+              "y": -5.25,
+              "z": 5
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.196,
+              "y": 4.5,
+              "z": 5
+            },
+            "right": {
+              "x": -4.946,
+              "y": 4.25,
+              "z": 5
+            }
+          }
+        ],
+        "signature": "5;floor-fragment-9;0.000000;5.000000;0.250000;-5.196000,-5.500000|-5.196000,4.500000|-4.946000,4.250000|-4.946000,-5.250000;0.000000,-5.196000,-5.500000,5.000000,-4.946000,-5.250000,5.000000|1.000000,-5.196000,4.500000,5.000000,-4.946000,4.250000,5.000000"
+      }
     },
     {
       "type": "wallSection",
@@ -168,7 +402,7 @@
       "thickness": 0.25,
       "bottomZ": 0,
       "traversalLayer": 0,
-      "wallTexturePath": "/assets/images/walls/woodwall.png",
+      "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
         "kind": "fragmentEdge",
@@ -177,7 +411,59 @@
         "startVertexId": "vertex-11",
         "endVertexId": "vertex-12"
       },
-      "openings": []
+      "openings": [],
+      "topProfile": null,
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.196,
+            "y": 4.5
+          },
+          "aRight": {
+            "x": -4.946,
+            "y": 4.25
+          },
+          "bLeft": {
+            "x": 3.4640000000000004,
+            "y": 4.5
+          },
+          "bRight": {
+            "x": 3.2140000000000004,
+            "y": 4.25
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.196,
+              "y": 4.5,
+              "z": 5
+            },
+            "right": {
+              "x": -4.946,
+              "y": 4.25,
+              "z": 5
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 3.4640000000000004,
+              "y": 4.5,
+              "z": 5
+            },
+            "right": {
+              "x": 3.2140000000000004,
+              "y": 4.25,
+              "z": 5
+            }
+          }
+        ],
+        "signature": "6;floor-fragment-9;0.000000;5.000000;0.250000;-5.196000,4.500000|3.464000,4.500000|3.214000,4.250000|-4.946000,4.250000;0.000000,-5.196000,4.500000,5.000000,-4.946000,4.250000,5.000000|1.000000,3.464000,4.500000,5.000000,3.214000,4.250000,5.000000"
+      }
     },
     {
       "type": "wallSection",
@@ -208,7 +494,7 @@
       "thickness": 0.25,
       "bottomZ": 0,
       "traversalLayer": 0,
-      "wallTexturePath": "/assets/images/walls/woodwall.png",
+      "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
         "kind": "fragmentEdge",
@@ -217,7 +503,59 @@
         "startVertexId": "vertex-12",
         "endVertexId": "vertex-13"
       },
-      "openings": []
+      "openings": [],
+      "topProfile": null,
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 3.4640000000000004,
+            "y": 4.5
+          },
+          "aRight": {
+            "x": 3.2140000000000004,
+            "y": 4.25
+          },
+          "bLeft": {
+            "x": 3.464,
+            "y": -5.5
+          },
+          "bRight": {
+            "x": 3.214,
+            "y": -5.25
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 3.4640000000000004,
+              "y": 4.5,
+              "z": 5
+            },
+            "right": {
+              "x": 3.2140000000000004,
+              "y": 4.25,
+              "z": 5
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 3.464,
+              "y": -5.5,
+              "z": 5
+            },
+            "right": {
+              "x": 3.214,
+              "y": -5.25,
+              "z": 5
+            }
+          }
+        ],
+        "signature": "7;floor-fragment-9;0.000000;5.000000;0.250000;3.464000,4.500000|3.464000,-5.500000|3.214000,-5.250000|3.214000,4.250000;0.000000,3.464000,4.500000,5.000000,3.214000,4.250000,5.000000|1.000000,3.464000,-5.500000,5.000000,3.214000,-5.250000,5.000000"
+      }
     },
     {
       "type": "wallSection",
@@ -248,7 +586,7 @@
       "thickness": 0.25,
       "bottomZ": 0,
       "traversalLayer": 0,
-      "wallTexturePath": "/assets/images/walls/woodwall.png",
+      "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
         "kind": "fragmentEdge",
@@ -257,7 +595,405 @@
         "startVertexId": "vertex-13",
         "endVertexId": "vertex-10"
       },
-      "openings": []
+      "openings": [],
+      "topProfile": null,
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 3.464,
+            "y": -5.5
+          },
+          "aRight": {
+            "x": 3.214,
+            "y": -5.25
+          },
+          "bLeft": {
+            "x": -5.196,
+            "y": -5.5
+          },
+          "bRight": {
+            "x": -4.946,
+            "y": -5.25
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 3.464,
+              "y": -5.5,
+              "z": 5
+            },
+            "right": {
+              "x": 3.214,
+              "y": -5.25,
+              "z": 5
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.196,
+              "y": -5.5,
+              "z": 5
+            },
+            "right": {
+              "x": -4.946,
+              "y": -5.25,
+              "z": 5
+            }
+          }
+        ],
+        "signature": "8;floor-fragment-9;0.000000;5.000000;0.250000;3.464000,-5.500000|-5.196000,-5.500000|-4.946000,-5.250000|3.214000,-5.250000;0.000000,3.464000,-5.500000,5.000000,3.214000,-5.250000,5.000000|1.000000,-5.196000,-5.500000,5.000000,-4.946000,-5.250000,5.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 9,
+      "floorId": "floor-fragment-9",
+      "fragmentId": "floor-fragment-9",
+      "startPoint": {
+        "kind": "edge",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "x": -5.196,
+        "y": 4.48968364234284
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-12",
+        "x": 3.464,
+        "y": 4.5
+      },
+      "height": 1,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "role": "interior",
+      "attachment": {
+        "kind": "lineBoundaryClip",
+        "fragmentId": "floor-fragment-9",
+        "linePoint": {
+          "x": -5.196,
+          "y": 4.48968364234284
+        },
+        "lineVector": {
+          "x": 8.66,
+          "y": 0.010316357657160324
+        }
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.196148908059138,
+            "y": 4.6146835536483675
+          },
+          "aRight": {
+            "x": -5.195851091940861,
+            "y": 4.364683731037312
+          },
+          "bLeft": {
+            "x": 3.589,
+            "y": 4.625148996859331
+          },
+          "bRight": {
+            "x": 3.339,
+            "y": 4.374851003140669
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.196148908059138,
+              "y": 4.6146835536483675,
+              "z": 1
+            },
+            "right": {
+              "x": -5.195851091940861,
+              "y": 4.364683731037312,
+              "z": 1
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 3.5890000000000004,
+              "y": 4.625148996859331,
+              "z": 1
+            },
+            "right": {
+              "x": 3.3390000000000004,
+              "y": 4.374851003140669,
+              "z": 1
+            }
+          }
+        ],
+        "signature": "9;floor-fragment-9;0.000000;1.000000;0.250000;-5.196149,4.614684|3.589000,4.625149|3.339000,4.374851|-5.195851,4.364684;0.000000,-5.196149,4.614684,1.000000,-5.195851,4.364684,1.000000|1.000000,3.589000,4.625149,1.000000,3.339000,4.374851,1.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 10,
+      "floorId": "floor-fragment-9",
+      "fragmentId": "floor-fragment-9",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-12",
+        "x": 3.464,
+        "y": 4.5
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-13",
+        "x": 3.464,
+        "y": -5.5
+      },
+      "height": 1,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 3.589,
+            "y": 4.625148996859331
+          },
+          "aRight": {
+            "x": 3.339,
+            "y": 4.374851003140669
+          },
+          "bLeft": {
+            "x": 3.589,
+            "y": -5.625
+          },
+          "bRight": {
+            "x": 3.339,
+            "y": -5.375
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 3.589,
+              "y": 4.625148996859331,
+              "z": 1
+            },
+            "right": {
+              "x": 3.339,
+              "y": 4.374851003140669,
+              "z": 1
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 3.589,
+              "y": -5.624999999999999,
+              "z": 1
+            },
+            "right": {
+              "x": 3.339,
+              "y": -5.375000000000001,
+              "z": 1
+            }
+          }
+        ],
+        "signature": "10;floor-fragment-9;0.000000;1.000000;0.250000;3.589000,4.625149|3.589000,-5.625000|3.339000,-5.375000|3.339000,4.374851;0.000000,3.589000,4.625149,1.000000,3.339000,4.374851,1.000000|1.000000,3.589000,-5.625000,1.000000,3.339000,-5.375000,1.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 11,
+      "floorId": "floor-fragment-9",
+      "fragmentId": "floor-fragment-9",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-13",
+        "x": 3.464,
+        "y": -5.5
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-10",
+        "x": -5.196,
+        "y": -5.5
+      },
+      "height": 1,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 3.589,
+            "y": -5.625
+          },
+          "aRight": {
+            "x": 3.339,
+            "y": -5.375
+          },
+          "bLeft": {
+            "x": -5.196,
+            "y": -5.625
+          },
+          "bRight": {
+            "x": -5.196,
+            "y": -5.375
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 3.589,
+              "y": -5.625,
+              "z": 1
+            },
+            "right": {
+              "x": 3.339,
+              "y": -5.375,
+              "z": 1
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.196,
+              "y": -5.625,
+              "z": 1
+            },
+            "right": {
+              "x": -5.196,
+              "y": -5.375,
+              "z": 1
+            }
+          }
+        ],
+        "signature": "11;floor-fragment-9;0.000000;1.000000;0.250000;3.589000,-5.625000|-5.196000,-5.625000|-5.196000,-5.375000|3.339000,-5.375000;0.000000,3.589000,-5.625000,1.000000,3.339000,-5.375000,1.000000|1.000000,-5.196000,-5.625000,1.000000,-5.196000,-5.375000,1.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 12,
+      "floorId": "floor-fragment-9",
+      "fragmentId": "floor-fragment-9",
+      "startPoint": {
+        "kind": "edge",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "boundaryPoint": true,
+        "x": -5.196,
+        "y": -1.8651562964301105
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-9",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-11",
+        "x": -5.196,
+        "y": 4.5
+      },
+      "height": 1,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/stonewall.png",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.321,
+            "y": -1.8651562964301105
+          },
+          "aRight": {
+            "x": -5.071,
+            "y": -1.8651562964301105
+          },
+          "bLeft": {
+            "x": -5.321,
+            "y": 4.5
+          },
+          "bRight": {
+            "x": -5.071,
+            "y": 4.5
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.321,
+              "y": -1.8651562964301105,
+              "z": 1
+            },
+            "right": {
+              "x": -5.071,
+              "y": -1.8651562964301105,
+              "z": 1
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.321,
+              "y": 4.5,
+              "z": 1
+            },
+            "right": {
+              "x": -5.071,
+              "y": 4.5,
+              "z": 1
+            }
+          }
+        ],
+        "signature": "12;floor-fragment-9;0.000000;1.000000;0.250000;-5.321000,-1.865156|-5.321000,4.500000|-5.071000,4.500000|-5.071000,-1.865156;0.000000,-5.321000,-1.865156,1.000000,-5.071000,-1.865156,1.000000|1.000000,-5.321000,4.500000,1.000000,-5.071000,4.500000,1.000000"
+      }
     }
   ],
   "mountedWallObjects": [
@@ -272,9 +1008,9 @@
       "mountedWallLineGroupId": 5,
       "mountedWallSectionUnitId": 5,
       "mountedWallFacingSign": 1,
-      "wallT": 0.20418940867879407,
+      "wallT": 0.18167517384534124,
       "width": 1.8412666272297946,
-      "height": 4.204973969660127,
+      "height": 3.6486870908517948,
       "zOffset": 0,
       "rotationAxis": "spatial",
       "placementRotation": 90,
@@ -298,7 +1034,7 @@
         }
       ],
       "x": -5.196,
-      "y": -3.384153265381758,
+      "y": -3.603667055007923,
       "z": 0,
       "isOpen": false,
       "isPassable": true,
@@ -307,19 +1043,19 @@
       "groundPlaneHitboxOverridePoints": [
         {
           "x": -5.2085,
-          "y": -4.304786578996655
+          "y": -4.5243003686228205
         },
         {
           "x": -5.2085,
-          "y": -2.4635199517668607
+          "y": -2.6830337413930256
         },
         {
           "x": -4.9334999999999996,
-          "y": -2.4635199517668607
+          "y": -2.6830337413930256
         },
         {
           "x": -4.9334999999999996,
-          "y": -4.304786578996655
+          "y": -4.5243003686228205
         }
       ],
       "mountKind": "wall"
@@ -335,10 +1071,10 @@
       "mountedWallLineGroupId": 5,
       "mountedWallSectionUnitId": 5,
       "mountedWallFacingSign": 1,
-      "wallT": 0.5,
+      "wallT": 0.5231839435979834,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 90,
       "placeableAnchorX": 0.5,
@@ -346,8 +1082,8 @@
       "renderDepthOffset": 0,
       "compositeLayers": null,
       "x": -5.196,
-      "y": -0.5,
-      "z": 2.052715973673867,
+      "y": -0.2739565499196619,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
@@ -355,19 +1091,19 @@
       "groundPlaneHitboxOverridePoints": [
         {
           "x": -5.196,
-          "y": -1.2578966947642076
+          "y": -1.0318532446838695
         },
         {
           "x": -5.196,
-          "y": 0.25789669476420773
+          "y": 0.48394014484454584
         },
         {
           "x": -4.946,
-          "y": 0.25789669476420773
+          "y": 0.48394014484454584
         },
         {
           "x": -4.946,
-          "y": -1.2578966947642076
+          "y": -1.0318532446838695
         }
       ]
     },
@@ -382,10 +1118,10 @@
       "mountedWallLineGroupId": 5,
       "mountedWallSectionUnitId": 5,
       "mountedWallFacingSign": 1,
-      "wallT": 0.7788030069876382,
+      "wallT": 0.8379902060809666,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 90,
       "placeableAnchorX": 0.5,
@@ -393,8 +1129,8 @@
       "renderDepthOffset": 0,
       "compositeLayers": null,
       "x": -5.196,
-      "y": 2.218329318129472,
-      "z": 2.052715973673867,
+      "y": 2.7954045092894244,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
@@ -402,19 +1138,19 @@
       "groundPlaneHitboxOverridePoints": [
         {
           "x": -5.196,
-          "y": 1.4604326233652642
+          "y": 2.037507814525217
         },
         {
           "x": -5.196,
-          "y": 2.9762260128936795
+          "y": 3.553301204053632
         },
         {
           "x": -4.946,
-          "y": 2.9762260128936795
+          "y": 3.553301204053632
         },
         {
           "x": -4.946,
-          "y": 1.4604326233652642
+          "y": 2.037507814525217
         }
       ]
     },
@@ -429,38 +1165,38 @@
       "mountedWallLineGroupId": 8,
       "mountedWallSectionUnitId": 8,
       "mountedWallFacingSign": 1,
-      "wallT": 0.25174145133935855,
+      "wallT": 0.25247795821582264,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 180,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": 1.2218543942359945,
+      "x": 1.2156603714049314,
       "y": -5.5,
-      "z": 2.052715973673867,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": 1.9797510890002021,
+          "x": 1.973557066169139,
           "y": -5.5
         },
         {
-          "x": 0.4639576994717868,
+          "x": 0.4577636766407237,
           "y": -5.5
         },
         {
-          "x": 0.4639576994717868,
+          "x": 0.4577636766407237,
           "y": -5.25
         },
         {
-          "x": 1.9797510890002021,
+          "x": 1.973557066169139,
           "y": -5.25
         }
       ]
@@ -476,38 +1212,38 @@
       "mountedWallLineGroupId": 8,
       "mountedWallSectionUnitId": 8,
       "mountedWallFacingSign": 1,
-      "wallT": 0.7092361641085264,
+      "wallT": 0.7005057116243254,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 180,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": -2.625676140152707,
+      "x": -2.5522530347605765,
       "y": -5.5,
-      "z": 2.052715973673867,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": -1.8677794453884995,
+          "x": -1.794356339996369,
           "y": -5.5
         },
         {
-          "x": -3.3835728349169147,
+          "x": -3.310149729524784,
           "y": -5.5
         },
         {
-          "x": -3.3835728349169147,
+          "x": -3.310149729524784,
           "y": -5.25
         },
         {
-          "x": -1.8677794453884995,
+          "x": -1.794356339996369,
           "y": -5.25
         }
       ]
@@ -523,10 +1259,10 @@
       "mountedWallLineGroupId": 7,
       "mountedWallSectionUnitId": 7,
       "mountedWallFacingSign": 1,
-      "wallT": 0.2612301581921941,
+      "wallT": 0.25276933489179304,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": -90.00000000000001,
       "placeableAnchorX": 0.5,
@@ -534,8 +1270,8 @@
       "renderDepthOffset": 0,
       "compositeLayers": null,
       "x": 3.4640000000000004,
-      "y": 1.8280059576261078,
-      "z": 2.052715973673867,
+      "y": 1.910498984805018,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
@@ -543,19 +1279,19 @@
       "groundPlaneHitboxOverridePoints": [
         {
           "x": 3.4640000000000004,
-          "y": 2.5859026523903155
+          "y": 2.6683956795692256
         },
         {
           "x": 3.4640000000000004,
-          "y": 1.0701092628619002
+          "y": 1.1526022900408104
         },
         {
           "x": 3.2140000000000004,
-          "y": 1.0701092628619002
+          "y": 1.1526022900408104
         },
         {
           "x": 3.2140000000000004,
-          "y": 2.5859026523903155
+          "y": 2.6683956795692256
         }
       ]
     },
@@ -570,10 +1306,10 @@
       "mountedWallLineGroupId": 7,
       "mountedWallSectionUnitId": 7,
       "mountedWallFacingSign": 1,
-      "wallT": 0.7221369790968323,
+      "wallT": 0.7279894820440103,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": -90.00000000000001,
       "placeableAnchorX": 0.5,
@@ -581,8 +1317,8 @@
       "renderDepthOffset": 0,
       "compositeLayers": null,
       "x": 3.464,
-      "y": -2.6658355461941143,
-      "z": 2.052715973673867,
+      "y": -2.7228974499291,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
@@ -590,19 +1326,19 @@
       "groundPlaneHitboxOverridePoints": [
         {
           "x": 3.464,
-          "y": -1.9079388514299067
+          "y": -1.9650007551648923
         },
         {
           "x": 3.464,
-          "y": -3.423732240958322
+          "y": -3.4807941446933075
         },
         {
           "x": 3.214,
-          "y": -3.423732240958322
+          "y": -3.4807941446933075
         },
         {
           "x": 3.214,
-          "y": -1.9079388514299067
+          "y": -1.9650007551648923
         }
       ]
     },
@@ -617,38 +1353,38 @@
       "mountedWallLineGroupId": 6,
       "mountedWallSectionUnitId": 6,
       "mountedWallFacingSign": 1,
-      "wallT": 0.7403005192491073,
+      "wallT": 0.7650788224604284,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": 1.1549273668849933,
+      "x": 1.3633128968922028,
       "y": 4.5,
-      "z": 2.052715973673867,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": 0.3970306721207856,
+          "x": 0.6054162021279951,
           "y": 4.5
         },
         {
-          "x": 1.912824061649201,
+          "x": 2.1212095916564104,
           "y": 4.5
         },
         {
-          "x": 1.912824061649201,
+          "x": 2.1212095916564104,
           "y": 4.25
         },
         {
-          "x": 0.3970306721207856,
+          "x": 0.6054162021279951,
           "y": 4.25
         }
       ]
@@ -664,38 +1400,38 @@
       "mountedWallLineGroupId": 6,
       "mountedWallSectionUnitId": 6,
       "mountedWallFacingSign": 1,
-      "wallT": 0.2589758464816823,
+      "wallT": 0.2338056307743893,
       "width": 1.5157933895284155,
       "height": 2.3822197549040145,
-      "zOffset": 2.052715973673867,
+      "zOffset": 2.5,
       "rotationAxis": "spatial",
       "placementRotation": 0,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": -2.8930131310890514,
+      "x": -3.1046946451873856,
       "y": 4.5,
-      "z": 2.052715973673867,
+      "z": 2.5,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": -3.650909825853259,
+          "x": -3.862591339951593,
           "y": 4.5
         },
         {
-          "x": -2.135116436324844,
+          "x": -2.346797950423178,
           "y": 4.5
         },
         {
-          "x": -2.135116436324844,
+          "x": -2.346797950423178,
           "y": 4.25
         },
         {
-          "x": -3.650909825853259,
+          "x": -3.862591339951593,
           "y": 4.25
         }
       ]
