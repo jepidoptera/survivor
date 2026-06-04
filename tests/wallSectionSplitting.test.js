@@ -439,6 +439,64 @@ test("_splitVertex endpoint survives _serializeEndpoint → _resolveSerializedEn
     assert.equal(resolved._splitVertex, true, "_splitVertex must survive round-trip");
 });
 
+test("WallSectionUnit save/load preserves generated gabled topProfile", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const WSU = globalThis.WallSectionUnit;
+    WSU._allSections.clear();
+
+    const topProfile = {
+        kind: "stations",
+        generatedBy: {
+            type: "roof",
+            mode: "gabled",
+            roofId: "roof-38",
+            floorId: "floor-fragment-26",
+            plane: {
+                kind: "shedPlane",
+                mode: "gabled",
+                direction: { x: 0, y: -1 },
+                minProjection: -7.7,
+                maxProjection: 4.7,
+                baseZ: 8.029,
+                peakHeight: 8,
+                clearance: 0.001
+            },
+            originalHeight: 4
+        },
+        stations: [
+            { t: 0, leftHeight: 4.1, rightHeight: 4.1 },
+            { t: 0.5, leftHeight: 11, rightHeight: 11 },
+            { t: 1, leftHeight: 4.1, rightHeight: 4.1 }
+        ]
+    };
+    const section = new WSU(
+        { x: -8.66, y: -4, _splitVertex: true },
+        { x: -8.66, y: 7, _splitVertex: true },
+        {
+            map: {},
+            id: 38,
+            height: 11,
+            thickness: 0.25,
+            bottomZ: 5,
+            traversalLayer: 1,
+            topProfile,
+            deferSetup: true
+        }
+    );
+
+    const saved = section.saveJson();
+    assert.deepEqual(saved.topProfile, topProfile);
+
+    WSU._allSections.clear();
+    const restored = WSU.loadJson(saved, {}, { deferSetup: true });
+    assert.ok(restored);
+    assert.deepEqual(restored.topProfile, topProfile);
+
+    const meshData = restored.rebuildMesh3d();
+    assert.equal(meshData.kind, "wallSectionProfiledPrism");
+});
+
 test("preserves scriptingName on all split pieces", () => {
     const nodeA = new TestNode(2, 3);
     nodeA._prototypeSectionKey = "A";

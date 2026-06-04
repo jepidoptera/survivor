@@ -16,9 +16,11 @@ export class GableTool {
             throw new Error("click a roof face to place a gable");
         }
         const gable = this.state.addGableToRoof(getFloorId(faceHit.floor), faceHit.faceIndex, {
+            roofId: faceHit.roof && faceHit.roof.id,
             preserveView: this.state.renderStyle() === "exterior"
         });
         this.state.selectGable(getFloorId(faceHit.floor), gable.id, {
+            roofId: faceHit.roof && faceHit.roof.id,
             preserveView: this.state.renderStyle() === "exterior"
         });
     }

@@ -59,10 +59,11 @@ export class SelectTool {
             ? options.renderer.pickRoofShedDirectionAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
             : null;
         if (shedDirectionHit) {
-            this.state.selectRoofShedDirection(getFloorId(shedDirectionHit.floor), { preserveView });
-            this.state.draft = { kind: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor) };
+            const roofId = shedDirectionHit.roof && shedDirectionHit.roof.id ? String(shedDirectionHit.roof.id) : null;
+            this.state.selectRoofShedDirection(getFloorId(shedDirectionHit.floor), { preserveView, ...(roofId ? { roofId } : {}) });
+            this.state.draft = { kind: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor), ...(roofId ? { roofId } : {}) };
             this.state.emitChange();
-            this.drag = { type: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor) };
+            this.drag = { type: "roofShedDirection", floorId: getFloorId(shedDirectionHit.floor), ...(roofId ? { roofId } : {}) };
             return;
         }
         const roofVertexHit = options.renderer &&
@@ -71,8 +72,9 @@ export class SelectTool {
             ? options.renderer.pickRoofContactVertexAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
             : null;
         if (roofVertexHit) {
-            this.state.selectRoofVertex(getFloorId(roofVertexHit.floor), roofVertexHit.vertexIndex, { preserveView });
-            this.drag = { type: "roofVertex", floorId: getFloorId(roofVertexHit.floor), vertexIndex: roofVertexHit.vertexIndex };
+            const roofId = roofVertexHit.roof && roofVertexHit.roof.id ? String(roofVertexHit.roof.id) : null;
+            this.state.selectRoofVertex(getFloorId(roofVertexHit.floor), roofVertexHit.vertexIndex, { preserveView, ...(roofId ? { roofId } : {}) });
+            this.drag = { type: "roofVertex", floorId: getFloorId(roofVertexHit.floor), vertexIndex: roofVertexHit.vertexIndex, ...(roofId ? { roofId } : {}) };
             return;
         }
         const roofEdgeHit = options.renderer &&
@@ -81,13 +83,15 @@ export class SelectTool {
             ? options.renderer.pickRoofContactEdgeAtScreen(options.screenPoint, Math.max(10, Number(options.thresholdPixels) || 10))
             : null;
         if (roofEdgeHit) {
+            const roofId = roofEdgeHit.roof && roofEdgeHit.roof.id ? String(roofEdgeHit.roof.id) : null;
             this.state.insertRoofVertexOnKnownEdge(
                 getFloorId(roofEdgeHit.floor),
                 roofEdgeHit.insertAfterIndex,
                 roofEdgeHit.point,
-                roofEdgeHit.t
+                roofEdgeHit.t,
+                { ...(roofId ? { roofId } : {}) }
             );
-            this.drag = { type: "roofVertex", floorId: getFloorId(roofEdgeHit.floor), vertexIndex: this.state.selection.vertexIndex };
+            this.drag = { type: "roofVertex", floorId: getFloorId(roofEdgeHit.floor), vertexIndex: this.state.selection.vertexIndex, ...(roofId ? { roofId } : {}) };
             return;
         }
         const gableHandle = this.pickGableHandle(options);
@@ -248,17 +252,21 @@ export class SelectTool {
             return;
         }
         if (hit.type === "gable") {
-            this.state.selectGable(getFloorId(hit.floor), hit.gable.id, { preserveView });
+            this.state.selectGable(getFloorId(hit.floor), hit.gable.id, {
+                preserveView,
+                ...(hit.roof && hit.roof.id ? { roofId: hit.roof.id } : {})
+            });
             this.drag = null;
             return;
         }
         if (hit.type === "roof") {
             const floorId = getFloorId(hit.floor);
-            if (this.state.isRoofSelected(floorId)) {
+            const roofId = hit.roof && hit.roof.id ? String(hit.roof.id) : null;
+            if (this.state.isRoofSelected(floorId, roofId)) {
                 this.beginRoofVerticalDrag(options);
                 return;
             }
-            this.state.selectRoof(floorId, { preserveView });
+            this.state.selectRoof(floorId, { preserveView, ...(roofId ? { roofId } : {}) });
             this.drag = null;
             return;
         }
@@ -740,6 +748,7 @@ export class SelectTool {
         if (!options.screenPoint) throw new Error("roof vertical drag requires a screen point");
         const originals = this.state.selectedRoofEntries().map(({ floor, roof }) => ({
             floorId: getFloorId(floor),
+            roofId: roof && roof.id ? String(roof.id) : "",
             elevationOffset: Number(roof.elevationOffset) || 0
         }));
         if (!originals.length) throw new Error("roof vertical drag requires selected roofs");

@@ -7,12 +7,16 @@ export class ColumnTool {
     }
 
     _snapForTarget(worldPoint, threshold, target, options = {}) {
-        if (!target.wall) return this.state.snapColumnPosition(worldPoint, threshold, getFloorId(target.floor));
+        const snapOptions = {
+            snapPointsPerSection: this.state.columnTool && this.state.columnTool.snapPointsPerSection
+        };
+        if (!target.wall) return this.state.snapColumnPosition(worldPoint, threshold, getFloorId(target.floor), snapOptions);
         const screenSnap = wallPlacementPointAtScreen(this.state, target.wall, target.floor, options.screenPoint, options.renderer, {
             worldX: Number(worldPoint.x),
-            worldY: Number(worldPoint.y)
+            worldY: Number(worldPoint.y),
+            snapPointsPerSection: snapOptions.snapPointsPerSection
         });
-        return screenSnap || this.state.snapColumnToWall(worldPoint, target.wall, threshold);
+        return screenSnap || this.state.snapColumnToWall(worldPoint, target.wall, threshold, snapOptions);
     }
 
     _resolveTarget(worldPoint, options = {}) {

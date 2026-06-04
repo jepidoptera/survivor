@@ -4,6 +4,18 @@
         return Number.isFinite(number) ? number : null;
     }
 
+    function normalizeSnapPointsPerSection(value) {
+        const count = Math.round(Number(value));
+        return Number.isInteger(count) && count >= 1 && count <= 64 ? count : 1;
+    }
+
+    function nearestSnapT(t, snapPointsPerSection) {
+        const count = normalizeSnapPointsPerSection(snapPointsPerSection);
+        const clamped = Math.max(0, Math.min(1, Number(t)));
+        const index = Math.max(0, Math.min(count - 1, Math.floor(clamped * count)));
+        return (index + 0.5) / count;
+    }
+
     function wrapPoint(mapRef, point) {
         return {
             x: mapRef && typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(point.x) : point.x,
@@ -80,7 +92,6 @@
 
         const longFaceA = [toScreen(aLeft, wallBottomZ), toScreen(bLeft, wallBottomZ), toScreen(bLeft, wallTopZ), toScreen(aLeft, wallTopZ)];
         const longFaceB = [toScreen(aRight, wallBottomZ), toScreen(bRight, wallBottomZ), toScreen(bRight, wallTopZ), toScreen(aRight, wallTopZ)];
-        const topFace = [toScreen(aLeft, wallTopZ), toScreen(bLeft, wallTopZ), toScreen(bRight, wallTopZ), toScreen(aRight, wallTopZ)];
         const faceDepth = pts => pts.reduce((sum, p) => sum + Number(p.y), 0) / pts.length;
         const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
         const frontFace = longAFront ? longFaceA : longFaceB;
@@ -128,31 +139,19 @@
             x: sx + ux * sectionCenterAlong + vx * halfT * facingSign,
             y: sy + uy * sectionCenterAlong + vy * halfT * facingSign
         };
-        const faceMinX = Math.min(Number(sectionStartScreen.x), Number(sectionEndScreen.x));
-        const faceMaxX = Math.max(Number(sectionStartScreen.x), Number(sectionEndScreen.x));
-        const faceSpanX = faceMaxX - faceMinX;
         const centerSnapPx = Number.isFinite(Number(options && options.centerSnapPx))
             ? Number(options.centerSnapPx)
             : 10;
-        let centerDistPx = Infinity;
-        if (faceSpanX > 1e-4) {
-            centerDistPx = Math.abs(Number(mouseScreen.x) - (faceMinX + faceMaxX) * 0.5);
-        } else {
-            let topMinY = Infinity;
-            let topMaxY = -Infinity;
-            for (let ti = 0; ti < topFace.length; ti++) {
-                if (Number(topFace[ti].y) < topMinY) topMinY = Number(topFace[ti].y);
-                if (Number(topFace[ti].y) > topMaxY) topMaxY = Number(topFace[ti].y);
-            }
-            if (Number.isFinite(topMinY) && Number.isFinite(topMaxY) && (topMaxY - topMinY) > 1e-4) {
-                centerDistPx = Math.abs(Number(mouseScreen.y) - (topMinY + topMaxY) * 0.5);
-            }
-        }
+        const snapPointsPerSection = normalizeSnapPointsPerSection(options && options.snapPointsPerSection);
+        const projectedScreenT = Math.max(0, Math.min(1, (mouseRelX * sdx + mouseRelY * sdy) / sLen2));
+        const nearestSectionSnapT = nearestSnapT(projectedScreenT, snapPointsPerSection);
+        const centerDistPx = Math.abs(projectedScreenT - nearestSectionSnapT) * Math.sqrt(sLen2);
         let centerSnapActive = false;
         if (Number.isFinite(centerDistPx) && centerDistPx <= centerSnapPx) {
+            const sectionSnapAlong = len * nearestSectionSnapT;
             along = fitsLength
-                ? Math.max(halfWidth, Math.min(len - halfWidth, sectionCenterAlong))
-                : Math.max(0, Math.min(len, sectionCenterAlong));
+                ? Math.max(halfWidth, Math.min(len - halfWidth, sectionSnapAlong))
+                : Math.max(0, Math.min(len, sectionSnapAlong));
             centerSnapActive = true;
         }
 

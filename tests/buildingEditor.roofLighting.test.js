@@ -50,7 +50,7 @@ function createRenderer(BuildingRenderer) {
     return renderer;
 }
 
-test("roof surface meshes opt into overhead slope lighting", async () => {
+test("roof surface meshes blend overhead slope and directional left lighting", async () => {
     const { BuildingRenderer } = await loadRenderer();
     const renderer = createRenderer(BuildingRenderer);
     const floor = {
@@ -64,7 +64,9 @@ test("roof surface meshes opt into overhead slope lighting", async () => {
 
     const roofMesh = createSurfaceUniformMesh();
     renderer.updateRoofMeshUniforms(roofMesh, floor, 1);
-    assert.equal(roofMesh.shader.uniforms.uOverheadSlopeLighting, 1);
+    assert.equal(roofMesh.shader.uniforms.uOverheadSlopeLighting, 0.55);
+    assert.ok(roofMesh.shader.uniforms.uLightVector[0] < 0);
+    assert.ok(roofMesh.shader.uniforms.uLightVector[2] > 0);
 
     const floorMesh = createSurfaceUniformMesh();
     renderer.updateFloorMeshUniforms(floorMesh, floor, 1);

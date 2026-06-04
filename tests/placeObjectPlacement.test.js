@@ -40,12 +40,16 @@ function toScreenPoint(point, z = 0) {
 }
 
 function placeAt(screenY, options = {}) {
+    return placeAtPoint({ x: 200, y: screenY }, options);
+}
+
+function placeAtPoint(mouseScreen, options = {}) {
     return placementApi.resolveWallMountedPlacementCandidate({
         section: makeSection(),
         category: "windows",
-        worldX: 2,
+        worldX: Number(mouseScreen.x) / 100,
         worldY: 0,
-        mouseScreen: { x: 200, y: screenY },
+        mouseScreen,
         toScreenPoint,
         width: 1,
         height: 1,
@@ -89,4 +93,15 @@ test("window wall placement snaps vertically to another window height", () => {
     assert.equal(aligned.verticalSnapTarget.id, "other-window");
     assert.equal(aligned.snappedZ, 2);
     assert.equal(aligned.wallAnchorZ, 2);
+});
+
+test("window wall placement uses snap points per wall section", () => {
+    const snapped = placeAtPoint({ x: 345, y: -135 }, {
+        snapPointsPerSection: 4
+    });
+
+    assert.equal(snapped.valid, true);
+    assert.equal(snapped.centerSnapActive, true);
+    assert.ok(Math.abs(snapped.wallT - 0.875) < 0.000001);
+    assert.ok(Math.abs(snapped.wallCenterX - 3.5) < 0.000001);
 });

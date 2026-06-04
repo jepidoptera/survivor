@@ -57,6 +57,41 @@ function clonePoints(points, fallbackPrefix = "vertex") {
     return points.map((point) => clonePoint(point, fallbackPrefix));
 }
 
+function cloneRoofEdgeAttachment(attachment) {
+    if (attachment === undefined || attachment === null) return null;
+    if (!attachment || typeof attachment !== "object") {
+        throw new Error("roof contact vertex edge attachment must be an object");
+    }
+    const type = String(attachment.type || "");
+    if (type !== "renderedRoofEdge") {
+        throw new Error(`unknown roof contact vertex edge attachment type: ${attachment.type}`);
+    }
+    const floorId = String(attachment.floorId || "");
+    const roofId = String(attachment.roofId || "");
+    const edgeKind = String(attachment.edgeKind || "");
+    const edgeIndex = Math.floor(Number(attachment.edgeIndex));
+    if (!floorId) throw new Error("roof contact vertex edge attachment requires a floorId");
+    if (!roofId) throw new Error("roof contact vertex edge attachment requires a roofId");
+    if (edgeKind !== "peakEave") {
+        throw new Error(`unknown roof contact vertex edge attachment edgeKind: ${attachment.edgeKind}`);
+    }
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0) {
+        throw new Error("roof contact vertex edge attachment edgeIndex must be zero or greater");
+    }
+    return { type, floorId, roofId, edgeKind, edgeIndex };
+}
+
+function cloneRoofContactPoint(point, fallbackPrefix = "roof-contact") {
+    const cloned = clonePoint(point, fallbackPrefix);
+    const attachment = cloneRoofEdgeAttachment(point && point.roofEdgeAttachment);
+    if (attachment) cloned.roofEdgeAttachment = attachment;
+    return cloned;
+}
+
+function cloneRoofContactPoints(points, fallbackPrefix = "roof-contact") {
+    return points.map((point) => cloneRoofContactPoint(point, fallbackPrefix));
+}
+
 function cloneFinitePoint(point, label) {
     if (!finitePoint(point)) throw new Error(`${label} must be a finite point`);
     return { x: Number(point.x), y: Number(point.y) };
@@ -73,7 +108,9 @@ function clonePlainObject(value) {
 }
 
 function finitePoint(point) {
-    return Number.isFinite(Number(point && point.x)) && Number.isFinite(Number(point && point.y));
+    return !!point && typeof point === "object" &&
+        Number.isFinite(Number(point.x)) &&
+        Number.isFinite(Number(point.y));
 }
 
 function ringPoints(ring) {
@@ -118,7 +155,7 @@ function polygonCentroidPoint(points) {
 
 function normalizeRoofMode(mode) {
     const value = String(mode || DEFAULTS.roofMode).trim().toLowerCase();
-    if (value === "peak" || value === "shed" || value === "dome") return value;
+    if (value === "peak" || value === "shed" || value === "gabled" || value === "dome") return value;
     throw new Error(`unknown roof mode: ${mode}`);
 }
 
@@ -409,6 +446,25 @@ export function createEmptyBuilding() {
     };
 }
 
+function normalizeColumnTopHeights(topHeights, sideCount) {
+    if (topHeights === undefined || topHeights === null) return null;
+    if (!Array.isArray(topHeights)) throw new Error("column topHeights must be an array");
+    const expectedCount = Math.round(Number(sideCount));
+    if (!Number.isInteger(expectedCount) || expectedCount < 3) {
+        throw new Error("column topHeights requires a valid sideCount");
+    }
+    if (topHeights.length !== expectedCount) {
+        throw new Error(`column topHeights must contain ${expectedCount} entries`);
+    }
+    return topHeights.map((value, index) => {
+        const height = Number(value);
+        if (!Number.isFinite(height) || height <= 0) {
+            throw new Error(`column topHeights entry ${index} must be a positive finite number`);
+        }
+        return height;
+    });
+}
+
 export function getBuildingFloors(building) {
     return Array.isArray(building && building.floorFragments) ? building.floorFragments : [];
 }
@@ -462,7 +518,7 @@ export function createRoof({
         peakPoint: peakPoint ? cloneFinitePoint(peakPoint, "building roof peak point") : null,
         elevationOffset: Number(elevationOffset),
         shedDirection: normalizeDirectionPoint(shedDirection, "building shed roof direction"),
-        contactPolygon: Array.isArray(contactPolygon) ? clonePoints(contactPolygon, "roof-contact") : [],
+        contactPolygon: Array.isArray(contactPolygon) ? cloneRoofContactPoints(contactPolygon, "roof-contact") : [],
         gables: Array.isArray(gables) ? gables.map((gable) => normalizeRoofGable(gable)) : []
     };
     if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
@@ -539,25 +595,52 @@ export function normalizeRoofGable(gable) {
     };
 }
 
+function normalizeFloorRoof(floor, roof) {
+    if (!floor || typeof floor !== "object" || !roof || typeof roof !== "object") return null;
+    roof.floorId = getFloorId(floor);
+    if (!Array.isArray(roof.contactPolygon) || roof.contactPolygon.length === 0) {
+        roof.contactPolygon = cloneRoofContactPoints(floor.outerPolygon || [], "roof-contact");
+    } else {
+        roof.contactPolygon = cloneRoofContactPoints(roof.contactPolygon, "roof-contact");
+    }
+    roof.mode = normalizeRoofMode(roof.mode);
+    roof.domeLevels = normalizeRoofDomeLevels(roof.domeLevels ?? DEFAULTS.roofDomeLevels);
+    roof.shedDirection = normalizeDirectionPoint(roof.shedDirection || DEFAULTS.roofShedDirection, "building shed roof direction");
+    if (!finitePoint(roof.peakPoint)) {
+        roof.peakPoint = polygonCentroidPoint(roof.contactPolygon || floor.outerPolygon || []);
+    } else {
+        roof.peakPoint = cloneFinitePoint(roof.peakPoint, "building roof peak point");
+    }
+    if (!Array.isArray(roof.gables)) roof.gables = [];
+    return roof;
+}
+
 export function getFloorRoof(floor) {
     if (!floor || typeof floor !== "object") return null;
-    if (!floor.roof || typeof floor.roof !== "object") {
-        return null;
-    }
-    floor.roof.floorId = getFloorId(floor);
-    if (!Array.isArray(floor.roof.contactPolygon) || floor.roof.contactPolygon.length === 0) {
-        floor.roof.contactPolygon = clonePoints(floor.outerPolygon || [], "roof-contact");
-    }
-    floor.roof.mode = normalizeRoofMode(floor.roof.mode);
-    floor.roof.domeLevels = normalizeRoofDomeLevels(floor.roof.domeLevels ?? DEFAULTS.roofDomeLevels);
-    floor.roof.shedDirection = normalizeDirectionPoint(floor.roof.shedDirection || DEFAULTS.roofShedDirection, "building shed roof direction");
-    if (!finitePoint(floor.roof.peakPoint)) {
-        floor.roof.peakPoint = defaultRoofPeakPointForFloor(floor);
-    } else {
-        floor.roof.peakPoint = cloneFinitePoint(floor.roof.peakPoint, "building roof peak point");
-    }
-    if (!Array.isArray(floor.roof.gables)) floor.roof.gables = [];
-    return floor.roof;
+    return normalizeFloorRoof(floor, floor.roof);
+}
+
+export function getFloorRoofs(floor) {
+    if (!floor || typeof floor !== "object") return [];
+    const roofs = [];
+    const seen = new Set();
+    const addRoof = (roof) => {
+        const normalized = normalizeFloorRoof(floor, roof);
+        if (!normalized) return;
+        const key = normalized.id ? String(normalized.id) : `object:${roofs.length}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        roofs.push(normalized);
+    };
+    addRoof(floor.roof);
+    (Array.isArray(floor.roofs) ? floor.roofs : []).forEach(addRoof);
+    return roofs;
+}
+
+export function findFloorRoof(floor, roofId) {
+    const id = String(roofId || "");
+    if (!id) return getFloorRoof(floor);
+    return getFloorRoofs(floor).find((roof) => String(roof.id) === id) || null;
 }
 
 export function getRoofContactPolygon(floorOrRoof) {
@@ -815,6 +898,7 @@ export function createColumn({
     rotation = 0,
     height = null,
     heightMode = null,
+    topHeights = null,
     bottomZ = 0,
     traversalLayer = 0,
     texturePath = DEFAULTS.wallTexture,
@@ -862,6 +946,7 @@ export function createColumn({
         depth: resolvedDepth,
         rotation: Number(rotation) || 0,
         height: resolvedHeight,
+        topHeights: normalizeColumnTopHeights(topHeights, resolvedSideCount),
         bottomZ: resolvedBottomZ,
         traversalLayer: Math.round(Number(traversalLayer) || 0),
         texturePath: String(texturePath || DEFAULTS.wallTexture)
@@ -1464,13 +1549,26 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
             gableIdMap.set(Number(gable.id), Number(copy.id));
             return copy;
         });
-        floor.roof.contactPolygon = clonePoints(getRoofContactPolygon(sourceRoof), "roof-contact");
-        floor.roof.peakPoint = cloneFinitePoint(getRoofPeakPoint(sourceRoof), "duplicated roof peak point");
+        floor.roof.contactPolygon = clonePoints(floor.outerPolygon, "roof-contact");
+        floor.roof.peakPoint = defaultRoofPeakPointForFloor(floor);
         floor.roof.shedDirection = normalizeDirectionPoint(getRoofShedDirection(sourceRoof), "duplicated shed roof direction");
         floor.roof.domeLevels = normalizeRoofDomeLevels(sourceRoof.domeLevels ?? DEFAULTS.roofDomeLevels);
     } else {
         floor.roof = null;
     }
+    floor.roofs = getFloorRoofs(source).slice(1).map((extraRoof) => createRoof({
+        floorId: floor.fragmentId,
+        mode: extraRoof.mode,
+        texture: extraRoof.texturePath,
+        overhang: extraRoof.overhang,
+        peakHeight: extraRoof.peakHeight,
+        domeLevels: extraRoof.domeLevels,
+        peakPoint: getRoofPeakPoint(extraRoof),
+        elevationOffset: extraRoof.elevationOffset,
+        shedDirection: getRoofShedDirection(extraRoof),
+        contactPolygon: getRoofContactPolygon(extraRoof),
+        gables: getRoofGables(extraRoof).map((gable) => ({ ...gable, id: undefined }))
+    }));
     floor.name = `${source.name} copy`;
     addFloor(building, floor);
     const wallIdMap = duplicateWallsForFloor(building, source, floor);
@@ -1978,10 +2076,9 @@ export function normalizeImportedBuilding(raw) {
         floor.name = String(floor.name || "").trim() || "floor";
         floor.floorTexturePath = floor.floorTexturePath || floor.floorTexture || DEFAULTS.floorTexture;
         const sourceRoof = floor.roof && typeof floor.roof === "object" ? floor.roof : null;
-        const hasLegacyRoofFields = floor.roofTexturePath !== undefined || floor.roofTexture !== undefined || floor.roofMode !== undefined || floor.roofOverhang !== undefined || floor.roofPeakHeight !== undefined || floor.roofElevationOffset !== undefined;
-        if (sourceRoof || floor.roof !== null || hasLegacyRoofFields) {
-            const roofSource = sourceRoof || {};
-            floor.roof = createRoof({
+        const normalizeFloorRoofSource = (roofSourceInput = {}) => {
+            const roofSource = roofSourceInput || {};
+            const roof = createRoof({
                 floorId: floor.fragmentId,
                 mode: roofSource.mode || roofSource.roofMode || floor.roofMode || (floor.defaults && floor.defaults.roofMode) || (building.defaults && building.defaults.roofMode) || DEFAULTS.roofMode,
                 texture: roofSource.texturePath || roofSource.roofTexturePath || floor.roofTexturePath || floor.roofTexture || (floor.defaults && floor.defaults.roofTexture) || (building.defaults && building.defaults.roofTexture) || DEFAULTS.roofTexture,
@@ -2004,10 +2101,20 @@ export function normalizeImportedBuilding(raw) {
                     : floor.outerPolygon,
                 gables: Array.isArray(roofSource.gables) ? roofSource.gables : []
             });
-            if (typeof roofSource.id === "string" && roofSource.id.length > 0) floor.roof.id = roofSource.id;
+            if (typeof roofSource.id === "string" && roofSource.id.length > 0) roof.id = roofSource.id;
+            return roof;
+        };
+        const hasLegacyRoofFields = floor.roofTexturePath !== undefined || floor.roofTexture !== undefined || floor.roofMode !== undefined || floor.roofOverhang !== undefined || floor.roofPeakHeight !== undefined || floor.roofElevationOffset !== undefined;
+        if (sourceRoof || floor.roof !== null || hasLegacyRoofFields) {
+            floor.roof = normalizeFloorRoofSource(sourceRoof || {});
         } else {
             floor.roof = null;
         }
+        floor.roofs = Array.isArray(floor.roofs)
+            ? floor.roofs
+                .filter((roof) => roof && typeof roof === "object")
+                .map((roof) => normalizeFloorRoofSource(roof))
+            : [];
         delete floor.roofTexturePath;
         delete floor.roofTexture;
         delete floor.roofMode;
@@ -2063,6 +2170,7 @@ export function normalizeImportedBuilding(raw) {
                 depth,
                 rotation: Number.isFinite(Number(raw.rotation)) ? Number(raw.rotation) : 0,
                 height: Number(raw.height) > 0 ? Number(raw.height) : floor.defaultWallHeight,
+                topHeights: normalizeColumnTopHeights(raw.topHeights, sc >= 3 && sc <= 12 ? sc : 4),
                 bottomZ: Number.isFinite(Number(raw.bottomZ)) ? Number(raw.bottomZ) : getFloorElevation(floor),
                 traversalLayer: Math.round(Number(raw.traversalLayer) || 0),
                 texturePath: String(raw.texturePath || DEFAULTS.wallTexture)
@@ -2177,16 +2285,44 @@ export function normalizeImportedBuilding(raw) {
         }
         return normalized;
     });
+    ensureUniqueRoofIds(building);
     refreshWallSectionEndpoints(building);
     bumpIdCountersFromBuilding(building);
     return building;
 }
 
+function ensureUniqueRoofIds(building) {
+    const seen = new Set();
+    getBuildingFloors(building).forEach((floor) => {
+        const roofs = [
+            floor && floor.roof,
+            ...(Array.isArray(floor && floor.roofs) ? floor.roofs : [])
+        ];
+        roofs.forEach((roof) => {
+            if (!roof) return;
+            const rawId = typeof roof.id === "string" ? roof.id.trim() : "";
+            if (rawId && !seen.has(rawId)) {
+                roof.id = rawId;
+                seen.add(rawId);
+                return;
+            }
+            let nextId = "";
+            do {
+                nextId = nextStringId("roof");
+            } while (seen.has(nextId));
+            roof.id = nextId;
+            seen.add(nextId);
+        });
+    });
+}
+
 function bumpIdCountersFromBuilding(building) {
     [building.id, ...getBuildingFloors(building).flatMap((floor) => [
         floor.fragmentId,
-        floor.roof && floor.roof.id,
-        ...(getRoofContactPolygon(floor) || []).map((point) => point.id),
+        ...getFloorRoofs(floor).flatMap((roof) => [
+            roof && roof.id,
+            ...(getRoofContactPolygon(roof) || []).map((point) => point.id)
+        ]),
         ...(floor.outerPolygon || []).map((point) => point.id),
         ...(floor.holes || []).flatMap((ring) => ring.map((point) => point.id))
     ])].forEach((id) => {
@@ -2201,9 +2337,9 @@ function bumpIdCountersFromBuilding(building) {
         if (Number.isInteger(Number(object.id))) mountedObjectIdCounter = Math.max(mountedObjectIdCounter, Number(object.id) + 1);
     });
     getBuildingFloors(building).forEach((floor) => {
-        getRoofGables(floor).forEach((gable) => {
+        getFloorRoofs(floor).forEach((roof) => getRoofGables(roof).forEach((gable) => {
             if (Number.isInteger(Number(gable.id))) gableIdCounter = Math.max(gableIdCounter, Number(gable.id) + 1);
-        });
+        }));
         getFloorBeams(floor).forEach((beam) => {
             if (Number.isInteger(Number(beam.id))) beamIdCounter = Math.max(beamIdCounter, Number(beam.id) + 1);
         });

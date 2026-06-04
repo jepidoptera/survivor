@@ -26,13 +26,17 @@ export class PaintTool {
         if (hit.type === "roof") {
             const texture = this.state.paintTextureForMode("roofs");
             if (!texture) throw new Error("choose a roof texture before painting");
-            this.state.paintRoof(hit.floor, texture);
+            this.state.paintRoof(hit.floor, texture, {
+                roofId: hit.roof && hit.roof.id
+            });
             return;
         }
         if (hit.type === "gable") {
             const texture = this.state.paintTextureForMode("walls");
             if (!texture) throw new Error("choose a wall texture before painting gable");
-            this.state.paintGable(hit.floor, hit.gable.id, texture);
+            this.state.paintGable(hit.floor, hit.gable.id, texture, {
+                roofId: hit.roof && hit.roof.id
+            });
         }
     }
 

@@ -42,6 +42,7 @@
                     <select id="roofMode">
                         <option value="peak">Peak</option>
                         <option value="shed">Shed</option>
+                        <option value="gabled">Gabled</option>
                         <option value="dome">Dome</option>
                     </select>
                 </label>
@@ -97,6 +98,10 @@
                     Sides
                     <input id="columnSideCount" type="number" min="3" max="12" step="1">
                 </label>
+                <label data-tool-scope="column">
+                    Snap points / section
+                    <input id="columnSnapPointsPerSection" type="number" min="1" max="64" step="1">
+                </label>
                 <label data-tool-scope="mountObject">
                     Size
                     <input id="mountSize" type="range" min="0.2" max="5" step="0.05">
@@ -107,10 +112,14 @@
                     <input id="mountAspect" type="range" min="-2" max="2" step="0.02">
                 </label>
                 <input id="mountAspectValue" class="toolValue" data-tool-scope="mountObject" type="number" min="0.05" max="25" step="0.01" title="Aspect ratio value">
+                <label data-tool-scope="mountObject">
+                    Snap points / section
+                    <input id="mountSnapPointsPerSection" type="number" min="1" max="64" step="1">
+                </label>
                 <button type="button" id="mountTextureButton" data-tool-scope="mountObject" class="iconTool" title="Paint texture">🎨</button>
                 <div id="mountTexturePalette" class="texturePalette" hidden></div>
                 <label class="checkLabel" data-tool-exclude="mountObject polygon scissors" data-selection-exclude="roof gable gableHandle">
-                    <input id="snapToggle" type="checkbox" checked>
+                    <input id="snapToggle" type="checkbox">
                     Snap to grid
                 </label>
                 <label class="checkLabel" data-tool-exclude="mountObject polygon scissors" data-selection-exclude="roof gable gableHandle">

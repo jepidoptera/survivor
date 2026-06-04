@@ -627,7 +627,8 @@ void main(void) {
 
         static _topProfilePlaneHeightAt(topProfile, point, bottomZ) {
             const generatedBy = topProfile && topProfile.generatedBy;
-            const plane = generatedBy && generatedBy.mode === "shed" && generatedBy.plane;
+            const mode = String(generatedBy && generatedBy.mode || "").trim().toLowerCase();
+            const plane = generatedBy && (mode === "shed" || mode === "gabled") && generatedBy.plane;
             if (!plane || typeof plane !== "object") return null;
             const direction = plane.direction || {};
             const dx = Number(direction.x);
@@ -645,11 +646,14 @@ void main(void) {
                 !Number.isFinite(peakHeight) ||
                 maxProjection - minProjection <= EPS
             ) {
-                throw new Error("generated shed wall topProfile has an invalid plane");
+                throw new Error("generated roof wall topProfile has an invalid plane");
             }
             const projection = Number(point.x) * dx + Number(point.y) * dy;
-            const t = Math.max(0, Math.min(1, (projection - minProjection) / (maxProjection - minProjection)));
-            return Math.max(0, baseZ + peakHeight * t - bottomZ);
+            const t = (projection - minProjection) / (maxProjection - minProjection);
+            const heightZ = mode === "gabled"
+                ? baseZ + peakHeight * (1 - Math.abs(2 * t - 1))
+                : baseZ + peakHeight * t;
+            return Math.max(0, heightZ - bottomZ);
         }
 
         static _numericEqual(a, b, eps = EPS) {
@@ -3232,6 +3236,7 @@ void main(void) {
                 : null;
             const topProfilePlaneKey = topProfilePlane
                 ? [
+                    this.topProfile.generatedBy.mode || "",
                     topProfilePlane.kind || "",
                     Number(topProfilePlane.direction && topProfilePlane.direction.x).toFixed(6),
                     Number(topProfilePlane.direction && topProfilePlane.direction.y).toFixed(6),
@@ -8046,6 +8051,9 @@ void main(void) {
                 startPoint: WallSectionUnit._serializeEndpoint(this.startPoint),
                 endPoint: WallSectionUnit._serializeEndpoint(this.endPoint)
             };
+            if (this.topProfile) {
+                data.topProfile = WallSectionUnit.normalizeTopProfile(this.topProfile, this.height);
+            }
             if (typeof this.visible === "boolean") {
                 data.visible = this.visible;
             }
@@ -8107,6 +8115,7 @@ void main(void) {
                     wallTexturePath: (typeof data.wallTexturePath === "string" && data.wallTexturePath.length > 0)
                         ? data.wallTexturePath
                         : DEFAULT_WALL_TEXTURE,
+                    topProfile: data.topProfile || null,
                     texturePhaseA: Number.isFinite(data.texturePhaseA) ? Number(data.texturePhaseA) : NaN,
                     texturePhaseB: Number.isFinite(data.texturePhaseB) ? Number(data.texturePhaseB) : NaN,
                     deferSetup: !!opts.deferSetup,

@@ -76,6 +76,7 @@ export function mountedObjectPlacementAt(state, asset, worldPoint, threshold, op
         height,
         placeableScale: height,
         anchorY,
+        snapPointsPerSection: asset.snapPointsPerSection ?? state.mountedObjectSnapPointsPerSection(category),
         verticalSnapTargets: category === "windows"
             ? sameLevelWindowSnapTargets(state.building, hit.floor, options.ignoredObjectId ?? null)
             : []

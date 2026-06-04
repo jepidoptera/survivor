@@ -8,6 +8,7 @@ import { SelectTool } from "./tools/SelectTool.js";
 import { WallTool } from "./tools/WallTool.js";
 import { BeamTool } from "./tools/BeamTool.js";
 import { ColumnTool } from "./tools/ColumnTool.js";
+import { RoofTool } from "./tools/RoofTool.js";
 import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const PAINT_TEXTURES = {
@@ -37,6 +38,7 @@ const roofMode = document.querySelector("#roofMode");
 const roofOverhang = document.querySelector("#roofOverhang");
 const roofPeakHeight = document.querySelector("#roofPeakHeight");
 const roofDomeLevels = document.querySelector("#roofDomeLevels");
+const roofDomeLevelsControl = roofDomeLevels ? roofDomeLevels.closest("label") : null;
 const gableHeight = document.querySelector("#gableHeight");
 const gableHeightValue = document.querySelector("#gableHeightValue");
 const gableRoofReturn = document.querySelector("#gableRoofReturn");
@@ -49,12 +51,14 @@ const columnWidth = document.querySelector("#columnWidth");
 const columnWidthValue = document.querySelector("#columnWidthValue");
 const columnHeight = document.querySelector("#columnHeight");
 const columnSideCount = document.querySelector("#columnSideCount");
+const columnSnapPointsPerSection = document.querySelector("#columnSnapPointsPerSection");
 const wallInsetEndpoints = document.querySelector("#wallInsetEndpoints");
 const wallProtrudeEndpoints = document.querySelector("#wallProtrudeEndpoints");
 const mountSize = document.querySelector("#mountSize");
 const mountSizeValue = document.querySelector("#mountSizeValue");
 const mountAspect = document.querySelector("#mountAspect");
 const mountAspectValue = document.querySelector("#mountAspectValue");
+const mountSnapPointsPerSection = document.querySelector("#mountSnapPointsPerSection");
 const mountTextureButton = document.querySelector("#mountTextureButton");
 const snapToggle = document.querySelector("#snapToggle");
 const snapDirectionToggle = document.querySelector("#snapDirectionToggle");
@@ -151,7 +155,8 @@ const tools = {
     paint: new PaintTool(state),
     select: new SelectTool(state),
     beam: new BeamTool(state),
-    column: new ColumnTool(state)
+    column: new ColumnTool(state),
+    roof: new RoofTool(state)
 };
 
 let panning = null;
@@ -177,6 +182,8 @@ const MOUNTED_OBJECT_ASSETS = {
 const MOUNT_ASPECT_LOG_BASE = 2;
 const Z_DOUBLE_TAP_MS = 320;
 const CAMERA_PITCH_WHEEL_SPEED = 0.004;
+const COLUMN_ARROW_ROTATION_STEP_RADIANS = 15 * Math.PI / 180;
+const COLUMN_ARROW_FINE_ROTATION_STEP_RADIANS = 3.75 * Math.PI / 180;
 
 function resizeStage() {
     const width = Math.max(320, stageHost.clientWidth);
@@ -461,7 +468,8 @@ async function loadMountedObjectAssets(category) {
         };
         state.mountedObjectTool.settings[category] = {
             size: firstAsset.height,
-            aspectRatio: firstAsset.width / firstAsset.height
+            aspectRatio: firstAsset.width / firstAsset.height,
+            snapPointsPerSection: state.mountedObjectSnapPointsPerSection(category)
         };
     }
     mountTexturePaletteSignature = "";
@@ -537,6 +545,15 @@ function resetCameraOrientation() {
     state.updateCameraRotationCenter();
     renderer.render();
     setStatus("view orientation reset");
+}
+
+function resetAndCenterBuildingView() {
+    state.camera.rotation = 0;
+    state.camera.pitch = renderer.defaultCameraPitch();
+    rotatePointerX = null;
+    state.centerCameraOnBuilding();
+    renderer.render();
+    setStatus("building centered");
 }
 
 function activeTool() {
@@ -865,6 +882,10 @@ function applyTextureToSelection(texturePath) {
         state.updateColumnToolTexture(texturePath);
         return;
     }
+    if (state.tool === "roof") {
+        state.updateRoofToolTexture(texturePath);
+        return;
+    }
     const kind = state.selection && state.selection.kind;
     if (kind === "wall" || kind === "wallEndpoint") {
         state.updateSelectedWallTexture(texturePath);
@@ -903,13 +924,23 @@ function selectionScopeMatches(element) {
     if (state.tool === "column") {
         return scope.split(/\s+/).includes("column");
     }
+    if (state.tool === "roof") {
+        return scope.split(/\s+/).includes("roof");
+    }
     return scope.split(/\s+/).includes(kind);
+}
+
+function activeRoofMode(selectedRoofEntries) {
+    if (state.tool === "roof") return state.inputs.roofMode || DEFAULTS.roofMode;
+    if (!Array.isArray(selectedRoofEntries) || selectedRoofEntries.length === 0) return "";
+    return sharedSelectionValue(selectedRoofEntries, ({ roof }) => roof.mode || DEFAULTS.roofMode) || "";
 }
 
 function toolScopeMatches(element) {
     const include = element.dataset.toolScope;
     const activeScopes = [state.tool];
     if (mountedObjectSettingsActive()) activeScopes.push("mountObject");
+    if (state.selection && state.selection.kind === "column") activeScopes.push("column");
     if (include && !include.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
     const exclude = element.dataset.toolExclude;
     if (exclude && exclude.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
@@ -1013,8 +1044,8 @@ function syncRoofToolButtonTexture() {
     if (!roofToolButton || !roofToolIcon) return;
     const texture = state.paintTextureForMode("roofs") || state.inputs.roofTexture;
     roofToolIcon.style.setProperty("--roof-tool-texture", texture ? `url("${texture}")` : "");
-    roofToolButton.title = texture ? `Create roof: ${textureName(texture)}` : "Create roof";
-    roofToolButton.disabled = !state.selectedFloor();
+    roofToolButton.title = texture ? `Place roofs: ${textureName(texture)}` : "Place roofs";
+    roofToolButton.disabled = false;
 }
 
 function syncSelectOptions(select, values) {
@@ -1409,27 +1440,34 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         return `${floorId} floor, ${floorWallCount} walls`;
     }
     if (selection.kind === "roof") {
-        const roofFloorIds = state.selectedRoofFloorIds();
-        if (roofFloorIds.length > 1) return `${roofFloorIds.length} roofs selected`;
-        const roof = selectedFloor ? getFloorRoof(selectedFloor) : null;
+        const roofEntries = state.selectedRoofEntries();
+        if (roofEntries.length > 1) return `${roofEntries.length} roofs selected`;
+        const entry = roofEntries[0] || null;
+        const roof = entry ? entry.roof : null;
+        const roofFloorId = entry ? getFloorId(entry.floor) : floorId;
         const offsetText = roof && Number.isFinite(Number(roof.elevationOffset)) && Math.abs(Number(roof.elevationOffset)) > 0.000001
             ? `, offset ${Number(roof.elevationOffset).toFixed(2)}`
             : "";
         const modeText = roof && roof.mode ? ` ${roof.mode}` : "";
-        return `${floorId}${modeText} roof${offsetText}`;
+        const idText = selection.roofId ? ` ${selection.roofId}` : "";
+        return `${roofFloorId}${modeText} roof${idText}${offsetText}`;
     }
     if (selection.kind === "roofVertex") {
-        return `${floorId} roof, contact vertex ${selection.vertexIndex}`;
+        const idText = selection.roofId ? ` ${selection.roofId}` : "";
+        return `${floorId} roof${idText}, contact vertex ${selection.vertexIndex}`;
     }
     if (selection.kind === "roofPeak") {
-        return `${floorId} roof, peak`;
+        const idText = selection.roofId ? ` ${selection.roofId}` : "";
+        return `${floorId} roof${idText}, peak`;
     }
     if (selection.kind === "roofShedDirection") {
-        return `${floorId} roof, shed direction`;
+        const idText = selection.roofId ? ` ${selection.roofId}` : "";
+        return `${floorId} roof${idText}, slope direction`;
     }
     if (selection.kind === "gable" || selection.kind === "gableHandle") {
         const handleText = selection.kind === "gableHandle" && selection.gableHandle ? `, ${selection.gableHandle}` : "";
-        return `${floorId} roof, gable ${selection.gableId}${handleText}`;
+        const idText = selection.roofId ? ` ${selection.roofId}` : "";
+        return `${floorId} roof${idText}, gable ${selection.gableId}${handleText}`;
     }
     if (selection.kind === "level") {
         return `${floorId} level, elevation ${getFloorElevation(selectedFloor)}, ${floorWallCount} walls`;
@@ -1449,8 +1487,7 @@ function syncUi() {
         button.dataset.active = state.tool === "mountObject" && button.dataset.mountCategory === state.mountedObjectTool.category ? "true" : "false";
     });
     if (roofToolButton) {
-        const selection = state.selection || {};
-        roofToolButton.dataset.active = selection.kind === "roof" || selection.kind === "roofVertex" || selection.kind === "roofPeak" || selection.kind === "roofShedDirection" || selection.kind === "gable" || selection.kind === "gableHandle" ? "true" : "false";
+        roofToolButton.dataset.active = state.tool === "roof" ? "true" : "false";
     }
     if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
     syncRoofToolButtonTexture();
@@ -1474,21 +1511,24 @@ function syncUi() {
     const selectedWalls = selectedWallsFrom(walls);
     const selectionKind = state.selection && state.selection.kind;
     const selectedRoofEntries = (() => {
-        if (selectionKind === "roof" || selectionKind === "roofVertex" || selectionKind === "roofPeak" || selectionKind === "roofShedDirection") {
+        if (selectionKind === "roof" || selectionKind === "roofVertex" || selectionKind === "roofPeak" || selectionKind === "roofShedDirection" || selectionKind === "gable" || selectionKind === "gableHandle") {
             return state.selectedRoofEntries();
         }
         if (!selectedFloor) return [];
         const roof = getFloorRoof(selectedFloor);
         return roof ? [{ floor: selectedFloor, roof }] : [];
     })();
-    const showVertexEndpointControls = state.tool !== "wall" && state.selectedWallsCanToggleVertexInset();
+    const showVertexEndpointControls = state.selectedWallsCanToggleVertexInset();
     if (wallInsetEndpoints) wallInsetEndpoints.hidden = wallInsetEndpoints.hidden || !showVertexEndpointControls;
     if (wallProtrudeEndpoints) wallProtrudeEndpoints.hidden = wallProtrudeEndpoints.hidden || !showVertexEndpointControls;
+    if (roofDomeLevelsControl) roofDomeLevelsControl.hidden = roofDomeLevelsControl.hidden || activeRoofMode(selectedRoofEntries) !== "dome";
     if (polygonElevation) polygonElevation.value = Number(state.polygonToolElevation);
     if (polygonFinalize) polygonFinalize.disabled = !state.canFinalizePolygonDraft();
     renderLayerPanel(floors);
     if (selectedFloor) {
-        const roof = getFloorRoof(selectedFloor);
+        const roof = selectionKind === "gable" || selectionKind === "gableHandle"
+            ? selectedRoofEntries[0] && selectedRoofEntries[0].roof
+            : getFloorRoof(selectedFloor);
         floorElevation.value = getFloorElevation(selectedFloor);
         floorHeight.value = Number(selectedFloor.floorHeight);
         const selectedGable = state.selectedGable();
@@ -1502,7 +1542,14 @@ function syncUi() {
             gableRoofReturn.checked = selectedGable.roofReturn !== false;
         }
     }
-    if (selectedRoofEntries.length > 0) {
+    if (state.tool === "roof") {
+        roofMode.value = state.inputs.roofMode || DEFAULTS.roofMode;
+        syncNumberInput(roofOverhang, Number(state.inputs.roofOverhang));
+        syncNumberInput(roofPeakHeight, Number(state.inputs.roofPeakHeight));
+        if (roofDomeLevels) {
+            syncNumberInput(roofDomeLevels, Number(state.inputs.roofDomeLevels ?? DEFAULTS.roofDomeLevels));
+        }
+    } else if (selectedRoofEntries.length > 0) {
         const sharedMode = sharedSelectionValue(selectedRoofEntries, ({ roof }) => roof.mode || "peak");
         roofMode.value = sharedMode || "";
         syncNumberInput(roofOverhang, sharedSelectionValue(selectedRoofEntries, ({ roof }) => Number(roof.overhang)));
@@ -1528,6 +1575,7 @@ function syncUi() {
                 : "";
         }
         columnSideCount.value = Number(state.columnTool.sideCount);
+        if (columnSnapPointsPerSection) columnSnapPointsPerSection.value = Number(state.columnTool.snapPointsPerSection);
         if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.columnTool.texture)}`;
     } else if (selectedWalls.length > 0) {
         syncNumberInput(wallHeight, sharedSelectionValue(selectedWalls, (wall) => Number(wall.height)));
@@ -1559,11 +1607,13 @@ function syncUi() {
         );
         syncNumberInput(columnHeight, sharedSelectionValue(selectedColumns, columnExplicitHeightValue), (value) => String(value));
         syncNumberInput(columnSideCount, sharedSelectionValue(selectedColumns, (column) => Number(column.sideCount)));
+        if (columnSnapPointsPerSection) columnSnapPointsPerSection.value = Number(state.columnTool.snapPointsPerSection);
         const sharedTexture = sharedSelectionValue(selectedColumns, (column) => column.texturePath);
         if (paintToolButton) paintToolButton.title = sharedTexture
             ? `Paint texture: ${textureName(sharedTexture)}`
             : "Paint texture: mixed";
     }
+    const mountedCategory = activeMountedObjectCategory();
     const selectedMountedObjects = state.tool !== "mountObject" ? state.selectedMountedObjects() : [];
     if (selectedMountedObjects.length > 0) {
         const sharedSize = sharedSelectionValue(selectedMountedObjects, (object) => Number(object.height));
@@ -1575,6 +1625,7 @@ function syncUi() {
         syncNumberInput(mountSizeValue, sharedSize, (value) => value.toFixed(2));
         syncNumberInput(mountAspectValue, sharedAspect, (value) => value.toFixed(2));
         const sharedTexture = sharedSelectionValue(selectedMountedObjects, (object) => object.texturePath);
+        if (mountSnapPointsPerSection) mountSnapPointsPerSection.value = Number(state.mountedObjectSnapPointsPerSection(mountedCategory));
         mountTextureButton.title = sharedTexture
             ? `Paint texture: ${textureName(sharedTexture)}`
             : "Paint texture: mixed";
@@ -1585,6 +1636,7 @@ function syncUi() {
             mountAspect.value = aspectRatioToSliderValue(mountAsset.aspectRatio);
             mountSizeValue.value = Number(mountAsset.size).toFixed(2);
             mountAspectValue.value = Number(mountAsset.aspectRatio).toFixed(2);
+            if (mountSnapPointsPerSection) mountSnapPointsPerSection.value = Number(mountAsset.snapPointsPerSection || 1);
             mountTextureButton.title = `Paint texture: ${textureName(mountAsset.texturePath)}`;
         }
     }
@@ -1633,8 +1685,7 @@ if (roofToolButton) {
             wallToolTexturePaletteOpen = false;
             columnToolTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
-            state.setTool("select");
-            state.createRoofForSelectedFloor({ preserveView: state.renderStyle() === "exterior" });
+            state.setTool(state.tool === "roof" ? "select" : "roof");
         });
     });
 }
@@ -1728,6 +1779,12 @@ mountAspect.addEventListener("input", () => {
 mountAspectValue.addEventListener("change", () => {
     withErrorBoundary(() => state.updateMountedObjectAspectRatio(mountAspectValue.value));
 });
+
+if (mountSnapPointsPerSection) {
+    mountSnapPointsPerSection.addEventListener("change", () => {
+        withErrorBoundary(() => state.updateMountedObjectSnapPointsPerSection(mountSnapPointsPerSection.value));
+    });
+}
 
 document.querySelector("#duplicateFloor").addEventListener("click", () => {
     withErrorBoundary(() => state.duplicateSelectedFloor());
@@ -1873,20 +1930,32 @@ floorHeight.addEventListener("change", () => {
 });
 
 roofMode.addEventListener("change", () => {
-    withErrorBoundary(() => state.updateSelectedRoofMode(roofMode.value));
+    withErrorBoundary(() => {
+        if (state.tool === "roof") state.updateRoofToolMode(roofMode.value);
+        else state.updateSelectedRoofMode(roofMode.value);
+    });
 });
 
 roofOverhang.addEventListener("change", () => {
-    withErrorBoundary(() => state.updateSelectedRoofOverhang(roofOverhang.value));
+    withErrorBoundary(() => {
+        if (state.tool === "roof") state.updateRoofToolOverhang(roofOverhang.value);
+        else state.updateSelectedRoofOverhang(roofOverhang.value);
+    });
 });
 
 roofPeakHeight.addEventListener("change", () => {
-    withErrorBoundary(() => state.updateSelectedRoofPeakHeight(roofPeakHeight.value));
+    withErrorBoundary(() => {
+        if (state.tool === "roof") state.updateRoofToolPeakHeight(roofPeakHeight.value);
+        else state.updateSelectedRoofPeakHeight(roofPeakHeight.value);
+    });
 });
 
 if (roofDomeLevels) {
     roofDomeLevels.addEventListener("change", () => {
-        withErrorBoundary(() => state.updateSelectedRoofDomeLevels(roofDomeLevels.value));
+        withErrorBoundary(() => {
+            if (state.tool === "roof") state.updateRoofToolDomeLevels(roofDomeLevels.value);
+            else state.updateSelectedRoofDomeLevels(roofDomeLevels.value);
+        });
     });
 }
 
@@ -1940,6 +2009,12 @@ columnSideCount.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedColumnSideCount(columnSideCount.value));
 });
 
+if (columnSnapPointsPerSection) {
+    columnSnapPointsPerSection.addEventListener("change", () => {
+        withErrorBoundary(() => state.updateColumnToolSnapPointsPerSection(columnSnapPointsPerSection.value));
+    });
+}
+
 wallInsetEndpoints.addEventListener("click", () => {
     withErrorBoundary(() => state.updateSelectedWallVertexInset(true));
 });
@@ -1949,8 +2024,7 @@ wallProtrudeEndpoints.addEventListener("click", () => {
 });
 
 snapToggle.addEventListener("change", () => {
-    state.snapToGrid = snapToggle.checked;
-    state.emitChange();
+    state.setSnapToGrid(snapToggle.checked);
 });
 
 snapDirectionToggle.addEventListener("change", () => {
@@ -2237,6 +2311,16 @@ document.addEventListener("keydown", (event) => {
     if (isTextEditingTarget(event.target)) return;
     if (event.key === "Shift") state.shiftKeyDown = true;
     const key = String(event.key || "").toLowerCase();
+    if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && state.selectedColumnIds().length > 0) {
+        withErrorBoundary(() => {
+            const step = event.shiftKey ? COLUMN_ARROW_FINE_ROTATION_STEP_RADIANS : COLUMN_ARROW_ROTATION_STEP_RADIANS;
+            state.rotateSelectedColumns(event.key === "ArrowLeft"
+                ? -step
+                : step);
+        });
+        event.preventDefault();
+        return;
+    }
     if ((event.ctrlKey || event.metaKey) && key === "d") {
         withErrorBoundary(() => {
             const enabled = renderer.toggleScreenPickerDebug();
@@ -2250,7 +2334,7 @@ document.addEventListener("keydown", (event) => {
         if (!event.repeat) {
             const now = performance.now();
             if (now - lastZTapTime <= Z_DOUBLE_TAP_MS) {
-                resetCameraOrientation();
+                resetAndCenterBuildingView();
                 rotatingView = false;
                 lastZTapTime = 0;
                 event.preventDefault();
@@ -2359,6 +2443,7 @@ resizeStage();
 renderer.render();
 try {
     state.loadWallToolSettingsFromBrowser();
+    state.loadColumnToolSettingsFromBrowser();
 } catch (error) {
     console.error(error);
     setStatus(error.message, true);

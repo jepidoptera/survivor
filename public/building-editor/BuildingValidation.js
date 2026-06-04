@@ -9,7 +9,7 @@ import {
     getFloorColumns,
     getFloorElevation,
     getFloorId,
-    getFloorRoof,
+    getFloorRoofs,
     getRoofContactPolygon,
     getRoofDomeLevels,
     getRoofGables,
@@ -78,65 +78,71 @@ function validateRing(errors, floorId, ring, label) {
     });
 }
 
-function validateRoof(errors, floor) {
+function validateRoofRecord(errors, floor, roof, roofIndex = 0) {
     const floorId = getFloorId(floor);
-    let roof = null;
-    try {
-        roof = getFloorRoof(floor);
-    } catch (error) {
-        errors.push(error.message);
-        return;
-    }
-    if (!roof || typeof roof !== "object") {
-        return;
-    }
-    if (roof.type !== "roof") errors.push(`floor ${floorId} roof type must be roof`);
+    const roofLabel = roofIndex === 0 ? `floor ${floorId} roof` : `floor ${floorId} roof ${roof.id || roofIndex}`;
+    if (roof.type !== "roof") errors.push(`${roofLabel} type must be roof`);
     const mode = String(roof.mode || "peak").trim().toLowerCase();
-    if (mode !== "peak" && mode !== "shed" && mode !== "dome") {
-        errors.push(`floor ${floorId} roof mode must be peak, shed, or dome`);
+    if (mode !== "peak" && mode !== "shed" && mode !== "gabled" && mode !== "dome") {
+        errors.push(`${roofLabel} mode must be peak, shed, gabled, or dome`);
     }
     if (mode !== "peak" && getRoofGables(roof).length > 0) {
-        errors.push(`floor ${floorId} roof gables require peak mode`);
+        errors.push(`${roofLabel} gables require peak mode`);
     }
     if (typeof roof.texturePath !== "string" || roof.texturePath.length === 0) {
-        errors.push(`floor ${floorId} roof texturePath must be a non-empty string`);
+        errors.push(`${roofLabel} texturePath must be a non-empty string`);
     }
     if (!Number.isFinite(Number(roof.overhang))) {
-        errors.push(`floor ${floorId} roof overhang must be a finite number`);
+        errors.push(`${roofLabel} overhang must be a finite number`);
     }
     if (Number(roof.overhang) < 0 && getRoofGables(roof).length > 0) {
-        errors.push(`floor ${floorId} roof gables cannot be used with negative overhang yet`);
+        errors.push(`${roofLabel} gables cannot be used with negative overhang yet`);
     }
     if (!Number.isFinite(Number(roof.peakHeight)) || Number(roof.peakHeight) < 0) {
-        errors.push(`floor ${floorId} roof peakHeight must be zero or greater`);
+        errors.push(`${roofLabel} peakHeight must be zero or greater`);
     }
     try {
         getRoofDomeLevels(roof);
     } catch (error) {
-        errors.push(`floor ${floorId} ${error.message}`);
+        errors.push(`${roofLabel} ${error.message}`);
     }
     if (!Number.isFinite(Number(roof.elevationOffset))) {
-        errors.push(`floor ${floorId} roof elevationOffset must be a finite number`);
+        errors.push(`${roofLabel} elevationOffset must be a finite number`);
     }
-    const peakPoint = getRoofPeakPoint(floor);
+    const peakPoint = getRoofPeakPoint(roof);
     if (!pointIsFinite(peakPoint)) {
-        errors.push(`floor ${floorId} roof peakPoint must be finite`);
+        errors.push(`${roofLabel} peakPoint must be finite`);
     }
-    const shedDirection = getRoofShedDirection(floor);
+    const shedDirection = getRoofShedDirection(roof);
     if (!pointIsFinite(shedDirection) || Math.hypot(Number(shedDirection && shedDirection.x), Number(shedDirection && shedDirection.y)) <= 0.000001) {
-        errors.push(`floor ${floorId} roof shedDirection must be finite`);
+        errors.push(`${roofLabel} shedDirection must be finite`);
     }
     if (Number(roof.peakHeight) <= 0 && getRoofGables(roof).length > 0) {
-        errors.push(`floor ${floorId} roof gables require positive peakHeight`);
+        errors.push(`${roofLabel} gables require positive peakHeight`);
     }
-    const perimeter = getRoofContactPolygon(floor);
+    const perimeter = getRoofContactPolygon(roof);
     validateRing(errors, floorId, perimeter, "roof contactPolygon");
+    perimeter.forEach((vertex, vertexIndex) => {
+        const attachment = vertex && vertex.roofEdgeAttachment;
+        if (attachment === undefined || attachment === null) return;
+        const label = `${roofLabel} contact vertex ${vertexIndex} roofEdgeAttachment`;
+        if (!attachment || typeof attachment !== "object") {
+            errors.push(`${label} must be an object`);
+            return;
+        }
+        if (attachment.type !== "renderedRoofEdge") errors.push(`${label} type must be renderedRoofEdge`);
+        if (typeof attachment.floorId !== "string" || attachment.floorId.length === 0) errors.push(`${label} floorId must be a non-empty string`);
+        if (typeof attachment.roofId !== "string" || attachment.roofId.length === 0) errors.push(`${label} roofId must be a non-empty string`);
+        if (attachment.edgeKind !== "peakEave") errors.push(`${label} edgeKind must be peakEave`);
+        const edgeIndex = Math.floor(Number(attachment.edgeIndex));
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0) errors.push(`${label} edgeIndex must be zero or greater`);
+    });
     const faceCount = perimeter.length;
     const cumulative = faceCount >= 3 ? ringCumulativeLengths(perimeter) : [];
     const totalLength = cumulative.length ? cumulative[cumulative.length - 1] : 0;
     const intervals = [];
     getRoofGables(roof).forEach((gable, index) => {
-        const label = `floor ${floorId} roof gable ${gable && gable.id !== undefined ? gable.id : index}`;
+        const label = `${roofLabel} gable ${gable && gable.id !== undefined ? gable.id : index}`;
         if (!gable || typeof gable !== "object") {
             errors.push(`${label} must be an object`);
             return;
@@ -179,6 +185,17 @@ function validateRoof(errors, floor) {
         });
         intervals.push({ id: gable.id, parts });
     });
+}
+
+function validateRoof(errors, floor) {
+    let roofs = [];
+    try {
+        roofs = getFloorRoofs(floor);
+    } catch (error) {
+        errors.push(error.message);
+        return;
+    }
+    roofs.forEach((roof, index) => validateRoofRecord(errors, floor, roof, index));
 }
 
 function endpointLabel(wall, key) {
@@ -459,6 +476,19 @@ export function validateBuilding(building) {
             }
             if (!Number.isFinite(Number(column.height)) || Number(column.height) <= 0) {
                 errors.push(`${label} height must be a positive number`);
+            }
+            if (column.topHeights !== undefined && column.topHeights !== null) {
+                if (!Array.isArray(column.topHeights)) {
+                    errors.push(`${label} topHeights must be an array`);
+                } else if (column.topHeights.length !== Math.round(Number(column.sideCount))) {
+                    errors.push(`${label} topHeights length must match sideCount`);
+                } else {
+                    column.topHeights.forEach((height, index) => {
+                        if (!Number.isFinite(Number(height)) || Number(height) <= 0) {
+                            errors.push(`${label} topHeights[${index}] must be a positive number`);
+                        }
+                    });
+                }
             }
             if (!Number.isFinite(Number(column.bottomZ))) errors.push(`${label} bottomZ must be finite`);
             if (!pointIsFinite(column.position)) errors.push(`${label} position must have finite x and y`);
