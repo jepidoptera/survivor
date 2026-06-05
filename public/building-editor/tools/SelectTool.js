@@ -280,6 +280,15 @@ export class SelectTool {
             this.drag = null;
             return;
         }
+        if (hit.type === "stair") {
+            this.state.selectStair(getFloorId(hit.floor), hit.stair.id, { preserveView });
+            this.drag = {
+                type: "stairPositionPending",
+                startScreen: options.screenPoint ? { x: Number(options.screenPoint.x), y: Number(options.screenPoint.y) } : null,
+                snapshot: this.state.beginSelectedStairMove(worldPoint)
+            };
+            return;
+        }
         if (hit.type === "column") {
             const floorId = getFloorId(hit.floor);
             this.state.selectColumn(floorId, hit.column.id, { preserveView });
@@ -638,6 +647,15 @@ export class SelectTool {
         return Math.hypot(dx, dy) >= 3;
     }
 
+    shouldStartStairDrag(options = {}) {
+        if (!this.drag || this.drag.type !== "stairPositionPending") return false;
+        if (!this.drag.snapshot) return false;
+        if (!this.drag.startScreen || !options.screenPoint) return true;
+        const dx = Number(options.screenPoint.x) - Number(this.drag.startScreen.x);
+        const dy = Number(options.screenPoint.y) - Number(this.drag.startScreen.y);
+        return Math.hypot(dx, dy) >= 3;
+    }
+
     finishMountedObjectDrag(worldPoint, threshold, options = {}) {
         if (this.drag.type === "mountedObjectPending") {
             this.drag = null;
@@ -786,6 +804,13 @@ export class SelectTool {
             }
             return;
         }
+        if (this.drag.type === "stairPositionPending") {
+            if (this.shouldStartStairDrag(options)) {
+                this.drag = { type: "stairPosition", snapshot: this.drag.snapshot };
+                this.state.moveSelectedStair(this.drag.snapshot, worldPoint);
+            }
+            return;
+        }
         if (this.drag.type === "mountedObject") {
             this.updateMountedObjectDrag(worldPoint, threshold, options);
             return;
@@ -857,6 +882,10 @@ export class SelectTool {
         }
         if (this.drag.type === "columnPosition") {
             this.state.moveSelectedColumn(worldPoint, threshold, options);
+            return;
+        }
+        if (this.drag.type === "stairPosition") {
+            this.state.moveSelectedStair(this.drag.snapshot, worldPoint);
             return;
         }
         if (this.drag.type === "gableHandle") {

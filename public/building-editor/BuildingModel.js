@@ -12,6 +12,9 @@ const DEFAULTS = Object.freeze({
     roofShedDirection: Object.freeze({ x: 0, y: -1 }),
     wallHeight: 3,
     wallThickness: 0.25,
+    stairWidth: 1.2,
+    stairDirection: "up",
+    stairRiserDepth: null,
     gridSize: 1
 });
 
@@ -21,6 +24,7 @@ let mountedObjectIdCounter = 1;
 let gableIdCounter = 1;
 let beamIdCounter = 1;
 let columnIdCounter = 1;
+let stairIdCounter = 1;
 
 function nextStringId(prefix) {
     return `${prefix}-${stringIdCounter++}`;
@@ -44,6 +48,10 @@ function nextBeamId() {
 
 function nextColumnId() {
     return columnIdCounter++;
+}
+
+function nextStairId() {
+    return stairIdCounter++;
 }
 
 function clonePoint(point, fallbackPrefix = "vertex") {
@@ -240,6 +248,20 @@ function normalizeRoofDomeLevels(levels) {
     const value = Math.floor(Number(levels));
     if (!Number.isInteger(value) || value < 1) {
         throw new Error("building roof dome levels must be a positive integer");
+    }
+    return value;
+}
+
+function normalizeStairDirection(direction) {
+    const value = String(direction || DEFAULTS.stairDirection).trim().toLowerCase();
+    if (value === "up" || value === "down") return value;
+    throw new Error(`stair direction must be up or down: ${direction || "missing"}`);
+}
+
+function normalizeStairWidth(width, label = "stair width") {
+    const value = Number(width);
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`${label} must be a positive number`);
     }
     return value;
 }
@@ -485,12 +507,20 @@ export function getBuildingColumns(building) {
     return getBuildingFloors(building).flatMap((floor) => Array.isArray(floor.columns) ? floor.columns : []);
 }
 
+export function getBuildingStairs(building) {
+    return getBuildingFloors(building).flatMap((floor) => Array.isArray(floor.stairs) ? floor.stairs : []);
+}
+
 export function getFloorBeams(floor) {
     return Array.isArray(floor && floor.beams) ? floor.beams : [];
 }
 
 export function getFloorColumns(floor) {
     return Array.isArray(floor && floor.columns) ? floor.columns : [];
+}
+
+export function getFloorStairs(floor) {
+    return Array.isArray(floor && floor.stairs) ? floor.stairs : [];
 }
 
 export function createRoof({
@@ -751,7 +781,8 @@ export function createFloor({
         defaultWallTexturePath: defaultWallTexture,
         posts: [],
         beams: [],
-        columns: []
+        columns: [],
+        stairs: []
     };
     setFloorElevation(floor, elevation);
     floor.roof.contactPolygon = clonePoints(floor.outerPolygon, "roof-contact");
@@ -951,6 +982,220 @@ export function createColumn({
         traversalLayer: Math.round(Number(traversalLayer) || 0),
         texturePath: String(texturePath || DEFAULTS.wallTexture)
     };
+}
+
+export function stairFootprintPoints(stair) {
+    if (!stair || typeof stair !== "object") throw new Error("stair footprint requires a stair record");
+    if (stair.ladder === true && Array.isArray(stair.footprint) && stair.footprint.length === 4) {
+        return stair.footprint.map((point) => cloneFinitePoint(point, "ladder stair footprint point"));
+    }
+    if (Array.isArray(stair.treads) && stair.treads.length >= 2) {
+        const left = [];
+        const right = [];
+        stair.treads.forEach((tread, index) => {
+            if (!finitePoint(tread && tread.left) || !finitePoint(tread && tread.right)) {
+                throw new Error(`stair ${stair.id || "(new)"} tread ${index} requires finite endpoints`);
+            }
+            left.push({ x: Number(tread.left.x), y: Number(tread.left.y) });
+            right.push({ x: Number(tread.right.x), y: Number(tread.right.y) });
+        });
+        return [...left, ...right.reverse()];
+    }
+    const start = stair.startPoint || stair.lowerPoint;
+    const end = stair.endPoint || stair.higherPoint;
+    if (!finitePoint(start) || !finitePoint(end)) {
+        throw new Error(`stair ${stair.id || "(new)"} requires finite endpoints`);
+    }
+    const dx = Number(end.x) - Number(start.x);
+    const dy = Number(end.y) - Number(start.y);
+    const length = Math.hypot(dx, dy);
+    if (!Number.isFinite(length) || length <= 0.000001) {
+        throw new Error(`stair ${stair.id || "(new)"} requires non-coincident endpoints`);
+    }
+    const width = normalizeStairWidth(stair.width);
+    const nx = -dy / length;
+    const ny = dx / length;
+    const halfWidth = width * 0.5;
+    return [
+        { x: Number(start.x) + nx * halfWidth, y: Number(start.y) + ny * halfWidth },
+        { x: Number(end.x) + nx * halfWidth, y: Number(end.y) + ny * halfWidth },
+        { x: Number(end.x) - nx * halfWidth, y: Number(end.y) - ny * halfWidth },
+        { x: Number(start.x) - nx * halfWidth, y: Number(start.y) - ny * halfWidth }
+    ];
+}
+
+function normalizeStairTreads(treads, width, label = "stair treads") {
+    if (!Array.isArray(treads) || treads.length < 2) return null;
+    return treads.map((tread, index) => {
+        if (!finitePoint(tread && tread.left) || !finitePoint(tread && tread.right)) {
+            throw new Error(`${label} ${index} requires finite left and right endpoints`);
+        }
+        const left = { x: Number(tread.left.x), y: Number(tread.left.y) };
+        const right = { x: Number(tread.right.x), y: Number(tread.right.y) };
+        const treadWidth = Math.hypot(right.x - left.x, right.y - left.y);
+        if (!Number.isFinite(treadWidth) || treadWidth <= 0.000001) {
+            throw new Error(`${label} ${index} must have non-coincident endpoints`);
+        }
+        const targetWidth = Number(width);
+        if (Number.isFinite(targetWidth) && targetWidth > 0 && Math.abs(treadWidth - targetWidth) > 0.01) {
+            throw new Error(`${label} ${index} width does not match stair width`);
+        }
+        const normalized = {
+            left,
+            right,
+            center: {
+                x: (left.x + right.x) * 0.5,
+                y: (left.y + right.y) * 0.5
+            }
+        };
+        if (Object.prototype.hasOwnProperty.call(tread, "arcDeltaAngle")) {
+            const value = Number(tread.arcDeltaAngle);
+            if (!Number.isFinite(value)) throw new Error(`${label} ${index} arcDeltaAngle must be finite`);
+            normalized.arcDeltaAngle = value;
+        }
+        if (Object.prototype.hasOwnProperty.call(tread, "arcNearDeltaAngle")) {
+            const value = Number(tread.arcNearDeltaAngle);
+            if (!Number.isFinite(value)) throw new Error(`${label} ${index} arcNearDeltaAngle must be finite`);
+            normalized.arcNearDeltaAngle = value;
+        }
+        return normalized;
+    });
+}
+
+function defaultStairRiserDepth(height, stepCount) {
+    const resolvedHeight = Number(height);
+    const resolvedStepCount = Math.max(1, Math.round(Number(stepCount) || 1));
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) return 0;
+    return Math.min(resolvedHeight, resolvedHeight / (resolvedStepCount + 1) + 0.25);
+}
+
+function normalizeStairRiserDepth(value, height, stepCount, label = "stair riser depth") {
+    if (value === null || value === undefined || value === "") {
+        return defaultStairRiserDepth(height, stepCount);
+    }
+    const depth = Number(value);
+    const maxDepth = Number(height);
+    if (!Number.isFinite(depth) || depth < 0) {
+        throw new Error(`${label} must be zero or greater`);
+    }
+    if (!Number.isFinite(maxDepth) || maxDepth <= 0) {
+        throw new Error(`${label} requires a positive stair height`);
+    }
+    if (depth > maxDepth) {
+        throw new Error(`${label} must be no greater than the stair height`);
+    }
+    return depth;
+}
+
+function defaultTreadsFromCenterline(startPoint, endPoint, width) {
+    const dx = Number(endPoint.x) - Number(startPoint.x);
+    const dy = Number(endPoint.y) - Number(startPoint.y);
+    const length = Math.hypot(dx, dy);
+    if (!Number.isFinite(length) || length <= 0.000001) {
+        throw new Error("stair endpoints must not coincide");
+    }
+    const nx = -dy / length;
+    const ny = dx / length;
+    const halfWidth = Number(width) * 0.5;
+    const treadAt = (point) => {
+        const center = { x: Number(point.x), y: Number(point.y) };
+        const left = { x: center.x + nx * halfWidth, y: center.y + ny * halfWidth };
+        const right = { x: center.x - nx * halfWidth, y: center.y - ny * halfWidth };
+        return {
+            left,
+            right,
+            center,
+            angle: Math.atan2(right.y - left.y, right.x - left.x)
+        };
+    };
+    return [treadAt(startPoint), treadAt(endPoint)];
+}
+
+export function createStraightStair({
+    floorId,
+    startPoint,
+    endPoint,
+    width = DEFAULTS.stairWidth,
+    direction = DEFAULTS.stairDirection,
+    texturePath = DEFAULTS.floorTexture,
+    treadTexturePath = null,
+    riserTexturePath = null,
+    bottomZ = 0,
+    height = DEFAULTS.wallHeight,
+    stepCount = null,
+    riserDepth = DEFAULTS.stairRiserDepth,
+    treads = null,
+    ladder = false,
+    footprint = null,
+    depth = 1 / 6
+}) {
+    const resolvedFloorId = String(floorId || "");
+    if (!resolvedFloorId) throw new Error("stair requires a floor fragment id");
+    const resolvedWidth = normalizeStairWidth(width);
+    const resolvedTreads = Array.isArray(treads)
+        ? normalizeStairTreads(treads, resolvedWidth)
+        : null;
+    if (!resolvedTreads && (!finitePoint(startPoint) || !finitePoint(endPoint))) {
+        throw new Error("stair requires finite start and end points");
+    }
+    const generatedTreads = resolvedTreads || defaultTreadsFromCenterline(startPoint, endPoint, resolvedWidth);
+    const firstTread = generatedTreads[0];
+    const lastTread = generatedTreads[generatedTreads.length - 1];
+    const resolvedStartPoint = firstTread.center;
+    const resolvedEndPoint = lastTread.center;
+    const runLength = Math.hypot(resolvedEndPoint.x - resolvedStartPoint.x, resolvedEndPoint.y - resolvedStartPoint.y);
+    if (ladder !== true && (!Number.isFinite(runLength) || runLength <= 0.000001)) {
+        throw new Error("stair endpoints must not coincide");
+    }
+    const resolvedHeight = Number(height);
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) {
+        throw new Error("stair height must be a positive number");
+    }
+    const resolvedDirection = normalizeStairDirection(direction);
+    const resolvedStepCount = stepCount === null || stepCount === undefined
+        ? Math.max(3, generatedTreads.length)
+        : Math.max(1, Math.round(Number(stepCount)));
+    if (!Number.isInteger(resolvedStepCount) || resolvedStepCount < 1) {
+        throw new Error("stair stepCount must be a positive integer");
+    }
+    const resolvedRiserDepth = normalizeStairRiserDepth(riserDepth, resolvedHeight, resolvedStepCount);
+    const resolvedBottomZ = Number(bottomZ);
+    if (!Number.isFinite(resolvedBottomZ)) throw new Error("stair bottomZ must be finite");
+    const resolvedTreadTexture = String(treadTexturePath || texturePath || DEFAULTS.floorTexture);
+    const resolvedRiserTexture = String(riserTexturePath || texturePath || resolvedTreadTexture || DEFAULTS.floorTexture);
+    if (!resolvedTreadTexture) throw new Error("stair tread texture path must be a non-empty string");
+    if (!resolvedRiserTexture) throw new Error("stair riser texture path must be a non-empty string");
+    const stair = {
+        type: "stairs",
+        id: nextStairId(),
+        stairKind: "straight",
+        floorId: resolvedFloorId,
+        startPoint: { x: Number(resolvedStartPoint.x), y: Number(resolvedStartPoint.y) },
+        endPoint: { x: Number(resolvedEndPoint.x), y: Number(resolvedEndPoint.y) },
+        treads: generatedTreads,
+        ladder: ladder === true,
+        direction: resolvedDirection,
+        width: resolvedWidth,
+        bottomZ: resolvedBottomZ,
+        height: resolvedHeight,
+        stepCount: resolvedStepCount,
+        riserDepth: resolvedRiserDepth,
+        texturePath: resolvedTreadTexture,
+        treadTexturePath: resolvedTreadTexture,
+        riserTexturePath: resolvedRiserTexture
+    };
+    if (stair.ladder) {
+        const resolvedDepth = Number(depth);
+        if (!Number.isFinite(resolvedDepth) || resolvedDepth <= 0) throw new Error("ladder stair depth must be a positive number");
+        stair.depth = resolvedDepth;
+        if (!Array.isArray(footprint) || footprint.length !== 4) {
+            throw new Error("ladder stair requires a four-point footprint");
+        }
+        stair.footprint = footprint.map((point) => cloneFinitePoint(point, "ladder stair footprint point"));
+    } else {
+        stair.footprint = stairFootprintPoints(stair);
+    }
+    return stair;
 }
 
 export function createWallMountedObject({
@@ -1569,6 +1814,24 @@ export function duplicateFloor(building, sourceFloorId, elevation) {
         contactPolygon: getRoofContactPolygon(extraRoof),
         gables: getRoofGables(extraRoof).map((gable) => ({ ...gable, id: undefined }))
     }));
+    floor.stairs = getFloorStairs(source).map((stair) => createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: stair.startPoint,
+        endPoint: stair.endPoint,
+        width: stair.width,
+        direction: stair.direction,
+        texturePath: stair.texturePath,
+        treadTexturePath: stair.treadTexturePath || stair.texturePath,
+        riserTexturePath: stair.riserTexturePath || stair.texturePath,
+        bottomZ: getFloorElevation(floor),
+        height: stair.height,
+        stepCount: stair.stepCount,
+        riserDepth: stair.riserDepth,
+        treads: stair.treads,
+        ladder: stair.ladder === true,
+        footprint: stair.footprint,
+        depth: stair.depth
+    }));
     floor.name = `${source.name} copy`;
     addFloor(building, floor);
     const wallIdMap = duplicateWallsForFloor(building, source, floor);
@@ -2132,6 +2395,7 @@ export function normalizeImportedBuilding(raw) {
         if (!Number.isFinite(Number(floor.nodeBaseZ))) setFloorElevation(floor, Number(floor.elevation) || 0);
         if (!Array.isArray(floor.beams)) floor.beams = [];
         if (!Array.isArray(floor.columns)) floor.columns = [];
+        if (!Array.isArray(floor.stairs)) floor.stairs = [];
         floor.beams = floor.beams.map((raw) => {
             const beam = {
                 type: "beam",
@@ -2176,6 +2440,28 @@ export function normalizeImportedBuilding(raw) {
                 texturePath: String(raw.texturePath || DEFAULTS.wallTexture)
             };
             return column;
+        });
+        floor.stairs = floor.stairs.map((raw) => {
+            const stair = createStraightStair({
+                floorId: floor.fragmentId,
+                startPoint: finitePoint(raw.startPoint) ? raw.startPoint : raw.lowerPoint,
+                endPoint: finitePoint(raw.endPoint) ? raw.endPoint : raw.higherPoint,
+                width: raw.width ?? DEFAULTS.stairWidth,
+                direction: raw.direction || DEFAULTS.stairDirection,
+                texturePath: raw.texturePath || DEFAULTS.floorTexture,
+                treadTexturePath: raw.treadTexturePath || raw.texturePath || DEFAULTS.floorTexture,
+                riserTexturePath: raw.riserTexturePath || raw.texturePath || raw.treadTexturePath || DEFAULTS.floorTexture,
+                bottomZ: Number.isFinite(Number(raw.bottomZ)) ? Number(raw.bottomZ) : getFloorElevation(floor),
+                height: Number(raw.height) > 0 ? Number(raw.height) : floor.floorHeight,
+                stepCount: raw.stepCount,
+                riserDepth: raw.riserDepth,
+                treads: raw.treads,
+                ladder: raw.ladder === true,
+                footprint: raw.footprint,
+                depth: raw.depth
+            });
+            if (Number.isInteger(Number(raw.id))) stair.id = Number(raw.id);
+            return stair;
         });
     });
     building.wallSections.forEach((wall) => {

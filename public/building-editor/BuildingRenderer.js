@@ -1,14 +1,14 @@
 import "../assets/javascript/wallGeometry.js";
 import { flattenPolygon, polygonCentroid, simplePolygonRingError } from "./BuildingGeometry.js";
 import { validateBuilding } from "./BuildingValidation.js";
-import { ADJACENT_DIRECTIONS, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
+import { ADJACENT_DIRECTIONS, GAME_HEX_RADIUS, GAME_HEX_X_STEP, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
-import { columnVertices, findFloor, findFloorRoof, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorBeams, getFloorColumns, getFloorElevation, getFloorId, getFloorRoof, getFloorRoofs, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, getWallResolvedGeometry, offsetRing, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
+import { columnVertices, findFloor, findFloorRoof, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorBeams, getFloorColumns, getFloorElevation, getFloorId, getFloorRoof, getFloorRoofs, getFloorStairs, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, getWallResolvedGeometry, offsetRing, stairFootprintPoints, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
 
 const GAME_XY_RATIO = 0.66;
 const CAMERA_DEFAULT_PITCH = Math.PI / 4;
-const CAMERA_MIN_PITCH = Math.PI / 12;
-const CAMERA_MAX_PITCH = Math.PI * 5 / 12;
+const CAMERA_MIN_PITCH = 0;
+const CAMERA_MAX_PITCH = Math.PI / 2 - 0.001;
 const CAMERA_PITCH_BASE = Math.SQRT1_2;
 const FLOOR_TEXTURE_REPEAT = 0.1;
 const DEFAULT_ROOF_TEXTURE_REPEAT = 0.5;
@@ -31,7 +31,10 @@ const GABLE_MOUNT_WALL_THICKNESS = 0.08;
 const GABLE_ENDPOINT_VERTEX_SNAP_PIXELS = 12;
 const ROOF_SHED_DIRECTION_HANDLE_LENGTH = 1.25;
 const GRID_SCREEN_OVERSCAN_PIXELS = 96;
-const GRID_HEXES_PER_GRAPHICS_CHUNK = 600;
+const GRID_HEX_TILE_COLS = 10;      // must be even for hex column parity
+const GRID_HEX_TILE_ROWS_MAX = 400;
+const GRID_HEX_TILE_SPRITES = 12;   // max sprite instances per axis (12×12 pool)
+const GRID_HEX_VY_MIN = 1.5;        // hide grid when hex row screen height < this px
 const PICKER_DEBUG_DEPTH_BIAS = 0.05;
 const SELECTION_OUTLINE_COLOR = 0x42a5ff;
 const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
@@ -1818,6 +1821,264 @@ function polygonSignedArea(points) {
     return area * 0.5;
 }
 
+function positiveAreaRing(points) {
+    const ring = (Array.isArray(points) ? points : [])
+        .filter((point) => finite2dPoint(point))
+        .map((point) => ({ x: Number(point.x), y: Number(point.y), z: point.z }));
+    return polygonSignedArea(ring) < 0 ? ring.reverse() : ring;
+}
+
+function normalizeRadians(angle) {
+    let out = Number(angle) % (Math.PI * 2);
+    if (out <= -Math.PI) out += Math.PI * 2;
+    if (out > Math.PI) out -= Math.PI * 2;
+    return out;
+}
+
+function shortestAngleDelta(from, to) {
+    return normalizeRadians(Number(to) - Number(from));
+}
+
+function unwrapDeltaNear(delta, referenceDelta) {
+    let unwrapped = Number(delta);
+    const reference = Number(referenceDelta);
+    if (!Number.isFinite(unwrapped)) throw new Error("stair arc delta must be finite");
+    if (!Number.isFinite(reference)) return unwrapped;
+    while (unwrapped - reference > Math.PI) unwrapped -= Math.PI * 2;
+    while (unwrapped - reference <= -Math.PI) unwrapped += Math.PI * 2;
+    return unwrapped;
+}
+
+function treadStoredArcDelta(tread, key, label) {
+    if (!Object.prototype.hasOwnProperty.call(tread || {}, key)) return null;
+    const value = Number(tread[key]);
+    if (!Number.isFinite(value)) throw new Error(`${label} ${key} must be finite`);
+    return value;
+}
+
+function stairArcDelta(startAngle, endAngle, tread, key, label, referenceDelta = null) {
+    const rawDelta = shortestAngleDelta(startAngle, endAngle);
+    const storedDelta = treadStoredArcDelta(tread, key, label);
+    if (storedDelta === null) {
+        return referenceDelta === null ? rawDelta : unwrapDeltaNear(rawDelta, referenceDelta);
+    }
+    const unwrapped = unwrapDeltaNear(rawDelta, storedDelta);
+    if (Math.abs(unwrapped - storedDelta) > 0.0001) {
+        throw new Error(`${label} ${key} does not match tread endpoint geometry`);
+    }
+    return storedDelta;
+}
+
+function arcPoint(center, radius, startAngle, deltaAngle, t) {
+    const angle = Number(startAngle) + Number(deltaAngle) * Math.max(0, Math.min(1, Number(t)));
+    return {
+        x: Number(center.x) + Math.cos(angle) * Number(radius),
+        y: Number(center.y) + Math.sin(angle) * Number(radius)
+    };
+}
+
+function pointDistance(a, b) {
+    return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+}
+
+function samePoint(a, b, epsilon = GEOMETRY_EPSILON) {
+    return pointDistance(a, b) <= epsilon;
+}
+
+function lineIntersectionPoint(a, b, c, d) {
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    const cx = Number(c.x);
+    const cy = Number(c.y);
+    const dx = Number(d.x);
+    const dy = Number(d.y);
+    const abx = bx - ax;
+    const aby = by - ay;
+    const cdx = dx - cx;
+    const cdy = dy - cy;
+    const denominator = abx * cdy - aby * cdx;
+    if (Math.abs(denominator) <= GEOMETRY_EPSILON) return null;
+    const acx = cx - ax;
+    const acy = cy - ay;
+    const t = (acx * cdy - acy * cdx) / denominator;
+    return { x: ax + abx * t, y: ay + aby * t };
+}
+
+function normalizedTread(tread, label = "stair tread") {
+    if (!tread || !finite2dPoint(tread.left) || !finite2dPoint(tread.right)) {
+        throw new Error(`${label} requires finite left and right endpoints`);
+    }
+    const left = { x: Number(tread.left.x), y: Number(tread.left.y) };
+    const right = { x: Number(tread.right.x), y: Number(tread.right.y) };
+    const length = pointDistance(left, right);
+    if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) {
+        throw new Error(`${label} requires non-coincident endpoints`);
+    }
+    const normalized = {
+        left,
+        right,
+        center: {
+            x: (left.x + right.x) * 0.5,
+            y: (left.y + right.y) * 0.5
+        },
+        angle: Math.atan2(right.y - left.y, right.x - left.x),
+        length
+    };
+    if (Object.prototype.hasOwnProperty.call(tread, "arcDeltaAngle")) {
+        const value = Number(tread.arcDeltaAngle);
+        if (!Number.isFinite(value)) throw new Error(`${label} arcDeltaAngle must be finite`);
+        normalized.arcDeltaAngle = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(tread, "arcNearDeltaAngle")) {
+        const value = Number(tread.arcNearDeltaAngle);
+        if (!Number.isFinite(value)) throw new Error(`${label} arcNearDeltaAngle must be finite`);
+        normalized.arcNearDeltaAngle = value;
+    }
+    return normalized;
+}
+
+function connectedTreadEndpoint(a, b) {
+    const endpoints = [
+        { aName: "left", bName: "left", aPoint: a.left, bPoint: b.left, aOther: a.right, bOther: b.right },
+        { aName: "left", bName: "right", aPoint: a.left, bPoint: b.right, aOther: a.right, bOther: b.left },
+        { aName: "right", bName: "left", aPoint: a.right, bPoint: b.left, aOther: a.left, bOther: b.right },
+        { aName: "right", bName: "right", aPoint: a.right, bPoint: b.right, aOther: a.left, bOther: b.left }
+    ];
+    return endpoints.find((entry) => samePoint(entry.aPoint, entry.bPoint)) || null;
+}
+
+function chooseParallelTreadPairing(a, b) {
+    const sameSideScore = pointDistance(a.left, b.left) + pointDistance(a.right, b.right);
+    const crossedScore = pointDistance(a.left, b.right) + pointDistance(a.right, b.left);
+    if (crossedScore < sameSideScore) {
+        return {
+            side0Start: a.left,
+            side0End: b.right,
+            side1Start: a.right,
+            side1End: b.left
+        };
+    }
+    return {
+        side0Start: a.left,
+        side0End: b.left,
+        side1Start: a.right,
+        side1End: b.right
+    };
+}
+
+function allocateCountsByArea(sections, totalCount) {
+    const count = Math.max(1, Math.round(Number(totalCount) || 1));
+    const active = sections
+        .map((section, index) => ({ section, index, area: Math.max(0, Number(section && section.area) || 0) }))
+        .filter((entry) => entry.area > GEOMETRY_EPSILON);
+    const counts = new Array(sections.length).fill(0);
+    if (!active.length) {
+        counts[0] = count;
+        return counts;
+    }
+    const totalArea = active.reduce((sum, entry) => sum + entry.area, 0);
+    if (count >= active.length) {
+        active.forEach((entry) => {
+            counts[entry.index] = 1;
+        });
+        const remaining = count - active.length;
+        const extras = active.map((entry) => {
+            const exact = remaining * entry.area / totalArea;
+            return { ...entry, exact, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
+        });
+        let assigned = 0;
+        extras.forEach((entry) => {
+            counts[entry.index] += entry.floor;
+            assigned += entry.floor;
+        });
+        extras
+            .sort((a, b) => b.remainder - a.remainder || b.area - a.area || a.index - b.index)
+            .slice(0, remaining - assigned)
+            .forEach((entry) => {
+                counts[entry.index] += 1;
+            });
+        return counts;
+    }
+    const shares = active.map((entry) => {
+        const exact = count * entry.area / totalArea;
+        return { ...entry, exact, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
+    });
+    let assigned = 0;
+    shares.forEach((entry) => {
+        counts[entry.index] = entry.floor;
+        assigned += entry.floor;
+    });
+    shares
+        .sort((a, b) => b.remainder - a.remainder || b.area - a.area || a.index - b.index)
+        .slice(0, count - assigned)
+        .forEach((entry) => {
+            counts[entry.index] += 1;
+        });
+    return counts;
+}
+
+function stairMeshKey(floor, stair) {
+    const floorId = getFloorId(floor);
+    const stairId = stair && stair.id !== undefined ? String(stair.id) : "new";
+    return `${floorId}:${stairId}`;
+}
+
+function stairTreadTexturePath(stair) {
+    return normalizeTexturePath(stair && (stair.treadTexturePath || stair.texturePath), "/assets/images/flooring/woodfloor.png");
+}
+
+function stairRiserTexturePath(stair) {
+    return normalizeTexturePath(stair && (stair.riserTexturePath || stair.texturePath || stair.treadTexturePath), "/assets/images/flooring/woodfloor.png");
+}
+
+function defaultStairRiserDepth(height, stepCount) {
+    const resolvedHeight = Number(height);
+    const resolvedStepCount = Math.max(1, Math.round(Number(stepCount) || 1));
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) return 0;
+    return Math.min(resolvedHeight, resolvedHeight / (resolvedStepCount + 1) + 0.25);
+}
+
+function stairRiserDepth(stair, height, stepCount) {
+    if (stair && stair.riserDepth !== null && stair.riserDepth !== undefined && stair.riserDepth !== "") {
+        const depth = Number(stair.riserDepth);
+        if (!Number.isFinite(depth) || depth < 0) {
+            throw new Error(`stair ${stair.id || "(new)"} riser depth must be zero or greater`);
+        }
+        return Math.min(Number(height), depth);
+    }
+    return defaultStairRiserDepth(height, stepCount);
+}
+
+function stairMeshSignature(floor, stair) {
+    const treads = Array.isArray(stair && stair.treads) ? stair.treads : [];
+    const treadSignature = treads.map((tread) => [
+        Number(tread && tread.left && tread.left.x).toFixed(4),
+        Number(tread && tread.left && tread.left.y).toFixed(4),
+        Number(tread && tread.right && tread.right.x).toFixed(4),
+        Number(tread && tread.right && tread.right.y).toFixed(4)
+    ].join(",")).join("|");
+    const footprintSignature = Array.isArray(stair && stair.footprint)
+        ? stair.footprint.map((point) => `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`).join("|")
+        : "";
+    return [
+        getFloorId(floor),
+        stair && stair.id,
+        stair && stair.ladder === true ? "ladder" : "stairs",
+        Number(stair && stair.width).toFixed(4),
+        Number(stair && stair.stepCount).toFixed(0),
+        Number(stair && stair.height).toFixed(4),
+        Number(stairRiserDepth(stair, Number(stair && stair.height), Number(stair && stair.stepCount))).toFixed(4),
+        Number(stair && stair.bottomZ).toFixed(4),
+        stair && stair.direction,
+        stairTreadTexturePath(stair),
+        stairRiserTexturePath(stair),
+        treadSignature,
+        footprintSignature
+    ].join(";");
+}
+
 function convexHull(points, label = "convex hull") {
     const unique = [];
     points.forEach((point, index) => {
@@ -2055,9 +2316,15 @@ export class BuildingRenderer {
         this.root = new PIXI.Container();
         this.gridLayer = new PIXI.Container();
         this.gridLayer.name = "buildingEditorGridLayer";
-        this.gridHexLayers = [];
+        this.hexGridSpriteLayer = new PIXI.Container();
+        this.hexGridSpriteLayer.name = "buildingEditorHexGridSpriteLayer";
+        this.hexGridTexture = null;
+        this.hexGridSprites = [];
+        this.hexGridTextureKey = null;
         this.gridAxisLayer = new PIXI.Graphics();
         this.gridAxisLayer.name = "buildingEditorGridAxisLayer";
+        // sprite layer first so axis layer renders on top
+        this.gridLayer.addChild(this.hexGridSpriteLayer);
         this.gridLayer.addChild(this.gridAxisLayer);
         this.gridAnchorLayer = new PIXI.Graphics();
         this.buildingUnit = new PIXI.Container();
@@ -2073,6 +2340,7 @@ export class BuildingRenderer {
         this.pickerDebugLabels = new PIXI.Container();
         this.floorMeshById = new Map();
         this.roofMeshById = new Map();
+        this.stairMeshById = new Map();
         this.gableWallMeshById = new Map();
         this.wallUnitById = new Map();
         this.columnUnitById = new Map();
@@ -2089,6 +2357,7 @@ export class BuildingRenderer {
         this.lastWallPickEntries = [];
         this.lastSurfacePickEntries = [];
         this.lastMountedObjectPickEntries = [];
+        this.lastStairPickEntries = [];
         this.roofTextureConfigCache = null;
         this.roofTextureConfigPromise = null;
         this.roofTextureConfigError = "";
@@ -2220,6 +2489,11 @@ export class BuildingRenderer {
         this.drawDraft();
         this.drawMountedObjectPreview();
         if (typeof this.app.render === "function") {
+            const gl = this.app.renderer && this.app.renderer.gl;
+            if (gl) {
+                gl.clearDepth(1);
+                gl.clear(gl.DEPTH_BUFFER_BIT);
+            }
             this.app.render();
         }
     }
@@ -2384,73 +2658,39 @@ export class BuildingRenderer {
         }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
     }
 
-    clearGridHexLayers() {
-        const layers = Array.isArray(this.gridHexLayers) ? this.gridHexLayers : [];
-        layers.forEach((layer) => {
-            if (layer && typeof layer.clear === "function") layer.clear();
-            if (layer) layer.visible = false;
-        });
+    drawGrid() {
+        const gridZ = this.activePlaneZ();
+        const camera = this.state.camera;
+        const zoom = Number(camera.zoom);
+        if (!Number.isFinite(zoom) || zoom <= 0) return;
+        const pitch = cameraPitchProjectionFactors(camera);
+        const vy = zoom * GAME_XY_RATIO * pitch.floor;
+
         if (this.gridAxisLayer && typeof this.gridAxisLayer.clear === "function") {
             this.gridAxisLayer.clear();
             this.gridAxisLayer.visible = true;
         }
-    }
+        this.gridAnchorLayer.clear();
 
-    gridHexLayerAt(index) {
-        if (!this.gridLayer || typeof PIXI === "undefined" || typeof PIXI.Graphics !== "function") {
-            throw new Error("building editor grid rendering requires a PIXI grid layer");
-        }
-        if (!Array.isArray(this.gridHexLayers)) this.gridHexLayers = [];
-        let layer = this.gridHexLayers[index];
-        if (!layer) {
-            layer = new PIXI.Graphics();
-            layer.name = `buildingEditorGridHexLayer:${index}`;
-            this.gridHexLayers[index] = layer;
-            if (typeof this.gridLayer.addChild === "function") {
-                this.gridLayer.addChild(layer);
-                if (this.gridAxisLayer && typeof this.gridLayer.addChild === "function") {
-                    this.gridLayer.addChild(this.gridAxisLayer);
-                }
-            }
-        }
-        layer.visible = true;
-        if (typeof layer.clear === "function") layer.clear();
-        layer.lineStyle(1, 0x263640, 0.58);
-        return layer;
-    }
-
-    drawGrid() {
-        const anchors = this.gridAnchorLayer;
-        this.clearGridHexLayers();
-        anchors.clear();
-        const gridZ = this.activePlaneZ();
-        const bounds = this.visibleWorldBounds(gridZ, GRID_SCREEN_OVERSCAN_PIXELS);
-        const topLeft = { x: bounds.minX, y: bounds.minY };
-        const bottomRight = { x: bounds.maxX, y: bounds.maxY };
-        const range = visibleHexRange(topLeft, bottomRight);
-
-        let gfx = null;
-        let chunkIndex = -1;
-        let chunkHexCount = GRID_HEXES_PER_GRAPHICS_CHUNK;
-        for (let x = range.minX; x <= range.maxX; x++) {
-            for (let y = range.minY; y <= range.maxY; y++) {
-                if (chunkHexCount >= GRID_HEXES_PER_GRAPHICS_CHUNK) {
-                    chunkIndex += 1;
-                    chunkHexCount = 0;
-                    gfx = this.gridHexLayerAt(chunkIndex);
-                }
-                const center = offsetToWorld({ x, y });
-                const corners = hexCorners(center).map((point) => this.worldToScreen(point, gridZ));
-                gfx.drawPolygon(flattenPolygon(corners));
-                chunkHexCount += 1;
-            }
-        }
-
-        if (!this.state.showSnapAnchors) {
-            this.drawAxes(this.gridAxisLayer, topLeft, bottomRight, gridZ);
+        if (vy < GRID_HEX_VY_MIN) {
+            this._hideHexGridSprites();
             return;
         }
 
+        const bounds = this.visibleWorldBounds(gridZ, GRID_SCREEN_OVERSCAN_PIXELS);
+        const topLeft = { x: bounds.minX, y: bounds.minY };
+        const bottomRight = { x: bounds.maxX, y: bounds.maxY };
+
+
+        this._drawHexGridTexture(gridZ, zoom, pitch.floor, Number(camera.rotation) || 0);
+
+        if (!this.state.showSnapAnchors) return;
+
+        const range = visibleHexRange(topLeft, bottomRight);
+        const hexCount = (range.maxX - range.minX + 1) * (range.maxY - range.minY + 1);
+        if (hexCount > 4000) return;
+
+        const anchors = this.gridAnchorLayer;
         anchors.beginFill(0x607782, 0.5);
         for (let x = range.minX; x <= range.maxX; x++) {
             for (let y = range.minY; y <= range.maxY; y++) {
@@ -2481,8 +2721,133 @@ export class BuildingRenderer {
             }
         }
         anchors.endFill();
+    }
 
-        this.drawAxes(this.gridAxisLayer, topLeft, bottomRight, gridZ);
+    _hideHexGridSprites() {
+        for (const spr of this.hexGridSprites) {
+            if (spr) spr.visible = false;
+        }
+    }
+
+    _drawHexGridTexture(gridZ, zoom, pf, rotation) {
+        const cosA = Math.cos(rotation);
+        const sinA = Math.sin(rotation);
+        const vy = zoom * GAME_XY_RATIO * pf;
+        const screenH = this.app.screen.height;
+        const screenW = this.app.screen.width;
+
+        const TILE_COLS = GRID_HEX_TILE_COLS;
+        const TILE_ROWS = Math.max(10, Math.min(GRID_HEX_TILE_ROWS_MAX,
+            Math.ceil(screenH / (GRID_HEX_TILE_SPRITES * vy))));
+
+        // Screen-space period vectors for the hex tile
+        // v1 = screen delta for one tile-width in world X (TILE_COLS * 0.866)
+        const v1x = TILE_COLS * GAME_HEX_X_STEP * cosA * zoom;
+        const v1y = TILE_COLS * GAME_HEX_X_STEP * sinA * vy;
+        // v2 = screen delta for one tile-height in world Y (TILE_ROWS)
+        const v2x = -TILE_ROWS * sinA * zoom;
+        const v2y = TILE_ROWS * cosA * vy;
+
+        // Bounding box of the parallelogram — guarantees rectangular sprites tile
+        // without visible gaps when placed at parallelogram lattice positions
+        const xMin = Math.min(0, v1x, v2x, v1x + v2x);
+        const xMax = Math.max(0, v1x, v2x, v1x + v2x);
+        const yMin = Math.min(0, v1y, v2y, v1y + v2y);
+        const yMax = Math.max(0, v1y, v2y, v1y + v2y);
+        const texW = Math.ceil(xMax - xMin) + 1;
+        const texH = Math.ceil(yMax - yMin) + 1;
+
+        // Extremely flat pitch + rotation produces enormous bounding-box textures; skip rather than OOM
+        if (texW > 2048 || texH > 2048) { this._hideHexGridSprites(); return; }
+
+        const key = `${zoom.toFixed(2)},${pf.toFixed(5)},${rotation.toFixed(5)},${TILE_ROWS}`;
+        if (key !== this.hexGridTextureKey || !this.hexGridTexture) {
+            this._buildHexGridTexture(TILE_COLS, TILE_ROWS, zoom, pf, cosA, sinA, xMin, yMin, texW, texH);
+            this.hexGridTextureKey = key;
+        }
+
+        // Anchor: align to the tile containing the screen center, then iterate
+        // symmetrically so that camera rotation never leaves part of the screen uncovered.
+        const centerWorld = this.screenToWorld({ x: screenW / 2, y: screenH / 2 }, gridZ);
+        const tileColIdx = Math.floor(centerWorld.x / (TILE_COLS * GAME_HEX_X_STEP));
+        const tileRowIdx = Math.floor(centerWorld.y / TILE_ROWS);
+        const refWorldX = tileColIdx * TILE_COLS * GAME_HEX_X_STEP;
+        const refWorldY = tileRowIdx * TILE_ROWS;
+        const refScreen = this.worldToScreen({ x: refWorldX, y: refWorldY }, gridZ);
+        // refScreen is the screen position of the tile's reference world point.
+        // In the texture, that point sits at pixel (-xMin, -yMin), so the
+        // sprite's top-left is refScreen offset by (xMin, yMin).
+        const startX = refScreen.x + xMin;
+        const startY = refScreen.y + yMin;
+
+        let idx = 0;
+        const half = Math.floor(GRID_HEX_TILE_SPRITES / 2);
+        for (let j = -half; j <= half; j++) {
+            for (let i = -half; i <= half; i++) {
+                const sx = startX + i * v1x + j * v2x;
+                const sy = startY + i * v1y + j * v2y;
+                if (sx + texW < 0 || sx > screenW || sy + texH < 0 || sy > screenH) continue;
+                let spr = this.hexGridSprites[idx];
+                if (!spr) {
+                    spr = new PIXI.Sprite(this.hexGridTexture);
+                    spr.name = "buildingEditorHexGridTile";
+                    spr.anchor.set(0, 0);
+                    spr.interactive = false;
+                    this.hexGridSpriteLayer.addChild(spr);
+                    this.hexGridSprites[idx] = spr;
+                }
+                if (spr.texture !== this.hexGridTexture) spr.texture = this.hexGridTexture;
+                spr.x = sx;
+                spr.y = sy;
+                spr.visible = true;
+                idx++;
+            }
+        }
+        for (; idx < this.hexGridSprites.length; idx++) {
+            if (this.hexGridSprites[idx]) this.hexGridSprites[idx].visible = false;
+        }
+    }
+
+    _buildHexGridTexture(TILE_COLS, TILE_ROWS, zoom, pf, cosA, sinA, xMin, yMin, texW, texH) {
+        const scaleX = zoom;
+        const scaleY = zoom * GAME_XY_RATIO * pf;
+        // Extra hex columns/rows to fill parallelogram corners; capped so iteration stays O(TILE_COLS²)
+        const extraCols = Math.min(TILE_COLS, Math.ceil(Math.abs(TILE_ROWS * sinA / GAME_HEX_X_STEP))) + 2;
+        const extraRows = Math.min(TILE_ROWS, Math.ceil(Math.abs(TILE_COLS * GAME_HEX_X_STEP * sinA))) + 2;
+        const hexBound = Math.max(scaleX * GAME_HEX_RADIUS, scaleY * 0.5) + 2;
+
+        const gfx = new PIXI.Graphics();
+        gfx.lineStyle(1, 0x263640, 0.58);
+
+        for (let col = -extraCols; col < TILE_COLS + extraCols; col++) {
+            const worldX = col * GAME_HEX_X_STEP;
+            for (let row = -extraRows; row < TILE_ROWS + extraRows; row++) {
+                const worldY = row + (col % 2 === 0 ? 0.5 : 0);
+                const cx = (worldX * cosA - worldY * sinA) * scaleX - xMin;
+                const cy = (worldX * sinA + worldY * cosA) * scaleY - yMin;
+                if (cx + hexBound < 0 || cx - hexBound > texW || cy + hexBound < 0 || cy - hexBound > texH) continue;
+                const corners = hexCorners({ x: worldX, y: worldY });
+                gfx.moveTo(
+                    (corners[0].x * cosA - corners[0].y * sinA) * scaleX - xMin,
+                    (corners[0].x * sinA + corners[0].y * cosA) * scaleY - yMin
+                );
+                for (let k = 1; k < corners.length; k++) {
+                    gfx.lineTo(
+                        (corners[k].x * cosA - corners[k].y * sinA) * scaleX - xMin,
+                        (corners[k].x * sinA + corners[k].y * cosA) * scaleY - yMin
+                    );
+                }
+                gfx.closePath();
+            }
+        }
+
+        const tex = this.app.renderer.generateTexture(gfx, {
+            region: new PIXI.Rectangle(0, 0, texW, texH),
+            resolution: 1,
+        });
+        gfx.destroy(true);
+        if (this.hexGridTexture) this.hexGridTexture.destroy(true);
+        this.hexGridTexture = tex;
     }
 
     drawAxes(gfx, topLeft, bottomRight, worldZ = 0) {
@@ -2851,16 +3216,91 @@ export class BuildingRenderer {
         });
     }
 
+    stairOpeningStepPolygonsForFloor(stair, floor) {
+        const floorZ = getFloorElevation(floor);
+        const bottomZ = Number(stair && stair.bottomZ);
+        const height = Number(stair && stair.height);
+        if (!Number.isFinite(bottomZ) || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} needs finite elevation data for floor opening`);
+        }
+        const topZ = String(stair.direction || "up") === "down" ? bottomZ : bottomZ + height;
+        if (Math.abs(topZ - floorZ) > GEOMETRY_EPSILON) return [];
+        const thresholdZ = floorZ - 2;
+        return this.stairStepPolygons(stair)
+            .filter((step) => Number(step.z) >= thresholdZ - GEOMETRY_EPSILON && Number(step.z) <= floorZ + GEOMETRY_EPSILON)
+            .map((step) => positiveAreaRing(step.polygon));
+    }
+
+    stairOpeningClipGeometryForFloor(stair, floor, label = "stair floor opening") {
+        const openingPolygons = this.stairOpeningStepPolygonsForFloor(stair, floor)
+            .map((polygon, index) => [closedClipRing(polygon, `${label} step ${index}`)]);
+        if (!openingPolygons.length) return [];
+        const clipper = polygonClipper(label);
+        const union = clipper.union(...openingPolygons);
+        if (!Array.isArray(union) || union.length === 0) return [];
+        const floorPolygon = this.floorClipPolygon(floor, `${label} floor ${getFloorId(floor)}`);
+        const clipped = clipper.intersection(union, [floorPolygon]);
+        return Array.isArray(clipped) ? clipped : [];
+    }
+
+    floorClipPolygon(floor, label = `floor ${getFloorId(floor)} polygon`) {
+        return [
+            closedClipRing(floor.outerPolygon, `${label} outer`),
+            ...(Array.isArray(floor.holes) ? floor.holes : [])
+                .map((ring, index) => closedClipRing(ring, `${label} hole ${index}`))
+        ];
+    }
+
+    stairOpeningIntersectsFloor(stair, floor) {
+        return clipGeometryArea(this.stairOpeningClipGeometryForFloor(
+            stair,
+            floor,
+            `stair ${stair && stair.id ? stair.id : "(new)"} render visibility`
+        )) > GEOMETRY_EPSILON;
+    }
+
+    stairOpeningHolesForFloor(floor) {
+        const openingPolygons = [];
+        getBuildingFloors(this.state.building).forEach((sourceFloor) => {
+            getFloorStairs(sourceFloor).forEach((stair) => {
+                this.stairOpeningStepPolygonsForFloor(stair, floor).forEach((polygon, index) => {
+                    openingPolygons.push([closedClipRing(polygon, `stair ${stair.id} opening step ${index}`)]);
+                });
+            });
+        });
+        if (!openingPolygons.length) return [];
+        const clipper = polygonClipper("stair floor openings");
+        const union = clipper.union(...openingPolygons);
+        if (!Array.isArray(union) || union.length === 0) return [];
+        const floorPolygon = this.floorClipPolygon(floor, `floor ${getFloorId(floor)} stair opening clip`);
+        const clipped = clipper.intersection(union, [floorPolygon]);
+        return (Array.isArray(clipped) ? clipped : [])
+            .map((polygon, index) => {
+                if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                    throw new Error(`stair floor opening union produced malformed polygon ${index}`);
+                }
+                return clipRingToPoints(polygon[0], `stair floor opening ${getFloorId(floor)} polygon ${index}`);
+            })
+            .filter((ring) => ring.length >= 3 && Math.abs(polygonSignedArea(ring)) > GEOMETRY_EPSILON);
+    }
+
+    floorSurfaceHoles(floor) {
+        const staticHoles = (Array.isArray(floor && floor.holes) ? floor.holes : [])
+            .filter((ring) => Array.isArray(ring) && ring.length >= 3);
+        return [...staticHoles, ...this.stairOpeningHolesForFloor(floor)];
+    }
+
     syncFloorMesh(floor, alpha) {
         const floorId = getFloorId(floor);
-        const signature = floorMeshSignature(floor);
+        const holeRings = this.floorSurfaceHoles(floor);
+        const signature = surfaceMeshSignatureFromRings(floorId, floor.outerPolygon || [], holeRings, floor.floorTexturePath, getFloorElevation(floor));
         let entry = this.floorMeshById.get(floorId);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
                 if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
                 entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
             }
-            const triangulation = triangulateFloor(floor);
+            const triangulation = triangulateSurface(floor && floor.outerPolygon, holeRings);
             if (!triangulation) return null;
             const mesh = this.createFloorMesh(floor, triangulation);
             if (!mesh) return null;
@@ -2901,6 +3341,393 @@ export class BuildingRenderer {
             this.buildingUnit.addChild(entry.mesh);
         }
         this.updateRoofMeshUniforms(entry.mesh, roofView, alpha);
+        return entry.mesh;
+    }
+
+    stairSectionBetweenTreads(previousTread, nextTread, label = "stair section") {
+        const previous = normalizedTread(previousTread, `${label} previous tread`);
+        const next = normalizedTread(nextTread, `${label} next tread`);
+        const directionCross = Math.sin(next.angle - previous.angle);
+        if (Math.abs(directionCross) <= GEOMETRY_EPSILON) {
+            const paired = chooseParallelTreadPairing(previous, next);
+            const ring = positiveAreaRing([
+                paired.side0Start,
+                paired.side0End,
+                paired.side1End,
+                paired.side1Start
+            ]);
+            const area = Math.abs(polygonSignedArea(ring));
+            return {
+                kind: "rectangle",
+                area,
+                pointOuter: (t) => interpolatePoint(paired.side0Start, paired.side0End, t),
+                pointInner: (t) => interpolatePoint(paired.side1Start, paired.side1End, t),
+                ring
+            };
+        }
+
+        const connected = connectedTreadEndpoint(previous, next);
+        if (connected) {
+            const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
+            const outer0 = connected.aOther;
+            const outer1 = connected.bOther;
+            const radius = pointDistance(center, outer0);
+            if (Math.abs(radius - pointDistance(center, outer1)) > Math.max(0.001, radius * 0.01)) {
+                throw new Error(`${label} connected tread endpoints do not share a consistent stair width`);
+            }
+            const startAngle = Math.atan2(outer0.y - center.y, outer0.x - center.x);
+            const endAngle = Math.atan2(outer1.y - center.y, outer1.x - center.x);
+            const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle", `${label} next tread`);
+            const area = Math.abs(0.5 * radius * radius * deltaAngle);
+            return {
+                kind: "wedge",
+                area,
+                pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
+                pointInner: () => ({ ...center }),
+                ring: positiveAreaRing([outer0, outer1, center])
+            };
+        }
+
+        const crossing = lineIntersectionPoint(previous.left, previous.right, next.left, next.right);
+        if (!crossing) {
+            throw new Error(`${label} treads are neither parallel, connected, nor intersecting`);
+        }
+        const sortedPrevious = [previous.left, previous.right]
+            .map((point) => ({ point, distance: pointDistance(crossing, point) }))
+            .sort((a, b) => a.distance - b.distance);
+        const sortedNext = [next.left, next.right]
+            .map((point) => ({ point, distance: pointDistance(crossing, point) }))
+            .sort((a, b) => a.distance - b.distance);
+        const near0 = sortedPrevious[0];
+        const far0 = sortedPrevious[1];
+        const near1 = sortedNext[0];
+        const far1 = sortedNext[1];
+        const nearRadius = (near0.distance + near1.distance) * 0.5;
+        const farRadius = (far0.distance + far1.distance) * 0.5;
+        if (farRadius - nearRadius <= GEOMETRY_EPSILON) {
+            throw new Error(`${label} intersecting treads produce a degenerate annular section`);
+        }
+        const farStartAngle = Math.atan2(far0.point.y - crossing.y, far0.point.x - crossing.x);
+        const farEndAngle = Math.atan2(far1.point.y - crossing.y, far1.point.x - crossing.x);
+        const farDeltaAngle = stairArcDelta(farStartAngle, farEndAngle, next, "arcDeltaAngle", `${label} next tread`);
+        const nearStartAngle = Math.atan2(near0.point.y - crossing.y, near0.point.x - crossing.x);
+        const nearEndAngle = Math.atan2(near1.point.y - crossing.y, near1.point.x - crossing.x);
+        const nearDeltaAngle = stairArcDelta(nearStartAngle, nearEndAngle, next, "arcNearDeltaAngle", `${label} next tread`, farDeltaAngle);
+        const sectionAngle = Math.abs(farDeltaAngle);
+        const area = Math.abs(0.5 * sectionAngle * (farRadius * farRadius - nearRadius * nearRadius));
+        return {
+            kind: "annular",
+            area,
+            pointOuter: (t) => arcPoint(crossing, farRadius, farStartAngle, farDeltaAngle, t),
+            pointInner: (t) => arcPoint(crossing, nearRadius, nearStartAngle, nearDeltaAngle, t),
+            ring: positiveAreaRing([
+                far0.point,
+                far1.point,
+                near1.point,
+                near0.point
+            ])
+        };
+    }
+
+    stairSections(stair) {
+        if (!stair || stair.ladder === true) return [];
+        const treads = Array.isArray(stair.treads) ? stair.treads : [];
+        if (treads.length < 2) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} requires at least two treads`);
+        }
+        const sections = [];
+        for (let index = 1; index < treads.length; index++) {
+            sections.push(this.stairSectionBetweenTreads(
+                treads[index - 1],
+                treads[index],
+                `stair ${stair.id || "(new)"} section ${index - 1}`
+            ));
+        }
+        return sections;
+    }
+
+    stairStepPolygons(stair) {
+        if (!stair || typeof stair !== "object") throw new Error("stair step polygons require a stair record");
+        const totalSteps = Math.max(1, Math.round(Number(stair.stepCount) || 1));
+        const baseZ = Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : this.activePlaneZ();
+        const height = Number(stair.height);
+        if (!Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair.id || "(new)"} requires a positive height for step rendering`);
+        }
+        const rise = String(stair.direction || "up") === "down" ? -height : height;
+        if (stair.ladder === true) {
+            const footprint = stairFootprintPoints(stair);
+            if (!Array.isArray(footprint) || footprint.length < 3) {
+                throw new Error(`ladder stair ${stair.id || "(new)"} requires a valid footprint`);
+            }
+            const ring = positiveAreaRing(footprint);
+            return Array.from({ length: totalSteps }, (_, index) => ({
+                sectionIndex: 0,
+                localStepIndex: index,
+                globalStepIndex: index + 1,
+                z: baseZ + rise * ((index + 1) / (totalSteps + 1)),
+                polygon: ring.map((point) => ({ ...point }))
+            }));
+        }
+        const sections = this.stairSections(stair);
+        const sectionCounts = allocateCountsByArea(sections, totalSteps);
+        const steps = [];
+        let globalStepIndex = 0;
+        sections.forEach((section, sectionIndex) => {
+            const count = sectionCounts[sectionIndex];
+            for (let step = 0; step < count; step++) {
+                const t0 = step / count;
+                const t1 = (step + 1) / count;
+                const outer0 = section.pointOuter(t0);
+                const outer1 = section.pointOuter(t1);
+                const inner1 = section.pointInner(t1);
+                const inner0 = section.pointInner(t0);
+                const polygon = section.kind === "wedge"
+                    ? positiveAreaRing([outer0, outer1, inner0])
+                    : positiveAreaRing([outer0, outer1, inner1, inner0]);
+                if (polygon.length < 3 || Math.abs(polygonSignedArea(polygon)) <= GEOMETRY_EPSILON) {
+                    throw new Error(`stair ${stair.id || "(new)"} section ${sectionIndex} step ${step} is degenerate`);
+                }
+                globalStepIndex++;
+                const isDownStair = String(stair.direction || "up") === "down";
+                steps.push({
+                    sectionIndex,
+                    localStepIndex: step,
+                    globalStepIndex,
+                    z: baseZ + rise * (globalStepIndex / (totalSteps + 1)),
+                    polygon,
+                    lowerEdge: isDownStair
+                        ? [{ ...outer1 }, { ...inner1 }]
+                        : [{ ...outer0 }, { ...inner0 }]
+                });
+            }
+        });
+        if (steps.length !== totalSteps) {
+            throw new Error(`stair ${stair.id || "(new)"} generated ${steps.length} rendered steps instead of ${totalSteps}`);
+        }
+        return steps;
+    }
+
+    triangulateStairSteps(stair) {
+        const steps = this.stairStepPolygons(stair);
+        const totalSteps = Math.max(1, Math.round(Number(stair && stair.stepCount) || 1));
+        const height = Number(stair && stair.height);
+        if (!Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} requires a positive height for solid step triangulation`);
+        }
+        const stepDrop = height / (totalSteps + 1);
+        const resolvedRiserDepth = stairRiserDepth(stair, height, totalSteps);
+        const baseZ = Number.isFinite(Number(stair && stair.bottomZ)) ? Number(stair.bottomZ) : this.activePlaneZ();
+        const floorZ = String(stair && stair.direction || "up") === "down"
+            ? baseZ - height
+            : baseZ;
+        const textureRepeat = FLOOR_TEXTURE_REPEAT;
+        const treadPoints = [];
+        const treadIndices = [];
+        const riserPoints = [];
+        const riserIndices = [];
+        const pushRiserPoint = (point) => {
+            riserPoints.push(point);
+            return riserPoints.length - 1;
+        };
+        const same2d = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) <= GEOMETRY_EPSILON;
+        const normalForFace = (p0, p1, p2) => {
+            const ux = p1.x - p0.x;
+            const uy = p1.y - p0.y;
+            const uz = p1.z - p0.z;
+            const vx = p2.x - p0.x;
+            const vy = p2.y - p0.y;
+            const vz = p2.z - p0.z;
+            const nx = uy * vz - uz * vy;
+            const ny = uz * vx - ux * vz;
+            const nz = ux * vy - uy * vx;
+            const length = Math.hypot(nx, ny, nz);
+            if (length <= GEOMETRY_EPSILON) return { x: 0, y: 0, z: 1 };
+            return { x: nx / length, y: ny / length, z: nz / length };
+        };
+        const addVerticalFace = (a, b, topZ, bottomZA, bottomZB) => {
+            const ax = Number(a.x);
+            const ay = Number(a.y);
+            const bx = Number(b.x);
+            const by = Number(b.y);
+            if (![ax, ay, bx, by, topZ, bottomZA, bottomZB].every(Number.isFinite)) {
+                throw new Error(`stair ${stair.id || "(new)"} solid face contains non-finite coordinates`);
+            }
+            if (Math.max(Math.abs(topZ - bottomZA), Math.abs(topZ - bottomZB)) <= GEOMETRY_EPSILON || Math.hypot(bx - ax, by - ay) <= GEOMETRY_EPSILON) return;
+            const edgeLength = Math.hypot(bx - ax, by - ay);
+            const u0 = 0;
+            const u1 = edgeLength * textureRepeat;
+            const vTop = -topZ * textureRepeat;
+            const p0 = { x: ax, y: ay, z: topZ };
+            const p1 = { x: bx, y: by, z: topZ };
+            const p2 = { x: bx, y: by, z: bottomZB };
+            const normal = normalForFace(p0, p1, p2);
+            const aTop = pushRiserPoint({ ...p0, u: u0, v: vTop, normal });
+            const bTop = pushRiserPoint({ ...p1, u: u1, v: vTop, normal });
+            const bBottom = pushRiserPoint({ ...p2, u: u1, v: -bottomZB * textureRepeat, normal });
+            const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * textureRepeat, normal });
+            riserIndices.push(aTop, bBottom, bTop, aTop, aBottom, bBottom);
+        };
+        const addBottomFace = (ring, bottomZFor) => {
+            const bottomRing = positiveAreaRing(ring).map((point) => ({
+                x: Number(point.x),
+                y: Number(point.y),
+                z: bottomZFor(point)
+            }));
+            const triangulation = triangulateSurface(bottomRing, []);
+            if (!triangulation) {
+                throw new Error(`stair ${stair.id || "(new)"} bottom face could not be triangulated`);
+            }
+            for (let index = 0; index < triangulation.indices.length; index += 3) {
+                const a = triangulation.points[Number(triangulation.indices[index])];
+                const b = triangulation.points[Number(triangulation.indices[index + 1])];
+                const c = triangulation.points[Number(triangulation.indices[index + 2])];
+                if (!a || !b || !c) throw new Error(`stair ${stair.id || "(new)"} bottom face contains a missing triangle point`);
+                const p0 = { x: Number(a.x), y: Number(a.y), z: bottomZFor(a) };
+                const p1 = { x: Number(c.x), y: Number(c.y), z: bottomZFor(c) };
+                const p2 = { x: Number(b.x), y: Number(b.y), z: bottomZFor(b) };
+                const normal = normalForFace(p0, p1, p2);
+                const offset = riserPoints.length;
+                [p0, p1, p2].forEach((point) => {
+                    riserPoints.push({
+                        ...point,
+                        u: point.x * textureRepeat,
+                        v: point.y * textureRepeat,
+                        normal
+                    });
+                });
+                riserIndices.push(offset, offset + 1, offset + 2);
+            }
+        };
+        const stepBottomZFor = (step, point) => {
+            const topZ = Number(step.z);
+            if (resolvedRiserDepth <= GEOMETRY_EPSILON) return topZ;
+            const lowerEdge = Array.isArray(step.lowerEdge) ? step.lowerEdge : [];
+            const onLowerEdge = lowerEdge.some((edgePoint) => same2d(point, edgePoint));
+            let bottomZ;
+            if (resolvedRiserDepth <= stepDrop + GEOMETRY_EPSILON) {
+                bottomZ = topZ - resolvedRiserDepth;
+            } else if (resolvedRiserDepth <= stepDrop * 2 + GEOMETRY_EPSILON) {
+                bottomZ = onLowerEdge
+                    ? topZ - resolvedRiserDepth
+                    : topZ - stepDrop;
+            } else {
+                bottomZ = onLowerEdge
+                    ? topZ - resolvedRiserDepth
+                    : topZ - (resolvedRiserDepth - stepDrop);
+            }
+            return Math.max(floorZ, bottomZ);
+        };
+        steps.forEach((step) => {
+            const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const triangulation = triangulateSurface(ring, []);
+            if (!triangulation) {
+                throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} could not be triangulated`);
+            }
+            const offset = treadPoints.length;
+            triangulation.points.forEach((point) => {
+                treadPoints.push({ ...point, z: step.z, normal: { x: 0, y: 0, z: 1 } });
+            });
+            triangulation.indices.forEach((index) => {
+                treadIndices.push(offset + Number(index));
+            });
+            if (resolvedRiserDepth <= GEOMETRY_EPSILON) return;
+            const bottomZFor = (point) => stepBottomZFor(step, point);
+            for (let index = 0; index < ring.length; index++) {
+                const a = ring[index];
+                const b = ring[(index + 1) % ring.length];
+                addVerticalFace(a, b, Number(step.z), bottomZFor(a), bottomZFor(b));
+            }
+            addBottomFace(ring, bottomZFor);
+        });
+        if (!treadPoints.length || treadIndices.length < 3) {
+            throw new Error(`stair ${stair.id || "(new)"} did not produce renderable step geometry`);
+        }
+        const combinedPoints = [
+            ...treadPoints,
+            ...riserPoints
+        ];
+        const combinedIndices = [
+            ...treadIndices,
+            ...riserIndices.map((index) => Number(index) + treadPoints.length)
+        ];
+        const treadIndexArray = treadPoints.length > 65535 ? Uint32Array : Uint16Array;
+        const riserIndexArray = riserPoints.length > 65535 ? Uint32Array : Uint16Array;
+        const combinedIndexArray = combinedPoints.length > 65535 ? Uint32Array : Uint16Array;
+        return {
+            points: combinedPoints,
+            indices: new combinedIndexArray(combinedIndices),
+            tread: {
+                points: treadPoints,
+                indices: new treadIndexArray(treadIndices)
+            },
+            riser: {
+                points: riserPoints,
+                indices: new riserIndexArray(riserIndices)
+            }
+        };
+    }
+
+    createStairMeshPart(floor, stair, triangulation, texturePath, namePrefix) {
+        return this.createSurfaceMesh(floor, triangulation, {
+            z: Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : getFloorElevation(floor),
+            texturePath,
+            textureFallback: "/assets/images/flooring/woodfloor.png",
+            textureRepeat: FLOOR_TEXTURE_REPEAT,
+            namePrefix
+        });
+    }
+
+    createStairMesh(floor, stair, triangulation) {
+        if (!triangulation || !triangulation.tread) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} triangulation is missing tread geometry`);
+        }
+        const container = new PIXI.Container();
+        container.name = `buildingEditorStairMesh:${getFloorId(floor)}:${stair && stair.id !== undefined ? stair.id : "new"}`;
+        const treadMesh = this.createStairMeshPart(floor, stair, triangulation.tread, stairTreadTexturePath(stair), "buildingEditorStairTreadMesh");
+        const hasRiser = !!(triangulation.riser && triangulation.riser.points && triangulation.riser.points.length && triangulation.riser.indices && triangulation.riser.indices.length >= 3);
+        const riserMesh = hasRiser
+            ? this.createStairMeshPart(floor, stair, triangulation.riser, stairRiserTexturePath(stair), "buildingEditorStairRiserMesh")
+            : null;
+        if (!treadMesh || (hasRiser && !riserMesh)) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} split mesh could not be created`);
+        if (riserMesh) container.addChild(riserMesh);
+        container.addChild(treadMesh);
+        container.visible = false;
+        container.interactive = false;
+        container._stairTreadMesh = treadMesh;
+        container._stairRiserMesh = riserMesh;
+        return container;
+    }
+
+    syncStairMesh(floor, stair, alpha) {
+        const key = stairMeshKey(floor, stair);
+        const signature = stairMeshSignature(floor, stair);
+        let entry = this.stairMeshById.get(key);
+        if (!entry || entry.signature !== signature) {
+            if (entry && entry.mesh) {
+                if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
+                entry.mesh.destroy({ children: true, texture: false, baseTexture: false });
+            }
+            const triangulation = this.triangulateStairSteps(stair);
+            const mesh = this.createStairMesh(floor, stair, triangulation);
+            if (!mesh) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} mesh could not be created`);
+            this.buildingUnit.addChild(mesh);
+            entry = { signature, mesh };
+            this.stairMeshById.set(key, entry);
+        } else if (entry.mesh.parent !== this.buildingUnit) {
+            this.buildingUnit.addChild(entry.mesh);
+        }
+        entry.mesh.visible = true;
+        this.updateSurfaceMeshUniforms(entry.mesh._stairTreadMesh, floor, alpha, {
+            texturePath: stairTreadTexturePath(stair),
+            textureFallback: "/assets/images/flooring/woodfloor.png"
+        });
+        if (entry.mesh._stairRiserMesh) {
+            this.updateSurfaceMeshUniforms(entry.mesh._stairRiserMesh, floor, alpha, {
+                texturePath: stairRiserTexturePath(stair),
+                textureFallback: "/assets/images/flooring/woodfloor.png"
+            });
+        }
         return entry.mesh;
     }
 
@@ -3586,12 +4413,12 @@ export class BuildingRenderer {
     }
 
     pickWallAtScreen(screenPoint) {
-        const hit = this.pickAtScreen(screenPoint, { includeSurfaces: false, includeColumns: false });
+        const hit = this.pickAtScreen(screenPoint, { includeSurfaces: false, includeColumns: false, includeStairs: false });
         return hit && hit.type === "wall" ? hit : null;
     }
 
     pickSurfaceAtScreen(screenPoint) {
-        const hit = this.pickAtScreen(screenPoint, { includeWalls: false, includeColumns: false });
+        const hit = this.pickAtScreen(screenPoint, { includeWalls: false, includeColumns: false, includeStairs: false });
         return hit && (hit.type === "floor" || hit.type === "roof") ? hit : null;
     }
 
@@ -3602,6 +4429,7 @@ export class BuildingRenderer {
         const includeGables = options.includeGables !== false;
         const includeColumns = options.includeColumns !== false;
         const includeBeams = options.includeBeams !== false;
+        const includeStairs = options.includeStairs !== false;
         const items = [];
         const push = (key, type, payload, displayObj, forceInclude = false) => {
             if (!displayObj) return;
@@ -3674,6 +4502,29 @@ export class BuildingRenderer {
                 }
             }
         }
+        if (includeStairs) {
+            for (const candidate of (this.lastStairPickEntries || [])) {
+                if (candidate && candidate.stair && candidate.floor && candidate.mesh) {
+                    const pickMeshes = [];
+                    if (candidate.mesh._stairTreadMesh || candidate.mesh._stairRiserMesh) {
+                        if (candidate.mesh._stairTreadMesh) pickMeshes.push(candidate.mesh._stairTreadMesh);
+                        if (candidate.mesh._stairRiserMesh && candidate.mesh._stairRiserMesh !== candidate.mesh._stairTreadMesh) {
+                            pickMeshes.push(candidate.mesh._stairRiserMesh);
+                        }
+                    } else {
+                        pickMeshes.push(candidate.mesh);
+                    }
+                    if (!pickMeshes.length) {
+                        throw new Error(`building editor stair ${candidate.stair.id} screen picker has no renderable mesh parts`);
+                    }
+                    pickMeshes.forEach((mesh) => {
+                        push(`stair:${getFloorId(candidate.floor)}:${candidate.stair.id}`, "stair",
+                            { type: "stair", stair: candidate.stair, floor: candidate.floor, entry: candidate },
+                            mesh);
+                    });
+                }
+            }
+        }
         if (includeColumns) {
             for (const candidate of (this.lastColumnPickEntries || [])) {
                 if (candidate && candidate.column && candidate.floor && candidate.mesh) {
@@ -3734,6 +4585,10 @@ export class BuildingRenderer {
             if (!payload.beam || !payload.floor) throw new Error("building editor beam pick item is missing its payload");
             return { type: "beam", beam: payload.beam, floor: payload.floor };
         }
+        if (item.editorPickType === "stair") {
+            if (!payload.stair || !payload.floor) throw new Error("building editor stair pick item is missing its payload");
+            return { type: "stair", stair: payload.stair, floor: payload.floor };
+        }
         if (item.editorPickType === "column") {
             if (!payload.column || !payload.floor) throw new Error("building editor column pick item is missing its payload");
             return { type: "column", column: payload.column, floor: payload.floor };
@@ -3775,7 +4630,7 @@ export class BuildingRenderer {
         const floor = entry.type === "roof" ? floorRoofView(entry.floor, entry.roof) : entry.floor;
         const triangulation = entry.type === "roof"
             ? triangulateRoof(floor, this.roofTextureRepeatConfig(roofTexturePath(floor)))
-            : triangulateFloor(floor);
+            : triangulateSurface(floor && floor.outerPolygon, Array.isArray(entry.holes) ? entry.holes : floor && floor.holes);
         if (!triangulation) {
             throw new Error(`screen picker debug surface ${entry.type} ${getFloorId(floor)} requires triangulatable geometry`);
         }
@@ -3823,6 +4678,35 @@ export class BuildingRenderer {
         );
     }
 
+    createStairPickerDebugMesh(entry) {
+        if (!entry || !entry.stair || !entry.floor) {
+            throw new Error("cannot create picker debug stair mesh without a valid stair entry");
+        }
+        const triangulation = this.triangulateStairSteps(entry.stair);
+        if (!triangulation || !Array.isArray(triangulation.points) || triangulation.points.length < 3) {
+            throw new Error(`screen picker debug stair ${entry.stair.id} requires triangulatable geometry`);
+        }
+        const positions = new Float32Array(triangulation.points.length * 3);
+        triangulation.points.forEach((point, index) => {
+            if (
+                !Number.isFinite(Number(point && point.x)) ||
+                !Number.isFinite(Number(point && point.y)) ||
+                !Number.isFinite(Number(point && point.z))
+            ) {
+                throw new Error(`screen picker debug stair ${entry.stair.id} has a non-finite vertex`);
+            }
+            positions[index * 3] = Number(point.x);
+            positions[index * 3 + 1] = Number(point.y);
+            positions[index * 3 + 2] = Number(point.z);
+        });
+        return this.createSolidDepthMesh(
+            `buildingEditorPickerDebug:stair:${getFloorId(entry.floor)}:${entry.stair.id}`,
+            positions,
+            triangulation.indices,
+            debugSurfaceColor("stair", `${getFloorId(entry.floor)}:${entry.stair.id}`)
+        );
+    }
+
     drawScreenPickerHoverOutline(hit, wallEntries) {
         if (!hit) return;
         const gfx = this.pickerDebugLayer;
@@ -3853,6 +4737,9 @@ export class BuildingRenderer {
         } else if (hit.type === "column") {
             labelText = `column ${hit.column.id}`;
             rings = this.columnScreenOutlineRings(hit.column);
+        } else if (hit.type === "stair") {
+            labelText = `stair ${hit.stair.id}`;
+            rings = clipGeometryRings(this.stairScreenOutlineRings(hit.stair, `${labelText} hover`), `${labelText} hover`);
         } else {
             throw new Error(`cannot draw hover outline for unknown pick hit type: ${hit.type}`);
         }
@@ -3884,6 +4771,7 @@ export class BuildingRenderer {
         const wallPickEntries = Array.isArray(wallEntries) ? wallEntries : [];
         const surfacePickEntries = Array.isArray(this.lastSurfacePickEntries) ? this.lastSurfacePickEntries : [];
         const mountedObjectPickEntries = Array.isArray(this.lastMountedObjectPickEntries) ? this.lastMountedObjectPickEntries : [];
+        const stairPickEntries = Array.isArray(this.lastStairPickEntries) ? this.lastStairPickEntries : [];
         const pointerHit = this.screenPickerDebugPoint ? this.pickAtScreen(this.screenPickerDebugPoint) : null;
         surfacePickEntries.forEach((entry) => {
             this.pickerDepthDebugLayer.addChild(this.createSurfacePickerDebugMesh(entry));
@@ -3900,6 +4788,11 @@ export class BuildingRenderer {
                 new Uint16Array([0, 1, 2, 0, 2, 3]),
                 debugWallColor(entry.object.id)
             ));
+        });
+        // Picker debug has two parts: register the object in editorPickRenderItems(),
+        // and draw a solid debug mesh here. New depth-rendered object types need both.
+        stairPickEntries.forEach((entry) => {
+            this.pickerDepthDebugLayer.addChild(this.createStairPickerDebugMesh(entry));
         });
         this.drawScreenPickerHoverOutline(pointerHit, wallEntries);
         if (this.screenPickerDebugPoint) {
@@ -4194,6 +5087,7 @@ export class BuildingRenderer {
         this.lastGablePickEntries = [];
         this.lastBeamPickEntries = [];
         this.lastColumnPickEntries = [];
+        this.lastStairPickEntries = [];
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
         const liveFloorMeshIds = new Set();
@@ -4207,11 +5101,13 @@ export class BuildingRenderer {
             const floorAlpha = exterior ? 0.92 : 1;
             const mesh = this.syncFloorMesh(floor, floorAlpha);
             if (mesh) {
+                const holes = this.floorSurfaceHoles(floor);
                 liveFloorMeshIds.add(getFloorId(floor));
                 this.lastSurfacePickEntries.push({
                     type: "floor",
                     floor,
                     z: getFloorElevation(floor),
+                    holes,
                     mesh
                 });
             }
@@ -4296,6 +5192,7 @@ export class BuildingRenderer {
         for (const [colId, entry] of this.columnUnitById.entries()) {
             if (!liveColumnIds.has(colId) && entry && entry.mesh) entry.mesh.visible = false;
         }
+        this.drawStairs();
         this.drawBeams();
     }
 
@@ -5026,6 +5923,36 @@ export class BuildingRenderer {
         );
     }
 
+    stairScreenOutlineRings(stair, label = "stair selection outline") {
+        const steps = this.stairStepPolygons(stair);
+        if (!steps.length) throw new Error(`${label} requires at least one rendered step`);
+        return steps.map((step, index) => [closedClipRing(
+            step.polygon.map((point) => this.worldToScreen(point, step.z)),
+            `${label} step ${index}`
+        )]);
+    }
+
+    stairOpeningScreenGeometry(stair, label = "stair opening outline") {
+        const geometry = [];
+        getBuildingFloors(this.state.building).forEach((floor) => {
+            const floorId = getFloorId(floor);
+            const clipped = this.stairOpeningClipGeometryForFloor(stair, floor, `${label} floor ${floorId}`);
+            if (clipGeometryArea(clipped) <= GEOMETRY_EPSILON) return;
+            const z = getFloorElevation(floor);
+            clipped.forEach((polygon, polygonIndex) => {
+                if (!looksLikeClipPolygon(polygon)) {
+                    throw new Error(`${label} floor ${floorId} contains malformed opening polygon ${polygonIndex}`);
+                }
+                geometry.push(polygon.map((ring, ringIndex) => {
+                    const points = clipRingToPoints(ring, `${label} floor ${floorId} polygon ${polygonIndex} ring ${ringIndex}`)
+                        .map((point) => this.worldToScreen(point, z));
+                    return closedClipRing(points, `${label} floor ${floorId} screen polygon ${polygonIndex} ring ${ringIndex}`);
+                }));
+            });
+        });
+        return geometry;
+    }
+
     drawSelectionOutline() {
         const gfx = this.selectionOutlineLayer;
         gfx.clear();
@@ -5093,6 +6020,20 @@ export class BuildingRenderer {
             if (!beams.length) {
                 throw new Error("beam selection outline is missing selected beams");
             }
+            return;
+        }
+        if (selection.kind === "stair") {
+            const stairs = this.state.selectedStairs();
+            if (!stairs.length) {
+                throw new Error("stair selection outline is missing selected stairs");
+            }
+            stairs.forEach((stair) => {
+                this.drawClipGeometryOutline(gfx, this.stairScreenOutlineRings(stair, `stair ${stair.id} selection outline`), `stair ${stair.id} selection outline`);
+                const openingGeometry = this.stairOpeningScreenGeometry(stair, `stair ${stair.id} upper floor opening outline`);
+                if (openingGeometry.length) {
+                    this.drawClipGeometryOutline(gfx, openingGeometry, `stair ${stair.id} upper floor opening outline`);
+                }
+            });
             return;
         }
         if (selection.kind === "column") {
@@ -5435,6 +6376,10 @@ export class BuildingRenderer {
             }
             return;
         }
+        if (draft && draft.kind === "stair" && Array.isArray(draft.treads) && draft.treads.length > 0) {
+            this.drawStairRecord(gfx, draft, true);
+            return;
+        }
         if (draft && draft.kind === "roofPlacement" && Array.isArray(draft.points) && draft.points.length >= 3) {
             const z = Number.isFinite(Number(draft.elevation)) ? Number(draft.elevation) : this.activePlaneZ();
             const screens = draft.points.map((point) => this.worldToScreen(point, z));
@@ -5478,6 +6423,177 @@ export class BuildingRenderer {
     }
 
     // ── Beam and Column rendering ────────────────────────────────────────────
+
+    drawStairRecord(gfx, stair, preview = false) {
+        if (preview) {
+            this.drawStairPreviewRecord(gfx, stair);
+            return;
+        }
+        const boundaryTreads = this.stairRenderTreads(stair);
+        const footprintSource = stair && stair.pendingTread
+            ? { ...stair, treads: [...(Array.isArray(stair.treads) ? stair.treads : []), stair.pendingTread] }
+            : stair;
+        const footprint = stairFootprintPoints(footprintSource);
+        if (!Array.isArray(footprint) || footprint.length < 4) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(preview)"} has invalid footprint`);
+        }
+        const baseZ = Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : this.activePlaneZ();
+        const height = Number.isFinite(Number(stair.height)) ? Number(stair.height) : 3;
+        const topZ = String(stair.direction || "up") === "down" ? baseZ - height : baseZ + height;
+        const color = 0xcaa16a;
+        const outline = 0x111820;
+        const alpha = 0.42;
+        const screens = footprint.map((point) => this.worldToScreen(point, baseZ));
+        gfx.lineStyle(1, outline, 0.55);
+        gfx.beginFill(color, alpha);
+        gfx.moveTo(screens[0].x, screens[0].y);
+        for (let i = 1; i < screens.length; i++) gfx.lineTo(screens[i].x, screens[i].y);
+        gfx.closePath();
+        gfx.endFill();
+
+        if (boundaryTreads.length >= 2 && stair.ladder !== true) {
+            const platformCount = Math.max(1, boundaryTreads.length - 1);
+            for (let index = 0; index < platformCount; index++) {
+                const z = baseZ + (topZ - baseZ) * ((index + 1) / (boundaryTreads.length + 1));
+                const current = boundaryTreads[index];
+                const next = boundaryTreads[index + 1];
+                const face = [current.left, next.left, next.right, current.right].map((point) => this.worldToScreen(point, z));
+                gfx.lineStyle(1, outline, 0.42);
+                gfx.beginFill(color, 0.28);
+                gfx.moveTo(face[0].x, face[0].y);
+                for (let i = 1; i < face.length; i++) gfx.lineTo(face[i].x, face[i].y);
+                gfx.closePath();
+                gfx.endFill();
+            }
+        }
+
+        boundaryTreads.forEach((tread, index) => {
+            const z = baseZ + (topZ - baseZ) * ((index + 1) / (boundaryTreads.length + 1));
+            const leftScreen = this.worldToScreen(tread.left, z);
+            const rightScreen = this.worldToScreen(tread.right, z);
+            gfx.lineStyle(index === 0 ? 2 : 1, outline, 0.5);
+            gfx.moveTo(leftScreen.x, leftScreen.y);
+            gfx.lineTo(rightScreen.x, rightScreen.y);
+        });
+    }
+
+    drawStairPreviewRecord(gfx, stair) {
+        const treads = Array.isArray(stair && stair.treads) ? [...stair.treads] : [];
+        if (stair && stair.pendingTread) treads.push(stair.pendingTread);
+        if (!treads.length) return;
+        const baseZ = Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : this.activePlaneZ();
+        const height = Number(stair && stair.height);
+        if (Number.isFinite(height) && height > 0 && (stair.ladder === true || treads.length >= 2)) {
+            const previewStair = { ...stair, treads };
+            const steps = this.stairStepPolygons(previewStair);
+            steps.forEach((step) => {
+                const polygon = Array.isArray(step.polygon) ? step.polygon : [];
+                if (polygon.length < 3) return;
+                const screens = polygon.map((point) => this.worldToScreen(point, step.z));
+                gfx.lineStyle(2, 0x42a5ff, 0.95);
+                gfx.moveTo(screens[0].x, screens[0].y);
+                for (let index = 1; index < screens.length; index++) {
+                    gfx.lineTo(screens[index].x, screens[index].y);
+                }
+                gfx.lineTo(screens[0].x, screens[0].y);
+            });
+        }
+        const centerFor = (tread) => tread.center || {
+            x: (Number(tread.left.x) + Number(tread.right.x)) * 0.5,
+            y: (Number(tread.left.y) + Number(tread.right.y)) * 0.5
+        };
+
+        if (treads.length >= 2) {
+            gfx.lineStyle(1, 0xf4f2e8, 0.72);
+            for (let index = 1; index < treads.length; index++) {
+                const start = this.worldToScreen(centerFor(treads[index - 1]), baseZ);
+                const end = this.worldToScreen(centerFor(treads[index]), baseZ);
+                gfx.moveTo(start.x, start.y);
+                gfx.lineTo(end.x, end.y);
+            }
+        }
+
+        treads.forEach((tread, index) => {
+            const leftScreen = this.worldToScreen(tread.left, baseZ);
+            const rightScreen = this.worldToScreen(tread.right, baseZ);
+            gfx.lineStyle(index === 0 ? 3 : 2, 0x9fe4d5, index === treads.length - 1 ? 0.95 : 0.72);
+            gfx.moveTo(leftScreen.x, leftScreen.y);
+            gfx.lineTo(rightScreen.x, rightScreen.y);
+        });
+    }
+
+    stairRenderTreads(stair) {
+        const sourceTreads = Array.isArray(stair && stair.treads) ? [...stair.treads] : [];
+        if (stair && stair.pendingTread) sourceTreads.push(stair.pendingTread);
+        if (sourceTreads.length === 0) return [];
+        if (stair.ladder === true) {
+            const stepCount = Math.max(1, Math.round(Number(stair.stepCount) || sourceTreads.length || 1));
+            return Array.from({ length: stepCount }, () => ({
+                left: { x: Number(sourceTreads[0].left.x), y: Number(sourceTreads[0].left.y) },
+                right: { x: Number(sourceTreads[0].right.x), y: Number(sourceTreads[0].right.y) }
+            }));
+        }
+        if (sourceTreads.length < 2) {
+            return sourceTreads.map((tread) => ({
+                left: { x: Number(tread.left.x), y: Number(tread.left.y) },
+                right: { x: Number(tread.right.x), y: Number(tread.right.y) }
+            }));
+        }
+        const centers = sourceTreads.map((tread) => ({
+            x: (Number(tread.left.x) + Number(tread.right.x)) * 0.5,
+            y: (Number(tread.left.y) + Number(tread.right.y)) * 0.5
+        }));
+        const lengths = [0];
+        for (let i = 1; i < centers.length; i++) {
+            lengths[i] = lengths[i - 1] + Math.hypot(centers[i].x - centers[i - 1].x, centers[i].y - centers[i - 1].y);
+        }
+        const total = lengths[lengths.length - 1];
+        if (!Number.isFinite(total) || total <= GEOMETRY_EPSILON) return sourceTreads;
+        const stepCount = Math.max(1, Math.round(Number(stair.stepCount) || sourceTreads.length));
+        const out = [];
+        for (let step = 0; step < stepCount; step++) {
+            const target = total * ((step + 1) / (stepCount + 1));
+            let segmentIndex = 1;
+            while (segmentIndex < lengths.length - 1 && lengths[segmentIndex] < target) segmentIndex++;
+            const previousLength = lengths[segmentIndex - 1];
+            const segmentLength = lengths[segmentIndex] - previousLength;
+            const t = segmentLength <= GEOMETRY_EPSILON ? 0 : (target - previousLength) / segmentLength;
+            const a = sourceTreads[segmentIndex - 1];
+            const b = sourceTreads[segmentIndex];
+            out.push({
+                left: {
+                    x: Number(a.left.x) + (Number(b.left.x) - Number(a.left.x)) * t,
+                    y: Number(a.left.y) + (Number(b.left.y) - Number(a.left.y)) * t
+                },
+                right: {
+                    x: Number(a.right.x) + (Number(b.right.x) - Number(a.right.x)) * t,
+                    y: Number(a.right.y) + (Number(b.right.y) - Number(a.right.y)) * t
+                }
+            });
+        }
+        return out;
+    }
+
+    drawStairs() {
+        const floors = this.renderedFloors();
+        const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        const liveStairMeshIds = new Set();
+        getBuildingFloors(this.state.building).forEach((ownerFloor) => {
+            getFloorStairs(ownerFloor).forEach((stair) => {
+                const ownerFloorId = getFloorId(ownerFloor);
+                const visibleThroughRenderedFloor = floorIds.has(ownerFloorId) ||
+                    floors.some((floor) => getFloorId(floor) !== ownerFloorId && this.stairOpeningIntersectsFloor(stair, floor));
+                if (!visibleThroughRenderedFloor) return;
+                const key = stairMeshKey(ownerFloor, stair);
+                const mesh = this.syncStairMesh(ownerFloor, stair, 1);
+                if (mesh) this.lastStairPickEntries.push({ stair, floor: ownerFloor, mesh });
+                liveStairMeshIds.add(key);
+            });
+        });
+        for (const [key, entry] of this.stairMeshById.entries()) {
+            if (!liveStairMeshIds.has(key) && entry && entry.mesh) entry.mesh.visible = false;
+        }
+    }
 
     _beamBoxVertices(beam, floor) {
         const pts = this.state.beamWorldPoints(beam);

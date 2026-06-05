@@ -7,6 +7,7 @@ import {
     createEmptyBuilding,
     createFloor,
     createRoof,
+    createStraightStair,
     createGableMountedObject,
     createPerimeterWallsForFloor,
     createWall,
@@ -26,12 +27,14 @@ import {
     getBuildingWalls,
     getFloorBeams,
     getFloorColumns,
+    getFloorStairs,
     getFloorRoof,
     getFloorRoofs,
     getRoofContactPolygon,
     getRoofDomeLevels,
     getRoofPeakPoint,
     getRoofShedDirection,
+    stairFootprintPoints,
     defaultRoofPeakPointForFloor,
     getFloorElevation,
     getFloorId,
@@ -71,6 +74,7 @@ const EDITOR_SETTINGS_STORAGE_KEY = "survivor-building-editor-settings";
 const MOUNTED_OBJECT_TOOL_STORAGE_KEY = "survivor-building-editor-mounted-object-tools";
 const WALL_TOOL_STORAGE_KEY = "survivor-building-editor-wall-tool";
 const COLUMN_TOOL_STORAGE_KEY = "survivor-building-editor-column-tool";
+const STAIR_TOOL_STORAGE_KEY = "survivor-building-editor-stair-tool";
 const CORRUPT_SAVE_BACKUP_KEY_PREFIX = `${STORAGE_KEY}-corrupt-backup`;
 const STACKED_VERTEX_TOLERANCE = 0.0001;
 const LOWER_FLOOR_VERTEX_SNAP_DISTANCE = 0.25;
@@ -94,6 +98,8 @@ const ROOF_SUPPORT_POINT_EPSILON = 0.0001;
 const DEFAULT_COLUMN_EXTRA_THICKNESS = 0.001;
 const DEFAULT_COLUMN_WIDTH = 0.25;
 const COLUMN_DIMENSION_MAX = 1;
+const STAIR_WIDTH_MIN = 0.2;
+const STAIR_WIDTH_MAX = 5;
 const ROOF_SNAP_IMPORTANCE = Object.freeze({
     perimeterWallOuterCorner: 4,
     lowerFloorVertex: 3,
@@ -173,6 +179,53 @@ function normalizeColumnHeight(value, label = "column height") {
         throw new Error(`${label} must be a positive number`);
     }
     return height;
+}
+
+function normalizeStairToolWidth(value, label = "stair width") {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width < STAIR_WIDTH_MIN || width > STAIR_WIDTH_MAX) {
+        throw new Error(`${label} must be between ${STAIR_WIDTH_MIN} and ${STAIR_WIDTH_MAX}`);
+    }
+    return width;
+}
+
+function normalizeStairDirection(value, label = "stair direction") {
+    const direction = String(value || "").trim().toLowerCase();
+    if (direction === "up" || direction === "down") return direction;
+    throw new Error(`${label} must be up or down`);
+}
+
+function normalizeStairStepCount(value, label = "stair step count") {
+    const stepCount = Math.round(Number(value));
+    if (!Number.isInteger(stepCount) || stepCount < 1 || stepCount > 200) {
+        throw new Error(`${label} must be an integer between 1 and 200`);
+    }
+    return stepCount;
+}
+
+function defaultStairRiserDepth(height, stepCount) {
+    const resolvedHeight = Number(height);
+    const resolvedStepCount = Math.max(1, Math.round(Number(stepCount) || 1));
+    if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) return 0;
+    return Math.min(resolvedHeight, resolvedHeight / (resolvedStepCount + 1) + 0.25);
+}
+
+function normalizeStairRiserDepth(value, height, stepCount, label = "stair riser depth") {
+    if (value === null || value === undefined || String(value).trim() === "") {
+        return defaultStairRiserDepth(height, stepCount);
+    }
+    const depth = Number(value);
+    const maxDepth = Number(height);
+    if (!Number.isFinite(depth) || depth < 0) {
+        throw new Error(`${label} must be zero or greater`);
+    }
+    if (!Number.isFinite(maxDepth) || maxDepth <= 0) {
+        throw new Error(`${label} requires a positive stair height`);
+    }
+    if (depth > maxDepth) {
+        throw new Error(`${label} must be no greater than the stair height`);
+    }
+    return depth;
 }
 
 function gablePositionScalar(floor, position) {
@@ -325,6 +378,257 @@ function polygonsIntersectOrTouch2d(a, b, tolerance = ROOF_SUPPORT_POINT_EPSILON
             return segmentsIntersectOrTouch2d(aPoint, aNext, bPoint, bNext, tolerance);
         });
     });
+}
+
+function polygonClipper(label = "building editor geometry") {
+    const clipper = globalThis.polygonClipping;
+    if (!clipper || typeof clipper.union !== "function" || typeof clipper.intersection !== "function") {
+        throw new Error(`${label} requires polygon-clipping`);
+    }
+    return clipper;
+}
+
+function closedClipRing(points, label) {
+    if (!Array.isArray(points) || points.length < 3) {
+        throw new Error(`${label} requires at least three points`);
+    }
+    const ring = points.map((point, index) => {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point at index ${index}`);
+        }
+        return [x, y];
+    });
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (Math.hypot(first[0] - last[0], first[1] - last[1]) > 0.000001) {
+        ring.push([first[0], first[1]]);
+    }
+    return ring;
+}
+
+function clipRingSignedArea(ring) {
+    let area = 0;
+    for (let index = 0; index < ring.length - 1; index++) {
+        const current = ring[index];
+        const next = ring[index + 1];
+        area += Number(current[0]) * Number(next[1]) - Number(next[0]) * Number(current[1]);
+    }
+    return area * 0.5;
+}
+
+function clipGeometryArea(geometry) {
+    return (Array.isArray(geometry) ? geometry : []).reduce((total, polygon) => {
+        if (!Array.isArray(polygon) || polygon.length === 0) return total;
+        const outerArea = Math.abs(clipRingSignedArea(polygon[0]));
+        const holeArea = polygon.slice(1).reduce((sum, ring) => sum + Math.abs(clipRingSignedArea(ring)), 0);
+        return total + Math.max(0, outerArea - holeArea);
+    }, 0);
+}
+
+function floorClipPolygon(floor, label = `floor ${getFloorId(floor)} polygon`) {
+    return [
+        closedClipRing(floor && floor.outerPolygon, `${label} outer`),
+        ...(Array.isArray(floor && floor.holes) ? floor.holes : [])
+            .map((ring, index) => closedClipRing(ring, `${label} hole ${index}`))
+    ];
+}
+
+function wallFootprintPolygonFromResolvedGeometry(wall) {
+    const resolvedProfile = getWallResolvedGeometry(wall).profile;
+    return [
+        resolvedProfile.aLeft,
+        resolvedProfile.bLeft,
+        resolvedProfile.bRight,
+        resolvedProfile.aRight
+    ];
+}
+
+function normalizeRadians(angle) {
+    let out = Number(angle) % (Math.PI * 2);
+    if (out <= -Math.PI) out += Math.PI * 2;
+    if (out > Math.PI) out -= Math.PI * 2;
+    return out;
+}
+
+function shortestAngleDelta(from, to) {
+    return normalizeRadians(Number(to) - Number(from));
+}
+
+function unwrapDeltaNear(delta, referenceDelta) {
+    let unwrapped = Number(delta);
+    const reference = Number(referenceDelta);
+    if (!Number.isFinite(unwrapped)) throw new Error("stair arc delta must be finite");
+    if (!Number.isFinite(reference)) return unwrapped;
+    while (unwrapped - reference > Math.PI) unwrapped -= Math.PI * 2;
+    while (unwrapped - reference <= -Math.PI) unwrapped += Math.PI * 2;
+    return unwrapped;
+}
+
+function treadStoredArcDelta(tread, key, label) {
+    if (!Object.prototype.hasOwnProperty.call(tread || {}, key)) return null;
+    const value = Number(tread[key]);
+    if (!Number.isFinite(value)) throw new Error(`${label} ${key} must be finite`);
+    return value;
+}
+
+function stairArcDelta(startAngle, endAngle, tread, key, label, referenceDelta = null) {
+    const rawDelta = shortestAngleDelta(startAngle, endAngle);
+    const storedDelta = treadStoredArcDelta(tread, key, label);
+    if (storedDelta === null) {
+        return referenceDelta === null ? rawDelta : unwrapDeltaNear(rawDelta, referenceDelta);
+    }
+    const unwrapped = unwrapDeltaNear(rawDelta, storedDelta);
+    if (Math.abs(unwrapped - storedDelta) > 0.0001) {
+        throw new Error(`${label} ${key} does not match tread endpoint geometry`);
+    }
+    return storedDelta;
+}
+
+function arcPoint(center, radius, startAngle, deltaAngle, t) {
+    const angle = Number(startAngle) + Number(deltaAngle) * Math.max(0, Math.min(1, Number(t)));
+    return {
+        x: Number(center.x) + Math.cos(angle) * Number(radius),
+        y: Number(center.y) + Math.sin(angle) * Number(radius)
+    };
+}
+
+function pointDistance(a, b) {
+    return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+}
+
+function samePoint2d(a, b, epsilon = 0.000001) {
+    return pointDistance(a, b) <= epsilon;
+}
+
+function lineIntersectionPoint(a, b, c, d) {
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    const cx = Number(c.x);
+    const cy = Number(c.y);
+    const dx = Number(d.x);
+    const dy = Number(d.y);
+    const abx = bx - ax;
+    const aby = by - ay;
+    const cdx = dx - cx;
+    const cdy = dy - cy;
+    const denominator = abx * cdy - aby * cdx;
+    if (Math.abs(denominator) <= 0.000001) return null;
+    const acx = cx - ax;
+    const acy = cy - ay;
+    const t = (acx * cdy - acy * cdx) / denominator;
+    return { x: ax + abx * t, y: ay + aby * t };
+}
+
+function polygonSignedArea(points) {
+    let area = 0;
+    for (let index = 0; index < points.length; index++) {
+        const current = points[index];
+        const next = points[(index + 1) % points.length];
+        area += Number(current.x) * Number(next.y) - Number(next.x) * Number(current.y);
+    }
+    return area * 0.5;
+}
+
+function positiveAreaRing(points) {
+    const ring = (Array.isArray(points) ? points : [])
+        .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+    return polygonSignedArea(ring) < 0 ? ring.reverse() : ring;
+}
+
+function normalizedStairTread(tread, label = "stair tread") {
+    if (!tread || !Number.isFinite(Number(tread.left && tread.left.x)) || !Number.isFinite(Number(tread.left && tread.left.y)) ||
+        !Number.isFinite(Number(tread.right && tread.right.x)) || !Number.isFinite(Number(tread.right && tread.right.y))) {
+        throw new Error(`${label} requires finite left and right endpoints`);
+    }
+    const left = { x: Number(tread.left.x), y: Number(tread.left.y) };
+    const right = { x: Number(tread.right.x), y: Number(tread.right.y) };
+    const length = pointDistance(left, right);
+    if (!Number.isFinite(length) || length <= 0.000001) {
+        throw new Error(`${label} requires non-coincident endpoints`);
+    }
+    const normalized = {
+        left,
+        right,
+        center: {
+            x: (left.x + right.x) * 0.5,
+            y: (left.y + right.y) * 0.5
+        },
+        angle: Math.atan2(right.y - left.y, right.x - left.x),
+        length
+    };
+    if (Object.prototype.hasOwnProperty.call(tread, "arcDeltaAngle")) {
+        const value = Number(tread.arcDeltaAngle);
+        if (!Number.isFinite(value)) throw new Error(`${label} arcDeltaAngle must be finite`);
+        normalized.arcDeltaAngle = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(tread, "arcNearDeltaAngle")) {
+        const value = Number(tread.arcNearDeltaAngle);
+        if (!Number.isFinite(value)) throw new Error(`${label} arcNearDeltaAngle must be finite`);
+        normalized.arcNearDeltaAngle = value;
+    }
+    return normalized;
+}
+
+function connectedStairTreadEndpoint(a, b) {
+    const endpoints = [
+        { aPoint: a.left, bPoint: b.left, aOther: a.right, bOther: b.right },
+        { aPoint: a.left, bPoint: b.right, aOther: a.right, bOther: b.left },
+        { aPoint: a.right, bPoint: b.left, aOther: a.left, bOther: b.right },
+        { aPoint: a.right, bPoint: b.right, aOther: a.left, bOther: b.left }
+    ];
+    return endpoints.find((entry) => samePoint2d(entry.aPoint, entry.bPoint)) || null;
+}
+
+function chooseParallelStairTreadPairing(a, b) {
+    const sameSideScore = pointDistance(a.left, b.left) + pointDistance(a.right, b.right);
+    const crossedScore = pointDistance(a.left, b.right) + pointDistance(a.right, b.left);
+    if (crossedScore < sameSideScore) {
+        return {
+            side0Start: a.left,
+            side0End: b.right,
+            side1Start: a.right,
+            side1End: b.left
+        };
+    }
+    return {
+        side0Start: a.left,
+        side0End: b.left,
+        side1Start: a.right,
+        side1End: b.right
+    };
+}
+
+function allocateCountsByArea(sections, totalCount) {
+    const count = Math.max(1, Math.round(Number(totalCount) || 1));
+    const active = sections
+        .map((section, index) => ({ section, index, area: Math.max(0, Number(section && section.area) || 0) }))
+        .filter((entry) => entry.area > 0.000001);
+    const counts = new Array(sections.length).fill(0);
+    if (!active.length) {
+        counts[0] = count;
+        return counts;
+    }
+    const totalArea = active.reduce((sum, entry) => sum + entry.area, 0);
+    if (count >= active.length) active.forEach((entry) => { counts[entry.index] = 1; });
+    const remaining = count - counts.reduce((sum, value) => sum + value, 0);
+    const shares = active.map((entry) => {
+        const exact = remaining * entry.area / totalArea;
+        return { ...entry, exact, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
+    });
+    let assigned = 0;
+    shares.forEach((entry) => {
+        counts[entry.index] += entry.floor;
+        assigned += entry.floor;
+    });
+    shares
+        .sort((a, b) => b.remainder - a.remainder || b.area - a.area || a.index - b.index)
+        .slice(0, remaining - assigned)
+        .forEach((entry) => { counts[entry.index] += 1; });
+    return counts;
 }
 
 function endpointIsInsetFloorVertex(endpoint) {
@@ -695,6 +999,12 @@ function createSelection(kind, fields = {}) {
     const beamId = fields.beamId !== undefined && fields.beamId !== null
         ? fields.beamId
         : (beamIds.length === 1 ? beamIds[0] : null);
+    const stairIds = Array.isArray(fields.stairIds)
+        ? fields.stairIds.map((id) => Number.isFinite(Number(id)) ? Number(id) : String(id))
+        : (fields.stairId !== undefined && fields.stairId !== null ? [fields.stairId] : []);
+    const stairId = fields.stairId !== undefined && fields.stairId !== null
+        ? fields.stairId
+        : (stairIds.length === 1 ? stairIds[0] : null);
     const floorId = fields.floorId !== undefined && fields.floorId !== null
         ? String(fields.floorId)
         : (fields.levelId !== undefined && fields.levelId !== null ? String(fields.levelId) : null);
@@ -717,6 +1027,8 @@ function createSelection(kind, fields = {}) {
         beamId: beamId !== undefined && beamId !== null ? Number(beamId) : null,
         beamIds,
         beamEndpointKey: fields.beamEndpointKey || null,
+        stairId: stairId !== undefined && stairId !== null ? Number(stairId) : null,
+        stairIds,
         columnId: columnId !== undefined && columnId !== null ? Number(columnId) : null,
         columnIds,
         ringKind: fields.ringKind || null,
@@ -768,6 +1080,15 @@ export class BuildingEditorState extends EventTarget {
             texture: DEFAULTS.wallTexture,
             snapPointsPerSection: 1
         };
+        this.stairTool = {
+            width: DEFAULTS.stairWidth,
+            direction: DEFAULTS.stairDirection,
+            texture: DEFAULTS.floorTexture,
+            treadTexture: DEFAULTS.floorTexture,
+            riserTexture: DEFAULTS.floorTexture,
+            stepCount: null,
+            riserDepth: DEFAULTS.stairRiserDepth
+        };
         this.gridSize = DEFAULTS.gridSize;
         this.camera = { x: 0, y: 0, z: 0, zoom: 72, rotation: 0, pitch: Math.PI / 4, rotationCenter: { x: 0, y: 0 } };
         this.draft = null;
@@ -793,6 +1114,13 @@ export class BuildingEditorState extends EventTarget {
             columnSideCount: 4,
             columnTexture: DEFAULTS.wallTexture,
             columnSnapPointsPerSection: 1,
+            stairWidth: DEFAULTS.stairWidth,
+            stairDirection: DEFAULTS.stairDirection,
+            stairTexture: DEFAULTS.floorTexture,
+            stairTreadTexture: DEFAULTS.floorTexture,
+            stairRiserTexture: DEFAULTS.floorTexture,
+            stairStepCount: null,
+            stairRiserDepth: DEFAULTS.stairRiserDepth,
             mountedObjectSnapPointsPerSection: 1
         };
         this.createStarterFloor();
@@ -844,12 +1172,35 @@ export class BuildingEditorState extends EventTarget {
             this.setColumnToolActive();
             return;
         }
+        if (tool === "stair") {
+            this.setStairToolActive();
+            return;
+        }
         if (tool === "polygon" || tool === "scissors") {
             const selectedFloor = this.selectedFloor();
             if (selectedFloor) this.polygonToolElevation = getFloorElevation(selectedFloor);
         }
         this.tool = tool;
         this.draft = null;
+        if (this.selection && this.selection.kind === "stair") this.clearSelectionForTool();
+        this.emitChange();
+    }
+
+    setStairToolActive() {
+        const selectedFloor = this.selectedFloor();
+        this.tool = "stair";
+        this.draft = null;
+        this.syncStairToolDirectionWithFloor(selectedFloor, { emit: false });
+        if (this.selection && this.selection.kind === "stair") this.clearSelectionForTool();
+        this.inputs.stairWidth = this.stairTool.width;
+        this.inputs.stairDirection = this.stairTool.direction;
+        this.inputs.stairTexture = this.stairTool.treadTexture;
+        this.inputs.stairTreadTexture = this.stairTool.treadTexture;
+        this.inputs.stairRiserTexture = this.stairTool.riserTexture;
+        this.inputs.stairStepCount = this.stairTool.stepCount;
+        this.inputs.stairRiserDepth = this.stairTool.riserDepth;
+        this.paintTextures.floor = this.stairTool.treadTexture;
+        this.saveStairToolSettingsToBrowser();
         this.emitChange();
     }
 
@@ -1291,6 +1642,396 @@ export class BuildingEditorState extends EventTarget {
         };
     }
 
+    updateStairToolWidth(value) {
+        const width = normalizeStairToolWidth(value, "stair tool width");
+        this.stairTool.width = width;
+        this.inputs.stairWidth = width;
+        this.saveStairToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateStairToolDirection(value) {
+        const direction = normalizeStairDirection(value, "stair tool direction");
+        this.stairTool.direction = direction;
+        this.inputs.stairDirection = direction;
+        this.saveStairToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateStairToolTexture(texture, part = "tread") {
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("stair tool texture path must be a non-empty string");
+        }
+        const resolvedPart = part === "riser" ? "riser" : "tread";
+        if (resolvedPart === "riser") {
+            this.stairTool.riserTexture = texture;
+            this.inputs.stairRiserTexture = texture;
+        } else {
+            this.stairTool.texture = texture;
+            this.stairTool.treadTexture = texture;
+            this.inputs.stairTexture = texture;
+            this.inputs.stairTreadTexture = texture;
+            this.paintTextures.floor = texture;
+        }
+        this.saveStairToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateStairToolTreadTexture(texture) {
+        this.updateStairToolTexture(texture, "tread");
+    }
+
+    updateStairToolRiserTexture(texture) {
+        this.updateStairToolTexture(texture, "riser");
+    }
+
+    updateSelectedStairTexture(texture, part = "tread") {
+        if (typeof texture !== "string" || texture.length === 0) {
+            throw new Error("stair texture path must be a non-empty string");
+        }
+        const stairs = this.selectedStairs();
+        if (!stairs.length) throw new Error("cannot update stair texture without a selected stair");
+        const resolvedPart = part === "riser" ? "riser" : "tread";
+        stairs.forEach((stair) => {
+            if (resolvedPart === "riser") {
+                stair.riserTexturePath = texture;
+            } else {
+                stair.texturePath = texture;
+                stair.treadTexturePath = texture;
+            }
+        });
+        if (resolvedPart === "riser") {
+            this.inputs.stairRiserTexture = texture;
+        } else {
+            this.inputs.stairTexture = texture;
+            this.inputs.stairTreadTexture = texture;
+            this.paintTextures.floor = texture;
+        }
+        this.emitChange();
+    }
+
+    updateSelectedStairTreadTexture(texture) {
+        this.updateSelectedStairTexture(texture, "tread");
+    }
+
+    updateSelectedStairRiserTexture(texture) {
+        this.updateSelectedStairTexture(texture, "riser");
+    }
+
+    resizeStairRecordWidth(stair, width) {
+        const resolvedWidth = normalizeStairToolWidth(width, "stair width");
+        stair.width = resolvedWidth;
+        if (Array.isArray(stair.treads) && stair.treads.length > 0) {
+            stair.treads = stair.treads.map((tread, index) => {
+                const normalized = normalizedStairTread(tread, `stair ${stair.id} tread ${index}`);
+                const half = resolvedWidth * 0.5;
+                const ux = Math.cos(normalized.angle);
+                const uy = Math.sin(normalized.angle);
+                return {
+                    ...tread,
+                    left: {
+                        x: normalized.center.x - ux * half,
+                        y: normalized.center.y - uy * half
+                    },
+                    right: {
+                        x: normalized.center.x + ux * half,
+                        y: normalized.center.y + uy * half
+                    },
+                    center: { ...normalized.center },
+                    angle: normalized.angle
+                };
+            });
+            const firstTread = stair.treads[0];
+            const lastTread = stair.treads[stair.treads.length - 1];
+            stair.startPoint = { ...firstTread.center };
+            stair.endPoint = { ...lastTread.center };
+        }
+        if (stair.ladder === true && Array.isArray(stair.footprint) && stair.footprint.length === 4) {
+            const points = stair.footprint.map((point, index) => {
+                if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) {
+                    throw new Error(`ladder stair ${stair.id} footprint point ${index} must be finite`);
+                }
+                return { x: Number(point.x), y: Number(point.y) };
+            });
+            const dx = points[1].x - points[0].x;
+            const dy = points[1].y - points[0].y;
+            const length = Math.hypot(dx, dy);
+            if (!Number.isFinite(length) || length <= 0.000001) {
+                throw new Error(`ladder stair ${stair.id} width edit requires a non-degenerate footprint edge`);
+            }
+            const ux = dx / length;
+            const uy = dy / length;
+            const resizeEdge = (a, b) => {
+                const center = {
+                    x: (Number(a.x) + Number(b.x)) * 0.5,
+                    y: (Number(a.y) + Number(b.y)) * 0.5
+                };
+                const half = resolvedWidth * 0.5;
+                return [
+                    { x: center.x - ux * half, y: center.y - uy * half },
+                    { x: center.x + ux * half, y: center.y + uy * half }
+                ];
+            };
+            const [bottomLeft, bottomRight] = resizeEdge(points[0], points[1]);
+            const [topLeft, topRight] = resizeEdge(points[3], points[2]);
+            stair.footprint = [bottomLeft, bottomRight, topRight, topLeft];
+        } else {
+            stair.footprint = stairFootprintPoints(stair);
+        }
+        return stair;
+    }
+
+    updateSelectedStairWidth(value) {
+        const width = normalizeStairToolWidth(value, "selected stair width");
+        const stairs = this.selectedStairs();
+        if (!stairs.length) throw new Error("cannot update stair width without a selected stair");
+        const candidates = stairs.map((stair) => this.resizeStairRecordWidth(this.cloneStairForDrag(stair), width));
+        if (!candidates.every((stair) => this.stairMoveIsLegal(stair))) return false;
+        stairs.forEach((stair, index) => {
+            Object.keys(stair).forEach((key) => delete stair[key]);
+            Object.assign(stair, candidates[index]);
+        });
+        this.inputs.stairWidth = width;
+        this.emitChange();
+        return true;
+    }
+
+    updateSelectedStairStepCount(value) {
+        const stepCount = normalizeStairStepCount(value, "selected stair step count");
+        const stairs = this.selectedStairs();
+        if (!stairs.length) throw new Error("cannot update stair step count without a selected stair");
+        stairs.forEach((stair) => {
+            stair.stepCount = stepCount;
+            stair.riserDepth = normalizeStairRiserDepth(stair.riserDepth, stair.height, stepCount, "selected stair riser depth");
+        });
+        this.inputs.stairStepCount = stepCount;
+        this.emitChange();
+        return true;
+    }
+
+    updateSelectedStairRiserDepth(value) {
+        const stairs = this.selectedStairs();
+        if (!stairs.length) throw new Error("cannot update stair riser depth without a selected stair");
+        const riserDepths = stairs.map((stair) => (
+            normalizeStairRiserDepth(value, stair.height, stair.stepCount, "selected stair riser depth")
+        ));
+        stairs.forEach((stair, index) => {
+            stair.riserDepth = riserDepths[index];
+        });
+        this.inputs.stairRiserDepth = riserDepths[0];
+        this.emitChange();
+        return true;
+    }
+
+    updateStairToolStepCount(value) {
+        const raw = String(value ?? "").trim();
+        if (raw === "") {
+            this.stairTool.stepCount = null;
+            this.inputs.stairStepCount = null;
+            this.saveStairToolSettingsToBrowser();
+            this.emitChange();
+            return;
+        }
+        const stepCount = normalizeStairStepCount(raw, "stair tool step count");
+        this.stairTool.stepCount = stepCount;
+        this.inputs.stairStepCount = stepCount;
+        this.saveStairToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    updateStairToolRiserDepth(value) {
+        const raw = String(value ?? "").trim();
+        if (raw === "") {
+            this.stairTool.riserDepth = null;
+            this.inputs.stairRiserDepth = null;
+            this.saveStairToolSettingsToBrowser();
+            this.emitChange();
+            return;
+        }
+        const selectedFloor = this.selectedFloor();
+        const direction = this.viableStairDirectionForFloor(selectedFloor, this.stairTool.direction);
+        const height = Math.abs(this.stairHeightDifferenceForFloor(selectedFloor, direction));
+        const stepCount = this.stairTool.stepCount || this.defaultStairStepCountForFloor(selectedFloor, direction);
+        const riserDepth = normalizeStairRiserDepth(raw, height, stepCount, "stair tool riser depth");
+        this.stairTool.riserDepth = riserDepth;
+        this.inputs.stairRiserDepth = riserDepth;
+        this.saveStairToolSettingsToBrowser();
+        this.emitChange();
+    }
+
+    stairTargetFloor(sourceFloor, direction = this.stairTool.direction) {
+        if (!sourceFloor) throw new Error("stair placement requires a source floor");
+        const sourceZ = getFloorElevation(sourceFloor);
+        const floors = getBuildingFloors(this.building)
+            .filter((floor) => floor !== sourceFloor)
+            .map((floor) => ({ floor, z: getFloorElevation(floor) }))
+            .filter((entry) => direction === "down" ? entry.z < sourceZ : entry.z > sourceZ)
+            .sort((a, b) => direction === "down" ? b.z - a.z : a.z - b.z);
+        if (!floors.length) {
+            throw new Error(`stair ${direction} placement requires another floor ${direction === "down" ? "below" : "above"} the source floor`);
+        }
+        return floors[0].floor;
+    }
+
+    stairDirectionAvailability(sourceFloor = this.selectedFloor()) {
+        if (!sourceFloor) return { up: false, down: false };
+        const sourceZ = getFloorElevation(sourceFloor);
+        const floors = getBuildingFloors(this.building).filter((floor) => floor !== sourceFloor);
+        return {
+            up: floors.some((floor) => getFloorElevation(floor) > sourceZ),
+            down: floors.some((floor) => getFloorElevation(floor) < sourceZ)
+        };
+    }
+
+    viableStairDirectionForFloor(sourceFloor = this.selectedFloor(), preferred = this.stairTool.direction) {
+        const direction = normalizeStairDirection(preferred, "stair tool direction");
+        const availability = this.stairDirectionAvailability(sourceFloor);
+        if (availability[direction]) return direction;
+        if (availability.up) return "up";
+        if (availability.down) return "down";
+        return direction;
+    }
+
+    syncStairToolDirectionWithFloor(sourceFloor = this.selectedFloor(), options = {}) {
+        const direction = this.viableStairDirectionForFloor(sourceFloor, this.stairTool.direction);
+        const changed = direction !== this.stairTool.direction;
+        if (changed) {
+            this.stairTool.direction = direction;
+            this.inputs.stairDirection = direction;
+            this.saveStairToolSettingsToBrowser();
+            if (options.emit !== false) this.emitChange();
+        }
+        return {
+            direction,
+            changed,
+            availability: this.stairDirectionAvailability(sourceFloor)
+        };
+    }
+
+    stairHeightDifferenceForFloor(sourceFloor, direction = this.stairTool.direction) {
+        const targetFloor = this.stairTargetFloor(sourceFloor, direction);
+        return getFloorElevation(targetFloor) - getFloorElevation(sourceFloor);
+    }
+
+    defaultStairStepCountForFloor(sourceFloor, direction = this.stairTool.direction) {
+        const heightDifference = Math.abs(this.stairHeightDifferenceForFloor(sourceFloor, direction));
+        return Math.max(1, Math.round(heightDifference * 5));
+    }
+
+    defaultStairRiserDepthForFloor(sourceFloor, direction = this.stairTool.direction, stepCount = null) {
+        const heightDifference = Math.abs(this.stairHeightDifferenceForFloor(sourceFloor, direction));
+        return defaultStairRiserDepth(heightDifference, stepCount || this.defaultStairStepCountForFloor(sourceFloor, direction));
+    }
+
+    stairCreationSettingsForFloor(sourceFloor, requestedDirection = this.stairTool.direction) {
+        const direction = normalizeStairDirection(requestedDirection, "stair tool direction");
+        const heightDifference = this.stairHeightDifferenceForFloor(sourceFloor, direction);
+        return {
+            width: this.stairTool.width,
+            direction,
+            texturePath: this.stairTool.treadTexture || this.stairTool.texture,
+            treadTexturePath: this.stairTool.treadTexture || this.stairTool.texture,
+            riserTexturePath: this.stairTool.riserTexture || this.stairTool.treadTexture || this.stairTool.texture,
+            height: Math.abs(heightDifference),
+            stepCount: this.stairTool.stepCount || this.defaultStairStepCountForFloor(sourceFloor, direction),
+            riserDepth: normalizeStairRiserDepth(
+                this.stairTool.riserDepth,
+                Math.abs(heightDifference),
+                this.stairTool.stepCount || this.defaultStairStepCountForFloor(sourceFloor, direction),
+                "stair tool riser depth"
+            )
+        };
+    }
+
+    stairToolSettingsSnapshot() {
+        return {
+            width: this.stairTool.width,
+            direction: this.stairTool.direction,
+            texture: this.stairTool.treadTexture || this.stairTool.texture,
+            treadTexture: this.stairTool.treadTexture || this.stairTool.texture,
+            riserTexture: this.stairTool.riserTexture || this.stairTool.treadTexture || this.stairTool.texture,
+            stepCount: this.stairTool.stepCount,
+            riserDepth: this.stairTool.riserDepth
+        };
+    }
+
+    saveStairToolSettingsToBrowser() {
+        const storage = browserLocalStorage();
+        if (!storage) return false;
+        storage.setItem(STAIR_TOOL_STORAGE_KEY, JSON.stringify(this.stairToolSettingsSnapshot()));
+        return true;
+    }
+
+    loadStairToolSettingsFromBrowser() {
+        const storage = browserLocalStorage();
+        if (!storage) return false;
+        const stored = storage.getItem(STAIR_TOOL_STORAGE_KEY);
+        if (!stored) return false;
+        const payload = JSON.parse(stored);
+        if (!payload || typeof payload !== "object") {
+            throw new Error("stored stair tool settings must be an object");
+        }
+        const width = normalizeStairToolWidth(payload.width ?? DEFAULTS.stairWidth, "stored stair width");
+        const direction = normalizeStairDirection(payload.direction ?? DEFAULTS.stairDirection, "stored stair direction");
+        const treadTexture = String(payload.treadTexture || payload.texture || DEFAULTS.floorTexture);
+        const riserTexture = String(payload.riserTexture || payload.texture || treadTexture || DEFAULTS.floorTexture);
+        if (!treadTexture) throw new Error("stored stair tool settings require a tread texture path");
+        if (!riserTexture) throw new Error("stored stair tool settings require a riser texture path");
+        const stepCount = payload.stepCount === null || payload.stepCount === undefined || payload.stepCount === ""
+            ? null
+            : normalizeStairStepCount(payload.stepCount, "stored stair step count");
+        const riserDepth = payload.riserDepth === null || payload.riserDepth === undefined || payload.riserDepth === ""
+            ? null
+            : Number(payload.riserDepth);
+        if (riserDepth !== null && (!Number.isFinite(riserDepth) || riserDepth < 0)) {
+            throw new Error("stored stair riser depth must be zero or greater");
+        }
+        this.stairTool = { width, direction, texture: treadTexture, treadTexture, riserTexture, stepCount, riserDepth };
+        this.inputs.stairWidth = width;
+        this.inputs.stairDirection = direction;
+        this.inputs.stairTexture = treadTexture;
+        this.inputs.stairTreadTexture = treadTexture;
+        this.inputs.stairRiserTexture = riserTexture;
+        this.inputs.stairStepCount = stepCount;
+        this.inputs.stairRiserDepth = riserDepth;
+        if (this.tool === "stair") {
+            this.syncStairToolDirectionWithFloor(this.selectedFloor(), { emit: false });
+            this.paintTextures.floor = treadTexture;
+        }
+        this.emitChange();
+        return true;
+    }
+
+    addStairToFloor(floorId, stairOptions = {}) {
+        const floor = findFloor(this.building, floorId);
+        if (!floor) throw new Error(`cannot add stair to missing floor: ${floorId}`);
+        const requestedDirection = stairOptions.direction || this.stairTool.direction;
+        const settings = this.stairCreationSettingsForFloor(floor, requestedDirection);
+        const targetFloor = this.stairTargetFloor(floor, settings.direction);
+        const owningFloor = settings.direction === "down" ? targetFloor : floor;
+        const stair = createStraightStair({
+            floorId: getFloorId(owningFloor),
+            bottomZ: getFloorElevation(floor),
+            height: settings.height,
+            width: settings.width,
+            direction: settings.direction,
+            texturePath: settings.texturePath,
+            treadTexturePath: settings.treadTexturePath,
+            riserTexturePath: settings.riserTexturePath,
+            stepCount: settings.stepCount,
+            riserDepth: settings.riserDepth,
+            ...stairOptions
+        });
+        stair.floorId = getFloorId(owningFloor);
+        if (!Array.isArray(owningFloor.stairs)) owningFloor.stairs = [];
+        owningFloor.stairs.push(stair);
+        this.selection = createSelection("floor", { floorId: getFloorId(owningFloor) });
+        this.selectedFloorIds = new Set([getFloorId(owningFloor)]);
+        this.layerSelectionMode = "floor";
+        this.emitChange();
+        return stair;
+    }
+
     setRenderError(message) {
         this.renderError = message;
     }
@@ -1485,6 +2226,7 @@ export class BuildingEditorState extends EventTarget {
         }
         this.selection = createSelection("floor", { floorId: selectedFloorId });
         this.syncInputsFromFloor(floor);
+        if (this.tool === "stair") this.syncStairToolDirectionWithFloor(floor, { emit: false });
         this.emitChange();
     }
 
@@ -3247,6 +3989,7 @@ export class BuildingEditorState extends EventTarget {
             case "wall":
             case "floor":
             case "roof":
+            case "stair":
                 this.selectLevel(selection.floorId, { preserveView });
                 return true;
             case "level":
@@ -3755,6 +4498,7 @@ export class BuildingEditorState extends EventTarget {
         this.building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
         refreshWallSectionEndpoints(this.building, floor);
         this.inputs.floorElevation = elevation;
+        if (this.tool === "stair") this.syncStairToolDirectionWithFloor(floor, { emit: false });
         this.emitChange();
     }
 
@@ -4808,7 +5552,11 @@ export class BuildingEditorState extends EventTarget {
 
     canFinalizePolygonDraft() {
         const draft = this.activePolygonDraft();
-        return !!(draft && draft.completed === true && Array.isArray(draft.points) && draft.points.length >= 3);
+        if (draft) return !!(draft.completed === true && Array.isArray(draft.points) && draft.points.length >= 3);
+        const stairDraft = this.draft && this.draft.kind === "stair" ? this.draft : null;
+        if (!stairDraft) return false;
+        if (stairDraft.ladder === true) return stairDraft.completed === true;
+        return !!(stairDraft.completed === true && Array.isArray(stairDraft.treads) && stairDraft.treads.length >= 2);
     }
 
     pickPolygonDraftVertex(point, threshold) {
@@ -5200,6 +5948,325 @@ export class BuildingEditorState extends EventTarget {
 
     removeBeamFromSelection(beamId, options = {}) {
         return this.removeBeamsFromSelection([beamId], options);
+    }
+
+    // ── Stair helpers ───────────────────────────────────────────────────────
+
+    findStairById(stairId) {
+        for (const floor of getBuildingFloors(this.building)) {
+            const stair = getFloorStairs(floor).find((candidate) => String(candidate.id) === String(stairId));
+            if (stair) return { stair, floor };
+        }
+        return null;
+    }
+
+    selectedStairIds() {
+        if (!this.selection || this.selection.kind !== "stair") return [];
+        if (Array.isArray(this.selection.stairIds) && this.selection.stairIds.length > 0) {
+            return this.selection.stairIds;
+        }
+        return this.selection.stairId !== null && this.selection.stairId !== undefined ? [this.selection.stairId] : [];
+    }
+
+    selectedStairs() {
+        return this.selectedStairIds().map((stairId) => {
+            const entry = this.findStairById(stairId);
+            if (!entry) throw new Error(`selected stair is missing from building: ${stairId}`);
+            return entry.stair;
+        });
+    }
+
+    isStairSelected(stairId) {
+        return this.selectedStairIds().some((id) => String(id) === String(stairId));
+    }
+
+    selectStair(floorId, stairId, options = {}) {
+        const entry = this.findStairById(stairId);
+        if (!entry) throw new Error(`cannot select missing stair: ${stairId}`);
+        const resolvedFloorId = getFloorId(entry.floor);
+        if (floorId !== undefined && floorId !== null && String(floorId) !== resolvedFloorId) {
+            throw new Error(`stair ${stairId} is not on floor ${floorId}`);
+        }
+        if (!options.preserveView) {
+            this.selectedFloorIds = new Set([resolvedFloorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.tool = "select";
+        this.draft = null;
+        this.selection = createSelection("stair", { floorId: resolvedFloorId, stairId: entry.stair.id });
+        this.emitChange();
+        return true;
+    }
+
+    cloneStairForDrag(stair) {
+        return JSON.parse(JSON.stringify(stair));
+    }
+
+    beginSelectedStairMove(startPoint) {
+        if (!startPoint || !Number.isFinite(Number(startPoint.x)) || !Number.isFinite(Number(startPoint.y))) {
+            throw new Error("stair drag requires a finite start point");
+        }
+        const entries = this.selectedStairIds().map((stairId) => this.findStairById(stairId)).filter(Boolean);
+        if (!entries.length) return null;
+        return {
+            startPoint: { x: Number(startPoint.x), y: Number(startPoint.y) },
+            originals: entries.map((entry) => ({
+                stairId: entry.stair.id,
+                floorId: getFloorId(entry.floor),
+                stair: this.cloneStairForDrag(entry.stair)
+            }))
+        };
+    }
+
+    translateStairRecord(stair, dx, dy) {
+        const movePoint = (point) => ({
+            ...point,
+            x: Number(point.x) + dx,
+            y: Number(point.y) + dy
+        });
+        if (stair.startPoint) stair.startPoint = movePoint(stair.startPoint);
+        if (stair.endPoint) stair.endPoint = movePoint(stair.endPoint);
+        if (stair.lowerPoint) stair.lowerPoint = movePoint(stair.lowerPoint);
+        if (stair.higherPoint) stair.higherPoint = movePoint(stair.higherPoint);
+        if (Array.isArray(stair.treads)) {
+            stair.treads = stair.treads.map((tread) => ({
+                ...tread,
+                left: movePoint(tread.left),
+                right: movePoint(tread.right),
+                center: tread.center ? movePoint(tread.center) : {
+                    x: (Number(tread.left.x) + Number(tread.right.x)) * 0.5 + dx,
+                    y: (Number(tread.left.y) + Number(tread.right.y)) * 0.5 + dy
+                }
+            }));
+        }
+        if (Array.isArray(stair.footprint)) {
+            stair.footprint = stair.footprint.map(movePoint);
+        } else {
+            stair.footprint = stairFootprintPoints(stair);
+        }
+        return stair;
+    }
+
+    stairTopAndBottomFloors(stair) {
+        const sourceZ = Number(stair && stair.bottomZ);
+        const height = Number(stair && stair.height);
+        if (!Number.isFinite(sourceZ) || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair && stair.id} move requires finite elevation data`);
+        }
+        const topZ = String(stair.direction || "up") === "down" ? sourceZ : sourceZ + height;
+        const bottomZ = String(stair.direction || "up") === "down" ? sourceZ - height : sourceZ;
+        const topFloor = this.floorAtElevation(topZ);
+        const bottomFloor = this.floorAtElevation(bottomZ);
+        if (!topFloor) throw new Error(`stair ${stair && stair.id} move requires a floor at top elevation ${topZ}`);
+        if (!bottomFloor) throw new Error(`stair ${stair && stair.id} move requires a floor at bottom elevation ${bottomZ}`);
+        return { topFloor, bottomFloor, topZ, bottomZ };
+    }
+
+    stairSectionBetweenTreads(previousTread, nextTread, label = "stair section") {
+        const previous = normalizedStairTread(previousTread, `${label} previous tread`);
+        const next = normalizedStairTread(nextTread, `${label} next tread`);
+        const directionCross = Math.sin(next.angle - previous.angle);
+        if (Math.abs(directionCross) <= 0.000001) {
+            const paired = chooseParallelStairTreadPairing(previous, next);
+            const ring = positiveAreaRing([
+                paired.side0Start,
+                paired.side0End,
+                paired.side1End,
+                paired.side1Start
+            ]);
+            return {
+                area: Math.abs(polygonSignedArea(ring)),
+                pointOuter: (t) => interpolatePoint(paired.side0Start, paired.side0End, t),
+                pointInner: (t) => interpolatePoint(paired.side1Start, paired.side1End, t)
+            };
+        }
+        const connected = connectedStairTreadEndpoint(previous, next);
+        if (connected) {
+            const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
+            const radius = pointDistance(center, connected.aOther);
+            const startAngle = Math.atan2(connected.aOther.y - center.y, connected.aOther.x - center.x);
+            const endAngle = Math.atan2(connected.bOther.y - center.y, connected.bOther.x - center.x);
+            const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle", `${label} next tread`);
+            return {
+                area: Math.abs(0.5 * radius * radius * deltaAngle),
+                pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
+                pointInner: () => ({ ...center })
+            };
+        }
+        const crossing = lineIntersectionPoint(previous.left, previous.right, next.left, next.right);
+        if (!crossing) throw new Error(`${label} treads are neither parallel, connected, nor intersecting`);
+        const sortedPrevious = [previous.left, previous.right]
+            .map((point) => ({ point, distance: pointDistance(crossing, point) }))
+            .sort((a, b) => a.distance - b.distance);
+        const sortedNext = [next.left, next.right]
+            .map((point) => ({ point, distance: pointDistance(crossing, point) }))
+            .sort((a, b) => a.distance - b.distance);
+        const nearRadius = (sortedPrevious[0].distance + sortedNext[0].distance) * 0.5;
+        const farRadius = (sortedPrevious[1].distance + sortedNext[1].distance) * 0.5;
+        const farStartAngle = Math.atan2(sortedPrevious[1].point.y - crossing.y, sortedPrevious[1].point.x - crossing.x);
+        const farEndAngle = Math.atan2(sortedNext[1].point.y - crossing.y, sortedNext[1].point.x - crossing.x);
+        const farDeltaAngle = stairArcDelta(farStartAngle, farEndAngle, next, "arcDeltaAngle", `${label} next tread`);
+        const nearStartAngle = Math.atan2(sortedPrevious[0].point.y - crossing.y, sortedPrevious[0].point.x - crossing.x);
+        const nearEndAngle = Math.atan2(sortedNext[0].point.y - crossing.y, sortedNext[0].point.x - crossing.x);
+        const nearDeltaAngle = stairArcDelta(nearStartAngle, nearEndAngle, next, "arcNearDeltaAngle", `${label} next tread`, farDeltaAngle);
+        return {
+            area: Math.abs(0.5 * Math.abs(farDeltaAngle) * (farRadius * farRadius - nearRadius * nearRadius)),
+            pointOuter: (t) => arcPoint(crossing, farRadius, farStartAngle, farDeltaAngle, t),
+            pointInner: (t) => arcPoint(crossing, nearRadius, nearStartAngle, nearDeltaAngle, t)
+        };
+    }
+
+    stairStepPolygonsForValidation(stair) {
+        const totalSteps = Math.max(1, Math.round(Number(stair.stepCount) || 1));
+        const baseZ = Number(stair.bottomZ);
+        const height = Number(stair.height);
+        const rise = String(stair.direction || "up") === "down" ? -height : height;
+        if (stair.ladder === true) {
+            const polygon = positiveAreaRing(stairFootprintPoints(stair));
+            return Array.from({ length: totalSteps }, (_unused, index) => ({
+                polygon,
+                z: baseZ + rise * ((index + 1) / (totalSteps + 1)),
+                globalStepIndex: index
+            }));
+        }
+        const treads = Array.isArray(stair.treads) ? stair.treads : [];
+        if (treads.length < 2) throw new Error(`stair ${stair.id} move requires at least two treads`);
+        const sections = [];
+        for (let index = 1; index < treads.length; index++) {
+            sections.push(this.stairSectionBetweenTreads(treads[index - 1], treads[index], `stair ${stair.id} section ${index - 1}`));
+        }
+        const counts = allocateCountsByArea(sections, totalSteps);
+        const steps = [];
+        sections.forEach((section, sectionIndex) => {
+            const count = counts[sectionIndex];
+            for (let local = 0; local < count; local++) {
+                const t0 = local / count;
+                const t1 = (local + 1) / count;
+                const globalStepIndex = steps.length;
+                steps.push({
+                    polygon: positiveAreaRing([
+                        section.pointOuter(t0),
+                        section.pointOuter(t1),
+                        section.pointInner(t1),
+                        section.pointInner(t0)
+                    ]),
+                    z: baseZ + rise * ((globalStepIndex + 1) / (totalSteps + 1)),
+                    globalStepIndex
+                });
+            }
+        });
+        return steps;
+    }
+
+    stairOpeningPolygonsForValidation(stair, topFloor) {
+        const floorZ = getFloorElevation(topFloor);
+        const thresholdZ = floorZ - 2;
+        return this.stairStepPolygonsForValidation(stair)
+            .filter((step) => Number(step.z) >= thresholdZ - 0.000001 && Number(step.z) <= floorZ + 0.000001)
+            .map((step) => positiveAreaRing(step.polygon));
+    }
+
+    stairLandingRectangles(stair) {
+        const treads = Array.isArray(stair.treads) ? stair.treads.map((tread, index) => normalizedStairTread(tread, `stair ${stair.id} tread ${index}`)) : [];
+        if (treads.length < 2 || stair.ladder === true) return [];
+        const { topFloor, bottomFloor } = this.stairTopAndBottomFloors(stair);
+        const topIndex = String(stair.direction || "up") === "down" ? 0 : treads.length - 1;
+        const bottomIndex = String(stair.direction || "up") === "down" ? treads.length - 1 : 0;
+        const rectFor = (index, neighborIndex, floor, label) => {
+            const tread = treads[index];
+            const neighbor = treads[neighborIndex];
+            const dx = tread.center.x - neighbor.center.x;
+            const dy = tread.center.y - neighbor.center.y;
+            const length = Math.hypot(dx, dy);
+            if (!Number.isFinite(length) || length <= 0.000001) {
+                throw new Error(`stair ${stair.id} ${label} landing requires separated tread centers`);
+            }
+            const ux = dx / length;
+            const uy = dy / length;
+            return {
+                floor,
+                label,
+                polygon: positiveAreaRing([
+                    tread.left,
+                    tread.right,
+                    { x: tread.right.x + ux, y: tread.right.y + uy },
+                    { x: tread.left.x + ux, y: tread.left.y + uy }
+                ])
+            };
+        };
+        return [
+            rectFor(topIndex, topIndex === 0 ? 1 : topIndex - 1, topFloor, "top"),
+            rectFor(bottomIndex, bottomIndex === 0 ? 1 : bottomIndex - 1, bottomFloor, "bottom")
+        ];
+    }
+
+    polygonFitsFloor(polygon, floor, label) {
+        const clipper = polygonClipper(label);
+        const source = [[closedClipRing(polygon, `${label} polygon`)]];
+        const clipped = clipper.intersection(source, [floorClipPolygon(floor, `${label} floor ${getFloorId(floor)}`)]);
+        return Math.abs(clipGeometryArea(source) - clipGeometryArea(clipped)) <= 0.000001;
+    }
+
+    polygonIntersectsFloorWalls(polygon, floor, label) {
+        const floorId = getFloorId(floor);
+        return getBuildingWalls(this.building)
+            .filter((wall) => String(wall.fragmentId || wall.floorId) === floorId)
+            .some((wall) => polygonsIntersectOrTouch2d(polygon, wallFootprintPolygonFromResolvedGeometry(wall), ROOF_SUPPORT_POINT_EPSILON));
+    }
+
+    stairMoveIsLegal(stair) {
+        const { topFloor } = this.stairTopAndBottomFloors(stair);
+        const openingPolygons = this.stairOpeningPolygonsForValidation(stair, topFloor);
+        if (!openingPolygons.length) return false;
+        for (const polygon of openingPolygons) {
+            if (!this.polygonFitsFloor(polygon, topFloor, `stair ${stair.id} upper-floor opening`)) return false;
+            if (this.polygonIntersectsFloorWalls(polygon, topFloor, `stair ${stair.id} upper-floor opening`)) return false;
+        }
+        for (const landing of this.stairLandingRectangles(stair)) {
+            if (!this.polygonFitsFloor(landing.polygon, landing.floor, `stair ${stair.id} ${landing.label} landing`)) return false;
+            if (this.polygonIntersectsFloorWalls(landing.polygon, landing.floor, `stair ${stair.id} ${landing.label} landing`)) return false;
+        }
+        return true;
+    }
+
+    moveSelectedStair(snapshot, point) {
+        if (!snapshot || !Array.isArray(snapshot.originals)) return false;
+        if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) {
+            throw new Error("stair drag move requires a finite point");
+        }
+        const dx = Number(point.x) - Number(snapshot.startPoint.x);
+        const dy = Number(point.y) - Number(snapshot.startPoint.y);
+        const candidates = snapshot.originals.map((entry) => ({
+            ...entry,
+            stair: this.translateStairRecord(this.cloneStairForDrag(entry.stair), dx, dy)
+        }));
+        if (!candidates.every((entry) => this.stairMoveIsLegal(entry.stair))) return false;
+        candidates.forEach((entry) => {
+            const current = this.findStairById(entry.stairId);
+            if (!current) throw new Error(`cannot move missing stair: ${entry.stairId}`);
+            Object.keys(current.stair).forEach((key) => delete current.stair[key]);
+            Object.assign(current.stair, entry.stair);
+        });
+        this.emitChange();
+        return true;
+    }
+
+    deleteSelectedStair() {
+        const stairIds = this.selectedStairIds();
+        if (!stairIds.length) return false;
+        const selectedIds = new Set(stairIds.map((id) => String(id)));
+        const entries = stairIds.map((stairId) => this.findStairById(stairId)).filter(Boolean);
+        if (!entries.length) return false;
+        const floors = new Set(entries.map((entry) => entry.floor));
+        floors.forEach((floor) => {
+            floor.stairs = getFloorStairs(floor).filter((stair) => !selectedIds.has(String(stair.id)));
+        });
+        const firstFloor = entries[0].floor;
+        this.selection = createSelection("floor", { floorId: getFloorId(firstFloor) });
+        this.selectedFloorIds = new Set([getFloorId(firstFloor)]);
+        this.layerSelectionMode = "floor";
+        this.emitChange();
+        return true;
     }
 
     addBeamToFloor(floorId, beamOptions = {}) {
@@ -6040,6 +7107,7 @@ export class BuildingEditorState extends EventTarget {
         if (selectedColumn) this.copyColumnToTool(selectedColumn);
         this.tool = "column";
         this.draft = null;
+        if (!selectedColumn && this.selection && this.selection.kind === "stair") this.clearSelectionForTool();
         this.saveColumnToolSettingsToBrowser();
         this.emitChange();
     }

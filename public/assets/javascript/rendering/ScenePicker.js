@@ -5,8 +5,8 @@
     const PICK_RENDER_DEBUG_SCALE = 1;
     const PICK_FLOOR_LAYER_DEFAULT_HEIGHT_UNITS = 3;
     const PICK_CAMERA_DEFAULT_PITCH = Math.PI / 4;
-    const PICK_CAMERA_MIN_PITCH = Math.PI / 12;
-    const PICK_CAMERA_MAX_PITCH = Math.PI * 5 / 12;
+    const PICK_CAMERA_MIN_PITCH = 0;
+    const PICK_CAMERA_MAX_PITCH = Math.PI / 2 - 0.001;
     const PICK_CAMERA_PITCH_BASE = Math.SQRT1_2;
     const PICK_PREVIEW_BLACK_KEY_FS = `
 precision mediump float;

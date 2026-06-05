@@ -92,6 +92,16 @@ function triangulationXyArea(triangulation) {
     return area;
 }
 
+function ringXyArea(ring) {
+    let area = 0;
+    for (let index = 0; index < ring.length; index++) {
+        const current = ring[index];
+        const next = ring[(index + 1) % ring.length];
+        area += Number(current.x) * Number(next.y) - Number(next.x) * Number(current.y);
+    }
+    return Math.abs(area) * 0.5;
+}
+
 function triangulatedZAt(triangulation, point, epsilon = 0.000001) {
     for (let index = 0; index < triangulation.indices.length; index += 3) {
         const a = triangulation.points[triangulation.indices[index]];
@@ -3433,6 +3443,1473 @@ test("beam round-trips through normalizeImportedBuilding", async () => {
     assert.equal(restoredBeam.height, 0.3);
     assert.equal(restoredBeam.endAttachment.kind, "column");
     assert.equal(restoredBeam.endAttachment.hostId, 7);
+});
+
+test("createStraightStair produces a valid footprint and rejects invalid settings", async () => {
+    const model = await loadModel();
+    const floor = model.createFloor({
+        footprint: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]
+    });
+    const stair = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 3, y: 1 },
+        width: 1,
+        direction: "down",
+        texturePath: "/assets/images/flooring/woodfloor.png",
+        treadTexturePath: "/assets/images/flooring/cobblestones.png",
+        riserTexturePath: "/assets/images/flooring/dirt.jpg",
+        bottomZ: 3,
+        height: 3,
+        riserDepth: 2
+    });
+
+    assert.equal(stair.type, "stairs");
+    assert.equal(stair.stairKind, "straight");
+    assert.equal(stair.direction, "down");
+    assert.equal(stair.width, 1);
+    assert.equal(stair.texturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.treadTexturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.riserTexturePath, "/assets/images/flooring/dirt.jpg");
+    assert.equal(stair.riserDepth, 2);
+    assert.equal(stair.footprint.length, 4);
+    assert.deepEqual(stair.footprint.map((point) => Number(point.y.toFixed(3))), [1.5, 1.5, 0.5, 0.5]);
+    assert.throws(() => model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 0, y: 0 }
+    }), /must not coincide/);
+    assert.throws(() => model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 1, y: 0 },
+        direction: "sideways"
+    }), /up or down/);
+    assert.throws(() => model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 1, y: 0 },
+        height: 3,
+        riserDepth: 4
+    }), /riser depth/);
+});
+
+test("stair records round-trip through normalizeImportedBuilding", async () => {
+    const model = await loadModel();
+    const building = model.createEmptyBuilding();
+    const floor = model.createFloor({
+        footprint: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }]
+    });
+    model.addFloor(building, floor);
+    const stair = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 4, y: 1 },
+        width: 1.4,
+        direction: "up",
+        treadTexturePath: "/assets/images/flooring/cobblestones.png",
+        riserTexturePath: "/assets/images/flooring/dirt.jpg",
+        bottomZ: 0,
+        height: 3,
+        stepCount: 9,
+        riserDepth: 1.75
+    });
+    floor.stairs.push(stair);
+
+    const restored = model.normalizeImportedBuilding(model.serializeBuilding(building));
+    const restoredFloor = model.getBuildingFloors(restored)[0];
+    const restoredStair = model.getFloorStairs(restoredFloor)[0];
+
+    assert.equal(restoredStair.id, stair.id);
+    assert.equal(restoredStair.floorId, floor.fragmentId);
+    assert.equal(restoredStair.width, 1.4);
+    assert.equal(restoredStair.direction, "up");
+    assert.equal(restoredStair.stepCount, 9);
+    assert.equal(restoredStair.riserDepth, 1.75);
+    assert.equal(restoredStair.treadTexturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(restoredStair.riserTexturePath, "/assets/images/flooring/dirt.jpg");
+    assert.equal(restoredStair.treads.length, 2);
+    assert.equal(restoredStair.footprint.length, 4);
+});
+
+test("stair tool settings are applied to new stairs", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const lowerFloor = model.createFloor({
+        elevation: -3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, lowerFloor);
+
+    state.setTool("stair");
+    state.updateStairToolWidth(1.6);
+    state.updateStairToolDirection("down");
+    state.updateStairToolTreadTexture("/assets/images/flooring/cobblestones.png");
+    state.updateStairToolRiserTexture("/assets/images/flooring/dirt.jpg");
+    state.updateStairToolRiserDepth(1.25);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 }
+    });
+
+    assert.equal(stair.width, 1.6);
+    assert.equal(stair.direction, "down");
+    assert.equal(stair.texturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.treadTexturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.riserTexturePath, "/assets/images/flooring/dirt.jpg");
+    assert.equal(stair.stepCount, 15);
+    assert.equal(stair.riserDepth, 1.25);
+    assert.equal(stair.height, 3);
+    assert.equal(stair.floorId, model.getFloorId(lowerFloor));
+    assert.equal(model.getFloorStairs(floor).length, 0);
+    assert.equal(model.getFloorStairs(lowerFloor).length, 1);
+    assert.equal(state.tool, "stair");
+});
+
+test("stair tool explicit step count overrides the floor-height default", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const upperFloor = model.createFloor({
+        elevation: 4,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, upperFloor);
+
+    assert.equal(state.defaultStairStepCountForFloor(floor, "up"), 20);
+    state.updateStairToolStepCount(7);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 }
+    });
+
+    assert.equal(stair.stepCount, 7);
+    assert.equal(stair.height, 4);
+});
+
+test("stair tool selects the only viable floor direction automatically", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const groundFloor = state.selectedFloor();
+    const lowerFloor = model.createFloor({
+        elevation: -3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, lowerFloor);
+
+    state.setTool("stair");
+
+    assert.deepEqual(state.stairDirectionAvailability(groundFloor), { up: false, down: true });
+    assert.equal(state.stairTool.direction, "down");
+    assert.equal(state.inputs.stairDirection, "down");
+
+    state.selectFloor(model.getFloorId(lowerFloor));
+
+    assert.deepEqual(state.stairDirectionAvailability(lowerFloor), { up: true, down: false });
+    assert.equal(state.stairTool.direction, "up");
+    assert.equal(state.inputs.stairDirection, "up");
+});
+
+test("stairs can be selected and deleted", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const upperFloor = model.createFloor({
+        elevation: 3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, upperFloor);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 }
+    });
+
+    state.selectStair(model.getFloorId(floor), stair.id);
+
+    assert.equal(state.selection.kind, "stair");
+    assert.equal(state.selectedStairIds()[0], stair.id);
+    assert.equal(state.selectedStairs()[0], stair);
+    assert.equal(state.deleteSelectedStair(), true);
+    assert.equal(model.getFloorStairs(floor).length, 0);
+    assert.equal(state.selection.kind, "floor");
+});
+
+test("selecting another editor object clears stair selection", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building)[0];
+    const upperFloor = model.createFloor({
+        elevation: 3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, upperFloor);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 }
+    });
+
+    state.selectStair(model.getFloorId(floor), stair.id);
+    state.selectWall(wall.id);
+
+    assert.equal(state.selection.kind, "wall");
+    assert.deepEqual(state.selectedStairIds(), []);
+});
+
+test("activating a tool clears stair selection", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const upperFloor = model.createFloor({
+        elevation: 3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, upperFloor);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 }
+    });
+
+    state.selectStair(model.getFloorId(floor), stair.id);
+    state.setTool("stair");
+
+    assert.equal(state.tool, "stair");
+    assert.equal(state.selection.kind, "level");
+    assert.deepEqual(state.selectedStairIds(), []);
+});
+
+test("selected stairs can be retextured with floor textures", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const upperFloor = model.createFloor({
+        elevation: 3,
+        footprint: [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }]
+    });
+    model.addFloor(state.building, upperFloor);
+    const stair = state.addStairToFloor(floor.fragmentId, {
+        startPoint: { x: -1, y: 0 },
+        endPoint: { x: 1, y: 0 },
+        texturePath: "/assets/images/flooring/woodfloor.png"
+    });
+
+    state.selectStair(model.getFloorId(floor), stair.id);
+    state.updateSelectedStairTreadTexture("/assets/images/flooring/cobblestones.png");
+    state.updateSelectedStairRiserTexture("/assets/images/flooring/dirt.jpg");
+
+    assert.equal(stair.texturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.treadTexturePath, "/assets/images/flooring/cobblestones.png");
+    assert.equal(stair.riserTexturePath, "/assets/images/flooring/dirt.jpg");
+    assert.equal(state.paintTextureForMode("floor"), "/assets/images/flooring/cobblestones.png");
+    assert.equal(state.selection.kind, "stair");
+    assert.deepEqual(state.selectedStairIds(), [stair.id]);
+});
+
+test("selected stairs can edit width and step count after placement", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const floor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 3,
+            footprint: floor.outerPolygon
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(0.5);
+        const stair = state.addStairToFloor(floor.fragmentId, {
+            treads: [
+                { left: { x: -0.5, y: -0.25 }, right: { x: -0.5, y: 0.25 } },
+                { left: { x: 0.5, y: -0.25 }, right: { x: 0.5, y: 0.25 } }
+            ]
+        });
+
+        state.selectStair(model.getFloorId(floor), stair.id);
+        assert.equal(state.updateSelectedStairWidth(0.8), true);
+        state.updateSelectedStairStepCount(8);
+        assert.equal(state.updateSelectedStairRiserDepth(1.2), true);
+
+        assert.equal(stair.width, 0.8);
+        assert.equal(stair.stepCount, 8);
+        assert.equal(stair.riserDepth, 1.2);
+        assert.equal(Math.hypot(stair.treads[0].right.x - stair.treads[0].left.x, stair.treads[0].right.y - stair.treads[0].left.y).toFixed(6), "0.800000");
+        assert.equal(state.selection.kind, "stair");
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("newly finished stair is selected and deactivates the stair tool", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const floor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 3,
+            footprint: floor.outerPolygon
+        });
+        model.addFloor(state.building, upperFloor);
+        state.setTool("stair");
+        state.draft = {
+            kind: "stair",
+            started: true,
+            completed: true,
+            ladder: false,
+            floorId: model.getFloorId(floor),
+            bottomZ: 0,
+            height: 3,
+            direction: "up",
+            width: 1,
+            stepCount: 6,
+            riserDepth: 0.5,
+            texturePath: "/assets/images/flooring/woodfloor.png",
+            treadTexturePath: "/assets/images/flooring/woodfloor.png",
+            riserTexturePath: "/assets/images/flooring/woodfloor.png",
+            treads: [
+                { left: { x: -0.5, y: -0.5 }, right: { x: -0.5, y: 0.5 } },
+                { left: { x: 0.5, y: -0.5 }, right: { x: 0.5, y: 0.5 } }
+            ]
+        };
+
+        new StairTool(state).finish();
+        const stair = state.selectedStairs()[0];
+
+        assert.equal(state.tool, "select");
+        assert.equal(state.selection.kind, "stair");
+        assert.equal(stair.riserDepth, 0.5);
+        state.stairMoveIsLegal = () => {
+            throw new Error("riser depth edit should not run stair move validation");
+        };
+        assert.equal(state.updateSelectedStairRiserDepth(1.2), true);
+        assert.equal(stair.riserDepth, 1.2);
+        assert.equal(state.stairTool.riserDepth, null);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("stair openings cut the floor above using steps within two map units", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const { BuildingRenderer } = await loadRenderer();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -1, y: -1 }, { x: 2, y: -1 }, { x: 2, y: 5 }, { x: -1, y: 5 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.state = state;
+        renderer.activePlaneZ = () => 0;
+
+        const holes = renderer.stairOpeningHolesForFloor(upperFloor);
+
+        assert.equal(stair.floorId, model.getFloorId(lowerFloor));
+        assert.equal(holes.length, 1);
+        assert.ok(Math.abs(ringXyArea(holes[0]) - 2) <= 0.000001, `expected a 2 m^2 stair opening, got ${ringXyArea(holes[0])}`);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("renderer draws lower-owned stairs through the rendered upper floor opening", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const { BuildingRenderer } = await loadRenderer();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -1, y: -1 }, { x: 2, y: -1 }, { x: 2, y: 5 }, { x: -1, y: 5 }]
+        });
+        const unrelatedUpperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: 10, y: 10 }, { x: 12, y: 10 }, { x: 12, y: 12 }, { x: 10, y: 12 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        model.addFloor(state.building, unrelatedUpperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.state = state;
+        renderer.stairMeshById = new Map();
+        renderer.syncStairMesh = (floor, renderedStair) => ({ floor, renderedStair });
+        renderer.renderedFloors = () => [upperFloor];
+        renderer.lastStairPickEntries = [];
+
+        renderer.drawStairs();
+
+        assert.equal(stair.floorId, model.getFloorId(lowerFloor));
+        assert.equal(renderer.lastStairPickEntries.length, 1);
+        assert.equal(renderer.lastStairPickEntries[0].floor, lowerFloor);
+        assert.equal(renderer.lastStairPickEntries[0].stair, stair);
+
+        renderer.lastStairPickEntries = [];
+        renderer.renderedFloors = () => [unrelatedUpperFloor];
+        renderer.drawStairs();
+
+        assert.equal(renderer.lastStairPickEntries.length, 0);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("selected stairs can be dragged and carry their upper-floor opening with them", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -2, y: -2 }, { x: 4, y: -2 }, { x: 4, y: 6 }, { x: -2, y: 6 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        state.selectStair(model.getFloorId(lowerFloor), stair.id);
+        const beforeOpening = state.stairOpeningPolygonsForValidation(stair, upperFloor)[0];
+        const snapshot = state.beginSelectedStairMove({ x: 0, y: 0 });
+
+        const moved = state.moveSelectedStair(snapshot, { x: 1, y: 0.5 });
+        const afterOpening = state.stairOpeningPolygonsForValidation(stair, upperFloor)[0];
+
+        assert.equal(moved, true);
+        assert.equal(stair.treads[0].left.x, 1);
+        assert.equal(stair.treads[0].left.y, 0.5);
+        assert.deepEqual(afterOpening.map((point, index) => ({
+            x: Number((point.x - beforeOpening[index].x).toFixed(6)),
+            y: Number((point.y - beforeOpening[index].y).toFixed(6))
+        })), beforeOpening.map(() => ({ x: 1, y: 0.5 })));
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("select tool drags selected stairs after the pointer moves", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const { SelectTool } = await loadSelectTool();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -2, y: -2 }, { x: 4, y: -2 }, { x: 4, y: 6 }, { x: -2, y: 6 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        const tool = new SelectTool(state);
+        const renderer = {
+            pickAtScreen() {
+                return { type: "stair", stair, floor: lowerFloor };
+            }
+        };
+
+        tool.pointerDown({ x: 0, y: 0 }, 0.5, { screenPoint: { x: 0, y: 0 }, renderer });
+        tool.pointerMove({ x: 1, y: 0.5 }, 0.5, { screenPoint: { x: 10, y: 0 }, renderer });
+
+        assert.equal(stair.treads[0].left.x, 1);
+        assert.equal(stair.treads[0].left.y, 0.5);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("selected stair drag is rejected when the upper-floor opening leaves its floor", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -1, y: -1 }, { x: 2, y: -1 }, { x: 2, y: 5 }, { x: -1, y: 5 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        state.selectStair(model.getFloorId(lowerFloor), stair.id);
+        const snapshot = state.beginSelectedStairMove({ x: 0, y: 0 });
+
+        const moved = state.moveSelectedStair(snapshot, { x: 4, y: 0 });
+
+        assert.equal(moved, false);
+        assert.equal(stair.treads[0].left.x, 0);
+        assert.equal(stair.treads[0].left.y, 0);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("selected stair drag is rejected when a landing rectangle intersects a wall", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -2, y: -2 }, { x: 5, y: -2 }, { x: 5, y: 6 }, { x: -2, y: 6 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        const wall = model.createWall({
+            floorId: upperFloor.fragmentId,
+            startPoint: { kind: "point", x: 1.25, y: 4.5 },
+            endPoint: { kind: "point", x: 1.75, y: 4.5 },
+            thickness: 0.25
+        });
+        state.building.wallSections.push(wall);
+        model.refreshWallResolvedGeometry(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        state.selectStair(model.getFloorId(lowerFloor), stair.id);
+        const snapshot = state.beginSelectedStairMove({ x: 0, y: 0 });
+
+        const moved = state.moveSelectedStair(snapshot, { x: 1, y: 0 });
+
+        assert.equal(moved, false);
+        assert.equal(stair.treads[0].left.x, 0);
+        assert.equal(stair.treads[0].left.y, 0);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("renderer draws stair drafts stored as treads", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    let cleared = false;
+    let rendered = null;
+    renderer.draftLayer = {
+        clear() {
+            cleared = true;
+        }
+    };
+    renderer.state = {
+        draft: {
+            kind: "stair",
+            treads: [{
+                left: { x: 0, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0.5, y: 0 },
+                angle: 0
+            }],
+            width: 1,
+            bottomZ: 0,
+            height: 0,
+            direction: "up"
+        }
+    };
+    renderer.drawStairRecord = (gfx, draft, preview) => {
+        rendered = { gfx, draft, preview };
+    };
+
+    renderer.drawDraft();
+
+    assert.equal(cleared, true);
+    assert.equal(rendered.gfx, renderer.draftLayer);
+    assert.equal(rendered.draft, renderer.state.draft);
+    assert.equal(rendered.preview, true);
+});
+
+test("renderer stair preview draws only tread lines and direction lines", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.worldToScreen = (point) => ({ x: Number(point.x), y: Number(point.y) });
+    renderer.activePlaneZ = () => 0;
+    const calls = [];
+    const gfx = {
+        lineStyle(...args) { calls.push(["lineStyle", ...args]); },
+        moveTo(...args) { calls.push(["moveTo", ...args]); },
+        lineTo(...args) { calls.push(["lineTo", ...args]); },
+        beginFill(...args) { calls.push(["beginFill", ...args]); },
+        closePath(...args) { calls.push(["closePath", ...args]); },
+        endFill(...args) { calls.push(["endFill", ...args]); }
+    };
+
+    renderer.drawStairPreviewRecord(gfx, {
+        bottomZ: 0,
+        treads: [{
+            left: { x: -1, y: 0 },
+            right: { x: 1, y: 0 },
+            center: { x: 0, y: 0 }
+        }],
+        pendingTread: {
+            left: { x: -1, y: 2 },
+            right: { x: 1, y: 2 },
+            center: { x: 0, y: 2 }
+        }
+    });
+
+    assert.equal(calls.some((call) => call[0] === "beginFill" || call[0] === "closePath" || call[0] === "endFill"), false);
+    assert.equal(calls.filter((call) => call[0] === "lineTo").length, 3);
+});
+
+test("renderer screen picker registers stairs with a stair hit payload", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.editorPickItemByKey = new Map();
+    renderer.lastSurfacePickEntries = [];
+    renderer.lastWallPickEntries = [];
+    renderer.lastGablePickEntries = [];
+    renderer.lastMountedObjectPickEntries = [];
+    renderer.lastBeamPickEntries = [];
+    renderer.lastColumnPickEntries = [];
+    const floor = model.createFloor({
+        footprint: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]
+    });
+    const stair = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 3, y: 1 },
+        width: 1,
+        bottomZ: 0,
+        height: 3,
+        stepCount: 5
+    });
+    const mesh = { name: "stair-pick-mesh" };
+    renderer.lastStairPickEntries = [{ stair, floor, mesh }];
+
+    const items = renderer.editorPickRenderItems();
+    const stairItem = items.find((entry) => entry.item.editorPickType === "stair");
+    const hit = renderer.hitFromEditorPickItem(stairItem.item);
+
+    assert.ok(stairItem);
+    assert.equal(stairItem.item.editorPickKey, `stair:${model.getFloorId(floor)}:${stair.id}`);
+    assert.equal(stairItem.displayObj, mesh);
+    assert.equal(hit.type, "stair");
+    assert.equal(hit.stair, stair);
+    assert.equal(hit.floor, floor);
+});
+
+test("renderer screen picker registers split stair tread and riser meshes", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.editorPickItemByKey = new Map();
+    renderer.lastSurfacePickEntries = [];
+    renderer.lastWallPickEntries = [];
+    renderer.lastGablePickEntries = [];
+    renderer.lastMountedObjectPickEntries = [];
+    renderer.lastBeamPickEntries = [];
+    renderer.lastColumnPickEntries = [];
+    const floor = model.createFloor({
+        footprint: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]
+    });
+    const stair = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 3, y: 1 },
+        width: 1,
+        bottomZ: 0,
+        height: 3,
+        stepCount: 5
+    });
+    const treadMesh = { name: "stair-tread-pick-mesh" };
+    const riserMesh = { name: "stair-riser-pick-mesh" };
+    const container = {
+        name: "stair-pick-container",
+        _stairTreadMesh: treadMesh,
+        _stairRiserMesh: riserMesh
+    };
+    renderer.lastStairPickEntries = [{ stair, floor, mesh: container }];
+
+    const items = renderer.editorPickRenderItems();
+    const stairItems = items.filter((entry) => entry.item.editorPickType === "stair");
+
+    assert.equal(stairItems.length, 2);
+    assert.deepEqual(stairItems.map((entry) => entry.displayObj), [treadMesh, riserMesh]);
+    stairItems.forEach((entry) => {
+        const hit = renderer.hitFromEditorPickItem(entry.item);
+        assert.equal(entry.item.editorPickKey, `stair:${model.getFloorId(floor)}:${stair.id}`);
+        assert.equal(hit.type, "stair");
+        assert.equal(hit.stair, stair);
+        assert.equal(hit.floor, floor);
+    });
+});
+
+test("renderer screen picker debug draws stairs as a solid depth mesh", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const floor = model.createFloor({
+        footprint: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]
+    });
+    const stair = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 3, y: 1 },
+        width: 1,
+        bottomZ: 0,
+        height: 3,
+        stepCount: 5
+    });
+    const indices = new Uint16Array([0, 1, 2]);
+    renderer.triangulateStairSteps = () => ({
+        points: [
+            { x: 1, y: 1, z: 0.5 },
+            { x: 2, y: 1, z: 0.5 },
+            { x: 1, y: 2, z: 0.5 }
+        ],
+        indices
+    });
+    let created = null;
+    renderer.createSolidDepthMesh = (name, positions, meshIndices, color) => {
+        created = { name, positions, meshIndices, color };
+        return { name };
+    };
+
+    const mesh = renderer.createStairPickerDebugMesh({ stair, floor });
+
+    assert.equal(mesh.name, `buildingEditorPickerDebug:stair:${model.getFloorId(floor)}:${stair.id}`);
+    assert.equal(created.name, mesh.name);
+    assert.deepEqual(Array.from(created.positions), [1, 1, 0.5, 2, 1, 0.5, 1, 2, 0.5]);
+    assert.equal(created.meshIndices, indices);
+    assert.equal(Number.isInteger(created.color), true);
+});
+
+test("renderer draws stair selection outlines as valid clip geometry", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const stair = { id: "1" };
+    const drawn = [];
+    renderer.state = {
+        tool: "select",
+        selection: { kind: "stair" },
+        selectedStairs: () => [stair]
+    };
+    renderer.selectionOutlineLayer = {
+        clear() {},
+        lineStyle(...args) { drawn.push(["lineStyle", ...args]); },
+        drawPolygon(points) { drawn.push(["drawPolygon", points]); }
+    };
+    renderer.worldToScreen = (point) => ({ x: Number(point.x), y: Number(point.y) });
+    renderer.stairStepPolygons = () => [{
+        z: 0,
+        polygon: [
+            { x: 0, y: 0 },
+            { x: 1, y: 0 },
+            { x: 1, y: 1 },
+            { x: 0, y: 1 }
+        ]
+    }];
+
+    renderer.drawSelectionOutline();
+
+    assert.equal(drawn.filter((call) => call[0] === "drawPolygon").length, 2);
+});
+
+test("renderer outlines the upper-floor hole when a stair is selected", async () => {
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingEditorState } = await loadState();
+        const { BuildingRenderer } = await loadRenderer();
+        const model = await loadModel();
+        const state = new BuildingEditorState();
+        const lowerFloor = state.selectedFloor();
+        const upperFloor = model.createFloor({
+            elevation: 4,
+            footprint: [{ x: -1, y: -1 }, { x: 2, y: -1 }, { x: 2, y: 5 }, { x: -1, y: 5 }]
+        });
+        model.addFloor(state.building, upperFloor);
+        state.updateStairToolWidth(1);
+        state.updateStairToolStepCount(4);
+        const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+            ]
+        });
+        state.selectStair(model.getFloorId(lowerFloor), stair.id);
+        const renderer = Object.create(BuildingRenderer.prototype);
+        const labels = [];
+        const realDrawClipGeometryOutline = BuildingRenderer.prototype.drawClipGeometryOutline;
+        renderer.state = state;
+        renderer.selectionOutlineLayer = {
+            clear() {},
+            lineStyle() {},
+            drawPolygon() {}
+        };
+        renderer.worldToScreen = (point, z = 0) => ({ x: Number(point.x), y: Number(point.y) - Number(z) });
+        renderer.drawClipGeometryOutline = function drawClipGeometryOutline(gfx, geometry, label) {
+            labels.push(label);
+            return realDrawClipGeometryOutline.call(this, gfx, geometry, label);
+        };
+
+        renderer.drawSelectionOutline();
+
+        assert.equal(labels.includes(`stair ${stair.id} selection outline`), true);
+        assert.equal(labels.includes(`stair ${stair.id} upper floor opening outline`), true);
+    } finally {
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("renderer stair preview outlines generated steps in blue before finalize", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const projectedZ = [];
+    renderer.worldToScreen = (point, z = 0) => {
+        projectedZ.push(Number(z));
+        return { x: Number(point.x), y: Number(point.y) };
+    };
+    renderer.activePlaneZ = () => 0;
+    const calls = [];
+    const gfx = {
+        lineStyle(...args) { calls.push(["lineStyle", ...args]); },
+        moveTo(...args) { calls.push(["moveTo", ...args]); },
+        lineTo(...args) { calls.push(["lineTo", ...args]); },
+        beginFill(...args) { calls.push(["beginFill", ...args]); },
+        closePath(...args) { calls.push(["closePath", ...args]); },
+        endFill(...args) { calls.push(["endFill", ...args]); }
+    };
+
+    renderer.drawStairPreviewRecord(gfx, {
+        bottomZ: 0,
+        height: 3,
+        direction: "up",
+        stepCount: 3,
+        treads: [{
+            left: { x: 0, y: 0 },
+            right: { x: 1, y: 0 },
+            center: { x: 0.5, y: 0 }
+        }],
+        pendingTread: {
+            left: { x: 0, y: 3 },
+            right: { x: 1, y: 3 },
+            center: { x: 0.5, y: 3 }
+        }
+    });
+
+    const blueStepOutlines = calls.filter((call) => call[0] === "lineStyle" && call[2] === 0x42a5ff);
+    assert.equal(blueStepOutlines.length, 3);
+    assert.equal(calls.some((call) => call[0] === "beginFill" || call[0] === "closePath" || call[0] === "endFill"), false);
+    assert.equal(projectedZ.some((z) => z > 0), true);
+});
+
+test("renderer stair steps divide straight sections and rise between floors", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.activePlaneZ = () => 0;
+
+    const steps = renderer.stairStepPolygons({
+        id: "straight",
+        bottomZ: 0,
+        height: 4,
+        direction: "up",
+        stepCount: 4,
+        treads: [
+            { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+            { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+        ]
+    });
+
+    assert.equal(steps.length, 4);
+    assert.deepEqual(steps.map((step) => step.polygon.length), [4, 4, 4, 4]);
+    assert.deepEqual(steps.map((step) => Number(step.z.toFixed(6))), [0.8, 1.6, 2.4, 3.2]);
+    assertPointSetsAlmostEqual(steps[0].polygon, [
+        { x: 0, y: 0 },
+        { x: 0, y: 0.5 },
+        { x: 1, y: 0.5 },
+        { x: 1, y: 0 }
+    ]);
+});
+
+test("renderer stair steps are allocated proportionally by section area", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.activePlaneZ = () => 0;
+
+    const steps = renderer.stairStepPolygons({
+        id: "proportional",
+        bottomZ: 0,
+        height: 2,
+        direction: "up",
+        stepCount: 10,
+        treads: [
+            { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+            { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } },
+            { left: { x: 0, y: 5 }, right: { x: 1, y: 5 } }
+        ]
+    });
+
+    assert.equal(steps.length, 10);
+    assert.equal(steps.filter((step) => step.sectionIndex === 0).length, 4);
+    assert.equal(steps.filter((step) => step.sectionIndex === 1).length, 6);
+});
+
+test("renderer stair steps form triangles for connected-end wedge sections", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.activePlaneZ = () => 0;
+
+    const steps = renderer.stairStepPolygons({
+        id: "wedge",
+        bottomZ: 2,
+        height: 3,
+        direction: "down",
+        stepCount: 3,
+        treads: [
+            { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+            { left: { x: 0, y: 0 }, right: { x: 0, y: 1 } }
+        ]
+    });
+
+    assert.equal(steps.length, 3);
+    assert.deepEqual(steps.map((step) => step.polygon.length), [3, 3, 3]);
+    assert.deepEqual(steps.map((step) => Number(step.z.toFixed(6))), [1.25, 0.5, -0.25]);
+    steps.forEach((step) => {
+        assert.equal(step.polygon.some((point) => Math.hypot(point.x, point.y) <= 0.000001), true);
+    });
+});
+
+test("renderer stair steps form annular quadrilaterals for crossing tread sections", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.activePlaneZ = () => 0;
+
+    const steps = renderer.stairStepPolygons({
+        id: "annular",
+        bottomZ: 0,
+        height: 1,
+        direction: "up",
+        stepCount: 2,
+        treads: [
+            { left: { x: -1, y: 0 }, right: { x: 3, y: 0 } },
+            { left: { x: 0, y: -1 }, right: { x: 0, y: 3 } }
+        ]
+    });
+
+    assert.equal(steps.length, 2);
+    assert.deepEqual(steps.map((step) => step.polygon.length), [4, 4]);
+    assert.equal(steps.every((step) => step.polygon.every((point) => {
+        const radius = Math.hypot(point.x, point.y);
+        return radius >= 1 - 0.000001 && radius <= 3 + 0.000001;
+    })), true);
+});
+
+test("renderer triangulates stair riser depth from tread-only to floor-clipped solid", async () => {
+    const previousEarcut = globalThis.earcut;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.activePlaneZ = () => 0;
+
+        const up = renderer.triangulateStairSteps({
+            id: "solid-up",
+            bottomZ: 0,
+            height: 3,
+            direction: "up",
+            stepCount: 2,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        });
+        const down = renderer.triangulateStairSteps({
+            id: "solid-down",
+            bottomZ: 3,
+            height: 3,
+            direction: "down",
+            stepCount: 2,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        });
+        const treadOnly = renderer.triangulateStairSteps({
+            id: "tread-only",
+            bottomZ: 0,
+            height: 3,
+            direction: "up",
+            stepCount: 2,
+            riserDepth: 0,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        });
+        const floorDepth = renderer.triangulateStairSteps({
+            id: "floor-depth",
+            bottomZ: 0,
+            height: 3,
+            direction: "up",
+            stepCount: 2,
+            riserDepth: 3,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        });
+
+        assert.equal(up.riser.points.some((point) => Math.abs(point.z) <= 0.000001), true);
+        assert.equal(up.riser.points.every((point) => point.z >= -0.000001), true);
+        assert.equal(up.points.some((point) => Math.abs(point.z - 1) <= 0.000001 && Math.abs(point.normal.z) <= 0.000001), true);
+        assert.equal(down.points.every((point) => point.z >= -0.000001), true);
+        assert.equal(up.tread.points.every((point) => point.normal.z === 1), true);
+        assert.equal(up.riser.points.every((point) => point.normal.z < 1), true);
+        assert.equal(up.indices.length > 12, true);
+        assert.equal(treadOnly.riser.points.length, 0);
+        assert.equal(treadOnly.riser.indices.length, 0);
+        assert.equal(treadOnly.points.every((point) => point.normal.z === 1), true);
+        assert.equal(floorDepth.riser.points.some((point) => Math.abs(point.z) <= 0.000001), true);
+        assert.equal(floorDepth.riser.points.every((point) => point.z >= -0.000001), true);
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+    }
+});
+
+test("stair tool starts a draft before target floor height is available", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    state.setTool("stair");
+    const tool = new StairTool(state);
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+
+    tool.pointerMove({ x: 0, y: 0 }, 0.1);
+    assert.equal(state.draft.kind, "stair");
+    assert.equal(state.draft.started, false);
+
+    tool.pointerDown({ x: 0, y: 0 }, 0.1);
+
+    assert.equal(state.draft.kind, "stair");
+    assert.equal(state.draft.started, true);
+    assert.equal(state.draft.floorId, floorId);
+    assert.match(state.draft.placementError, /requires another floor above/);
+    assert.throws(() => tool.finish(), /requires another floor above/);
+});
+
+test("stair tool cancel deselects the tool", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const state = new BuildingEditorState();
+    state.setTool("stair");
+    state.draft = {
+        kind: "stair",
+        started: false,
+        completed: false,
+        treads: [{
+            left: { x: 0, y: 0 },
+            right: { x: 1, y: 0 },
+            center: { x: 0.5, y: 0 },
+            angle: 0
+        }]
+    };
+    const tool = new StairTool(state);
+
+    tool.cancel();
+
+    assert.equal(state.tool, "select");
+    assert.equal(state.draft, null);
+});
+
+test("stair tool completes an active draft when clicking the final point", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    const state = {
+        stairTool: { width: 2 },
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }, {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }],
+            pendingTread: {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerDown({ x: 0.05, y: 2.03 }, 0.14, { thresholdPixels: 14, renderer });
+    assert.equal(state.draft.completed, true);
+    assert.equal(state.draft.pendingTread, null);
+    assert.equal(state.draft.treads.length, 2);
+});
+
+test("stair tool reopens a completed draft when clicking the final point again", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    const state = {
+        stairTool: { width: 2 },
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: true,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }, {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }],
+            pendingTread: null,
+            pendingArcState: null,
+            selectedTreadIndex: -1,
+            selectedTreadPoint: ""
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerDown({ x: 0, y: 2 }, 0.14, { thresholdPixels: 14, renderer });
+    tool.pointerUp({ x: 0, y: 2 }, 0.14, { thresholdPixels: 14, renderer });
+
+    assert.equal(state.draft.completed, false);
+    tool.pointerMove({ x: 0, y: 3 }, 0.14, { thresholdPixels: 14, renderer });
+    assert.equal(state.draft.pendingTread.center.y, 3);
+});
+
+test("stair tool drags the completed draft final point", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    const state = {
+        stairTool: { width: 2 },
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: true,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }, {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }],
+            pendingTread: null,
+            pendingArcState: null,
+            selectedTreadIndex: -1,
+            selectedTreadPoint: ""
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerDown({ x: 0, y: 2 }, 0.14, { thresholdPixels: 14, renderer });
+    tool.pointerMove({ x: 0, y: 3 }, 0.14, { thresholdPixels: 14, renderer });
+    tool.pointerUp({ x: 0, y: 3 }, 0.14, { thresholdPixels: 14, renderer });
+
+    assert.equal(state.draft.completed, true);
+    assert.equal(state.draft.treads.length, 2);
+    assert.deepEqual(
+        {
+            x: Number(state.draft.treads[1].center.x.toFixed(6)),
+            y: Number(state.draft.treads[1].center.y.toFixed(6))
+        },
+        { x: 0, y: 3 }
+    );
+});
+
+test("stair pending tread centers at the mouse and mirrors across the direction line", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const state = {
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }]
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerMove({ x: 0, y: 2 }, 0.1);
+
+    assert.deepEqual(
+        {
+            x: Number(state.draft.pendingTread.center.x.toFixed(6)),
+            y: Number(state.draft.pendingTread.center.y.toFixed(6))
+        },
+        { x: 0, y: 2 }
+    );
+    assert.equal(Math.abs(Number(state.draft.pendingTread.angle.toFixed(6))), Number(Math.PI.toFixed(6)));
+});
+
+test("stair pending tread snaps near-perpendicular paths to dead-straight 90 degrees", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const previousAngle = Math.PI / 36;
+    const previous = {
+        left: { x: -Math.cos(previousAngle), y: -Math.sin(previousAngle) },
+        right: { x: Math.cos(previousAngle), y: Math.sin(previousAngle) },
+        center: { x: 0, y: 0 },
+        angle: previousAngle
+    };
+    const state = {
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [previous]
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerMove({ x: 0, y: 3 }, 0.1);
+
+    assert.deepEqual(
+        {
+            x: Number(state.draft.pendingTread.center.x.toFixed(6)),
+            y: Number(state.draft.pendingTread.center.y.toFixed(6))
+        },
+        { x: 0, y: 3 }
+    );
+    assert.equal(Math.abs(Number(state.draft.pendingTread.angle.toFixed(6))), Number(Math.PI.toFixed(6)));
+});
+
+test("stair pending tread snaps nearest endpoints together when mirrored treads cross", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const state = {
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }]
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerMove({ x: 0.2, y: 0.1 }, 0.1);
+
+    const previous = state.draft.treads[0];
+    const pending = state.draft.pendingTread;
+    const endpointPairs = [
+        [previous.left, pending.left],
+        [previous.left, pending.right],
+        [previous.right, pending.left],
+        [previous.right, pending.right]
+    ];
+    assert.equal(endpointPairs.some(([a, b]) => Math.hypot(a.x - b.x, a.y - b.y) < 0.000001), true);
+    assert.notDeepEqual(
+        {
+            x: Number(pending.center.x.toFixed(6)),
+            y: Number(pending.center.y.toFixed(6))
+        },
+        { x: 0.2, y: 0.1 }
+    );
+    const fifteenDegrees = Math.PI / 12;
+    const snappedStep = pending.angle / fifteenDegrees;
+    assert.equal(Math.abs(snappedStep - Math.round(snappedStep)) < 0.000001, true);
+    assert.equal(tool._commitPendingTread(), true);
+    assert.equal(state.draft.treads.length, 2);
+});
+
+test("stair active path treads snap to walls without becoming ladders", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    state.setTool("stair");
+    state.updateStairToolWidth(1);
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building).find((candidate) => String(candidate.floorId || candidate.fragmentId) === model.getFloorId(floor));
+    const [a, b] = model.wallPoints(state.building, wall);
+    const midpoint = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+    state.draft = {
+        kind: "stair",
+        started: true,
+        completed: false,
+        ladder: false,
+        floorId: model.getFloorId(floor),
+        width: 1,
+        treads: [{
+            left: { x: midpoint.x - 0.5, y: midpoint.y + 2 },
+            right: { x: midpoint.x + 0.5, y: midpoint.y + 2 },
+            center: { x: midpoint.x, y: midpoint.y + 2 },
+            angle: 0
+        }]
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerMove(midpoint, 0.1, {
+        renderer: {
+            screenPixelsToWorldDistance() {
+                return 0.1;
+            }
+        }
+    });
+
+    const pending = state.draft.pendingTread;
+    const treadDx = pending.right.x - pending.left.x;
+    const treadDy = pending.right.y - pending.left.y;
+    const wallDx = b.x - a.x;
+    const wallDy = b.y - a.y;
+    assert.equal(Math.hypot(treadDx, treadDy).toFixed(6), "1.000000");
+    assert.equal(Math.abs(treadDx * wallDx + treadDy * wallDy) < 0.000001, false);
+    assert.equal(Math.hypot(pending.center.x - midpoint.x, pending.center.y - midpoint.y).toFixed(6), "0.500000");
+    assert.equal(Math.hypot(pending.left.x - midpoint.x, pending.left.y - midpoint.y) < 0.000001, false);
+    assert.equal(state.draft.ladder, false);
 });
 
 test("beams can be multi-selected, moved vertically, and bulk deleted", async () => {

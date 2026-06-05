@@ -9,6 +9,7 @@ import { WallTool } from "./tools/WallTool.js";
 import { BeamTool } from "./tools/BeamTool.js";
 import { ColumnTool } from "./tools/ColumnTool.js";
 import { RoofTool } from "./tools/RoofTool.js";
+import { StairTool } from "./tools/StairTool.js";
 import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const PAINT_TEXTURES = {
@@ -52,6 +53,11 @@ const columnWidthValue = document.querySelector("#columnWidthValue");
 const columnHeight = document.querySelector("#columnHeight");
 const columnSideCount = document.querySelector("#columnSideCount");
 const columnSnapPointsPerSection = document.querySelector("#columnSnapPointsPerSection");
+const stairWidth = document.querySelector("#stairWidth");
+const stairWidthValue = document.querySelector("#stairWidthValue");
+const stairStepCount = document.querySelector("#stairStepCount");
+const stairRiserDepth = document.querySelector("#stairRiserDepth");
+const stairDirectionInputs = [...document.querySelectorAll("[name='stairDirection']")];
 const wallInsetEndpoints = document.querySelector("#wallInsetEndpoints");
 const wallProtrudeEndpoints = document.querySelector("#wallProtrudeEndpoints");
 const mountSize = document.querySelector("#mountSize");
@@ -65,6 +71,7 @@ const snapDirectionToggle = document.querySelector("#snapDirectionToggle");
 const anchorToggle = document.querySelector("#anchorToggle");
 const selectedSummary = document.querySelector("#selectedSummary");
 const paintToolButton = document.querySelector('[data-tool="paint"]');
+const stairTextureButtons = [...document.querySelectorAll("[data-stair-texture-part]")];
 const roofToolButton = document.querySelector(".roofToolButton");
 const roofToolIcon = document.querySelector("#roofToolIcon");
 const wallToolButton = document.querySelector(".wallToolButton");
@@ -73,6 +80,8 @@ const beamToolButton = document.querySelector(".beamToolButton");
 const beamToolIcon = document.querySelector("#beamToolIcon");
 const columnToolButton = document.querySelector(".columnToolButton");
 const columnToolIcon = document.querySelector("#columnToolIcon");
+const stairToolButton = document.querySelector(".stairToolButton");
+const stairToolIcon = document.querySelector("#stairToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
 const buildingOpenDialog = document.querySelector("#buildingOpenDialog");
 const buildingOpenMessage = document.querySelector("#buildingOpenMessage");
@@ -156,7 +165,8 @@ const tools = {
     select: new SelectTool(state),
     beam: new BeamTool(state),
     column: new ColumnTool(state),
-    roof: new RoofTool(state)
+    roof: new RoofTool(state),
+    stair: new StairTool(state)
 };
 
 let panning = null;
@@ -170,6 +180,8 @@ let layerPanelSignature = "";
 let texturePaletteSignature = "";
 let wallToolTexturePaletteOpen = false;
 let columnToolTexturePaletteOpen = false;
+let stairTexturePaletteOpen = false;
+let stairTexturePalettePart = "tread";
 let mountTexturePaletteSignature = "";
 let mountTexturePaletteOpen = false;
 let windowContext = null;
@@ -561,12 +573,13 @@ function activeTool() {
 }
 
 function draftConsumesEscape(draft) {
-    return draft && (draft.kind === "polygonEdit" || draft.kind === "wall");
+    return draft && (draft.kind === "polygonEdit" || draft.kind === "wall" || draft.kind === "stair");
 }
 
 function activePaintMode() {
     if (state.tool === "wall") return "walls";
     if (state.tool === "column") return "walls";
+    if (state.tool === "stair") return "floor";
     const kind = state.selection && state.selection.kind;
     if (kind === "gable" || kind === "gableHandle") return "walls";
     if (kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection") return "roofs";
@@ -574,9 +587,9 @@ function activePaintMode() {
 }
 
 function selectionCanUsePaintTool() {
-    if (state.tool === "wall" || state.tool === "column") return true;
+    if (state.tool === "wall" || state.tool === "column" || state.tool === "stair") return true;
     const kind = state.selection && state.selection.kind;
-    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint" || kind === "column";
+    return kind === "floor" || kind === "floorVertex" || kind === "roof" || kind === "roofVertex" || kind === "roofPeak" || kind === "roofShedDirection" || kind === "gable" || kind === "gableHandle" || kind === "wall" || kind === "wallEndpoint" || kind === "column" || kind === "stair";
 }
 
 function mountedObjectSettingsActive() {
@@ -882,6 +895,10 @@ function applyTextureToSelection(texturePath) {
         state.updateColumnToolTexture(texturePath);
         return;
     }
+    if (state.tool === "stair") {
+        state.updateStairToolTexture(texturePath, stairTexturePalettePart);
+        return;
+    }
     if (state.tool === "roof") {
         state.updateRoofToolTexture(texturePath);
         return;
@@ -907,6 +924,10 @@ function applyTextureToSelection(texturePath) {
         state.updateSelectedColumnTexture(texturePath);
         return;
     }
+    if (kind === "stair") {
+        state.updateSelectedStairTexture(texturePath, stairTexturePalettePart);
+        return;
+    }
     throw new Error(`cannot paint texture for ${kind || "empty"} selection`);
 }
 
@@ -923,6 +944,9 @@ function selectionScopeMatches(element) {
     }
     if (state.tool === "column") {
         return scope.split(/\s+/).includes("column");
+    }
+    if (state.tool === "stair") {
+        return scope.split(/\s+/).includes("stair");
     }
     if (state.tool === "roof") {
         return scope.split(/\s+/).includes("roof");
@@ -941,6 +965,7 @@ function toolScopeMatches(element) {
     const activeScopes = [state.tool];
     if (mountedObjectSettingsActive()) activeScopes.push("mountObject");
     if (state.selection && state.selection.kind === "column") activeScopes.push("column");
+    if (state.selection && state.selection.kind === "stair") activeScopes.push("stair");
     if (include && !include.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
     const exclude = element.dataset.toolExclude;
     if (exclude && exclude.split(/\s+/).some((scope) => activeScopes.includes(scope))) return false;
@@ -988,6 +1013,15 @@ function columnDepthValue(column) {
 
 function columnWidthValueFor(column) {
     return Number(column.width ?? Number(column.size) * 2);
+}
+
+function stairRiserDepthValueFor(stair) {
+    const explicit = Number(stair && stair.riserDepth);
+    if (Number.isFinite(explicit)) return explicit;
+    const height = Number(stair && stair.height);
+    const stepCount = Math.max(1, Math.round(Number(stair && stair.stepCount) || 1));
+    if (!Number.isFinite(height) || height <= 0) return NaN;
+    return Math.min(height, height / (stepCount + 1) + 0.25);
 }
 
 function columnExplicitHeightValue(column) {
@@ -1038,6 +1072,13 @@ function syncColumnToolButtonTexture() {
     const texture = state.columnTool && state.columnTool.texture ? state.columnTool.texture : state.inputs.columnTexture;
     columnToolIcon.style.setProperty("--column-tool-texture", texture ? `url("${texture}")` : "none");
     if (columnToolButton) columnToolButton.title = texture ? `Place columns: ${textureName(texture)}` : "Place columns";
+}
+
+function syncStairToolButtonTexture() {
+    if (!stairToolIcon) return;
+    const texture = state.stairTool && (state.stairTool.treadTexture || state.stairTool.texture) ? (state.stairTool.treadTexture || state.stairTool.texture) : state.inputs.stairTexture;
+    stairToolIcon.style.setProperty("--stair-tool-texture", texture ? `url("${texture}")` : "none");
+    if (stairToolButton) stairToolButton.title = texture ? `Place stairs: ${textureName(texture)}` : "Place stairs";
 }
 
 function syncRoofToolButtonTexture() {
@@ -1179,14 +1220,26 @@ function renderTexturePalette() {
     const mode = activePaintMode();
     const textures = PAINT_TEXTURES[mode] || [];
     const selectedColumn = state.selectedColumn();
+    const selectedStairTexture = state.selection && state.selection.kind === "stair"
+        ? sharedSelectionValue(state.selectedStairs(), (stair) => stairTexturePalettePart === "riser"
+            ? (stair.riserTexturePath || stair.texturePath)
+            : (stair.treadTexturePath || stair.texturePath))
+        : null;
     const selected = state.tool === "wall"
         ? state.wallTool.texture
         : (state.tool === "column"
             ? state.columnTool.texture
-            : (selectedColumn && mode === "walls" ? selectedColumn.texturePath : state.paintTextureForMode(mode)));
+            : (state.tool === "stair"
+                ? (stairTexturePalettePart === "riser"
+                    ? state.stairTool.riserTexture
+                    : (state.stairTool.treadTexture || state.stairTool.texture))
+                : (selectedStairTexture && mode === "floor"
+                    ? selectedStairTexture
+                    : (selectedColumn && mode === "walls" ? selectedColumn.texturePath : state.paintTextureForMode(mode)))));
     if (state.tool !== "wall") wallToolTexturePaletteOpen = false;
     if (state.tool !== "column") columnToolTexturePaletteOpen = false;
-    texturePalette.hidden = !((state.tool === "paint" || wallToolTexturePaletteOpen || columnToolTexturePaletteOpen) && selectionCanUsePaintTool());
+    if (state.tool !== "stair" && (!state.selection || state.selection.kind !== "stair")) stairTexturePaletteOpen = false;
+    texturePalette.hidden = !((state.tool === "paint" || wallToolTexturePaletteOpen || columnToolTexturePaletteOpen || stairTexturePaletteOpen) && selectionCanUsePaintTool());
     texturePalette.setAttribute("aria-label", `${mode === "walls" ? "wall" : (mode === "roofs" ? "roof" : "floor")} textures`);
     texturePalette.style.setProperty("--texture-column-count", String(Math.max(1, textures.length)));
     positionTexturePalette();
@@ -1215,8 +1268,11 @@ function renderTexturePalette() {
 }
 
 function positionTexturePalette() {
-    if (texturePalette.hidden || !paintToolButton) return;
-    const buttonRect = paintToolButton.getBoundingClientRect();
+    const anchor = stairTexturePaletteOpen
+        ? stairTextureButtons.find((button) => button.dataset.stairTexturePart === stairTexturePalettePart)
+        : paintToolButton;
+    if (texturePalette.hidden || !anchor) return;
+    const buttonRect = anchor.getBoundingClientRect();
     const left = Math.min(buttonRect.right + 8, window.innerWidth - 48);
     const top = Math.max(8, Math.min(buttonRect.top, window.innerHeight - 64));
     texturePalette.style.left = `${left}px`;
@@ -1430,6 +1486,12 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         if (!beam) throw new Error(`selected beam is missing from editor beam list: ${selection.beamId}`);
         return `beam ${beam.id}, level ${beam.floorId}, height ${beam.height}, thickness ${beam.thickness}`;
     }
+    if (selection.kind === "stair") {
+        const stairs = state.selectedStairs();
+        const stair = stairs[0];
+        if (!stair) throw new Error(`selected stair is missing from editor stair list: ${selection.stairId}`);
+        return `stair ${stair.id}, level ${stair.floorId}, ${stair.stepCount} steps, ${stair.direction}`;
+    }
     if (!selectedFloor) return "nothing selected";
     const floorId = getFloorId(selectedFloor);
     const floorWallCount = walls.filter((wall) => (wall.fragmentId || wall.floorId) === floorId).length;
@@ -1494,6 +1556,7 @@ function syncUi() {
     syncWallToolButtonTexture();
     syncBeamToolButtonTexture();
     syncColumnToolButtonTexture();
+    syncStairToolButtonTexture();
     syncMountedToolButtonTextures();
     document.querySelectorAll("[data-selection-scope], [data-selection-exclude]").forEach((element) => {
         element.hidden = !selectionScopeMatches(element);
@@ -1577,6 +1640,61 @@ function syncUi() {
         columnSideCount.value = Number(state.columnTool.sideCount);
         if (columnSnapPointsPerSection) columnSnapPointsPerSection.value = Number(state.columnTool.snapPointsPerSection);
         if (paintToolButton) paintToolButton.title = `Paint texture: ${textureName(state.columnTool.texture)}`;
+    } else if (state.tool === "stair" && (!state.selection || state.selection.kind !== "stair")) {
+        stairWidth.value = Number(state.stairTool.width);
+        stairWidthValue.value = Number(state.stairTool.width).toFixed(2);
+        const selectedFloorForStairs = state.selectedFloor();
+        const stairDirectionAvailability = state.stairDirectionAvailability(selectedFloorForStairs);
+        if (stairStepCount) {
+            let stepCount = state.stairTool.stepCount;
+            if (!stepCount && selectedFloorForStairs && stairDirectionAvailability[state.stairTool.direction]) {
+                try {
+                    stepCount = state.defaultStairStepCountForFloor(selectedFloorForStairs, state.stairTool.direction);
+                } catch (_error) {
+                    stepCount = "";
+                }
+            }
+            stairStepCount.value = stepCount || "";
+        }
+        if (stairRiserDepth) {
+            let maxDepth = null;
+            let riserDepthValue = state.stairTool.riserDepth;
+            if (selectedFloorForStairs && stairDirectionAvailability[state.stairTool.direction]) {
+                try {
+                    const height = Math.abs(state.stairHeightDifferenceForFloor(selectedFloorForStairs, state.stairTool.direction));
+                    maxDepth = height;
+                    if (riserDepthValue === null || riserDepthValue === undefined || riserDepthValue === "") {
+                        const stepCount = state.stairTool.stepCount || state.defaultStairStepCountForFloor(selectedFloorForStairs, state.stairTool.direction);
+                        riserDepthValue = state.defaultStairRiserDepthForFloor(selectedFloorForStairs, state.stairTool.direction, stepCount);
+                    }
+                } catch (_error) {
+                    riserDepthValue = "";
+                }
+            }
+            if (Number.isFinite(Number(maxDepth))) {
+                stairRiserDepth.max = String(maxDepth);
+            } else {
+                stairRiserDepth.removeAttribute("max");
+            }
+            syncNumberInput(stairRiserDepth, riserDepthValue, (value) => value.toFixed(2));
+        }
+        stairDirectionInputs.forEach((input) => {
+            const available = stairDirectionAvailability[input.value] === true;
+            input.disabled = !available;
+            const label = input.closest("label");
+            if (label) {
+                label.classList.toggle("toolRadioDisabled", !available);
+                label.title = available ? "" : `No floor ${input.value === "up" ? "above" : "below"} the selected floor`;
+            }
+            input.checked = input.value === state.stairTool.direction;
+        });
+        stairTextureButtons.forEach((button) => {
+            const part = button.dataset.stairTexturePart === "riser" ? "riser" : "tread";
+            const texture = part === "riser"
+                ? state.stairTool.riserTexture
+                : (state.stairTool.treadTexture || state.stairTool.texture);
+            button.title = `${part === "riser" ? "Riser" : "Tread"} texture: ${textureName(texture)}`;
+        });
     } else if (selectedWalls.length > 0) {
         syncNumberInput(wallHeight, sharedSelectionValue(selectedWalls, (wall) => Number(wall.height)));
         syncRangeAndValueInput(
@@ -1612,6 +1730,37 @@ function syncUi() {
         if (paintToolButton) paintToolButton.title = sharedTexture
             ? `Paint texture: ${textureName(sharedTexture)}`
             : "Paint texture: mixed";
+    }
+    const selectedStairs = state.selectedStairs();
+    if (selectedStairs.length > 0) {
+        syncRangeAndValueInput(
+            stairWidth,
+            stairWidthValue,
+            sharedSelectionValue(selectedStairs, (stair) => Number(stair.width)),
+            Number(selectedStairs[0].width),
+            (value) => value.toFixed(2)
+        );
+        if (stairStepCount) {
+            syncNumberInput(stairStepCount, sharedSelectionValue(selectedStairs, (stair) => Number(stair.stepCount)), (value) => String(Math.round(value)));
+        }
+        if (stairRiserDepth) {
+            const sharedHeight = sharedSelectionValue(selectedStairs, (stair) => Number(stair.height));
+            if (Number.isFinite(Number(sharedHeight))) {
+                stairRiserDepth.max = String(sharedHeight);
+            } else {
+                stairRiserDepth.removeAttribute("max");
+            }
+            syncNumberInput(stairRiserDepth, sharedSelectionValue(selectedStairs, stairRiserDepthValueFor), (value) => value.toFixed(2));
+        }
+        stairTextureButtons.forEach((button) => {
+            const part = button.dataset.stairTexturePart === "riser" ? "riser" : "tread";
+            const sharedTexture = sharedSelectionValue(selectedStairs, (stair) => part === "riser"
+                ? (stair.riserTexturePath || stair.texturePath)
+                : (stair.treadTexturePath || stair.texturePath));
+            button.title = sharedTexture
+                ? `${part === "riser" ? "Riser" : "Tread"} texture: ${textureName(sharedTexture)}`
+                : `${part === "riser" ? "Riser" : "Tread"} texture: mixed`;
+        });
     }
     const mountedCategory = activeMountedObjectCategory();
     const selectedMountedObjects = state.tool !== "mountObject" ? state.selectedMountedObjects() : [];
@@ -1674,7 +1823,22 @@ document.querySelectorAll("[data-tool]").forEach((button) => {
             }
             wallToolTexturePaletteOpen = false;
             columnToolTexturePaletteOpen = false;
+            stairTexturePaletteOpen = false;
             state.setTool(state.tool === button.dataset.tool ? "select" : button.dataset.tool);
+        });
+    });
+});
+
+stairTextureButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+        withErrorBoundary(() => {
+            const nextPart = button.dataset.stairTexturePart === "riser" ? "riser" : "tread";
+            const switchingPart = stairTexturePalettePart !== nextPart;
+            stairTexturePalettePart = nextPart;
+            stairTexturePaletteOpen = switchingPart || !stairTexturePaletteOpen;
+            wallToolTexturePaletteOpen = false;
+            columnToolTexturePaletteOpen = false;
+            renderTexturePalette();
         });
     });
 });
@@ -1684,6 +1848,7 @@ if (roofToolButton) {
         withErrorBoundary(() => {
             wallToolTexturePaletteOpen = false;
             columnToolTexturePaletteOpen = false;
+            stairTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
             state.setTool(state.tool === "roof" ? "select" : "roof");
         });
@@ -1700,7 +1865,8 @@ texturePalette.addEventListener("click", (event) => {
         applyTextureToSelection(texturePath);
         wallToolTexturePaletteOpen = false;
         columnToolTexturePaletteOpen = false;
-        if (state.tool !== "wall" && state.tool !== "column") {
+        stairTexturePaletteOpen = false;
+        if (state.tool !== "wall" && state.tool !== "column" && state.tool !== "stair" && state.tool !== "select") {
             state.setTool("select");
         }
     });
@@ -1714,6 +1880,7 @@ mountToolButtons.forEach((button) => {
         withErrorBoundary(() => {
             wallToolTexturePaletteOpen = false;
             columnToolTexturePaletteOpen = false;
+            stairTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
             state.setMountedObjectToolCategory(button.dataset.mountCategory);
         });
@@ -1997,6 +2164,57 @@ columnWidth.addEventListener("input", () => {
 
 columnWidthValue.addEventListener("change", () => {
     withErrorBoundary(() => state.updateSelectedColumnWidth(columnWidthValue.value));
+});
+
+stairWidth.addEventListener("input", () => {
+    withErrorBoundary(() => {
+        if (state.selection && state.selection.kind === "stair") {
+            state.updateSelectedStairWidth(stairWidth.value);
+        } else {
+            state.updateStairToolWidth(stairWidth.value);
+        }
+    });
+});
+
+stairWidthValue.addEventListener("change", () => {
+    withErrorBoundary(() => {
+        if (state.selection && state.selection.kind === "stair") {
+            state.updateSelectedStairWidth(stairWidthValue.value);
+        } else {
+            state.updateStairToolWidth(stairWidthValue.value);
+        }
+    });
+});
+
+if (stairStepCount) {
+    stairStepCount.addEventListener("change", () => {
+        withErrorBoundary(() => {
+            if (state.selection && state.selection.kind === "stair") {
+                state.updateSelectedStairStepCount(stairStepCount.value);
+            } else {
+                state.updateStairToolStepCount(stairStepCount.value);
+            }
+        });
+    });
+}
+
+if (stairRiserDepth) {
+    stairRiserDepth.addEventListener("change", () => {
+        withErrorBoundary(() => {
+            if (state.selection && state.selection.kind === "stair") {
+                state.updateSelectedStairRiserDepth(stairRiserDepth.value);
+            } else {
+                state.updateStairToolRiserDepth(stairRiserDepth.value);
+            }
+        });
+    });
+}
+
+stairDirectionInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+        if (!input.checked) return;
+        withErrorBoundary(() => state.updateStairToolDirection(input.value));
+    });
 });
 
 if (columnHeight) {
@@ -2311,6 +2529,14 @@ document.addEventListener("keydown", (event) => {
     if (isTextEditingTarget(event.target)) return;
     if (event.key === "Shift") state.shiftKeyDown = true;
     const key = String(event.key || "").toLowerCase();
+    if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && state.tool === "stair") {
+        const tool = activeTool();
+        if (tool && typeof tool.rotatePreview === "function") {
+            tool.rotatePreview(event.key === "ArrowLeft" ? -Math.PI / 36 : Math.PI / 36);
+            event.preventDefault();
+            return;
+        }
+    }
     if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && state.selectedColumnIds().length > 0) {
         withErrorBoundary(() => {
             const step = event.shiftKey ? COLUMN_ARROW_FINE_ROTATION_STEP_RADIANS : COLUMN_ARROW_ROTATION_STEP_RADIANS;
@@ -2398,6 +2624,10 @@ document.addEventListener("keydown", (event) => {
             event.preventDefault();
             return;
         }
+        if (state.deleteSelectedStair()) {
+            event.preventDefault();
+            return;
+        }
     }
     if (key === "a") {
         state.setTool("polygon");
@@ -2444,6 +2674,7 @@ renderer.render();
 try {
     state.loadWallToolSettingsFromBrowser();
     state.loadColumnToolSettingsFromBrowser();
+    state.loadStairToolSettingsFromBrowser();
 } catch (error) {
     console.error(error);
     setStatus(error.message, true);
