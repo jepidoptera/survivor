@@ -2186,31 +2186,150 @@ export class BuildingEditorState extends EventTarget {
     }
 
     buildingCenter() {
-        const points = [];
-        getBuildingFloors(this.building).forEach((floor) => {
-            if (Array.isArray(floor.outerPolygon)) {
-                floor.outerPolygon.forEach((point) => {
-                    if (Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))) {
-                        points.push(point);
-                    }
-                });
-            }
-        });
-        if (!points.length) return { x: 0, y: 0 };
-        const bounds = points.reduce((acc, point) => ({
-            minX: Math.min(acc.minX, Number(point.x)),
-            maxX: Math.max(acc.maxX, Number(point.x)),
-            minY: Math.min(acc.minY, Number(point.y)),
-            maxY: Math.max(acc.maxY, Number(point.y))
-        }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+        return this.averagePoints(getBuildingFloors(this.building)
+            .map((floor) => this.floorRotationCenter(floor))
+            .filter(Boolean)) || { x: 0, y: 0 };
+    }
+
+    finitePoint2d(point) {
+        if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return null;
+        return { x: Number(point.x), y: Number(point.y) };
+    }
+
+    averagePoints(points) {
+        const finitePoints = (Array.isArray(points) ? points : [])
+            .map((point) => this.finitePoint2d(point))
+            .filter(Boolean);
+        if (!finitePoints.length) return null;
+        const sum = finitePoints.reduce((acc, point) => ({
+            x: acc.x + point.x,
+            y: acc.y + point.y
+        }), { x: 0, y: 0 });
         return {
-            x: (bounds.minX + bounds.maxX) * 0.5,
-            y: (bounds.minY + bounds.maxY) * 0.5
+            x: sum.x / finitePoints.length,
+            y: sum.y / finitePoints.length
         };
     }
 
+    floorRotationCenter(floor) {
+        const outer = Array.isArray(floor && floor.outerPolygon) ? floor.outerPolygon : [];
+        if (outer.length >= 3) return this.finitePoint2d(polygonCentroid(outer));
+        return this.averagePoints(outer);
+    }
+
+    wallRotationCenter(wall, endpointKey = null) {
+        if (!wall) return null;
+        const points = wallPoints(this.building, wall);
+        if (!Array.isArray(points) || points.length < 2) return null;
+        if (endpointKey === "start" || endpointKey === "end") {
+            return this.finitePoint2d(points[endpointKey === "start" ? 0 : 1]);
+        }
+        return this.averagePoints(points.slice(0, 2));
+    }
+
+    mountedObjectRotationCenter(object) {
+        const direct = this.finitePoint2d(object);
+        if (direct) return direct;
+        const wall = findWall(this.building, object && (object.wallId ?? object.mountedWallSectionUnitId));
+        const wallLine = wall ? wallPoints(this.building, wall) : null;
+        if (Array.isArray(wallLine) && wallLine.length >= 2) {
+            const t = Number.isFinite(Number(object.wallT)) ? Math.max(0, Math.min(1, Number(object.wallT))) : 0.5;
+            return {
+                x: Number(wallLine[0].x) + (Number(wallLine[1].x) - Number(wallLine[0].x)) * t,
+                y: Number(wallLine[0].y) + (Number(wallLine[1].y) - Number(wallLine[0].y)) * t
+            };
+        }
+        return null;
+    }
+
+    roofRotationCenter(floor, roof) {
+        const contact = getRoofContactPolygon(roof);
+        if (Array.isArray(contact) && contact.length >= 3) return this.finitePoint2d(polygonCentroid(contact));
+        return this.floorRotationCenter(floor);
+    }
+
+    gableRotationCenter(floor, gable) {
+        const roof = findFloorRoof(floor, this.selection && this.selection.roofId);
+        const contact = roof ? getRoofContactPolygon(roof) : [];
+        const endpoints = [gable && gable.start, gable && gable.end]
+            .map((endpoint) => {
+                const edgeIndex = Math.floor(Number(endpoint && endpoint.edgeIndex));
+                if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= contact.length) return null;
+                const a = contact[edgeIndex];
+                const b = contact[(edgeIndex + 1) % contact.length];
+                if (!a || !b) return null;
+                const t = Number.isFinite(Number(endpoint.t)) ? Math.max(0, Math.min(1, Number(endpoint.t))) : 0;
+                return {
+                    x: Number(a.x) + (Number(b.x) - Number(a.x)) * t,
+                    y: Number(a.y) + (Number(b.y) - Number(a.y)) * t
+                };
+            })
+            .filter(Boolean);
+        return this.averagePoints(endpoints) || this.floorRotationCenter(floor);
+    }
+
+    stairRotationCenter(stair) {
+        const footprint = stairFootprintPoints(stair);
+        if (Array.isArray(footprint) && footprint.length >= 3) return this.finitePoint2d(polygonCentroid(footprint));
+        return this.averagePoints(footprint);
+    }
+
+    beamRotationCenter(beam) {
+        const points = this.beamWorldPoints(beam);
+        if (!points) return null;
+        return this.averagePoints([points.start, points.end]);
+    }
+
+    selectedObjectRotationCenter() {
+        const selection = this.selection || {};
+        if (selection.kind === "wall" || selection.kind === "wallEndpoint") {
+            const endpointKey = selection.kind === "wallEndpoint" ? selection.wallEndpointKey : null;
+            return this.averagePoints(this.selectedWalls().map((wall) => this.wallRotationCenter(wall, endpointKey)));
+        }
+        if (selection.kind === "mountedObject") {
+            return this.averagePoints(this.selectedMountedObjects().map((object) => this.mountedObjectRotationCenter(object)));
+        }
+        if (selection.kind === "roof" || selection.kind === "roofVertex" || selection.kind === "roofPeak" || selection.kind === "roofShedDirection") {
+            if (selection.kind === "roofVertex") {
+                const selected = this.selectedRoofVertex();
+                return selected ? this.finitePoint2d(selected.point) : null;
+            }
+            if (selection.kind === "roofPeak") {
+                const selected = this.selectedRoofPeak();
+                return selected ? this.finitePoint2d(selected.point) : null;
+            }
+            if (selection.kind === "roofShedDirection") {
+                const selected = this.selectedRoofShedDirection();
+                return selected ? this.roofRotationCenter(selected.floor, selected.roof) : null;
+            }
+            return this.averagePoints(this.selectedRoofEntries().map((entry) => this.roofRotationCenter(entry.floor, entry.roof)));
+        }
+        if (selection.kind === "gable" || selection.kind === "gableHandle") {
+            const floor = findFloor(this.building, selection.floorId);
+            const gable = this.selectedGable();
+            return floor && gable ? this.gableRotationCenter(floor, gable) : null;
+        }
+        if (selection.kind === "column") {
+            return this.averagePoints(this.selectedColumns().map((column) => column.position));
+        }
+        if (selection.kind === "beam") {
+            return this.averagePoints(this.selectedBeams().map((beam) => this.beamRotationCenter(beam)));
+        }
+        if (selection.kind === "stair") {
+            return this.averagePoints(this.selectedStairs().map((stair) => this.stairRotationCenter(stair)));
+        }
+        if (selection.kind === "floorVertex") {
+            const floor = findFloor(this.building, selection.floorId);
+            const ring = floor ? getFloorRing(floor, selection.ringKind || "outer", Number.isFinite(selection.holeIndex) ? selection.holeIndex : -1) : null;
+            return ring && ring[selection.vertexIndex] ? this.finitePoint2d(ring[selection.vertexIndex]) : null;
+        }
+        return null;
+    }
+
     updateCameraRotationCenter() {
-        this.camera.rotationCenter = this.buildingCenter();
+        this.camera.rotationCenter = this.selectedObjectRotationCenter()
+            || this.floorRotationCenter(this.selectedFloor())
+            || this.buildingCenter();
         return this.camera.rotationCenter;
     }
 
@@ -2240,6 +2359,38 @@ export class BuildingEditorState extends EventTarget {
         this.layerSelectionMode = "all";
         this.selection = createSelection("building");
         this.syncInputsFromFloor(floors[0] || null);
+        this.emitChange();
+    }
+
+    clearObjectSelectionKeepingView() {
+        const floors = getBuildingFloors(this.building);
+        if (!floors.length) {
+            this.selectedFloorIds = new Set();
+            this.layerSelectionMode = "floor";
+            this.selection = createSelection("building");
+            this.syncInputsFromFloor(null);
+            this.emitChange();
+            return;
+        }
+        if (this.allFloorsSelected()) {
+            this.selection = createSelection("building");
+            this.syncInputsFromFloor(floors[0] || null);
+            this.emitChange();
+            return;
+        }
+        const selection = this.selection || {};
+        let floor = selection.floorId ? findFloor(this.building, selection.floorId) : null;
+        if (!floor) {
+            floor = floors.find((candidate) => this.selectedFloorIds.has(getFloorId(candidate))) || null;
+        }
+        if (!floor) floor = floors[0];
+        const floorId = getFloorId(floor);
+        if (!this.selectedFloorIds.has(floorId)) {
+            this.selectedFloorIds = new Set([floorId]);
+            this.layerSelectionMode = "floor";
+        }
+        this.selection = createSelection("level", { floorId });
+        this.syncInputsFromFloor(floor);
         this.emitChange();
     }
 

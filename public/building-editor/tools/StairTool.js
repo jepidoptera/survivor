@@ -6,8 +6,8 @@ const ROTATION_STEP = Math.PI / 36;
 const GEOMETRY_EPSILON = 0.000001;
 const FINAL_POINT_HIT_PIXELS = 10;
 const FINAL_POINT_DRAG_PIXELS = 3;
+const STRAIGHT_TREAD_SNAP_PIXELS = 10;
 const SNAPPED_TREAD_ANGLE_STEP = Math.PI / 12;
-const RIGHT_ANGLE_SNAP_THRESHOLD = Math.PI / 24;
 const ARC_DELTA_SNAP_THRESHOLD = Math.PI / 24;
 const ARC_DELTA_SNAP_GEOMETRY_EPSILON = 0.00001;
 
@@ -73,15 +73,18 @@ function treadAngle(tread) {
     return Math.atan2(Number(tread.right.y) - Number(tread.left.y), Number(tread.right.x) - Number(tread.left.x));
 }
 
-function snapAngle(angle, step = SNAPPED_TREAD_ANGLE_STEP) {
-    return Math.round(Number(angle) / step) * step;
+function treadCenter(tread) {
+    if (tread && finitePoint(tread.center)) {
+        return { x: Number(tread.center.x), y: Number(tread.center.y) };
+    }
+    return {
+        x: (Number(tread.left.x) + Number(tread.right.x)) * 0.5,
+        y: (Number(tread.left.y) + Number(tread.right.y)) * 0.5
+    };
 }
 
-function angleDistance(a, b) {
-    let delta = Number(a) - Number(b);
-    while (delta <= -Math.PI) delta += Math.PI * 2;
-    while (delta > Math.PI) delta -= Math.PI * 2;
-    return Math.abs(delta);
+function snapAngle(angle, step = SNAPPED_TREAD_ANGLE_STEP) {
+    return Math.round(Number(angle) / step) * step;
 }
 
 function normalizeRadians(angle) {
@@ -108,9 +111,18 @@ function unwrapDeltaNear(delta, referenceDelta) {
 function snappedArcDelta(delta) {
     const resolved = Number(delta);
     if (!Number.isFinite(resolved)) throw new Error("stair arc delta must be finite");
-    const target = Math.round(resolved / Math.PI) * Math.PI;
-    if (Math.abs(target) < Math.PI - GEOMETRY_EPSILON) return null;
+    const target = Math.round(resolved / (Math.PI * 0.5)) * (Math.PI * 0.5);
+    if (Math.abs(target) <= GEOMETRY_EPSILON) return null;
     return Math.abs(resolved - target) <= ARC_DELTA_SNAP_THRESHOLD ? target : null;
+}
+
+function snappedArcGeometryDelta(snappedDelta, unsnappedDelta) {
+    const target = Number(snappedDelta);
+    if (!Number.isFinite(target)) throw new Error("snapped stair arc delta must be finite");
+    if (Math.abs(target) <= GEOMETRY_EPSILON) {
+        return (Math.sign(Number(unsnappedDelta)) || 1) * ARC_DELTA_SNAP_GEOMETRY_EPSILON;
+    }
+    return target - Math.sign(target) * ARC_DELTA_SNAP_GEOMETRY_EPSILON;
 }
 
 function pointFromPolar(center, radius, angle) {
@@ -118,15 +130,6 @@ function pointFromPolar(center, radius, angle) {
         x: Number(center.x) + Math.cos(angle) * Number(radius),
         y: Number(center.y) + Math.sin(angle) * Number(radius)
     };
-}
-
-function snapTreadAngleToRightAngle(directionAngle, angle) {
-    const candidates = [Number(directionAngle) + Math.PI * 0.5, Number(directionAngle) - Math.PI * 0.5];
-    const nearest = candidates.reduce((best, candidate) => {
-        const distance = angleDistance(angle, candidate);
-        return !best || distance < best.distance ? { angle: candidate, distance } : best;
-    }, null);
-    return nearest && nearest.distance <= RIGHT_ANGLE_SNAP_THRESHOLD ? nearest.angle : angle;
 }
 
 function reflectAngleAcrossDirection(treadAngleValue, directionAngle) {
@@ -420,18 +423,9 @@ export class StairTool {
             };
         }
         if (snap) {
-            const end = {
-                x: snap.projection.x + snap.normal.x * width,
-                y: snap.projection.y + snap.normal.y * width
-            };
-            const tread = {
-                left: { x: snap.projection.x, y: snap.projection.y },
-                right: end,
-                center: {
-                    x: (snap.projection.x + end.x) * 0.5,
-                    y: (snap.projection.y + end.y) * 0.5
-                },
-                angle: Math.atan2(snap.normal.y, snap.normal.x)
+            const center = {
+                x: snap.projection.x + snap.normal.x * width * 0.5,
+                y: snap.projection.y + snap.normal.y * width * 0.5
             };
             return {
                 floor,
@@ -439,7 +433,7 @@ export class StairTool {
                 ladder: false,
                 snapped: true,
                 snapKind: "wallEnd",
-                treads: [tread],
+                treads: [treadFromCenter(center, this.previewRotation, width)],
                 ...settings
             };
         }
@@ -500,12 +494,12 @@ export class StairTool {
             );
             if (!this.drag.moved && dragDistance <= this.drag.dragThreshold) return;
             this.drag.moved = true;
-            this._moveDraftFinalPoint(this.lastWorldPoint, options);
+            this._moveDraftFinalPoint(this.lastWorldPoint, threshold, options);
             return;
         }
         const draft = this._activeDraft();
         if (draft && draft.started && draft.completed !== true && draft.ladder !== true) {
-            this._updatePendingTread(this.lastWorldPoint, options);
+            this._updatePendingTread(this.lastWorldPoint, threshold, options);
             return;
         }
         if (draft && draft.completed === true) return;
@@ -658,17 +652,19 @@ export class StairTool {
         return this.state.draft && this.state.draft.kind === "stair" ? this.state.draft : null;
     }
 
-    _updatePendingTread(worldPoint, options = {}) {
+    _updatePendingTread(worldPoint, threshold, options = {}) {
         const draft = this._activeDraft();
         if (!draft || !draft.started || !Array.isArray(draft.treads) || !draft.treads.length) return;
         const previous = draft.treads[draft.treads.length - 1];
-        const pending = this._pendingTreadForPoint(draft, previous, worldPoint, options);
+        const pending = this._pendingTreadForPoint(draft, previous, worldPoint, threshold, options);
         if (!pending) return;
-        draft.pendingTread = this._pendingTreadWithArcMetadata(draft, previous, pending);
+        draft.pendingTread = this._pendingTreadWithArcMetadata(draft, previous, pending.tread, {
+            snapArcDelta: pending.wallSnapped !== true
+        });
         this.state.emitChange();
     }
 
-    _pendingTreadForPoint(draft, previous, worldPoint, options = {}) {
+    _pendingTreadForPoint(draft, previous, worldPoint, threshold, options = {}) {
         const rawDistance = Math.hypot(Number(worldPoint.x) - Number(previous.center.x), Number(worldPoint.y) - Number(previous.center.y));
         if (!Number.isFinite(rawDistance) || rawDistance <= GEOMETRY_EPSILON) return null;
         const floor = this.state.building && draft.floorId ? findFloor(this.state.building, draft.floorId) : null;
@@ -679,19 +675,44 @@ export class StairTool {
                 y: Number(wallSnap.projection.y) + Number(wallSnap.normal.y) * Number(draft.width) * 0.5
             }
             : { x: Number(worldPoint.x), y: Number(worldPoint.y) };
+        const straightSnap = wallSnap ? null : this._straightTreadSnap(previous, targetPoint, draft.width, threshold, options);
+        if (straightSnap) return { tread: straightSnap, wallSnapped: false, straightSnapped: true };
         const direction = normalizeVector(
             targetPoint.x - Number(previous.center.x),
             targetPoint.y - Number(previous.center.y),
             "stair path segment"
         );
         const directionAngle = Math.atan2(direction.y, direction.x);
-        const pendingAngle = snapTreadAngleToRightAngle(
-            directionAngle,
-            reflectAngleAcrossDirection(treadAngle(previous), directionAngle)
-        );
+        const pendingAngle = reflectAngleAcrossDirection(treadAngle(previous), directionAngle);
         let pending = treadFromCenter(targetPoint, pendingAngle, draft.width);
         if (treadLinesCross(previous, pending)) pending = snapNearestTreadEndpoints(previous, pending);
-        return pending;
+        return { tread: pending, wallSnapped: !!wallSnap };
+    }
+
+    _straightTreadSnap(previous, targetPoint, width, threshold, options = {}) {
+        const center = treadCenter(previous);
+        const previousAngle = treadAngle(previous);
+        const tangent = { x: Math.cos(previousAngle), y: Math.sin(previousAngle) };
+        const normal = { x: -Math.sin(previousAngle), y: Math.cos(previousAngle) };
+        const dx = Number(targetPoint.x) - center.x;
+        const dy = Number(targetPoint.y) - center.y;
+        const alongNormal = dx * normal.x + dy * normal.y;
+        if (Math.abs(alongNormal) <= GEOMETRY_EPSILON) return null;
+        const lineDistance = Math.abs(dx * tangent.x + dy * tangent.y);
+        const snapDistance = this._screenPixelsToWorldDistance(STRAIGHT_TREAD_SNAP_PIXELS, threshold, options);
+        if (lineDistance > snapDistance) return null;
+        const snappedCenter = {
+            x: center.x + normal.x * alongNormal,
+            y: center.y + normal.y * alongNormal
+        };
+        const directionAngle = alongNormal >= 0
+            ? Math.atan2(normal.y, normal.x)
+            : Math.atan2(-normal.y, -normal.x);
+        return treadFromCenter(
+            snappedCenter,
+            reflectAngleAcrossDirection(previousAngle, directionAngle),
+            width
+        );
     }
 
     _pendingTreadWithArcMetadata(draft, previous, pending, options = {}) {
@@ -712,12 +733,12 @@ export class StairTool {
         let nearDeltaAngle = Number.isFinite(Number(deltas.nearDeltaAngle))
             ? unwrapDeltaNear(deltas.nearDeltaAngle, deltaAngle)
             : null;
-        const snappedDelta = snappedArcDelta(deltaAngle);
+        const snappedDelta = options.snapArcDelta === false ? null : snappedArcDelta(deltaAngle);
         if (snappedDelta !== null) {
-            const geometryDelta = snappedDelta - Math.sign(snappedDelta) * ARC_DELTA_SNAP_GEOMETRY_EPSILON;
+            const geometryDelta = snappedArcGeometryDelta(snappedDelta, deltaAngle);
             const geometryNearDelta = nearDeltaAngle === null
                 ? geometryDelta
-                : snappedDelta - Math.sign(snappedDelta) * ARC_DELTA_SNAP_GEOMETRY_EPSILON;
+                : snappedArcGeometryDelta(snappedDelta, nearDeltaAngle);
             pending = pendingTreadForArcDelta(pending, deltas, geometryDelta, geometryNearDelta);
             deltaAngle = snappedDelta;
             if (nearDeltaAngle !== null) nearDeltaAngle = snappedDelta;
@@ -738,7 +759,7 @@ export class StairTool {
         const draft = this._activeDraft();
         if (!draft || !draft.started || draft.completed === true) return false;
         if (!draft.pendingTread) {
-            if (this.lastWorldPoint) this._updatePendingTread(this.lastWorldPoint);
+            if (this.lastWorldPoint) this._updatePendingTread(this.lastWorldPoint, 0, {});
         }
         if (!draft.pendingTread) return false;
         const candidate = cloneTread(draft.pendingTread);
@@ -798,20 +819,21 @@ export class StairTool {
         return true;
     }
 
-    _moveDraftFinalPoint(worldPoint, options = {}) {
+    _moveDraftFinalPoint(worldPoint, threshold, options = {}) {
         const draft = this._activeDraft();
         if (!draft || draft.completed !== true || draft.ladder === true || !Array.isArray(draft.treads) || draft.treads.length < 2) return false;
         const index = draft.treads.length - 1;
         const previous = draft.treads[index - 1];
         const current = draft.treads[index];
-        const pending = this._pendingTreadForPoint(draft, previous, worldPoint, options);
+        const pending = this._pendingTreadForPoint(draft, previous, worldPoint, threshold, options);
         if (!pending) return false;
         const metadataDraft = {
             ...draft,
             treads: draft.treads.slice(0, index),
             pendingArcState: null
         };
-        const next = this._pendingTreadWithArcMetadata(metadataDraft, previous, pending, {
+        const next = this._pendingTreadWithArcMetadata(metadataDraft, previous, pending.tread, {
+            snapArcDelta: pending.wallSnapped !== true,
             referenceDeltaAngle: current.arcDeltaAngle
         });
         if (this._draftTreadReplacementHasConflicts(draft, index, next)) return false;

@@ -83,7 +83,7 @@ test("stair tool keeps pending drag winding beyond a full turn", async () => {
     assert.ok(Math.abs(resolved.arcNearDeltaAngle - 5 * Math.PI / 2) < 0.000001);
 });
 
-test("stair tool snaps pending arcs to 180 and 360 degrees", async () => {
+test("stair tool snaps pending arcs to 90-degree turns after straight", async () => {
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
     const { BuildingRenderer } = await import("../public/building-editor/BuildingRenderer.js");
     const tool = new StairTool({});
@@ -101,10 +101,27 @@ test("stair tool snaps pending arcs to 180 and 360 degrees", async () => {
         angle
     });
 
+    const quarterTurn = tool._pendingTreadWithArcMetadata(
+        { treads: [previous], pendingArcState: null },
+        previous,
+        pendingAt(Math.PI / 2 - 0.03)
+    );
     const halfTurn = tool._pendingTreadWithArcMetadata(
         { treads: [previous], pendingArcState: null },
         previous,
         pendingAt(Math.PI - 0.03)
+    );
+    const threeQuarterTurn = tool._pendingTreadWithArcMetadata(
+        {
+            treads: [previous],
+            pendingArcState: {
+                treadIndex: 0,
+                kind: "annular",
+                deltaAngle: 3 * Math.PI / 2 - 0.05
+            }
+        },
+        previous,
+        pendingAt(-Math.PI / 2 - 0.03)
     );
     const fullTurn = tool._pendingTreadWithArcMetadata(
         {
@@ -119,11 +136,17 @@ test("stair tool snaps pending arcs to 180 and 360 degrees", async () => {
         pendingAt(-0.03)
     );
 
+    assert.ok(Math.abs(quarterTurn.arcDeltaAngle - Math.PI / 2) < 0.000001);
+    assert.ok(Math.abs(quarterTurn.arcNearDeltaAngle - Math.PI / 2) < 0.000001);
     assert.ok(Math.abs(halfTurn.arcDeltaAngle - Math.PI) < 0.000001);
     assert.ok(Math.abs(halfTurn.arcNearDeltaAngle - Math.PI) < 0.000001);
+    assert.ok(Math.abs(threeQuarterTurn.arcDeltaAngle - 3 * Math.PI / 2) < 0.000001);
+    assert.ok(Math.abs(threeQuarterTurn.arcNearDeltaAngle - 3 * Math.PI / 2) < 0.000001);
     assert.ok(Math.abs(fullTurn.arcDeltaAngle - 2 * Math.PI) < 0.000001);
     assert.ok(Math.abs(fullTurn.arcNearDeltaAngle - 2 * Math.PI) < 0.000001);
+    assert.ok(Math.abs(renderer.stairSectionBetweenTreads(previous, quarterTurn).area - 0.5 * (Math.PI / 2) * (9 - 1)) < 0.0001);
     assert.ok(Math.abs(renderer.stairSectionBetweenTreads(previous, halfTurn).area - 0.5 * Math.PI * (9 - 1)) < 0.0001);
+    assert.ok(Math.abs(renderer.stairSectionBetweenTreads(previous, threeQuarterTurn).area - 0.5 * (3 * Math.PI / 2) * (9 - 1)) < 0.0001);
     assert.ok(Math.abs(renderer.stairSectionBetweenTreads(previous, fullTurn).area - 0.5 * (2 * Math.PI) * (9 - 1)) < 0.0001);
 });
 

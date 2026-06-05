@@ -632,8 +632,315 @@
       "beams": [],
       "_createPerimeterWalls": false,
       "roofs": [],
-      "columns": [],
-      "stairs": []
+      "columns": [
+        {
+          "type": "column",
+          "id": 1,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": -0.10780792097828895,
+            "y": -0.49702971778651417
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 2,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 1.51100431470626,
+            "y": -0.5204409293362566
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 3,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 3.1781485284110174,
+            "y": -0.7551149139108588
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 4,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 4.68768846596292,
+            "y": -1.190376159043641
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 5,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 6.257674278839329,
+            "y": -1.9350399760178014
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 6,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 7.662515532546942,
+            "y": -3.028999069314093
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 7,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 8.804930215060427,
+            "y": -4.122021714148396
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 8,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 9.759579489357293,
+            "y": -5.2068036125171915
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 9,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 10.53066613613495,
+            "y": -6.828732348683243
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 10,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 11.003355353396536,
+            "y": -8.228535509665349
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        },
+        {
+          "type": "column",
+          "id": 11,
+          "floorId": "floor-fragment-49",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 11.369986163647024,
+            "y": -9.80626387842549
+          },
+          "sideCount": 6,
+          "size": 0.05,
+          "width": 0.1,
+          "depth": 0.1,
+          "rotation": 0,
+          "height": 1,
+          "topHeights": null,
+          "bottomZ": 8,
+          "traversalLayer": 2,
+          "texturePath": "/assets/images/walls/woodwall.png"
+        }
+      ],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 4,
+          "stairKind": "straight",
+          "floorId": "floor-fragment-49",
+          "startPoint": {
+            "x": -3.8042745116302803,
+            "y": -0.26100041632131155
+          },
+          "endPoint": {
+            "x": 4.331472589517876,
+            "y": -22.182414822239785
+          },
+          "treads": [
+            {
+              "left": {
+                "x": -4.308797953027565,
+                "y": 1.0983950732550811
+              },
+              "right": {
+                "x": -3.299751070232996,
+                "y": -1.6203959058977042
+              },
+              "center": {
+                "x": -3.8042745116302803,
+                "y": -0.26100041632131155
+              }
+            },
+            {
+              "left": {
+                "x": 3.826962742100713,
+                "y": -20.823014287496946
+              },
+              "right": {
+                "x": 4.835982436935039,
+                "y": -23.541815356982625
+              },
+              "center": {
+                "x": 4.331472589517876,
+                "y": -22.182414822239785
+              },
+              "arcDeltaAngle": 3.141592653589793,
+              "arcNearDeltaAngle": 3.141592653589793
+            }
+          ],
+          "ladder": false,
+          "direction": "up",
+          "width": 2.9,
+          "bottomZ": 8,
+          "height": 4,
+          "stepCount": 20,
+          "riserDepth": 0.44047619047619047,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": -4.308797953027565,
+              "y": 1.0983950732550811
+            },
+            {
+              "x": 3.826962742100713,
+              "y": -20.823014287496946
+            },
+            {
+              "x": 4.835982436935039,
+              "y": -23.541815356982625
+            },
+            {
+              "x": -3.299751070232996,
+              "y": -1.6203959058977042
+            }
+          ]
+        }
+      ]
     },
     {
       "fragmentId": "floor-fragment-59",

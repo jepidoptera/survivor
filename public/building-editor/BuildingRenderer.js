@@ -3,7 +3,7 @@ import { flattenPolygon, polygonCentroid, simplePolygonRingError } from "./Build
 import { validateBuilding } from "./BuildingValidation.js";
 import { ADJACENT_DIRECTIONS, GAME_HEX_RADIUS, GAME_HEX_X_STEP, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
-import { columnVertices, findFloor, findFloorRoof, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorBeams, getFloorColumns, getFloorElevation, getFloorId, getFloorRoof, getFloorRoofs, getFloorStairs, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, getWallResolvedGeometry, offsetRing, stairFootprintPoints, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
+import { columnVertices, DEFAULTS, findFloor, findFloorRoof, findWall, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorBeams, getFloorColumns, getFloorElevation, getFloorId, getFloorRoof, getFloorRoofs, getFloorStairs, getRoofContactPolygon, getRoofDomeLevels, getRoofGables, getRoofPeakPoint, getRoofShedDirection, getWallResolvedGeometry, offsetRing, stairFootprintPoints, wallCenterlinePoints, wallPoints } from "./BuildingModel.js";
 
 const GAME_XY_RATIO = 0.66;
 const CAMERA_DEFAULT_PITCH = Math.PI / 4;
@@ -2026,11 +2026,11 @@ function stairMeshKey(floor, stair) {
 }
 
 function stairTreadTexturePath(stair) {
-    return normalizeTexturePath(stair && (stair.treadTexturePath || stair.texturePath), "/assets/images/flooring/woodfloor.png");
+    return normalizeTexturePath(stair && (stair.treadTexturePath || stair.texturePath), DEFAULTS.floorTexture);
 }
 
 function stairRiserTexturePath(stair) {
-    return normalizeTexturePath(stair && (stair.riserTexturePath || stair.texturePath || stair.treadTexturePath), "/assets/images/flooring/woodfloor.png");
+    return normalizeTexturePath(stair && (stair.riserTexturePath || stair.texturePath || stair.treadTexturePath), DEFAULTS.floorTexture);
 }
 
 function defaultStairRiserDepth(height, stepCount) {
@@ -2956,7 +2956,7 @@ export class BuildingRenderer {
     }
 
     getFloorTexture(texturePath) {
-        return this.getSurfaceTexture(texturePath, "/assets/images/flooring/woodfloor.png");
+        return this.getSurfaceTexture(texturePath, DEFAULTS.floorTexture);
     }
 
     getRoofTexture(texturePath) {
@@ -3143,7 +3143,7 @@ export class BuildingRenderer {
         return this.createSurfaceMesh(floor, triangulation, {
             z: getFloorElevation(floor),
             texturePath: floor.floorTexturePath,
-            textureFallback: "/assets/images/flooring/woodfloor.png",
+            textureFallback: DEFAULTS.floorTexture,
             textureRepeat: FLOOR_TEXTURE_REPEAT,
             namePrefix: "buildingEditorFloorMesh"
         });
@@ -3204,7 +3204,7 @@ export class BuildingRenderer {
     updateFloorMeshUniforms(mesh, floor, alpha) {
         this.updateSurfaceMeshUniforms(mesh, floor, alpha, {
             texturePath: floor.floorTexturePath,
-            textureFallback: "/assets/images/flooring/woodfloor.png"
+            textureFallback: DEFAULTS.floorTexture
         });
     }
 
@@ -3672,7 +3672,7 @@ export class BuildingRenderer {
         return this.createSurfaceMesh(floor, triangulation, {
             z: Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : getFloorElevation(floor),
             texturePath,
-            textureFallback: "/assets/images/flooring/woodfloor.png",
+            textureFallback: DEFAULTS.floorTexture,
             textureRepeat: FLOOR_TEXTURE_REPEAT,
             namePrefix
         });
@@ -3720,12 +3720,12 @@ export class BuildingRenderer {
         entry.mesh.visible = true;
         this.updateSurfaceMeshUniforms(entry.mesh._stairTreadMesh, floor, alpha, {
             texturePath: stairTreadTexturePath(stair),
-            textureFallback: "/assets/images/flooring/woodfloor.png"
+            textureFallback: DEFAULTS.floorTexture
         });
         if (entry.mesh._stairRiserMesh) {
             this.updateSurfaceMeshUniforms(entry.mesh._stairRiserMesh, floor, alpha, {
                 texturePath: stairRiserTexturePath(stair),
-                textureFallback: "/assets/images/flooring/woodfloor.png"
+                textureFallback: DEFAULTS.floorTexture
             });
         }
         return entry.mesh;
@@ -4829,20 +4829,6 @@ export class BuildingRenderer {
         return wallDepth > floorDepth + COLLAPSED_WALL_FRONT_DEPTH_EPSILON;
     }
 
-    drawWallProjectionOutlines(floorIds, wallEntries = null) {
-        if (this.state.renderStyle() !== "interior") return;
-        const wallDebug = this.wallLayer;
-        wallDebug.lineStyle(2, 0xffffff, 0.95);
-        getBuildingWalls(this.state.building).forEach((wall) => {
-            const floor = findFloor(this.state.building, wall.fragmentId || wall.floorId);
-            if (!floor || !floorIds.has(getFloorId(floor))) return;
-            const projection = clipGeometryRings(this.wallScreenPickGeometry(wall, floor, wallEntries), `wall ${wall.id} projection`);
-            projection.forEach((ring, index) => {
-                wallDebug.drawPolygon(flattenClipRing(ring, `wall ${wall.id} projection outline ${index}`));
-            });
-        });
-    }
-
     ensureWallUnit(wall, floor) {
         const WallSectionUnit = globalThis.WallSectionUnit;
         if (typeof WallSectionUnit !== "function") {
@@ -5160,7 +5146,6 @@ export class BuildingRenderer {
         wallEntries.forEach((entry) => {
             entry.mesh = this.renderWallUnit(entry.wall, entry.floor, 1, wallEntries);
         });
-        this.drawWallProjectionOutlines(floorIds, wallEntries);
         for (const [floorId, entry] of this.floorMeshById.entries()) {
             if (!liveFloorMeshIds.has(floorId) && entry && entry.mesh) entry.mesh.visible = false;
         }

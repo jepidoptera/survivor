@@ -3,6 +3,9 @@ import { getBuildingMountedObjects, getFloorElevation, getFloorId } from "../Bui
 import { ringsForFloor } from "../BuildingPolygonEditing.js";
 import { mountedObjectPlacementAt } from "./MountedObjectTool.js";
 
+const BACKGROUND_DOUBLE_CLICK_MS = 360;
+const BACKGROUND_DOUBLE_CLICK_PIXELS = 8;
+
 function closestScreenSegmentPoint(point, a, b) {
     const dx = Number(b.x) - Number(a.x);
     const dy = Number(b.y) - Number(a.y);
@@ -34,6 +37,7 @@ export class SelectTool {
     constructor(state) {
         this.state = state;
         this.drag = null;
+        this.lastBackgroundClick = null;
     }
 
     pointerDown(worldPoint, threshold, options = {}) {
@@ -225,10 +229,17 @@ export class SelectTool {
         }
         const hit = hasScreenPicker ? screenHit : this.state.pick(worldPoint, threshold);
         if (!hit) {
-            this.state.selectBuilding();
+            if (options.doubleClick || this.isBackgroundDoubleClick(options)) {
+                this.state.selectBuilding();
+                this.lastBackgroundClick = null;
+            } else {
+                this.state.clearObjectSelectionKeepingView();
+                this.rememberBackgroundClick(options);
+            }
             this.drag = null;
             return;
         }
+        this.lastBackgroundClick = null;
         if (hit.type === "floorVertex") {
             this.selectFloorVertexHit(hit, { preserveView });
             return;
@@ -316,6 +327,37 @@ export class SelectTool {
             this.state.selectFloor(getFloorId(hit.floor), { preserveView });
             this.drag = null;
         }
+    }
+
+    clickTimeMs(options = {}) {
+        if (Number.isFinite(Number(options.timeStamp))) return Number(options.timeStamp);
+        if (typeof performance !== "undefined" && performance && typeof performance.now === "function") {
+            return performance.now();
+        }
+        return Date.now();
+    }
+
+    screenClickPoint(options = {}) {
+        if (!options.screenPoint) return null;
+        const x = Number(options.screenPoint.x);
+        const y = Number(options.screenPoint.y);
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    }
+
+    isBackgroundDoubleClick(options = {}) {
+        const previous = this.lastBackgroundClick;
+        const point = this.screenClickPoint(options);
+        if (!previous || !point) return false;
+        const elapsed = this.clickTimeMs(options) - previous.time;
+        if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > BACKGROUND_DOUBLE_CLICK_MS) return false;
+        return Math.hypot(point.x - previous.x, point.y - previous.y) <= BACKGROUND_DOUBLE_CLICK_PIXELS;
+    }
+
+    rememberBackgroundClick(options = {}) {
+        const point = this.screenClickPoint(options);
+        this.lastBackgroundClick = point
+            ? { ...point, time: this.clickTimeMs(options) }
+            : null;
     }
 
     selectFloorVertexHit(hit, options = {}) {

@@ -1850,6 +1850,34 @@ test("building camera can recenter on the whole building bounds", async () => {
     assert.deepEqual(state.camera.rotationCenter, state.buildingCenter());
 });
 
+test("camera rotation center prefers selected object then selected floor then average floor centers", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const firstFloor = state.selectedFloor();
+    const secondFloor = model.createFloor({
+        elevation: 3,
+        footprint: [
+            { x: 20, y: 10 },
+            { x: 24, y: 10 },
+            { x: 24, y: 14 },
+            { x: 20, y: 14 }
+        ],
+        createPerimeterWalls: false
+    });
+    model.addFloor(state.building, secondFloor);
+    const column = state.addColumnToFloor(firstFloor.fragmentId, { position: { x: 1.25, y: -0.5 } });
+
+    state.selectColumn(firstFloor.fragmentId, column.id);
+    assert.deepEqual(state.updateCameraRotationCenter(), { x: 1.25, y: -0.5 });
+
+    state.selectLevel(secondFloor.fragmentId);
+    assert.deepEqual(state.updateCameraRotationCenter(), { x: 22, y: 12 });
+
+    state.selectBuilding();
+    assert.deepEqual(state.updateCameraRotationCenter(), { x: 11, y: 6 });
+});
+
 test("shed roof direction handle updates a normalized roof direction", async () => {
     const { BuildingEditorState } = await loadState();
     const state = new BuildingEditorState();
@@ -3189,6 +3217,45 @@ test("select tool shift-adds and control-removes columns", async () => {
         }
     });
     assert.deepEqual(state.selectedColumnIds().map(Number), [second.id]);
+});
+
+test("select tool background click clears selection but keeps interior until double click", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { SelectTool } = await loadSelectTool();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const column = state.addColumnToFloor(floor.fragmentId, { position: { x: 1, y: 1 } });
+    const selectTool = new SelectTool(state);
+    const renderer = {
+        pickAtScreen() {
+            return null;
+        }
+    };
+
+    state.selectColumn(floor.fragmentId, column.id);
+    assert.equal(state.renderStyle(), "interior");
+
+    selectTool.pointerDown({ x: 50, y: 50 }, 0.5, {
+        screenPoint: { x: 50, y: 50 },
+        renderer,
+        doubleClick: false,
+        timeStamp: 100
+    });
+
+    assert.equal(state.renderStyle(), "interior");
+    assert.equal(state.selection.kind, "level");
+    assert.equal(state.selection.floorId, floor.fragmentId);
+    assert.deepEqual(state.selectedColumnIds(), []);
+
+    selectTool.pointerDown({ x: 50, y: 50 }, 0.5, {
+        screenPoint: { x: 50, y: 50 },
+        renderer,
+        doubleClick: false,
+        timeStamp: 220
+    });
+
+    assert.equal(state.renderStyle(), "exterior");
+    assert.equal(state.selection.kind, "building");
 });
 
 test("select tool click-selecting a column does not move it off its wall", async () => {
@@ -4594,6 +4661,59 @@ test("stair tool starts a draft before target floor height is available", async 
     assert.throws(() => tool.finish(), /requires another floor above/);
 });
 
+test("stair tool rotates a wall-snapped first tread preview", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const state = {
+        stairTool: {
+            width: 2,
+            direction: "up",
+            texture: "/assets/images/flooring/woodfloor.png",
+            treadTexture: "/assets/images/flooring/woodfloor.png",
+            riserTexture: "/assets/images/flooring/woodfloor.png",
+            stepCount: 4,
+            riserDepth: 0.5
+        },
+        draft: null,
+        stairCreationSettingsForFloor() {
+            return {
+                direction: "up",
+                width: 2,
+                texturePath: "/assets/images/flooring/woodfloor.png",
+                treadTexturePath: "/assets/images/flooring/woodfloor.png",
+                riserTexturePath: "/assets/images/flooring/woodfloor.png",
+                height: 3,
+                stepCount: 4,
+                riserDepth: 0.5
+            };
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+    tool._floorForPoint = () => ({ fragmentId: "floor", elevation: 0 });
+    tool._wallSnap = () => ({
+        projection: { x: 1, y: 1 },
+        normal: { x: 0, y: 1 },
+        onWall: false
+    });
+
+    tool.pointerMove({ x: 1, y: 1.6 }, 0.1);
+    const before = state.draft.treads[0];
+    tool.rotatePreview(Math.PI / 2);
+    const after = state.draft.treads[0];
+
+    assert.deepEqual(
+        {
+            x: Number(after.center.x.toFixed(6)),
+            y: Number(after.center.y.toFixed(6))
+        },
+        {
+            x: Number(before.center.x.toFixed(6)),
+            y: Number(before.center.y.toFixed(6))
+        }
+    );
+    assert.equal(Number(after.angle.toFixed(6)), Number((Math.PI / 2).toFixed(6)));
+});
+
 test("stair tool cancel deselects the tool", async () => {
     const { BuildingEditorState } = await loadState();
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
@@ -4786,7 +4906,7 @@ test("stair pending tread centers at the mouse and mirrors across the direction 
     assert.equal(Math.abs(Number(state.draft.pendingTread.angle.toFixed(6))), Number(Math.PI.toFixed(6)));
 });
 
-test("stair pending tread snaps near-perpendicular paths to dead-straight 90 degrees", async () => {
+test("stair pending tread does not force straight from a small angle alone", async () => {
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
     const previousAngle = Math.PI / 36;
     const previous = {
@@ -4817,7 +4937,83 @@ test("stair pending tread snaps near-perpendicular paths to dead-straight 90 deg
         },
         { x: 0, y: 3 }
     );
+    assert.equal(Number(state.draft.pendingTread.angle.toFixed(6)), Number((Math.PI - previousAngle).toFixed(6)));
+});
+
+test("stair pending tread snaps straight within ten screen pixels of the guide line", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    const state = {
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }]
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+    const pointer = { x: 0.08, y: 3 };
+
+    tool.pointerMove(pointer, 0.14, { thresholdPixels: 14, renderer });
+
+    assert.deepEqual(
+        {
+            x: Number(state.draft.pendingTread.center.x.toFixed(6)),
+            y: Number(state.draft.pendingTread.center.y.toFixed(6))
+        },
+        { x: 0, y: 3 }
+    );
     assert.equal(Math.abs(Number(state.draft.pendingTread.angle.toFixed(6))), Number(Math.PI.toFixed(6)));
+});
+
+test("stair pending tread bends normally outside ten screen pixels of the straight guide line", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    const state = {
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            width: 2,
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }]
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+    const pointer = { x: 0.11, y: 3 };
+
+    tool.pointerMove(pointer, 0.14, { thresholdPixels: 14, renderer });
+
+    assert.deepEqual(
+        {
+            x: Number(state.draft.pendingTread.center.x.toFixed(6)),
+            y: Number(state.draft.pendingTread.center.y.toFixed(6))
+        },
+        { x: 0.11, y: 3 }
+    );
+    assert.notEqual(Math.abs(Number(state.draft.pendingTread.angle.toFixed(6))), Number(Math.PI.toFixed(6)));
 });
 
 test("stair pending tread snaps nearest endpoints together when mirrored treads cross", async () => {

@@ -13,13 +13,7 @@ import { StairTool } from "./tools/StairTool.js";
 import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
 
 const PAINT_TEXTURES = {
-    floor: [
-        "/assets/images/flooring/black.png",
-        "/assets/images/flooring/cave.jpg",
-        "/assets/images/flooring/woodfloor.png",
-        "/assets/images/flooring/cobblestones.png",
-        "/assets/images/flooring/dirt.jpg"
-    ],
+    floor: [DEFAULTS.floorTexture],
     roofs: [],
     walls: []
 };
@@ -387,8 +381,7 @@ function normalizeImagePathList(values, folder) {
     const prefix = `/assets/images/${folder}/`;
     return [...new Set((Array.isArray(values) ? values : [])
         .map((value) => String(value || ""))
-        .filter((value) => value.startsWith(prefix) && /\.(png|jpe?g|webp|gif)$/i.test(value)))]
-        .sort((a, b) => textureName(a).localeCompare(textureName(b)));
+        .filter((value) => value.startsWith(prefix) && /\.(png|jpe?g|webp|gif)$/i.test(value)))];
 }
 
 async function loadTextureManifest(folder) {
@@ -417,6 +410,10 @@ async function loadWallTextures() {
 
 async function loadRoofTextures() {
     await loadPaintTextures("roofs", "roofs");
+}
+
+async function loadFloorTextures() {
+    await loadPaintTextures("flooring", "floor");
 }
 
 function mergeMountedAssetDefaults(category, defaults, item) {
@@ -2336,6 +2333,7 @@ app.stage.on("pointerdown", (event) => {
             shiftKey: !!((original && original.shiftKey) || state.shiftKeyDown),
             controlKey: !!(original && (original.ctrlKey || original.metaKey)),
             doubleClick: !!(original && Number(original.detail) >= 2),
+            timeStamp: original && Number.isFinite(Number(original.timeStamp)) ? Number(original.timeStamp) : undefined,
             thresholdPixels,
             screenPoint,
             renderer
@@ -2690,6 +2688,10 @@ loadWallTextures().catch((error) => {
     setStatus(error.message, true);
 });
 loadRoofTextures().catch((error) => {
+    console.error(error);
+    setStatus(error.message, true);
+});
+loadFloorTextures().catch((error) => {
     console.error(error);
     setStatus(error.message, true);
 });
