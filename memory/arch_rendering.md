@@ -99,6 +99,18 @@ screenY = ((worldY - cameraY) - (worldZ - cameraZ)) * viewscale * xyratio
 ```
 `xyratio ≈ 0.66` compresses Y for isometric look. Z lifts objects upward on screen.
 
+## Building Editor Picker Debug
+
+The building editor picker has two separate paths that both need to be updated for new object types:
+- `editorPickRenderItems()` registers the actual hidden screen-pick target and display object.
+- `drawScreenPickerDebug()` draws the visible solid-color debug mesh for Ctrl/Cmd+D picker inspection.
+
+If a new object is selectable but looks normal in picker debug, it probably has the first path but is missing the second. Depth-rendered objects should get a solid debug mesh, usually through `createSolidDepthMesh(...)`, rather than relying on their visual textured mesh.
+
+The hidden picker can proxy `PIXI.Sprite`, `PIXI.Mesh`, and `PIXI.Graphics`, but not a plain `PIXI.Container`. If a visual object is split into child meshes, register each renderable child in `editorPickRenderItems()` with the same logical pick payload instead of registering the parent container.
+
+Keep picker camera pitch limits in `ScenePicker.js` aligned with building editor camera pitch limits. If the visible renderer allows lower or higher pitch than the picker shader clamps to, selectable geometry appears in one screen position but writes its ID color somewhere else.
+
 ## Wizard Shield (Wizard.js)
 
 Custom dodecahedron wireframe rendered via raw WebGL (not PIXI):
