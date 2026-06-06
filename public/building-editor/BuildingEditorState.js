@@ -97,7 +97,7 @@ const ROOF_SUPPORT_HEIGHT_EPSILON = 0.0001;
 const ROOF_SUPPORT_POINT_EPSILON = 0.0001;
 const DEFAULT_COLUMN_EXTRA_THICKNESS = 0.001;
 const DEFAULT_COLUMN_WIDTH = 0.25;
-const COLUMN_DIMENSION_MAX = 1;
+const COLUMN_DIMENSION_MAX = 2;
 const STAIR_WIDTH_MIN = 0.2;
 const STAIR_WIDTH_MAX = 5;
 const ROOF_SNAP_IMPORTANCE = Object.freeze({
@@ -4542,6 +4542,74 @@ export class BuildingEditorState extends EventTarget {
         });
     }
 
+    removeGableMountedObjectsForFloor(floorId) {
+        const targetFloorId = String(floorId || "");
+        this.building.mountedWallObjects = getBuildingMountedObjects(this.building)
+            .filter((object) => !(String(object.floorId) === targetFloorId && object.mountKind === "gable"));
+    }
+
+    moveRoofStack(sourceFloor, targetFloor) {
+        if (!sourceFloor || !targetFloor) throw new Error("cannot move roof stack without source and target floors");
+        const targetFloorId = getFloorId(targetFloor);
+        const roof = getFloorRoof(sourceFloor);
+        const roofs = Array.isArray(sourceFloor.roofs) ? sourceFloor.roofs : [];
+        if (!roof && roofs.length === 0) return;
+        const movedRoofs = [roof, ...roofs].filter(Boolean);
+        movedRoofs.forEach((entry) => {
+            entry.floorId = targetFloorId;
+        });
+        targetFloor.roof = roof || null;
+        targetFloor.roofs = roofs;
+        sourceFloor.roof = null;
+        sourceFloor.roofs = [];
+    }
+
+    duplicateFloorAdjacent(sourceFloorId, position = "above") {
+        const source = findFloor(this.building, sourceFloorId);
+        if (!source) throw new Error(`cannot duplicate missing floor: ${sourceFloorId}`);
+        const placement = String(position || "").trim().toLowerCase();
+        if (placement !== "above" && placement !== "below") {
+            throw new Error(`unknown duplicate floor position: ${position}`);
+        }
+        const sourceElevation = getFloorElevation(source);
+        const duplicateHeight = Number(source.floorHeight);
+        if (!Number.isFinite(duplicateHeight) || duplicateHeight <= 0) {
+            throw new Error("cannot duplicate floor without a positive floor height");
+        }
+        const existingFloors = [...getBuildingFloors(this.building)].sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        const topFloor = existingFloors[existingFloors.length - 1] || null;
+        const sourceWasTop = topFloor && getFloorId(topFloor) === getFloorId(source);
+        const sourceHadRoof = !!getFloorRoof(source);
+        const insertElevation = placement === "above"
+            ? sourceElevation + duplicateHeight
+            : sourceElevation;
+        existingFloors.forEach((floor) => {
+            if (getFloorElevation(floor) >= insertElevation - 0.000001) {
+                setFloorElevation(floor, getFloorElevation(floor) + duplicateHeight);
+            }
+        });
+        const floor = duplicateFloor(this.building, getFloorId(source), insertElevation);
+        if (sourceWasTop && sourceHadRoof) {
+            this.removeGableMountedObjectsForFloor(getFloorId(floor));
+            floor.roof = null;
+            floor.roofs = [];
+            if (placement === "above") {
+                const sourceId = getFloorId(source);
+                const targetId = getFloorId(floor);
+                getBuildingMountedObjects(this.building).forEach((object) => {
+                    if (String(object.floorId) === sourceId && object.mountKind === "gable") {
+                        object.floorId = targetId;
+                    }
+                });
+                this.moveRoofStack(source, floor);
+            }
+        }
+        this.building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        getBuildingFloors(this.building).forEach((candidateFloor) => refreshWallSectionEndpoints(this.building, candidateFloor));
+        this.selectFloor(getFloorId(floor));
+        return floor;
+    }
+
     duplicateSelectedFloor() {
         const source = this.selectedFloor();
         if (!source) throw new Error("cannot duplicate floor without a selected floor");
@@ -5703,11 +5771,7 @@ export class BuildingEditorState extends EventTarget {
 
     canFinalizePolygonDraft() {
         const draft = this.activePolygonDraft();
-        if (draft) return !!(draft.completed === true && Array.isArray(draft.points) && draft.points.length >= 3);
-        const stairDraft = this.draft && this.draft.kind === "stair" ? this.draft : null;
-        if (!stairDraft) return false;
-        if (stairDraft.ladder === true) return stairDraft.completed === true;
-        return !!(stairDraft.completed === true && Array.isArray(stairDraft.treads) && stairDraft.treads.length >= 2);
+        return !!(draft && draft.completed === true && Array.isArray(draft.points) && draft.points.length >= 3);
     }
 
     pickPolygonDraftVertex(point, threshold) {

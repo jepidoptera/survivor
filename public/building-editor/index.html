@@ -6,6 +6,7 @@
     <title>Building Editor</title>
     <script src="/pixi.js/pixi.js"></script>
     <script src="/assets/javascript/wallGeometry.js"></script>
+    <script src="/assets/javascript/shared/StairTraversal.js"></script>
     <script src="/assets/javascript/gameobjects/wallSectionUnit.js"></script>
     <script src="/assets/javascript/gameobjects/columnUnit.js"></script>
     <script src="/assets/javascript/gameobjects/beamUnit.js"></script>
@@ -21,6 +22,8 @@
         <main class="workspace">
             <div class="controlBar">
                 <div class="toolCluster" aria-label="building editor tools">
+                    <button type="button" id="mountTextureButton" data-tool-scope="mountObject" class="iconTool" title="Paint texture">🎨</button>
+                    <div id="mountTexturePalette" class="texturePalette" hidden></div>
                     <button type="button" data-tool="paint" data-selection-scope="floor floorVertex roof gable gableHandle wall wallEndpoint column" class="iconTool" title="Paint texture">🎨</button>
                     <button type="button" id="stairTreadTextureButton" data-selection-scope="stair" data-stair-texture-part="tread" class="stairTextureButton" title="Stair tread texture"><span class="stairTextureIcon" aria-hidden="true">🎨</span><span>Tread</span></button>
                     <button type="button" id="stairRiserTextureButton" data-selection-scope="stair" data-stair-texture-part="riser" class="stairTextureButton" title="Stair riser texture"><span class="stairTextureIcon" aria-hidden="true">🎨</span><span>Riser</span></button>
@@ -30,7 +33,7 @@
                     Elevation
                     <input id="polygonElevation" type="number" step="0.25">
                 </label>
-                <button type="button" id="polygonFinalize" data-tool-scope="polygon scissors stair" disabled>Finalize</button>
+                <button type="button" id="polygonFinalize" data-tool-scope="polygon scissors" disabled>Finalize</button>
                 <label data-selection-scope="level floor floorVertex">
                     Elevation
                     <input id="floorElevation" type="number" step="0.25">
@@ -70,7 +73,6 @@
                     Roof return
                 </label>
                 <button type="button" data-tool="gable" data-selection-scope="roof gable gableHandle">Gable</button>
-                <button type="button" id="duplicateFloor" data-selection-scope="level floor floorVertex">Duplicate Level</button>
                 <label data-selection-scope="wall wallEndpoint">
                     Wall height
                     <input id="wallHeight" type="number" min="0.1" step="0.1">
@@ -84,14 +86,14 @@
                 <button type="button" id="wallProtrudeEndpoints" data-selection-scope="wall wallEndpoint" title="Protrude vertex endpoints">Protrude</button>
                 <label data-selection-scope="column">
                     Depth
-                    <input id="columnThickness" type="range" min="0.001" max="1" step="0.001">
+                    <input id="columnThickness" type="range" min="0.001" max="2" step="0.001">
                 </label>
-                <input id="columnThicknessValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="1" step="0.001" title="Column depth value">
+                <input id="columnThicknessValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="2" step="0.001" title="Column depth value">
                 <label data-selection-scope="column">
                     Width
-                    <input id="columnWidth" type="range" min="0.001" max="1" step="0.001">
+                    <input id="columnWidth" type="range" min="0.001" max="2" step="0.001">
                 </label>
-                <input id="columnWidthValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="1" step="0.001" title="Column width value">
+                <input id="columnWidthValue" class="toolValue" data-selection-scope="column" type="number" min="0.001" max="2" step="0.001" title="Column width value">
                 <label data-selection-scope="column">
                     Height
                     <input id="columnHeight" type="number" min="0.001" step="0.1" placeholder="wall">
@@ -142,20 +144,21 @@
                     Snap points / section
                     <input id="mountSnapPointsPerSection" type="number" min="1" max="64" step="1">
                 </label>
-                <button type="button" id="mountTextureButton" data-tool-scope="mountObject" class="iconTool" title="Paint texture">🎨</button>
-                <div id="mountTexturePalette" class="texturePalette" hidden></div>
-                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors" data-selection-exclude="roof gable gableHandle">
+                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors stair" data-selection-exclude="roof gable gableHandle stair">
                     <input id="snapToggle" type="checkbox">
                     Snap to grid
                 </label>
-                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors" data-selection-exclude="roof gable gableHandle">
+                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors stair" data-selection-exclude="roof gable gableHandle stair">
                     <input id="snapDirectionToggle" type="checkbox">
                     Snap direction
                 </label>
-                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors" data-selection-exclude="roof gable gableHandle">
+                <label class="checkLabel" data-tool-exclude="mountObject polygon scissors stair" data-selection-exclude="roof gable gableHandle stair">
                     <input id="anchorToggle" type="checkbox">
                     Show anchors
                 </label>
+                <button type="button" id="playtestToggle" class="iconTool playtestToolButton playtestTopButton" title="Playtest wizard movement">
+                    <img src="/assets/images/wizard-hat-favicon.png" alt="">
+                </button>
             </div>
             <div class="stageFrame">
                 <div class="sideToolbar" aria-label="wall fixture tools">
@@ -166,8 +169,8 @@
                             <span class="roofToolRidge"></span>
                         </span>
                     </button>
-                    <button type="button" class="iconTool sideToolButton wallToolButton" data-tool="wall" title="Place walls">
-                        <span id="wallToolIcon" class="wallToolIcon" aria-hidden="true"></span>
+                    <button type="button" class="iconTool sideToolButton wallToolButton" id="structureToolButton" title="Place walls" aria-haspopup="true" aria-controls="structureToolMenu">
+                        <span id="structureToolIcon" class="structureToolIcon" aria-hidden="true"></span>
                     </button>
                     <button type="button" class="iconTool sideToolButton mountToolButton" data-mount-category="doors" title="Place doors">
                         <img src="/assets/images/doors/door5.png" alt="">
@@ -181,17 +184,24 @@
                     <button type="button" class="iconTool sideToolButton scissorsToolButton" data-tool="scissors" title="Cut floor hole">
                         <img src="/assets/images/thumbnails/scissors.png" alt="">
                     </button>
-                    <button type="button" class="iconTool sideToolButton beamToolButton" data-tool="beam" title="Place beams">
-                        <span id="beamToolIcon" class="beamToolIcon" aria-hidden="true"></span>
-                    </button>
-                    <button type="button" class="iconTool sideToolButton columnToolButton" data-tool="column" title="Place columns">
-                        <span id="columnToolIcon" class="columnToolIcon" aria-hidden="true"></span>
-                    </button>
                     <button type="button" class="iconTool sideToolButton stairToolButton" data-tool="stair" title="Place stairs">
                         <span id="stairToolIcon" class="stairToolIcon" aria-hidden="true"></span>
                     </button>
                 </div>
-                <div id="stageHost" tabindex="0"></div>
+                <div id="structureToolMenu" class="structureToolMenu" hidden>
+                    <button type="button" class="iconTool structureToolMenuButton" data-structure-tool="wall" title="Place walls" aria-label="Place walls">
+                        <span id="wallToolIcon" class="wallToolIcon" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" class="iconTool structureToolMenuButton" data-structure-tool="column" title="Place columns" aria-label="Place columns">
+                        <span id="columnToolIcon" class="columnToolIcon" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" class="iconTool structureToolMenuButton" data-structure-tool="beam" title="Place beams" aria-label="Place beams">
+                        <span id="beamToolIcon" class="beamToolIcon" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div id="stageHost" tabindex="0">
+                    <div id="playtestFpsCounter" class="playtestFpsCounter" hidden>0 fps</div>
+                </div>
             </div>
             <div class="statusBar">
                 <span id="selectedSummary"></span>
@@ -222,6 +232,12 @@
         <button type="button" data-window-select="column">this column</button>
         <button type="button" data-window-select="texture">same texture</button>
         <button type="button" data-window-select="all">all</button>
+    </div>
+    <div id="layerContextMenu" class="contextMenu" hidden>
+        <div class="contextMenuTitle">level:</div>
+        <div class="contextMenuSeparator"></div>
+        <button type="button" data-layer-duplicate-position="above">add duplicate above</button>
+        <button type="button" data-layer-duplicate-position="below">add duplicate below</button>
     </div>
 
     <div id="buildingOpenDialog" class="modalOverlay" hidden>

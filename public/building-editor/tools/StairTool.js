@@ -1,12 +1,12 @@
-import { distanceToSegment } from "../BuildingGeometry.js";
-import { findFloor, getFloorElevation, getFloorId, wallPoints } from "../BuildingModel.js";
+import { DEFAULTS, findFloor, getBuildingWalls, getFloorElevation, getFloorId, wallPoints } from "../BuildingModel.js";
 
 const LADDER_DEPTH = 1 / 6;
 const ROTATION_STEP = Math.PI / 36;
 const GEOMETRY_EPSILON = 0.000001;
-const FINAL_POINT_HIT_PIXELS = 10;
+const FINAL_TREAD_HIT_PIXELS = 10;
 const FINAL_POINT_DRAG_PIXELS = 3;
 const STRAIGHT_TREAD_SNAP_PIXELS = 10;
+const STAIR_WALL_LADDER_SNAP_PIXELS = 10;
 const SNAPPED_TREAD_ANGLE_STEP = Math.PI / 12;
 const ARC_DELTA_SNAP_THRESHOLD = Math.PI / 24;
 const ARC_DELTA_SNAP_GEOMETRY_EPSILON = 0.00001;
@@ -354,6 +354,27 @@ function ladderFootprintFromWall(projection, wallUnit, normal, width) {
     ];
 }
 
+function wallSnapFacePoint(snap) {
+    return snap && finitePoint(snap.faceProjection) ? snap.faceProjection : snap.projection;
+}
+
+function wallHalfThickness(wall) {
+    return Math.max(
+        0,
+        Number.isFinite(Number(wall && wall.thickness)) ? Number(wall.thickness) : DEFAULTS.wallThickness
+    ) * 0.5;
+}
+
+function treadPerpendicularToWallFace(snap, width) {
+    const facePoint = wallSnapFacePoint(snap);
+    const normal = normalizeVector(snap && snap.normal && snap.normal.x, snap && snap.normal && snap.normal.y, "stair wall snap normal");
+    const center = {
+        x: facePoint.x + normal.x * Number(width) * 0.5,
+        y: facePoint.y + normal.y * Number(width) * 0.5
+    };
+    return treadFromCenter(center, Math.atan2(normal.y, normal.x), width);
+}
+
 export class StairTool {
     constructor(state) {
         this.state = state;
@@ -376,12 +397,19 @@ export class StairTool {
         return target && target.floor ? target.floor : null;
     }
 
+    _maxWallHalfThicknessForFloor(floor) {
+        const floorId = getFloorId(floor);
+        return getBuildingWalls(this.state.building)
+            .filter((wall) => String(wall.floorId || wall.fragmentId) === floorId)
+            .reduce((max, wall) => Math.max(max, wallHalfThickness(wall)), 0);
+    }
+
     _wallSnap(worldPoint, floor, options = {}) {
         const width = Number(this.state.stairTool.width);
-        const tenPixels = options.renderer && typeof options.renderer.screenPixelsToWorldDistance === "function"
-            ? options.renderer.screenPixelsToWorldDistance(10)
+        const ladderDistance = options.renderer && typeof options.renderer.screenPixelsToWorldDistance === "function"
+            ? options.renderer.screenPixelsToWorldDistance(STAIR_WALL_LADDER_SNAP_PIXELS)
             : 0.1;
-        const threshold = width * 0.5 + tenPixels;
+        const threshold = width * 0.5 + this._maxWallHalfThicknessForFloor(floor) + GEOMETRY_EPSILON;
         const wallHit = this.state.pickWallAt(worldPoint, threshold);
         if (!wallHit || !wallHit.wall || getFloorId(wallHit.floor) !== getFloorId(floor)) return null;
         const points = wallPoints(this.state.building, wallHit.wall);
@@ -393,9 +421,15 @@ export class StairTool {
         const dy = Number(worldPoint.y) - projection.y;
         const normalSign = dx * normalA.x + dy * normalA.y >= 0 ? 1 : -1;
         const normal = { x: normalA.x * normalSign, y: normalA.y * normalSign };
-        const distance = distanceToSegment(worldPoint, points[0], points[1]);
-        const onWall = distance <= tenPixels;
-        return { wall: wallHit.wall, points, projection, wallUnit, normal, onWall };
+        const halfThickness = wallHalfThickness(wallHit.wall);
+        const faceProjection = {
+            x: projection.x + normal.x * halfThickness,
+            y: projection.y + normal.y * halfThickness
+        };
+        const distanceToFace = Math.hypot(Number(worldPoint.x) - faceProjection.x, Number(worldPoint.y) - faceProjection.y);
+        if (distanceToFace > width * 0.5 + GEOMETRY_EPSILON) return null;
+        const onWall = distanceToFace <= ladderDistance;
+        return { wall: wallHit.wall, points, projection, faceProjection, wallUnit, normal, onWall };
     }
 
     _previewForPoint(worldPoint, options = {}) {
@@ -405,7 +439,8 @@ export class StairTool {
         const snap = this._wallSnap(worldPoint, floor, options);
         const settings = this._settingsForFloor(floor, { quiet: true });
         if (snap && snap.onWall) {
-            const footprint = ladderFootprintFromWall(snap.projection, snap.wallUnit, snap.normal, width);
+            const facePoint = wallSnapFacePoint(snap);
+            const footprint = ladderFootprintFromWall(facePoint, snap.wallUnit, snap.normal, width);
             return {
                 floor,
                 floorId: getFloorId(floor),
@@ -415,7 +450,7 @@ export class StairTool {
                 treads: [{
                     left: footprint[0],
                     right: footprint[1],
-                    center: snap.projection,
+                    center: facePoint,
                     angle: Math.atan2(snap.wallUnit.y, snap.wallUnit.x)
                 }],
                 footprint,
@@ -423,17 +458,13 @@ export class StairTool {
             };
         }
         if (snap) {
-            const center = {
-                x: snap.projection.x + snap.normal.x * width * 0.5,
-                y: snap.projection.y + snap.normal.y * width * 0.5
-            };
             return {
                 floor,
                 floorId: getFloorId(floor),
                 ladder: false,
                 snapped: true,
                 snapKind: "wallEnd",
-                treads: [treadFromCenter(center, this.previewRotation, width)],
+                treads: [treadPerpendicularToWallFace(snap, width)],
                 ...settings
             };
         }
@@ -499,7 +530,20 @@ export class StairTool {
         }
         const draft = this._activeDraft();
         if (draft && draft.started && draft.completed !== true && draft.ladder !== true) {
-            this._updatePendingTread(this.lastWorldPoint, threshold, options);
+            const finishHover = Array.isArray(draft.treads) &&
+                draft.treads.length >= 2 &&
+                this._pointHitsFinalTreadLine(this.lastWorldPoint, threshold, options);
+            const hoverChanged = this._setFinishTreadHover(draft, finishHover);
+            if (finishHover) {
+                const hadPending = !!draft.pendingTread || !!draft.pendingArcState;
+                draft.pendingTread = null;
+                draft.pendingArcState = null;
+                if (hoverChanged || hadPending) this.state.emitChange();
+                return;
+            }
+            if (!this._updatePendingTread(this.lastWorldPoint, threshold, options) && hoverChanged) {
+                this.state.emitChange();
+            }
             return;
         }
         if (draft && draft.completed === true) return;
@@ -552,12 +596,13 @@ export class StairTool {
             return;
         }
         if (draft && draft.started) {
-            if (draft.ladder !== true && this._pointHitsFinalPoint(this.lastWorldPoint, threshold, options)) {
+            if (draft.ladder !== true && this._pointHitsFinalTreadLine(this.lastWorldPoint, threshold, options)) {
                 if (!Array.isArray(draft.treads) || draft.treads.length < 2) return;
                 draft.completed = true;
                 draft.pendingTread = null;
                 draft.pendingArcState = null;
-                this.state.emitChange();
+                draft.finishTreadHover = false;
+                this.finish();
                 return;
             }
             this._commitPendingTread();
@@ -584,12 +629,17 @@ export class StairTool {
             footprint: preview.footprint || null,
             pendingTread: null,
             pendingArcState: null,
+            finishTreadHover: false,
             selectedTreadIndex: -1,
             selectedTreadPoint: ""
         };
         this.state.selectedFloorIds = new Set([preview.floorId]);
         this.state.layerSelectionMode = "floor";
         this.state.draft = startedDraft;
+        if (startedDraft.completed === true) {
+            this.finish();
+            return;
+        }
         this.state.emitChange();
     }
 
@@ -614,11 +664,49 @@ export class StairTool {
         return tread && tread.center ? tread.center : null;
     }
 
+    _finalTread(draft = this._activeDraft()) {
+        if (!draft || !Array.isArray(draft.treads) || !draft.treads.length) return null;
+        const tread = draft.treads[draft.treads.length - 1];
+        return tread && finitePoint(tread.left) && finitePoint(tread.right) ? tread : null;
+    }
+
     _pointHitsFinalPoint(worldPoint, threshold, options = {}) {
         const finalPoint = this._finalPoint();
         if (!finalPoint) return false;
-        const hitDistance = this._screenPixelsToWorldDistance(FINAL_POINT_HIT_PIXELS, threshold, options);
+        const hitDistance = this._screenPixelsToWorldDistance(FINAL_TREAD_HIT_PIXELS, threshold, options);
         return Math.hypot(Number(worldPoint.x) - Number(finalPoint.x), Number(worldPoint.y) - Number(finalPoint.y)) <= hitDistance;
+    }
+
+    _pointHitsFinalTreadLine(worldPoint, threshold, options = {}) {
+        const draft = this._activeDraft();
+        const tread = this._finalTread(draft);
+        if (!tread) return false;
+        if (
+            options.screenPoint &&
+            options.renderer &&
+            typeof options.renderer.worldToScreen === "function"
+        ) {
+            const baseZ = Number.isFinite(Number(draft && draft.bottomZ)) ? Number(draft.bottomZ) : 0;
+            const leftScreen = options.renderer.worldToScreen(tread.left, baseZ);
+            const rightScreen = options.renderer.worldToScreen(tread.right, baseZ);
+            if (finitePoint(leftScreen) && finitePoint(rightScreen) && finitePoint(options.screenPoint)) {
+                const closestScreen = closestPointOnSegment(options.screenPoint, leftScreen, rightScreen);
+                return Math.hypot(
+                    Number(options.screenPoint.x) - closestScreen.x,
+                    Number(options.screenPoint.y) - closestScreen.y
+                ) <= FINAL_TREAD_HIT_PIXELS;
+            }
+        }
+        const hitDistance = this._screenPixelsToWorldDistance(FINAL_TREAD_HIT_PIXELS, threshold, options);
+        const closest = closestPointOnSegment(worldPoint, tread.left, tread.right);
+        return Math.hypot(Number(worldPoint.x) - closest.x, Number(worldPoint.y) - closest.y) <= hitDistance;
+    }
+
+    _setFinishTreadHover(draft, hover) {
+        const next = hover === true;
+        if (!draft || draft.finishTreadHover === next) return false;
+        draft.finishTreadHover = next;
+        return true;
     }
 
     pointerUp(worldPoint, threshold, options = {}) {
@@ -654,14 +742,15 @@ export class StairTool {
 
     _updatePendingTread(worldPoint, threshold, options = {}) {
         const draft = this._activeDraft();
-        if (!draft || !draft.started || !Array.isArray(draft.treads) || !draft.treads.length) return;
+        if (!draft || !draft.started || !Array.isArray(draft.treads) || !draft.treads.length) return false;
         const previous = draft.treads[draft.treads.length - 1];
         const pending = this._pendingTreadForPoint(draft, previous, worldPoint, threshold, options);
-        if (!pending) return;
+        if (!pending) return false;
         draft.pendingTread = this._pendingTreadWithArcMetadata(draft, previous, pending.tread, {
             snapArcDelta: pending.wallSnapped !== true
         });
         this.state.emitChange();
+        return true;
     }
 
     _pendingTreadForPoint(draft, previous, worldPoint, threshold, options = {}) {
@@ -669,10 +758,11 @@ export class StairTool {
         if (!Number.isFinite(rawDistance) || rawDistance <= GEOMETRY_EPSILON) return null;
         const floor = this.state.building && draft.floorId ? findFloor(this.state.building, draft.floorId) : null;
         const wallSnap = floor ? this._wallSnap(worldPoint, floor, options) : null;
+        const wallFacePoint = wallSnap ? wallSnapFacePoint(wallSnap) : null;
         const targetPoint = wallSnap
             ? {
-                x: Number(wallSnap.projection.x) + Number(wallSnap.normal.x) * Number(draft.width) * 0.5,
-                y: Number(wallSnap.projection.y) + Number(wallSnap.normal.y) * Number(draft.width) * 0.5
+                x: Number(wallFacePoint.x) + Number(wallSnap.normal.x) * Number(draft.width) * 0.5,
+                y: Number(wallFacePoint.y) + Number(wallSnap.normal.y) * Number(draft.width) * 0.5
             }
             : { x: Number(worldPoint.x), y: Number(worldPoint.y) };
         const straightSnap = wallSnap ? null : this._straightTreadSnap(previous, targetPoint, draft.width, threshold, options);
@@ -767,6 +857,7 @@ export class StairTool {
         draft.treads.push(candidate);
         draft.pendingTread = null;
         draft.pendingArcState = null;
+        draft.finishTreadHover = false;
         this.state.emitChange();
         return true;
     }

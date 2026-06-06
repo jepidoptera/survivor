@@ -13,6 +13,14 @@ async function loadRenderer() {
     return import("../public/building-editor/BuildingRenderer.js");
 }
 
+async function loadPlaytestRuntime() {
+    return import("../public/building-editor/PlaytestRuntime.js");
+}
+
+async function loadGeometry() {
+    return import("../public/building-editor/BuildingGeometry.js");
+}
+
 async function loadSelectTool() {
     return import("../public/building-editor/tools/SelectTool.js");
 }
@@ -413,6 +421,58 @@ test("duplicated floor roof overhang does not bake source roof footprint into th
     }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
 
     assert.deepEqual(bounds, { minX: -2.598, maxX: 2.598, minY: -1.5, maxY: 1.5 });
+});
+
+test("duplicating a layer above or below shifts floors above the inserted duplicate", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const firstFloor = state.selectedFloor();
+    firstFloor.floorHeight = 3;
+    const secondFloor = model.duplicateFloor(state.building, model.getFloorId(firstFloor), 3);
+    const thirdFloor = model.duplicateFloor(state.building, model.getFloorId(secondFloor), 6);
+
+    const below = state.duplicateFloorAdjacent(model.getFloorId(secondFloor), "below");
+    assert.equal(model.getFloorElevation(firstFloor), 0);
+    assert.equal(model.getFloorElevation(below), 3);
+    assert.equal(model.getFloorElevation(secondFloor), 6);
+    assert.equal(model.getFloorElevation(thirdFloor), 9);
+
+    const above = state.duplicateFloorAdjacent(model.getFloorId(secondFloor), "above");
+    assert.equal(model.getFloorElevation(secondFloor), 6);
+    assert.equal(model.getFloorElevation(above), 9);
+    assert.equal(model.getFloorElevation(thirdFloor), 12);
+});
+
+test("duplicating the top layer moves its roof to the new top instead of copying it", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const source = state.selectedFloor();
+    const sourceRoof = model.getFloorRoof(source);
+    sourceRoof.overhang = 1.25;
+    sourceRoof.peakHeight = 2;
+
+    const above = state.duplicateFloorAdjacent(model.getFloorId(source), "above");
+    assert.equal(model.getFloorRoof(source), null);
+    assert.equal(model.getFloorRoof(above), sourceRoof);
+    assert.equal(sourceRoof.floorId, model.getFloorId(above));
+    assert.equal(model.getFloorElevation(above), 3);
+});
+
+test("duplicating below the top layer leaves the roof on the original top floor", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const source = state.selectedFloor();
+    const sourceRoof = model.getFloorRoof(source);
+
+    const below = state.duplicateFloorAdjacent(model.getFloorId(source), "below");
+    assert.equal(model.getFloorRoof(source), sourceRoof);
+    assert.equal(model.getFloorRoof(below), null);
+    assert.equal(sourceRoof.floorId, model.getFloorId(source));
+    assert.equal(model.getFloorElevation(below), 0);
+    assert.equal(model.getFloorElevation(source), 3);
 });
 
 test("layer panel highlight follows the selected object's owning floor", async () => {
@@ -1704,6 +1764,75 @@ test("roof UVs use repeatsPerMapUnitX and repeatsPerMapUnitY from the texture ma
     }
 });
 
+test("floor UVs use repeatsPerMapUnitX and repeatsPerMapUnitY from the texture manifest", async () => {
+    const previousEarcut = globalThis.earcut;
+    const previousPixi = globalThis.PIXI;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { floor } = await createTestBuilding();
+        const { BuildingRenderer } = await loadRenderer();
+        floor.floorTexturePath = "/assets/images/flooring/test-repeat.png";
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.floorTextureConfigCache = {
+            byPath: new Map([[
+                "/assets/images/flooring/test-repeat.png",
+                {
+                    texturePath: "/assets/images/flooring/test-repeat.png",
+                    repeatsPerMapUnitX: 0.25,
+                    repeatsPerMapUnitY: 0.5
+                }
+            ]]),
+            byFile: new Map(),
+            defaultRepeatX: 0.1,
+            defaultRepeatY: 0.1
+        };
+        renderer.floorTextureConfigError = "";
+        renderer.getFloorDepthState = () => null;
+        renderer.getSurfaceTexture = (texturePath) => ({ texturePath });
+        let capturedUvs = null;
+        class GeometryStub {
+            addAttribute(name, data) {
+                if (name === "aUvs") capturedUvs = Array.from(data);
+                return this;
+            }
+            addIndex() { return this; }
+        }
+        globalThis.PIXI = {
+            Geometry: GeometryStub,
+            Shader: { from: () => ({ uniforms: {} }) },
+            Mesh: class MeshStub {
+                constructor(geometry, shader) {
+                    this.geometry = geometry;
+                    this.shader = shader;
+                }
+            },
+            DRAW_MODES: { TRIANGLES: 0 }
+        };
+
+        const repeat = renderer.floorTextureRepeatConfig(floor.floorTexturePath);
+        renderer.createFloorMesh(floor, {
+            points: floor.outerPolygon.map((point) => ({ x: Number(point.x), y: Number(point.y) })),
+            indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+        }, repeat);
+
+        assert.deepEqual(
+            capturedUvs.map((value) => Number(value.toFixed(6))),
+            [0, 0, 2.5, 0, 2.5, 5, 0, 5]
+        );
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+        if (typeof previousPixi === "undefined") {
+            delete globalThis.PIXI;
+        } else {
+            globalThis.PIXI = previousPixi;
+        }
+    }
+});
+
 test("dome roofs build equidistant z levels on a hemispherical curve", async () => {
     const previousEarcut = globalThis.earcut;
     try {
@@ -1829,6 +1958,50 @@ test("building editor camera pitch preserves default projection and round-trips 
     const roundTrip = renderer.screenToWorld(pitchedScreen, 2);
     assert.ok(Math.abs(roundTrip.x - point.x) < 0.000001);
     assert.ok(Math.abs(roundTrip.y - point.y) < 0.000001);
+});
+
+test("building editor camera centering keeps rotation center stable", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.app = { screen: { width: 320, height: 180 } };
+    const rotationCenter = { x: -4, y: 2 };
+    renderer.state = {
+        camera: {
+            x: 0,
+            y: 0,
+            z: 0,
+            zoom: 32,
+            rotation: 0.7,
+            pitch: Math.PI / 5,
+            rotationCenter
+        },
+        buildingCenter() {
+            return { x: 0, y: 0 };
+        }
+    };
+
+    const target = { x: 6, y: -3 };
+    renderer.centerCameraOnWorldPoint(target, 1.25);
+
+    assert.equal(renderer.state.camera.rotationCenter, rotationCenter);
+    const screen = renderer.worldToScreen(target, 1.25);
+    assert.ok(Math.abs(screen.x - 160) < 0.000001);
+    assert.ok(Math.abs(screen.y - 90) < 0.000001);
+});
+
+test("neutral building selection can still carry an interior focused floor", async () => {
+    const { BuildingEditorState } = await loadState();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+
+    state.selection = { kind: "building", floorId };
+    state.selectedFloorIds = new Set([floorId]);
+    state.layerSelectionMode = "floor";
+
+    assert.equal(state.renderStyle(), "interior");
+    assert.equal(state.selectedFloor(), floor);
 });
 
 test("building camera can recenter on the whole building bounds", async () => {
@@ -2646,12 +2819,25 @@ test("createColumn produces a valid column record with defaults", async () => {
     assert.equal(col.depth, 0.25);
     assert.equal(col.height, 3);
     assert.equal(col.heightMode, "fixed");
+    const maxSized = model.createColumn({
+        floorId: floor.fragmentId,
+        position: { x: 4, y: 4 },
+        width: 2,
+        depth: 2,
+        floorDefaultWallHeight: 3
+    });
+    assert.equal(maxSized.width, 2);
+    assert.equal(maxSized.depth, 2);
     assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, sideCount: 2 }),
         /sideCount must be between/);
     assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, sideCount: 13 }),
         /sideCount must be between/);
     assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, size: -1 }),
         /width.*must be a positive/);
+    assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, width: 2.001 }),
+        /width.*no greater than 2/);
+    assert.throws(() => model.createColumn({ floorId: floor.fragmentId, position: { x: 0, y: 0 }, depth: 2.001 }),
+        /depth.*no greater than 2/);
 });
 
 test("column tool defaults to host wall height and one millimeter extra thickness", async () => {
@@ -3446,6 +3632,35 @@ test("columnVertices returns correct polygon for a square column", async () => {
     assert.ok(Math.abs(minFaceToCenter - 0.5) < 0.000001, `apothem should equal half width, got ${minFaceToCenter}`);
 });
 
+test("playtest columns contribute footprint edges as blocking segments", async () => {
+    const model = await loadModel();
+    const { playtestColumnBlockingSegmentsForFloor } = await loadPlaytestRuntime();
+    const column = model.createColumn({
+        floorId: "floor-a",
+        position: { x: 0, y: 0 },
+        sideCount: 4,
+        width: 1,
+        depth: 1,
+        rotation: 0,
+        height: 3
+    });
+
+    const segments = playtestColumnBlockingSegmentsForFloor([column], "floor-a");
+    const otherFloorSegments = playtestColumnBlockingSegmentsForFloor([column], "floor-b");
+
+    assert.equal(segments.length, 4);
+    assert.equal(otherFloorSegments.length, 0);
+    assert.equal(segments.every((segment) => segment.kind === "column"), true);
+    assert.equal(segments.every((segment) => segment.column === column), true);
+    segments.forEach((segment) => {
+        assert.equal(segment.points.length, 2);
+        segment.points.forEach((point) => {
+            assert.equal(Number.isFinite(point.x), true);
+            assert.equal(Number.isFinite(point.y), true);
+        });
+    });
+});
+
 test("column depth UVs use wall texture repeat config", async () => {
     const WallSectionUnit = loadWallSectionUnit();
     const ColumnUnit = loadColumnUnit();
@@ -3492,6 +3707,38 @@ test("validateBuilding reports beam and column errors", async () => {
     errors = validateBuilding(building);
     assert.ok(errors.some((e) => /sideCount must be an integer between 3 and 12/.test(e)), "should report bad sideCount");
     void _m;
+});
+
+test("validateBuilding reports duplicate stair ids", async () => {
+    const model = await loadModel();
+    const { building, floor } = await createTestBuilding();
+    const upperFloor = model.createFloor({
+        elevation: 3,
+        footprint: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+    });
+    model.addFloor(building, upperFloor);
+    const first = model.createStraightStair({
+        floorId: floor.fragmentId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 3, y: 1 },
+        bottomZ: 0,
+        height: 3
+    });
+    const second = model.createStraightStair({
+        floorId: upperFloor.fragmentId,
+        startPoint: { x: 1, y: 2 },
+        endPoint: { x: 3, y: 2 },
+        bottomZ: 3,
+        height: 3
+    });
+    second.id = first.id;
+    floor.stairs.push(first);
+    upperFloor.stairs.push(second);
+    const { validateBuilding } = await import("../public/building-editor/BuildingValidation.js");
+
+    const errors = validateBuilding(building);
+
+    assert.ok(errors.some((e) => /duplicate stair id/.test(e)), "should report duplicate stair id");
 });
 
 test("beam round-trips through normalizeImportedBuilding", async () => {
@@ -3597,6 +3844,76 @@ test("stair records round-trip through normalizeImportedBuilding", async () => {
     assert.equal(restoredStair.riserTexturePath, "/assets/images/flooring/dirt.jpg");
     assert.equal(restoredStair.treads.length, 2);
     assert.equal(restoredStair.footprint.length, 4);
+});
+
+test("normalizeImportedBuilding advances the stair id counter from saved stairs", async () => {
+    const model = await import(`../public/building-editor/BuildingModel.js?stair-counter=${Date.now()}-${Math.random()}`);
+    const floor = (fragmentId, z, stairs = []) => ({
+        fragmentId,
+        surfaceId: fragmentId,
+        ownerSectionKey: "",
+        name: "floor",
+        level: Math.floor(z / 3),
+        nodeBaseZOffset: z - Math.floor(z / 3) * 3,
+        nodeBaseZ: z,
+        outerPolygon: [
+            { id: `${fragmentId}-a`, x: 0, y: 0 },
+            { id: `${fragmentId}-b`, x: 6, y: 0 },
+            { id: `${fragmentId}-c`, x: 6, y: 6 },
+            { id: `${fragmentId}-d`, x: 0, y: 6 }
+        ],
+        holes: [],
+        floorTexturePath: model.DEFAULTS.floorTexture,
+        roof: null,
+        roofs: [],
+        floorHeight: 3,
+        defaultWallHeight: 3,
+        defaultWallTexturePath: model.DEFAULTS.wallTexture,
+        beams: [],
+        columns: [],
+        stairs
+    });
+    const stair = (id, floorId, bottomZ) => ({
+        type: "stairs",
+        id,
+        floorId,
+        startPoint: { x: 1, y: 1 },
+        endPoint: { x: 4, y: 1 },
+        width: 1.2,
+        direction: "up",
+        texturePath: model.DEFAULTS.floorTexture,
+        treadTexturePath: model.DEFAULTS.floorTexture,
+        riserTexturePath: model.DEFAULTS.floorTexture,
+        bottomZ,
+        height: 3,
+        stepCount: 8
+    });
+    const building = {
+        schema: "survivor-building-v1",
+        id: "building-1",
+        name: "counter test",
+        origin: { x: 0, y: 0 },
+        defaults: {},
+        floorFragments: [
+            floor("floor-fragment-1", 0, [stair(2, "floor-fragment-1", 0)]),
+            floor("floor-fragment-2", 3, [stair(3, "floor-fragment-2", 3)]),
+            floor("floor-fragment-3", 6, [stair(4, "floor-fragment-3", 6)])
+        ],
+        wallSections: [],
+        mountedWallObjects: [],
+        roof: null
+    };
+
+    model.normalizeImportedBuilding(building);
+    const next = model.createStraightStair({
+        floorId: "floor-fragment-1",
+        startPoint: { x: 1, y: 2 },
+        endPoint: { x: 4, y: 2 },
+        bottomZ: 0,
+        height: 3
+    });
+
+    assert.equal(next.id, 5);
 });
 
 test("stair tool settings are applied to new stairs", async () => {
@@ -3972,6 +4289,70 @@ test("renderer draws lower-owned stairs through the rendered upper floor opening
     }
 });
 
+test("playtest runtime blocks movement through generated upper-floor stair openings", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { buildPlaytestStairFloorBlockers } = await loadPlaytestRuntime();
+    const { pointInPolygon } = await loadGeometry();
+    const StairTraversal = require("../public/assets/javascript/shared/StairTraversal.js");
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const lowerFloor = state.selectedFloor();
+    const upperFloor = model.createFloor({
+        elevation: 4,
+        footprint: [{ x: -1, y: -1 }, { x: 2, y: -1 }, { x: 2, y: 5 }, { x: -1, y: 5 }]
+    });
+    model.addFloor(state.building, upperFloor);
+    state.updateStairToolWidth(1);
+    state.updateStairToolStepCount(4);
+    const stair = state.addStairToFloor(lowerFloor.fragmentId, {
+        treads: [
+            { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+            { left: { x: 0, y: 4 }, right: { x: 1, y: 4 } }
+        ]
+    });
+    const lowerFloorId = model.getFloorId(lowerFloor);
+    const upperFloorId = model.getFloorId(upperFloor);
+    const stairId = `${lowerFloorId}:${stair.id}`;
+    const runtimeStair = {
+        id: stairId,
+        sourceStair: stair,
+        stairKind: "straight",
+        lowerPoint: stair.treads[0].center,
+        higherPoint: stair.treads[stair.treads.length - 1].center,
+        lowerZ: Number(stair.bottomZ),
+        higherZ: Number(stair.bottomZ) + Number(stair.height),
+        lowerFloorId,
+        higherFloorId: upperFloorId,
+        width: Number(stair.width),
+        stepCount: Number(stair.stepCount) || 1,
+        treads: stair.treads
+    };
+    runtimeStair.traversalFrame = StairTraversal.createTreadPathFrame(runtimeStair);
+
+    const upperOpeningPolygons = state.stairOpeningPolygonsForValidation(stair, upperFloor);
+    const blockers = buildPlaytestStairFloorBlockers({
+        traversal: StairTraversal,
+        runtimeStair,
+        height: stair.height,
+        stairId,
+        upperOpeningPolygons
+    });
+
+    assert.equal(upperOpeningPolygons.length, 2);
+    assert.equal(blockers.filter((blocker) => blocker.endpoint === "lower").length, 1);
+    assert.equal(blockers.filter((blocker) => blocker.endpoint === "higher").length, 2);
+    assert.ok(blockers.some((blocker) => (
+        blocker.endpoint === "higher" &&
+        String(blocker.floorId) === String(upperFloorId) &&
+        pointInPolygon({ x: 0.5, y: 3.5 }, blocker.polygon)
+    )));
+    assert.ok(blockers.some((blocker) => (
+        blocker.endpoint === "lower" &&
+        String(blocker.floorId) === String(lowerFloorId) &&
+        pointInPolygon({ x: 0.5, y: 0.5 }, blocker.polygon)
+    )));
+});
+
 test("selected stairs can be dragged and carry their upper-floor opening with them", async () => {
     const previousClipper = globalThis.polygonClipping;
     try {
@@ -4210,7 +4591,38 @@ test("renderer stair preview draws only tread lines and direction lines", async 
     });
 
     assert.equal(calls.some((call) => call[0] === "beginFill" || call[0] === "closePath" || call[0] === "endFill"), false);
-    assert.equal(calls.filter((call) => call[0] === "lineTo").length, 3);
+    assert.equal(calls.filter((call) => call[0] === "lineTo").length, 5);
+    assert.equal(calls.some((call) => call[0] === "lineStyle" && call[2] === 0x05070a), true);
+    assert.equal(calls.some((call) => call[0] === "lineStyle" && call[2] === 0xffffff), true);
+});
+
+test("renderer stair preview colors the finish tread red only while hover-finalizing", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.worldToScreen = (point) => ({ x: Number(point.x), y: Number(point.y) });
+    renderer.activePlaneZ = () => 0;
+    const calls = [];
+    const gfx = {
+        lineStyle(...args) { calls.push(["lineStyle", ...args]); },
+        moveTo(...args) { calls.push(["moveTo", ...args]); },
+        lineTo(...args) { calls.push(["lineTo", ...args]); }
+    };
+
+    renderer.drawStairPreviewRecord(gfx, {
+        bottomZ: 0,
+        finishTreadHover: true,
+        treads: [{
+            left: { x: -1, y: 0 },
+            right: { x: 1, y: 0 },
+            center: { x: 0, y: 0 }
+        }, {
+            left: { x: -1, y: 2 },
+            right: { x: 1, y: 2 },
+            center: { x: 0, y: 2 }
+        }]
+    });
+
+    assert.equal(calls.some((call) => call[0] === "lineStyle" && call[1] === 4 && call[2] === 0xff4f4f), true);
 });
 
 test("renderer screen picker registers stairs with a stair hit payload", async () => {
@@ -4419,7 +4831,7 @@ test("renderer outlines the upper-floor hole when a stair is selected", async ()
     }
 });
 
-test("renderer stair preview outlines generated steps in blue before finalize", async () => {
+test("renderer stair preview outlines generated steps in blue before placement", async () => {
     const { BuildingRenderer } = await loadRenderer();
     const renderer = Object.create(BuildingRenderer.prototype);
     const projectedZ = [];
@@ -4487,6 +4899,106 @@ test("renderer stair steps divide straight sections and rise between floors", as
         { x: 1, y: 0.5 },
         { x: 1, y: 0 }
     ]);
+});
+
+test("renderer randomizes stair tread texture origins deterministically", async () => {
+    const previousEarcut = globalThis.earcut;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.activePlaneZ = () => 0;
+
+        const stair = {
+            id: "randomized-tread-uvs",
+            bottomZ: 0,
+            height: 2,
+            direction: "up",
+            stepCount: 2,
+            riserDepth: 0,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        };
+        const triangulation = renderer.triangulateStairSteps(stair);
+        const repeated = renderer.triangulateStairSteps(stair);
+        const first = triangulation.tread.points.filter((point) => point.z === triangulation.tread.points[0].z);
+        const second = triangulation.tread.points.filter((point) => point.z !== triangulation.tread.points[0].z);
+        const lowerVFor = (points) => points
+            .filter((point) => Math.abs(point.y - Math.min(...points.map((candidate) => candidate.y))) <= 0.000001)
+            .map((point) => Number(point.v.toFixed(6)))
+            .sort((a, b) => a - b);
+        const vRangeFor = (points) => {
+            const values = points.map((point) => Number(point.v));
+            return {
+                min: Number(Math.min(...values).toFixed(6)),
+                max: Number(Math.max(...values).toFixed(6))
+            };
+        };
+        const uvPairs = (points) => points.map((point) => [Number(point.u.toFixed(6)), Number(point.v.toFixed(6))]);
+        const firstRange = vRangeFor(first);
+        const secondRange = vRangeFor(second);
+
+        assert.deepEqual(uvPairs(triangulation.tread.points), uvPairs(repeated.tread.points));
+        assert.equal(new Set(lowerVFor(first)).size, 1);
+        assert.equal(new Set(lowerVFor(second)).size, 1);
+        assert.notEqual(lowerVFor(first)[0], lowerVFor(second)[0]);
+        assert.equal(Number((firstRange.max - firstRange.min).toFixed(6)), 0.1);
+        assert.equal(Number((secondRange.max - secondRange.min).toFixed(6)), 0.1);
+        assert.equal(first.every((point) => Number.isFinite(point.u) && Number.isFinite(point.v)), true);
+        assert.equal(second.every((point) => Number.isFinite(point.u) && Number.isFinite(point.v)), true);
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+    }
+});
+
+test("renderer stair geometry uses flooring manifest repeat values", async () => {
+    const previousEarcut = globalThis.earcut;
+    try {
+        globalThis.earcut = require("earcut").default;
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.activePlaneZ = () => 0;
+
+        const triangulation = renderer.triangulateStairSteps({
+            id: "manifest-repeat-stair",
+            bottomZ: 0,
+            height: 2,
+            direction: "up",
+            stepCount: 2,
+            riserDepth: 0.5,
+            treads: [
+                { left: { x: 0, y: 0 }, right: { x: 1, y: 0 } },
+                { left: { x: 0, y: 2 }, right: { x: 1, y: 2 } }
+            ]
+        }, {
+            treadTextureRepeatX: 0.25,
+            treadTextureRepeatY: 0.5,
+            riserTextureRepeatX: 0.75,
+            riserTextureRepeatY: 1
+        });
+        const first = triangulation.tread.points.filter((point) => Math.abs(point.z - triangulation.tread.points[0].z) <= 0.000001);
+        const firstVValues = first.map((point) => Number(point.v.toFixed(6)));
+        const firstUValues = first.map((point) => Number(point.u.toFixed(6)));
+        const riserUValues = triangulation.riser.points.map((point) => Number(point.u.toFixed(6)));
+        const riserVValues = triangulation.riser.points.map((point) => Number(point.v.toFixed(6)));
+
+        assert.equal(Number((Math.max(...firstUValues) - Math.min(...firstUValues)).toFixed(6)), 0.25);
+        assert.equal(Number((Math.max(...firstVValues) - Math.min(...firstVValues)).toFixed(6)), 0.5);
+        assert.equal(riserUValues.includes(0.75), true);
+        assert.equal(riserVValues.includes(-0.666667), true);
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+    }
 });
 
 test("renderer stair steps are allocated proportionally by section area", async () => {
@@ -4714,6 +5226,70 @@ test("stair tool rotates a wall-snapped first tread preview", async () => {
     assert.equal(Number(after.angle.toFixed(6)), Number((Math.PI / 2).toFixed(6)));
 });
 
+test("stair wall snap reaches the near wall face from the stair center", async () => {
+    const { BuildingEditorState } = await loadState();
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    state.setTool("stair");
+    state.updateStairToolWidth(1);
+    const floor = state.selectedFloor();
+    const wall = model.getBuildingWalls(state.building).find((candidate) => String(candidate.floorId || candidate.fragmentId) === model.getFloorId(floor));
+    const [a, b] = model.wallPoints(state.building, wall);
+    const midpoint = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+    const wallDx = b.x - a.x;
+    const wallDy = b.y - a.y;
+    const length = Math.hypot(wallDx, wallDy);
+    const normal = { x: -wallDy / length, y: wallDx / length };
+    const wallHalfThickness = Math.max(0, Number(wall.thickness) || model.DEFAULTS.wallThickness) * 0.5;
+    const pointAtStairCenter = {
+        x: midpoint.x + normal.x * (wallHalfThickness + 0.5),
+        y: midpoint.y + normal.y * (wallHalfThickness + 0.5)
+    };
+    const tool = new StairTool(state);
+    tool._floorForPoint = () => floor;
+
+    tool.pointerMove(pointAtStairCenter, 0.1, {
+        renderer: {
+            screenPixelsToWorldDistance(pixels) {
+                return Number(pixels) * 0.005;
+            }
+        }
+    });
+
+    assert.equal(state.draft.snapped, true);
+    assert.equal(state.draft.snapKind, "wallEnd");
+    assert.equal(state.draft.ladder, false);
+    assert.equal(
+        Math.hypot(state.draft.treads[0].center.x - midpoint.x, state.draft.treads[0].center.y - midpoint.y).toFixed(6),
+        (0.5 + wallHalfThickness).toFixed(6)
+    );
+    const facePoint = {
+        x: midpoint.x + normal.x * wallHalfThickness,
+        y: midpoint.y + normal.y * wallHalfThickness
+    };
+    const tread = state.draft.treads[0];
+    const faceTouchesTread = [tread.left, tread.right].some((point) =>
+        Math.hypot(point.x - facePoint.x, point.y - facePoint.y) < 0.000001
+    );
+    assert.equal(faceTouchesTread, true);
+    const treadDx = tread.right.x - tread.left.x;
+    const treadDy = tread.right.y - tread.left.y;
+    assert.equal(Math.abs(treadDx * wallDx + treadDy * wallDy) < 0.000001, true);
+
+    tool.pointerMove({
+        x: midpoint.x + normal.x * (wallHalfThickness + 0.51),
+        y: midpoint.y + normal.y * (wallHalfThickness + 0.51)
+    }, 0.1, {
+        renderer: {
+            screenPixelsToWorldDistance(pixels) {
+                return Number(pixels) * 0.005;
+            }
+        }
+    });
+    assert.equal(state.draft.snapped, false);
+});
+
 test("stair tool cancel deselects the tool", async () => {
     const { BuildingEditorState } = await loadState();
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
@@ -4738,13 +5314,77 @@ test("stair tool cancel deselects the tool", async () => {
     assert.equal(state.draft, null);
 });
 
-test("stair tool completes an active draft when clicking the final point", async () => {
+test("stair tool finalizes an active draft when clicking near the final tread line", async () => {
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
     const renderer = {
         screenPixelsToWorldDistance(pixels) {
             return Number(pixels) * 0.01;
         }
     };
+    let createdOptions = null;
+    let selected = null;
+    const state = {
+        stairTool: { width: 2 },
+        draft: {
+            kind: "stair",
+            started: true,
+            completed: false,
+            ladder: false,
+            floorId: "floor-1",
+            direction: "up",
+            width: 2,
+            height: 3,
+            stepCount: 6,
+            riserDepth: 0.5,
+            texturePath: "/assets/images/flooring/woodfloor.png",
+            treadTexturePath: "/assets/images/flooring/woodfloor.png",
+            riserTexturePath: "/assets/images/flooring/woodfloor.png",
+            treads: [{
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                center: { x: 0, y: 0 },
+                angle: 0
+            }, {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }],
+            pendingTread: {
+                left: { x: -1, y: 2 },
+                right: { x: 1, y: 2 },
+                center: { x: 0, y: 2 },
+                angle: 0
+            }
+        },
+        addStairToFloor(floorId, options) {
+            createdOptions = { floorId, options };
+            return { id: 9, floorId };
+        },
+        selectStair(floorId, stairId) {
+            selected = { floorId, stairId };
+        },
+        emitChange() {}
+    };
+    const tool = new StairTool(state);
+
+    tool.pointerDown({ x: 0.95, y: 2.03 }, 0.14, { thresholdPixels: 14, renderer });
+
+    assert.equal(state.draft, null);
+    assert.equal(createdOptions.floorId, "floor-1");
+    assert.equal(createdOptions.options.treads.length, 2);
+    assert.equal(createdOptions.options.riserDepth, 0.5);
+    assert.deepEqual(selected, { floorId: "floor-1", stairId: 9 });
+});
+
+test("stair tool flags the final tread hover only inside the finish hit distance", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    const renderer = {
+        screenPixelsToWorldDistance(pixels) {
+            return Number(pixels) * 0.01;
+        }
+    };
+    let changeCount = 0;
     const state = {
         stairTool: { width: 2 },
         draft: {
@@ -4765,20 +5405,25 @@ test("stair tool completes an active draft when clicking the final point", async
                 angle: 0
             }],
             pendingTread: {
-                left: { x: -1, y: 2 },
-                right: { x: 1, y: 2 },
-                center: { x: 0, y: 2 },
+                left: { x: -1, y: 3 },
+                right: { x: 1, y: 3 },
+                center: { x: 0, y: 3 },
                 angle: 0
-            }
+            },
+            pendingArcState: { treadIndex: 1, kind: "test", deltaAngle: 0 }
         },
-        emitChange() {}
+        emitChange() { changeCount++; }
     };
     const tool = new StairTool(state);
 
-    tool.pointerDown({ x: 0.05, y: 2.03 }, 0.14, { thresholdPixels: 14, renderer });
-    assert.equal(state.draft.completed, true);
+    tool.pointerMove({ x: 0.95, y: 2.03 }, 0.14, { thresholdPixels: 14, renderer });
+    assert.equal(state.draft.finishTreadHover, true);
     assert.equal(state.draft.pendingTread, null);
-    assert.equal(state.draft.treads.length, 2);
+    assert.equal(state.draft.pendingArcState, null);
+
+    tool.pointerMove({ x: 0.95, y: 2.12 }, 0.14, { thresholdPixels: 14, renderer });
+    assert.equal(state.draft.finishTreadHover, false);
+    assert.ok(changeCount >= 2);
 });
 
 test("stair tool reopens a completed draft when clicking the final point again", async () => {
@@ -5103,7 +5748,11 @@ test("stair active path treads snap to walls without becoming ladders", async ()
     const wallDy = b.y - a.y;
     assert.equal(Math.hypot(treadDx, treadDy).toFixed(6), "1.000000");
     assert.equal(Math.abs(treadDx * wallDx + treadDy * wallDy) < 0.000001, false);
-    assert.equal(Math.hypot(pending.center.x - midpoint.x, pending.center.y - midpoint.y).toFixed(6), "0.500000");
+    const wallHalfThickness = Math.max(0, Number(wall.thickness) || model.DEFAULTS.wallThickness) * 0.5;
+    assert.equal(
+        Math.hypot(pending.center.x - midpoint.x, pending.center.y - midpoint.y).toFixed(6),
+        (0.5 + wallHalfThickness).toFixed(6)
+    );
     assert.equal(Math.hypot(pending.left.x - midpoint.x, pending.left.y - midpoint.y) < 0.000001, false);
     assert.equal(state.draft.ladder, false);
 });

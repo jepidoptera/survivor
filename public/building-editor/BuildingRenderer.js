@@ -12,6 +12,7 @@ const CAMERA_MAX_PITCH = Math.PI / 2 - 0.001;
 const CAMERA_PITCH_BASE = Math.SQRT1_2;
 const FLOOR_TEXTURE_REPEAT = 0.1;
 const DEFAULT_ROOF_TEXTURE_REPEAT = 0.5;
+const FLOOR_TEXTURE_CONFIG_URL = "/assets/images/flooring/items.json";
 const ROOF_TEXTURE_CONFIG_URL = "/assets/images/roofs/items.json";
 const ROOF_RENDER_Z_LIFT = 0.03;
 const FLOOR_DEPTH_NEAR_METRIC = -128;
@@ -38,6 +39,15 @@ const GRID_HEX_VY_MIN = 1.5;        // hide grid when hex row screen height < th
 const PICKER_DEBUG_DEPTH_BIAS = 0.05;
 const SELECTION_OUTLINE_COLOR = 0x42a5ff;
 const SELECTION_OUTLINE_SHADOW_COLOR = 0x07131f;
+const PLAYTEST_WIZARD_SHEET_PATH = "/assets/images/runningman.png";
+const PLAYTEST_WIZARD_SHEET_ROWS = 12;
+const PLAYTEST_WIZARD_SHEET_COLS = 9;
+const PLAYTEST_WIZARD_HAT_RESOLUTION = 128;
+const PLAYTEST_WIZARD_HAT_RENDER_SCALE = 0.9;
+const PLAYTEST_WIZARD_HAT_RENDER_Y_OFFSET_UNITS = 0.14;
+const PLAYTEST_WIZARD_HAT_COLOR = 0x000099;
+const PLAYTEST_WIZARD_HAT_BAND_COLOR = 0xffd700;
+const PLAYTEST_WIZARD_SHADOW_RENDER_Z_OFFSET_UNITS = 0.1;
 
 function roofMeshKey(floor, roof = null) {
     const floorId = getFloorId(floor);
@@ -178,6 +188,64 @@ void main(void) {
 }
 `;
 
+const PLAYTEST_WIZARD_DEPTH_VS = `
+precision highp float;
+attribute vec3 aWorldPosition;
+attribute vec2 aUvs;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform float uCameraPitch;
+uniform vec2 uDepthRange;
+uniform float uDepthBias;
+uniform float uCameraRotation;
+uniform vec2 uCameraRotationCenter;
+varying vec2 vUvs;
+void main(void) {
+    float cosR = cos(uCameraRotation);
+    float sinR = sin(uCameraRotation);
+    vec2 rel = aWorldPosition.xy - uCameraRotationCenter;
+    vec2 rotatedWorld = vec2(
+        rel.x * cosR - rel.y * sinR,
+        rel.x * sinR + rel.y * cosR
+    ) + uCameraRotationCenter;
+    float camDx = rotatedWorld.x - uCameraWorld.x;
+    float camDy = rotatedWorld.y - uCameraWorld.y;
+    float camDz = aWorldPosition.z - uCameraZ;
+    float pitchFloor = cos(uCameraPitch) / ${CAMERA_PITCH_BASE.toFixed(16)};
+    float pitchHeight = sin(uCameraPitch) / ${CAMERA_PITCH_BASE.toFixed(16)};
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor + uDepthBias;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+}
+`;
+
+const PLAYTEST_WIZARD_DEPTH_FS = `
+precision highp float;
+varying vec2 vUvs;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+void main(void) {
+    vec4 outColor = texture2D(uSampler, vUvs) * uTint;
+    if (outColor.a < uAlphaCutoff) discard;
+    gl_FragColor = outColor;
+}
+`;
+
 function normalizeTexturePath(path, fallback) {
     return (typeof path === "string" && path.length > 0) ? path : fallback;
 }
@@ -267,8 +335,8 @@ function cameraPitchProjectionFactors(camera) {
     };
 }
 
-function floorMeshSignature(floor) {
-    return surfaceMeshSignature(floor, floor.floorTexturePath, getFloorElevation(floor));
+function floorMeshSignature(floor, textureRepeatConfig = null) {
+    return `${surfaceMeshSignature(floor, floor.floorTexturePath, getFloorElevation(floor))};${textureRepeatSignature(textureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`;
 }
 
 function floorTopElevation(floor) {
@@ -314,10 +382,10 @@ function normalizeTextureConfigPath(texturePath) {
     return raw;
 }
 
-function normalizeRoofTextureRepeatConfig(config = {}) {
+function normalizeTextureRepeatConfig(config = {}, fallbackRepeat = FLOOR_TEXTURE_REPEAT) {
     const fallback = Number.isFinite(Number(config.repeatsPerMapUnit))
         ? Math.max(0.0001, Number(config.repeatsPerMapUnit))
-        : DEFAULT_ROOF_TEXTURE_REPEAT;
+        : fallbackRepeat;
     const x = Number.isFinite(Number(config.repeatsPerMapUnitX))
         ? Math.max(0.0001, Number(config.repeatsPerMapUnitX))
         : fallback;
@@ -327,9 +395,17 @@ function normalizeRoofTextureRepeatConfig(config = {}) {
     return { repeatsPerMapUnitX: x, repeatsPerMapUnitY: y };
 }
 
-function roofTextureRepeatSignature(config) {
-    const repeat = normalizeRoofTextureRepeatConfig(config);
+function normalizeRoofTextureRepeatConfig(config = {}) {
+    return normalizeTextureRepeatConfig(config, DEFAULT_ROOF_TEXTURE_REPEAT);
+}
+
+function textureRepeatSignature(config, fallbackRepeat = FLOOR_TEXTURE_REPEAT) {
+    const repeat = normalizeTextureRepeatConfig(config, fallbackRepeat);
     return `${repeat.repeatsPerMapUnitX.toFixed(6)}:${repeat.repeatsPerMapUnitY.toFixed(6)}`;
+}
+
+function roofTextureRepeatSignature(config) {
+    return textureRepeatSignature(config, DEFAULT_ROOF_TEXTURE_REPEAT);
 }
 
 function gableWallTexturePath(floor, gable) {
@@ -1881,6 +1957,29 @@ function pointDistance(a, b) {
     return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
 }
 
+function stableHashString(value) {
+    const text = String(value);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index++) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    hash += hash << 13;
+    hash ^= hash >>> 7;
+    hash += hash << 3;
+    hash ^= hash >>> 17;
+    hash += hash << 5;
+    return hash >>> 0;
+}
+
+function stableUnitRandom(seed) {
+    return stableHashString(seed) / 4294967296;
+}
+
+function pointSeed(point) {
+    return `${Number(point && point.x).toFixed(4)},${Number(point && point.y).toFixed(4)}`;
+}
+
 function samePoint(a, b, epsilon = GEOMETRY_EPSILON) {
     return pointDistance(a, b) <= epsilon;
 }
@@ -2051,7 +2150,7 @@ function stairRiserDepth(stair, height, stepCount) {
     return defaultStairRiserDepth(height, stepCount);
 }
 
-function stairMeshSignature(floor, stair) {
+function stairMeshSignature(floor, stair, treadTextureRepeatConfig = null, riserTextureRepeatConfig = null) {
     const treads = Array.isArray(stair && stair.treads) ? stair.treads : [];
     const treadSignature = treads.map((tread) => [
         Number(tread && tread.left && tread.left.x).toFixed(4),
@@ -2074,6 +2173,8 @@ function stairMeshSignature(floor, stair) {
         stair && stair.direction,
         stairTreadTexturePath(stair),
         stairRiserTexturePath(stair),
+        textureRepeatSignature(treadTextureRepeatConfig, FLOOR_TEXTURE_REPEAT),
+        textureRepeatSignature(riserTextureRepeatConfig, FLOOR_TEXTURE_REPEAT),
         treadSignature,
         footprintSignature
     ].join(";");
@@ -2335,6 +2436,27 @@ export class BuildingRenderer {
         this.selectionOutlineLayer = new PIXI.Graphics();
         this.handleLayer = new PIXI.Graphics();
         this.draftLayer = new PIXI.Graphics();
+        this.playtestLayer = new PIXI.Container();
+        this.playtestLayer.name = "buildingEditorPlaytestLayer";
+        this.playtestShadowGraphics = new PIXI.Graphics();
+        this.playtestShadowGraphics.name = "buildingEditorPlaytestWizardShadow";
+        this.playtestHatGraphics = new PIXI.Graphics();
+        this.playtestHatGraphics.name = "buildingEditorPlaytestWizardHat";
+        this.playtestWizardSprite = null;
+        this.playtestWizardDepthMesh = null;
+        this.playtestWizardDepthWorldPositions = null;
+        this.playtestWizardDepthUvSignature = "";
+        this.playtestWizardDepthPositionSignature = "";
+        this.playtestWizardSheetTexture = null;
+        this.playtestWizardFrames = null;
+        this.playtestWizardSheetLoadAttached = false;
+        this.playtestFloorSnapshotRenderTexture = null;
+        this.playtestFloorSnapshotSprite = null;
+        this.playtestFloorSnapshotSize = null;
+        this.playtestFloorSnapshot = null;
+        this.playtestFloorRenderOverride = null;
+        this.playtestLayer.addChild(this.playtestShadowGraphics);
+        this.playtestLayer.addChild(this.playtestHatGraphics);
         this.pickerDepthDebugLayer = new PIXI.Container();
         this.pickerDebugLayer = new PIXI.Graphics();
         this.pickerDebugLabels = new PIXI.Container();
@@ -2358,6 +2480,9 @@ export class BuildingRenderer {
         this.lastSurfacePickEntries = [];
         this.lastMountedObjectPickEntries = [];
         this.lastStairPickEntries = [];
+        this.floorTextureConfigCache = null;
+        this.floorTextureConfigPromise = null;
+        this.floorTextureConfigError = "";
         this.roofTextureConfigCache = null;
         this.roofTextureConfigPromise = null;
         this.roofTextureConfigError = "";
@@ -2373,18 +2498,23 @@ export class BuildingRenderer {
             this.selectionOutlineLayer,
             this.handleLayer,
             this.draftLayer,
+            this.playtestLayer,
             this.pickerDepthDebugLayer,
             this.pickerDebugLayer,
             this.pickerDebugLabels
         );
         this.app.stage.addChild(this.root);
-        void this.ensureRoofTextureConfigLoaded().then(() => {
+        void Promise.all([
+            this.ensureFloorTextureConfigLoaded(),
+            this.ensureRoofTextureConfigLoaded()
+        ]).then(() => {
             if (this.state && typeof this.state.setRenderError === "function") {
                 this.render();
             }
         }).catch((error) => {
             console.error(error);
-            this.roofTextureConfigError = error.message;
+            this.floorTextureConfigError = this.floorTextureConfigError || error.message;
+            this.roofTextureConfigError = this.roofTextureConfigError || error.message;
             if (this.state && typeof this.state.setRenderError === "function") {
                 this.state.setRenderError(error.message);
             }
@@ -2479,14 +2609,17 @@ export class BuildingRenderer {
             this.state.setRenderError("");
         }
         this.drawGrid();
+        this.ensurePlaytestFloorSnapshotForCurrentFade();
         this.drawGameStyleBuilding();
         this.drawFloorUnderlay(this.floorLayer);
         this.drawMountedObjects();
+        this.renderPlaytestFloorSnapshot();
         this.renderEditorPickPass();
         this.drawScreenPickerDebug(this.lastWallPickEntries);
         this.drawSelectionOutline();
         this.drawHandles();
         this.drawDraft();
+        this.drawPlaytestWizard();
         this.drawMountedObjectPreview();
         if (typeof this.app.render === "function") {
             const gl = this.app.renderer && this.app.renderer.gl;
@@ -2606,6 +2739,27 @@ export class BuildingRenderer {
             x: (rotated.x - camera.x) * camera.zoom + this.app.screen.width / 2,
             y: projectedY * camera.zoom * GAME_XY_RATIO + this.app.screen.height / 2
         };
+    }
+
+    centerCameraOnWorldPoint(point, worldZ = 0) {
+        if (!point || !this.state || !this.state.camera) {
+            throw new Error("building editor camera centering requires a point and camera");
+        }
+        const x = Number(point.x);
+        const y = Number(point.y);
+        const z = Number(worldZ);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            throw new Error("building editor camera centering requires finite x/y/z");
+        }
+        const camera = this.state.camera;
+        const cameraZ = Number.isFinite(Number(camera.z)) ? Number(camera.z) : 0;
+        const rotated = this.rotatePointForCamera({ x, y });
+        const pitch = cameraPitchProjectionFactors(camera);
+        if (!(pitch.floor > 0)) {
+            throw new Error("building editor camera centering requires a positive floor projection");
+        }
+        camera.x = rotated.x;
+        camera.y = rotated.y - ((z - cameraZ) * pitch.height / pitch.floor);
     }
 
     screenToWorld(point, worldZ = this.activePlaneZ()) {
@@ -2977,12 +3131,12 @@ export class BuildingRenderer {
         return texture;
     }
 
-    buildRoofTextureConfigMaps(doc) {
+    buildTextureConfigMaps(doc, label, fallbackRepeat) {
         if (!doc || typeof doc !== "object") {
-            throw new Error("roof texture manifest must be an object");
+            throw new Error(`${label} texture manifest must be an object`);
         }
         const defaults = doc.defaults && typeof doc.defaults === "object" ? doc.defaults : {};
-        const defaultRepeat = normalizeRoofTextureRepeatConfig(defaults);
+        const defaultRepeat = normalizeTextureRepeatConfig(defaults, fallbackRepeat);
         const cfg = {
             byPath: new Map(),
             byFile: new Map(),
@@ -2990,13 +3144,13 @@ export class BuildingRenderer {
             defaultRepeatY: defaultRepeat.repeatsPerMapUnitY
         };
         const items = Array.isArray(doc.items) ? doc.items : [];
-        if (!items.length) throw new Error("roof texture manifest is empty");
+        if (!items.length) throw new Error(`${label} texture manifest is empty`);
         items.forEach((item, index) => {
             if (!item || typeof item !== "object") {
-                throw new Error(`roof texture manifest item ${index} must be an object`);
+                throw new Error(`${label} texture manifest item ${index} must be an object`);
             }
             const texturePath = normalizeTextureConfigPath(item.texturePath);
-            if (!texturePath) throw new Error(`roof texture manifest item ${index} is missing texturePath`);
+            if (!texturePath) throw new Error(`${label} texture manifest item ${index} is missing texturePath`);
             const fallbackRepeat = Number.isFinite(Number(item.repeatsPerMapUnit))
                 ? Math.max(0.0001, Number(item.repeatsPerMapUnit))
                 : null;
@@ -3016,6 +3170,49 @@ export class BuildingRenderer {
             if (textureFile) cfg.byFile.set(textureFile, entry);
         });
         return cfg;
+    }
+
+    buildRoofTextureConfigMaps(doc) {
+        return this.buildTextureConfigMaps(doc, "roof", DEFAULT_ROOF_TEXTURE_REPEAT);
+    }
+
+    buildFloorTextureConfigMaps(doc) {
+        return this.buildTextureConfigMaps(doc, "floor", FLOOR_TEXTURE_REPEAT);
+    }
+
+    ensureFloorTextureConfigLoaded() {
+        if (this.floorTextureConfigCache) return Promise.resolve(this.floorTextureConfigCache);
+        if (this.floorTextureConfigPromise) return this.floorTextureConfigPromise;
+        if (typeof fetch !== "function" || typeof window === "undefined" || !window.location) {
+            this.floorTextureConfigCache = {
+                byPath: new Map(),
+                byFile: new Map(),
+                defaultRepeatX: FLOOR_TEXTURE_REPEAT,
+                defaultRepeatY: FLOOR_TEXTURE_REPEAT
+            };
+            return Promise.resolve(this.floorTextureConfigCache);
+        }
+        this.floorTextureConfigError = "";
+        this.floorTextureConfigPromise = fetch(FLOOR_TEXTURE_CONFIG_URL, { cache: "no-cache" })
+            .then((response) => {
+                if (!response || !response.ok) {
+                    throw new Error("could not load floor texture manifest");
+                }
+                return response.json();
+            })
+            .then((doc) => {
+                this.floorTextureConfigCache = this.buildFloorTextureConfigMaps(doc);
+                this.floorTextureConfigError = "";
+                return this.floorTextureConfigCache;
+            })
+            .catch((error) => {
+                this.floorTextureConfigError = error.message;
+                throw error;
+            })
+            .finally(() => {
+                this.floorTextureConfigPromise = null;
+            });
+        return this.floorTextureConfigPromise;
     }
 
     ensureRoofTextureConfigLoaded() {
@@ -3053,16 +3250,9 @@ export class BuildingRenderer {
         return this.roofTextureConfigPromise;
     }
 
-    roofTextureRepeatConfig(texturePath) {
-        if (this.roofTextureConfigError) {
-            throw new Error(this.roofTextureConfigError);
-        }
-        if (!this.roofTextureConfigCache) {
-            void this.ensureRoofTextureConfigLoaded();
-        }
-        const normalized = normalizeTextureConfigPath(normalizeTexturePath(texturePath, "/assets/images/roofs/slate.png"));
+    textureRepeatConfigFromCache(texturePath, fallbackTexturePath, cache, fallbackRepeat) {
+        const normalized = normalizeTextureConfigPath(normalizeTexturePath(texturePath, fallbackTexturePath));
         const file = (normalized.split("/").pop() || "").toLowerCase();
-        const cache = this.roofTextureConfigCache || null;
         const entry = (cache && cache.byPath && cache.byPath.get(normalized)) ||
             (cache && cache.byFile && cache.byFile.get(file)) ||
             null;
@@ -3070,11 +3260,41 @@ export class BuildingRenderer {
             texturePath: entry && entry.texturePath ? entry.texturePath : normalized,
             repeatsPerMapUnitX: entry && Number.isFinite(Number(entry.repeatsPerMapUnitX))
                 ? Math.max(0.0001, Number(entry.repeatsPerMapUnitX))
-                : (cache && Number.isFinite(Number(cache.defaultRepeatX)) ? Number(cache.defaultRepeatX) : DEFAULT_ROOF_TEXTURE_REPEAT),
+                : (cache && Number.isFinite(Number(cache.defaultRepeatX)) ? Number(cache.defaultRepeatX) : fallbackRepeat),
             repeatsPerMapUnitY: entry && Number.isFinite(Number(entry.repeatsPerMapUnitY))
                 ? Math.max(0.0001, Number(entry.repeatsPerMapUnitY))
-                : (cache && Number.isFinite(Number(cache.defaultRepeatY)) ? Number(cache.defaultRepeatY) : DEFAULT_ROOF_TEXTURE_REPEAT)
+                : (cache && Number.isFinite(Number(cache.defaultRepeatY)) ? Number(cache.defaultRepeatY) : fallbackRepeat)
         };
+    }
+
+    floorTextureRepeatConfig(texturePath) {
+        if (this.floorTextureConfigError) {
+            throw new Error(this.floorTextureConfigError);
+        }
+        if (!this.floorTextureConfigCache) {
+            void this.ensureFloorTextureConfigLoaded();
+        }
+        return this.textureRepeatConfigFromCache(
+            texturePath,
+            DEFAULTS.floorTexture,
+            this.floorTextureConfigCache || null,
+            FLOOR_TEXTURE_REPEAT
+        );
+    }
+
+    roofTextureRepeatConfig(texturePath) {
+        if (this.roofTextureConfigError) {
+            throw new Error(this.roofTextureConfigError);
+        }
+        if (!this.roofTextureConfigCache) {
+            void this.ensureRoofTextureConfigLoaded();
+        }
+        return this.textureRepeatConfigFromCache(
+            texturePath,
+            "/assets/images/roofs/slate.png",
+            this.roofTextureConfigCache || null,
+            DEFAULT_ROOF_TEXTURE_REPEAT
+        );
     }
 
     createSurfaceMesh(floor, triangulation, options = {}) {
@@ -3139,12 +3359,14 @@ export class BuildingRenderer {
         return mesh;
     }
 
-    createFloorMesh(floor, triangulation) {
+    createFloorMesh(floor, triangulation, textureRepeatConfig = null) {
+        const repeatConfig = normalizeTextureRepeatConfig(textureRepeatConfig, FLOOR_TEXTURE_REPEAT);
         return this.createSurfaceMesh(floor, triangulation, {
             z: getFloorElevation(floor),
             texturePath: floor.floorTexturePath,
             textureFallback: DEFAULTS.floorTexture,
-            textureRepeat: FLOOR_TEXTURE_REPEAT,
+            textureRepeatX: repeatConfig.repeatsPerMapUnitX,
+            textureRepeatY: repeatConfig.repeatsPerMapUnitY,
             namePrefix: "buildingEditorFloorMesh"
         });
     }
@@ -3293,7 +3515,8 @@ export class BuildingRenderer {
     syncFloorMesh(floor, alpha) {
         const floorId = getFloorId(floor);
         const holeRings = this.floorSurfaceHoles(floor);
-        const signature = surfaceMeshSignatureFromRings(floorId, floor.outerPolygon || [], holeRings, floor.floorTexturePath, getFloorElevation(floor));
+        const textureRepeatConfig = this.floorTextureRepeatConfig(floor.floorTexturePath);
+        const signature = `${surfaceMeshSignatureFromRings(floorId, floor.outerPolygon || [], holeRings, floor.floorTexturePath, getFloorElevation(floor))};${textureRepeatSignature(textureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`;
         let entry = this.floorMeshById.get(floorId);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
@@ -3302,7 +3525,7 @@ export class BuildingRenderer {
             }
             const triangulation = triangulateSurface(floor && floor.outerPolygon, holeRings);
             if (!triangulation) return null;
-            const mesh = this.createFloorMesh(floor, triangulation);
+            const mesh = this.createFloorMesh(floor, triangulation, textureRepeatConfig);
             if (!mesh) return null;
             this.buildingUnit.addChild(mesh);
             entry = { signature, mesh };
@@ -3508,7 +3731,7 @@ export class BuildingRenderer {
         return steps;
     }
 
-    triangulateStairSteps(stair) {
+    triangulateStairSteps(stair, options = {}) {
         const steps = this.stairStepPolygons(stair);
         const totalSteps = Math.max(1, Math.round(Number(stair && stair.stepCount) || 1));
         const height = Number(stair && stair.height);
@@ -3521,7 +3744,16 @@ export class BuildingRenderer {
         const floorZ = String(stair && stair.direction || "up") === "down"
             ? baseZ - height
             : baseZ;
-        const textureRepeat = FLOOR_TEXTURE_REPEAT;
+        const treadTextureRepeat = normalizeTextureRepeatConfig({
+            repeatsPerMapUnit: options.treadTextureRepeat,
+            repeatsPerMapUnitX: options.treadTextureRepeatX,
+            repeatsPerMapUnitY: options.treadTextureRepeatY
+        }, FLOOR_TEXTURE_REPEAT);
+        const riserTextureRepeat = normalizeTextureRepeatConfig({
+            repeatsPerMapUnit: options.riserTextureRepeat,
+            repeatsPerMapUnitX: options.riserTextureRepeatX,
+            repeatsPerMapUnitY: options.riserTextureRepeatY
+        }, FLOOR_TEXTURE_REPEAT);
         const treadPoints = [];
         const treadIndices = [];
         const riserPoints = [];
@@ -3556,16 +3788,16 @@ export class BuildingRenderer {
             if (Math.max(Math.abs(topZ - bottomZA), Math.abs(topZ - bottomZB)) <= GEOMETRY_EPSILON || Math.hypot(bx - ax, by - ay) <= GEOMETRY_EPSILON) return;
             const edgeLength = Math.hypot(bx - ax, by - ay);
             const u0 = 0;
-            const u1 = edgeLength * textureRepeat;
-            const vTop = -topZ * textureRepeat;
+            const u1 = edgeLength * riserTextureRepeat.repeatsPerMapUnitX;
+            const vTop = -topZ * riserTextureRepeat.repeatsPerMapUnitY;
             const p0 = { x: ax, y: ay, z: topZ };
             const p1 = { x: bx, y: by, z: topZ };
             const p2 = { x: bx, y: by, z: bottomZB };
             const normal = normalForFace(p0, p1, p2);
             const aTop = pushRiserPoint({ ...p0, u: u0, v: vTop, normal });
             const bTop = pushRiserPoint({ ...p1, u: u1, v: vTop, normal });
-            const bBottom = pushRiserPoint({ ...p2, u: u1, v: -bottomZB * textureRepeat, normal });
-            const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * textureRepeat, normal });
+            const bBottom = pushRiserPoint({ ...p2, u: u1, v: -bottomZB * riserTextureRepeat.repeatsPerMapUnitY, normal });
+            const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * riserTextureRepeat.repeatsPerMapUnitY, normal });
             riserIndices.push(aTop, bBottom, bTop, aTop, aBottom, bBottom);
         };
         const addBottomFace = (ring, bottomZFor) => {
@@ -3591,8 +3823,8 @@ export class BuildingRenderer {
                 [p0, p1, p2].forEach((point) => {
                     riserPoints.push({
                         ...point,
-                        u: point.x * textureRepeat,
-                        v: point.y * textureRepeat,
+                        u: point.x * riserTextureRepeat.repeatsPerMapUnitX,
+                        v: point.y * riserTextureRepeat.repeatsPerMapUnitY,
                         normal
                     });
                 });
@@ -3618,15 +3850,89 @@ export class BuildingRenderer {
             }
             return Math.max(floorZ, bottomZ);
         };
+        const treadUvFrame = (step, ring) => {
+            const lowerEdge = Array.isArray(step.lowerEdge) ? step.lowerEdge : [];
+            const a = lowerEdge[0];
+            const b = lowerEdge[1];
+            if (!finite2dPoint(a) || !finite2dPoint(b)) {
+                throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} requires a finite lower edge for tread texture mapping`);
+            }
+            const edgeLength = pointDistance(a, b);
+            if (!Number.isFinite(edgeLength) || edgeLength <= GEOMETRY_EPSILON) {
+                throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} lower edge is degenerate`);
+            }
+            const ux = (Number(b.x) - Number(a.x)) / edgeLength;
+            const uy = (Number(b.y) - Number(a.y)) / edgeLength;
+            const midpoint = {
+                x: (Number(a.x) + Number(b.x)) * 0.5,
+                y: (Number(a.y) + Number(b.y)) * 0.5
+            };
+            const center = ring.reduce((acc, point) => ({
+                x: acc.x + Number(point.x),
+                y: acc.y + Number(point.y)
+            }), { x: 0, y: 0 });
+            center.x /= ring.length;
+            center.y /= ring.length;
+            let vx = -uy;
+            let vy = ux;
+            if ((center.x - midpoint.x) * vx + (center.y - midpoint.y) * vy < 0) {
+                vx = -vx;
+                vy = -vy;
+            }
+            let maxT = 0;
+            const local = ring.map((point) => {
+                const dx = Number(point.x) - Number(a.x);
+                const dy = Number(point.y) - Number(a.y);
+                const s = dx * ux + dy * uy;
+                const t = Math.max(0, dx * vx + dy * vy);
+                maxT = Math.max(maxT, t);
+                return { point, s, t };
+            });
+            if (maxT <= GEOMETRY_EPSILON) {
+                throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} has no measurable tread texture height`);
+            }
+            const seed = [
+                "stair-tread-uv",
+                stair && stair.id !== undefined ? String(stair.id) : "new",
+                stair && stair.floorId !== undefined ? String(stair.floorId) : "",
+                step.sectionIndex,
+                step.localStepIndex,
+                step.globalStepIndex,
+                pointSeed(a),
+                pointSeed(b),
+                ring.map(pointSeed).join(";")
+            ].join("|");
+            const uOffset = stableUnitRandom(`${seed}|u`);
+            const vOffset = stableUnitRandom(`${seed}|v`);
+            return {
+                uvFor(point) {
+                    const match = local.find((entry) => same2d(entry.point, point));
+                    if (match) {
+                        return {
+                            u: uOffset + match.s * treadTextureRepeat.repeatsPerMapUnitX,
+                            v: vOffset + match.t * treadTextureRepeat.repeatsPerMapUnitY
+                        };
+                    }
+                    const dx = Number(point.x) - Number(a.x);
+                    const dy = Number(point.y) - Number(a.y);
+                    return {
+                        u: uOffset + (dx * ux + dy * uy) * treadTextureRepeat.repeatsPerMapUnitX,
+                        v: vOffset + Math.max(0, dx * vx + dy * vy) * treadTextureRepeat.repeatsPerMapUnitY
+                    };
+                }
+            };
+        };
         steps.forEach((step) => {
             const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const uvFrame = treadUvFrame(step, ring);
             const triangulation = triangulateSurface(ring, []);
             if (!triangulation) {
                 throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} could not be triangulated`);
             }
             const offset = treadPoints.length;
             triangulation.points.forEach((point) => {
-                treadPoints.push({ ...point, z: step.z, normal: { x: 0, y: 0, z: 1 } });
+                const uv = uvFrame.uvFor(point);
+                treadPoints.push({ ...point, z: step.z, u: uv.u, v: uv.v, normal: { x: 0, y: 0, z: 1 } });
             });
             triangulation.indices.forEach((index) => {
                 treadIndices.push(offset + Number(index));
@@ -3668,26 +3974,28 @@ export class BuildingRenderer {
         };
     }
 
-    createStairMeshPart(floor, stair, triangulation, texturePath, namePrefix) {
+    createStairMeshPart(floor, stair, triangulation, texturePath, namePrefix, textureRepeatConfig = null) {
+        const repeatConfig = normalizeTextureRepeatConfig(textureRepeatConfig, FLOOR_TEXTURE_REPEAT);
         return this.createSurfaceMesh(floor, triangulation, {
             z: Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : getFloorElevation(floor),
             texturePath,
             textureFallback: DEFAULTS.floorTexture,
-            textureRepeat: FLOOR_TEXTURE_REPEAT,
+            textureRepeatX: repeatConfig.repeatsPerMapUnitX,
+            textureRepeatY: repeatConfig.repeatsPerMapUnitY,
             namePrefix
         });
     }
 
-    createStairMesh(floor, stair, triangulation) {
+    createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig = null, riserTextureRepeatConfig = null) {
         if (!triangulation || !triangulation.tread) {
             throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} triangulation is missing tread geometry`);
         }
         const container = new PIXI.Container();
         container.name = `buildingEditorStairMesh:${getFloorId(floor)}:${stair && stair.id !== undefined ? stair.id : "new"}`;
-        const treadMesh = this.createStairMeshPart(floor, stair, triangulation.tread, stairTreadTexturePath(stair), "buildingEditorStairTreadMesh");
+        const treadMesh = this.createStairMeshPart(floor, stair, triangulation.tread, stairTreadTexturePath(stair), "buildingEditorStairTreadMesh", treadTextureRepeatConfig);
         const hasRiser = !!(triangulation.riser && triangulation.riser.points && triangulation.riser.points.length && triangulation.riser.indices && triangulation.riser.indices.length >= 3);
         const riserMesh = hasRiser
-            ? this.createStairMeshPart(floor, stair, triangulation.riser, stairRiserTexturePath(stair), "buildingEditorStairRiserMesh")
+            ? this.createStairMeshPart(floor, stair, triangulation.riser, stairRiserTexturePath(stair), "buildingEditorStairRiserMesh", riserTextureRepeatConfig)
             : null;
         if (!treadMesh || (hasRiser && !riserMesh)) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} split mesh could not be created`);
         if (riserMesh) container.addChild(riserMesh);
@@ -3701,15 +4009,22 @@ export class BuildingRenderer {
 
     syncStairMesh(floor, stair, alpha) {
         const key = stairMeshKey(floor, stair);
-        const signature = stairMeshSignature(floor, stair);
+        const treadTextureRepeatConfig = this.floorTextureRepeatConfig(stairTreadTexturePath(stair));
+        const riserTextureRepeatConfig = this.floorTextureRepeatConfig(stairRiserTexturePath(stair));
+        const signature = stairMeshSignature(floor, stair, treadTextureRepeatConfig, riserTextureRepeatConfig);
         let entry = this.stairMeshById.get(key);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
                 if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
                 entry.mesh.destroy({ children: true, texture: false, baseTexture: false });
             }
-            const triangulation = this.triangulateStairSteps(stair);
-            const mesh = this.createStairMesh(floor, stair, triangulation);
+            const triangulation = this.triangulateStairSteps(stair, {
+                treadTextureRepeatX: treadTextureRepeatConfig.repeatsPerMapUnitX,
+                treadTextureRepeatY: treadTextureRepeatConfig.repeatsPerMapUnitY,
+                riserTextureRepeatX: riserTextureRepeatConfig.repeatsPerMapUnitX,
+                riserTextureRepeatY: riserTextureRepeatConfig.repeatsPerMapUnitY
+            });
+            const mesh = this.createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig, riserTextureRepeatConfig);
             if (!mesh) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} mesh could not be created`);
             this.buildingUnit.addChild(mesh);
             entry = { signature, mesh };
@@ -5053,13 +5368,383 @@ export class BuildingRenderer {
         return this.renderWallUnit(wall, floor, alpha, wallEntries);
     }
 
+    rendererScreenSize() {
+        const width = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.width) || 0));
+        const height = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.height) || 0));
+        if (!(width > 0) || !(height > 0)) {
+            throw new Error("playtest floor snapshot requires a valid renderer screen size");
+        }
+        return { width, height };
+    }
+
+    ensureRenderTextureDepthAttachment(renderTexture, label = "render texture") {
+        const framebuffer = renderTexture && renderTexture.baseTexture && renderTexture.baseTexture.framebuffer
+            ? renderTexture.baseTexture.framebuffer
+            : (renderTexture && renderTexture.framebuffer ? renderTexture.framebuffer : null);
+        if (!framebuffer) {
+            throw new Error(`${label} is missing a framebuffer; depth-tested rendering cannot be used.`);
+        }
+        if (typeof framebuffer.enableDepth === "function") {
+            framebuffer.enableDepth();
+        } else if (Object.prototype.hasOwnProperty.call(framebuffer, "depth")) {
+            framebuffer.depth = true;
+        } else {
+            throw new Error(`${label} framebuffer does not support a depth attachment.`);
+        }
+        return framebuffer;
+    }
+
+    clearDepthTestedRenderTarget(resources, label = "render target") {
+        const renderer = resources && resources.renderer;
+        const texture = resources && resources.texture;
+        const gl = renderer && renderer.gl;
+        const framebuffer = texture && texture.baseTexture && texture.baseTexture.framebuffer
+            ? texture.baseTexture.framebuffer
+            : (texture && texture.framebuffer ? texture.framebuffer : null);
+        if (!gl || !framebuffer || !renderer.framebuffer || typeof renderer.framebuffer.bind !== "function") {
+            throw new Error(`${label} cannot be cleared with a depth buffer`);
+        }
+        renderer.framebuffer.bind(framebuffer);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clearDepth(1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        return true;
+    }
+
+    ensurePlaytestFloorSnapshotResources() {
+        if (!PIXI.RenderTexture || !PIXI.Sprite) {
+            throw new Error("playtest floor snapshot requires Pixi render texture support");
+        }
+        const renderer = this.app && this.app.renderer;
+        if (!renderer) throw new Error("playtest floor snapshot requires an app renderer");
+        const { width, height } = this.rendererScreenSize();
+        const sizeKey = `${width}x${height}`;
+        if (
+            !this.playtestFloorSnapshotRenderTexture ||
+            !this.playtestFloorSnapshotSize ||
+            this.playtestFloorSnapshotSize.key !== sizeKey
+        ) {
+            if (
+                this.playtestFloorSnapshotRenderTexture &&
+                typeof this.playtestFloorSnapshotRenderTexture.destroy === "function"
+            ) {
+                this.playtestFloorSnapshotRenderTexture.destroy(true);
+            }
+            this.playtestFloorSnapshotRenderTexture = PIXI.RenderTexture.create({ width, height });
+            this.playtestFloorSnapshotSize = { key: sizeKey, width, height };
+        }
+        this.ensureRenderTextureDepthAttachment(
+            this.playtestFloorSnapshotRenderTexture,
+            "playtest floor snapshot texture"
+        );
+        if (!this.playtestFloorSnapshotSprite) {
+            this.playtestFloorSnapshotSprite = new PIXI.Sprite(this.playtestFloorSnapshotRenderTexture);
+            this.playtestFloorSnapshotSprite.name = "buildingEditorPlaytestFloorSnapshot";
+            this.playtestFloorSnapshotSprite.interactive = false;
+            this.playtestFloorSnapshotSprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(this.playtestFloorSnapshotSprite, "renderable")) {
+                this.playtestFloorSnapshotSprite.renderable = false;
+            }
+        } else if (this.playtestFloorSnapshotSprite.texture !== this.playtestFloorSnapshotRenderTexture) {
+            this.playtestFloorSnapshotSprite.texture = this.playtestFloorSnapshotRenderTexture;
+        }
+        this.applyPlaytestFloorSnapshotSpriteTransform(this.playtestFloorSnapshotSprite, width, height);
+        if (PIXI.BLEND_MODES) {
+            this.playtestFloorSnapshotSprite.blendMode = PIXI.BLEND_MODES.NORMAL;
+        }
+        return {
+            renderer,
+            texture: this.playtestFloorSnapshotRenderTexture,
+            sprite: this.playtestFloorSnapshotSprite,
+            width,
+            height
+        };
+    }
+
+    playtestFloorSnapshotCameraState() {
+        const camera = this.state && this.state.camera;
+        if (!camera) throw new Error("playtest floor snapshot requires a camera");
+        const pitch = cameraPitchProjectionFactors(camera);
+        const state = {
+            x: Number(camera.x),
+            y: Number(camera.y),
+            z: Number.isFinite(Number(camera.z)) ? Number(camera.z) : 0,
+            zoom: Number(camera.zoom),
+            rotation: Number(camera.rotation) || 0,
+            pitch: pitch.pitch,
+            pitchFloor: pitch.floor,
+            pitchHeight: pitch.height,
+            xyratio: GAME_XY_RATIO
+        };
+        if (
+            !Number.isFinite(state.x) ||
+            !Number.isFinite(state.y) ||
+            !Number.isFinite(state.z) ||
+            !(state.zoom > 0) ||
+            !Number.isFinite(state.rotation) ||
+            !Number.isFinite(state.pitch)
+        ) {
+            throw new Error("playtest floor snapshot has invalid camera state");
+        }
+        return state;
+    }
+
+    playtestFloorSnapshotScreenOffset(snapshot) {
+        if (!snapshot || !snapshot.camera) {
+            throw new Error("playtest floor snapshot is missing camera state");
+        }
+        const captured = snapshot.camera;
+        const current = this.playtestFloorSnapshotCameraState();
+        if (Math.abs(current.rotation - captured.rotation) > 0.000001) {
+            throw new Error("playtest floor snapshot cannot track camera rotation changes during a fade");
+        }
+        if (Math.abs(current.pitch - captured.pitch) > 0.000001) {
+            throw new Error("playtest floor snapshot cannot track camera pitch changes during a fade");
+        }
+        if (Math.abs(current.zoom - captured.zoom) > 0.000001) {
+            throw new Error("playtest floor snapshot cannot track camera zoom changes during a fade");
+        }
+        return {
+            x: (captured.x - current.x) * current.zoom,
+            y: (
+                (captured.y - current.y) * current.pitchFloor +
+                (current.z - captured.z) * current.pitchHeight
+            ) * current.zoom * current.xyratio
+        };
+    }
+
+    applyPlaytestFloorSnapshotSpriteTransform(sprite, width, height, offsetX = 0, offsetY = 0) {
+        if (!sprite) throw new Error("missing playtest floor snapshot sprite");
+        const textureRef = sprite.texture || this.playtestFloorSnapshotRenderTexture || null;
+        const textureWidth = Number(textureRef && textureRef.width) || Number(width);
+        const textureHeight = Number(textureRef && textureRef.height) || Number(height);
+        if (!(textureWidth > 0) || !(textureHeight > 0)) {
+            throw new Error("playtest floor snapshot has invalid texture size");
+        }
+        if (sprite.anchor && typeof sprite.anchor.set === "function") sprite.anchor.set(0, 0);
+        sprite.position.set(Number(offsetX) || 0, Number(height) + (Number(offsetY) || 0));
+        sprite.scale.set(Number(width) / textureWidth, -(Number(height) / textureHeight));
+    }
+
+    playtestFloorSnapshotSignature(fade) {
+        const { width, height } = this.rendererScreenSize();
+        return [
+            String(fade && fade.fromFloorId || ""),
+            String(fade && fade.toFloorId || ""),
+            `${width}x${height}`
+        ].join("|");
+    }
+
+    playtestFloorSnapshotAlpha(fade = this.playtestFloorFadeDescriptor()) {
+        if (!fade) return 0;
+        return Math.max(0, Math.min(1, 1 - Number(fade.progress)));
+    }
+
+    withDisplayObjectsHidden(displayObjects, callback) {
+        const hidden = [];
+        const seen = new Set();
+        const hide = (displayObj) => {
+            if (!displayObj || seen.has(displayObj)) return;
+            seen.add(displayObj);
+            hidden.push({
+                displayObj,
+                visible: displayObj.visible,
+                renderable: displayObj.renderable
+            });
+            displayObj.visible = false;
+            if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) displayObj.renderable = false;
+        };
+        displayObjects.forEach(hide);
+        try {
+            return callback();
+        } finally {
+            for (let i = hidden.length - 1; i >= 0; i--) {
+                const entry = hidden[i];
+                entry.displayObj.visible = entry.visible;
+                if (Object.prototype.hasOwnProperty.call(entry.displayObj, "renderable")) {
+                    entry.displayObj.renderable = entry.renderable;
+                }
+            }
+        }
+    }
+
+    capturePlaytestFloorSnapshot(fade) {
+        if (!fade) return false;
+        const fromFloor = findFloor(this.state.building, fade.fromFloorId);
+        const toFloor = findFloor(this.state.building, fade.toFloorId);
+        if (!fromFloor) throw new Error(`playtest floor snapshot references missing source level ${fade.fromFloorId}`);
+        if (!toFloor) throw new Error(`playtest floor snapshot references missing target level ${fade.toFloorId}`);
+        const resources = this.ensurePlaytestFloorSnapshotResources();
+        const previousOverride = this.playtestFloorRenderOverride;
+        const previousSnapshot = this.playtestFloorSnapshot;
+        this.playtestFloorRenderOverride = {
+            floorIds: new Set([String(fade.fromFloorId)]),
+            suppressFade: true
+        };
+        try {
+            this.drawGameStyleBuilding();
+            this.drawMountedObjects();
+            const hidden = [
+                resources.sprite,
+                this.gridLayer,
+                this.gridAnchorLayer,
+                this.floorLayer,
+                this.selectionOutlineLayer,
+                this.handleLayer,
+                this.draftLayer,
+                this.playtestLayer,
+                this.playtestWizardSprite,
+                this.playtestWizardDepthMesh,
+                this.playtestShadowGraphics,
+                this.playtestHatGraphics,
+                this.pickerDepthDebugLayer,
+                this.pickerDebugLayer,
+                this.pickerDebugLabels
+            ];
+            this.withDisplayObjectsHidden(hidden, () => {
+                this.clearDepthTestedRenderTarget(resources, "playtest floor snapshot target");
+                resources.renderer.render(this.root, resources.texture, false);
+            });
+        } catch (error) {
+            throw new Error(`playtest floor snapshot capture failed: ${error && error.message ? error.message : error}`);
+        } finally {
+            this.playtestFloorRenderOverride = previousOverride;
+            this.playtestFloorSnapshot = previousSnapshot;
+        }
+        this.playtestFloorSnapshot = {
+            active: true,
+            fromFloorId: String(fade.fromFloorId),
+            toFloorId: String(fade.toFloorId),
+            signature: this.playtestFloorSnapshotSignature(fade),
+            width: resources.width,
+            height: resources.height,
+            camera: this.playtestFloorSnapshotCameraState()
+        };
+        resources.sprite.alpha = this.playtestFloorSnapshotAlpha(fade);
+        resources.sprite.visible = true;
+        if (Object.prototype.hasOwnProperty.call(resources.sprite, "renderable")) resources.sprite.renderable = true;
+        return true;
+    }
+
+    ensurePlaytestFloorSnapshotForCurrentFade() {
+        const fade = this.playtestFloorFadeDescriptor();
+        if (!fade) {
+            this.hidePlaytestFloorSnapshot();
+            return false;
+        }
+        const signature = this.playtestFloorSnapshotSignature(fade);
+        const snapshot = this.playtestFloorSnapshot;
+        if (
+            snapshot &&
+            snapshot.active === true &&
+            snapshot.signature === signature &&
+            String(snapshot.fromFloorId || "") === String(fade.fromFloorId) &&
+            String(snapshot.toFloorId || "") === String(fade.toFloorId)
+        ) {
+            return false;
+        }
+        return this.capturePlaytestFloorSnapshot(fade);
+    }
+
+    hidePlaytestFloorSnapshot() {
+        const sprite = this.playtestFloorSnapshotSprite;
+        if (sprite) {
+            sprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) sprite.renderable = false;
+            if (sprite.parent) sprite.parent.removeChild(sprite);
+        }
+        this.playtestFloorSnapshot = null;
+    }
+
+    setPlaytestFloorSnapshotDisplayIndex() {
+        const sprite = this.playtestFloorSnapshotSprite;
+        if (!sprite || !this.root || sprite.parent !== this.root || typeof this.root.setChildIndex !== "function") return;
+        const before = this.selectionOutlineLayer;
+        let targetIndex = this.root.children.length - 1;
+        if (before && before.parent === this.root && typeof this.root.getChildIndex === "function") {
+            targetIndex = Math.max(0, this.root.getChildIndex(before));
+        }
+        if (this.root.getChildIndex(sprite) !== targetIndex) {
+            this.root.setChildIndex(sprite, targetIndex);
+        }
+    }
+
+    renderPlaytestFloorSnapshot() {
+        const fade = this.playtestFloorFadeDescriptor();
+        if (!fade || !(this.playtestFloorSnapshot && this.playtestFloorSnapshot.active === true)) {
+            this.hidePlaytestFloorSnapshot();
+            return null;
+        }
+        const resources = this.ensurePlaytestFloorSnapshotResources();
+        const alpha = this.playtestFloorSnapshotAlpha(fade);
+        if (!(alpha > 0.001)) {
+            this.hidePlaytestFloorSnapshot();
+            return null;
+        }
+        const sprite = resources.sprite;
+        if (sprite.parent !== this.root) this.root.addChild(sprite);
+        this.setPlaytestFloorSnapshotDisplayIndex();
+        const offset = this.playtestFloorSnapshotScreenOffset(this.playtestFloorSnapshot);
+        this.applyPlaytestFloorSnapshotSpriteTransform(
+            sprite,
+            this.playtestFloorSnapshot.width || resources.width,
+            this.playtestFloorSnapshot.height || resources.height,
+            offset.x,
+            offset.y
+        );
+        sprite.alpha = alpha;
+        sprite.visible = true;
+        if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) sprite.renderable = true;
+        if (PIXI.BLEND_MODES) sprite.blendMode = PIXI.BLEND_MODES.NORMAL;
+        return sprite;
+    }
+
     renderedFloors() {
+        const override = this.playtestFloorRenderOverride;
+        if (override && override.floorIds instanceof Set) {
+            return [...getBuildingFloors(this.state.building)]
+                .filter((floor) => override.floorIds.has(getFloorId(floor)))
+                .sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        }
         if (this.state.renderStyle() === "exterior") {
             return [...getBuildingFloors(this.state.building)]
                 .sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
         }
+        const fade = this.playtestFloorFadeDescriptor();
+        if (fade) {
+            const fromFloor = findFloor(this.state.building, fade.fromFloorId);
+            const toFloor = findFloor(this.state.building, fade.toFloorId);
+            if (!fromFloor) throw new Error(`playtest floor fade references missing source level ${fade.fromFloorId}`);
+            if (!toFloor) throw new Error(`playtest floor fade references missing target level ${fade.toFloorId}`);
+            return [toFloor];
+        }
         const floor = this.state.selectedFloor();
         return floor ? [floor] : [];
+    }
+
+    playtestFloorFadeDescriptor() {
+        const fade = this.state && this.state.playtestFloorFade ? this.state.playtestFloorFade : null;
+        if (!fade) return null;
+        const fromFloorId = String(fade.fromFloorId || "");
+        const toFloorId = String(fade.toFloorId || "");
+        const progress = Number(fade.progress);
+        if (!fromFloorId || !toFloorId) throw new Error("playtest floor fade requires level ids");
+        if (!Number.isFinite(progress)) throw new Error("playtest floor fade requires finite progress");
+        return {
+            fromFloorId,
+            toFloorId,
+            progress: Math.max(0, Math.min(1, progress))
+        };
+    }
+
+    renderedFloorAlphaMap(floors, exterior) {
+        const alphaById = new Map();
+        floors.forEach((floor) => {
+            const floorId = getFloorId(floor);
+            const alpha = exterior ? 0.92 : 1;
+            alphaById.set(floorId, Math.max(0, Math.min(1, alpha)));
+        });
+        return alphaById;
     }
 
     drawGameStyleBuilding() {
@@ -5076,15 +5761,16 @@ export class BuildingRenderer {
         this.lastStairPickEntries = [];
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
+        const exterior = this.state.renderStyle() === "exterior";
+        const floorAlphaById = this.renderedFloorAlphaMap(floors, exterior);
         const liveFloorMeshIds = new Set();
         const liveRoofMeshIds = new Set();
         const liveGableWallIds = new Set();
         const liveWallIds = new Set();
         const wallEntries = [];
-        const exterior = this.state.renderStyle() === "exterior";
         this.buildingUnit.alpha = exterior ? 0.92 : 1;
         floors.forEach((floor) => {
-            const floorAlpha = exterior ? 0.92 : 1;
+            const floorAlpha = floorAlphaById.get(getFloorId(floor)) ?? (exterior ? 0.92 : 1);
             const mesh = this.syncFloorMesh(floor, floorAlpha);
             if (mesh) {
                 const holes = this.floorSurfaceHoles(floor);
@@ -5106,7 +5792,7 @@ export class BuildingRenderer {
                         (!selection.roofId || String(selection.roofId) === String(roof.id));
                 if (exterior || selectedRoofVisible) {
                     const roofView = floorRoofView(floor, roof);
-                    const roofMesh = this.syncRoofMesh(floor, 1, roof);
+                    const roofMesh = this.syncRoofMesh(floor, floorAlpha, roof);
                     if (roofMesh) {
                         const key = roofMeshKey(floor, roof);
                         liveRoofMeshIds.add(key);
@@ -5120,7 +5806,7 @@ export class BuildingRenderer {
                     }
                     getRoofGables(roof).forEach((gable) => {
                         const roofView = floorRoofView(floor, roof);
-                        const gableMesh = this.syncGableWallMesh(roofView, gable, 1);
+                        const gableMesh = this.syncGableWallMesh(roofView, gable, floorAlpha);
                         liveGableWallIds.add(`${roofMeshKey(floor, roof)}:${gable.id}`);
                         this.lastGablePickEntries.push({
                             type: "gable",
@@ -5144,7 +5830,8 @@ export class BuildingRenderer {
         });
         this.lastWallPickEntries = wallEntries;
         wallEntries.forEach((entry) => {
-            entry.mesh = this.renderWallUnit(entry.wall, entry.floor, 1, wallEntries);
+            const alpha = floorAlphaById.get(getFloorId(entry.floor)) ?? 1;
+            entry.mesh = this.renderWallUnit(entry.wall, entry.floor, alpha, wallEntries);
         });
         for (const [floorId, entry] of this.floorMeshById.entries()) {
             if (!liveFloorMeshIds.has(floorId) && entry && entry.mesh) entry.mesh.visible = false;
@@ -5170,7 +5857,8 @@ export class BuildingRenderer {
             getFloorColumns(floor).forEach((column) => {
                 const pickMesh = this.createColumnPickMesh(column, floor);
                 this.lastColumnPickEntries.push({ column, floor, mesh: pickMesh });
-                this.renderColumnUnit(column, floor, 1);
+                const alpha = floorAlphaById.get(getFloorId(floor)) ?? 1;
+                this.renderColumnUnit(column, floor, alpha);
                 liveColumnIds.add(String(column.id));
             });
         });
@@ -5831,6 +6519,10 @@ export class BuildingRenderer {
 
     drawMountedObjects() {
         const liveIds = new Set();
+        const floors = this.renderedFloors();
+        const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
+        const exterior = this.state.renderStyle() === "exterior";
+        const floorAlphaById = this.renderedFloorAlphaMap(floors, exterior);
         const draft = this.state.draft;
         const replacingMountedObjectId = draft &&
             draft.kind === "mountedObject" &&
@@ -5843,6 +6535,8 @@ export class BuildingRenderer {
             if (replacingMountedObjectId === id) return;
             const placement = this.mountedObjectPlacement(object);
             if (!placement) return;
+            const floorId = getFloorId(placement.floor);
+            if (!floorIds.has(floorId)) return;
             liveIds.add(id);
             let mesh = this.mountedObjectMeshById.get(id);
             if (!mesh) {
@@ -5852,8 +6546,12 @@ export class BuildingRenderer {
             } else if (mesh.parent !== this.buildingUnit) {
                 this.buildingUnit.addChild(mesh);
             }
+            const floorAlpha = floorAlphaById.get(floorId) ?? 1;
+            const collapsedAlpha = placement.mountKind === "gable"
+                ? 1
+                : (this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1);
             this.updateMountedObjectMesh(mesh, object, placement, {
-                alphaMultiplier: placement.mountKind === "gable" ? 1 : (this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1)
+                alphaMultiplier: floorAlpha * collapsedAlpha
             });
             this.lastMountedObjectPickEntries.push({
                 ...placement,
@@ -6407,6 +7105,388 @@ export class BuildingRenderer {
         });
     }
 
+    validatePlaytestWizardSheetBase(baseTexture) {
+        if (!baseTexture) {
+            throw new Error("building editor playtest wizard is missing runningman base texture");
+        }
+        if (baseTexture.valid !== true) return false;
+        const width = Number(baseTexture.width);
+        const height = Number(baseTexture.height);
+        if (!(width > 0) || !(height > 0)) {
+            throw new Error("building editor playtest wizard runningman texture has invalid dimensions");
+        }
+        if (width % PLAYTEST_WIZARD_SHEET_COLS !== 0 || height % PLAYTEST_WIZARD_SHEET_ROWS !== 0) {
+            throw new Error(`building editor playtest wizard sprite sheet must divide into ${PLAYTEST_WIZARD_SHEET_ROWS}x${PLAYTEST_WIZARD_SHEET_COLS} frames`);
+        }
+        return true;
+    }
+
+    attachPlaytestWizardSheetLoadHandler(baseTexture) {
+        if (this.playtestWizardSheetLoadAttached || !baseTexture || typeof baseTexture.once !== "function") return;
+        this.playtestWizardSheetLoadAttached = true;
+        baseTexture.once("loaded", () => {
+            this.playtestWizardFrames = null;
+            this.validatePlaytestWizardSheetBase(baseTexture);
+            this.render();
+        });
+        baseTexture.once("error", () => {
+            throw new Error(`building editor playtest wizard failed to load ${PLAYTEST_WIZARD_SHEET_PATH}`);
+        });
+    }
+
+    ensurePlaytestWizardFrames() {
+        if (Array.isArray(this.playtestWizardFrames) && this.playtestWizardFrames.length > 0) {
+            return this.playtestWizardFrames;
+        }
+        if (!globalThis.PIXI || !PIXI.Texture || !PIXI.Rectangle) {
+            throw new Error("building editor playtest wizard requires PIXI.Texture and PIXI.Rectangle");
+        }
+        this.playtestWizardSheetTexture = this.playtestWizardSheetTexture || PIXI.Texture.from(PLAYTEST_WIZARD_SHEET_PATH);
+        const baseTexture = this.playtestWizardSheetTexture && this.playtestWizardSheetTexture.baseTexture;
+        if (!this.validatePlaytestWizardSheetBase(baseTexture)) {
+            if (!baseTexture || typeof baseTexture.once !== "function") {
+                throw new Error("building editor playtest wizard runningman texture is not ready and cannot report load completion");
+            }
+            this.attachPlaytestWizardSheetLoadHandler(baseTexture);
+            return null;
+        }
+        const frameWidth = Number(baseTexture.width) / PLAYTEST_WIZARD_SHEET_COLS;
+        const frameHeight = Number(baseTexture.height) / PLAYTEST_WIZARD_SHEET_ROWS;
+        const frames = [];
+        for (let row = 0; row < PLAYTEST_WIZARD_SHEET_ROWS; row++) {
+            for (let col = 0; col < PLAYTEST_WIZARD_SHEET_COLS; col++) {
+                const frameRect = new PIXI.Rectangle(
+                    col * frameWidth,
+                    row * frameHeight,
+                    frameWidth,
+                    frameHeight
+                );
+                frames.push(new PIXI.Texture(baseTexture, frameRect));
+            }
+        }
+        this.playtestWizardFrames = frames;
+        return frames;
+    }
+
+    ensurePlaytestWizardSprite(texture) {
+        if (!PIXI.Sprite) {
+            throw new Error("building editor playtest wizard requires PIXI.Sprite");
+        }
+        if (!this.playtestWizardSprite) {
+            this.playtestWizardSprite = new PIXI.Sprite(texture);
+            this.playtestWizardSprite.name = "buildingEditorPlaytestWizard";
+            if (!this.playtestWizardSprite.anchor || typeof this.playtestWizardSprite.anchor.set !== "function") {
+                throw new Error("building editor playtest wizard sprite requires a Pixi anchor");
+            }
+            this.playtestWizardSprite.anchor.set(0.5, 0.75);
+        } else {
+            this.playtestWizardSprite.texture = texture;
+        }
+        if (this.playtestWizardSprite.parent !== this.playtestLayer) {
+            this.playtestLayer.addChild(this.playtestWizardSprite);
+        }
+        if (this.playtestHatGraphics.parent !== this.playtestLayer) {
+            this.playtestLayer.addChild(this.playtestHatGraphics);
+        } else if (typeof this.playtestLayer.setChildIndex === "function" && Array.isArray(this.playtestLayer.children)) {
+            this.playtestLayer.setChildIndex(this.playtestHatGraphics, this.playtestLayer.children.length - 1);
+        }
+        return this.playtestWizardSprite;
+    }
+
+    ensurePlaytestWizardDepthMesh() {
+        if (!PIXI.Geometry || !PIXI.Shader || !PIXI.Mesh) {
+            throw new Error("building editor playtest wizard depth rendering requires Pixi Geometry, Shader, and Mesh");
+        }
+        if (this.playtestWizardDepthMesh && this.playtestWizardDepthMesh.destroyed !== true) {
+            return this.playtestWizardDepthMesh;
+        }
+        const uvs = new Float32Array([
+            0, 1,
+            1, 1,
+            1, 0,
+            0, 0
+        ]);
+        const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+        const geometry = new PIXI.Geometry()
+            .addAttribute("aWorldPosition", new Float32Array(12), 3)
+            .addAttribute("aUvs", uvs, 2)
+            .addIndex(indices);
+        const shader = PIXI.Shader.from(PLAYTEST_WIZARD_DEPTH_VS, PLAYTEST_WIZARD_DEPTH_FS, {
+            uScreenSize: new Float32Array([1, 1]),
+            uCameraWorld: new Float32Array([0, 0]),
+            uCameraZ: 0,
+            uViewScale: 1,
+            uXyRatio: GAME_XY_RATIO,
+            uCameraPitch: CAMERA_DEFAULT_PITCH,
+            uDepthRange: new Float32Array([
+                FLOOR_DEPTH_FAR_METRIC,
+                1 / Math.max(1e-6, FLOOR_DEPTH_FAR_METRIC - FLOOR_DEPTH_NEAR_METRIC)
+            ]),
+            uDepthBias: 0,
+            uCameraRotation: 0,
+            uCameraRotationCenter: new Float32Array([0, 0]),
+            uTint: new Float32Array([1, 1, 1, 1]),
+            uAlphaCutoff: 0.08,
+            uSampler: PIXI.Texture.WHITE
+        });
+        const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
+        mesh.name = "buildingEditorPlaytestWizardDepthMesh";
+        mesh.interactive = false;
+        mesh.visible = false;
+        this.playtestWizardDepthMesh = mesh;
+        this.playtestWizardDepthWorldPositions = geometry.getBuffer("aWorldPosition").data;
+        this.playtestWizardDepthUvSignature = "";
+        this.playtestWizardDepthPositionSignature = "";
+        return mesh;
+    }
+
+    updatePlaytestWizardDepthUvs(mesh, texture) {
+        if (!mesh || !mesh.geometry || !texture || !texture.baseTexture) {
+            throw new Error("building editor playtest wizard depth mesh requires a framed texture");
+        }
+        const uvBuffer = mesh.geometry.getBuffer("aUvs");
+        if (!uvBuffer) throw new Error("building editor playtest wizard depth mesh is missing UVs");
+        const baseTexture = texture.baseTexture;
+        const baseW = Number(baseTexture.realWidth || baseTexture.width || 0);
+        const baseH = Number(baseTexture.realHeight || baseTexture.height || 0);
+        if (!(baseW > 0) || !(baseH > 0)) {
+            throw new Error("building editor playtest wizard texture has no finite base size");
+        }
+        const frame = texture.frame || new PIXI.Rectangle(0, 0, baseW, baseH);
+        const u0 = Number(frame.x) / baseW;
+        const v0 = Number(frame.y) / baseH;
+        const u1 = (Number(frame.x) + Number(frame.width)) / baseW;
+        const v1 = (Number(frame.y) + Number(frame.height)) / baseH;
+        const signature = `${u0.toFixed(6)}:${v0.toFixed(6)}:${u1.toFixed(6)}:${v1.toFixed(6)}`;
+        if (signature === this.playtestWizardDepthUvSignature) return;
+        uvBuffer.data = new Float32Array([
+            u0, v1,
+            u1, v1,
+            u1, v0,
+            u0, v0
+        ]);
+        uvBuffer.update();
+        this.playtestWizardDepthUvSignature = signature;
+    }
+
+    updatePlaytestWizardDepthMesh(mesh, texture, wizard, sprite) {
+        if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this.playtestWizardDepthWorldPositions) {
+            throw new Error("building editor playtest wizard depth mesh is missing required buffers");
+        }
+        const x = Number(wizard.x);
+        const y = Number(wizard.y);
+        const z = Number(wizard.z);
+        if (![x, y, z].every(Number.isFinite)) {
+            throw new Error("building editor playtest wizard depth mesh requires finite x/y/z");
+        }
+        const viewScale = Number(this.state.camera.zoom);
+        if (!(viewScale > 0)) throw new Error("building editor playtest wizard depth mesh requires positive camera zoom");
+        const widthWorld = Math.max(0.01, Math.abs(Number(sprite.width) || viewScale) / viewScale);
+        const heightWorldZ = Math.max(0.01, Math.abs(Number(sprite.height) || viewScale) / (viewScale * GAME_XY_RATIO));
+        const rotation = Number(this.state.camera.rotation) || 0;
+        const axisX = Math.cos(rotation);
+        const axisY = -Math.sin(rotation);
+        const halfWidth = widthWorld * 0.5;
+        const bottomZ = z;
+        const topZ = z + heightWorldZ;
+        const leftX = x - axisX * halfWidth;
+        const leftY = y - axisY * halfWidth;
+        const rightX = x + axisX * halfWidth;
+        const rightY = y + axisY * halfWidth;
+        const signature = [
+            leftX, leftY, rightX, rightY, bottomZ, topZ, widthWorld, heightWorldZ, rotation
+        ].map((value) => Number(value).toFixed(4)).join("|");
+        if (signature !== this.playtestWizardDepthPositionSignature) {
+            const positions = this.playtestWizardDepthWorldPositions;
+            positions[0] = leftX; positions[1] = leftY; positions[2] = bottomZ;
+            positions[3] = rightX; positions[4] = rightY; positions[5] = bottomZ;
+            positions[6] = rightX; positions[7] = rightY; positions[8] = topZ;
+            positions[9] = leftX; positions[10] = leftY; positions[11] = topZ;
+            mesh.geometry.getBuffer("aWorldPosition").update();
+            this.playtestWizardDepthPositionSignature = signature;
+        }
+        this.updatePlaytestWizardDepthUvs(mesh, texture);
+        const camera = this.gameCamera();
+        const u = mesh.shader.uniforms;
+        u.uScreenSize[0] = Math.max(1, this.app.screen.width);
+        u.uScreenSize[1] = Math.max(1, this.app.screen.height);
+        u.uCameraWorld[0] = Number(camera.x);
+        u.uCameraWorld[1] = Number(camera.y);
+        u.uCameraZ = Number(camera.z);
+        u.uViewScale = Number(camera.viewscale);
+        u.uXyRatio = Number(camera.xyratio);
+        u.uCameraPitch = cameraPitch(this.state.camera);
+        u.uCameraRotation = rotation;
+        const rotationCenter = this.state.camera.rotationCenter || this.state.buildingCenter();
+        u.uCameraRotationCenter[0] = Number(rotationCenter.x) || 0;
+        u.uCameraRotationCenter[1] = Number(rotationCenter.y) || 0;
+        u.uDepthRange[0] = FLOOR_DEPTH_FAR_METRIC;
+        u.uDepthRange[1] = 1 / Math.max(1e-6, FLOOR_DEPTH_FAR_METRIC - FLOOR_DEPTH_NEAR_METRIC);
+        u.uDepthBias = 0;
+        u.uTint[0] = 1;
+        u.uTint[1] = 1;
+        u.uTint[2] = 1;
+        u.uTint[3] = 1;
+        u.uAlphaCutoff = 0.08;
+        u.uSampler = texture;
+        if (mesh.parent !== this.buildingUnit) this.buildingUnit.addChild(mesh);
+        mesh.visible = true;
+        if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+            mesh.renderable = true;
+        }
+    }
+
+    playtestWizardFrameIndex(wizard) {
+        const visualSpeed = Math.hypot(
+            Number(wizard && wizard.movementVector && wizard.movementVector.x) || 0,
+            Number(wizard && wizard.movementVector && wizard.movementVector.y) || 0
+        );
+        const rowIndex = Number.isInteger(wizard.lastDirectionRow)
+            ? ((wizard.lastDirectionRow % PLAYTEST_WIZARD_SHEET_ROWS) + PLAYTEST_WIZARD_SHEET_ROWS) % PLAYTEST_WIZARD_SHEET_ROWS
+            : 0;
+        let frameIndex = rowIndex * PLAYTEST_WIZARD_SHEET_COLS;
+        if (wizard.isJumping) {
+            frameIndex = rowIndex * PLAYTEST_WIZARD_SHEET_COLS + 2;
+        } else if (wizard.moving === true || visualSpeed > 0.02) {
+            const speed = Number(wizard.speed);
+            const speedRatio = speed > 0 ? visualSpeed / speed : 0;
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            const animSpeed = Number.isFinite(Number(wizard.animationSpeedMultiplier))
+                ? Number(wizard.animationSpeedMultiplier)
+                : 1;
+            const simTicks = (nowMs / 1000) * 60;
+            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
+            frameIndex = rowIndex * PLAYTEST_WIZARD_SHEET_COLS + 1 + effectiveAnimFrame;
+        }
+        return frameIndex;
+    }
+
+    redrawPlaytestWizardHatGeometry() {
+        const gfx = this.playtestHatGraphics;
+        if (!gfx) throw new Error("building editor playtest wizard hat graphics are missing");
+        const hatResolution = PLAYTEST_WIZARD_HAT_RESOLUTION;
+        const brimX = 0 * hatResolution;
+        const brimY = -0.625 * hatResolution;
+        const brimWidth = 0.5 * hatResolution;
+        const brimHeight = 0.25 * hatResolution;
+        const pointX = 0 * hatResolution;
+        const pointY = -0.65 * hatResolution;
+        const pointHeight = 0.35 * hatResolution;
+        const pointWidth = brimWidth * 0.6;
+        const bandInnerHeight = brimHeight * 0.4;
+        const bandInnerWidth = pointWidth * 0.8;
+        const bandOuterWidth = pointWidth;
+        const bandOuterHeight = brimHeight / brimWidth * bandOuterWidth;
+
+        gfx.clear();
+        gfx.beginFill(PLAYTEST_WIZARD_HAT_COLOR, 1);
+        gfx.drawEllipse(brimX, brimY, brimWidth / 2, brimHeight / 2);
+        gfx.endFill();
+        gfx.beginFill(PLAYTEST_WIZARD_HAT_BAND_COLOR, 1);
+        gfx.drawEllipse(brimX, brimY, bandOuterWidth / 2, bandOuterHeight / 2);
+        gfx.endFill();
+        gfx.beginFill(PLAYTEST_WIZARD_HAT_COLOR, 1);
+        gfx.drawEllipse(brimX, brimY, bandInnerWidth / 2, bandInnerHeight / 2);
+        gfx.drawRect(brimX - bandInnerWidth / 2, brimY - bandInnerHeight, bandInnerWidth, bandInnerHeight);
+        gfx.endFill();
+        gfx.beginFill(PLAYTEST_WIZARD_HAT_COLOR, 1);
+        gfx.moveTo(pointX, pointY - pointHeight);
+        gfx.lineTo(pointX - pointWidth / 2, pointY);
+        gfx.lineTo(pointX + pointWidth / 2, pointY);
+        gfx.closePath();
+        gfx.endFill();
+    }
+
+    hidePlaytestWizardDisplay() {
+        if (this.playtestShadowGraphics) {
+            this.playtestShadowGraphics.clear();
+            this.playtestShadowGraphics.visible = false;
+        }
+        if (this.playtestHatGraphics) {
+            this.playtestHatGraphics.clear();
+            this.playtestHatGraphics.visible = false;
+        }
+        if (this.playtestWizardSprite) {
+            this.playtestWizardSprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(this.playtestWizardSprite, "renderable")) {
+                this.playtestWizardSprite.renderable = false;
+            }
+        }
+        if (this.playtestWizardDepthMesh) {
+            this.playtestWizardDepthMesh.visible = false;
+            if (Object.prototype.hasOwnProperty.call(this.playtestWizardDepthMesh, "renderable")) {
+                this.playtestWizardDepthMesh.renderable = false;
+            }
+        }
+    }
+
+    drawPlaytestWizard() {
+        const wizard = this.state && this.state.playtestWizard ? this.state.playtestWizard : null;
+        if (!wizard || wizard.active !== true) {
+            this.hidePlaytestWizardDisplay();
+            return;
+        }
+        const x = Number(wizard.x);
+        const y = Number(wizard.y);
+        const z = Number(wizard.z);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            throw new Error("building editor playtest wizard requires finite x/y/z");
+        }
+        const radius = Number.isFinite(Number(wizard.radius)) ? Math.max(0.05, Number(wizard.radius)) : 0.3;
+        const zoom = Number(this.state.camera.zoom);
+        if (!(zoom > 0)) throw new Error("building editor playtest wizard requires positive camera zoom");
+        const center = this.worldToScreen({ x, y }, z);
+        const shadowCenter = this.worldToScreen({ x, y }, z + PLAYTEST_WIZARD_SHADOW_RENDER_Z_OFFSET_UNITS);
+        const px = Math.max(5, radius * zoom);
+        const py = Math.max(3, px * 0.45);
+
+        const shadow = this.playtestShadowGraphics;
+        if (!shadow) throw new Error("building editor playtest wizard shadow graphics are missing");
+        shadow.visible = true;
+        shadow.clear();
+        shadow.lineStyle(0, 0x000000, 0);
+        shadow.beginFill(0x000000, 0.22);
+        shadow.drawEllipse(shadowCenter.x, shadowCenter.y + py * 0.35, px * 0.95, py * 0.55);
+        shadow.endFill();
+
+        const frames = this.ensurePlaytestWizardFrames();
+        if (!frames) {
+            if (this.playtestWizardSprite) this.playtestWizardSprite.visible = false;
+            if (this.playtestWizardDepthMesh) this.playtestWizardDepthMesh.visible = false;
+            return;
+        }
+        const frameIndex = this.playtestWizardFrameIndex(wizard);
+        const texture = frames[frameIndex];
+        if (!texture) throw new Error(`building editor playtest wizard missing frame ${frameIndex}`);
+        const sprite = this.ensurePlaytestWizardSprite(texture);
+        sprite.x = center.x;
+        sprite.y = center.y - zoom * 0.25;
+        sprite.width = zoom;
+        sprite.height = zoom;
+        sprite.rotation = 0;
+        sprite.alpha = 1;
+        sprite.visible = false;
+        if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+            sprite.renderable = false;
+        }
+        const depthMesh = this.ensurePlaytestWizardDepthMesh();
+        this.updatePlaytestWizardDepthMesh(depthMesh, texture, wizard, sprite);
+
+        this.redrawPlaytestWizardHatGeometry();
+        const hat = this.playtestHatGraphics;
+        hat.visible = true;
+        hat.x = center.x;
+        hat.y = sprite.y - (PLAYTEST_WIZARD_HAT_RENDER_Y_OFFSET_UNITS * zoom * GAME_XY_RATIO);
+        if (!hat.scale || typeof hat.scale.set !== "function") {
+            throw new Error("building editor playtest wizard hat requires a Pixi scale");
+        }
+        const hatScale = (zoom / PLAYTEST_WIZARD_HAT_RESOLUTION) * PLAYTEST_WIZARD_HAT_RENDER_SCALE;
+        hat.scale.set(hatScale, hatScale);
+    }
+
     // ── Beam and Column rendering ────────────────────────────────────────────
 
     drawStairRecord(gfx, stair, preview = false) {
@@ -6463,6 +7543,10 @@ export class BuildingRenderer {
     }
 
     drawStairPreviewRecord(gfx, stair) {
+        const sourceTreadCount = Array.isArray(stair && stair.treads) ? stair.treads.length : 0;
+        const finishHoverIndex = stair && stair.finishTreadHover === true && sourceTreadCount >= 2
+            ? sourceTreadCount - 1
+            : -1;
         const treads = Array.isArray(stair && stair.treads) ? [...stair.treads] : [];
         if (stair && stair.pendingTread) treads.push(stair.pendingTread);
         if (!treads.length) return;
@@ -6501,9 +7585,25 @@ export class BuildingRenderer {
         treads.forEach((tread, index) => {
             const leftScreen = this.worldToScreen(tread.left, baseZ);
             const rightScreen = this.worldToScreen(tread.right, baseZ);
-            gfx.lineStyle(index === 0 ? 3 : 2, 0x9fe4d5, index === treads.length - 1 ? 0.95 : 0.72);
-            gfx.moveTo(leftScreen.x, leftScreen.y);
-            gfx.lineTo(rightScreen.x, rightScreen.y);
+            const finishHover = index === finishHoverIndex;
+            if (finishHover) {
+                gfx.lineStyle(4, 0xff4f4f, 1);
+                gfx.moveTo(leftScreen.x, leftScreen.y);
+                gfx.lineTo(rightScreen.x, rightScreen.y);
+                return;
+            }
+            const dx = Number(rightScreen.x) - Number(leftScreen.x);
+            const dy = Number(rightScreen.y) - Number(leftScreen.y);
+            const length = Math.hypot(dx, dy);
+            const offsetX = length > GEOMETRY_EPSILON ? -dy / length : 0;
+            const offsetY = length > GEOMETRY_EPSILON ? dx / length : 0;
+            const alpha = index === treads.length - 1 ? 0.95 : 0.78;
+            gfx.lineStyle(index === 0 ? 3 : 2, 0x05070a, alpha);
+            gfx.moveTo(leftScreen.x - offsetX, leftScreen.y - offsetY);
+            gfx.lineTo(rightScreen.x - offsetX, rightScreen.y - offsetY);
+            gfx.lineStyle(index === 0 ? 3 : 2, 0xffffff, alpha);
+            gfx.moveTo(leftScreen.x + offsetX, leftScreen.y + offsetY);
+            gfx.lineTo(rightScreen.x + offsetX, rightScreen.y + offsetY);
         });
     }
 
@@ -6562,6 +7662,8 @@ export class BuildingRenderer {
     drawStairs() {
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        const exterior = this.state.renderStyle() === "exterior";
+        const floorAlphaById = this.renderedFloorAlphaMap(floors, exterior);
         const liveStairMeshIds = new Set();
         getBuildingFloors(this.state.building).forEach((ownerFloor) => {
             getFloorStairs(ownerFloor).forEach((stair) => {
@@ -6570,7 +7672,16 @@ export class BuildingRenderer {
                     floors.some((floor) => getFloorId(floor) !== ownerFloorId && this.stairOpeningIntersectsFloor(stair, floor));
                 if (!visibleThroughRenderedFloor) return;
                 const key = stairMeshKey(ownerFloor, stair);
-                const mesh = this.syncStairMesh(ownerFloor, stair, 1);
+                const stairAlphas = [];
+                if (floorIds.has(ownerFloorId)) stairAlphas.push(floorAlphaById.get(ownerFloorId) ?? 1);
+                floors
+                    .filter((floor) => getFloorId(floor) !== ownerFloorId && this.stairOpeningIntersectsFloor(stair, floor))
+                    .forEach((floor) => stairAlphas.push(floorAlphaById.get(getFloorId(floor)) ?? 1));
+                if (stairAlphas.length === 0) {
+                    throw new Error(`visible stair ${stair.id} has no resolved floor alpha`);
+                }
+                const stairAlpha = Math.max(...stairAlphas);
+                const mesh = this.syncStairMesh(ownerFloor, stair, stairAlpha);
                 if (mesh) this.lastStairPickEntries.push({ stair, floor: ownerFloor, mesh });
                 liveStairMeshIds.add(key);
             });
@@ -6668,8 +7779,12 @@ export class BuildingRenderer {
         const gfx = this.wallLayer;
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        const exterior = this.state.renderStyle() === "exterior";
+        const floorAlphaById = this.renderedFloorAlphaMap(floors, exterior);
         getBuildingFloors(this.state.building).forEach((floor) => {
-            if (!floorIds.has(getFloorId(floor))) return;
+            const floorId = getFloorId(floor);
+            if (!floorIds.has(floorId)) return;
+            const floorAlpha = floorAlphaById.get(floorId) ?? 1;
             getFloorBeams(floor).forEach((beam) => {
                 const verts = this._beamBoxVertices(beam, floor);
                 if (!verts) return;
@@ -6678,8 +7793,8 @@ export class BuildingRenderer {
                 const outlineColor = selected ? 0xfff0b8 : 0x111820;
                 const bVerts = verts.map((v) => this.worldToScreen(v, v.zB));
                 const tVerts = verts.map((v) => this.worldToScreen(v, v.zT));
-                gfx.lineStyle(selected ? 2 : 1, outlineColor, selected ? 0.95 : 0.5);
-                gfx.beginFill(color, selected ? 0.72 : 0.52);
+                gfx.lineStyle(selected ? 2 : 1, outlineColor, (selected ? 0.95 : 0.5) * floorAlpha);
+                gfx.beginFill(color, (selected ? 0.72 : 0.52) * floorAlpha);
                 [[bVerts[0], bVerts[1], bVerts[2], bVerts[3]],
                  [tVerts[0], tVerts[1], tVerts[2], tVerts[3]],
                  [bVerts[0], bVerts[1], tVerts[1], tVerts[0]],
@@ -6700,8 +7815,12 @@ export class BuildingRenderer {
         const gfx = this.wallLayer;
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((f) => getFloorId(f)));
+        const exterior = this.state.renderStyle() === "exterior";
+        const floorAlphaById = this.renderedFloorAlphaMap(floors, exterior);
         getBuildingFloors(this.state.building).forEach((floor) => {
-            if (!floorIds.has(getFloorId(floor))) return;
+            const floorId = getFloorId(floor);
+            if (!floorIds.has(floorId)) return;
+            const floorAlpha = floorAlphaById.get(floorId) ?? 1;
             getFloorColumns(floor).forEach((column) => {
                 const verts = columnVertices(column);
                 if (!verts || verts.length < 3) return;
@@ -6713,8 +7832,8 @@ export class BuildingRenderer {
                 const bScreen = verts.map((v) => this.worldToScreen(v, bz));
                 const tScreen = verts.map((v) => this.worldToScreen(v, tz));
                 const n = verts.length;
-                gfx.lineStyle(selected ? 2 : 1, outlineColor, selected ? 0.95 : 0.5);
-                gfx.beginFill(color, selected ? 0.72 : 0.52);
+                gfx.lineStyle(selected ? 2 : 1, outlineColor, (selected ? 0.95 : 0.5) * floorAlpha);
+                gfx.beginFill(color, (selected ? 0.72 : 0.52) * floorAlpha);
                 gfx.moveTo(bScreen[0].x, bScreen[0].y);
                 for (let i = 1; i < n; i++) gfx.lineTo(bScreen[i].x, bScreen[i].y);
                 gfx.closePath();

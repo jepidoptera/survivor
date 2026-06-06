@@ -284,6 +284,25 @@ input[type="range"] {
     outline: none;
 }
 
+.playtestFpsCounter {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    min-width: 56px;
+    padding: 3px 7px;
+    border: 1px solid rgba(159, 228, 213, 0.55);
+    border-radius: 4px;
+    background: rgba(10, 18, 24, 0.72);
+    color: #dff8f2;
+    font-size: 12px;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    pointer-events: none;
+    user-select: none;
+}
+
 .stageFrame {
     display: grid;
     grid-template-columns: 108px minmax(0, 1fr);
@@ -319,6 +338,74 @@ input[type="range"] {
     object-fit: contain;
 }
 
+.structureToolIcon {
+    display: grid;
+    place-items: center;
+    width: 55px;
+    height: 55px;
+    pointer-events: none;
+}
+
+.structureToolIcon > * {
+    pointer-events: none;
+}
+
+.structureToolMenu {
+    position: fixed;
+    z-index: 35;
+    display: flex;
+    gap: 6px;
+    padding: 7px;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #101820;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36);
+}
+
+.structureToolMenuButton {
+    width: 54px;
+    min-width: 54px;
+    min-height: 54px;
+    padding: 5px;
+}
+
+.structureToolMenuButton[data-active="true"] {
+    border-color: #ffd27a;
+    background: #3c3323;
+}
+
+.structureToolMenuButton .wallToolIcon,
+.structureToolMenuButton .beamToolIcon,
+.structureToolMenuButton .columnToolIcon {
+    width: 40px;
+    height: 40px;
+}
+
+.structureToolMenuButton .beamToolIcon::after {
+    width: 36px;
+    height: 10px;
+}
+
+.structureToolMenuButton .columnToolIcon::after {
+    width: 14px;
+    height: 34px;
+}
+
+.playtestToolButton[data-active="true"] {
+    border-color: #9fe4d5;
+    background: #233b3c;
+}
+
+.playtestTopButton {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: auto;
+    box-shadow: -8px 0 12px #192730;
+}
+
 .wallToolIcon {
     display: block;
     width: 55px;
@@ -337,43 +424,70 @@ input[type="range"] {
     --roof-tool-texture: url("/assets/images/roofs/slate.png");
     position: relative;
     display: block;
-    width: 59px;
-    height: 48px;
+    width: 62px;
+    height: 52px;
+}
+
+.roofToolIcon::before,
+.roofToolIcon::after {
+    content: "";
+    position: absolute;
+    z-index: 4;
+    height: 2px;
+    background: #f4f2e8;
+    box-shadow: 0 1px 0 #111820;
+    transform-origin: left center;
+}
+
+.roofToolIcon::before {
+    left: 45px;
+    top: 2px;
+    width: 24px;
+    transform: rotate(57deg);
+}
+
+.roofToolIcon::after {
+    left: 31px;
+    top: 50px;
+    width: 39px;
+    transform: rotate(-47deg);
 }
 
 .roofToolFace {
     position: absolute;
-    bottom: 6px;
-    height: 31px;
-    border: 2px solid #d8e0d8;
-    box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.34);
+    inset: 0;
 }
 
 .roofToolFaceTextured {
-    left: 6px;
-    width: 32px;
+    z-index: 1;
     background-image: var(--roof-tool-texture);
     background-position: center;
     background-size: cover;
-    clip-path: polygon(0 100%, 100% 100%, 91% 0, 29% 0);
+    clip-path: polygon(18px 30px, 45px 2px, 58px 22px, 31px 50px);
+    filter: drop-shadow(0 0 0 #f4f2e8);
 }
 
 .roofToolFaceShade {
-    right: 5px;
-    width: 24px;
-    background: linear-gradient(135deg, #3f4b50, #172127);
-    clip-path: polygon(0 0, 84% 23%, 100% 100%, 0 100%);
+    z-index: 2;
+    background: #697278;
+    clip-path: polygon(18px 30px, 5px 50px, 31px 50px);
+    filter:
+        drop-shadow(1px 0 0 #d8e0d8)
+        drop-shadow(-1px 0 0 #d8e0d8)
+        drop-shadow(0 -1px 0 #d8e0d8)
+        drop-shadow(0 1px 0 #111820);
 }
 
 .roofToolRidge {
     position: absolute;
-    left: 22px;
-    top: 7px;
-    width: 27px;
+    left: 18px;
+    top: 30px;
+    z-index: 4;
+    width: 39px;
     height: 2px;
     background: #f4f2e8;
     box-shadow: 0 1px 0 #111820;
-    transform: rotate(18deg);
+    transform: rotate(-47deg);
     transform-origin: left center;
 }
 
@@ -615,11 +729,14 @@ input[type="range"] {
     min-width: 0;
     overflow: hidden;
     color: #f4f2e8;
-    cursor: text;
     font-size: 12px;
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.layerCard[data-selected="true"] .layerName {
+    cursor: text;
 }
 
 .layerNameInput {

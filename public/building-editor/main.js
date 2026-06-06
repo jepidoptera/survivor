@@ -10,7 +10,9 @@ import { BeamTool } from "./tools/BeamTool.js";
 import { ColumnTool } from "./tools/ColumnTool.js";
 import { RoofTool } from "./tools/RoofTool.js";
 import { StairTool } from "./tools/StairTool.js";
-import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, wallCenterlinePoints } from "./BuildingModel.js";
+import { DEFAULTS, findFloor, getBuildingBeams, getBuildingColumns, getBuildingMountedObjects, getBuildingFloors, getBuildingWalls, getFloorElevation, getFloorId, getFloorRoof, getFloorStairs, wallCenterlinePoints } from "./BuildingModel.js";
+import { pointInPolygon, polygonArea, polygonCentroid } from "./BuildingGeometry.js";
+import { buildPlaytestStairFloorBlockers, playtestColumnBlockingSegmentsForFloor } from "./PlaytestRuntime.js";
 
 const PAINT_TEXTURES = {
     floor: [DEFAULTS.floorTexture],
@@ -25,6 +27,7 @@ const layerPanel = document.querySelector("#layerPanel");
 const texturePalette = document.querySelector("#texturePalette");
 const mountTexturePalette = document.querySelector("#mountTexturePalette");
 const windowContextMenu = document.querySelector("#windowContextMenu");
+const layerContextMenu = document.querySelector("#layerContextMenu");
 const floorElevation = document.querySelector("#floorElevation");
 const polygonElevation = document.querySelector("#polygonElevation");
 const polygonFinalize = document.querySelector("#polygonFinalize");
@@ -68,15 +71,18 @@ const paintToolButton = document.querySelector('[data-tool="paint"]');
 const stairTextureButtons = [...document.querySelectorAll("[data-stair-texture-part]")];
 const roofToolButton = document.querySelector(".roofToolButton");
 const roofToolIcon = document.querySelector("#roofToolIcon");
-const wallToolButton = document.querySelector(".wallToolButton");
+const structureToolButton = document.querySelector("#structureToolButton");
+const structureToolIcon = document.querySelector("#structureToolIcon");
+const structureToolMenu = document.querySelector("#structureToolMenu");
+const structureToolMenuButtons = [...document.querySelectorAll("[data-structure-tool]")];
 const wallToolIcon = document.querySelector("#wallToolIcon");
-const beamToolButton = document.querySelector(".beamToolButton");
 const beamToolIcon = document.querySelector("#beamToolIcon");
-const columnToolButton = document.querySelector(".columnToolButton");
 const columnToolIcon = document.querySelector("#columnToolIcon");
 const stairToolButton = document.querySelector(".stairToolButton");
 const stairToolIcon = document.querySelector("#stairToolIcon");
 const mountToolButtons = [...document.querySelectorAll("[data-mount-category]")];
+const playtestToggle = document.querySelector("#playtestToggle");
+const playtestFpsCounter = document.querySelector("#playtestFpsCounter");
 const buildingOpenDialog = document.querySelector("#buildingOpenDialog");
 const buildingOpenMessage = document.querySelector("#buildingOpenMessage");
 const buildingSaveList = document.querySelector("#buildingSaveList");
@@ -125,6 +131,7 @@ app.stage.interactive = true;
 const state = new BuildingEditorState();
 let currentBuildingName = "";
 let buildingOpenDialogCanClose = false;
+state.playtestWizard = null;
 window.__buildingEditorDebugState = state;
 window.repairBuildingEditorBrowserSave = (options = {}) => {
     try {
@@ -171,6 +178,7 @@ let rotatePointerX = null;
 let lastZTapTime = 0;
 let lastStagePointer = null;
 let layerPanelSignature = "";
+let layerContextFloorId = "";
 let texturePaletteSignature = "";
 let wallToolTexturePaletteOpen = false;
 let columnToolTexturePaletteOpen = false;
@@ -180,6 +188,27 @@ let mountTexturePaletteSignature = "";
 let mountTexturePaletteOpen = false;
 let windowContext = null;
 let layerDrag = null;
+let activeStructureTool = "wall";
+let structureToolPressTimer = null;
+let structureToolLongPressOpened = false;
+let playtestAnimationFrame = null;
+let playtestLastTimeMs = 0;
+let playtestMouseWorld = null;
+let playtestRuntime = null;
+let playtestPreviousFocus = null;
+let playtestFpsAverage = 0;
+let playtestFpsLastDisplayMs = 0;
+let playtestForwardPressed = false;
+let playtestFocusedFloorId = "";
+
+const PLAYTEST_WIZARD_RADIUS = 0.3;
+const PLAYTEST_WIZARD_SPEED = 4.5;
+const PLAYTEST_WIZARD_ANIMATION_SPEED_MULTIPLIER = 2 / 3;
+const PLAYTEST_WIZARD_DIRECTION_ROW_OFFSET = 0;
+const PLAYTEST_FPS_DISPLAY_INTERVAL_MS = 250;
+const PLAYTEST_COLLISION_EPSILON = 0.000001;
+const PLAYTEST_LEVEL_FADE_SECONDS = 0.5;
+const PLAYTEST_UPPER_FLOOR_TRANSITION_DISTANCE = 1;
 
 const MOUNTED_OBJECT_ASSETS = {
     doors: [],
@@ -204,6 +233,8 @@ function resizeStage() {
     positionTexturePalette();
     positionMountTexturePalette();
     closeWindowContextMenu();
+    closeLayerContextMenu();
+    closeStructureToolMenu();
 }
 
 function setStatus(message, isError = false) {
@@ -227,6 +258,1000 @@ async function withAsyncErrorBoundary(fn) {
         console.error(error);
         setStatus(error.message, true);
     }
+}
+
+function requireEditorStairTraversal() {
+    const traversal = globalThis.StairTraversal;
+    if (!traversal || typeof traversal.createTreadPathFrame !== "function") {
+        throw new Error("building editor playtest requires StairTraversal tread path support");
+    }
+    return traversal;
+}
+
+function floorContainsWorldPoint(floor, point) {
+    if (!floor || !point || !Array.isArray(floor.outerPolygon) || floor.outerPolygon.length < 3) return false;
+    if (!pointInPolygon(point, floor.outerPolygon)) return false;
+    const holes = Array.isArray(floor.holes) ? floor.holes : [];
+    return !holes.some((hole) => Array.isArray(hole) && hole.length >= 3 && pointInPolygon(point, hole));
+}
+
+function findPlaytestFloorAtElevation(elevation, point = null) {
+    const targetZ = Number(elevation);
+    if (!Number.isFinite(targetZ)) throw new Error("playtest floor lookup requires a finite elevation");
+    const floors = getBuildingFloors(state.building)
+        .filter((floor) => Math.abs(getFloorElevation(floor) - targetZ) <= 0.000001);
+    if (point) {
+        const containing = floors.find((floor) => floorContainsWorldPoint(floor, point));
+        if (containing) return containing;
+    }
+    return floors[0] || null;
+}
+
+function playtestFloorSupportAt(point, preferredFloorId = "") {
+    if (preferredFloorId) {
+        const preferred = findFloor(state.building, preferredFloorId);
+        if (preferred && floorContainsWorldPoint(preferred, point)) {
+            return { floor: preferred, floorId: getFloorId(preferred), z: getFloorElevation(preferred) };
+        }
+    }
+    const containing = getBuildingFloors(state.building)
+        .filter((floor) => floorContainsWorldPoint(floor, point))
+        .sort((a, b) => getFloorElevation(b) - getFloorElevation(a))[0] || null;
+    return containing
+        ? { floor: containing, floorId: getFloorId(containing), z: getFloorElevation(containing) }
+        : null;
+}
+
+function buildPlaytestRuntime() {
+    const traversal = requireEditorStairTraversal();
+    const stairs = [];
+    const floorBlockers = [];
+    getBuildingFloors(state.building).forEach((floor) => {
+        const floorId = getFloorId(floor);
+        getFloorStairs(floor).forEach((stair) => {
+            const stairId = `${floorId}:${stair.id}`;
+            if (!Array.isArray(stair.treads) || stair.treads.length < 2) {
+                throw new Error(`playtest stair ${stairId} requires saved tread geometry`);
+            }
+            const bottomZ = Number.isFinite(Number(stair.bottomZ)) ? Number(stair.bottomZ) : getFloorElevation(floor);
+            const height = Number(stair.height);
+            if (!Number.isFinite(height) || height <= 0) {
+                throw new Error(`playtest stair ${stairId} requires a positive height`);
+            }
+            const direction = String(stair.direction || "up").toLowerCase();
+            const topZ = direction === "down" ? bottomZ - height : bottomZ + height;
+            const lowerZ = Math.min(bottomZ, topZ);
+            const higherZ = Math.max(bottomZ, topZ);
+            const startPoint = stair.startPoint || (Array.isArray(stair.treads) && stair.treads[0] ? stair.treads[0].center : null);
+            const endPoint = stair.endPoint || (Array.isArray(stair.treads) && stair.treads.length > 0 ? stair.treads[stair.treads.length - 1].center : null);
+            if (!startPoint || !endPoint) throw new Error(`playtest stair ${stairId} requires endpoint geometry`);
+            const lowerPoint = direction === "down" ? endPoint : startPoint;
+            const higherPoint = direction === "down" ? startPoint : endPoint;
+            const orderedTreads = direction === "down" ? [...stair.treads].reverse() : [...stair.treads];
+            const lowerFloor = findPlaytestFloorAtElevation(lowerZ, lowerPoint);
+            const higherFloor = findPlaytestFloorAtElevation(higherZ, higherPoint);
+            if (!lowerFloor) throw new Error(`playtest stair ${stairId} cannot resolve a lower floor at elevation ${lowerZ}`);
+            if (!higherFloor) throw new Error(`playtest stair ${stairId} cannot resolve an upper floor at elevation ${higherZ}`);
+            const runtimeStair = {
+                id: stairId,
+                sourceStair: stair,
+                stairKind: "straight",
+                lowerPoint,
+                higherPoint,
+                lowerZ,
+                higherZ,
+                lowerFloorId: getFloorId(lowerFloor),
+                higherFloorId: getFloorId(higherFloor),
+                width: Number(stair.width),
+                stepCount: Number(stair.stepCount) || 1,
+                treads: orderedTreads
+            };
+            runtimeStair.traversalFrame = traversal.createTreadPathFrame(runtimeStair);
+            stairs.push(runtimeStair);
+            floorBlockers.push(...buildPlaytestStairFloorBlockers({
+                traversal,
+                runtimeStair,
+                height,
+                stairId,
+                upperOpeningPolygons: state.stairOpeningPolygonsForValidation(stair, higherFloor)
+            }));
+        });
+    });
+    return { stairs, floorBlockers };
+}
+
+function spawnPlaytestWizard() {
+    const floor = state.selectedFloor() || getBuildingFloors(state.building)[0];
+    if (!floor) throw new Error("playtest wizard requires at least one floor");
+    const point = polygonCentroid(floor.outerPolygon);
+    if (!floorContainsWorldPoint(floor, point)) {
+        throw new Error(`playtest wizard cannot spawn outside floor ${getFloorId(floor)}`);
+    }
+    return {
+        active: true,
+        x: point.x,
+        y: point.y,
+        z: getFloorElevation(floor),
+        radius: PLAYTEST_WIZARD_RADIUS,
+        speed: PLAYTEST_WIZARD_SPEED,
+        moving: false,
+        movementVector: { x: 0, y: 0 },
+        lastDirectionRow: 9,
+        animationSpeedMultiplier: PLAYTEST_WIZARD_ANIMATION_SPEED_MULTIPLIER,
+        isMovingBackward: false,
+        isJumping: false,
+        floorId: getFloorId(floor),
+        onStair: false,
+        stairSupport: null
+    };
+}
+
+function setPlaytestWizardFacing(wizard, direction) {
+    if (!wizard || !direction) return;
+    const rawDx = Number(direction.x);
+    const rawDy = Number(direction.y);
+    if (!(Math.hypot(rawDx, rawDy) > 0.000001)) return;
+    const cameraDirection = renderer && typeof renderer.rotateVectorForCamera === "function"
+        ? renderer.rotateVectorForCamera({ x: rawDx, y: rawDy })
+        : { x: rawDx, y: rawDy };
+    const dx = Number(cameraDirection.x);
+    const dy = Number(cameraDirection.y);
+    if (!(Math.hypot(dx, dy) > 0.000001)) return;
+    const facingDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+    const directions = [
+        { angle: 0, index: 6 },
+        { angle: 30, index: 7 },
+        { angle: 60, index: 8 },
+        { angle: 90, index: 9 },
+        { angle: 120, index: 10 },
+        { angle: 150, index: 11 },
+        { angle: 180, index: 0 },
+        { angle: -150, index: 1 },
+        { angle: -120, index: 2 },
+        { angle: -90, index: 3 },
+        { angle: -60, index: 4 },
+        { angle: -30, index: 5 }
+    ];
+    let closest = directions[0];
+    let minDiff = Infinity;
+    directions.forEach((entry) => {
+        let diff = Math.abs(facingDeg - entry.angle);
+        if (diff > 180) diff = 360 - diff;
+        if (diff < minDiff) {
+            minDiff = diff;
+            closest = entry;
+        }
+    });
+    wizard.lastDirectionRow = (closest.index + PLAYTEST_WIZARD_DIRECTION_ROW_OFFSET + 12) % 12;
+}
+
+function setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, fallbackDirection = null) {
+    if (!wizard) return;
+    const previousX = Number(previousPoint && previousPoint.x);
+    const previousY = Number(previousPoint && previousPoint.y);
+    const currentX = Number(wizard.x);
+    const currentY = Number(wizard.y);
+    const movedX = currentX - previousX;
+    const movedY = currentY - previousY;
+    const movedDistance = Math.hypot(movedX, movedY);
+    const dt = Math.max(0, Number(deltaSeconds) || 0);
+    if (movedDistance > 0.000001 && dt > 0) {
+        wizard.moving = true;
+        wizard.movementVector = { x: movedX / dt, y: movedY / dt };
+        setPlaytestWizardFacing(wizard, { x: movedX, y: movedY });
+        return;
+    }
+    wizard.moving = false;
+    wizard.movementVector = { x: 0, y: 0 };
+    if (fallbackDirection) setPlaytestWizardFacing(wizard, fallbackDirection);
+}
+
+function resetPlaytestFpsCounter() {
+    playtestFpsAverage = 0;
+    playtestFpsLastDisplayMs = 0;
+    if (playtestFpsCounter) {
+        playtestFpsCounter.textContent = "0 fps";
+        playtestFpsCounter.hidden = true;
+    }
+}
+
+function updatePlaytestFpsCounter(deltaSeconds, nowMs) {
+    if (!playtestFpsCounter) return;
+    playtestFpsCounter.hidden = false;
+    const dt = Number(deltaSeconds);
+    if (!(dt > 0)) return;
+    const instantFps = 1 / dt;
+    playtestFpsAverage = playtestFpsAverage > 0
+        ? playtestFpsAverage * 0.88 + instantFps * 0.12
+        : instantFps;
+    if (nowMs - playtestFpsLastDisplayMs >= PLAYTEST_FPS_DISPLAY_INTERVAL_MS) {
+        playtestFpsLastDisplayMs = nowMs;
+        playtestFpsCounter.textContent = `${Math.max(0, Math.round(playtestFpsAverage))} fps`;
+    }
+}
+
+function playtestStairSupport(runtimeStair, local, pointOverride = null) {
+    const traversal = requireEditorStairTraversal();
+    const support = traversal.supportFromPathLocal(runtimeStair, runtimeStair.traversalFrame, local);
+    if (pointOverride) {
+        support.point = { x: Number(pointOverride.x), y: Number(pointOverride.y) };
+    }
+    return support;
+}
+
+function applyPlaytestStairSupport(wizard, support) {
+    const previousStairSupport = wizard.stairSupport
+        ? {
+            stairId: wizard.stairSupport.stairId,
+            upDown: wizard.stairSupport.upDown,
+            leftRight: wizard.stairSupport.leftRight
+        }
+        : null;
+    wizard.x = support.point.x;
+    wizard.y = support.point.y;
+    wizard.z = support.baseZ;
+    wizard.floorId = support.upDown >= 1 ? support.stair.higherFloorId : support.stair.lowerFloorId;
+    wizard.onStair = true;
+    wizard.stairSupport = {
+        stairId: support.stairId,
+        upDown: support.upDown,
+        leftRight: support.leftRight
+    };
+    updatePlaytestStairFloorFocus(support, previousStairSupport);
+}
+
+function applyPlaytestFloorSupport(wizard, support, point) {
+    wizard.x = point.x;
+    wizard.y = point.y;
+    wizard.z = support.z;
+    wizard.floorId = support.floorId;
+    wizard.onStair = false;
+    wizard.stairSupport = null;
+    focusPlaytestFloorAfterFloorSupport(support.floorId);
+}
+
+function connectedStairEndpointForFloor(stair, floorId) {
+    if (stair.lowerFloorId === floorId) return "lower";
+    if (stair.higherFloorId === floorId) return "higher";
+    return "";
+}
+
+function playtestFloorMovementBlockedAt(point, floorId) {
+    if (!playtestRuntime || !Array.isArray(playtestRuntime.floorBlockers)) return false;
+    return playtestRuntime.floorBlockers.some((blocker) => (
+        String(blocker.floorId) === String(floorId) &&
+        Array.isArray(blocker.polygon) &&
+        blocker.polygon.length >= 3 &&
+        pointInPolygon(point, blocker.polygon)
+    ));
+}
+
+function playtestClosestPointOnSegment(point, a, b) {
+    const ax = Number(a && a.x);
+    const ay = Number(a && a.y);
+    const bx = Number(b && b.x);
+    const by = Number(b && b.y);
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    if (![ax, ay, bx, by, px, py].every(Number.isFinite)) {
+        throw new Error("playtest collision segment requires finite points");
+    }
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared > PLAYTEST_COLLISION_EPSILON
+        ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared))
+        : 0;
+    const x = ax + dx * t;
+    const y = ay + dy * t;
+    const distance = Math.hypot(px - x, py - y);
+    return { x, y, t, distance, distanceSquared: distance * distance };
+}
+
+function playtestClosestPolygonEdge(point, polygon) {
+    if (!Array.isArray(polygon) || polygon.length < 3) return null;
+    let best = null;
+    for (let index = 0; index < polygon.length; index++) {
+        const a = polygon[index];
+        const b = polygon[(index + 1) % polygon.length];
+        const closest = playtestClosestPointOnSegment(point, a, b);
+        if (!best || closest.distanceSquared < best.distanceSquared) {
+            best = { ...closest, a, b, index };
+        }
+    }
+    return best;
+}
+
+function playtestNormalizeVector(vector) {
+    const x = Number(vector && vector.x);
+    const y = Number(vector && vector.y);
+    const length = Math.hypot(x, y);
+    if (!(length > PLAYTEST_COLLISION_EPSILON)) return null;
+    return { x: x / length, y: y / length };
+}
+
+function playtestNormalFacingMovement(normal, movement) {
+    const unit = playtestNormalizeVector(normal);
+    if (!unit) return null;
+    const dot = unit.x * Number(movement && movement.x) + unit.y * Number(movement && movement.y);
+    return dot >= 0 ? unit : { x: -unit.x, y: -unit.y };
+}
+
+function playtestCrossedPolygonNormal(from, movement, polygon) {
+    if (!Array.isArray(polygon) || polygon.length < 3) return null;
+    const fromX = Number(from && from.x);
+    const fromY = Number(from && from.y);
+    const dx = Number(movement && movement.x);
+    const dy = Number(movement && movement.y);
+    if (![fromX, fromY, dx, dy].every(Number.isFinite)) {
+        throw new Error("playtest polygon crossing requires finite movement");
+    }
+    if (!(Math.hypot(dx, dy) > PLAYTEST_COLLISION_EPSILON)) return null;
+    for (let index = 0; index < polygon.length; index++) {
+        const a = polygon[index];
+        const b = polygon[(index + 1) % polygon.length];
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        const ex = bx - ax;
+        const ey = by - ay;
+        const den = dx * ey - dy * ex;
+        if (Math.abs(den) < 1e-12) continue;
+        const t = ((ax - fromX) * ey - (ay - fromY) * ex) / den;
+        const u = ((ax - fromX) * dy - (ay - fromY) * dx) / den;
+        if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) continue;
+        const edgeLength = Math.hypot(ex, ey);
+        if (!(edgeLength > PLAYTEST_COLLISION_EPSILON)) continue;
+        return playtestNormalFacingMovement({ x: -ey / edgeLength, y: ex / edgeLength }, movement);
+    }
+    return null;
+}
+
+function playtestFallbackPolygonNormal(point, polygon, movement) {
+    const edge = playtestClosestPolygonEdge(point, polygon);
+    if (!edge) return null;
+    const dx = Number(edge.b.x) - Number(edge.a.x);
+    const dy = Number(edge.b.y) - Number(edge.a.y);
+    const length = Math.hypot(dx, dy);
+    if (!(length > PLAYTEST_COLLISION_EPSILON)) return null;
+    const areaSign = polygonArea(polygon) >= 0 ? 1 : -1;
+    const outward = areaSign >= 0
+        ? { x: dy / length, y: -dx / length }
+        : { x: -dy / length, y: dx / length };
+    const awayFromEdge = playtestNormalizeVector({
+        x: Number(point.x) - edge.x,
+        y: Number(point.y) - edge.y
+    });
+    return playtestNormalFacingMovement(awayFromEdge || outward, movement);
+}
+
+function playtestBlockingPolygonContact(point, floorId, previousPoint, movement) {
+    if (!playtestRuntime || !Array.isArray(playtestRuntime.floorBlockers)) return null;
+    const blocker = playtestRuntime.floorBlockers.find((entry) => (
+        String(entry.floorId) === String(floorId) &&
+        Array.isArray(entry.polygon) &&
+        entry.polygon.length >= 3 &&
+        pointInPolygon(point, entry.polygon)
+    ));
+    if (!blocker) return null;
+    const normal = playtestCrossedPolygonNormal(previousPoint, movement, blocker.polygon) ||
+        playtestFallbackPolygonNormal(point, blocker.polygon, movement);
+    return normal ? { normal, kind: "stairBlocker", blocker } : null;
+}
+
+function playtestFloorBoundaryContact(point, floorId, previousPoint, movement) {
+    const floor = findFloor(state.building, floorId);
+    if (!floor) throw new Error(`playtest movement references missing level ${floorId}`);
+    const outer = Array.isArray(floor.outerPolygon) ? floor.outerPolygon : [];
+    if (outer.length < 3) throw new Error(`playtest movement level ${floorId} has no valid outer polygon`);
+    let polygon = null;
+    if (!pointInPolygon(point, outer)) {
+        polygon = outer;
+    } else {
+        const holes = Array.isArray(floor.holes) ? floor.holes : [];
+        polygon = holes.find((hole) => Array.isArray(hole) && hole.length >= 3 && pointInPolygon(point, hole)) || null;
+    }
+    if (!polygon) return null;
+    const normal = playtestCrossedPolygonNormal(previousPoint, movement, polygon) ||
+        playtestFallbackPolygonNormal(point, polygon, movement);
+    return normal ? { normal, kind: "floorBoundary", polygon } : null;
+}
+
+function playtestWallCollisionAt(point, floorId, radius, movement = null) {
+    const floor = findFloor(state.building, floorId);
+    if (!floor) throw new Error(`playtest wall collision references missing level ${floorId}`);
+    const hitRadius = Math.max(0, Number(radius) || 0);
+    const blockingSegments = [];
+    let best = null;
+    getBuildingWalls(state.building).forEach((wall) => {
+        if (String(wall && (wall.fragmentId || wall.floorId)) !== String(floorId)) return;
+        const points = wallCenterlinePoints(state.building, wall, floor);
+        if (!Array.isArray(points) || points.length < 2) return;
+        const thickness = Number.isFinite(Number(wall.thickness))
+            ? Math.max(0, Number(wall.thickness))
+            : DEFAULTS.wallThickness;
+        blockingSegments.push({
+            kind: "wall",
+            wall,
+            points: [points[0], points[points.length - 1]],
+            threshold: hitRadius + thickness * 0.5
+        });
+    });
+    playtestColumnBlockingSegmentsForFloor(getBuildingColumns(state.building), floorId).forEach((segment) => {
+        blockingSegments.push({
+            ...segment,
+            threshold: hitRadius
+        });
+    });
+    blockingSegments.forEach((segment) => {
+        if (!Array.isArray(segment.points) || segment.points.length < 2) {
+            throw new Error(`playtest ${segment.kind || "solid"} blocking segment requires two points`);
+        }
+        const threshold = Math.max(0, Number(segment.threshold) || 0);
+        const closest = playtestClosestPointOnSegment(point, segment.points[0], segment.points[1]);
+        if (closest.distance >= threshold - PLAYTEST_COLLISION_EPSILON) return;
+        if (!best || closest.distanceSquared < best.closest.distanceSquared) {
+            best = { ...segment, threshold, closest };
+        }
+    });
+    if (!best) return null;
+    const movementVector = movement && Math.hypot(Number(movement.x), Number(movement.y)) > PLAYTEST_COLLISION_EPSILON
+        ? movement
+        : { x: Number(point.x) - best.closest.x, y: Number(point.y) - best.closest.y };
+    let normal = playtestNormalizeVector({ x: best.closest.x - Number(point.x), y: best.closest.y - Number(point.y) });
+    if (!normal) {
+        normal = playtestNormalizeVector(movementVector);
+    }
+    if (!normal) {
+        const a = best.points[0];
+        const b = best.points[1];
+        normal = playtestNormalizeVector({
+            x: -(Number(b.y) - Number(a.y)),
+            y: Number(b.x) - Number(a.x)
+        });
+    }
+    normal = playtestNormalFacingMovement(normal, movementVector);
+    return normal ? {
+        normal,
+        kind: best.kind || "wall",
+        wall: best.wall,
+        column: best.column,
+        floorId: String(floorId),
+        distanceSquared: best.closest.distanceSquared
+    } : null;
+}
+
+function playtestFloorMovementAllowedAt(point, floorId, radius) {
+    const floorSupport = playtestFloorSupportAt(point, floorId);
+    if (!floorSupport || String(floorSupport.floorId) !== String(floorId)) return false;
+    if (playtestFloorMovementBlockedAt(point, floorId)) return false;
+    return !playtestWallCollisionAt(point, floorId, radius);
+}
+
+function playtestFloorMovementContact(previousPoint, candidate, floorId, radius, movement) {
+    return playtestWallCollisionAt(candidate, floorId, radius, movement) ||
+        playtestBlockingPolygonContact(candidate, floorId, previousPoint, movement) ||
+        playtestFloorBoundaryContact(candidate, floorId, previousPoint, movement);
+}
+
+function playtestSlideMovement(movement, contact) {
+    const normal = contact && contact.normal ? contact.normal : null;
+    const unit = playtestNormalizeVector(normal);
+    if (!unit) return { x: 0, y: 0 };
+    const dot = Number(movement.x) * unit.x + Number(movement.y) * unit.y;
+    if (!(dot > PLAYTEST_COLLISION_EPSILON)) return { x: Number(movement.x), y: Number(movement.y) };
+    return {
+        x: Number(movement.x) - unit.x * dot,
+        y: Number(movement.y) - unit.y * dot
+    };
+}
+
+function resolvePlaytestFloorMovement(wizard, candidate) {
+    const previousPoint = { x: Number(wizard.x), y: Number(wizard.y) };
+    const floorId = wizard.floorId;
+    const radius = Number.isFinite(Number(wizard.radius)) ? Math.max(0, Number(wizard.radius)) : PLAYTEST_WIZARD_RADIUS;
+    if (playtestFloorMovementAllowedAt(candidate, floorId, radius)) return candidate;
+    const requested = {
+        x: Number(candidate.x) - previousPoint.x,
+        y: Number(candidate.y) - previousPoint.y
+    };
+    if (!(Math.hypot(requested.x, requested.y) > PLAYTEST_COLLISION_EPSILON)) return previousPoint;
+    const firstContact = playtestFloorMovementContact(previousPoint, candidate, floorId, radius, requested);
+    if (!firstContact) return previousPoint;
+    const firstSlide = playtestSlideMovement(requested, firstContact);
+    if (!(Math.hypot(firstSlide.x, firstSlide.y) > PLAYTEST_COLLISION_EPSILON)) return previousPoint;
+    const firstCandidate = {
+        x: previousPoint.x + firstSlide.x,
+        y: previousPoint.y + firstSlide.y
+    };
+    if (playtestFloorMovementAllowedAt(firstCandidate, floorId, radius)) return firstCandidate;
+    const secondContact = playtestFloorMovementContact(previousPoint, firstCandidate, floorId, radius, firstSlide);
+    if (!secondContact) return previousPoint;
+    const secondSlide = playtestSlideMovement(firstSlide, secondContact);
+    if (!(Math.hypot(secondSlide.x, secondSlide.y) > PLAYTEST_COLLISION_EPSILON)) return previousPoint;
+    const secondCandidate = {
+        x: previousPoint.x + secondSlide.x,
+        y: previousPoint.y + secondSlide.y
+    };
+    return playtestFloorMovementAllowedAt(secondCandidate, floorId, radius) ? secondCandidate : previousPoint;
+}
+
+function playtestStairSideLimits(traversal, frame, upDown, radius) {
+    const left = traversal.pointFromPathLocal(frame, upDown, 0);
+    const right = traversal.pointFromPathLocal(frame, upDown, 1);
+    const crosslineLength = Math.hypot(Number(right.x) - Number(left.x), Number(right.y) - Number(left.y));
+    if (!(crosslineLength > PLAYTEST_COLLISION_EPSILON)) {
+        throw new Error(`playtest stair ${frame && frame.stairId ? frame.stairId : "(unknown)"} has a degenerate crossline`);
+    }
+    const inset = Math.max(0, Number(radius) || 0) / crosslineLength;
+    return {
+        min: inset,
+        max: 1 - inset
+    };
+}
+
+function playtestClampStairLocalSide(traversal, frame, local, radius) {
+    if (!local || !Number.isFinite(Number(local.upDown)) || !Number.isFinite(Number(local.leftRight))) {
+        throw new Error("playtest stair side clamp requires finite local coordinates");
+    }
+    const limits = playtestStairSideLimits(traversal, frame, local.upDown, radius);
+    if (limits.min > limits.max + PLAYTEST_COLLISION_EPSILON) {
+        throw new Error(`playtest stair ${frame && frame.stairId ? frame.stairId : "(unknown)"} is too narrow for the wizard hitbox`);
+    }
+    return {
+        upDown: Number(local.upDown),
+        leftRight: Math.max(limits.min, Math.min(limits.max, Number(local.leftRight)))
+    };
+}
+
+function playtestStairPointForLocal(traversal, frame, local) {
+    if (!local || !Number.isFinite(Number(local.upDown)) || !Number.isFinite(Number(local.leftRight))) {
+        throw new Error("playtest stair wall collision requires finite local coordinates");
+    }
+    if (Number(local.upDown) < 0 || Number(local.upDown) > 1) {
+        return traversal.exitPointFromPathLocal(frame, local);
+    }
+    return traversal.pointFromPathLocal(frame, local.upDown, local.leftRight);
+}
+
+function playtestStairWallContact(point, stair, radius, movement = null) {
+    if (!stair) throw new Error("playtest stair wall contact requires a stair");
+    const floorIds = [...new Set([stair.lowerFloorId, stair.higherFloorId].map((floorId) => String(floorId || "")).filter(Boolean))];
+    if (!floorIds.length) throw new Error(`playtest stair ${stair.id || "(unknown)"} has no connected floors`);
+    let best = null;
+    floorIds.forEach((floorId) => {
+        const contact = playtestWallCollisionAt(point, floorId, radius, movement);
+        if (!contact) return;
+        if (!best || Number(contact.distanceSquared) < Number(best.distanceSquared)) best = contact;
+    });
+    return best;
+}
+
+function playtestStairLocalAllowed(traversal, stair, local, radius) {
+    const frame = stair && stair.traversalFrame;
+    if (!frame) throw new Error(`playtest stair ${stair && stair.id ? stair.id : "(unknown)"} is missing a traversal frame`);
+    const upDown = Number(local && local.upDown);
+    if (!Number.isFinite(upDown)) throw new Error("playtest stair allowance requires finite up/down");
+    if (upDown >= 0 && upDown <= 1 && !traversal.localInsidePathFrame(frame, local, radius)) return false;
+    const point = playtestStairPointForLocal(traversal, frame, local);
+    return !playtestStairWallContact(point, stair, radius);
+}
+
+function playtestResolveStairWallSlide(traversal, stair, currentLocal, candidateLocal, radius) {
+    const frame = stair && stair.traversalFrame;
+    if (!frame) throw new Error(`playtest stair ${stair && stair.id ? stair.id : "(unknown)"} is missing a traversal frame`);
+    const currentPoint = playtestStairPointForLocal(traversal, frame, currentLocal);
+    const candidatePoint = playtestStairPointForLocal(traversal, frame, candidateLocal);
+    const movement = {
+        x: Number(candidatePoint.x) - Number(currentPoint.x),
+        y: Number(candidatePoint.y) - Number(currentPoint.y)
+    };
+    const contact = playtestStairWallContact(candidatePoint, stair, radius, movement);
+    if (!contact) return candidateLocal;
+    if (!(Math.hypot(movement.x, movement.y) > PLAYTEST_COLLISION_EPSILON)) return null;
+    const slide = playtestSlideMovement(movement, contact);
+    if (!(Math.hypot(slide.x, slide.y) > PLAYTEST_COLLISION_EPSILON)) return null;
+    const slidePoint = {
+        x: Number(currentPoint.x) + slide.x,
+        y: Number(currentPoint.y) + slide.y
+    };
+    const slideLocal = playtestClampStairLocalSide(
+        traversal,
+        frame,
+        traversal.localPointForPathFrame(frame, slidePoint),
+        radius
+    );
+    return playtestStairLocalAllowed(traversal, stair, slideLocal, radius) ? slideLocal : null;
+}
+
+function resolvePlaytestStairMovement(traversal, stair, wizard, direction, stepDistance) {
+    const frame = stair && stair.traversalFrame;
+    if (!frame) throw new Error(`playtest stair ${stair && stair.id ? stair.id : "(unknown)"} is missing a traversal frame`);
+    const radius = Number.isFinite(Number(wizard.radius)) ? Math.max(0, Number(wizard.radius)) : PLAYTEST_WIZARD_RADIUS;
+    const currentLocal = playtestClampStairLocalSide(traversal, frame, wizard.stairSupport, radius);
+    const nextLocal = traversal.movePathLocal(
+        frame,
+        currentLocal,
+        direction,
+        1,
+        stepDistance
+    );
+    if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
+        const exitCandidate = playtestClampStairLocalSide(traversal, frame, nextLocal, radius);
+        const wallSlide = playtestResolveStairWallSlide(traversal, stair, currentLocal, exitCandidate, radius);
+        return wallSlide || currentLocal;
+    }
+    if (traversal.localInsidePathFrame(frame, nextLocal, radius) && playtestStairLocalAllowed(traversal, stair, nextLocal, radius)) {
+        return nextLocal;
+    }
+    const clampedCandidate = playtestClampStairLocalSide(traversal, frame, nextLocal, radius);
+    if (
+        traversal.localInsidePathFrame(frame, clampedCandidate, radius) &&
+        playtestStairLocalAllowed(traversal, stair, clampedCandidate, radius)
+    ) {
+        return clampedCandidate;
+    }
+    const wallSlide = playtestResolveStairWallSlide(traversal, stair, currentLocal, clampedCandidate, radius);
+    if (wallSlide) return wallSlide;
+    const currentSide = playtestClampStairLocalSide(traversal, frame, currentLocal, radius);
+    const tangentCandidate = playtestClampStairLocalSide(traversal, frame, {
+        upDown: nextLocal.upDown,
+        leftRight: currentSide.leftRight
+    }, radius);
+    return traversal.localInsidePathFrame(frame, tangentCandidate, radius) &&
+        playtestStairLocalAllowed(traversal, stair, tangentCandidate, radius)
+        ? tangentCandidate
+        : currentSide;
+}
+
+function playtestStairEntryDirectionMatches(previousLocal, candidateLocal, endpoint) {
+    if (!previousLocal || !candidateLocal) return false;
+    const previousUpDown = Number(previousLocal.upDown);
+    const candidateUpDown = Number(candidateLocal.upDown);
+    if (!Number.isFinite(previousUpDown) || !Number.isFinite(candidateUpDown)) return false;
+    if (endpoint === "lower") return candidateUpDown > previousUpDown + 0.000001;
+    if (endpoint === "higher") return candidateUpDown < previousUpDown - 0.000001;
+    throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+}
+
+function cloneEditorSelection(selection) {
+    if (!selection || typeof selection !== "object") throw new Error("playtest focus snapshot requires an editor selection");
+    return JSON.parse(JSON.stringify(selection));
+}
+
+function snapshotPlaytestEditorFocus() {
+    return {
+        selection: cloneEditorSelection(state.selection),
+        selectedFloorIds: [...state.selectedFloorIds],
+        layerSelectionMode: state.layerSelectionMode
+    };
+}
+
+function restorePlaytestEditorFocus() {
+    if (!playtestPreviousFocus) return;
+    const snapshot = playtestPreviousFocus;
+    playtestPreviousFocus = null;
+    playtestFocusedFloorId = "";
+    state.playtestFloorFade = null;
+    const floors = getBuildingFloors(state.building);
+    const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
+    snapshot.selectedFloorIds.forEach((floorId) => {
+        if (!floorIds.has(String(floorId))) {
+            throw new Error(`cannot restore playtest editor focus: missing level ${floorId}`);
+        }
+    });
+    if (snapshot.selection && snapshot.selection.floorId && !floorIds.has(String(snapshot.selection.floorId))) {
+        throw new Error(`cannot restore playtest editor selection: missing level ${snapshot.selection.floorId}`);
+    }
+    state.selection = cloneEditorSelection(snapshot.selection);
+    state.selectedFloorIds = new Set(snapshot.selectedFloorIds.map((floorId) => String(floorId)));
+    state.layerSelectionMode = snapshot.layerSelectionMode === "all" ? "all" : "floor";
+    const inputFloor = findFloor(state.building, state.selection.floorId)
+        || floors.find((floor) => state.selectedFloorIds.has(getFloorId(floor)))
+        || floors[0]
+        || null;
+    state.syncInputsFromFloor(inputFloor);
+    if (state.tool === "stair" && inputFloor) state.syncStairToolDirectionWithFloor(inputFloor, { emit: false });
+    state.emitChange();
+}
+
+function focusPlaytestFloor(floorId, options = {}) {
+    floorId = String(floorId || "");
+    if (!floorId) throw new Error("playtest wizard focus requires a level id");
+    const floor = findFloor(state.building, floorId);
+    if (!floor) {
+        throw new Error(`playtest wizard focus references missing level ${floorId}`);
+    }
+    const alreadyFocused = state.renderStyle() === "interior" &&
+        !state.playtestFloorFade &&
+        state.selectedFloorIds.size === 1 &&
+        state.selectedFloorIds.has(floorId);
+    const alreadyClear = state.selection &&
+        state.selection.kind === "building" &&
+        String(state.selection.floorId || "") === floorId;
+    playtestFocusedFloorId = floorId;
+    if (alreadyFocused && alreadyClear) return false;
+    state.playtestFloorFade = null;
+    state.selectedFloorIds = new Set([floorId]);
+    state.layerSelectionMode = "floor";
+    state.selection = { kind: "building", floorId };
+    if (options.syncInputs !== false) state.syncInputsFromFloor(floor);
+    if (options.emit !== false) state.emitChange();
+    return true;
+}
+
+function focusPlaytestWizardLevel(wizard) {
+    if (!wizard || wizard.active !== true) return false;
+    return focusPlaytestFloor(wizard.floorId);
+}
+
+function startPlaytestFloorFade(fromFloorId, toFloorId) {
+    fromFloorId = String(fromFloorId || "");
+    toFloorId = String(toFloorId || "");
+    if (!fromFloorId || !toFloorId) throw new Error("playtest floor fade requires level ids");
+    if (fromFloorId === toFloorId) return false;
+    const fromFloor = findFloor(state.building, fromFloorId);
+    const toFloor = findFloor(state.building, toFloorId);
+    if (!fromFloor) throw new Error(`playtest floor fade references missing source level ${fromFloorId}`);
+    if (!toFloor) throw new Error(`playtest floor fade references missing target level ${toFloorId}`);
+    const active = state.playtestFloorFade;
+    if (
+        active &&
+        String(active.fromFloorId || "") === fromFloorId &&
+        String(active.toFloorId || "") === toFloorId
+    ) {
+        return false;
+    }
+    state.playtestFloorFade = {
+        fromFloorId,
+        toFloorId,
+        elapsedSeconds: 0,
+        durationSeconds: PLAYTEST_LEVEL_FADE_SECONDS,
+        progress: 0
+    };
+    state.selectedFloorIds = new Set([fromFloorId, toFloorId]);
+    state.layerSelectionMode = "floor";
+    state.selection = { kind: "building", floorId: toFloorId };
+    state.syncInputsFromFloor(toFloor);
+    state.emitChange();
+    return true;
+}
+
+function updatePlaytestFloorFade(deltaSeconds) {
+    const fade = state.playtestFloorFade;
+    if (!fade) return false;
+    const duration = Number(fade.durationSeconds);
+    if (!(duration > 0)) throw new Error("playtest floor fade requires a positive duration");
+    fade.elapsedSeconds = Math.max(0, Number(fade.elapsedSeconds) || 0) + Math.max(0, Number(deltaSeconds) || 0);
+    fade.progress = Math.max(0, Math.min(1, fade.elapsedSeconds / duration));
+    if (fade.progress < 1) return false;
+    return focusPlaytestFloor(fade.toFloorId);
+}
+
+function playtestStairFocusDirection(support, previousStairSupport) {
+    if (!support || !support.stair) throw new Error("playtest stair focus direction requires stair support");
+    const currentUpDown = Number(support.upDown);
+    if (!Number.isFinite(currentUpDown)) throw new Error(`playtest stair ${support.stair.id} focus requires finite up/down`);
+    if (previousStairSupport && String(previousStairSupport.stairId || "") === String(support.stairId || "")) {
+        const previousUpDown = Number(previousStairSupport.upDown);
+        if (Number.isFinite(previousUpDown)) {
+            const delta = currentUpDown - previousUpDown;
+            if (delta > PLAYTEST_COLLISION_EPSILON) return "up";
+            if (delta < -PLAYTEST_COLLISION_EPSILON) return "down";
+        }
+    }
+    return "";
+}
+
+function updatePlaytestStairFloorFocus(support, previousStairSupport = null) {
+    if (!support || !support.stair) throw new Error("playtest stair floor focus requires stair support");
+    const stair = support.stair;
+    const lowerFloorId = String(stair.lowerFloorId || "");
+    const higherFloorId = String(stair.higherFloorId || "");
+    const baseZ = Number(support.baseZ);
+    const higherZ = Number(stair.higherZ);
+    if (!lowerFloorId || !higherFloorId) throw new Error(`playtest stair ${stair.id} requires connected floor ids`);
+    if (!Number.isFinite(baseZ) || !Number.isFinite(higherZ)) {
+        throw new Error(`playtest stair ${stair.id} focus requires finite z values`);
+    }
+    const activeFade = state.playtestFloorFade;
+    if (activeFade) return false;
+    const currentFocus = String(playtestFocusedFloorId || (state.selection && state.selection.floorId) || lowerFloorId);
+    const direction = playtestStairFocusDirection(support, previousStairSupport);
+    const distanceToUpperFloor = higherZ - baseZ;
+    const reachedUpperFadeInThreshold =
+        distanceToUpperFloor >= -PLAYTEST_COLLISION_EPSILON &&
+        distanceToUpperFloor <= PLAYTEST_UPPER_FLOOR_TRANSITION_DISTANCE + PLAYTEST_COLLISION_EPSILON;
+    const reachedUpperFadeOutThreshold =
+        distanceToUpperFloor >= PLAYTEST_UPPER_FLOOR_TRANSITION_DISTANCE - PLAYTEST_COLLISION_EPSILON;
+    if (
+        currentFocus === lowerFloorId &&
+        reachedUpperFadeInThreshold &&
+        (direction === "up" || direction === "")
+    ) {
+        return startPlaytestFloorFade(lowerFloorId, higherFloorId);
+    }
+    if (
+        currentFocus === higherFloorId &&
+        reachedUpperFadeOutThreshold &&
+        (direction === "down" || direction === "")
+    ) {
+        return startPlaytestFloorFade(higherFloorId, lowerFloorId);
+    }
+    return false;
+}
+
+function focusPlaytestFloorAfterFloorSupport(floorId) {
+    floorId = String(floorId || "");
+    const activeFade = state.playtestFloorFade;
+    if (activeFade && String(activeFade.toFloorId || "") === floorId) return false;
+    return focusPlaytestFloor(floorId);
+}
+
+function updatePlaytestWizard(deltaSeconds) {
+    const wizard = state.playtestWizard;
+    if (!wizard || wizard.active !== true || !playtestRuntime || !playtestMouseWorld) return;
+    const traversal = requireEditorStairTraversal();
+    const dx = Number(playtestMouseWorld.x) - Number(wizard.x);
+    const dy = Number(playtestMouseWorld.y) - Number(wizard.y);
+    const distance = Math.hypot(dx, dy);
+    if (!(distance > 0.03)) {
+        wizard.moving = false;
+        wizard.movementVector = { x: 0, y: 0 };
+        return;
+    }
+    const direction = { x: dx / distance, y: dy / distance };
+    if (!playtestForwardPressed) {
+        wizard.moving = false;
+        wizard.movementVector = { x: 0, y: 0 };
+        setPlaytestWizardFacing(wizard, direction);
+        return;
+    }
+    const stepDistance = Math.min(distance, PLAYTEST_WIZARD_SPEED * Math.max(0, Number(deltaSeconds) || 0));
+    const previousPoint = { x: Number(wizard.x), y: Number(wizard.y) };
+
+    if (wizard.onStair) {
+        const stairId = wizard.stairSupport && wizard.stairSupport.stairId;
+        const stair = playtestRuntime.stairs.find((entry) => entry.id === stairId);
+        if (!stair) throw new Error(`playtest wizard references missing stair ${stairId}`);
+        const nextLocal = resolvePlaytestStairMovement(traversal, stair, wizard, direction, stepDistance);
+        const nextPoint = traversal.pointFromPathLocal(
+            stair.traversalFrame,
+            nextLocal.upDown,
+            nextLocal.leftRight
+        );
+        if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
+            const targetFloorId = nextLocal.upDown < 0 ? stair.lowerFloorId : stair.higherFloorId;
+            const exitPoint = traversal.exitPointFromPathLocal(stair.traversalFrame, nextLocal);
+            const floorSupport = playtestFloorSupportAt(exitPoint, targetFloorId);
+            if (floorSupport && floorSupport.floorId === targetFloorId) {
+                applyPlaytestFloorSupport(wizard, floorSupport, exitPoint);
+                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+            } else {
+                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+            }
+            return;
+        }
+        if (!traversal.localInsidePathFrame(stair.traversalFrame, nextLocal, wizard.radius)) {
+            setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+            return;
+        }
+        applyPlaytestStairSupport(wizard, playtestStairSupport(stair, nextLocal, nextPoint));
+        setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+        return;
+    }
+
+    const candidate = {
+        x: Number(wizard.x) + direction.x * stepDistance,
+        y: Number(wizard.y) + direction.y * stepDistance
+    };
+
+    for (const stair of playtestRuntime.stairs) {
+        const endpoint = connectedStairEndpointForFloor(stair, wizard.floorId);
+        if (!endpoint) continue;
+        const previousLocal = traversal.localPointForPathFrame(stair.traversalFrame, wizard);
+        const candidateLocal = traversal.localPointForPathFrame(stair.traversalFrame, candidate);
+        if (
+            traversal.endpointLineCrossed(stair.traversalFrame, wizard, candidate, endpoint) &&
+            playtestStairEntryDirectionMatches(previousLocal, candidateLocal, endpoint) &&
+            traversal.localInsidePathFrame(stair.traversalFrame, candidateLocal, wizard.radius)
+        ) {
+            applyPlaytestStairSupport(wizard, playtestStairSupport(stair, candidateLocal, candidate));
+            setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+            return;
+        }
+    }
+
+    const resolvedCandidate = resolvePlaytestFloorMovement(wizard, candidate);
+    const floorSupport = playtestFloorSupportAt(resolvedCandidate, wizard.floorId);
+    if (
+        floorSupport &&
+        String(floorSupport.floorId) === String(wizard.floorId) &&
+        playtestFloorMovementAllowedAt(resolvedCandidate, wizard.floorId, wizard.radius)
+    ) {
+        applyPlaytestFloorSupport(wizard, floorSupport, resolvedCandidate);
+        setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+        return;
+    }
+    setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+}
+
+function runPlaytestFrame(nowMs) {
+    if (!state.playtestWizard || state.playtestWizard.active !== true) {
+        playtestAnimationFrame = null;
+        return;
+    }
+    const last = Number.isFinite(playtestLastTimeMs) && playtestLastTimeMs > 0 ? playtestLastTimeMs : nowMs;
+    playtestLastTimeMs = nowMs;
+    withErrorBoundary(() => {
+        const deltaSeconds = Math.min(0.05, Math.max(0, (nowMs - last) / 1000));
+        updatePlaytestFpsCounter(deltaSeconds, nowMs);
+        updatePlaytestWizard(deltaSeconds);
+        updatePlaytestFloorFade(deltaSeconds);
+        centerPlaytestCameraOnWizard();
+        renderer.render();
+    });
+    playtestAnimationFrame = requestAnimationFrame(runPlaytestFrame);
+}
+
+function centerPlaytestCameraOnWizard() {
+    const wizard = state.playtestWizard;
+    if (!wizard || wizard.active !== true) return false;
+    if (!renderer || typeof renderer.centerCameraOnWorldPoint !== "function") {
+        throw new Error("building editor playtest requires camera centering support");
+    }
+    renderer.centerCameraOnWorldPoint({ x: wizard.x, y: wizard.y }, wizard.z);
+    if (
+        lastStagePointer &&
+        Number.isFinite(Number(lastStagePointer.x)) &&
+        Number.isFinite(Number(lastStagePointer.y))
+    ) {
+        playtestMouseWorld = renderer.screenToWorld(lastStagePointer, wizard.z);
+    } else {
+        playtestMouseWorld = { x: Number(wizard.x), y: Number(wizard.y) };
+    }
+    return true;
+}
+
+function setPlaytestMode(enabled) {
+    if (enabled) {
+        if (!playtestPreviousFocus) playtestPreviousFocus = snapshotPlaytestEditorFocus();
+        playtestRuntime = buildPlaytestRuntime();
+        state.playtestWizard = spawnPlaytestWizard();
+        state.playtestFloorFade = null;
+        playtestFocusedFloorId = String(state.playtestWizard.floorId || "");
+        playtestMouseWorld = { x: state.playtestWizard.x, y: state.playtestWizard.y };
+        playtestForwardPressed = false;
+        playtestLastTimeMs = 0;
+        playtestFpsAverage = 0;
+        playtestFpsLastDisplayMs = 0;
+        if (playtestFpsCounter) {
+            playtestFpsCounter.textContent = "0 fps";
+            playtestFpsCounter.hidden = false;
+        }
+        focusPlaytestWizardLevel(state.playtestWizard);
+        centerPlaytestCameraOnWizard();
+        if (!playtestAnimationFrame) playtestAnimationFrame = requestAnimationFrame(runPlaytestFrame);
+        setStatus("wizard playtest active");
+    } else {
+        state.playtestWizard = null;
+        state.playtestFloorFade = null;
+        playtestFocusedFloorId = "";
+        playtestRuntime = null;
+        playtestMouseWorld = null;
+        playtestForwardPressed = false;
+        playtestLastTimeMs = 0;
+        resetPlaytestFpsCounter();
+        if (playtestAnimationFrame) {
+            cancelAnimationFrame(playtestAnimationFrame);
+            playtestAnimationFrame = null;
+        }
+        restorePlaytestEditorFocus();
+        setStatus("wizard playtest off");
+    }
+    syncUi();
+    renderer.render();
 }
 
 const BUILDING_EDITOR_SAVE_API = "/api/building-editor/buildings";
@@ -827,6 +1852,8 @@ function applyWindowContextSelection(group, mode) {
 }
 
 function showWindowContextMenu(screenPoint, sourceObject, mode) {
+    closeLayerContextMenu();
+    closeStructureToolMenu();
     windowContext = {
         type: "window",
         objectId: sourceObject.id,
@@ -840,6 +1867,8 @@ function showWindowContextMenu(screenPoint, sourceObject, mode) {
 }
 
 function showWallContextMenu(screenPoint, sourceWall, mode) {
+    closeLayerContextMenu();
+    closeStructureToolMenu();
     windowContext = {
         type: "wall",
         wallId: sourceWall.id,
@@ -853,6 +1882,8 @@ function showWallContextMenu(screenPoint, sourceWall, mode) {
 }
 
 function showColumnContextMenu(screenPoint, sourceColumn, mode) {
+    closeLayerContextMenu();
+    closeStructureToolMenu();
     windowContext = {
         type: "column",
         columnId: sourceColumn.id,
@@ -866,6 +1897,8 @@ function showColumnContextMenu(screenPoint, sourceColumn, mode) {
 }
 
 function showBeamContextMenu(screenPoint, sourceBeam, mode) {
+    closeLayerContextMenu();
+    closeStructureToolMenu();
     windowContext = {
         type: "beam",
         beamId: sourceBeam.id,
@@ -881,6 +1914,117 @@ function showBeamContextMenu(screenPoint, sourceBeam, mode) {
 function closeWindowContextMenu() {
     windowContextMenu.hidden = true;
     windowContext = null;
+}
+
+function openLayerContextMenu(floorId, clientX, clientY) {
+    if (!findFloor(state.building, floorId)) {
+        throw new Error(`cannot open layer menu for missing floor: ${floorId}`);
+    }
+    closeWindowContextMenu();
+    closeStructureToolMenu();
+    layerContextFloorId = String(floorId);
+    layerContextMenu.hidden = false;
+    const rect = layerContextMenu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(Number(clientX), window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(Number(clientY), window.innerHeight - rect.height - 8));
+    layerContextMenu.style.left = `${left}px`;
+    layerContextMenu.style.top = `${top}px`;
+}
+
+function closeLayerContextMenu() {
+    layerContextMenu.hidden = true;
+    layerContextFloorId = "";
+}
+
+function normalizeStructureTool(tool) {
+    const value = String(tool || "").trim();
+    if (value === "wall" || value === "column" || value === "beam") return value;
+    throw new Error(`unknown structure tool: ${tool}`);
+}
+
+function structureToolLabel(tool) {
+    const value = normalizeStructureTool(tool);
+    if (value === "column") return "columns";
+    if (value === "beam") return "beams";
+    return "walls";
+}
+
+function cancelStructureToolPressTimer() {
+    if (structureToolPressTimer) {
+        clearTimeout(structureToolPressTimer);
+        structureToolPressTimer = null;
+    }
+}
+
+function closeStructureToolMenu() {
+    cancelStructureToolPressTimer();
+    if (structureToolMenu) structureToolMenu.hidden = true;
+    if (structureToolButton) structureToolButton.setAttribute("aria-expanded", "false");
+}
+
+function positionStructureToolMenu() {
+    if (!structureToolMenu || !structureToolButton || structureToolMenu.hidden) return;
+    const buttonRect = structureToolButton.getBoundingClientRect();
+    const menuRect = structureToolMenu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(buttonRect.right + 8, window.innerWidth - menuRect.width - 8));
+    const top = Math.max(8, Math.min(
+        buttonRect.top + (buttonRect.height - menuRect.height) * 0.5,
+        window.innerHeight - menuRect.height - 8
+    ));
+    structureToolMenu.style.left = `${left}px`;
+    structureToolMenu.style.top = `${top}px`;
+}
+
+function openStructureToolMenu() {
+    if (!structureToolMenu) return;
+    closeWindowContextMenu();
+    closeLayerContextMenu();
+    wallToolTexturePaletteOpen = false;
+    columnToolTexturePaletteOpen = false;
+    stairTexturePaletteOpen = false;
+    mountTexturePaletteOpen = false;
+    structureToolMenu.hidden = false;
+    if (structureToolButton) structureToolButton.setAttribute("aria-expanded", "true");
+    positionStructureToolMenu();
+    syncStructureToolButton();
+}
+
+function selectStructureTool(tool, options = {}) {
+    const nextTool = normalizeStructureTool(tool);
+    activeStructureTool = nextTool;
+    closeStructureToolMenu();
+    wallToolTexturePaletteOpen = false;
+    columnToolTexturePaletteOpen = false;
+    stairTexturePaletteOpen = false;
+    mountTexturePaletteOpen = false;
+    if (options.toggle === true && state.tool === nextTool) {
+        state.setTool("select");
+        return;
+    }
+    state.setTool(nextTool);
+}
+
+function syncStructureToolButton() {
+    if (state.tool === "wall" || state.tool === "column" || state.tool === "beam") {
+        activeStructureTool = state.tool;
+    }
+    structureToolMenuButtons.forEach((button) => {
+        button.dataset.active = button.dataset.structureTool === activeStructureTool ? "true" : "false";
+    });
+    if (!structureToolButton || !structureToolIcon) return;
+    const sourceIcon = activeStructureTool === "column"
+        ? columnToolIcon
+        : (activeStructureTool === "beam" ? beamToolIcon : wallToolIcon);
+    structureToolIcon.replaceChildren();
+    if (sourceIcon) {
+        const clone = sourceIcon.cloneNode(true);
+        clone.removeAttribute("id");
+        structureToolIcon.appendChild(clone);
+    }
+    const title = `Place ${structureToolLabel(activeStructureTool)}`;
+    structureToolButton.title = title;
+    structureToolButton.setAttribute("aria-label", title);
+    structureToolButton.dataset.active = (state.tool === "wall" || state.tool === "column" || state.tool === "beam") ? "true" : "false";
 }
 
 function applyTextureToSelection(texturePath) {
@@ -1051,24 +2195,27 @@ function syncMountedToolButtonTextures() {
 }
 
 function syncWallToolButtonTexture() {
-    if (!wallToolButton || !wallToolIcon) return;
+    if (!wallToolIcon) return;
     const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
     wallToolIcon.style.backgroundImage = texture ? `url("${texture}")` : "";
-    wallToolButton.title = texture ? `Place walls: ${textureName(texture)}` : "Place walls";
+    const wallButton = structureToolMenuButtons.find((button) => button.dataset.structureTool === "wall");
+    if (wallButton) wallButton.title = texture ? `Place walls: ${textureName(texture)}` : "Place walls";
 }
 
 function syncBeamToolButtonTexture() {
     if (!beamToolIcon) return;
     const texture = state.wallTool && state.wallTool.texture ? state.wallTool.texture : state.inputs.wallTexture;
     beamToolIcon.style.setProperty("--beam-tool-texture", texture ? `url("${texture}")` : "none");
-    if (beamToolButton) beamToolButton.title = texture ? `Place beams: ${textureName(texture)}` : "Place beams";
+    const beamButton = structureToolMenuButtons.find((button) => button.dataset.structureTool === "beam");
+    if (beamButton) beamButton.title = texture ? `Place beams: ${textureName(texture)}` : "Place beams";
 }
 
 function syncColumnToolButtonTexture() {
     if (!columnToolIcon) return;
     const texture = state.columnTool && state.columnTool.texture ? state.columnTool.texture : state.inputs.columnTexture;
     columnToolIcon.style.setProperty("--column-tool-texture", texture ? `url("${texture}")` : "none");
-    if (columnToolButton) columnToolButton.title = texture ? `Place columns: ${textureName(texture)}` : "Place columns";
+    const columnButton = structureToolMenuButtons.find((button) => button.dataset.structureTool === "column");
+    if (columnButton) columnButton.title = texture ? `Place columns: ${textureName(texture)}` : "Place columns";
 }
 
 function syncStairToolButtonTexture() {
@@ -1548,11 +2695,12 @@ function syncUi() {
     if (roofToolButton) {
         roofToolButton.dataset.active = state.tool === "roof" ? "true" : "false";
     }
-    if (wallToolButton) wallToolButton.dataset.active = state.tool === "wall" ? "true" : "false";
+    if (playtestToggle) playtestToggle.dataset.active = state.playtestWizard && state.playtestWizard.active === true ? "true" : "false";
     syncRoofToolButtonTexture();
     syncWallToolButtonTexture();
     syncBeamToolButtonTexture();
     syncColumnToolButtonTexture();
+    syncStructureToolButton();
     syncStairToolButtonTexture();
     syncMountedToolButtonTextures();
     document.querySelectorAll("[data-selection-scope], [data-selection-exclude]").forEach((element) => {
@@ -1801,6 +2949,9 @@ function syncUi() {
 }
 
 state.addEventListener("change", () => {
+    if (state.playtestWizard && state.playtestWizard.active === true) {
+        playtestRuntime = buildPlaytestRuntime();
+    }
     renderer.render();
     syncUi();
 });
@@ -1821,6 +2972,7 @@ document.querySelectorAll("[data-tool]").forEach((button) => {
             wallToolTexturePaletteOpen = false;
             columnToolTexturePaletteOpen = false;
             stairTexturePaletteOpen = false;
+            closeStructureToolMenu();
             state.setTool(state.tool === button.dataset.tool ? "select" : button.dataset.tool);
         });
     });
@@ -1847,8 +2999,55 @@ if (roofToolButton) {
             columnToolTexturePaletteOpen = false;
             stairTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
+            closeStructureToolMenu();
             state.setTool(state.tool === "roof" ? "select" : "roof");
         });
+    });
+}
+
+if (structureToolButton) {
+    structureToolButton.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        structureToolLongPressOpened = false;
+        cancelStructureToolPressTimer();
+        structureToolPressTimer = setTimeout(() => {
+            structureToolLongPressOpened = true;
+            withErrorBoundary(() => openStructureToolMenu());
+        }, 360);
+    });
+    structureToolButton.addEventListener("pointerup", () => {
+        cancelStructureToolPressTimer();
+    });
+    structureToolButton.addEventListener("pointerleave", () => {
+        cancelStructureToolPressTimer();
+    });
+    structureToolButton.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        withErrorBoundary(() => openStructureToolMenu());
+    });
+    structureToolButton.addEventListener("click", () => {
+        withErrorBoundary(() => {
+            if (structureToolLongPressOpened) {
+                structureToolLongPressOpened = false;
+                return;
+            }
+            selectStructureTool(activeStructureTool, { toggle: true });
+        });
+    });
+}
+
+structureToolMenuButtons.forEach((button) => {
+    button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+    });
+    button.addEventListener("click", () => {
+        withErrorBoundary(() => selectStructureTool(button.dataset.structureTool));
+    });
+});
+
+if (structureToolMenu) {
+    structureToolMenu.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
     });
 }
 
@@ -1879,10 +3078,19 @@ mountToolButtons.forEach((button) => {
             columnToolTexturePaletteOpen = false;
             stairTexturePaletteOpen = false;
             mountTexturePaletteOpen = false;
+            closeStructureToolMenu();
             state.setMountedObjectToolCategory(button.dataset.mountCategory);
         });
     });
 });
+
+if (playtestToggle) {
+    playtestToggle.addEventListener("click", () => {
+        withErrorBoundary(() => {
+            setPlaytestMode(!(state.playtestWizard && state.playtestWizard.active === true));
+        });
+    });
+}
 
 mountTextureButton.addEventListener("click", () => {
     withErrorBoundary(() => {
@@ -1928,6 +3136,12 @@ document.addEventListener("pointerdown", (event) => {
     closeWindowContextMenu();
 }, true);
 
+document.addEventListener("pointerdown", (event) => {
+    if (!structureToolMenu || structureToolMenu.hidden) return;
+    if (structureToolMenu.contains(event.target) || (structureToolButton && structureToolButton.contains(event.target))) return;
+    closeStructureToolMenu();
+}, true);
+
 mountSize.addEventListener("input", () => {
     withErrorBoundary(() => state.updateMountedObjectSize(mountSize.value));
 });
@@ -1949,10 +3163,6 @@ if (mountSnapPointsPerSection) {
         withErrorBoundary(() => state.updateMountedObjectSnapPointsPerSection(mountSnapPointsPerSection.value));
     });
 }
-
-document.querySelector("#duplicateFloor").addEventListener("click", () => {
-    withErrorBoundary(() => state.duplicateSelectedFloor());
-});
 
 document.querySelector("#saveBuilding").addEventListener("click", () => {
     withAsyncErrorBoundary(() => saveCurrentBuildingToServer());
@@ -1998,8 +3208,12 @@ cancelBuildingNameButton.addEventListener("click", () => {
 layerPanel.addEventListener("click", (event) => {
     const renameTarget = event.target.closest("[data-rename-floor-id]");
     if (renameTarget && layerPanel.contains(renameTarget)) {
-        withErrorBoundary(() => beginLayerRename(renameTarget, renameTarget.dataset.renameFloorId));
-        return;
+        const floorId = renameTarget.dataset.renameFloorId;
+        if (state.isLayerFloorHighlighted(floorId)) {
+            withErrorBoundary(() => beginLayerRename(renameTarget, floorId));
+            return;
+        }
+        // Not yet selected — fall through to card selection below
     }
     const deleteButton = event.target.closest("[data-delete-floor-id]");
     if (deleteButton && layerPanel.contains(deleteButton)) {
@@ -2017,6 +3231,32 @@ layerPanel.addEventListener("click", (event) => {
         state.selectFloor(card.dataset.floorId);
     });
 });
+
+layerPanel.addEventListener("contextmenu", (event) => {
+    const row = event.target.closest(".layerRow");
+    if (!row || !layerPanel.contains(row) || !row.dataset.floorRowId) return;
+    event.preventDefault();
+    withErrorBoundary(() => openLayerContextMenu(row.dataset.floorRowId, event.clientX, event.clientY));
+});
+
+layerContextMenu.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-layer-duplicate-position]");
+    if (!button || !layerContextMenu.contains(button)) return;
+    withErrorBoundary(() => {
+        if (!layerContextFloorId) throw new Error("layer context menu is missing its source level");
+        state.duplicateFloorAdjacent(layerContextFloorId, button.dataset.layerDuplicatePosition);
+        closeLayerContextMenu();
+    });
+});
+
+layerContextMenu.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+});
+
+document.addEventListener("pointerdown", (event) => {
+    if (layerContextMenu.hidden || layerContextMenu.contains(event.target)) return;
+    closeLayerContextMenu();
+}, true);
 
 layerPanel.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -2270,6 +3510,11 @@ app.stage.on("pointerdown", (event) => {
         if (rotatingView) return;
         const screenPoint = { x: event.data.global.x, y: event.data.global.y };
         renderer.setScreenPickerDebugPoint(screenPoint);
+        if (state.playtestWizard && state.playtestWizard.active === true) {
+            playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+            panning = null;
+            return;
+        }
         if (original.button === 2) {
             const hit = renderer.pickAtScreen(screenPoint, { includeSurfaces: false });
             const menuPoint = {
@@ -2361,6 +3606,11 @@ app.stage.on("pointermove", (event) => {
             return;
         }
         state.updateHoverPoint(worldFromEvent(event));
+        if (state.playtestWizard && state.playtestWizard.active === true) {
+            playtestMouseWorld = renderer.screenToWorld(lastStagePointer, state.playtestWizard.z);
+            renderer.render();
+            return;
+        }
         if (typeof activeTool().pointerMove === "function") {
             const thresholdPixels = state.tool === "select" ? 10 : 14;
             activeTool().pointerMove(worldFromEvent(event), renderer.screenPixelsToWorldDistance(thresholdPixels), {
@@ -2374,6 +3624,11 @@ app.stage.on("pointermove", (event) => {
 
 app.stage.on("pointerup", (event) => {
     const screenPoint = { x: event.data.global.x, y: event.data.global.y };
+    if (state.playtestWizard && state.playtestWizard.active === true) {
+        playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+        panning = null;
+        return;
+    }
     const thresholdPixels = state.tool === "select" ? 10 : 14;
     if (typeof activeTool().pointerUp === "function") activeTool().pointerUp(worldFromEvent(event), renderer.screenPixelsToWorldDistance(thresholdPixels), {
         thresholdPixels,
@@ -2385,6 +3640,11 @@ app.stage.on("pointerup", (event) => {
 
 app.stage.on("pointerupoutside", (event) => {
     const screenPoint = { x: event.data.global.x, y: event.data.global.y };
+    if (state.playtestWizard && state.playtestWizard.active === true) {
+        playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+        panning = null;
+        return;
+    }
     const thresholdPixels = state.tool === "select" ? 10 : 14;
     if (typeof activeTool().pointerUp === "function") activeTool().pointerUp(worldFromEvent(event), renderer.screenPixelsToWorldDistance(thresholdPixels), {
         thresholdPixels,
@@ -2506,8 +3766,23 @@ stageHost.addEventListener("touchcancel", () => {
 }, { passive: false });
 
 document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.playtestWizard && state.playtestWizard.active === true) {
+        setPlaytestMode(false);
+        event.preventDefault();
+        return;
+    }
     if (event.key === "Escape" && !windowContextMenu.hidden) {
         closeWindowContextMenu();
+        event.preventDefault();
+        return;
+    }
+    if (event.key === "Escape" && !layerContextMenu.hidden) {
+        closeLayerContextMenu();
+        event.preventDefault();
+        return;
+    }
+    if (event.key === "Escape" && structureToolMenu && !structureToolMenu.hidden) {
+        closeStructureToolMenu();
         event.preventDefault();
         return;
     }
@@ -2527,6 +3802,11 @@ document.addEventListener("keydown", (event) => {
     if (isTextEditingTarget(event.target)) return;
     if (event.key === "Shift") state.shiftKeyDown = true;
     const key = String(event.key || "").toLowerCase();
+    if (state.playtestWizard && state.playtestWizard.active === true && key === "w") {
+        playtestForwardPressed = true;
+        event.preventDefault();
+        return;
+    }
     if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && state.tool === "stair") {
         const tool = activeTool();
         if (tool && typeof tool.rotatePreview === "function") {
@@ -2647,6 +3927,9 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("keyup", (event) => {
     if (event.key === "Shift") state.shiftKeyDown = false;
+    if (String(event.key || "").toLowerCase() === "w") {
+        playtestForwardPressed = false;
+    }
     if (String(event.key || "").toLowerCase() === "z") {
         rotatingView = false;
         rotatePointerX = null;
@@ -2658,6 +3941,7 @@ window.addEventListener("blur", () => {
     rotatingView = false;
     rotatePointerX = null;
     lastZTapTime = 0;
+    playtestForwardPressed = false;
 });
 
 function isTextEditingTarget(target) {

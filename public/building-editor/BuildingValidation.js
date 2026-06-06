@@ -10,6 +10,7 @@ import {
     getFloorElevation,
     getFloorId,
     getFloorRoofs,
+    getFloorStairs,
     getRoofContactPolygon,
     getRoofDomeLevels,
     getRoofGables,
@@ -468,11 +469,11 @@ export function validateBuilding(building) {
             if (!Number.isFinite(Number(column.size)) || Number(column.size) <= 0) {
                 errors.push(`${label} size (apothem) must be a positive number`);
             }
-            if (!Number.isFinite(Number(column.width)) || Number(column.width) <= 0 || Number(column.width) > 1) {
-                errors.push(`${label} width must be a positive number no greater than 1`);
+            if (!Number.isFinite(Number(column.width)) || Number(column.width) <= 0 || Number(column.width) > 2) {
+                errors.push(`${label} width must be a positive number no greater than 2`);
             }
-            if (!Number.isFinite(Number(column.depth)) || Number(column.depth) <= 0 || Number(column.depth) > 1) {
-                errors.push(`${label} depth must be a positive number no greater than 1`);
+            if (!Number.isFinite(Number(column.depth)) || Number(column.depth) <= 0 || Number(column.depth) > 2) {
+                errors.push(`${label} depth must be a positive number no greater than 2`);
             }
             if (!Number.isFinite(Number(column.height)) || Number(column.height) <= 0) {
                 errors.push(`${label} height must be a positive number`);
@@ -499,6 +500,31 @@ export function validateBuilding(building) {
                 } else if (String(wall.fragmentId || wall.floorId) !== String(floorId)) {
                     errors.push(`${label} wallId must reference a wall on the same floor`);
                 }
+            }
+        });
+    });
+
+    const stairIds = new Set();
+    getBuildingFloors(building).forEach((floor) => {
+        const floorId = getFloorId(floor);
+        getFloorStairs(floor).forEach((stair) => {
+            const label = `stair ${stair.id ?? "(missing id)"} on floor ${floorId}`;
+            if (stair.id === undefined || stair.id === null || stair.id === "") errors.push(`${label} is missing id`);
+            if (stairIds.has(String(stair.id))) errors.push(`duplicate stair id: ${stair.id}`);
+            stairIds.add(String(stair.id));
+            if (stair.type !== "stairs") errors.push(`${label} type must be stairs`);
+            if (String(stair.floorId || "") !== String(floorId)) {
+                errors.push(`${label} floorId must match containing floor`);
+            }
+            if (!Number.isFinite(Number(stair.width)) || Number(stair.width) <= 0) {
+                errors.push(`${label} width must be a positive number`);
+            }
+            if (!Number.isFinite(Number(stair.height)) || Number(stair.height) <= 0) {
+                errors.push(`${label} height must be a positive number`);
+            }
+            if (!Number.isFinite(Number(stair.bottomZ))) errors.push(`${label} bottomZ must be finite`);
+            if (!Number.isInteger(Number(stair.stepCount)) || Number(stair.stepCount) < 1) {
+                errors.push(`${label} stepCount must be a positive integer`);
             }
         });
     });

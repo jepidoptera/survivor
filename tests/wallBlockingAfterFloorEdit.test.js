@@ -93,6 +93,7 @@ function loadGameClasses() {
     vm.createContext(context);
 
     const files = [
+        path.join(__dirname, "../public/assets/javascript/shared/StairTraversal.js"),
         path.join(__dirname, "../public/assets/javascript/Map.js"),
         path.join(__dirname, "../public/assets/javascript/gameobjects/Character.js"),
         path.join(__dirname, "../public/assets/javascript/gameobjects/Animal.js")

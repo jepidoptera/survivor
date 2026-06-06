@@ -946,11 +946,11 @@ export function createColumn({
     const legacySize = Number(size);
     const resolvedWidth = Number(width ?? (Number.isFinite(legacySize) ? legacySize * 2 : 0.25));
     const resolvedDepth = Number(depth ?? (Number.isFinite(legacySize) ? legacySize * 2 : 0.25));
-    if (!Number.isFinite(resolvedWidth) || resolvedWidth <= 0 || resolvedWidth > 1) {
-        throw new Error("column width must be a positive number no greater than 1");
+    if (!Number.isFinite(resolvedWidth) || resolvedWidth <= 0 || resolvedWidth > 2) {
+        throw new Error("column width must be a positive number no greater than 2");
     }
-    if (!Number.isFinite(resolvedDepth) || resolvedDepth <= 0 || resolvedDepth > 1) {
-        throw new Error("column depth must be a positive number no greater than 1");
+    if (!Number.isFinite(resolvedDepth) || resolvedDepth <= 0 || resolvedDepth > 2) {
+        throw new Error("column depth must be a positive number no greater than 2");
     }
     const resolvedHeight = Number(height ?? floorDefaultWallHeight ?? DEFAULTS.wallHeight);
     if (!Number.isFinite(resolvedHeight) || resolvedHeight <= 0) {
@@ -2415,8 +2415,8 @@ export function normalizeImportedBuilding(raw) {
         floor.columns = floor.columns.map((raw) => {
             const sc = Math.round(Number(raw.sideCount) || 4);
             const legacySize = Number(raw.size) > 0 ? Number(raw.size) : 0.125;
-            const width = Number(raw.width) > 0 ? Math.min(1, Number(raw.width)) : legacySize * 2;
-            const depth = Number(raw.depth) > 0 ? Math.min(1, Number(raw.depth)) : legacySize * 2;
+            const width = Number(raw.width) > 0 ? Math.min(2, Number(raw.width)) : legacySize * 2;
+            const depth = Number(raw.depth) > 0 ? Math.min(2, Number(raw.depth)) : legacySize * 2;
             const column = {
                 type: "column",
                 id: Number.isInteger(Number(raw.id)) ? Number(raw.id) : nextColumnId(),
@@ -2631,6 +2631,9 @@ function bumpIdCountersFromBuilding(building) {
         });
         getFloorColumns(floor).forEach((column) => {
             if (Number.isInteger(Number(column.id))) columnIdCounter = Math.max(columnIdCounter, Number(column.id) + 1);
+        });
+        getFloorStairs(floor).forEach((stair) => {
+            if (Number.isInteger(Number(stair.id))) stairIdCounter = Math.max(stairIdCounter, Number(stair.id) + 1);
         });
     });
 }

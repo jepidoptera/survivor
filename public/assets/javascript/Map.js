@@ -2072,7 +2072,7 @@ class GameMap {
                 ]
             });
         }
-        return {
+        const stairRecord = {
             id: transitionId,
             transitionId,
             type: "stairs",
@@ -2096,6 +2096,34 @@ class GameMap {
             treads,
             texturePath: definition.texturePath
         };
+        stairRecord.traversalFrame = this.createStraightStairTraversalFrame(stairRecord);
+        return stairRecord;
+    }
+
+    requireStairTraversal() {
+        const traversal = (typeof globalThis !== "undefined" && globalThis.StairTraversal)
+            ? globalThis.StairTraversal
+            : null;
+        if (!traversal || typeof traversal.createStraightFrame !== "function") {
+            throw new Error("stair traversal requires StairTraversal runtime");
+        }
+        return traversal;
+    }
+
+    createStraightStairTraversalFrame(stair) {
+        const traversal = this.requireStairTraversal();
+        return traversal.createStraightFrame(stair, {
+            shortestDeltaX: this.shortestDeltaX.bind(this),
+            shortestDeltaY: this.shortestDeltaY.bind(this)
+        });
+    }
+
+    getStraightStairTraversalFrame(stair) {
+        if (!stair || stair.stairKind !== "straight") return null;
+        if (!stair.traversalFrame) {
+            stair.traversalFrame = this.createStraightStairTraversalFrame(stair);
+        }
+        return stair.traversalFrame;
     }
 
     isPointSupportedByFloorFragment(fragment, x, y) {
@@ -2228,39 +2256,31 @@ class GameMap {
         return sum * 0.5;
     }
 
-    getStraightStairTreadAtWorldPosition(x, y) {
+    getStraightStairSupportAtWorldPosition(x, y, actor = null, options = {}) {
         if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) return null;
+        const traversal = this.requireStairTraversal();
+        const radius = this.getActorMovementSupportRadius(actor, options);
         let best = null;
-        let bestArea = Infinity;
+        let bestDistance = Infinity;
         for (const stair of this.stairsById.values()) {
             if (!stair || stair.stairKind !== "straight") continue;
-            if (!Array.isArray(stair.treads) || stair.treads.length === 0) {
-                throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing treads`);
-            }
-            for (let i = 0; i < stair.treads.length; i++) {
-                const tread = stair.treads[i];
-                if (!tread || !Array.isArray(tread.outer) || tread.outer.length < 3) {
-                    throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} has invalid tread ${i}`);
-                }
-                if (!Number.isFinite(tread.baseZ)) {
-                    throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} tread ${i} is missing baseZ`);
-                }
-                if (!pointInPolygon2D(Number(x), Number(y), tread.outer)) continue;
-                const area = Math.abs(this.getPolygonSignedArea2D(tread.outer));
-                if (!best || area < bestArea) {
-                    best = {
-                        type: "stair",
-                        stair,
-                        stairId: stair.id,
-                        tread,
-                        treadIndex: i,
-                        baseZ: Number(tread.baseZ)
-                    };
-                    bestArea = area;
-                }
+            const frame = this.getStraightStairTraversalFrame(stair);
+            const local = traversal.localPointForStraightFrame(frame, { x, y }, {
+                shortestDeltaX: this.shortestDeltaX.bind(this),
+                shortestDeltaY: this.shortestDeltaY.bind(this)
+            });
+            if (!traversal.localInsideStraightFrame(frame, local, radius)) continue;
+            const sideDistance = Math.abs(Number(local.sideDistance));
+            if (!best || sideDistance < bestDistance) {
+                best = traversal.supportFromStraightLocal(stair, frame, local);
+                bestDistance = sideDistance;
             }
         }
         return best;
+    }
+
+    getStraightStairTreadAtWorldPosition(x, y) {
+        return this.getStraightStairSupportAtWorldPosition(x, y, null, { supportRadius: 0 });
     }
 
     getStraightStairTreadSupport(stair, treadIndex) {
@@ -2276,13 +2296,29 @@ class GameMap {
         if (!Number.isFinite(tread.baseZ)) {
             throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} tread ${resolvedIndex} is missing baseZ`);
         }
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStraightStairTraversalFrame(stair);
+        const stepCount = Math.max(1, Array.isArray(stair.treads) && stair.treads.length > 0
+            ? stair.treads.length
+            : (Number.isFinite(stair.stepCount) ? Math.round(Number(stair.stepCount)) : 1));
+        const upDown = (resolvedIndex + 0.5) / stepCount;
+        const local = {
+            upDown,
+            leftRight: 0.5,
+            sideDistance: 0,
+            baseZ: frame.lowerZ + (frame.higherZ - frame.lowerZ) * upDown
+        };
         return {
             type: "stair",
             stair,
             stairId: stair.id,
             tread,
             treadIndex: resolvedIndex,
-            baseZ: Number(tread.baseZ)
+            upDown,
+            leftRight: 0.5,
+            baseZ: local.baseZ,
+            point: traversal.pointFromLocal(frame, upDown, 0),
+            local
         };
     }
 
@@ -2296,6 +2332,18 @@ class GameMap {
         if (!(this.stairsById instanceof Map)) throw new Error("actor stair support exists without stair runtime records");
         const stair = this.stairsById.get(stairId);
         if (!stair) throw new Error(`actor stair support references missing stair ${stairId}`);
+        if (Number.isFinite(state.upDown) && Number.isFinite(state.leftRight)) {
+            const traversal = this.requireStairTraversal();
+            const frame = this.getStraightStairTraversalFrame(stair);
+            const upDown = Math.max(0, Math.min(1, Number(state.upDown)));
+            const leftRight = Math.max(0, Math.min(1, Number(state.leftRight)));
+            const point = traversal.pointFromLocal(frame, upDown, leftRight - 0.5);
+            const local = traversal.localPointForStraightFrame(frame, point, {
+                shortestDeltaX: this.shortestDeltaX.bind(this),
+                shortestDeltaY: this.shortestDeltaY.bind(this)
+            });
+            return traversal.supportFromStraightLocal(stair, frame, local);
+        }
         return this.getStraightStairTreadSupport(stair, state.treadIndex);
     }
 
@@ -2336,35 +2384,22 @@ class GameMap {
     actorFitsWithinStairSideBounds(stair, x, y, actor = null, options = {}) {
         if (!stair || stair.stairKind !== "straight") return false;
         const radius = this.getActorMovementSupportRadius(actor, options);
-        if (!(radius > 0)) return true;
-        const lowerPoint = stair.lowerPoint;
-        const higherPoint = stair.higherPoint;
-        const width = Number(stair.width);
-        if (!lowerPoint || !higherPoint || !Number.isFinite(width)) {
-            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing side-bound geometry`);
-        }
-        const dx = this.shortestDeltaX(lowerPoint.x, higherPoint.x);
-        const dy = this.shortestDeltaY(lowerPoint.y, higherPoint.y);
-        const length = Math.hypot(dx, dy);
-        if (!(length > 1e-6)) {
-            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} has zero-length side-bound geometry`);
-        }
-        const relX = this.shortestDeltaX(lowerPoint.x, Number(x));
-        const relY = this.shortestDeltaY(lowerPoint.y, Number(y));
-        const ux = dx / length;
-        const uy = dy / length;
-        const sideDistance = Math.abs((relX * -uy) + (relY * ux));
-        return sideDistance <= (width * 0.5) - radius + 1e-6;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStraightStairTraversalFrame(stair);
+        const local = traversal.localPointForStraightFrame(frame, { x, y }, {
+            shortestDeltaX: this.shortestDeltaX.bind(this),
+            shortestDeltaY: this.shortestDeltaY.bind(this)
+        });
+        return Math.abs(Number(local.sideDistance)) <= frame.halfWidth - radius + 1e-6;
     }
 
     getActiveLayerForStairSupport(support) {
         if (!support || support.type !== "stair" || !support.stair) return null;
         const stair = support.stair;
-        const thresholdZ = Number(stair.higherZ) - 1;
-        if (!Number.isFinite(thresholdZ)) {
-            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing higherZ`);
+        if (!Number.isFinite(stair.higherLevel) || !Number.isFinite(stair.lowerLevel)) {
+            throw new Error(`straight stair runtime record ${stair.id || "(unknown)"} is missing endpoint levels`);
         }
-        return Number(support.baseZ) >= thresholdZ
+        return Number(support.upDown) >= 1
             ? Math.round(Number(stair.higherLevel) || 0)
             : Math.round(Number(stair.lowerLevel) || 0);
     }
@@ -2434,16 +2469,31 @@ class GameMap {
         }
         if (currentSupport.type === "stair" && nextSupport.type === "stair") {
             if (currentSupport.stairId !== nextSupport.stairId) return false;
-            return Math.abs(Number(currentSupport.treadIndex) - Number(nextSupport.treadIndex)) <= 1;
+            return true;
         }
         const stairSupport = currentSupport.type === "stair" ? currentSupport : nextSupport;
         const floorSupport = currentSupport.type === "floor" ? currentSupport : nextSupport;
         const stair = stairSupport && stairSupport.stair;
         if (!stair || !floorSupport) return false;
         const endpoint = this.getStairEndpointForFloorSupport(floorSupport, stair);
-        if (Number(stairSupport.treadIndex) === 0 && endpoint === "lower") return true;
-        if (Number(stairSupport.treadIndex) === stair.treads.length - 1 && endpoint === "higher") return true;
+        if (Number(stairSupport.upDown) <= 1e-6 && endpoint === "lower") return true;
+        if (Number(stairSupport.upDown) >= 1 - 1e-6 && endpoint === "higher") return true;
         return false;
+    }
+
+    didActorCrossStairEndpoint(stair, actor, worldX, worldY, endpoint) {
+        if (!actor || !stair) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStraightStairTraversalFrame(stair);
+        const previous = traversal.localPointForStraightFrame(frame, { x: actor.x, y: actor.y }, {
+            shortestDeltaX: this.shortestDeltaX.bind(this),
+            shortestDeltaY: this.shortestDeltaY.bind(this)
+        });
+        const next = traversal.localPointForStraightFrame(frame, { x: worldX, y: worldY }, {
+            shortestDeltaX: this.shortestDeltaX.bind(this),
+            shortestDeltaY: this.shortestDeltaY.bind(this)
+        });
+        return traversal.endpointCrossed(previous, next, endpoint);
     }
 
     resolveActorStairMovementOccupancy(worldX, worldY, actor = null, options = {}) {
@@ -2455,11 +2505,11 @@ class GameMap {
         const currentFloorSupport = currentStairSupport
             ? null
             : this.getFloorSupportAtWorldPosition(Number(actor && actor.x), Number(actor && actor.y), currentLayer, options);
-        const nextStairSupport = this.getStraightStairTreadAtWorldPosition(worldX, worldY);
-        const nextLayer = currentStairSupport
+        const nextStairSupport = this.getStraightStairSupportAtWorldPosition(worldX, worldY, actor, options);
+        let nextLayer = currentStairSupport
             ? this.getActiveLayerForStairSupport(currentStairSupport)
             : currentLayer;
-        const nextFloorSupport = this.getFloorSupportAtWorldPosition(worldX, worldY, nextLayer, options);
+        let nextFloorSupport = this.getFloorSupportAtWorldPosition(worldX, worldY, nextLayer, options);
 
         if (currentStairSupport) {
             if (nextStairSupport) {
@@ -2467,15 +2517,36 @@ class GameMap {
                     this.actorFitsWithinStairSideBounds(nextStairSupport.stair, worldX, worldY, actor, options);
                 return { handled: true, allowed, support: allowed ? nextStairSupport : null, currentSupport: currentStairSupport };
             }
+            const traversal = this.requireStairTraversal();
+            const frame = this.getStraightStairTraversalFrame(currentStairSupport.stair);
+            const exitLocal = traversal.localPointForStraightFrame(frame, { x: worldX, y: worldY }, {
+                shortestDeltaX: this.shortestDeltaX.bind(this),
+                shortestDeltaY: this.shortestDeltaY.bind(this)
+            });
+            if (exitLocal.upDown < 0) {
+                nextLayer = Math.round(Number(currentStairSupport.stair.lowerLevel) || 0);
+                nextFloorSupport = this.getFloorSupportAtWorldPosition(worldX, worldY, nextLayer, options);
+            } else if (exitLocal.upDown > 1) {
+                nextLayer = Math.round(Number(currentStairSupport.stair.higherLevel) || 0);
+                nextFloorSupport = this.getFloorSupportAtWorldPosition(worldX, worldY, nextLayer, options);
+            }
             if (nextFloorSupport) {
-                const allowed = this.areActorMovementSupportsAdjacent(currentStairSupport, nextFloorSupport);
+                const endpoint = this.getStairEndpointForFloorSupport(nextFloorSupport, currentStairSupport.stair);
+                const crossedEndpoint = endpoint &&
+                    this.didActorCrossStairEndpoint(currentStairSupport.stair, actor, worldX, worldY, endpoint);
+                const allowed = this.areActorMovementSupportsAdjacent(currentStairSupport, nextFloorSupport) ||
+                    crossedEndpoint;
                 return { handled: true, allowed, support: allowed ? nextFloorSupport : null, currentSupport: currentStairSupport };
             }
             return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport };
         }
 
         if (nextStairSupport) {
-            const allowed = this.areActorMovementSupportsAdjacent(currentFloorSupport, nextStairSupport) &&
+            const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, nextStairSupport.stair);
+            const crossedEndpoint = endpoint &&
+                this.didActorCrossStairEndpoint(nextStairSupport.stair, actor, worldX, worldY, endpoint);
+            const allowed = !!endpoint &&
+                crossedEndpoint &&
                 this.actorFitsWithinStairSideBounds(nextStairSupport.stair, worldX, worldY, actor, options);
             if (allowed) {
                 return { handled: true, allowed: true, support: nextStairSupport, currentSupport: currentFloorSupport };
@@ -2484,6 +2555,24 @@ class GameMap {
                 return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport };
             }
             return { handled: false, allowed: false, support: null, currentSupport: currentFloorSupport };
+        }
+
+        if (currentFloorSupport) {
+            const traversal = this.requireStairTraversal();
+            for (const stair of this.stairsById.values()) {
+                if (!stair || stair.stairKind !== "straight") continue;
+                const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
+                if (!endpoint) continue;
+                if (!this.didActorCrossStairEndpoint(stair, actor, worldX, worldY, endpoint)) continue;
+                const frame = this.getStraightStairTraversalFrame(stair);
+                const local = traversal.localPointForStraightFrame(frame, { x: worldX, y: worldY }, {
+                    shortestDeltaX: this.shortestDeltaX.bind(this),
+                    shortestDeltaY: this.shortestDeltaY.bind(this)
+                });
+                if (local.upDown >= -1e-6 && local.upDown <= 1 + 1e-6) {
+                    return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport };
+                }
+            }
         }
 
         return { handled: false, allowed: false, support: null, currentSupport: currentFloorSupport };
@@ -2520,6 +2609,8 @@ class GameMap {
             actor._stairSupport = {
                 stairId: support.stairId,
                 treadIndex: support.treadIndex,
+                upDown: support.upDown,
+                leftRight: support.leftRight,
                 baseZ: support.baseZ,
                 localZ
             };
