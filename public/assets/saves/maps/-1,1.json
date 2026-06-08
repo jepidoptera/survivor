@@ -24688,23 +24688,6 @@
       "id": 50
     },
     {
-      "type": "deer",
-      "x": 149.05303333333356,
-      "y": 305.55833333333374,
-      "hp": 12.478388112473613,
-      "maxHp": 12.478388112473613,
-      "mp": 12.478388112473613,
-      "maxMp": 12.478388112473613,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.0123679300247688,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer56",
-      "id": 178
-    },
-    {
       "type": "squirrel",
       "x": 156.3707333333332,
       "y": 285.7833333333331,
@@ -24737,23 +24720,6 @@
       "chaseRadius": -1,
       "scriptingName": "deer12",
       "id": 177
-    },
-    {
-      "type": "squirrel",
-      "x": 149.93346666666665,
-      "y": 274.9333333333334,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5278020232067688,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel112",
-      "id": 172
     },
     {
       "type": "deer",
@@ -24791,8 +24757,8 @@
     },
     {
       "type": "squirrel",
-      "x": 124.704,
-      "y": 229.49999999999991,
+      "x": 117.60279999999999,
+      "y": 248.60000000000002,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -24807,21 +24773,21 @@
       "id": 262
     },
     {
-      "type": "squirrel",
-      "x": 169.70269230769244,
-      "y": 251,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
+      "type": "deer",
+      "x": 146.6371153846152,
+      "y": 239.5,
+      "hp": 12.459465507078637,
+      "maxHp": 12.459465507078637,
+      "mp": 12.459465507078637,
+      "maxMp": 12.459465507078637,
       "temperature": 0,
       "baselineTemperature": 0,
-      "size": 0.4898897326537922,
+      "size": 0.7516090629293288,
       "inventory": {},
       "tint": 16777215,
       "chaseRadius": -1,
-      "scriptingName": "squirrel79",
-      "id": 169
+      "scriptingName": "deer46",
+      "id": 123
     }
   ],
   "powerups": []

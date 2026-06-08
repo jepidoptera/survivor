@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -62.95680921527348,
-    "y": 137.32579332232453,
+    "x": -40.97505608193722,
+    "y": 141.71799729609452,
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -18,7 +18,7 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "teleport",
+    "currentSpell": "placeobject",
     "activeAura": "speed",
     "activeAuras": [
       "speed",
@@ -27,15 +27,15 @@
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "windows",
-    "selectedPlaceableTexturePath": "/assets/images/windows/very%20plain%20arch.png",
+    "selectedPlaceableCategory": "roof",
+    "selectedPlaceableTexturePath": "/assets/images/roofs/smallshingles.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/thornflowers.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/crystal%20ball.png",
       "signs": "/assets/images/signs/princess.png",
-      "roof": "/assets/images/roofs/slate.png"
+      "roof": "/assets/images/roofs/smallshingles.png"
     },
     "selectedPlaceableRenderOffset": 0,
     "selectedPlaceableRenderOffsetByTexture": {
@@ -54,7 +54,7 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0,
       "/assets/images/windows/very%20plain%20arch.png": 0
     },
-    "selectedPlaceableScale": 1.81,
+    "selectedPlaceableScale": 1.023,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -88,7 +88,7 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0,
       "/assets/images/windows/very%20plain%20arch.png": 0
     },
-    "selectedPlaceableRotationAxis": "spatial",
+    "selectedPlaceableRotationAxis": "visual",
     "selectedPlaceableRotationAxisByTexture": {
       "/assets/images/doors/door5.png": "spatial",
       "/assets/images/windows/window.png": "spatial",
@@ -140,7 +140,7 @@
       "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
-    "selectedEditorCategory": "windows",
+    "selectedEditorCategory": "roof",
     "selectedFloorEditLevel": 0,
     "selectedWallHeight": 3,
     "selectedWallThickness": 0.375,
@@ -148,7 +148,7 @@
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
     "selectedRoofOverhang": 0.6875,
     "selectedRoofPeakHeight": 8.25,
-    "selectedRoofTextureRepeat": 0.46875,
+    "selectedRoofTextureRepeat": 0.1875,
     "showEditorPanel": true,
     "showPerfReadout": true,
     "spells": [
@@ -221,8 +221,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -78.45058053689081,
-      "y": 123.82165450437819
+      "x": -56.4656617830908,
+      "y": 123.35017270875774
     }
   },
   "los": {

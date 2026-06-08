@@ -26654,9 +26654,9 @@
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "castsLosShadows": false,
-      "mountedWallLineGroupId": 5130,
-      "mountedSectionId": 5130,
-      "mountedWallSectionUnitId": 5130,
+      "mountedWallLineGroupId": 5922,
+      "mountedSectionId": 5922,
+      "mountedWallSectionUnitId": 5922,
       "mountedWallFacingSign": 1,
       "groundPlaneHitboxOverridePoints": [
         {
@@ -26702,9 +26702,9 @@
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "castsLosShadows": false,
-      "mountedWallLineGroupId": 5130,
-      "mountedSectionId": 5130,
-      "mountedWallSectionUnitId": 5130,
+      "mountedWallLineGroupId": 5922,
+      "mountedSectionId": 5922,
+      "mountedWallSectionUnitId": 5922,
       "mountedWallFacingSign": 1,
       "groundPlaneHitboxOverridePoints": [
         {
@@ -26750,9 +26750,9 @@
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "castsLosShadows": false,
-      "mountedWallLineGroupId": 5127,
-      "mountedSectionId": 5127,
-      "mountedWallSectionUnitId": 5127,
+      "mountedWallLineGroupId": 5919,
+      "mountedSectionId": 5919,
+      "mountedWallSectionUnitId": 5919,
       "mountedWallFacingSign": 1,
       "groundPlaneHitboxOverridePoints": [
         {
@@ -26798,9 +26798,9 @@
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "castsLosShadows": false,
-      "mountedWallLineGroupId": 5127,
-      "mountedSectionId": 5127,
-      "mountedWallSectionUnitId": 5127,
+      "mountedWallLineGroupId": 5919,
+      "mountedSectionId": 5919,
+      "mountedWallSectionUnitId": 5919,
       "mountedWallFacingSign": 1,
       "groundPlaneHitboxOverridePoints": [
         {
@@ -26846,9 +26846,9 @@
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "castsLosShadows": false,
-      "mountedWallLineGroupId": 5131,
-      "mountedSectionId": 5131,
-      "mountedWallSectionUnitId": 5131,
+      "mountedWallLineGroupId": 5923,
+      "mountedSectionId": 5923,
+      "mountedWallSectionUnitId": 5923,
       "mountedWallFacingSign": 1,
       "groundPlaneHitboxOverridePoints": [
         {

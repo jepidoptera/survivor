@@ -22151,7 +22151,7 @@
   "walls": [
     {
       "type": "wallSection",
-      "id": 450,
+      "id": 5915,
       "height": 4.5,
       "thickness": 0.125,
       "bottomZ": 0,
@@ -22166,11 +22166,17 @@
         "kind": "midpoint",
         "a": {
           "xindex": 250,
-          "yindex": 221
+          "yindex": 221,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
         },
         "b": {
           "xindex": 249,
-          "yindex": 221
+          "yindex": 221,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
         },
         "x": 216.067,
         "y": 221.25
@@ -22180,15 +22186,18 @@
         "xindex": 250,
         "yindex": 220,
         "x": 216.5,
-        "y": 220.5
+        "y": 220.5,
+        "traversalLayer": 0,
+        "surfaceId": "",
+        "fragmentId": ""
       },
       "tint": 16777215,
       "scriptingName": "wallsection264",
-      "_prototypeManagedRecordId": 451
+      "_prototypeManagedRecordId": 5916
     },
     {
       "type": "wallSection",
-      "id": 451,
+      "id": 5916,
       "height": 4.5,
       "thickness": 0.125,
       "bottomZ": 0,
@@ -22203,11 +22212,17 @@
         "kind": "midpoint",
         "a": {
           "xindex": 249,
-          "yindex": 220
+          "yindex": 220,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
         },
         "b": {
           "xindex": 250,
-          "yindex": 219
+          "yindex": 219,
+          "traversalLayer": 0,
+          "surfaceId": "",
+          "fragmentId": ""
         },
         "x": 216.067,
         "y": 219.75
@@ -22217,16 +22232,19 @@
         "xindex": 250,
         "yindex": 220,
         "x": 216.5,
-        "y": 220.5
+        "y": 220.5,
+        "traversalLayer": 0,
+        "surfaceId": "",
+        "fragmentId": ""
       },
       "tint": 16777215,
       "scriptingName": "wallsection263",
-      "_prototypeManagedRecordId": 452
+      "_prototypeManagedRecordId": 5917
     }
   ],
   "blockedEdges": [
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22237,7 +22255,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22248,7 +22266,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22259,7 +22277,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22270,7 +22288,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 248,
         "yindex": 221
@@ -22281,7 +22299,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22292,7 +22310,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22303,7 +22321,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22314,7 +22332,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22325,7 +22343,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22336,7 +22354,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22347,7 +22365,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 248,
         "yindex": 220
@@ -22358,7 +22376,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 219
@@ -22369,7 +22387,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22380,7 +22398,7 @@
       }
     },
     {
-      "recordId": 450,
+      "recordId": 5915,
       "a": {
         "xindex": 249,
         "yindex": 219
@@ -22391,7 +22409,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22402,7 +22420,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22413,7 +22431,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22424,7 +22442,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 220
@@ -22435,7 +22453,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 219
@@ -22446,7 +22464,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 248,
         "yindex": 219
@@ -22457,7 +22475,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22468,7 +22486,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22479,7 +22497,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22490,7 +22508,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22501,7 +22519,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22512,7 +22530,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 221
@@ -22523,7 +22541,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 248,
         "yindex": 220
@@ -22534,7 +22552,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 250,
         "yindex": 220
@@ -22545,7 +22563,7 @@
       }
     },
     {
-      "recordId": 451,
+      "recordId": 5916,
       "a": {
         "xindex": 249,
         "yindex": 222
@@ -28161,23 +28179,6 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": 282.4892000000001,
-      "y": 232.5999999999999,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5988071967455374,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel22",
-      "id": 210
-    },
-    {
-      "type": "squirrel",
       "x": 252.67215384615383,
       "y": 218.1538461538462,
       "hp": 1,
@@ -28245,23 +28246,6 @@
       "id": 250
     },
     {
-      "type": "squirrel",
-      "x": 251.77284615384593,
-      "y": 246,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.4447117102431572,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel59",
-      "id": 213
-    },
-    {
       "type": "deer",
       "x": 262.43130769230777,
       "y": 164.94230769230774,
@@ -28277,23 +28261,6 @@
       "chaseRadius": -1,
       "scriptingName": "deer53",
       "id": 221
-    },
-    {
-      "type": "deer",
-      "x": 220.3103999999999,
-      "y": 212.69999999999982,
-      "hp": 12.4774242223302,
-      "maxHp": 12.4774242223302,
-      "mp": 12.4774242223302,
-      "maxMp": 12.4774242223302,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.8926777685515319,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer49",
-      "id": 164
     },
     {
       "type": "squirrel",
@@ -28313,23 +28280,6 @@
       "id": 161
     },
     {
-      "type": "deer",
-      "x": 216.8896999999999,
-      "y": 191.2750000000002,
-      "hp": 12.451267058590588,
-      "maxHp": 12.451267058590588,
-      "mp": 12.451267058590588,
-      "maxMp": 12.451267058590588,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.7783610528546796,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer40",
-      "id": 220
-    },
-    {
       "type": "squirrel",
       "x": 219.41553333333323,
       "y": 178.81666666666652,
@@ -28345,6 +28295,125 @@
       "chaseRadius": -1,
       "scriptingName": "squirrel150",
       "id": 162
+    },
+    {
+      "type": "deer",
+      "x": 241.84715384615393,
+      "y": 234.5,
+      "hp": 12.470016968035358,
+      "maxHp": 12.470016968035358,
+      "mp": 12.470016968035358,
+      "maxMp": 12.470016968035358,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 1.0644098252758614,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer66",
+      "id": 179
+    },
+    {
+      "type": "squirrel",
+      "x": 230.356,
+      "y": 206.13333333333335,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.4758804532691001,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel177",
+      "id": 219
+    },
+    {
+      "type": "squirrel",
+      "x": 225.88166666666672,
+      "y": 171.9166666666666,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5639861339333566,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel146",
+      "id": 45
+    },
+    {
+      "type": "deer",
+      "x": 220.13719999999995,
+      "y": 208.5999999999999,
+      "hp": 12.451267058590588,
+      "maxHp": 12.451267058590588,
+      "mp": 12.451267058590588,
+      "maxMp": 12.451267058590588,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.7783610528546796,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer40",
+      "id": 220
+    },
+    {
+      "type": "squirrel",
+      "x": 225.55969230769225,
+      "y": 217.19230769230785,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5864685928357081,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel76",
+      "id": 157
+    },
+    {
+      "type": "squirrel",
+      "x": 217.16615384615375,
+      "y": 225.5,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.414691050829185,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel36",
+      "id": 38
+    },
+    {
+      "type": "squirrel",
+      "x": 258.934,
+      "y": 248.4666666666667,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.4181738847652478,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel92",
+      "id": 171
     }
   ],
   "powerups": []

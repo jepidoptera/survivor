@@ -23631,6 +23631,23 @@
       "chaseRadius": -1,
       "scriptingName": "deer16",
       "id": 111
+    },
+    {
+      "type": "squirrel",
+      "x": 25.114000000000004,
+      "y": 315.99999999999983,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5689107510026873,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel68",
+      "id": 288
     }
   ],
   "powerups": []
