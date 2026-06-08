@@ -378,6 +378,7 @@ function spawnPlaytestWizard() {
         movementVector: { x: 0, y: 0 },
         lastDirectionRow: 9,
         animationSpeedMultiplier: PLAYTEST_WIZARD_ANIMATION_SPEED_MULTIPLIER,
+        runAnimationPhase: 0,
         isMovingBackward: false,
         isJumping: false,
         floorId: getFloorId(floor),
@@ -438,6 +439,16 @@ function setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, fall
     if (movedDistance > 0.000001 && dt > 0) {
         wizard.moving = true;
         wizard.movementVector = { x: movedX / dt, y: movedY / dt };
+        const visualSpeed = movedDistance / dt;
+        const speed = Number(wizard.speed);
+        const speedRatio = speed > 0 ? visualSpeed / speed : 0;
+        const animSpeed = Number.isFinite(Number(wizard.animationSpeedMultiplier))
+            ? Number(wizard.animationSpeedMultiplier)
+            : 1;
+        const previousPhase = Number.isFinite(Number(wizard.runAnimationPhase))
+            ? Number(wizard.runAnimationPhase)
+            : 0;
+        wizard.runAnimationPhase = (previousPhase + dt * 60 * animSpeed * speedRatio / 2) % 8;
         setPlaytestWizardFacing(wizard, { x: movedX, y: movedY });
         return;
     }
@@ -3605,12 +3616,11 @@ app.stage.on("pointermove", (event) => {
             renderer.render();
             return;
         }
-        state.updateHoverPoint(worldFromEvent(event));
         if (state.playtestWizard && state.playtestWizard.active === true) {
             playtestMouseWorld = renderer.screenToWorld(lastStagePointer, state.playtestWizard.z);
-            renderer.render();
             return;
         }
+        state.updateHoverPoint(worldFromEvent(event));
         if (typeof activeTool().pointerMove === "function") {
             const thresholdPixels = state.tool === "select" ? 10 : 14;
             activeTool().pointerMove(worldFromEvent(event), renderer.screenPixelsToWorldDistance(thresholdPixels), {

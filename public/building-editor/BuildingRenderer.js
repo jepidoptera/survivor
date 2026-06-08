@@ -5870,6 +5870,7 @@ export class BuildingRenderer {
     }
 
     drawFloorUnderlay(gfx) {
+        if (this.state && this.state.playtestWizard && this.state.playtestWizard.active === true) return;
         const floor = typeof this.state.floorUnderlay === "function" ? this.state.floorUnderlay() : null;
         if (!floor) return;
         const selectedFloor = this.state.selectedFloor();
@@ -7348,16 +7349,9 @@ export class BuildingRenderer {
         if (wizard.isJumping) {
             frameIndex = rowIndex * PLAYTEST_WIZARD_SHEET_COLS + 2;
         } else if (wizard.moving === true || visualSpeed > 0.02) {
-            const speed = Number(wizard.speed);
-            const speedRatio = speed > 0 ? visualSpeed / speed : 0;
-            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
-                ? performance.now()
-                : Date.now();
-            const animSpeed = Number.isFinite(Number(wizard.animationSpeedMultiplier))
-                ? Number(wizard.animationSpeedMultiplier)
-                : 1;
-            const simTicks = (nowMs / 1000) * 60;
-            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const animFrame = Number.isFinite(Number(wizard.runAnimationPhase))
+                ? Math.floor(Number(wizard.runAnimationPhase)) % 8
+                : 0;
             const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
             frameIndex = rowIndex * PLAYTEST_WIZARD_SHEET_COLS + 1 + effectiveAnimFrame;
         }

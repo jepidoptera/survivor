@@ -101,3 +101,68 @@ test("building editor playtest floor snapshot sprite uses render-texture y flip"
     assert.equal(sprite.scale.x, 1);
     assert.equal(sprite.scale.y, -1);
 });
+
+test("building editor playtest wizard animation uses accumulated run phase", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const wizard = {
+        lastDirectionRow: 6,
+        moving: true,
+        movementVector: { x: 4.5, y: 0 },
+        speed: 4.5,
+        animationSpeedMultiplier: 1,
+        runAnimationPhase: 2.25,
+        isMovingBackward: false,
+        isJumping: false
+    };
+
+    const frameAtNormalSpeed = renderer.playtestWizardFrameIndex(wizard);
+    wizard.movementVector = { x: 2.25, y: 0 };
+    const frameAtDifferentSpeed = renderer.playtestWizardFrameIndex(wizard);
+
+    assert.equal(frameAtNormalSpeed, 6 * 9 + 1 + 2);
+    assert.equal(frameAtDifferentSpeed, frameAtNormalSpeed);
+});
+
+test("building editor playtest hides lower floor underlay guides", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.worldToScreen = (point) => ({ x: Number(point.x), y: Number(point.y) });
+    const lower = {
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 2, y: 0 },
+            { x: 2, y: 2 },
+            { x: 0, y: 2 }
+        ],
+        holes: []
+    };
+    const selected = { elevation: 3 };
+    const calls = [];
+    const gfx = {
+        lineStyle(...args) { calls.push(["lineStyle", ...args]); },
+        moveTo(...args) { calls.push(["moveTo", ...args]); },
+        lineTo(...args) { calls.push(["lineTo", ...args]); },
+        beginFill(...args) { calls.push(["beginFill", ...args]); },
+        drawCircle(...args) { calls.push(["drawCircle", ...args]); },
+        endFill(...args) { calls.push(["endFill", ...args]); }
+    };
+    renderer.state = {
+        floorUnderlay() {
+            return lower;
+        },
+        selectedFloor() {
+            return selected;
+        },
+        playtestWizard: null
+    };
+
+    renderer.drawFloorUnderlay(gfx);
+    assert.equal(calls.some((call) => call[0] === "lineTo"), true);
+
+    calls.length = 0;
+    renderer.state.playtestWizard = { active: true };
+    renderer.drawFloorUnderlay(gfx);
+
+    assert.deepEqual(calls, []);
+});
