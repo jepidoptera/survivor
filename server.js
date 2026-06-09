@@ -193,6 +193,8 @@ function saveSectionWorldSlot(requestedSlot, payload) {
         : {};
     const hasTriggers = Object.prototype.hasOwnProperty.call(payload || {}, 'triggers');
     const triggers = Array.isArray(payload && payload.triggers) ? payload.triggers : [];
+    const hasBuildings = Object.prototype.hasOwnProperty.call(payload || {}, 'buildings');
+    const buildings = Array.isArray(payload && payload.buildings) ? payload.buildings : [];
 
     fs.mkdirSync(slotDir, { recursive: true });
     const manifestPath = path.join(slotDir, 'manifest.json');
@@ -200,6 +202,10 @@ function saveSectionWorldSlot(requestedSlot, payload) {
     if (hasTriggers) {
         const triggersPath = path.join(slotDir, 'triggers.json');
         fs.writeFileSync(triggersPath, JSON.stringify(triggers, null, 2), 'utf8');
+    }
+    if (hasBuildings) {
+        const buildingsPath = path.join(slotDir, 'buildings.json');
+        fs.writeFileSync(buildingsPath, JSON.stringify(buildings, null, 2), 'utf8');
     }
     const validSections = sections.filter(isValidSectionCoordRecord);
     for (let i = 0; i < validSections.length; i++) {
@@ -230,7 +236,7 @@ function loadSectionWorldSlot(requestedSlot) {
     }
 
     const sectionFiles = fs.readdirSync(slotDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith('.json') && entry.name !== 'manifest.json' && entry.name !== 'triggers.json')
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json') && entry.name !== 'manifest.json' && entry.name !== 'triggers.json' && entry.name !== 'buildings.json')
         .map(entry => entry.name)
         .sort((a, b) => a.localeCompare(b));
 
@@ -256,6 +262,18 @@ function loadSectionWorldSlot(requestedSlot) {
         triggers = manifest.triggers;
     }
 
+    const buildingsPath = path.join(slotDir, 'buildings.json');
+    let buildings = [];
+    if (fs.existsSync(buildingsPath)) {
+        const rawBuildings = fs.readFileSync(buildingsPath, 'utf8');
+        const parsedBuildings = JSON.parse(rawBuildings);
+        if (Array.isArray(parsedBuildings)) {
+            buildings = parsedBuildings;
+        }
+    } else if (Array.isArray(manifest.buildings)) {
+        buildings = manifest.buildings;
+    }
+
     const sections = [];
     for (let i = 0; i < sectionFiles.length; i++) {
         const fileName = sectionFiles[i];
@@ -274,6 +292,7 @@ function loadSectionWorldSlot(requestedSlot) {
             slot: requestedSlot,
             manifest,
             triggers,
+            buildings,
             sections
         }
     };

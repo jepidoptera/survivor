@@ -316,6 +316,9 @@
                             : []
                     }))
                     : [],
+                buildingPlacements: Array.isArray(sectionStateSource.buildingPlacements)
+                    ? sectionStateSource.buildingPlacements.map((record) => JSON.parse(JSON.stringify(record)))
+                    : [],
                 hysteresisRatio: 0.1,
                 useSparseNodes: true,
                 activeCenterKey: (typeof activeCenterKey === "string" && activeCenterKey.length > 0)

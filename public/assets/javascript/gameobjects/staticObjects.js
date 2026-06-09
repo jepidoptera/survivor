@@ -1388,6 +1388,8 @@ class StaticObject {
     static FLOWER_BURN_FRAGMENT_GRAVITY = 0.018;
     static FLOWER_BURN_FRAGMENT_ROW_STAGGER_SECONDS = 1;
     static FLOWER_BURN_ASH_FADE_SECONDS = 7;
+    static TREE_BURN_CRUMBLE_DELAY_SECONDS = 1;
+    static FIRE_SIZE_INTERPOLATE_SECONDS = 0.35;
 
     static _depthBillboardState = null;
     static _groundBillboardState = null;
@@ -1497,10 +1499,166 @@ void main(void) {
     gl_FragColor = tex;
 }
 `;
+    static _depthBillboardVsWebgl2 = `#version 300 es
+precision highp float;
+in vec3 aWorldPosition;
+in vec2 aUvs;
+uniform vec2 uScreenSize;
+uniform vec2 uScreenJitter;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+uniform vec2 uWorldSize;
+uniform vec2 uWrapEnabled;
+uniform vec2 uWrapAnchorWorld;
+uniform float uLayerBaseZ;
+uniform float uDepthBias;
+uniform float uZOffset;
+out vec2 vUvs;
+out float vWorldZ;
+out float vExteriorDepthBase;
+out float vDepth;
+void main(void) {
+    float anchorDx = uWrapAnchorWorld.x - uCameraWorld.x;
+    float anchorDy = uWrapAnchorWorld.y - uCameraWorld.y;
+    if (uWrapEnabled.x > 0.5 && uWorldSize.x > 0.0) {
+        anchorDx = mod(anchorDx + 0.5 * uWorldSize.x, uWorldSize.x);
+        if (anchorDx < 0.0) anchorDx += uWorldSize.x;
+        anchorDx -= 0.5 * uWorldSize.x;
+    }
+    if (uWrapEnabled.y > 0.5 && uWorldSize.y > 0.0) {
+        anchorDy = mod(anchorDy + 0.5 * uWorldSize.y, uWorldSize.y);
+        if (anchorDy < 0.0) anchorDy += uWorldSize.y;
+        anchorDy -= 0.5 * uWorldSize.y;
+    }
+    float localDx = aWorldPosition.x - uWrapAnchorWorld.x;
+    float localDy = aWorldPosition.y - uWrapAnchorWorld.y;
+    float camDx = anchorDx + localDx;
+    float camDy = anchorDy + localDy;
+    float camDz = (aWorldPosition.z + uLayerBaseZ) - uCameraZ;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz + uDepthBias;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    clip += vec2(
+        (uScreenJitter.x / sx) * 2.0,
+        -(uScreenJitter.y / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0 + (uZOffset * 0.001), 1.0);
+    vUvs = aUvs;
+    vWorldZ = aWorldPosition.z + uLayerBaseZ;
+    vExteriorDepthBase = anchorDy + uLayerBaseZ - uCameraZ;
+    vDepth = nd;
+}
+`;
+    static _depthBillboardFsWebgl2 = `#version 300 es
+precision highp float;
+in vec2 vUvs;
+in float vWorldZ;
+in float vExteriorDepthBase;
+in float vDepth;
+uniform float uZOffset;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uBrightness;
+uniform float uAlphaCutoff;
+uniform float uClipMinZ;
+uniform vec2 uDepthRange;
+uniform float uDepthBias;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
+uniform sampler2D uBuildingCutawayDataSampler;
+uniform float uBuildingCutawayUseDataAlpha;
+uniform float uBuildingCutawayCurrentFloorZ;
+uniform float uBuildingCutawayUpperAlpha;
+uniform float uBuildingExteriorDepthMetricUse;
+uniform sampler2D uBuildingExteriorDepthMetricSampler;
+uniform vec2 uBuildingExteriorDepthMetricRange;
+out vec4 fragColor;
+float decodeExteriorDepthMetric(vec3 value) {
+    return dot(value, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0));
+}
+void main(void) {
+    vec4 tex = texture(uSampler, vUvs) * uTint;
+    float b = clamp(uBrightness, -1.0, 1.0);
+    if (b > 0.0) {
+        tex.rgb = mix(tex.rgb, vec3(1.0), b);
+    } else if (b < 0.0) {
+        tex.rgb *= (1.0 + b);
+    }
+    if (vWorldZ < uClipMinZ) discard;
+    if (tex.a < uAlphaCutoff) discard;
+    gl_FragDepth = vDepth;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        fragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    if (uBuildingCutawayUseDataAlpha > 0.5) {
+        vec4 data = texture(uBuildingCutawayDataSampler, vUvs);
+        if (data.a > 0.5) {
+            float minZ = uBuildingCutawayDataZRange.x;
+            float span = 1.0 / max(1e-6, uBuildingCutawayDataZRange.y);
+            float pixelZ = minZ + data.r * span;
+            if (pixelZ > uBuildingCutawayCurrentFloorZ + 0.001) {
+                tex.a *= clamp(uBuildingCutawayUpperAlpha, 0.0, 1.0);
+            }
+        }
+    }
+    if (uBuildingExteriorDepthMetricUse > 0.5) {
+        vec4 depthData = texture(uBuildingExteriorDepthMetricSampler, vUvs);
+        if (depthData.a > 0.5) {
+            float minMetric = uBuildingExteriorDepthMetricRange.x;
+            float span = 1.0 / max(1e-6, uBuildingExteriorDepthMetricRange.y);
+            float localMetric = minMetric + decodeExteriorDepthMetric(depthData.rgb) * span;
+            float depthMetric = vExteriorDepthBase + localMetric + uDepthBias;
+            float farMetric = uDepthRange.x;
+            float invSpan = max(1e-6, uDepthRange.y);
+            float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+            gl_FragDepth = nd;
+        }
+    }
+    fragColor = tex;
+}
+`;
 
     static _depthMetricNear = -128;
     static _depthMetricFar = 256;
     static GROUND_PLANE_VISUAL_LIFT = 0.03;
+
+    static isWebgl2Renderer(renderer) {
+        const gl = renderer && renderer.gl ? renderer.gl : null;
+        if (!gl) return false;
+        if (typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext) return true;
+        return typeof gl.texImage3D === "function" && typeof gl.drawBuffers === "function";
+    }
+
+    static depthBillboardShaderSources(renderer = null) {
+        if (StaticObject.isWebgl2Renderer(renderer)) {
+            return {
+                key: "webgl2",
+                vertex: StaticObject._depthBillboardVsWebgl2,
+                fragment: StaticObject._depthBillboardFsWebgl2
+            };
+        }
+        return {
+            key: "webgl1",
+            vertex: StaticObject._depthBillboardVs,
+            fragment: StaticObject._depthBillboardFs
+        };
+    }
 
     static ensureDepthBillboardState(pixiRef) {
         if (!pixiRef) return null;
@@ -1825,7 +1983,11 @@ void main(void) {
             hasMountedWallTarget &&
             (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
         );
-        const desiredMode = useDualWallPlanes ? "dual" : (isGroundRotation ? "ground" : "single");
+        const rendererRef = (options && options.renderer) ||
+            (typeof globalThis !== "undefined" && globalThis.app && globalThis.app.renderer ? globalThis.app.renderer : null);
+        const shaderSources = StaticObject.depthBillboardShaderSources(rendererRef);
+        const desiredPlaneMode = useDualWallPlanes ? "dual" : (isGroundRotation ? "ground" : "single");
+        const desiredMode = `${desiredPlaneMode}:${shaderSources.key}`;
         if (this._depthBillboardMesh && !this._depthBillboardMesh.destroyed && this._depthBillboardMeshMode === desiredMode) {
             return this._depthBillboardMesh;
         }
@@ -1860,7 +2022,7 @@ void main(void) {
             .addAttribute("aWorldPosition", new Float32Array(positionsVertexCount), 3)
             .addAttribute("aUvs", uvs, 2)
             .addIndex(indices);
-        const shader = pixi.Shader.from(StaticObject._depthBillboardVs, StaticObject._depthBillboardFs, {
+        const shader = pixi.Shader.from(shaderSources.vertex, shaderSources.fragment, {
             uScreenSize: new Float32Array([1, 1]),
             uScreenJitter: new Float32Array([0, 0]),
             uCameraWorld: new Float32Array([0, 0]),
@@ -1884,6 +2046,9 @@ void main(void) {
             uBuildingCutawayUseDataAlpha: 0,
             uBuildingCutawayCurrentFloorZ: 0,
             uBuildingCutawayUpperAlpha: 1,
+            uBuildingExteriorDepthMetricUse: 0,
+            uBuildingExteriorDepthMetricSampler: pixi.Texture.WHITE,
+            uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
             uSampler: pixi.Texture.WHITE
         });
         const mesh = new pixi.Mesh(geometry, shader, state, pixi.DRAW_MODES.TRIANGLES);
@@ -2150,7 +2315,8 @@ void main(void) {
             return null;
         }
         const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
-            forceSinglePlane: !useDualWallPlanes
+            forceSinglePlane: !useDualWallPlanes,
+            renderer: ctx && ctx.app ? ctx.app.renderer : null
         });
         if (!mesh || !mesh.shader || !mesh.shader.uniforms) {
             hideDepthMesh();
@@ -2279,8 +2445,12 @@ void main(void) {
             // bottom edge, independent of sprite anchor. Otherwise center-anchored
             // sprites put half of their depth quad below the floor and get clipped
             // by depth-writing ground polygons.
-            const bottomZ = worldZ;
-            const topZ = worldZ + worldHeightZ;
+            const useVerticalAnchorY = this.depthBillboardUseVerticalAnchorY === true ||
+                (options && options.useVerticalAnchorY === true);
+            const bottomZ = useVerticalAnchorY
+                ? worldZ - ((1 - anchorY) * worldHeightZ)
+                : worldZ;
+            const topZ = bottomZ + worldHeightZ;
             const isSpatialDoorOrWindow = !!(
                 this.rotationAxis === "spatial" &&
                 (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
@@ -2783,6 +2953,45 @@ void main(void) {
         this.fireSprite = null;
     }
 
+    _getFireVisualScaleTargets() {
+        let spriteScale = 1;
+        if (this.maxHP && this.maxHP > 0) {
+            const hpRatio = Math.max(0, Math.min(1, this.hp / this.maxHP));
+            spriteScale = 0.3 + 0.7 * (1 - hpRatio);
+        }
+
+        let intensityScale = 1;
+        if (this.type === "tree" && this.maxHP > 0 && this.hp > 0) {
+            intensityScale = Math.min(this.maxHP / this.hp, 4);
+        }
+
+        return { spriteScale, intensityScale };
+    }
+
+    _updateFireVisualScales() {
+        const targets = this._getFireVisualScaleTargets();
+        const currentFrame = Number.isFinite(frameCount) ? Number(frameCount) : 0;
+        const previousFrame = Number.isFinite(this._fireVisualScaleLastFrame)
+            ? this._fireVisualScaleLastFrame
+            : currentFrame;
+        this._fireVisualScaleLastFrame = currentFrame;
+        const deltaFrames = Math.max(0, currentFrame - previousFrame);
+        if (!Number.isFinite(this.fireScale) || !Number.isFinite(this._renderedFireIntensityScale)) {
+            this.fireScale = targets.spriteScale;
+            this._renderedFireIntensityScale = targets.intensityScale;
+            return;
+        }
+
+        const simFps = Math.max(1, Number(frameRate) || 30);
+        const easeFrames = Math.max(
+            1,
+            (Number(StaticObject.FIRE_SIZE_INTERPOLATE_SECONDS) || 0.35) * simFps
+        );
+        const t = Math.max(0, Math.min(1, deltaFrames / easeFrames));
+        this.fireScale += (targets.spriteScale - this.fireScale) * t;
+        this._renderedFireIntensityScale += (targets.intensityScale - this._renderedFireIntensityScale) * t;
+    }
+
     update() {
         this.updateSpriteAnimation();
 
@@ -2826,19 +3035,14 @@ void main(void) {
             const alphaMult = Number.isFinite(this.fireAlphaMult) ? this.fireAlphaMult : 1;
             if (this.fireSprite) {
                 this.fireSprite.alpha = alphaMult;
-                // Scale fire size based on HP: starts small, grows as HP drops
-                if (this.maxHP && this.maxHP > 0) {
-                    const hpRatio = Math.max(0, Math.min(1, this.hp / this.maxHP));
-                    // Fire scale: 0.3 at full HP, 1.0 at 0 HP
-                    this.fireScale = 0.3 + 0.7 * (1 - hpRatio);
-                } else {
-                    this.fireScale = 1;
-                }
+                this._updateFireVisualScales();
             }
         } else {
             if (this.fireSprite) {
                 this._removeFireSprite();
             }
+            delete this._fireVisualScaleLastFrame;
+            delete this._renderedFireIntensityScale;
         }
         
         // Fade out fire after destruction
@@ -2870,9 +3074,208 @@ void main(void) {
         }
     }
 
+    _getFallenTreeBurnFragmentQuad() {
+        if (this.type !== "tree" || !this.falling) return null;
+        const absRotation = Math.min(90, Math.max(0, Math.abs(Number(this.rotation) || 0)));
+        if (absRotation < 89.999) return null;
+
+        const positions = this._depthBillboardWorldPositions;
+        if (positions && positions.length >= 12) {
+            const values = Array.from(positions.slice ? positions.slice(0, 12) : positions).slice(0, 12).map(Number);
+            if (values.length >= 12 && values.every(Number.isFinite)) {
+                const cachedScreen = this._fallenTreeBurnScreenQuad;
+                return {
+                    bl: { x: values[0], y: values[1], z: values[2] },
+                    br: { x: values[3], y: values[4], z: values[5] },
+                    tr: { x: values[6], y: values[7], z: values[8] },
+                    tl: { x: values[9], y: values[10], z: values[11] },
+                    screen: (
+                        cachedScreen &&
+                        cachedScreen.bl &&
+                        cachedScreen.br &&
+                        cachedScreen.tr &&
+                        cachedScreen.tl
+                    ) ? cachedScreen : null
+                };
+            }
+        }
+
+        const sprite = this.pixiSprite;
+        const viewScale = Math.max(1e-6, Math.abs(Number(viewscale) || 1));
+        const xyRatio = Math.max(1e-6, Math.abs(Number(xyratio) || 1));
+        const anchorX = (sprite && sprite.anchor && Number.isFinite(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0.5;
+        const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
+        const worldY = Number.isFinite(this.y) ? Number(this.y) : 0;
+        const worldZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        const spriteWorldWidth = (sprite && Number.isFinite(sprite.width) && Math.abs(Number(sprite.width)) > 0)
+            ? Math.abs(Number(sprite.width)) / viewScale
+            : Math.max(0.01, Math.abs(Number(this.width) || Number(this.size) || 4));
+        const spriteWorldHeightZ = (sprite && Number.isFinite(sprite.height) && Math.abs(Number(sprite.height)) > 0)
+            ? Math.abs(Number(sprite.height)) / (viewScale * xyRatio)
+            : Math.max(0.01, Math.abs(Number(this.height) || Number(this.size) || 4) / xyRatio);
+        const fallSign = (typeof this.fallDirection === "string")
+            ? (this.fallDirection === "right" ? 1 : -1)
+            : ((Number(this.rotation) || 0) >= 0 ? 1 : -1);
+        const fallRadians = (absRotation * Math.PI / 180) * fallSign;
+        const cosR = Math.cos(fallRadians);
+        const sinR = Math.sin(fallRadians);
+
+        let topWidth = spriteWorldWidth;
+        let deformedHeight = spriteWorldHeightZ;
+        if (absRotation >= 75) {
+            const lateProgress = Math.min((absRotation - 75) / 15, 1);
+            topWidth = spriteWorldWidth * (1 - lateProgress * 0.5);
+            deformedHeight = spriteWorldHeightZ * (1 + lateProgress * 0.1);
+        }
+
+        const safeXyRatio = Math.max(1e-6, xyRatio);
+        const rotateXZ = (x, z) => {
+            const zMetric = z * safeXyRatio;
+            const rx = (x * cosR) - (zMetric * sinR);
+            const rzMetric = (x * sinR) + (zMetric * cosR);
+            return {
+                x: rx,
+                z: rzMetric / safeXyRatio
+            };
+        };
+
+        const baseCenterX = worldX + (0.5 - anchorX) * spriteWorldWidth;
+        const baseY = worldY;
+        const localBL = rotateXZ(-spriteWorldWidth * 0.5, 0);
+        const localBR = rotateXZ(spriteWorldWidth * 0.5, 0);
+        const localTR = rotateXZ(topWidth * 0.5, deformedHeight);
+        const localTL = rotateXZ(-topWidth * 0.5, deformedHeight);
+
+        const quad = {
+            bl: { x: baseCenterX + localBL.x, y: baseY, z: worldZ + localBL.z },
+            br: { x: baseCenterX + localBR.x, y: baseY, z: worldZ + localBR.z },
+            tr: { x: baseCenterX + localTR.x, y: baseY, z: worldZ + localTR.z },
+            tl: { x: baseCenterX + localTL.x, y: baseY, z: worldZ + localTL.z }
+        };
+        const cachedScreen = this._fallenTreeBurnScreenQuad;
+        if (cachedScreen && cachedScreen.bl && cachedScreen.br && cachedScreen.tr && cachedScreen.tl) {
+            quad.screen = cachedScreen;
+        }
+        return quad;
+    }
+
+    _interpolateBurnFragmentQuadPoint(quad, u, v) {
+        if (!quad) return null;
+        const mix = (a, b, t) => ({
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+            z: a.z + (b.z - a.z) * t
+        });
+        const top = mix(quad.tl, quad.tr, u);
+        const bottom = mix(quad.bl, quad.br, u);
+        return mix(top, bottom, v);
+    }
+
+    _interpolateBurnFragmentTriangleMappedPoint(quad, u, v, diagonal = "bl-tr") {
+        if (!quad) return null;
+        if (diagonal === "br-tl") {
+            const useUpperRightTriangle = u >= v;
+            if (useUpperRightTriangle) {
+                const wTl = 1 - u;
+                const wTr = u - v;
+                const wBr = v;
+                return {
+                    x: quad.tl.x * wTl + quad.tr.x * wTr + quad.br.x * wBr,
+                    y: quad.tl.y * wTl + quad.tr.y * wTr + quad.br.y * wBr,
+                    z: (Number(quad.tl.z) || 0) * wTl + (Number(quad.tr.z) || 0) * wTr + (Number(quad.br.z) || 0) * wBr
+                };
+            }
+            const wTl = 1 - v;
+            const wBr = u;
+            const wBl = v - u;
+            return {
+                x: quad.tl.x * wTl + quad.br.x * wBr + quad.bl.x * wBl,
+                y: quad.tl.y * wTl + quad.br.y * wBr + quad.bl.y * wBl,
+                z: (Number(quad.tl.z) || 0) * wTl + (Number(quad.br.z) || 0) * wBr + (Number(quad.bl.z) || 0) * wBl
+            };
+        }
+        const useLowerRightTriangle = (u + v) >= 1;
+        if (useLowerRightTriangle) {
+            const wBl = 1 - u;
+            const wBr = u + v - 1;
+            const wTr = 1 - v;
+            return {
+                x: quad.bl.x * wBl + quad.br.x * wBr + quad.tr.x * wTr,
+                y: quad.bl.y * wBl + quad.br.y * wBr + quad.tr.y * wTr,
+                z: (Number(quad.bl.z) || 0) * wBl + (Number(quad.br.z) || 0) * wBr + (Number(quad.tr.z) || 0) * wTr
+            };
+        }
+        const wBl = v;
+        const wTr = u;
+        const wTl = 1 - u - v;
+        return {
+            x: quad.bl.x * wBl + quad.tr.x * wTr + quad.tl.x * wTl,
+            y: quad.bl.y * wBl + quad.tr.y * wTr + quad.tl.y * wTl,
+            z: (Number(quad.bl.z) || 0) * wBl + (Number(quad.tr.z) || 0) * wTr + (Number(quad.tl.z) || 0) * wTl
+        };
+    }
+
+    _getScreenQuadLowerBoundaryYAtX(quad, x) {
+        if (!quad || !quad.bl || !quad.br || !quad.tr || !quad.tl) {
+            throw new Error("missing fallen tree screen quad for crumble boundary");
+        }
+        const points = [quad.bl, quad.br, quad.tr, quad.tl].map(pt => ({
+            x: Number(pt.x),
+            y: Number(pt.y)
+        }));
+        if (!points.every(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y)) || !Number.isFinite(Number(x))) {
+            throw new Error("invalid fallen tree screen quad for crumble boundary");
+        }
+        const targetX = Number(x);
+        const minX = Math.min(...points.map(pt => pt.x));
+        const maxX = Math.max(...points.map(pt => pt.x));
+        const epsilon = 1e-6;
+        if (targetX < minX - epsilon || targetX > maxX + epsilon) {
+            throw new Error("fallen tree fragment bottom is outside crumble boundary");
+        }
+        const clampedX = Math.max(minX, Math.min(maxX, targetX));
+        const intersections = [];
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            const edgeMinX = Math.min(a.x, b.x);
+            const edgeMaxX = Math.max(a.x, b.x);
+            if (clampedX < edgeMinX - epsilon || clampedX > edgeMaxX + epsilon) continue;
+            const dx = b.x - a.x;
+            if (Math.abs(dx) <= epsilon) {
+                if (Math.abs(clampedX - a.x) <= epsilon) {
+                    intersections.push(a.y, b.y);
+                }
+                continue;
+            }
+            const t = (clampedX - a.x) / dx;
+            if (t >= -epsilon && t <= 1 + epsilon) {
+                const clampedT = Math.max(0, Math.min(1, t));
+                intersections.push(a.y + ((b.y - a.y) * clampedT));
+            }
+        }
+        if (intersections.length === 0) {
+            throw new Error("missing fallen tree crumble boundary intersection");
+        }
+        return Math.max(...intersections);
+    }
+
     _startFlowerBurnFragments(currentFrame, options = {}) {
         if (this._flowerBurnFragments) return;
 
+        const fallenTreeFragmentQuad = this._getFallenTreeBurnFragmentQuad();
+        const fallenTreeScreenQuad = (
+            fallenTreeFragmentQuad &&
+            fallenTreeFragmentQuad.screen &&
+            fallenTreeFragmentQuad.screen.bl &&
+            fallenTreeFragmentQuad.screen.br &&
+            fallenTreeFragmentQuad.screen.tr &&
+            fallenTreeFragmentQuad.screen.tl
+        ) ? fallenTreeFragmentQuad.screen : null;
+        const fallenTreeDiagonal = (
+            fallenTreeScreenQuad &&
+            fallenTreeScreenQuad.diagonal === "br-tl"
+        ) ? "br-tl" : "bl-tr";
         this.hp = 0;
         if (this.isOnFire) {
             this.isOnFire = false;
@@ -2919,9 +3322,20 @@ void main(void) {
             typeof pixiRef.Texture === "function" &&
             typeof pixiRef.Rectangle === "function" &&
             typeof pixiRef.Container === "function" &&
+            (
+                !fallenTreeFragmentQuad ||
+                (
+                    typeof pixiRef.Geometry === "function" &&
+                    typeof pixiRef.Mesh === "function" &&
+                    typeof pixiRef.MeshMaterial === "function"
+                )
+            ) &&
             typeof globalThis.worldToScreen === "function"
         );
         if (!canFragment) {
+            if (fallenTreeFragmentQuad) {
+                throw new Error("missing Pixi mesh support for fallen tree crumble fragments");
+            }
             this.removeFromGame();
             return;
         }
@@ -2954,8 +3368,6 @@ void main(void) {
         const maxFloorVariationPx = Math.max(0, sourceScreenHeight * 0.1);
         const sidewaysVelocityPxPerFrame = sourceScreenWidth * 0.006;
         const downwardGravityPxPerFrameSq = Math.max(0.35, sourceScreenHeight * 0.0024);
-        const texPieceWidth = baseTexW / cols;
-        const texPieceHeight = baseTexH / rows;
         const container = new pixiRef.Container();
         container.visible = true;
         if (Object.prototype.hasOwnProperty.call(container, "renderable")) {
@@ -2965,40 +3377,147 @@ void main(void) {
         const fragments = [];
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
+                const texLeft = Math.min(baseTexW, (col * baseTexW) / cols);
+                const texTop = Math.min(baseTexH, (row * baseTexH) / rows);
+                const texRight = (col === cols - 1)
+                    ? baseTexW
+                    : Math.min(baseTexW, ((col + 1) * baseTexW) / cols);
+                const texBottom = (row === rows - 1)
+                    ? baseTexH
+                    : Math.min(baseTexH, ((row + 1) * baseTexH) / rows);
                 const rect = new pixiRef.Rectangle(
-                    col * texPieceWidth,
-                    row * texPieceHeight,
-                    texPieceWidth,
-                    texPieceHeight
+                    texLeft,
+                    texTop,
+                    Math.max(0.001, texRight - texLeft),
+                    Math.max(0.001, texBottom - texTop)
                 );
-                const fragTexture = new pixiRef.Texture(baseTexture, rect);
-                const fragSprite = new pixiRef.Sprite(fragTexture);
-                if (fragSprite.anchor && typeof fragSprite.anchor.set === "function") {
-                    fragSprite.anchor.set(0.5, 0.5);
-                }
-                fragSprite.tint = sourceTint;
-                fragSprite.alpha = sourceAlpha;
-                container.addChild(fragSprite);
-
-                const localX = (-anchorX * worldWidth) + ((col + 0.5) * pieceWorldWidth);
-                const localZ = Math.max(0, (anchorY * worldHeight) - ((row + 0.5) * pieceWorldHeight));
                 const normX = cols > 1 ? ((col / (cols - 1)) * 2 - 1) : 0;
                 const rowDelayFrames = rows > 1
                     ? Math.round((row / (rows - 1)) * totalRowDelayFrames)
                     : 0;
                 const floorVariationPx = Math.random() * maxFloorVariationPx;
+                const fragTexture = new pixiRef.Texture(baseTexture, rect);
+                const fallenTile = fallenTreeFragmentQuad ? (() => {
+                    const u0 = col / cols;
+                    const u1 = (col + 1) / cols;
+                    const v0 = row / rows;
+                    const v1 = (row + 1) / rows;
+                    const uc = (u0 + u1) * 0.5;
+                    const vc = (v0 + v1) * 0.5;
+                    const centerWorld = this._interpolateBurnFragmentQuadPoint(fallenTreeFragmentQuad, uc, vc);
+                    const screenSource = fallenTreeScreenQuad || fallenTreeFragmentQuad;
+                    const project = (pt) => globalThis.worldToScreen({ x: pt.x, y: pt.y, z: pt.z });
+                    const blScreen = this._interpolateBurnFragmentTriangleMappedPoint(screenSource, u0, v1, fallenTreeDiagonal);
+                    const brScreen = this._interpolateBurnFragmentTriangleMappedPoint(screenSource, u1, v1, fallenTreeDiagonal);
+                    const trScreen = this._interpolateBurnFragmentTriangleMappedPoint(screenSource, u1, v0, fallenTreeDiagonal);
+                    const tlScreen = this._interpolateBurnFragmentTriangleMappedPoint(screenSource, u0, v0, fallenTreeDiagonal);
+                    const centerScreen = this._interpolateBurnFragmentTriangleMappedPoint(screenSource, uc, vc, fallenTreeDiagonal);
+                    const projectedCenterScreen = fallenTreeScreenQuad ? centerScreen : project(centerWorld);
+                    const resolvedBlScreen = fallenTreeScreenQuad ? blScreen : project(blScreen);
+                    const resolvedBrScreen = fallenTreeScreenQuad ? brScreen : project(brScreen);
+                    const resolvedTrScreen = fallenTreeScreenQuad ? trScreen : project(trScreen);
+                    const resolvedTlScreen = fallenTreeScreenQuad ? tlScreen : project(tlScreen);
+                    const centerX = Number(projectedCenterScreen.x) || 0;
+                    const centerY = Number(projectedCenterScreen.y) || 0;
+                    const vertexData = new Float32Array([
+                        (Number(resolvedBlScreen.x) || 0) - centerX, (Number(resolvedBlScreen.y) || 0) - centerY,
+                        (Number(resolvedBrScreen.x) || 0) - centerX, (Number(resolvedBrScreen.y) || 0) - centerY,
+                        (Number(resolvedTrScreen.x) || 0) - centerX, (Number(resolvedTrScreen.y) || 0) - centerY,
+                        (Number(resolvedTlScreen.x) || 0) - centerX, (Number(resolvedTlScreen.y) || 0) - centerY
+                    ]);
+                    const screenQuad = fallenTreeScreenQuad || {
+                        bl: project(fallenTreeFragmentQuad.bl),
+                        br: project(fallenTreeFragmentQuad.br),
+                        tr: project(fallenTreeFragmentQuad.tr),
+                        tl: project(fallenTreeFragmentQuad.tl)
+                    };
+                    const bottomEdgeCenter = {
+                        x: (((Number(resolvedBlScreen.x) || 0) + (Number(resolvedBrScreen.x) || 0)) * 0.5),
+                        y: (((Number(resolvedBlScreen.y) || 0) + (Number(resolvedBrScreen.y) || 0)) * 0.5)
+                    };
+                    const boundaryDeltas = [
+                        resolvedBlScreen,
+                        resolvedBrScreen,
+                        bottomEdgeCenter
+                    ].map(pt => this._getScreenQuadLowerBoundaryYAtX(screenQuad, pt.x) - (Number(pt.y) || 0));
+                    if (!boundaryDeltas.every(Number.isFinite)) {
+                        throw new Error("invalid fallen tree crumble boundary delta");
+                    }
+                    // A fragment stops at first contact with the fallen quad's lower screen-space
+                    // boundary. Using the minimum delta prevents either bottom corner from passing
+                    // through a sloped or skewed quad bottom.
+                    const boundaryContactDrop = Math.max(0, Math.min(...boundaryDeltas));
+                    const settleJitterPx = (Math.random() - 0.5) * Math.min(maxFloorVariationPx, sourceScreenHeight * 0.025);
+                    const untaperedDropToGround = Math.max(
+                        0,
+                        Math.min(boundaryContactDrop, boundaryContactDrop + settleJitterPx)
+                    );
+                    const baseToCrownFallT = rows > 1
+                        ? Math.max(0, Math.min(1, (rows - row - 1) / (rows - 1)))
+                        : 1;
+                    const dropToGround = untaperedDropToGround * baseToCrownFallT;
+                    return {
+                        centerWorld,
+                        centerScreen: projectedCenterScreen,
+                        vertexData,
+                        floorScreenDeltaY: dropToGround
+                    };
+                })() : null;
+                let fragSprite = null;
+                let meshVertexBuffer = null;
+                if (fallenTile) {
+                    const geometry = new pixiRef.Geometry()
+                        .addAttribute("aVertexPosition", fallenTile.vertexData, 2)
+                        .addAttribute("aTextureCoord", new Float32Array([
+                            0, 1,
+                            1, 1,
+                            1, 0,
+                            0, 0
+                        ]), 2)
+                        .addIndex(new Uint16Array(
+                            fallenTreeDiagonal === "br-tl"
+                                ? [1, 2, 3, 0, 1, 3]
+                                : [0, 1, 2, 0, 2, 3]
+                        ));
+                    const material = new pixiRef.MeshMaterial(fragTexture);
+                    material.tint = sourceTint;
+                    fragSprite = new pixiRef.Mesh(
+                        geometry,
+                        material,
+                        undefined,
+                        pixiRef.DRAW_MODES ? pixiRef.DRAW_MODES.TRIANGLES : undefined
+                    );
+                    fragSprite.texture = fragTexture;
+                    fragSprite.tint = sourceTint;
+                    meshVertexBuffer = geometry.getBuffer("aVertexPosition");
+                } else {
+                    fragSprite = new pixiRef.Sprite(fragTexture);
+                    if (fragSprite.anchor && typeof fragSprite.anchor.set === "function") {
+                        fragSprite.anchor.set(0.5, 0.5);
+                    }
+                    fragSprite.tint = sourceTint;
+                }
+                fragSprite.alpha = sourceAlpha;
+                container.addChild(fragSprite);
+
+                const localX = fallenTile ? 0 : ((-anchorX * worldWidth) + ((col + 0.5) * pieceWorldWidth));
+                const localZ = fallenTile ? 0 : Math.max(0, (anchorY * worldHeight) - ((row + 0.5) * pieceWorldHeight));
                 fragments.push({
                     sprite: fragSprite,
+                    meshVertexBuffer,
                     width: pieceWorldWidth,
                     height: pieceWorldHeight,
-                    startWx: this.x + localX,
-                    startWy: this.y,
-                    startWz: localZ,
+                    startWx: fallenTile ? fallenTile.centerWorld.x : (this.x + localX),
+                    startWy: fallenTile ? fallenTile.centerWorld.y : this.y,
+                    startWz: fallenTile ? fallenTile.centerWorld.z : localZ,
+                    useWorldZForScreen: !!fallenTile,
                     startOffsetScreenX: 0,
                     startOffsetScreenY: 0,
-                    startScreenX: sourceScreenLeft + ((col + 0.5) * pieceScreenWidth),
-                    startScreenY: sourceScreenTop + ((row + 0.5) * pieceScreenHeight),
-                    floorScreenDeltaY: (sourceScreenBottom - pieceScreenHeight - (sourceScreenTop + ((row + 0.5) * pieceScreenHeight))) - floorVariationPx,
+                    startScreenX: fallenTile ? fallenTile.centerScreen.x : (sourceScreenLeft + ((col + 0.5) * pieceScreenWidth)),
+                    startScreenY: fallenTile ? fallenTile.centerScreen.y : (sourceScreenTop + ((row + 0.5) * pieceScreenHeight)),
+                    floorScreenDeltaY: fallenTile
+                        ? fallenTile.floorScreenDeltaY
+                        : (sourceScreenBottom - pieceScreenHeight - (sourceScreenTop + ((row + 0.5) * pieceScreenHeight))) - floorVariationPx,
                     screenOffsetX: 0,
                     screenOffsetY: 0,
                     screenWidth: pieceScreenWidth,
@@ -3019,7 +3538,11 @@ void main(void) {
         for (let i = 0; i < fragments.length; i++) {
             const frag = fragments[i];
             if (!frag) continue;
-            const baseScreenPoint = globalThis.worldToScreen({ x: frag.startWx, y: frag.startWy });
+            const baseScreenPoint = globalThis.worldToScreen({
+                x: frag.startWx,
+                y: frag.startWy,
+                z: frag.useWorldZForScreen ? (Number(frag.startWz) || 0) : 0
+            });
             const baseScreenX = Number(baseScreenPoint && baseScreenPoint.x) || 0;
             const baseScreenY = Number(baseScreenPoint && baseScreenPoint.y) || 0;
             frag.startOffsetScreenX = frag.startScreenX - baseScreenX;
@@ -3089,15 +3612,21 @@ void main(void) {
             if (!frag || !frag.sprite) continue;
             frag.age += deltaFrames;
             const activeAge = frag.age - Math.max(0, Number(frag.startDelayFrames) || 0);
-            const baseScreenPoint = globalThis.worldToScreen({ x: frag.startWx, y: frag.startWy });
+            const baseScreenPoint = globalThis.worldToScreen({
+                x: frag.startWx,
+                y: frag.startWy,
+                z: frag.useWorldZForScreen ? (Number(frag.startWz) || 0) : 0
+            });
             const baseScreenX = Number(baseScreenPoint && baseScreenPoint.x) || 0;
             const baseScreenY = Number(baseScreenPoint && baseScreenPoint.y) || 0;
             if (activeAge < 0) {
                 frag.sprite.x = baseScreenX + (Number(frag.startOffsetScreenX) || 0);
                 frag.sprite.y = baseScreenY + (Number(frag.startOffsetScreenY) || 0);
-                frag.sprite.width = Math.max(1, Number(frag.screenWidth) || 1);
-                frag.sprite.height = Math.max(1, Number(frag.screenHeight) || 1);
-                frag.sprite.rotation = 0;
+                if (!frag.meshVertexBuffer) {
+                    frag.sprite.width = Math.max(1, Number(frag.screenWidth) || 1);
+                    frag.sprite.height = Math.max(1, Number(frag.screenHeight) || 1);
+                }
+                frag.sprite.rotation = Number.isFinite(frag.rotation) ? Number(frag.rotation) : 0;
                 frag.sprite.alpha = 1;
                 frag.sprite.visible = true;
                 if (Object.prototype.hasOwnProperty.call(frag.sprite, "renderable")) {
@@ -3141,8 +3670,10 @@ void main(void) {
             anyAlive = true;
             frag.sprite.x = baseScreenX + (Number(frag.startOffsetScreenX) || 0) + (Number(frag.screenOffsetX) || 0);
             frag.sprite.y = baseScreenY + (Number(frag.startOffsetScreenY) || 0) + (Number(frag.screenOffsetY) || 0);
-            frag.sprite.width = Math.max(1, Number(frag.screenWidth) || 1);
-            frag.sprite.height = Math.max(1, Number(frag.screenHeight) || 1);
+            if (!frag.meshVertexBuffer) {
+                frag.sprite.width = Math.max(1, Number(frag.screenWidth) || 1);
+                frag.sprite.height = Math.max(1, Number(frag.screenHeight) || 1);
+            }
             if (frag.landed !== true) {
                 frag.rotation += frag.spin * Math.max(1, deltaFrames);
             }
@@ -4112,6 +4643,7 @@ class Tree extends StaticObject {
             if (!this.falling) {
                 this.falling = true;
                 this.rotation = 0;
+                this._burnedTreeFallCompleteFrame = null;
                 if (this.burned && this.pixiSprite) {
                     this.pixiSprite.tint = 0x222222;
                 }
@@ -4150,6 +4682,22 @@ class Tree extends StaticObject {
                     this.isOnFire = false;
                     this.fireFadeStart = frameCount;
                 }
+
+                if (this.burned) {
+                    const currentFrame = Number.isFinite(frameCount) ? Number(frameCount) : 0;
+                    if (!Number.isFinite(this._burnedTreeFallCompleteFrame)) {
+                        this._burnedTreeFallCompleteFrame = currentFrame;
+                    }
+                    const simFps = Math.max(1, Number(frameRate) || 60);
+                    const crumbleDelayFrames = Math.max(
+                        0,
+                        Math.round((Number(StaticObject.TREE_BURN_CRUMBLE_DELAY_SECONDS) || 0) * simFps)
+                    );
+                    if (currentFrame - this._burnedTreeFallCompleteFrame >= crumbleDelayFrames) {
+                        this._updateFlowerBurnFragments();
+                        if (this.gone) return;
+                    }
+                }
             }
         }
     }
@@ -4180,7 +4728,8 @@ class Tree extends StaticObject {
         }
 
         const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
-            forceSinglePlane: true
+            forceSinglePlane: true,
+            renderer: ctx && ctx.app ? ctx.app.renderer : null
         });
         if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillboardWorldPositions) {
             if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;
@@ -4189,10 +4738,11 @@ class Tree extends StaticObject {
         const indexBuffer = mesh.geometry && typeof mesh.geometry.getIndex === "function"
             ? mesh.geometry.getIndex()
             : null;
+        const useRightFallDiagonal = (typeof this.fallDirection === "string")
+            ? (this.fallDirection === "right")
+            : ((Number(this.rotation) || 0) > 0);
+        this._fallenTreeBurnMeshDiagonal = useRightFallDiagonal ? "bl-tr" : "br-tl";
         if (indexBuffer && indexBuffer.data && indexBuffer.data.length >= 6) {
-            const useRightFallDiagonal = (typeof this.fallDirection === "string")
-                ? (this.fallDirection === "right")
-                : ((Number(this.rotation) || 0) > 0);
             const desiredIndices = useRightFallDiagonal
                 ? [0, 1, 2, 0, 2, 3]
                 : [1, 2, 3, 0, 1, 3];
@@ -4330,6 +4880,17 @@ class Tree extends StaticObject {
         uniforms.uAlphaCutoff = Number.isFinite(options.alphaCutoff) ? Number(options.alphaCutoff) : 0.08;
         uniforms.uClipMinZ = this._scriptSinkState ? 0 : -1000000;
         uniforms.uSampler = sourceTexture || PIXI.Texture.WHITE;
+        const layerBaseZ = Number.isFinite(this._renderLayerBaseZ) ? Number(this._renderLayerBaseZ) : 0;
+        const projectCorner = (pt) => camera.worldToScreen(pt.x, pt.y, pt.z + layerBaseZ);
+        this._fallenTreeBurnScreenQuad = {
+            bl: projectCorner(bl),
+            br: projectCorner(br),
+            tr: projectCorner(tr),
+            tl: projectCorner(tl),
+            diagonal: this._fallenTreeBurnMeshDiagonal === "br-tl" ? "br-tl" : "bl-tr",
+            signature,
+            frameCount: Number.isFinite(frameCount) ? Number(frameCount) : null
+        };
         mesh.visible = true;
         return mesh;
     }
@@ -5414,7 +5975,8 @@ class PlacedObject extends StaticObject {
         }
 
         const mesh = this.ensureDepthBillboardMesh(null, options.alphaCutoff, {
-            forceSinglePlane: true
+            forceSinglePlane: true,
+            renderer: ctx && ctx.app ? ctx.app.renderer : null
         });
         if (!mesh || !mesh.shader || !mesh.shader.uniforms || !this._depthBillboardWorldPositions) {
             if (this._depthBillboardMesh) this._depthBillboardMesh.visible = false;

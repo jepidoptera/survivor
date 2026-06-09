@@ -1581,7 +1581,41 @@
             })]);
         };
 
+        const enqueuePrototypeAsyncBuildingSync = (session) => {
+            const buildingState = map && map._prototypeBuildingState;
+            if (!buildingState) return;
+            prependPrototypeTasks(session, [createPrototypeTask("buildings.plan", () => {
+                const start = prototypeNow();
+                const desiredBuildingIds = new Set();
+                const activeSectionKeys = typeof map.getPrototypeActiveSectionKeys === "function"
+                    ? map.getPrototypeActiveSectionKeys()
+                    : new Set();
+                activeSectionKeys.forEach((sectionKey) => {
+                    const ids = buildingState.buildingIdsBySectionKey instanceof Map
+                        ? buildingState.buildingIdsBySectionKey.get(sectionKey)
+                        : null;
+                    if (!(ids instanceof Set)) return;
+                    ids.forEach((id) => desiredBuildingIds.add(id));
+                });
+                const desiredSignature = Array.from(desiredBuildingIds).sort().join("|");
+                const previousSignature = typeof buildingState.activeDesiredSignature === "string"
+                    ? buildingState.activeDesiredSignature
+                    : "";
+                buildingState.desiredBuildingIds = desiredBuildingIds;
+                buildingState.activeDesiredSignature = desiredSignature;
+                buildingState.lastSyncStats = {
+                    ms: Number((prototypeNow() - start).toFixed(2)),
+                    placements: Array.isArray(buildingState.orderedPlacements) ? buildingState.orderedPlacements.length : 0,
+                    desired: desiredBuildingIds.size,
+                    active: buildingState.loadedBuildingsById instanceof Map ? buildingState.loadedBuildingsById.size : 0,
+                    changed: desiredSignature !== previousSignature
+                };
+                session.buildingsChanged = desiredSignature !== previousSignature;
+            })]);
+        };
+
         return {
+            enqueuePrototypeAsyncBuildingSync,
             enqueuePrototypeAsyncObjectSync,
             enqueuePrototypeAsyncWallSync,
             enqueuePrototypeAsyncAnimalSync,

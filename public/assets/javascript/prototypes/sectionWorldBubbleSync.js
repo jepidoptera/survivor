@@ -898,6 +898,7 @@
             const {
                 updateActiveBubbleForActor,
                 enqueuePrototypeAsyncWallSync,
+                enqueuePrototypeAsyncBuildingSync,
                 enqueuePrototypeAsyncObjectSync,
                 enqueuePrototypeAsyncAnimalSync,
                 enqueuePrototypeAsyncPowerupSync
@@ -968,6 +969,9 @@
                     enqueuePrototypeAsyncObjectSync(asyncSession);
                     const wallSectionKeys = getPendingWallSyncSectionKeys();
                     enqueuePrototypeAsyncWallSync(asyncSession, wallSectionKeys ? { onlySectionKeys: wallSectionKeys } : undefined);
+                    if (typeof enqueuePrototypeAsyncBuildingSync === "function") {
+                        enqueuePrototypeAsyncBuildingSync(asyncSession);
+                    }
                     enqueuePrototypeAsyncLayoutSync(asyncSession);
                     this._prototypeBubbleShiftSession = asyncSession;
                 }
@@ -996,6 +1000,9 @@
                 enqueuePrototypeAsyncObjectSync(asyncSession);
                 const wallSectionKeys = getPendingWallSyncSectionKeys();
                 enqueuePrototypeAsyncWallSync(asyncSession, wallSectionKeys ? { onlySectionKeys: wallSectionKeys } : undefined);
+                if (typeof enqueuePrototypeAsyncBuildingSync === "function") {
+                    enqueuePrototypeAsyncBuildingSync(asyncSession);
+                }
                 this._prototypeBubbleShiftSession = asyncSession;
                 advancePrototypeAsyncBubbleShiftSession(asyncSession, options);
                 updatePrototypeGpuDebugStats(this);

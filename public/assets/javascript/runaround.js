@@ -333,7 +333,27 @@ function updateTriggerAreaEdgePan(deltaSeconds) {
 }
 
 // Pixi.js setup
+const gameWebglContextAttributes = {
+    alpha: false,
+    antialias: true,
+    depth: true,
+    stencil: true,
+    preserveDrawingBuffer: false
+};
+const gamePixiView = document.createElement("canvas");
+const gamePixiContext = gamePixiView.getContext("webgl2", gameWebglContextAttributes);
+if (!gamePixiContext) {
+    throw new Error("game renderer requires WebGL2 for depth-mapped building exteriors");
+}
+const gameContextAttributes = typeof gamePixiContext.getContextAttributes === "function"
+    ? gamePixiContext.getContextAttributes()
+    : null;
+if (!gameContextAttributes || gameContextAttributes.depth !== true) {
+    throw new Error("game renderer requires a WebGL depth buffer");
+}
 const app = new PIXI.Application({
+    view: gamePixiView,
+    context: gamePixiContext,
     width: window.innerWidth,
     height: window.innerHeight,
     backgroundColor: 0x000000,
@@ -3422,6 +3442,11 @@ jQuery(() => {
             initSpellMenuKeyboardFocus();
             return true;
         }
+        if (spellName === "placebuilding" && typeof SpellSystem.showBuildingMenu === "function") {
+            SpellSystem.showBuildingMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
         if (spellName === "spawnanimal" && typeof SpellSystem.showAnimalMenu === "function") {
             SpellSystem.showAnimalMenu(wizard);
             initSpellMenuKeyboardFocus();
@@ -5070,7 +5095,7 @@ jQuery(() => {
     $("#selectedSpell").on("contextmenu", event => {
         if (
             wizard &&
-            (wizard.currentSpell === "placeobject" || wizard.currentSpell === "blackdiamond") &&
+            (wizard.currentSpell === "placeobject" || wizard.currentSpell === "placebuilding" || wizard.currentSpell === "blackdiamond") &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.showEditorSubmenuForSelectedCategory === "function"
         ) {
@@ -6043,19 +6068,24 @@ jQuery(() => {
         const isPlaceRotateRight = event.key === "ArrowRight";
         if (
             wizard &&
-            wizard.currentSpell === "placeobject" &&
+            (wizard.currentSpell === "placeobject" || wizard.currentSpell === "placebuilding") &&
             (isPlaceRotateLeft || isPlaceRotateRight) &&
             !canPanDetachedCameraWithArrowKeys() &&
             !spellMenuVisible &&
             !auraMenuVisible &&
             !editorMenuVisible &&
-            typeof SpellSystem !== "undefined" &&
-            typeof SpellSystem.adjustPlaceableRotation === "function"
+            typeof SpellSystem !== "undefined"
         ) {
+            const adjustRotation = wizard.currentSpell === "placebuilding"
+                ? SpellSystem.adjustBuildingPlacementRotation
+                : SpellSystem.adjustPlaceableRotation;
+            if (typeof adjustRotation !== "function") {
+                throw new Error(`missing rotation handler for ${wizard.currentSpell}`);
+            }
             event.preventDefault();
             if (!event.repeat) {
                 const delta = isPlaceRotateRight ? 5 : -5;
-                SpellSystem.adjustPlaceableRotation(wizard, delta);
+                adjustRotation(wizard, delta);
             }
             return;
         }

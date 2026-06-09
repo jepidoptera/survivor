@@ -289,6 +289,9 @@
                 uClipMinZ: -1000000,
                 uBuildingCutawayDataPass: 0,
                 uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
+                uBuildingExteriorDepthMetricDataPass: 0,
+                uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
+                uBuildingExteriorDepthMetricOrigin: 0,
                 uSampler: PIXI.Texture.WHITE
             });
             const mesh = new PIXI.Mesh(geo, shader, state, PIXI.DRAW_MODES.TRIANGLES);

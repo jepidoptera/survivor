@@ -1,5 +1,6 @@
 import "../assets/javascript/wallGeometry.js";
 import { flattenPolygon, polygonCentroid, simplePolygonRingError } from "./BuildingGeometry.js";
+import { BuildingEditorState } from "./BuildingEditorState.js";
 import { validateBuilding } from "./BuildingValidation.js";
 import { ADJACENT_DIRECTIONS, GAME_HEX_RADIUS, GAME_HEX_X_STEP, hexCorners, immediateNeighborOffset, offsetToWorld, visibleHexRange } from "./BuildingHexGrid.js";
 import { ringsForFloor } from "./BuildingPolygonEditing.js";
@@ -15,6 +16,8 @@ const DEFAULT_ROOF_TEXTURE_REPEAT = 0.5;
 const FLOOR_TEXTURE_CONFIG_URL = "/assets/images/flooring/items.json";
 const ROOF_TEXTURE_CONFIG_URL = "/assets/images/roofs/items.json";
 const ROOF_RENDER_Z_LIFT = 0.03;
+const EXTERIOR_BITMAP_FLOOR_Z_LIFT = 0.001;
+const EXTERIOR_BITMAP_FLOOR_DEPTH_METRIC_BIAS = 0.035;
 const FLOOR_DEPTH_NEAR_METRIC = -128;
 const FLOOR_DEPTH_FAR_METRIC = 256;
 const FLOOR_DEPTH_BIAS = 0.015;
@@ -48,6 +51,8 @@ const PLAYTEST_WIZARD_HAT_RENDER_Y_OFFSET_UNITS = 0.14;
 const PLAYTEST_WIZARD_HAT_COLOR = 0x000099;
 const PLAYTEST_WIZARD_HAT_BAND_COLOR = 0xffd700;
 const PLAYTEST_WIZARD_SHADOW_RENDER_Z_OFFSET_UNITS = 0.1;
+const EXTERIOR_BITMAP_DEFAULT_PADDING = 48;
+const EXTERIOR_BITMAP_MAX_DIMENSION = 2048;
 
 function roofMeshKey(floor, roof = null) {
     const floorId = getFloorId(floor);
@@ -81,6 +86,7 @@ uniform vec2 uLightClamp;
 uniform float uOverheadSlopeLighting;
 varying vec2 vUvs;
 varying float vLightFactor;
+varying float vExteriorDepthMetric;
 void main(void) {
     float cosR = cos(uCameraRotation);
     float sinR = sin(uCameraRotation);
@@ -99,6 +105,7 @@ void main(void) {
     float screenX = camDx * uViewScale;
     float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
     float depthMetric = camDy * pitchHeight + camDz * pitchFloor + uDepthBias;
+    vExteriorDepthMetric = rotatedWorld.y * pitchHeight + aWorldPosition.z * pitchFloor;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -127,13 +134,36 @@ const FLOOR_DEPTH_FS = `
 precision highp float;
 varying vec2 vUvs;
 varying float vLightFactor;
+varying float vExteriorDepthMetric;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
+uniform float uDepthBias;
+uniform float uBuildingExteriorDepthMetricDataPass;
+uniform float uBuildingExteriorDepthMetricBias;
+uniform vec2 uBuildingExteriorDepthMetricRange;
+uniform float uBuildingExteriorDepthMetricOrigin;
+vec3 encodeExteriorDepthMetric(float value) {
+    float clamped = clamp(value, 0.0, 1.0);
+    float r = floor(clamped * 255.0);
+    float remainder = clamped * 255.0 - r;
+    float g = floor(remainder * 255.0);
+    remainder = remainder * 255.0 - g;
+    float b = floor(remainder * 255.0);
+    return vec3(r, g, b) / 255.0;
+}
 void main(void) {
     vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
     outColor.rgb *= vLightFactor;
     if (outColor.a < uAlphaCutoff) discard;
+    if (uBuildingExteriorDepthMetricDataPass > 0.5) {
+        float minMetric = uBuildingExteriorDepthMetricRange.x;
+        float invSpan = uBuildingExteriorDepthMetricRange.y;
+        float metricBias = uDepthBias + uBuildingExteriorDepthMetricBias;
+        float encodedMetric = clamp(((vExteriorDepthMetric + metricBias - uBuildingExteriorDepthMetricOrigin) - minMetric) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodeExteriorDepthMetric(encodedMetric), 1.0);
+        return;
+    }
     gl_FragColor = outColor;
 }
 `;
@@ -250,6 +280,106 @@ function normalizeTexturePath(path, fallback) {
     return (typeof path === "string" && path.length > 0) ? path : fallback;
 }
 
+function configureExteriorDepthMetricTexture(texture) {
+    const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+    if (!baseTexture) throw new Error("building exterior depth metric texture is missing baseTexture");
+    if (typeof PIXI !== "undefined" && PIXI.SCALE_MODES) {
+        baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
+    }
+    if (typeof PIXI !== "undefined" && PIXI.MIPMAP_MODES) {
+        baseTexture.mipmap = PIXI.MIPMAP_MODES.OFF;
+    } else if (Object.prototype.hasOwnProperty.call(baseTexture, "mipmap")) {
+        baseTexture.mipmap = false;
+    }
+    if (Object.prototype.hasOwnProperty.call(baseTexture, "anisotropicLevel")) {
+        baseTexture.anisotropicLevel = 0;
+    }
+    if (typeof baseTexture.update === "function") baseTexture.update();
+    return texture;
+}
+
+function wallTexturePathForRender(wall, floor) {
+    return normalizeTexturePath(
+        wall && wall.wallTexturePath,
+        floor && floor.defaultWallTexturePath || DEFAULTS.wallTexture
+    );
+}
+
+function textureReadyPromise(texture, label) {
+    if (!texture || !texture.baseTexture) {
+        throw new Error(`${label} texture could not be created`);
+    }
+    const baseTexture = texture.baseTexture;
+    if (baseTexture.valid === true) return Promise.resolve(texture);
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeoutId = typeof setTimeout === "function"
+            ? setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                reject(new Error(`${label} texture did not finish loading`));
+            }, 15000)
+            : null;
+        const cleanup = () => {
+            if (timeoutId !== null && typeof clearTimeout === "function") clearTimeout(timeoutId);
+            if (baseTexture.off) {
+                baseTexture.off("loaded", onLoaded);
+                baseTexture.off("error", onError);
+            } else if (baseTexture.removeListener) {
+                baseTexture.removeListener("loaded", onLoaded);
+                baseTexture.removeListener("error", onError);
+            }
+        };
+        const onLoaded = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            if (baseTexture.valid !== true) {
+                reject(new Error(`${label} texture loaded without becoming valid`));
+                return;
+            }
+            resolve(texture);
+        };
+        const onError = (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            const message = error && error.message ? error.message : String(error || "unknown error");
+            reject(new Error(`${label} texture failed to load: ${message}`));
+        };
+        if (baseTexture.once) {
+            baseTexture.once("loaded", onLoaded);
+            baseTexture.once("error", onError);
+        } else if (baseTexture.on) {
+            baseTexture.on("loaded", onLoaded);
+            baseTexture.on("error", onError);
+        } else {
+            reject(new Error(`${label} texture cannot report load completion`));
+            return;
+        }
+        if (baseTexture.valid === true) onLoaded();
+    });
+}
+
+async function loadPixiTexturePath(path, label) {
+    const normalizedPath = normalizeTexturePath(path, "");
+    if (!normalizedPath) throw new Error(`${label} texture path is missing`);
+    let loadedTexture = null;
+    if (globalThis.PIXI && PIXI.Assets && typeof PIXI.Assets.load === "function") {
+        try {
+            loadedTexture = await PIXI.Assets.load(normalizedPath);
+        } catch (error) {
+            const message = error && error.message ? error.message : String(error || "unknown error");
+            throw new Error(`${label} texture failed to load ${normalizedPath}: ${message}`);
+        }
+    }
+    const texture = loadedTexture && loadedTexture.baseTexture
+        ? loadedTexture
+        : PIXI.Texture.from(normalizedPath);
+    return textureReadyPromise(texture, `${label} ${normalizedPath}`);
+}
+
 function ringPointsForTriangulation(ring) {
     return (Array.isArray(ring) ? ring : [])
         .filter((point) => Number.isFinite(Number(point && point.x)) && Number.isFinite(Number(point && point.y)))
@@ -339,6 +469,12 @@ function floorMeshSignature(floor, textureRepeatConfig = null) {
     return `${surfaceMeshSignature(floor, floor.floorTexturePath, getFloorElevation(floor))};${textureRepeatSignature(textureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`;
 }
 
+function floorRenderElevation(floor, zLift = 0) {
+    const baseZ = getFloorElevation(floor);
+    const lift = Number.isFinite(Number(zLift)) ? Number(zLift) : 0;
+    return baseZ + lift;
+}
+
 function floorTopElevation(floor) {
     const baseZ = getFloorElevation(floor);
     const height = Number(floor && floor.floorHeight);
@@ -410,6 +546,40 @@ function roofTextureRepeatSignature(config) {
 
 function gableWallTexturePath(floor, gable) {
     return normalizeTexturePath(gable && gable.wallTexturePath, floor && floor.defaultWallTexturePath || "/assets/images/walls/woodwall.png");
+}
+
+function exteriorBitmapTexturePaths(building) {
+    const paths = new Set();
+    getBuildingFloors(building).forEach((floor) => {
+        paths.add(normalizeTexturePath(floor && floor.floorTexturePath, DEFAULTS.floorTexture));
+        getFloorRoofs(floor).forEach((roof) => {
+            const roofView = floorRoofView(floor, roof);
+            paths.add(normalizeTexturePath(roofTexturePath(roofView), "/assets/images/roofs/slate.png"));
+            getRoofGables(roof).forEach((gable) => {
+                paths.add(gableWallTexturePath(floor, gable));
+            });
+        });
+        getFloorBeams(floor).forEach((beam) => {
+            paths.add(normalizeTexturePath(beam && beam.texturePath, DEFAULTS.wallTexture));
+        });
+        getFloorColumns(floor).forEach((column) => {
+            paths.add(normalizeTexturePath(column && column.texturePath, DEFAULTS.wallTexture));
+        });
+        getFloorStairs(floor).forEach((stair) => {
+            paths.add(stairTreadTexturePath(stair));
+            paths.add(stairRiserTexturePath(stair));
+        });
+    });
+    getBuildingWalls(building).forEach((wall) => {
+        const floor = findFloor(building, wall && (wall.fragmentId || wall.floorId));
+        paths.add(wallTexturePathForRender(wall, floor));
+    });
+    getBuildingMountedObjects(building).forEach((object) => {
+        paths.add(normalizeTexturePath(object && object.texturePath, object && object.category === "windows"
+            ? "/assets/images/windows/window.png"
+            : "/assets/images/doors/door5.png"));
+    });
+    return [...paths].filter((path) => typeof path === "string" && path.length > 0);
 }
 
 function roofPerimeterRing(floor) {
@@ -1632,11 +1802,12 @@ function surfaceMeshSignatureFromRings(surfaceId, outerRing, holeRings, textureP
 function wallRenderSignature(building, wall, floor) {
     const renderPoints = wallCenterlinePoints(building, wall, floor);
     const resolvedGeometry = getWallResolvedGeometry(wall);
+    const texturePath = wallTexturePathForRender(wall, floor);
     return [
         wall.id,
         getFloorId(floor),
         resolvedGeometry.signature,
-        normalizeTexturePath(wall.wallTexturePath, ""),
+        texturePath,
         renderPoints.map((point) => `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`).join("|")
     ].join(";");
 }
@@ -2399,6 +2570,369 @@ function colorToVec4(color, alpha = 1) {
     ]);
 }
 
+function finitePositiveNumber(value, fallback, label) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return num;
+    if (Number.isFinite(fallback) && fallback > 0) return fallback;
+    throw new Error(`${label} must be a positive number`);
+}
+
+function finiteNumberOr(value, fallback, label) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+    if (Number.isFinite(fallback)) return fallback;
+    throw new Error(`${label} must be a finite number`);
+}
+
+function collectExteriorBitmapProjectionPoints(building) {
+    const points = [];
+    const addPoint = (point, z = 0) => {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        const pz = Number(z);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pz)) return;
+        points.push({ x, y, z: pz });
+    };
+    const floors = getBuildingFloors(building);
+    floors.forEach((floor) => {
+        const floorZ = getFloorElevation(floor);
+        const wallHeight = Number(floor && floor.floorHeight);
+        const topZ = floorZ + (Number.isFinite(wallHeight) && wallHeight > 0
+            ? wallHeight
+            : Number(floor && floor.defaultWallHeight) || DEFAULTS.wallHeight);
+        const rings = [floor && floor.outerPolygon]
+            .concat(Array.isArray(floor && floor.holes) ? floor.holes : []);
+        rings.forEach((ring) => {
+            (Array.isArray(ring) ? ring : []).forEach((point) => {
+                addPoint(point, floorZ);
+                addPoint(point, topZ);
+            });
+        });
+        getFloorRoofs(floor).forEach((roof) => {
+            const roofView = floorRoofView(floor, roof);
+            const roofZ = roofRenderElevation(roofView);
+            getRoofContactPolygon(roofView).forEach((point) => addPoint(point, roofZ));
+            addPoint(getRoofPeakPoint(roofView), roofZ + roofPeakHeight(roofView));
+            getRoofGables(roof).forEach((gable) => {
+                const geometry = gableWorldGeometry(roofView, gable);
+                (geometry.wallSegments || []).forEach((segment) => {
+                    addPoint(segment.bottomStart, segment.bottomStart && segment.bottomStart.z);
+                    addPoint(segment.bottomEnd, segment.bottomEnd && segment.bottomEnd.z);
+                    addPoint(segment.topStart, segment.topStart && segment.topStart.z);
+                    addPoint(segment.topEnd, segment.topEnd && segment.topEnd.z);
+                });
+            });
+        });
+        getFloorColumns(floor).forEach((column) => {
+            const bottomZ = Number(column && column.bottomZ);
+            const height = Number(column && column.height);
+            columnVertices(column).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
+        });
+        getFloorBeams(floor).forEach((beam) => {
+            if (beam && beam.start) addPoint(beam.start, beam.start.z);
+            if (beam && beam.end) addPoint(beam.end, beam.end.z);
+        });
+        getFloorStairs(floor).forEach((stair) => {
+            const bottomZ = Number(stair && stair.bottomZ) || floorZ;
+            const height = Number(stair && stair.height) || 0;
+            stairFootprintPoints(stair).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
+        });
+    });
+    getBuildingMountedObjects(building).forEach((object) => {
+        const x = Number(object && object.x);
+        const y = Number(object && object.y);
+        const z = Number(object && object.z);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+            const size = Math.max(0.25, Number(object && object.size) || 1);
+            const baseZ = Number.isFinite(z) ? z : 0;
+            addPoint({ x: x - size, y: y - size }, baseZ - size);
+            addPoint({ x: x + size, y: y + size }, baseZ + size);
+        }
+    });
+    if (points.length === 0) {
+        throw new Error("building exterior bitmap export requires at least one finite building projection point");
+    }
+    return points;
+}
+
+function collectInteriorBitmapProjectionPoints(building, floor) {
+    const points = [];
+    const floorId = getFloorId(floor);
+    const addPoint = (point, z = 0) => {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        const pz = Number(z);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pz)) return;
+        points.push({ x, y, z: pz });
+    };
+    const floorZ = getFloorElevation(floor);
+    const floorHeight = Number(floor && floor.floorHeight);
+    const topZ = floorZ + (Number.isFinite(floorHeight) && floorHeight > 0
+        ? floorHeight
+        : Number(floor && floor.defaultWallHeight) || DEFAULTS.wallHeight);
+    const rings = [floor && floor.outerPolygon]
+        .concat(Array.isArray(floor && floor.holes) ? floor.holes : []);
+    rings.forEach((ring) => {
+        (Array.isArray(ring) ? ring : []).forEach((point) => {
+            addPoint(point, floorZ);
+            addPoint(point, topZ);
+        });
+    });
+    getBuildingWalls(building).forEach((wall) => {
+        const ownerFloor = findFloor(building, wall && (wall.fragmentId || wall.floorId));
+        if (!ownerFloor || getFloorId(ownerFloor) !== floorId) return;
+        const wallPointsForBounds = wallCenterlinePoints(building, wall, ownerFloor);
+        const wallTopZ = floorZ + Math.max(0, Number(wall && wall.height) || Number(ownerFloor && ownerFloor.defaultWallHeight) || DEFAULTS.wallHeight);
+        wallPointsForBounds.forEach((point) => {
+            addPoint(point, floorZ);
+            addPoint(point, wallTopZ);
+        });
+    });
+    getFloorColumns(floor).forEach((column) => {
+        const bottomZ = Number(column && column.bottomZ);
+        const height = Number(column && column.height);
+        columnVertices(column).forEach((point) => {
+            addPoint(point, bottomZ);
+            addPoint(point, bottomZ + height);
+        });
+    });
+    getFloorBeams(floor).forEach((beam) => {
+        if (beam && beam.start) addPoint(beam.start, beam.start.z);
+        if (beam && beam.end) addPoint(beam.end, beam.end.z);
+    });
+    getFloorStairs(floor).forEach((stair) => {
+        const bottomZ = Number(stair && stair.bottomZ) || floorZ;
+        const height = Number(stair && stair.height) || 0;
+        stairFootprintPoints(stair).forEach((point) => {
+            addPoint(point, bottomZ);
+            addPoint(point, bottomZ + height);
+        });
+    });
+    if (points.length === 0) {
+        throw new Error(`building interior bitmap export requires at least one finite projection point for floor ${floorId}`);
+    }
+    return points;
+}
+
+function screenBoundsForProjectionPoints(renderer, points) {
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    points.forEach((point) => {
+        const screen = renderer.worldToScreen(point, point.z);
+        if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) return;
+        bounds.minX = Math.min(bounds.minX, screen.x);
+        bounds.minY = Math.min(bounds.minY, screen.y);
+        bounds.maxX = Math.max(bounds.maxX, screen.x);
+        bounds.maxY = Math.max(bounds.maxY, screen.y);
+    });
+    if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)) {
+        throw new Error("building exterior bitmap export could not project building bounds");
+    }
+    bounds.width = Math.max(1, bounds.maxX - bounds.minX);
+    bounds.height = Math.max(1, bounds.maxY - bounds.minY);
+    bounds.centerX = (bounds.minX + bounds.maxX) * 0.5;
+    bounds.centerY = (bounds.minY + bounds.maxY) * 0.5;
+    return bounds;
+}
+
+function exteriorDepthMetricForPoint(point, camera) {
+    const rotation = Number(camera && camera.rotation) || 0;
+    const center = (camera && camera.rotationCenter) || { x: 0, y: 0 };
+    const cosR = Math.cos(rotation);
+    const sinR = Math.sin(rotation);
+    const dx = Number(point && point.x) - Number(center.x || 0);
+    const dy = Number(point && point.y) - Number(center.y || 0);
+    const rotatedY = Number(center.y || 0) + dx * sinR + dy * cosR;
+    const pitch = cameraPitchProjectionFactors(camera || {});
+    return rotatedY * pitch.height + (Number(point && point.z) || 0) * pitch.floor;
+}
+
+function exteriorDepthMetricOrigin(camera) {
+    return exteriorDepthMetricForPoint({ x: 0, y: 0, z: 0 }, camera);
+}
+
+function exteriorDepthMetricBounds(points, camera) {
+    const origin = exteriorDepthMetricOrigin(camera);
+    let min = Infinity;
+    let max = -Infinity;
+    points.forEach((point) => {
+        const metric = exteriorDepthMetricForPoint(point, camera) - origin;
+        if (!Number.isFinite(metric)) return;
+        min = Math.min(min, metric);
+        max = Math.max(max, metric);
+    });
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        throw new Error("building exterior bitmap export could not compute depth metric bounds");
+    }
+    const padding = 1;
+    min -= padding;
+    max += padding;
+    if (max <= min) max = min + 1;
+    return {
+        min,
+        max,
+        span: max - min,
+        origin
+    };
+}
+
+function rotatePointAroundOrigin(point, rotation) {
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const cosR = Math.cos(rotation);
+    const sinR = Math.sin(rotation);
+    return {
+        x: x * cosR - y * sinR,
+        y: x * sinR + y * cosR
+    };
+}
+
+function rotateBuildingDataAroundOrigin(buildingData, rotation) {
+    if (Math.abs(Number(rotation) || 0) < GEOMETRY_EPSILON) return buildingData;
+    const rotated = JSON.parse(JSON.stringify(buildingData));
+    const applyRotation = (value) => {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+            value.forEach(applyRotation);
+            return;
+        }
+        if (Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y))) {
+            const point = rotatePointAroundOrigin(value, rotation);
+            if (point) {
+                value.x = point.x;
+                value.y = point.y;
+            }
+        }
+        if (value.type === "column" && Number.isFinite(Number(value.rotation))) {
+            value.rotation = Number(value.rotation) + rotation;
+        }
+        Object.keys(value).forEach((key) => applyRotation(value[key]));
+    };
+    applyRotation(rotated);
+    return rotated;
+}
+
+function setExteriorBitmapScreen(appLike, width, height) {
+    appLike.screen.width = width;
+    appLike.screen.height = height;
+}
+
+function configureBuildingBitmapExportCamera(state, pixelsPerWorldUnit, pitch, rotation) {
+    state.camera.zoom = pixelsPerWorldUnit;
+    state.camera.pitch = pitch;
+    state.camera.rotation = rotation;
+    state.camera.z = 0;
+    state.updateCameraRotationCenter();
+    state.centerCameraOnBuilding();
+    state.camera.rotation = rotation;
+    state.camera.pitch = pitch;
+    state.camera.zoom = pixelsPerWorldUnit;
+}
+
+function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}) {
+    const label = typeof config.label === "string" && config.label.length > 0
+        ? config.label
+        : "building";
+    if (!globalThis.PIXI) {
+        throw new Error(`${label} bitmap export requires PIXI`);
+    }
+    if (!PIXI.RenderTexture || !PIXI.Container) {
+        throw new Error(`${label} bitmap export requires Pixi render texture support`);
+    }
+    const appRef = (options && options.app) || globalThis.app || null;
+    const rendererRef = (options && options.renderer) || (appRef && appRef.renderer) || null;
+    if (!rendererRef || typeof rendererRef.render !== "function") {
+        throw new Error(`${label} bitmap export requires a Pixi renderer`);
+    }
+
+    const pixelsPerWorldUnit = finitePositiveNumber(
+        options && options.pixelsPerWorldUnit,
+        72,
+        `${label} bitmap pixelsPerWorldUnit`
+    );
+    const padding = Math.max(0, Math.round(finitePositiveNumber(
+        options && options.paddingPixels,
+        EXTERIOR_BITMAP_DEFAULT_PADDING,
+        `${label} bitmap paddingPixels`
+    )));
+    const maxDimension = Math.max(64, Math.round(finitePositiveNumber(
+        options && options.maxDimension,
+        EXTERIOR_BITMAP_MAX_DIMENSION,
+        `${label} bitmap maxDimension`
+    )));
+    const rotation = finiteNumberOr(options && options.rotation, 0, `${label} bitmap rotation`);
+    const pitch = clampCameraPitch(finiteNumberOr(
+        options && options.pitch,
+        CAMERA_DEFAULT_PITCH,
+        `${label} bitmap pitch`
+    ));
+
+    const sourceBuildingData = config.rotateModelAroundOrigin === true
+        ? rotateBuildingDataAroundOrigin(buildingData, rotation)
+        : buildingData;
+    const state = new BuildingEditorState();
+    state.import(sourceBuildingData);
+    const configured = typeof config.configureState === "function"
+        ? (config.configureState(state, options) || {})
+        : {};
+    configureBuildingBitmapExportCamera(
+        state,
+        pixelsPerWorldUnit,
+        pitch,
+        config.rotateModelAroundOrigin === true ? 0 : rotation
+    );
+
+    const stage = new PIXI.Container();
+    stage.name = typeof config.stageName === "string" && config.stageName.length > 0
+        ? config.stageName
+        : "buildingBitmapExportStage";
+    const appLike = {
+        renderer: rendererRef,
+        stage,
+        screen: { width: 1, height: 1 },
+        render() {}
+    };
+    const exportRenderer = new BuildingRenderer(appLike, state, {
+        suppressInitialRender: true,
+        floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT
+    });
+    return {
+        ...configured,
+        appRef,
+        rendererRef,
+        pixelsPerWorldUnit,
+        padding,
+        maxDimension,
+        rotation,
+        pitch,
+        state,
+        stage,
+        appLike,
+        exportRenderer
+    };
+}
+
+function destroyBuildingBitmapExportSetup(setup) {
+    if (!setup) return;
+    const exportRenderer = setup.exportRenderer;
+    const stage = setup.stage;
+    if (exportRenderer && exportRenderer.root && exportRenderer.root.parent && typeof exportRenderer.root.parent.removeChild === "function") {
+        exportRenderer.root.parent.removeChild(exportRenderer.root);
+    }
+    if (exportRenderer && exportRenderer.root && typeof exportRenderer.root.destroy === "function") {
+        exportRenderer.root.destroy({ children: true, texture: false, baseTexture: false });
+    }
+    if (stage && typeof stage.destroy === "function") {
+        stage.destroy({ children: true, texture: false, baseTexture: false });
+    }
+}
+
 export class BuildingRenderer {
     static get DEFAULT_CAMERA_PITCH() {
         return CAMERA_DEFAULT_PITCH;
@@ -2408,12 +2942,13 @@ export class BuildingRenderer {
         return clampCameraPitch(value);
     }
 
-    constructor(app, state) {
+    constructor(app, state, options = {}) {
         if (!globalThis.PIXI) {
             throw new Error("BuildingRenderer requires PIXI to be loaded");
         }
         this.app = app;
         this.state = state;
+        this.options = options && typeof options === "object" ? options : {};
         this.root = new PIXI.Container();
         this.gridLayer = new PIXI.Container();
         this.gridLayer.name = "buildingEditorGridLayer";
@@ -2482,6 +3017,9 @@ export class BuildingRenderer {
         this.lastStairPickEntries = [];
         this.floorTextureConfigCache = null;
         this.floorTextureConfigPromise = null;
+        this.floorSurfaceZLift = Number.isFinite(Number(this.options.floorSurfaceZLift))
+            ? Number(this.options.floorSurfaceZLift)
+            : 0;
         this.floorTextureConfigError = "";
         this.roofTextureConfigCache = null;
         this.roofTextureConfigPromise = null;
@@ -2504,21 +3042,23 @@ export class BuildingRenderer {
             this.pickerDebugLabels
         );
         this.app.stage.addChild(this.root);
-        void Promise.all([
-            this.ensureFloorTextureConfigLoaded(),
-            this.ensureRoofTextureConfigLoaded()
-        ]).then(() => {
-            if (this.state && typeof this.state.setRenderError === "function") {
-                this.render();
-            }
-        }).catch((error) => {
-            console.error(error);
-            this.floorTextureConfigError = this.floorTextureConfigError || error.message;
-            this.roofTextureConfigError = this.roofTextureConfigError || error.message;
-            if (this.state && typeof this.state.setRenderError === "function") {
-                this.state.setRenderError(error.message);
-            }
-        });
+        if (this.options.suppressInitialRender !== true) {
+            void Promise.all([
+                this.ensureFloorTextureConfigLoaded(),
+                this.ensureRoofTextureConfigLoaded()
+            ]).then(() => {
+                if (this.state && typeof this.state.setRenderError === "function") {
+                    this.render();
+                }
+            }).catch((error) => {
+                console.error(error);
+                this.floorTextureConfigError = this.floorTextureConfigError || error.message;
+                this.roofTextureConfigError = this.roofTextureConfigError || error.message;
+                if (this.state && typeof this.state.setRenderError === "function") {
+                    this.state.setRenderError(error.message);
+                }
+            });
+        }
     }
 
     defaultCameraPitch() {
@@ -3350,6 +3890,12 @@ export class BuildingRenderer {
             uOverheadSlopeLighting: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
+            uBuildingExteriorDepthMetricDataPass: 0,
+            uBuildingExteriorDepthMetricBias: Number.isFinite(Number(options.exteriorDepthMetricBias))
+                ? Number(options.exteriorDepthMetricBias)
+                : 0,
+            uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
+            uBuildingExteriorDepthMetricOrigin: 0,
             uSampler: this.getSurfaceTexture(texturePath, options.textureFallback)
         });
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
@@ -3362,11 +3908,12 @@ export class BuildingRenderer {
     createFloorMesh(floor, triangulation, textureRepeatConfig = null) {
         const repeatConfig = normalizeTextureRepeatConfig(textureRepeatConfig, FLOOR_TEXTURE_REPEAT);
         return this.createSurfaceMesh(floor, triangulation, {
-            z: getFloorElevation(floor),
+            z: floorRenderElevation(floor, this.floorSurfaceZLift),
             texturePath: floor.floorTexturePath,
             textureFallback: DEFAULTS.floorTexture,
             textureRepeatX: repeatConfig.repeatsPerMapUnitX,
             textureRepeatY: repeatConfig.repeatsPerMapUnitY,
+            exteriorDepthMetricBias: EXTERIOR_BITMAP_FLOOR_DEPTH_METRIC_BIAS,
             namePrefix: "buildingEditorFloorMesh"
         });
     }
@@ -3516,7 +4063,8 @@ export class BuildingRenderer {
         const floorId = getFloorId(floor);
         const holeRings = this.floorSurfaceHoles(floor);
         const textureRepeatConfig = this.floorTextureRepeatConfig(floor.floorTexturePath);
-        const signature = `${surfaceMeshSignatureFromRings(floorId, floor.outerPolygon || [], holeRings, floor.floorTexturePath, getFloorElevation(floor))};${textureRepeatSignature(textureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`;
+        const floorZ = floorRenderElevation(floor, this.floorSurfaceZLift);
+        const signature = `${surfaceMeshSignatureFromRings(floorId, floor.outerPolygon || [], holeRings, floor.floorTexturePath, floorZ)};${textureRepeatSignature(textureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`;
         let entry = this.floorMeshById.get(floorId);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
@@ -5172,7 +5720,7 @@ export class BuildingRenderer {
                         ? Math.round(Number(wall.traversalLayer))
                         : Math.round(baseZ / 3),
                     level: Number.isFinite(Number(wall.level)) ? Math.round(Number(wall.level)) : Math.round(baseZ / 3),
-                    wallTexturePath: normalizeTexturePath(wall.wallTexturePath, "/assets/images/walls/stonewall.png"),
+                    wallTexturePath: wallTexturePathForRender(wall, floor),
                     deferSetup: true,
                     suppressAutoScriptingName: true
                 }
@@ -5236,7 +5784,9 @@ export class BuildingRenderer {
 
     ensureColumnUnit(column, floor) {
         const ColumnUnit = globalThis.ColumnUnit;
-        if (typeof ColumnUnit !== "function") return null;
+        if (typeof ColumnUnit !== "function") {
+            throw new Error(`column ${column && column.id !== undefined ? column.id : "(unknown)"} rendering requires ColumnUnit`);
+        }
         const pos = column.position || {};
         const topHeights = this.columnTopHeightsForRender(column, floor);
         const topHeightSig = Array.isArray(topHeights) ? topHeights.map((value) => Number(value).toFixed(6)).join(",") : "";
@@ -5344,7 +5894,11 @@ export class BuildingRenderer {
     updateWallTexturePhase(unit, wall, floor) {
         if (!unit) return;
         const modelPhaseA = Number(wall && wall.texturePhaseA);
-        const texturePath = normalizeTexturePath(wall && wall.wallTexturePath, "/assets/images/walls/stonewall.png");
+        const texturePath = wallTexturePathForRender(wall, floor);
+        if (unit.wallTexturePath !== texturePath) {
+            unit.wallTexturePath = texturePath;
+            unit._depthGeometryCache = null;
+        }
         unit.texturePhaseA = this.shouldUseExteriorPerimeterTextureU(wall)
             ? this.exteriorPerimeterTexturePhaseU(wall, floor, texturePath)
             : (Number.isFinite(modelPhaseA) ? modelPhaseA : NaN);
@@ -5568,6 +6122,104 @@ export class BuildingRenderer {
         }
     }
 
+    applyExteriorDepthMetricDataPassState(displayObjects, metricBounds) {
+        if (!metricBounds || !Number.isFinite(metricBounds.min) || !(metricBounds.span > 0)) {
+            throw new Error("building exterior depth data pass requires finite metric bounds");
+        }
+        const displaySet = displayObjects instanceof Set ? displayObjects : new Set(displayObjects || []);
+        const savedUniforms = [];
+        let dataShaderCount = 0;
+        const visitSeen = new Set();
+        const visit = (displayObj) => {
+            if (!displayObj || visitSeen.has(displayObj)) return;
+            visitSeen.add(displayObj);
+            const uniforms = displayObj.shader && displayObj.shader.uniforms ? displayObj.shader.uniforms : null;
+            if (
+                uniforms &&
+                Object.prototype.hasOwnProperty.call(uniforms, "uBuildingExteriorDepthMetricDataPass")
+            ) {
+                savedUniforms.push({
+                    uniforms,
+                    pass: uniforms.uBuildingExteriorDepthMetricDataPass,
+                    range: uniforms.uBuildingExteriorDepthMetricRange
+                        ? [uniforms.uBuildingExteriorDepthMetricRange[0], uniforms.uBuildingExteriorDepthMetricRange[1]]
+                        : null,
+                    origin: uniforms.uBuildingExteriorDepthMetricOrigin,
+                    bias: uniforms.uBuildingExteriorDepthMetricBias
+                });
+                uniforms.uBuildingExteriorDepthMetricDataPass = 1;
+                if (uniforms.uBuildingExteriorDepthMetricRange && uniforms.uBuildingExteriorDepthMetricRange.length >= 2) {
+                    uniforms.uBuildingExteriorDepthMetricRange[0] = metricBounds.min;
+                    uniforms.uBuildingExteriorDepthMetricRange[1] = 1 / Math.max(1e-6, metricBounds.span);
+                }
+                uniforms.uBuildingExteriorDepthMetricOrigin = metricBounds.origin;
+                dataShaderCount += 1;
+            }
+            const children = Array.isArray(displayObj.children) ? displayObj.children : [];
+            for (let i = 0; i < children.length; i++) visit(children[i]);
+        };
+        displaySet.forEach(displayObj => visit(displayObj));
+        if (dataShaderCount <= 0) {
+            throw new Error("building exterior depth data pass found no compatible structural display objects");
+        }
+        return () => {
+            for (let i = savedUniforms.length - 1; i >= 0; i--) {
+                const saved = savedUniforms[i];
+                const uniforms = saved && saved.uniforms;
+                if (!uniforms) continue;
+                uniforms.uBuildingExteriorDepthMetricDataPass = saved.pass;
+                if (
+                    saved.range &&
+                    uniforms.uBuildingExteriorDepthMetricRange &&
+                    uniforms.uBuildingExteriorDepthMetricRange.length >= 2
+                ) {
+                    uniforms.uBuildingExteriorDepthMetricRange[0] = saved.range[0];
+                    uniforms.uBuildingExteriorDepthMetricRange[1] = saved.range[1];
+                }
+                uniforms.uBuildingExteriorDepthMetricOrigin = saved.origin;
+                if (Object.prototype.hasOwnProperty.call(uniforms, "uBuildingExteriorDepthMetricBias")) {
+                    uniforms.uBuildingExteriorDepthMetricBias = saved.bias;
+                }
+            }
+        };
+    }
+
+    assertInteriorBitmapSurfaceMesh(mesh, label) {
+        if (!mesh || mesh.visible !== true) {
+            throw new Error(`building interior bitmap capture missing visible ${label}`);
+        }
+        const uniforms = mesh.shader && mesh.shader.uniforms ? mesh.shader.uniforms : null;
+        if (!uniforms || !Object.prototype.hasOwnProperty.call(uniforms, "uBuildingExteriorDepthMetricDataPass")) {
+            throw new Error(`building interior bitmap capture ${label} lacks depth metric shader support`);
+        }
+    }
+
+    assertInteriorBitmapRenderableSurfaces(floor) {
+        const floorId = getFloorId(floor);
+        const floorEntry = this.floorMeshById.get(floorId);
+        this.assertInteriorBitmapSurfaceMesh(
+            floorEntry && floorEntry.mesh,
+            `floor texture mesh for floor ${floorId}`
+        );
+        getFloorStairs(floor).forEach((stair) => {
+            const key = stairMeshKey(floor, stair);
+            const entry = this.stairMeshById.get(key);
+            if (!entry || !entry.mesh || entry.mesh.visible !== true) {
+                throw new Error(`building interior bitmap capture missing visible stair mesh ${key}`);
+            }
+            this.assertInteriorBitmapSurfaceMesh(
+                entry.mesh._stairTreadMesh,
+                `stair tread mesh ${key}`
+            );
+            if (entry.mesh._stairRiserMesh) {
+                this.assertInteriorBitmapSurfaceMesh(
+                    entry.mesh._stairRiserMesh,
+                    `stair riser mesh ${key}`
+                );
+            }
+        });
+    }
+
     capturePlaytestFloorSnapshot(fade) {
         if (!fade) return false;
         const fromFloor = findFloor(this.state.building, fade.fromFloorId);
@@ -5778,7 +6430,7 @@ export class BuildingRenderer {
                 this.lastSurfacePickEntries.push({
                     type: "floor",
                     floor,
-                    z: getFloorElevation(floor),
+                    z: floorRenderElevation(floor, this.floorSurfaceZLift),
                     holes,
                     mesh
                 });
@@ -6441,6 +7093,9 @@ export class BuildingRenderer {
             uOverheadSlopeLighting: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: 0.001,
+            uBuildingExteriorDepthMetricDataPass: 0,
+            uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
+            uBuildingExteriorDepthMetricOrigin: 0,
             uSampler: texture
         });
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
@@ -7889,5 +8544,313 @@ export class BuildingRenderer {
             gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
             gfx.endFill();
         });
+    }
+}
+
+export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
+    const setup = createBuildingBitmapExportSetup(buildingData, options, {
+        label: "building exterior",
+        stageName: "buildingExteriorBitmapExportStage",
+        rotateModelAroundOrigin: false,
+        configureState(state) {
+            state.layerSelectionMode = "all";
+            state.selectedFloorIds = new Set(getBuildingFloors(state.building).map((floor) => getFloorId(floor)));
+        }
+    });
+    const {
+        rendererRef,
+        pixelsPerWorldUnit,
+        padding,
+        maxDimension,
+        rotation,
+        pitch,
+        state,
+        appLike,
+        exportRenderer
+    } = setup;
+    try {
+        await Promise.all([
+            exportRenderer.ensureFloorTextureConfigLoaded(),
+            exportRenderer.ensureRoofTextureConfigLoaded()
+        ]);
+        const WallSectionUnit = globalThis.WallSectionUnit;
+        if (WallSectionUnit && typeof WallSectionUnit._ensureWallTextureConfigLoaded === "function") {
+            await WallSectionUnit._ensureWallTextureConfigLoaded();
+        }
+        const exteriorTexturePaths = exteriorBitmapTexturePaths(state.building);
+        await Promise.all(exteriorTexturePaths.map((path) => loadPixiTexturePath(path, "building exterior bitmap")));
+        const projectionPoints = collectExteriorBitmapProjectionPoints(state.building);
+        let initialBounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const width = Math.ceil(initialBounds.width + padding * 2);
+        const height = Math.ceil(initialBounds.height + padding * 2);
+        if (width > maxDimension || height > maxDimension) {
+            throw new Error(`building exterior bitmap ${width}x${height} exceeds max dimension ${maxDimension}`);
+        }
+        setExteriorBitmapScreen(appLike, width, height);
+        let bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const dx = (width * 0.5) - bounds.centerX;
+        const dy = (height * 0.5) - bounds.centerY;
+        const pitchFactors = cameraPitchProjectionFactors(state.camera);
+        state.camera.x -= dx / pixelsPerWorldUnit;
+        state.camera.y -= dy / (pixelsPerWorldUnit * GAME_XY_RATIO * pitchFactors.floor);
+        bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const metricBounds = exteriorDepthMetricBounds(projectionPoints, state.camera);
+        const originScreen = exportRenderer.worldToScreen({ x: 0, y: 0 }, 0);
+        if (!originScreen || !Number.isFinite(originScreen.x) || !Number.isFinite(originScreen.y)) {
+            throw new Error("building exterior bitmap export could not project building origin");
+        }
+
+        const texture = PIXI.RenderTexture.create({
+            width,
+            height,
+            resolution: 1
+        });
+        const depthMetricTexture = PIXI.RenderTexture.create({
+            width,
+            height,
+            resolution: 1
+        });
+        configureExteriorDepthMetricTexture(depthMetricTexture);
+        exportRenderer.ensureRenderTextureDepthAttachment(texture, "building exterior bitmap texture");
+        exportRenderer.ensureRenderTextureDepthAttachment(depthMetricTexture, "building exterior depth metric texture");
+        exportRenderer.drawGameStyleBuilding();
+        exportRenderer.drawMountedObjects();
+        const hidden = [
+            exportRenderer.gridLayer,
+            exportRenderer.gridAnchorLayer,
+            exportRenderer.floorLayer,
+            exportRenderer.wallLayer,
+            exportRenderer.mountedObjectLayer,
+            exportRenderer.selectionOutlineLayer,
+            exportRenderer.handleLayer,
+            exportRenderer.draftLayer,
+            exportRenderer.playtestLayer,
+            exportRenderer.pickerDepthDebugLayer,
+            exportRenderer.pickerDebugLayer,
+            exportRenderer.pickerDebugLabels
+        ];
+        exportRenderer.withDisplayObjectsHidden(hidden, () => {
+            exportRenderer.clearDepthTestedRenderTarget(
+                { renderer: rendererRef, texture },
+                "building exterior bitmap target"
+            );
+            rendererRef.render(exportRenderer.root, texture, false);
+            const restoreDepthMetricPass = exportRenderer.applyExteriorDepthMetricDataPassState(
+                new Set([exportRenderer.buildingUnit]),
+                metricBounds
+            );
+            try {
+                exportRenderer.clearDepthTestedRenderTarget(
+                    { renderer: rendererRef, texture: depthMetricTexture },
+                    "building exterior depth metric target"
+                );
+                rendererRef.render(exportRenderer.root, depthMetricTexture, false);
+            } finally {
+                restoreDepthMetricPass();
+            }
+        });
+        return {
+            texture,
+            depthMetricTexture,
+            width,
+            height,
+            anchorX: Math.max(0, Math.min(1, originScreen.x / width)),
+            anchorY: Math.max(0, Math.min(1, originScreen.y / height)),
+            pixelsPerWorldUnit,
+            xyratio: GAME_XY_RATIO,
+            floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT,
+            rotation,
+            pitch,
+            depthMetric: {
+                min: metricBounds.min,
+                max: metricBounds.max,
+                span: metricBounds.span,
+                origin: metricBounds.origin
+            },
+            bounds: {
+                screen: bounds,
+                worldWidth: width / pixelsPerWorldUnit,
+                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO)
+            },
+            camera: {
+                x: Number(state.camera.x),
+                y: Number(state.camera.y),
+                z: Number(state.camera.z) || 0,
+                zoom: pixelsPerWorldUnit,
+                rotation,
+                pitch
+            }
+        };
+    } catch (error) {
+        throw new Error(`building exterior bitmap export failed: ${error && error.message ? error.message : error}`);
+    } finally {
+        destroyBuildingBitmapExportSetup(setup);
+    }
+}
+
+export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
+    const setup = createBuildingBitmapExportSetup(buildingData, options, {
+        label: "building interior",
+        stageName: "buildingInteriorBitmapExportStage",
+        rotateModelAroundOrigin: true,
+        configureState(state, setupOptions) {
+            const floors = getBuildingFloors(state.building);
+            const requestedFloorId = setupOptions && setupOptions.floorId !== undefined && setupOptions.floorId !== null
+                ? String(setupOptions.floorId)
+                : "";
+            const requestedLevel = Number(setupOptions && setupOptions.level);
+            const floor = requestedFloorId
+                ? findFloor(state.building, requestedFloorId)
+                : (Number.isFinite(requestedLevel)
+                    ? floors.find(candidate => Math.round(Number(candidate && candidate.level)) === Math.round(requestedLevel))
+                    : floors[0]);
+            if (!floor) {
+                throw new Error(`building interior bitmap export references missing floor ${requestedFloorId || requestedLevel || "(first)"}`);
+            }
+            const floorId = getFloorId(floor);
+            state.layerSelectionMode = "floor";
+            state.selectedFloorIds = new Set([floorId]);
+            state.selection = {
+                ...(state.selection || {}),
+                kind: "floor",
+                floorId,
+                levelId: floorId
+            };
+            return { floor, floorId };
+        }
+    });
+    const {
+        rendererRef,
+        pixelsPerWorldUnit,
+        padding,
+        maxDimension,
+        rotation,
+        pitch,
+        state,
+        appLike,
+        exportRenderer,
+        floor,
+        floorId
+    } = setup;
+    try {
+        await Promise.all([
+            exportRenderer.ensureFloorTextureConfigLoaded(),
+            exportRenderer.ensureRoofTextureConfigLoaded()
+        ]);
+        const WallSectionUnit = globalThis.WallSectionUnit;
+        if (WallSectionUnit && typeof WallSectionUnit._ensureWallTextureConfigLoaded === "function") {
+            await WallSectionUnit._ensureWallTextureConfigLoaded();
+        }
+        const interiorTexturePaths = exteriorBitmapTexturePaths(state.building);
+        await Promise.all(interiorTexturePaths.map((path) => loadPixiTexturePath(path, "building interior bitmap")));
+        const projectionPoints = collectInteriorBitmapProjectionPoints(state.building, floor);
+        let initialBounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const width = Math.ceil(initialBounds.width + padding * 2);
+        const height = Math.ceil(initialBounds.height + padding * 2);
+        if (width > maxDimension || height > maxDimension) {
+            throw new Error(`building interior bitmap ${width}x${height} exceeds max dimension ${maxDimension}`);
+        }
+        setExteriorBitmapScreen(appLike, width, height);
+        let bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const dx = (width * 0.5) - bounds.centerX;
+        const dy = (height * 0.5) - bounds.centerY;
+        const pitchFactors = cameraPitchProjectionFactors(state.camera);
+        state.camera.x -= dx / pixelsPerWorldUnit;
+        state.camera.y -= dy / (pixelsPerWorldUnit * GAME_XY_RATIO * pitchFactors.floor);
+        bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const metricBounds = exteriorDepthMetricBounds(projectionPoints, state.camera);
+        const originScreen = exportRenderer.worldToScreen({ x: 0, y: 0 }, 0);
+        if (!originScreen || !Number.isFinite(originScreen.x) || !Number.isFinite(originScreen.y)) {
+            throw new Error("building interior bitmap export could not project building origin");
+        }
+
+        const texture = PIXI.RenderTexture.create({
+            width,
+            height,
+            resolution: 1
+        });
+        const depthMetricTexture = PIXI.RenderTexture.create({
+            width,
+            height,
+            resolution: 1
+        });
+        configureExteriorDepthMetricTexture(depthMetricTexture);
+        exportRenderer.ensureRenderTextureDepthAttachment(texture, "building interior bitmap texture");
+        exportRenderer.ensureRenderTextureDepthAttachment(depthMetricTexture, "building interior depth metric texture");
+        exportRenderer.drawGameStyleBuilding();
+        exportRenderer.drawMountedObjects();
+        exportRenderer.assertInteriorBitmapRenderableSurfaces(floor);
+        const hidden = [
+            exportRenderer.gridLayer,
+            exportRenderer.gridAnchorLayer,
+            exportRenderer.floorLayer,
+            exportRenderer.wallLayer,
+            exportRenderer.mountedObjectLayer,
+            exportRenderer.selectionOutlineLayer,
+            exportRenderer.handleLayer,
+            exportRenderer.draftLayer,
+            exportRenderer.playtestLayer,
+            exportRenderer.pickerDepthDebugLayer,
+            exportRenderer.pickerDebugLayer,
+            exportRenderer.pickerDebugLabels
+        ];
+        exportRenderer.withDisplayObjectsHidden(hidden, () => {
+            exportRenderer.clearDepthTestedRenderTarget(
+                { renderer: rendererRef, texture },
+                "building interior bitmap target"
+            );
+            rendererRef.render(exportRenderer.root, texture, false);
+            const restoreDepthMetricPass = exportRenderer.applyExteriorDepthMetricDataPassState(
+                new Set([exportRenderer.buildingUnit]),
+                metricBounds
+            );
+            try {
+                exportRenderer.clearDepthTestedRenderTarget(
+                    { renderer: rendererRef, texture: depthMetricTexture },
+                    "building interior depth metric target"
+                );
+                rendererRef.render(exportRenderer.root, depthMetricTexture, false);
+            } finally {
+                restoreDepthMetricPass();
+            }
+        });
+        return {
+            texture,
+            depthMetricTexture,
+            width,
+            height,
+            anchorX: Math.max(0, Math.min(1, originScreen.x / width)),
+            anchorY: Math.max(0, Math.min(1, originScreen.y / height)),
+            pixelsPerWorldUnit,
+            xyratio: GAME_XY_RATIO,
+            floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT,
+            rotation,
+            pitch,
+            floorId,
+            level: Number.isFinite(Number(floor && floor.level)) ? Math.round(Number(floor.level)) : 0,
+            depthMetric: {
+                min: metricBounds.min,
+                max: metricBounds.max,
+                span: metricBounds.span,
+                origin: metricBounds.origin
+            },
+            bounds: {
+                screen: bounds,
+                worldWidth: width / pixelsPerWorldUnit,
+                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO)
+            },
+            camera: {
+                x: Number(state.camera.x),
+                y: Number(state.camera.y),
+                z: Number(state.camera.z) || 0,
+                zoom: pixelsPerWorldUnit,
+                rotation,
+                pitch
+            }
+        };
+    } catch (error) {
+        throw new Error(`building interior bitmap export failed: ${error && error.message ? error.message : error}`);
+    } finally {
+        destroyBuildingBitmapExportSetup(setup);
     }
 }

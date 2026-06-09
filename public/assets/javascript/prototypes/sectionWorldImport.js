@@ -289,6 +289,11 @@
                 manifest: (assetBundle && assetBundle.manifest && typeof assetBundle.manifest === "object")
                     ? assetBundle.manifest
                     : {},
+                buildingPlacements: Array.isArray(assetBundle && assetBundle.buildings)
+                    ? assetBundle.buildings.map((placement) => ({ ...placement }))
+                    : (Array.isArray(assetBundle && assetBundle.manifest && assetBundle.manifest.buildings)
+                        ? assetBundle.manifest.buildings.map((placement) => ({ ...placement }))
+                        : []),
                 loadedSectionAssetKeys: new Set(
                     orderedSectionAssets
                         .filter((asset) => !!(asset && asset._prototypeSectionHydrated === true))

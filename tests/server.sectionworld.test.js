@@ -77,6 +77,66 @@ test("sectionworld API preserves top-level trigger definitions after a save/load
     }
 });
 
+test("sectionworld API preserves top-level building placements after a save/load round trip", async () => {
+    const slot = `test_buildings_${process.pid}_${Date.now()}`;
+    const slotDir = resolveSectionWorldDirForSlot(slot);
+    fs.rmSync(slotDir, { recursive: true, force: true });
+
+    try {
+        const buildingRecord = {
+            schema: "survivor-building-placement-v1",
+            id: "building:test-house",
+            buildingSaveName: "the house",
+            transform: { x: 12, y: 34, rotation: 0.25 },
+            footprintPolygons: [[
+                { x: 10, y: 30 },
+                { x: 14, y: 30 },
+                { x: 14, y: 36 },
+                { x: 10, y: 36 }
+            ]],
+            overlappedSectionKeys: ["0,0"],
+            loadState: "unloaded"
+        };
+        const payload = {
+            manifest: {
+                activeCenterKey: "0,0"
+            },
+            buildings: [buildingRecord],
+            sections: [
+                {
+                    id: "section-0,0",
+                    key: "0,0",
+                    coord: { q: 0, r: 0 },
+                    centerAxial: { q: 0, r: 0 },
+                    centerOffset: { x: 0, y: 0 },
+                    neighborKeys: [],
+                    tileCoordKeys: ["0,0"],
+                    groundTextureId: 0,
+                    groundTiles: { "0,0": 0 },
+                    walls: [],
+                    objects: [],
+                    animals: [],
+                    powerups: []
+                }
+            ]
+        };
+
+        const saveResult = saveSectionWorldSlot(slot, payload);
+        assert.equal(saveResult.status, 200);
+        assert.equal(saveResult.body.ok, true);
+
+        const loadResult = loadSectionWorldSlot(slot);
+        assert.equal(loadResult.status, 200);
+        assert.equal(loadResult.body.ok, true);
+        assert.deepEqual(loadResult.body.buildings, [buildingRecord]);
+        assert.deepEqual(loadResult.body.sections[0].objects, []);
+        assert.ok(fs.existsSync(path.join(slotDir, "buildings.json")));
+        assert.equal(fs.existsSync(path.join(slotDir, "building:test-house.json")), false);
+    } finally {
+        fs.rmSync(slotDir, { recursive: true, force: true });
+    }
+});
+
 test("sectionworld API installs its larger JSON body parser before the default parser", () => {
     assert.ok(parseMegabyteLimit(sectionWorldJsonBodyLimit) > parseMegabyteLimit(defaultJsonBodyLimit));
 

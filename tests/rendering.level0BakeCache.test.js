@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const sectionWorldBuildings = require("../public/assets/javascript/prototypes/sectionWorldBuildings.js");
 
 function loadRenderingImpl(options = {}) {
     const context = {
@@ -58,6 +59,58 @@ function loadRenderingImpl(options = {}) {
 function makeNode(xindex, yindex) {
     return { xindex, yindex, neighbors: [] };
 }
+
+test("prototype building exterior bitmap signature includes render data version", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/prototypes/sectionWorldBuildings.js"),
+        "utf8"
+    );
+
+    assert.match(source, /const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v3";/);
+    assert.match(source, /EXTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),/);
+});
+
+test("prototype building interior bitmap signature includes floor and render data version", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/prototypes/sectionWorldBuildings.js"),
+        "utf8"
+    );
+    const rendererSource = fs.readFileSync(
+        path.join(__dirname, "../public/building-editor/BuildingRenderer.js"),
+        "utf8"
+    );
+
+    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v4-z-baked";/);
+    assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),\s+String\(floorId \|\| ""\),/);
+    const interiorSignatureBody = source.slice(
+        source.indexOf("function interiorBitmapSettingsSignature"),
+        source.indexOf("function destroyPrototypeBuildingBitmapEntry")
+    );
+    assert.match(interiorSignatureBody, /Number\(transform\.rotation \|\| 0\)\.toFixed\(6\),/);
+    assert.match(source, /renderBuildingInteriorBitmap\(buildingData,/);
+    assert.match(source, /floorId: sourceFloorId,\s+rotation: Number\(placement\.transform && placement\.transform\.rotation\) \|\| 0,/);
+    assert.match(rendererSource, /export async function renderBuildingInteriorBitmap\(buildingData, options = \{\}\)/);
+    assert.match(rendererSource, /function rotateBuildingDataAroundOrigin\(buildingData, rotation\)/);
+    assert.match(rendererSource, /function createBuildingBitmapExportSetup\(buildingData, options = \{\}, config = \{\}\)/);
+    assert.match(rendererSource, /config\.rotateModelAroundOrigin === true\s+\? rotateBuildingDataAroundOrigin\(buildingData, rotation\)\s+: buildingData;/);
+    assert.match(rendererSource, /renderBuildingExteriorBitmap[\s\S]*?rotateModelAroundOrigin: false,/);
+    assert.match(rendererSource, /renderBuildingInteriorBitmap[\s\S]*?rotateModelAroundOrigin: true,/);
+    assert.match(rendererSource, /state\.layerSelectionMode = "floor";/);
+    assert.match(rendererSource, /collectInteriorBitmapProjectionPoints\(state\.building, floor\)/);
+    assert.match(rendererSource, /assertInteriorBitmapRenderableSurfaces\(floor\)/);
+});
+
+test("main game Pixi renderer requests a depth buffer", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/runaround.js"),
+        "utf8"
+    );
+
+    assert.match(source, /const gameWebglContextAttributes = \{[\s\S]*?\bdepth:\s*true[\s\S]*?\};/);
+    assert.match(source, /gamePixiView\.getContext\("webgl2", gameWebglContextAttributes\)/);
+    assert.match(source, /gameContextAttributes\.depth !== true/);
+    assert.match(source, /new PIXI\.Application\(\{[\s\S]*?\bview:\s*gamePixiView,[\s\S]*?\bcontext:\s*gamePixiContext,[\s\S]*?\}\);/);
+});
 
 test("level 0 ground bake nodes are expanded once per stable bubble", () => {
     const RenderingImpl = loadRenderingImpl();
@@ -149,6 +202,409 @@ test("character overlay projection uses interpolated absolute world z", () => {
 
     assert.deepEqual(calls, [{ x: 4, y: 5, z: 6.75 }]);
     assert.deepEqual(point, { x: 4, y: -1.75 });
+});
+
+test("building placement footprints remain visible outside the placement tool", () => {
+    const drawOps = [];
+    class GraphicsStub {
+        constructor() {
+            this.visible = false;
+            this.parent = null;
+            this.interactive = true;
+        }
+        clear() { drawOps.push(["clear"]); }
+        lineStyle(width, color, alpha) { drawOps.push(["lineStyle", width, color, alpha]); }
+        beginFill(color, alpha) { drawOps.push(["beginFill", color, alpha]); }
+        moveTo(x, y) { drawOps.push(["moveTo", x, y]); }
+        lineTo(x, y) { drawOps.push(["lineTo", x, y]); }
+        closePath() { drawOps.push(["closePath"]); }
+        endFill() { drawOps.push(["endFill"]); }
+    }
+    const RenderingImpl = loadRenderingImpl({ PIXI: { Graphics: GraphicsStub } });
+    const renderer = new RenderingImpl();
+    const ui = {
+        children: [],
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+    };
+    renderer.layers = { ui };
+    renderer.camera = {
+        worldToScreen(x, y, z = 0) {
+            return { x: x * 10, y: (y - z) * 10 };
+        }
+    };
+    renderer.promoteInteriorPresentationDisplayObject = () => true;
+
+    renderer.renderBuildingPlacementPreview({
+        wizard: { currentSpell: "fireball" },
+        map: {
+            getPrototypeBuildingPlacements() {
+                return [{
+                    footprintPolygons: [[
+                        { x: 0, y: 0 },
+                        { x: 1, y: 0 },
+                        { x: 1, y: 1 },
+                        { x: 0, y: 1 }
+                    ]]
+                }];
+            }
+        }
+    });
+
+    assert.equal(renderer.buildingPlacementPreviewGraphics.visible, true);
+    assert.equal(ui.children.includes(renderer.buildingPlacementPreviewGraphics), true);
+    assert.ok(drawOps.some(op => op[0] === "lineStyle" && op[2] === 0x66aaff));
+});
+
+test("building exterior bitmap rendering requires a depth metric texture", () => {
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Graphics: class {},
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.anchor = { set(x, y) { this.x = x; this.y = y; } };
+                    this.visible = true;
+                    this.renderable = true;
+                }
+            },
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    const renderer = new RenderingImpl();
+
+    assert.throws(() => {
+        renderer.renderPrototypeBuildingExteriorBitmap(
+            { app: { renderer: { gl: { getExtension() { return {}; } } } } },
+            { id: "building:placed-1", transform: { x: 1, y: 2 } },
+            {
+                id: "building:placed-1",
+                status: "ready",
+                texture: { width: 10, height: 10 },
+                width: 10,
+                height: 10,
+                depthMetric: { min: -1, span: 2 }
+            }
+        );
+    }, /missing its depth metric texture/);
+});
+
+test("building exterior bitmap rendering uses vertical texture anchor", () => {
+    let updateThis = null;
+    let updateOptions = null;
+    let createdState = null;
+    const mesh = {
+        shader: {
+            uniforms: {
+                uBuildingExteriorDepthMetricUse: 0,
+                uBuildingExteriorDepthMetricSampler: null,
+                uBuildingExteriorDepthMetricRange: new Float32Array(2)
+            }
+        },
+        visible: false,
+        renderable: false
+    };
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Graphics: class {},
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.anchor = { set(x, y) { this.x = x; this.y = y; } };
+                    this.width = 0;
+                    this.height = 0;
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                }
+            },
+            State: class {},
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.PIXI.State = class StateStub {
+        constructor() {
+            createdState = this;
+        }
+    };
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.isWebgl2Renderer = () => true;
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh(_ctx, _camera, options) {
+        updateThis = this;
+        updateOptions = options;
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const renderer = new RenderingImpl();
+    renderer.camera = { viewscale: 10, xyratio: 1 };
+    const depthObjects = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+        }
+    };
+    const objects3d = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+    };
+    renderer.layers = {
+        depthObjects,
+        objects3d
+    };
+
+    renderer.renderPrototypeBuildingExteriorBitmap(
+        { app: { renderer: { gl: {} } }, map: {} },
+        { id: "building:placed-1", transform: { x: 1, y: 2 } },
+        {
+            id: "building:placed-1",
+            status: "ready",
+            texture: { width: 100, height: 80 },
+            depthMetricTexture: { width: 100, height: 80 },
+            width: 100,
+            height: 80,
+            anchorX: 0.5,
+            anchorY: 0.25,
+            bounds: { worldWidth: 10, worldHeight: 8 },
+            depthMetric: { min: -1, span: 2 }
+        }
+    );
+
+    assert.equal(updateThis.depthBillboardUseVerticalAnchorY, true);
+    assert.equal(updateOptions.useVerticalAnchorY, true);
+    assert.equal(updateThis.x, 1);
+    assert.equal(updateThis.y, 2);
+    assert.equal(updateThis._renderDepthBias, 0);
+    assert.equal(mesh.state, createdState);
+    assert.equal(mesh.state.depthTest, true);
+    assert.equal(mesh.state.depthMask, true);
+    assert.equal(mesh.state.blend, true);
+    assert.equal(objects3d.children.includes(mesh), true);
+    assert.equal(depthObjects.children.includes(mesh), false);
+});
+
+test("building interior bitmap rendering projects a visible ground mesh", () => {
+    let updateThis = null;
+    let updateOptions = null;
+    let uvUpdated = false;
+    let createdState = null;
+    const uvBuffer = {
+        data: new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]),
+        update() {
+            uvUpdated = true;
+        }
+    };
+    const mesh = {
+        shader: {
+            uniforms: {
+                uBuildingExteriorDepthMetricUse: 0,
+                uBuildingExteriorDepthMetricSampler: null,
+                uBuildingExteriorDepthMetricRange: new Float32Array(2)
+            }
+        },
+        geometry: {
+            getBuffer(name) {
+                return name === "aUvs" ? uvBuffer : null;
+            }
+        },
+        visible: false,
+        renderable: false,
+        alpha: 0,
+        parent: null
+    };
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Graphics: class {},
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.anchor = { set(x, y) { this.x = x; this.y = y; } };
+                    this.width = 0;
+                    this.height = 0;
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                }
+            },
+            State: class {
+                constructor() {
+                    createdState = this;
+                }
+            },
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh(_ctx, _camera, options) {
+        updateThis = this;
+        updateOptions = options;
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        viewscale: 36,
+        xyratio: 0.66
+    };
+    const objects3d = {
+        children: [],
+        sortableChildren: false,
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+    };
+    renderer.layers = { objects3d };
+
+    const renderedMesh = renderer.renderPrototypeBuildingInteriorBitmap(
+        { app: { renderer: { gl: {} } }, map: {} },
+        { id: "building:placed-1", transform: { x: 1, y: 2, rotation: Math.PI / 2 } },
+        {
+            id: "building:placed-1|floor-0",
+            status: "ready",
+            texture: {
+                width: 100,
+                height: 80,
+                baseTexture: { realWidth: 100, realHeight: 80 },
+                frame: { x: 0, y: 0, width: 100, height: 80 }
+            },
+            depthMetricTexture: { width: 100, height: 80 },
+            width: 100,
+            height: 80,
+            bounds: { worldWidth: 10, worldHeight: 8 },
+            pixelsPerWorldUnit: 72,
+            xyratio: 0.66,
+            anchorX: 0.25,
+            anchorY: 0.75,
+            depthMetric: { min: -1, span: 2 }
+        }
+    );
+
+    assert.equal(renderedMesh, mesh);
+    assert.equal(mesh.visible, true);
+    assert.equal(mesh.renderable, true);
+    assert.equal(updateThis.rotationAxis, "ground");
+    assert.equal(updateThis.x, 1);
+    assert.equal(updateThis.y, 2);
+    assert.equal(updateThis.width, 10);
+    assert.equal(updateThis.height, 8);
+    assert.equal(updateThis.placementRotation, 0);
+    assert.equal(updateThis.pixiSprite.visible, false);
+    assert.equal(updateThis.pixiSprite.renderable, false);
+    assert.equal(updateThis.pixiSprite.width, 360);
+    assert.equal(updateThis.pixiSprite.height, 288);
+    assert.equal(updateThis.pixiSprite.anchor.x, 0.25);
+    assert.equal(updateThis.pixiSprite.anchor.y, 0.75);
+    assert.equal(updateOptions.groundPlaneVisualLift, 0);
+    assert.equal(updateOptions.alphaCutoff, 0.01);
+    assert.equal(mesh.state, createdState);
+    assert.equal(mesh.state.depthTest, true);
+    assert.equal(mesh.state.depthMask, true);
+    assert.equal(mesh.state.blend, true);
+    assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricUse, 1);
+    assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricSampler.width, 100);
+    assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricRange[0], -1);
+    assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricRange[1], 0.5);
+    assert.equal(uvUpdated, true);
+    assert.deepEqual(Array.from(uvBuffer.data), [0, 0, 1, 0, 1, 1, 0, 1]);
+    assert.equal(mesh.zIndex, 2147483647);
+    assert.equal(objects3d.sortableChildren, true);
+    assert.equal(objects3d.children.includes(mesh), true);
+});
+
+test("building tool space hold shows pre-placement footprint preview", () => {
+    const drawOps = [];
+    class GraphicsStub {
+        constructor() {
+            this.visible = false;
+            this.parent = null;
+            this.interactive = true;
+        }
+        clear() { drawOps.push(["clear"]); }
+        lineStyle(width, color, alpha) { drawOps.push(["lineStyle", width, color, alpha]); }
+        beginFill(color, alpha) { drawOps.push(["beginFill", color, alpha]); }
+        moveTo(x, y) { drawOps.push(["moveTo", x, y]); }
+        lineTo(x, y) { drawOps.push(["lineTo", x, y]); }
+        closePath() { drawOps.push(["closePath"]); }
+        endFill() { drawOps.push(["endFill"]); }
+    }
+    const RenderingImpl = loadRenderingImpl({ PIXI: { Graphics: GraphicsStub } });
+    const renderer = new RenderingImpl();
+    const ui = {
+        children: [],
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+    };
+    const map = {
+        getPrototypeBuildingPlacements() {
+            return [];
+        }
+    };
+    renderer.layers = { ui };
+    renderer.camera = {
+        worldToScreen(x, y, z = 0) {
+            return { x: x * 10, y: (y - z) * 10 };
+        }
+    };
+    renderer.promoteInteriorPresentationDisplayObject = () => true;
+    renderer.getMousePosRef = () => ({ worldX: 3, worldY: 4, screenX: 30, screenY: 40 });
+
+    renderer.renderBuildingPlacementPreview({
+        wizard: { currentSpell: "fireball" },
+        map,
+        spaceHeld: false
+    });
+    assert.equal(renderer.buildingPlacementPreviewGraphics.visible, false);
+
+    let previewOptions = null;
+    RenderingImpl.__testContext.SpellSystem = {
+        getBuildingPlacementPreview(_wizard, options) {
+            previewOptions = options;
+            if (options.forceActive !== true) return null;
+            return {
+                footprintPolygons: [[
+                    { x: 3, y: 4 },
+                    { x: 5, y: 4 },
+                    { x: 5, y: 6 },
+                    { x: 3, y: 6 }
+                ]],
+                overlappedSectionKeys: []
+            };
+        }
+    };
+
+    drawOps.length = 0;
+    renderer.renderBuildingPlacementPreview({
+        wizard: { currentSpell: "placebuilding", editorPlacementActive: false },
+        map,
+        spaceHeld: true
+    });
+    assert.equal(renderer.buildingPlacementPreviewGraphics.visible, true);
+    assert.equal(previewOptions.forceActive, true);
+    assert.equal(previewOptions.spaceHeld, true);
+    assert.equal(previewOptions.mouseWorldPos.x, 3);
+    assert.equal(previewOptions.mouseWorldPos.y, 4);
+    assert.equal(previewOptions.mouseWorldPos.screenX, 30);
+    assert.equal(previewOptions.mouseWorldPos.screenY, 40);
+    assert.ok(drawOps.some(op => op[0] === "lineStyle" && op[2] === 0xffcc44 && op[3] === 0.95));
 });
 
 test("non-character render items still use local z plus layer base", () => {
@@ -728,6 +1184,26 @@ test("upper-layer ground objects render in the depth layer instead of the ground
     assert.equal(sprite.visible, false);
 });
 
+test("wizard body layer uses shared 3d depth layer while hat remains an overlay", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const depthObjects = { name: "renderingDepthObjects" };
+    const characters = { name: "renderingCharacters" };
+    const objects3d = { name: "renderingObjects3d" };
+    const entities = { name: "renderingEntities" };
+    renderer.layers = { depthObjects, characters, objects3d, entities };
+
+    assert.equal(renderer.getCharacterLayer(), objects3d);
+
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
+        "utf8"
+    );
+    assert.match(source, /const overlayContainer = \(this\.layers && \(this\.layers\.entities \|\| this\.layers\.characters \|\| this\.layers\.depthObjects\)\) \|\| null;/);
+    assert.match(source, /keepWizardShieldInCharacterLayer\(wizard\.shieldGraphics\)/);
+    assert.doesNotMatch(source, /keepWizardShieldInCharacterLayer\(hat\)/);
+});
+
 test("building interior foreground promotion moves display object temporarily and restores it", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -911,6 +1387,37 @@ test("building interior overlay floor clips real floor texture entries", () => {
         { x: 8, y: 8 },
         { x: 2, y: 8 }
     ]));
+});
+
+test("prototype building interior overlay does not cover exported floor bitmap with world ground", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.collectFloorVisualEntries = () => {
+        throw new Error("prototype interiors should not sample world floor visuals");
+    };
+
+    const entries = renderer.collectBuildingInteriorOverlayFloorEntries({}, {
+        id: "active",
+        level: 0,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        }
+    }, {
+        buildingId: "building:placed-1",
+        building: {
+            _prototypeBuildingPlacement: {
+                id: "building:placed-1"
+            }
+        }
+    });
+
+    assert.equal(entries.length, 0);
 });
 
 test("floor visual mesh updates when a non-sampled vertex moves", () => {
@@ -1588,7 +2095,7 @@ test("building interior rendering draws active-floor doors even when their wall 
     assert.equal(depthOptions.drawOnlyMountedWallSide, true);
     assert.equal(mesh.visible, true);
     assert.equal(mesh.renderable, true);
-    assert.equal(mesh.parent, depthObjects);
+    assert.equal(mesh.parent, renderer.layers.objects3d);
 });
 
 test("building doorway transition latches interior presentation until threshold is cleared", () => {
@@ -1795,6 +2302,225 @@ test("building doorway transition latches exterior presentation when entering", 
     assert.equal(committedInterior.active, true);
     assert.equal(committedInterior.triggers.length, 1);
     assert.equal(!!committedInterior._doorwayPresentationTransition, false);
+});
+
+test("prototype building doorway transitions into interior presentation after entry", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const map = {
+        floorsById: new Map(),
+        shortestDeltaX: (fromX, toX) => toX - fromX,
+        shortestDeltaY: (fromY, toY) => toY - fromY,
+        _buildingRenderCacheVersion: 0,
+        markBuildingRenderCacheDirty() {
+            this._buildingRenderCacheVersion += 1;
+        }
+    };
+    sectionWorldBuildings.installSectionWorldBuildingApis(map);
+    const buildingData = {
+        schema: "survivor-building-v1",
+        floorFragments: [{
+            fragmentId: "floor-0",
+            surfaceId: "floor-0",
+            level: 0,
+            nodeBaseZ: 0,
+            outerPolygon: [
+                { x: 0, y: -5 },
+                { x: 10, y: -5 },
+                { x: 10, y: 2 },
+                { x: 0, y: 2 }
+            ],
+            holes: []
+        }],
+        wallSections: [{
+            id: 42,
+            floorId: "floor-0",
+            fragmentId: "floor-0",
+            startPoint: { x: 0, y: 0 },
+            endPoint: { x: 10, y: 0 },
+            thickness: 0.25,
+            bottomZ: 0,
+            traversalLayer: 0,
+            role: "perimeter"
+        }, {
+            id: 43,
+            floorId: "floor-0",
+            fragmentId: "floor-0",
+            startPoint: { x: 10, y: 0 },
+            endPoint: { x: 10, y: -5 },
+            thickness: 0.25,
+            bottomZ: 0,
+            traversalLayer: 0,
+            role: "perimeter"
+        }, {
+            id: 44,
+            floorId: "floor-0",
+            fragmentId: "floor-0",
+            startPoint: { x: 10, y: -5 },
+            endPoint: { x: 0, y: -5 },
+            thickness: 0.25,
+            bottomZ: 0,
+            traversalLayer: 0,
+            role: "perimeter"
+        }, {
+            id: 45,
+            floorId: "floor-0",
+            fragmentId: "floor-0",
+            startPoint: { x: 0, y: -5 },
+            endPoint: { x: 0, y: 0 },
+            thickness: 0.25,
+            bottomZ: 0,
+            traversalLayer: 0,
+            role: "perimeter"
+        }],
+        mountedWallObjects: [{
+            id: 7,
+            type: "placedObject",
+            category: "doors",
+            wallId: 42,
+            wallT: 0.5,
+            width: 2,
+            height: 3,
+            rotationAxis: "spatial",
+            isPassable: true
+        }]
+    };
+    map.addPrototypeBuildingPlacement({
+        id: "building:placed-test-house",
+        buildingSaveName: "test house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    }, { buildingData });
+
+    const outsideState = renderer.getLayerCutawayState({
+        map,
+        wizard: { x: 5, y: 0.2, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 1000
+    });
+    assert.equal(outsideState.active, false);
+    assert.equal(outsideState.triggers.length, 0);
+
+    const thresholdState = renderer.getLayerCutawayState({
+        map,
+        wizard: { x: 5, y: -0.2, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 1100
+    });
+    assert.equal(thresholdState.active, false);
+    assert.equal(thresholdState.triggers.length, 0);
+    assert.equal(!!thresholdState._doorwayPresentationTransition, true);
+
+    const interiorState = renderer.getLayerCutawayState({
+        map,
+        wizard: { x: 5, y: -1.2, currentLayer: 0, currentLayerBaseZ: 0 },
+        renderNowMs: 1300
+    });
+    assert.equal(interiorState.active, true);
+    assert.equal(interiorState.triggers.length, 1);
+    assert.equal(interiorState.triggers[0].buildingId, "building:placed-test-house");
+    assert.equal(!!interiorState.triggers[0].activeInteriorRegion, true);
+    assert.equal(!!interiorState._doorwayPresentationTransition, false);
+    assert.equal(renderer.isPrototypeBuildingExteriorHiddenByInteriorCutaway(
+        { id: "building:placed-test-house" },
+        { _renderingLayerCutawayState: outsideState }
+    ), false);
+    assert.equal(renderer.isPrototypeBuildingExteriorHiddenByInteriorCutaway(
+        { id: "building:placed-test-house" },
+        { _renderingLayerCutawayState: interiorState }
+    ), true);
+});
+
+test("prototype building active interior requests and renders source floor bitmap", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-test-house",
+        buildingSaveName: "test house",
+        transform: { x: 3, y: 4, rotation: 0.25 }
+    };
+    const cache = {
+        id: "building:placed-test-house|floor-0",
+        placementId: placement.id,
+        floorId: "floor-0",
+        status: "ready",
+        texture: {},
+        depthMetricTexture: {},
+        depthMetric: { min: -1, span: 2 },
+        bounds: { worldWidth: 8, worldHeight: 6 }
+    };
+    let requested = null;
+    let rendered = null;
+    let hiddenIds = null;
+    const map = {
+        getPrototypeBuildingInteriorBitmap(id, floorId) {
+            requested = { phase: "get", id, floorId };
+            return null;
+        },
+        requestPrototypeBuildingInteriorBitmap(requestPlacement, floorId, options) {
+            requested = {
+                phase: "request",
+                placementId: requestPlacement && requestPlacement.id,
+                floorId,
+                hasApp: !!options.app,
+                hasRenderer: !!options.renderer
+            };
+            return cache;
+        }
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            fragmentId: `${placement.id}:floor:floor-0`,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-0"
+            }
+        }
+    };
+    renderer.getLayerCutawayState = () => ({
+        active: true,
+        triggers: [trigger]
+    });
+    renderer.renderPrototypeBuildingInteriorBitmap = (ctx, renderedPlacement, renderedCache) => {
+        rendered = { ctx, placement: renderedPlacement, cache: renderedCache };
+        return { name: "interior bitmap mesh" };
+    };
+    renderer.hideUnusedPrototypeBuildingInteriors = (activeIds) => {
+        hiddenIds = new Set(activeIds);
+    };
+
+    const renderedMeshes = renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(requested, {
+        phase: "request",
+        placementId: placement.id,
+        floorId: "floor-0",
+        hasApp: true,
+        hasRenderer: true
+    });
+    assert.equal(rendered.placement, placement);
+    assert.equal(rendered.cache, cache);
+    assert.deepEqual([...hiddenIds], [cache.id]);
+    assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), ["interior bitmap mesh"]);
+});
+
+test("prototype building interior bitmaps are tracked by the objects3d lifecycle", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
+        "utf8"
+    );
+    const renderObjectsStart = source.indexOf("renderObjects3D(ctx, visibleNodes");
+    assert.ok(renderObjectsStart >= 0, "renderObjects3D source not found");
+    const interiorCall = source.indexOf("this.renderPrototypeBuildingInteriors(ctx)", renderObjectsStart);
+    const previousFrameCleanup = source.indexOf("for (const obj of this._currentDisplayObjectSets", renderObjectsStart);
+    assert.ok(interiorCall > renderObjectsStart, "prototype interior render call missing from renderObjects3D");
+    assert.ok(previousFrameCleanup > renderObjectsStart, "objects3d display cleanup missing");
+    assert.ok(interiorCall < previousFrameCleanup, "prototype interiors must be added before objects3d display cleanup");
+    assert.doesNotMatch(source, /profileDrawPassSection\("renderPrototypeBuildingInteriors"/);
 });
 
 test("outside building cutaway renders only exterior face for mounted windows", () => {
@@ -2099,6 +2825,46 @@ test("building interior wall promotion skips legacy black outline graphics", () 
 
     assert.equal(displayObjects.length, 1);
     assert.equal(displayObjects[0], depthMesh);
+});
+
+test("building cutaway composite skips prototype placement triggers without live capture objects", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.buildingCutawayCompositeCache = {
+        active: true,
+        texture: {},
+        dataTexture: {},
+        wizardLayer: 0,
+        wizardX: 5,
+        wizardY: 5
+    };
+    const state = {
+        active: true,
+        wizardLayer: 0,
+        wizardX: 5,
+        wizardY: 5,
+        triggers: [{
+            buildingId: "building:placed-1",
+            building: {
+                buildingId: "building:placed-1",
+                _prototypeBuildingPlacement: { id: "building:placed-1" }
+            },
+            renderCache: {
+                renderItems: [{
+                    item: {
+                        type: "wallSection",
+                        _cutawayCompositeFrame: Number(renderer._layerCutawayFrameId) || 0
+                    },
+                    level: 0
+                }]
+            }
+        }]
+    };
+
+    assert.deepEqual(renderer.getBuildingCutawayCompositeTriggers(state), []);
+    assert.equal(renderer.getBuildingCutawayCompositeSignature(null, state), "");
+    assert.equal(renderer.renderBuildingCutawayComposites({}, state, {}), null);
+    assert.equal(renderer.buildingCutawayCompositeCache, null);
 });
 
 test("building cutaway composite hiding preserves active interior foreground display objects", () => {

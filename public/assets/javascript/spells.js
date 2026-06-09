@@ -254,8 +254,9 @@ const SpellSystem = (() => {
     const RANDOM_TREE_VARIANT = "random";
     const PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "signs", "roof"];
     const EDITOR_PLACEABLE_CATEGORIES = ["flowers", "windows", "doors", "furniture", "roof"];
-    const EDITOR_CATEGORIES = [...EDITOR_PLACEABLE_CATEGORIES, "powerups"];
+    const EDITOR_CATEGORIES = [...EDITOR_PLACEABLE_CATEGORIES, "powerups", "buildings"];
     const EDITOR_MENU_ICON = "/assets/images/thumbnails/edit.png";
+    const BUILDING_EDITOR_ICON = "/assets/images/thumbnails/layers.png";
     const ROOF_EDITOR_ICON = "/assets/images/thumbnails/roof.png";
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
@@ -454,6 +455,10 @@ const SpellSystem = (() => {
     let wallTextureFetchPromise = null;
     let placeableImagePathsByCategory = null;
     let placeableImageFetchPromise = null;
+    let buildingEditorSaveList = null;
+    let buildingEditorSaveListFetchPromise = null;
+    const buildingEditorSavePayloadsByName = new Map();
+    const buildingEditorSavePayloadFetchesByName = new Map();
     let editorMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
     const textureAlphaMaskCache = new Map();
 
@@ -1817,7 +1822,7 @@ const SpellSystem = (() => {
     }
 
     function isEditorToolName(spellName) {
-        return spellName === "wall" || spellName === "buildroad" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "blackdiamond" || spellName === "nodeinspector";
+        return spellName === "wall" || spellName === "buildroad" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
     }
 
     function isFloorEditorToolName(spellName) {
@@ -1885,6 +1890,7 @@ const SpellSystem = (() => {
             : "";
         if (EDITOR_CATEGORIES.includes(raw)) return raw;
         if (wizardRef.currentSpell === "blackdiamond") return "powerups";
+        if (wizardRef.currentSpell === "placebuilding") return "buildings";
         const placeableCategory = getSelectedPlaceableCategory(wizardRef);
         return EDITOR_PLACEABLE_CATEGORIES.includes(placeableCategory)
             ? placeableCategory
@@ -1927,6 +1933,9 @@ const SpellSystem = (() => {
             }
             return POWERUP_PLACEMENT_IMAGE_PATH;
         }
+        if (category === "buildings") {
+            return BUILDING_EDITOR_ICON;
+        }
         return getSelectedPlaceableTextureForCategory(wizardRef, category);
     }
 
@@ -1936,6 +1945,203 @@ const SpellSystem = (() => {
             return preview.imagePath;
         }
         return POWERUP_PLACEMENT_IMAGE_PATH;
+    }
+
+    function normalizeBuildingSaveName(rawName) {
+        return String(rawName === undefined || rawName === null ? "" : rawName).trim();
+    }
+
+    function fetchBuildingEditorSaves(options = {}) {
+        const forceRefresh = !!(options && options.forceRefresh);
+        if (forceRefresh) {
+            buildingEditorSaveList = null;
+        }
+        if (!forceRefresh && Array.isArray(buildingEditorSaveList)) {
+            return Promise.resolve(buildingEditorSaveList);
+        }
+        if (!forceRefresh && buildingEditorSaveListFetchPromise) {
+            return buildingEditorSaveListFetchPromise;
+        }
+        buildingEditorSaveListFetchPromise = fetch("/api/building-editor/buildings", { cache: "no-cache" })
+            .then(response => response.json())
+            .then(payload => {
+                if (!payload || payload.ok !== true || !Array.isArray(payload.buildings)) {
+                    throw new Error("building editor save list response is invalid");
+                }
+                buildingEditorSaveList = payload.buildings
+                    .filter(item => item && typeof item.name === "string" && item.name.trim().length > 0)
+                    .map(item => ({ ...item, name: item.name.trim() }));
+                return buildingEditorSaveList;
+            })
+            .finally(() => {
+                buildingEditorSaveListFetchPromise = null;
+            });
+        return buildingEditorSaveListFetchPromise;
+    }
+
+    function fetchBuildingEditorSaveData(saveName) {
+        const name = normalizeBuildingSaveName(saveName);
+        if (!name) return Promise.reject(new Error("missing building save name"));
+        if (buildingEditorSavePayloadsByName.has(name)) {
+            return Promise.resolve(buildingEditorSavePayloadsByName.get(name));
+        }
+        if (buildingEditorSavePayloadFetchesByName.has(name)) {
+            return buildingEditorSavePayloadFetchesByName.get(name);
+        }
+        const promise = fetch(`/api/building-editor/buildings/${encodeURIComponent(name)}`, { cache: "no-cache" })
+            .then(response => response.json().then(payload => ({ response, payload })))
+            .then(({ response, payload }) => {
+                if (!response.ok || !payload || payload.ok !== true || !payload.data) {
+                    throw new Error(`failed to load building save ${name}`);
+                }
+                if (payload.data.schema !== "survivor-building-v1" || !Array.isArray(payload.data.floorFragments)) {
+                    throw new Error(`invalid building save ${name}`);
+                }
+                buildingEditorSavePayloadsByName.set(name, payload.data);
+                return payload.data;
+            })
+            .finally(() => {
+                buildingEditorSavePayloadFetchesByName.delete(name);
+            });
+        buildingEditorSavePayloadFetchesByName.set(name, promise);
+        return promise;
+    }
+
+    function getSelectedBuildingSaveName(wizardRef) {
+        const selected = normalizeBuildingSaveName(wizardRef && wizardRef.selectedBuildingSaveName);
+        if (selected) return selected;
+        if (Array.isArray(buildingEditorSaveList) && buildingEditorSaveList.length > 0) {
+            return buildingEditorSaveList[0].name;
+        }
+        return "";
+    }
+
+    function setSelectedBuildingSaveName(wizardRef, saveName) {
+        if (!wizardRef) return "";
+        const name = normalizeBuildingSaveName(saveName);
+        if (!name) throw new Error("missing building save name");
+        wizardRef.selectedBuildingSaveName = name;
+        wizardRef.selectedEditorCategory = "buildings";
+        return name;
+    }
+
+    function getSelectedBuildingRotation(wizardRef) {
+        const raw = Number(wizardRef && wizardRef.selectedBuildingRotation);
+        return Number.isFinite(raw) ? raw : 0;
+    }
+
+    function adjustBuildingPlacementRotation(wizardRef, deltaDegrees) {
+        if (!wizardRef || !Number.isFinite(deltaDegrees) || deltaDegrees === 0) return null;
+        const current = getSelectedBuildingRotation(wizardRef);
+        const stepRadians = PLACEABLE_ROTATION_STEP_DEGREES * Math.PI / 180;
+        let next = current + (Number(deltaDegrees) * Math.PI / 180);
+        next = ((next % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        if (next > Math.PI) next -= Math.PI * 2;
+        const snapped = Math.round(next / stepRadians) * stepRadians;
+        wizardRef.selectedBuildingRotation = snapped;
+        wizardRef.selectedEditorCategory = "buildings";
+        return snapped;
+    }
+
+    function buildBuildingPlacementTransform(wizardRef, worldX, worldY, options = {}) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : (typeof map !== "undefined" ? map : null);
+        const layerPoint = typeof resolveEditorWorldPointOnLayer === "function"
+            ? resolveEditorWorldPointOnLayer(wizardRef, worldX, worldY, options)
+            : { x: worldX, y: worldY };
+        const xRaw = Number.isFinite(layerPoint && layerPoint.x) ? Number(layerPoint.x) : Number(worldX);
+        const yRaw = Number.isFinite(layerPoint && layerPoint.y) ? Number(layerPoint.y) : Number(worldY);
+        return {
+            x: mapRef && typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(xRaw) : xRaw,
+            y: mapRef && typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(yRaw) : yRaw,
+            rotation: getSelectedBuildingRotation(wizardRef)
+        };
+    }
+
+    function getBuildingPlacementPreview(wizardRef, options = {}) {
+        const forceActive = !!(options && (options.forceActive === true || options.spaceHeld === true));
+        if (!wizardRef || wizardRef.currentSpell !== "placebuilding" || (wizardRef.editorPlacementActive !== true && !forceActive)) return null;
+        const saveName = getSelectedBuildingSaveName(wizardRef);
+        if (!saveName) {
+            fetchBuildingEditorSaves().catch(error => console.error("[building placement] failed to list saves", error));
+            return null;
+        }
+        const mouse = (options && options.mouseWorldPos) || (
+            typeof mousePos !== "undefined" && mousePos && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)
+                ? { x: Number(mousePos.worldX), y: Number(mousePos.worldY), screenX: mousePos.screenX, screenY: mousePos.screenY }
+                : null
+        );
+        if (!mouse || !Number.isFinite(mouse.x) || !Number.isFinite(mouse.y)) return null;
+        const buildingData = buildingEditorSavePayloadsByName.get(saveName) || null;
+        if (!buildingData) {
+            fetchBuildingEditorSaveData(saveName).catch(error => console.error("[building placement] failed to load preview", error));
+            return { loading: true, buildingSaveName: saveName, footprintPolygons: [] };
+        }
+        const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
+        if (!mapRef || typeof mapRef.computePrototypeBuildingFootprint !== "function") {
+            throw new Error("building placement preview requires section-world building APIs");
+        }
+        const transform = buildBuildingPlacementTransform(wizardRef, mouse.x, mouse.y, {
+            screenX: Number.isFinite(mouse.screenX) ? mouse.screenX : undefined,
+            screenY: Number.isFinite(mouse.screenY) ? mouse.screenY : undefined
+        });
+        const placement = {
+            id: "building:preview",
+            buildingSaveName: saveName,
+            transform
+        };
+        const footprintPolygons = mapRef.computePrototypeBuildingFootprint(buildingData, placement);
+        const overlappedSectionKeys = typeof mapRef.computePrototypeBuildingOverlappedSectionKeys === "function"
+            ? mapRef.computePrototypeBuildingOverlappedSectionKeys(footprintPolygons)
+            : [];
+        return {
+            loading: false,
+            buildingSaveName: saveName,
+            transform,
+            footprintPolygons,
+            overlappedSectionKeys
+        };
+    }
+
+    function placeSelectedBuilding(wizardRef, worldX, worldY, options = {}) {
+        if (!wizardRef || wizardRef.castDelay) return false;
+        const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
+        if (!mapRef || typeof mapRef.addPrototypeBuildingPlacement !== "function") {
+            message("Building placement is unavailable.");
+            return false;
+        }
+        const saveName = getSelectedBuildingSaveName(wizardRef);
+        if (!saveName) {
+            fetchBuildingEditorSaves({ forceRefresh: true })
+                .then((items) => {
+                    if (items.length > 0) setSelectedBuildingSaveName(wizardRef, items[0].name);
+                })
+                .catch(error => console.error("[building placement] failed to refresh saves", error));
+            message("Choose a building first.");
+            return false;
+        }
+        const transform = buildBuildingPlacementTransform(wizardRef, worldX, worldY, options);
+        wizardRef.castDelay = true;
+        wizardRef.casting = true;
+        fetchBuildingEditorSaveData(saveName)
+            .then((buildingData) => {
+                const placement = mapRef.addPrototypeBuildingPlacement({
+                    buildingSaveName: saveName,
+                    transform
+                }, { buildingData });
+                if (typeof mapRef.schedulePrototypeRuntimeSync === "function") {
+                    mapRef.schedulePrototypeRuntimeSync({ reason: "building-placement" });
+                }
+                message(`Placed building ${placement.buildingSaveName}.`);
+            })
+            .catch((error) => {
+                console.error("[building placement] failed", error);
+                message("Building placement failed.");
+            })
+            .finally(() => {
+                wizardRef.castDelay = false;
+                wizardRef.casting = false;
+            });
+        return true;
     }
 
     function fetchPlaceableImages(options = {}) {
@@ -8126,6 +8332,11 @@ const SpellSystem = (() => {
             return;
         }
 
+        if (wizardRef.currentSpell === "placebuilding") {
+            placeSelectedBuilding(wizardRef, worldX, worldY, options || {});
+            return;
+        }
+
         if (wizardRef.currentSpell === "blackdiamond") {
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
             const placeBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
@@ -8904,6 +9115,21 @@ const SpellSystem = (() => {
         renderTreeSelector(wizardRef);
     }
 
+    function openBuildingSelector(wizardRef) {
+        if (!wizardRef || !canUseEditorFeatures(wizardRef)) return;
+        wizardRef.selectedEditorCategory = "buildings";
+        setCurrentSpell(wizardRef, "placebuilding");
+        spellMenuMode = "editor-items";
+        editorMenuCategory = "buildings";
+        $("#spellMenu").removeClass("hidden");
+        renderEditorItemSelector(wizardRef, "buildings");
+        fetchBuildingEditorSaves({ forceRefresh: true }).then(() => {
+            if (spellMenuMode === "editor-items" && editorMenuCategory === "buildings") {
+                renderEditorItemSelector(wizardRef, "buildings");
+            }
+        }).catch(error => console.error("[building placement] failed to list saves", error));
+    }
+
     function renderEditorCategorySelector(wizardRef) {
         const $grid = $("#editorGrid");
         $grid.empty();
@@ -8984,9 +9210,9 @@ const SpellSystem = (() => {
         // Render editor categories (placeable objects, powerups)
         const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
         EDITOR_CATEGORIES.forEach(category => {
-            const selectedTexture = (category === "powerups")
+            const selectedTexture = category === "powerups"
                 ? getPowerupEditorCategoryIcon(wizardRef)
-                : getSelectedPlaceableTextureForCategory(wizardRef, category);
+                : (category === "buildings" ? BUILDING_EDITOR_ICON : getSelectedPlaceableTextureForCategory(wizardRef, category));
             const icon = $("<div>")
                 .addClass("spellIcon")
                 .css({
@@ -8999,6 +9225,14 @@ const SpellSystem = (() => {
                     if (category === "powerups") {
                         wizardRef.selectedEditorCategory = "powerups";
                         setCurrentSpell(wizardRef, "blackdiamond");
+                    } else if (category === "buildings") {
+                        wizardRef.selectedEditorCategory = "buildings";
+                        setCurrentSpell(wizardRef, "placebuilding");
+                        fetchBuildingEditorSaves().then(items => {
+                            if (!getSelectedBuildingSaveName(wizardRef) && items.length > 0) {
+                                setSelectedBuildingSaveName(wizardRef, items[0].name);
+                            }
+                        }).catch(error => console.error("[building placement] failed to list saves", error));
                     } else {
                         setSelectedPlaceableCategory(wizardRef, category);
                         wizardRef.selectedEditorCategory = category;
@@ -9011,6 +9245,10 @@ const SpellSystem = (() => {
                 .on("contextmenu", event => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (category === "buildings") {
+                        openBuildingSelector(wizardRef);
+                        return;
+                    }
                     if (category === "powerups") {
                         wizardRef.selectedEditorCategory = "powerups";
                         setCurrentSpell(wizardRef, "blackdiamond");
@@ -9020,18 +9258,22 @@ const SpellSystem = (() => {
                         refreshSelectedPlaceableMetadata(wizardRef);
                         setCurrentSpell(wizardRef, "placeobject");
                     }
-                    editorMenuMode = "items";
+                    spellMenuMode = "editor-items";
                     editorMenuCategory = category;
                     renderEditorItemSelector(wizardRef, category);
                     if (category !== "powerups") {
                         fetchPlaceableImages({ forceRefresh: true }).then(() => {
-                            if (editorMenuMode === "items" && editorMenuCategory === category) {
+                            if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
                                 renderEditorItemSelector(wizardRef, category);
                             }
                         });
                     }
                 });
-            if (category !== "powerups") {
+            if (category === "buildings") {
+                icon.attr("data-spell", "placebuilding");
+                icon.attr("data-opens-submenu", "true");
+            }
+            if (category !== "powerups" && category !== "buildings") {
                 applyCompositeLayersToThumbnail(icon, category, selectedTexture);
             }
             if (selectedEditorCategory === category) {
@@ -9111,6 +9353,75 @@ const SpellSystem = (() => {
                 });
             } else {
                 renderPowerupItems([{ file: POWERUP_PLACEMENT_FILE_NAME, imagePath: POWERUP_PLACEMENT_IMAGE_PATH, name: "Button" }]);
+            }
+            return;
+        }
+
+        if (safeCategory === "buildings") {
+            const selectedName = getSelectedBuildingSaveName(wizardRef);
+            const renderBuildingItems = (items) => {
+                if (!Array.isArray(items) || items.length === 0) {
+                    const empty = $("<div>")
+                        .css({
+                            "color": "#fff",
+                            "font-size": "12px",
+                            "padding": "8px"
+                        })
+                        .text("No buildings");
+                    $grid.append(empty);
+                    return;
+                }
+                items.forEach(item => {
+                    const name = normalizeBuildingSaveName(item && item.name);
+                    if (!name) return;
+                    const icon = $("<div>")
+                        .addClass("spellIcon")
+                        .css({
+                            "background-image": `url('${BUILDING_EDITOR_ICON}')`,
+                            "background-size": "cover",
+                            "background-position": "center center",
+                            "position": "relative"
+                        })
+                        .attr("title", name)
+                        .click(() => {
+                            setSelectedBuildingSaveName(wizardRef, name);
+                            setCurrentSpell(wizardRef, "placebuilding");
+                            fetchBuildingEditorSaveData(name).catch(error => console.error("[building placement] failed to load save", error));
+                            spellMenuMode = "main";
+                            refreshSpellSelector(wizardRef);
+                            $("#spellMenu").addClass("hidden");
+                        });
+                    const label = $("<span>")
+                        .text(name)
+                        .css({
+                            "position": "absolute",
+                            "left": "3px",
+                            "right": "3px",
+                            "bottom": "3px",
+                            "font-size": "10px",
+                            "line-height": "10px",
+                            "color": "#fff",
+                            "text-align": "center",
+                            "text-shadow": "1px 1px 2px #000",
+                            "pointer-events": "none",
+                            "overflow": "hidden",
+                            "text-overflow": "ellipsis",
+                            "white-space": "nowrap"
+                        });
+                    icon.append(label);
+                    if (name === selectedName) {
+                        icon.addClass("selected");
+                    }
+                    $grid.append(icon);
+                });
+            };
+            if (Array.isArray(buildingEditorSaveList)) {
+                renderBuildingItems(buildingEditorSaveList);
+            } else {
+                fetchBuildingEditorSaves().then(renderBuildingItems).catch(error => {
+                    console.error("[building placement] failed to list saves", error);
+                    renderBuildingItems([]);
+                });
             }
             return;
         }
@@ -10022,9 +10333,9 @@ const SpellSystem = (() => {
             // Editor categories (placeable objects, powerups)
             const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
             EDITOR_CATEGORIES.forEach(category => {
-                const selectedTexture = (category === "powerups")
+                const selectedTexture = category === "powerups"
                     ? getPowerupEditorCategoryIcon(wizardRef)
-                    : getSelectedPlaceableTextureForCategory(wizardRef, category);
+                    : (category === "buildings" ? BUILDING_EDITOR_ICON : getSelectedPlaceableTextureForCategory(wizardRef, category));
                 const catIcon = $("<div>")
                     .addClass("spellIcon")
                     .css({
@@ -10037,6 +10348,14 @@ const SpellSystem = (() => {
                         if (category === "powerups") {
                             wizardRef.selectedEditorCategory = "powerups";
                             setCurrentSpell(wizardRef, "blackdiamond");
+                        } else if (category === "buildings") {
+                            wizardRef.selectedEditorCategory = "buildings";
+                            setCurrentSpell(wizardRef, "placebuilding");
+                            fetchBuildingEditorSaves().then(items => {
+                                if (!getSelectedBuildingSaveName(wizardRef) && items.length > 0) {
+                                    setSelectedBuildingSaveName(wizardRef, items[0].name);
+                                }
+                            }).catch(error => console.error("[building placement] failed to list saves", error));
                         } else {
                             setSelectedPlaceableCategory(wizardRef, category);
                             wizardRef.selectedEditorCategory = category;
@@ -10049,6 +10368,10 @@ const SpellSystem = (() => {
                     .on("contextmenu", event => {
                         event.preventDefault();
                         event.stopPropagation();
+                        if (category === "buildings") {
+                            openBuildingSelector(wizardRef);
+                            return;
+                        }
                         if (category === "powerups") {
                             wizardRef.selectedEditorCategory = "powerups";
                             setCurrentSpell(wizardRef, "blackdiamond");
@@ -10069,7 +10392,11 @@ const SpellSystem = (() => {
                             });
                         }
                     });
-                if (category !== "powerups") {
+                if (category === "buildings") {
+                    catIcon.attr("data-spell", "placebuilding");
+                    catIcon.attr("data-opens-submenu", "true");
+                }
+                if (category !== "powerups" && category !== "buildings") {
                     applyCompositeLayersToThumbnail(catIcon, category, selectedTexture);
                 }
                 if (selectedEditorCategory === category) {
@@ -10155,6 +10482,13 @@ const SpellSystem = (() => {
         wizardRef.spells = buildSpellList(wizardRef);
         if (spellName === "blackdiamond") {
             wizardRef.selectedEditorCategory = "powerups";
+        } else if (spellName === "placebuilding") {
+            wizardRef.selectedEditorCategory = "buildings";
+            fetchBuildingEditorSaves().then(items => {
+                if (!getSelectedBuildingSaveName(wizardRef) && items.length > 0) {
+                    setSelectedBuildingSaveName(wizardRef, items[0].name);
+                }
+            }).catch(error => console.error("[building placement] failed to list saves", error));
         } else if (spellName === "placeobject") {
             wizardRef.selectedEditorCategory = getSelectedPlaceableCategory(wizardRef);
         }
@@ -10258,6 +10592,10 @@ const SpellSystem = (() => {
         openTriggerAreaMenu(wizardRef);
     }
 
+    function showBuildingMenu(wizardRef) {
+        openBuildingSelector(wizardRef);
+    }
+
     function showEditorMenu(wizardRef) {
         if (!wizardRef) return;
         if (!canUseEditorFeatures(wizardRef)) return;
@@ -10273,7 +10611,13 @@ const SpellSystem = (() => {
         editorMenuCategory = category;
         $("#spellMenu").removeClass("hidden");
         renderEditorItemSelector(wizardRef, category);
-        if (category !== "powerups") {
+        if (category === "buildings") {
+            fetchBuildingEditorSaves({ forceRefresh: true }).then(() => {
+                if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
+                    renderEditorItemSelector(wizardRef, category);
+                }
+            }).catch(error => console.error("[building placement] failed to list saves", error));
+        } else if (category !== "powerups") {
             fetchPlaceableImages({ forceRefresh: true }).then(() => {
                 if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
                     renderEditorItemSelector(wizardRef, category);
@@ -10312,6 +10656,10 @@ const SpellSystem = (() => {
             setCurrentSpell(wizardRef, "blackdiamond");
             return "blackdiamond";
         }
+        if (category === "buildings") {
+            setCurrentSpell(wizardRef, "placebuilding");
+            return "placebuilding";
+        }
         setSelectedPlaceableCategory(wizardRef, category);
         refreshSelectedPlaceableMetadata(wizardRef);
         setCurrentSpell(wizardRef, "placeobject");
@@ -10329,6 +10677,16 @@ const SpellSystem = (() => {
     function selectEditorCategory(wizardRef, category) {
         if (!wizardRef) return;
         if (!canUseEditorFeatures(wizardRef)) return;
+        if (category === "buildings") {
+            wizardRef.selectedEditorCategory = "buildings";
+            setCurrentSpell(wizardRef, "placebuilding");
+            return;
+        }
+        if (category === "powerups") {
+            wizardRef.selectedEditorCategory = "powerups";
+            setCurrentSpell(wizardRef, "blackdiamond");
+            return;
+        }
         setSelectedPlaceableCategory(wizardRef, category);
         wizardRef.selectedEditorCategory = category;
         refreshSelectedPlaceableMetadata(wizardRef);
@@ -10375,6 +10733,7 @@ const SpellSystem = (() => {
         showFloorEditingMenu,
         showAnimalMenu,
         showTriggerAreaMenu,
+        showBuildingMenu,
         showEditorMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
@@ -10391,11 +10750,17 @@ const SpellSystem = (() => {
         adjustAnimalSizeScale,
         adjustTreeGrowSize,
         adjustPlaceableRotation,
+        adjustBuildingPlacementRotation,
         resolveTreePlacementSize,
         resolveTreePlacementTextureVariant,
         clearTreePlacementPreviewSize,
         clearTreePlacementPreviewVariant,
         getPowerupPlacementPreviewConfig,
+        getBuildingPlacementPreview,
+        fetchBuildingEditorSaves,
+        fetchBuildingEditorSaveData,
+        getSelectedBuildingSaveName,
+        setSelectedBuildingSaveName,
         beginDragSpell,
         updateDragPreview,
         completeDragSpell,

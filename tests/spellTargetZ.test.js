@@ -59,6 +59,37 @@ function loadSpellContext() {
     return context;
 }
 
+test("building placement rotation adjusts in snapped five degree radians", () => {
+    const context = loadSpellContext();
+    const wizard = {
+        currentSpell: "placebuilding",
+        selectedEditorCategory: "buildings",
+        selectedBuildingRotation: 0
+    };
+
+    const right = context.SpellSystem.adjustBuildingPlacementRotation(wizard, 5);
+    assertNearlyEqual(right, Math.PI / 36);
+    assertNearlyEqual(wizard.selectedBuildingRotation, Math.PI / 36);
+    assert.equal(wizard.selectedEditorCategory, "buildings");
+
+    const left = context.SpellSystem.adjustBuildingPlacementRotation(wizard, -10);
+    assertNearlyEqual(left, -Math.PI / 36);
+    assertNearlyEqual(wizard.selectedBuildingRotation, -Math.PI / 36);
+});
+
+test("building placement rotation wraps around the negative boundary", () => {
+    const context = loadSpellContext();
+    const wizard = {
+        currentSpell: "placebuilding",
+        selectedBuildingRotation: -Math.PI
+    };
+
+    const next = context.SpellSystem.adjustBuildingPlacementRotation(wizard, -5);
+
+    assertNearlyEqual(next, 35 * Math.PI / 36);
+    assertNearlyEqual(wizard.selectedBuildingRotation, 35 * Math.PI / 36);
+});
+
 function loadVanishContext() {
     const context = {
         console,

@@ -42,6 +42,7 @@
             assignNodesToSections,
             buildPrototypeSummary,
             initializePrototypeRuntimeState,
+            installSectionWorldBuildingApis,
             setActiveCenter
         } = deps;
 
@@ -495,6 +496,10 @@
             );
             assignNodesToSections(this, nextState);
             this._prototypeSectionState = nextState;
+            if (typeof installSectionWorldBuildingApis === "function") {
+                installSectionWorldBuildingApis(this);
+                this.initializePrototypeBuildingState(nextState.buildingPlacements || []);
+            }
             rebuildPrototypeFloorRuntime(this, nextState);
             this._sectionWorld = buildPrototypeSummary(nextState);
             this._twoSectionPrototype = this._sectionWorld;
@@ -590,6 +595,9 @@
             return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !isBlocked);
         };
         map.getNodesInIndexWindow = function getNodesInIndexWindow(xStart, xEnd, yStart, yEnd) {
+            if (typeof this.syncPrototypeBuildingMovementBlockers === "function") {
+                this.syncPrototypeBuildingMovementBlockers();
+            }
             const state = this._prototypeSectionState;
             const sparseNodes = (state && state.allNodesByCoordKey instanceof Map) ? state.allNodesByCoordKey : null;
             if (!sparseNodes) return [];

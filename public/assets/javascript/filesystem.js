@@ -2439,6 +2439,9 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
             ? map.exportPrototypeTriggerDefinitions()
             : [],
+        buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
+            ? map.exportPrototypeBuildingPlacements()
+            : [],
         sections: exportedSections
     };
     const sectionSummary = summarizePrototypeSectionAssets(exportedSections);

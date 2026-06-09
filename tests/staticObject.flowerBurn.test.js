@@ -2,8 +2,27 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 
 const STATIC_OBJECTS_MODULE_PATH = require.resolve("../public/assets/javascript/gameobjects/staticObjects.js");
+
+test("prototype building exterior shader decodes packed RGB depth metric data", () => {
+    const source = fs.readFileSync(STATIC_OBJECTS_MODULE_PATH, "utf8");
+
+    assert.match(source, /float decodeExteriorDepthMetric\(vec3 value\)/);
+    assert.match(source, /return dot\(value, vec3\(1\.0, 1\.0 \/ 255\.0, 1\.0 \/ 65025\.0\)\);/);
+    assert.match(source, /decodeExteriorDepthMetric\(depthData\.rgb\) \* span/);
+});
+
+test("webgl2 depth billboard shader writes depth for ordinary billboards", () => {
+    const source = fs.readFileSync(STATIC_OBJECTS_MODULE_PATH, "utf8");
+
+    assert.match(source, /out float vDepth;/);
+    assert.match(source, /vDepth = nd;/);
+    assert.match(source, /in float vDepth;/);
+    assert.match(source, /gl_FragDepth = vDepth;/);
+    assert.match(source, /if \(uBuildingExteriorDepthMetricUse > 0\.5\)[\s\S]*gl_FragDepth = nd;/);
+});
 
 class FakeTexture {
     constructor(baseTexture = null, frame = null) {
@@ -16,6 +35,16 @@ class FakeTexture {
             once() {}
         };
         this.frame = frame;
+        if (frame) {
+            const baseW = Number(this.baseTexture.realWidth || this.baseTexture.width || 0);
+            const baseH = Number(this.baseTexture.realHeight || this.baseTexture.height || 0);
+            if (
+                Number(frame.x) + Number(frame.width) > baseW ||
+                Number(frame.y) + Number(frame.height) > baseH
+            ) {
+                throw new Error("FakeTexture frame does not fit inside base texture");
+            }
+        }
     }
 
     static from() {
@@ -124,12 +153,26 @@ class FakeMesh {
         this.state = state;
         this.drawMode = drawMode;
         this.parent = null;
+        this.x = 0;
+        this.y = 0;
+        this.alpha = 1;
+        this.rotation = 0;
+        this.tint = 0xffffff;
         this.visible = false;
+        this.renderable = true;
+        this.texture = null;
         this.destroyed = false;
     }
 
     destroy() {
         this.destroyed = true;
+    }
+}
+
+class FakeMeshMaterial {
+    constructor(texture) {
+        this.texture = texture;
+        this.tint = 0xffffff;
     }
 }
 
@@ -192,6 +235,7 @@ function installTestGlobals() {
             }
         },
         State: class State {},
+        MeshMaterial: FakeMeshMaterial,
         Rectangle: class Rectangle {
             constructor(x, y, width, height) {
                 this.x = x;
@@ -241,7 +285,7 @@ function installTestGlobals() {
     globalThis.frameRate = 30;
     globalThis.viewscale = 100;
     globalThis.xyratio = 1;
-    globalThis.worldToScreen = ({ x, y }) => ({ x: x * 100, y: y * 100 });
+    globalThis.worldToScreen = ({ x, y, z = 0 }) => ({ x: x * 100, y: (y - (Number(z) || 0)) * 100 });
 }
 
 test("flowers burn into falling fragments and remove themselves from the game", () => {
@@ -337,6 +381,217 @@ test("flowers burn into falling fragments and remove themselves from the game", 
     restoreGlobals();
 });
 
+test("burned trees crumble one second after finishing their fall", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const node = new TestNode();
+    const map = {
+        objects: [],
+        worldToNode() {
+            return node;
+        }
+    };
+
+    const oddSizedTreeTexture = new globalThis.PIXI.Texture({
+        valid: true,
+        width: 835,
+        height: 720,
+        realWidth: 835,
+        realHeight: 720,
+        once() {}
+    });
+    const tree = new globalThis.Tree(
+        { x: 0, y: 0 },
+        [oddSizedTreeTexture],
+        map,
+        { deferPostLoad: true }
+    );
+    map.objects.push(tree);
+    tree.hp = 0.25;
+    tree.fallDirection = "left";
+    tree.ignite();
+
+    globalThis.frameCount = 0;
+    tree.update();
+    assert.equal(tree.burned, true);
+    assert.equal(tree.falling, true);
+    assert.equal(tree._flowerBurnFragments, null);
+
+    let fallCompleteFrame = null;
+    for (let frame = 1; frame < 200; frame++) {
+        globalThis.frameCount = frame;
+        tree.update();
+        if (tree.fallenHitboxCreated) {
+            fallCompleteFrame = frame;
+            break;
+        }
+    }
+    assert.ok(Number.isFinite(fallCompleteFrame));
+    assert.equal(Math.abs(tree.rotation), 90);
+    assert.equal(tree._burnedTreeFallCompleteFrame, fallCompleteFrame);
+    assert.equal(tree._flowerBurnFragments, null);
+    assert.equal(tree.isOnFire, false);
+
+    tree.pixiSprite.width = tree.width * globalThis.viewscale;
+    tree.pixiSprite.height = tree.height * globalThis.viewscale;
+    tree.updateDepthBillboardMesh(
+        { app: { screen: { width: 1200, height: 900 } }, map },
+        {
+            x: 0,
+            y: 0,
+            z: 0,
+            viewscale: globalThis.viewscale,
+            xyratio: globalThis.xyratio,
+            worldToScreen(worldX, worldY, worldZ = 0) {
+                return globalThis.worldToScreen({ x: worldX, y: worldY, z: worldZ });
+            }
+        },
+        {}
+    );
+    assert.ok(tree._fallenTreeBurnScreenQuad);
+    assert.equal(tree._fallenTreeBurnScreenQuad.diagonal, "br-tl");
+
+    globalThis.frameCount = fallCompleteFrame + globalThis.frameRate - 1;
+    tree.update();
+    assert.equal(tree._flowerBurnFragments, null);
+    assert.equal(tree.pixiSprite.visible, true);
+
+    globalThis.frameCount = fallCompleteFrame + globalThis.frameRate;
+    tree.update();
+    assert.ok(Array.isArray(tree._flowerBurnFragments));
+    assert.equal(tree._flowerBurnFragments.length, 49);
+    assert.ok(tree._flowerBurnFragmentContainer);
+    const lastFrame = tree._flowerBurnFragments[tree._flowerBurnFragments.length - 1].sprite.texture.frame;
+    assert.ok(lastFrame.x + lastFrame.width <= 835);
+    assert.ok(lastFrame.y + lastFrame.height <= 720);
+    const fragmentXs = tree._flowerBurnFragments.map(frag => frag.sprite.x);
+    const fragmentYs = tree._flowerBurnFragments.map(frag => frag.sprite.y);
+    assert.ok(Math.max(...fragmentXs) - Math.min(...fragmentXs) > 300);
+    assert.ok(Math.min(...fragmentYs) < -100);
+    assert.ok(Math.max(...fragmentYs) > 100);
+    const firstTreeFragment = tree._flowerBurnFragments[0];
+    assert.ok(firstTreeFragment.meshVertexBuffer);
+    assert.deepEqual(Array.from(firstTreeFragment.sprite.geometry.index), [1, 2, 3, 0, 1, 3]);
+    const firstVertices = Array.from(firstTreeFragment.meshVertexBuffer.data);
+    assert.notEqual(firstVertices[0], firstVertices[6]);
+    const fallDistances = tree._flowerBurnFragments.map(frag => frag.floorScreenDeltaY);
+    assert.ok(Math.max(...fallDistances) > 15);
+    const lowerBoundaryYAtX = (quad, x) => {
+        const points = [quad.bl, quad.br, quad.tr, quad.tl];
+        const intersections = [];
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            if (x < Math.min(a.x, b.x) - 1e-6 || x > Math.max(a.x, b.x) + 1e-6) continue;
+            const dx = b.x - a.x;
+            if (Math.abs(dx) <= 1e-6) {
+                if (Math.abs(x - a.x) <= 1e-6) intersections.push(a.y, b.y);
+                continue;
+            }
+            const t = Math.max(0, Math.min(1, (x - a.x) / dx));
+            intersections.push(a.y + ((b.y - a.y) * t));
+        }
+        return Math.max(...intersections);
+    };
+    for (let row = 0; row < 7; row++) {
+        for (let col = 0; col < 7; col++) {
+            const frag = tree._flowerBurnFragments[(row * 7) + col];
+            const vertices = Array.from(frag.meshVertexBuffer.data);
+            const bottomPoints = [
+                { x: frag.startScreenX + vertices[0], y: frag.startScreenY + vertices[1] },
+                { x: frag.startScreenX + vertices[2], y: frag.startScreenY + vertices[3] },
+                {
+                    x: frag.startScreenX + ((vertices[0] + vertices[2]) * 0.5),
+                    y: frag.startScreenY + ((vertices[1] + vertices[3]) * 0.5)
+                }
+            ];
+            const finalBottomDistances = bottomPoints.map(point => (
+                lowerBoundaryYAtX(tree._fallenTreeBurnScreenQuad, point.x) - (point.y + frag.floorScreenDeltaY)
+            ));
+            assert.ok(finalBottomDistances.every(Number.isFinite));
+            assert.ok(
+                finalBottomDistances.every(distance => distance >= -1e-6),
+                `row=${row} col=${col} distances=${finalBottomDistances.join(",")}`
+            );
+            if (row === 0) {
+                assert.ok(
+                    Math.min(...finalBottomDistances) < 8,
+                    `row=${row} col=${col} distances=${finalBottomDistances.join(",")}`
+                );
+            }
+            if (row === 6) {
+                assert.equal(frag.floorScreenDeltaY, 0);
+            }
+        }
+    }
+    const average = values => values.reduce((sum, value) => sum + value, 0) / values.length;
+    const rowAverageDrops = Array.from({ length: 7 }, (_unused, row) => (
+        average(fallDistances.slice(row * 7, (row + 1) * 7))
+    ));
+    assert.ok(rowAverageDrops[0] > rowAverageDrops[3]);
+    assert.ok(rowAverageDrops[3] > rowAverageDrops[6]);
+    assert.equal(tree.pixiSprite.visible, false);
+    assert.equal(tree.gone, undefined);
+
+    let frame = globalThis.frameCount;
+    for (let i = 0; i < 900; i++) {
+        frame += 1;
+        globalThis.frameCount = frame;
+        tree.update();
+        if (tree.gone) break;
+    }
+    assert.equal(tree.gone, true);
+    assert.equal(map.objects.includes(tree), false);
+    assert.equal(node.objects.includes(tree), false);
+    assert.equal(globalThis.activeSimObjects.has(tree), false);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("tree fire size interpolates when burn damage kills the tree", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const node = new TestNode();
+    const map = {
+        objects: [],
+        worldToNode() {
+            return node;
+        }
+    };
+    const tree = new globalThis.Tree(
+        { x: 0, y: 0 },
+        [new globalThis.PIXI.Texture()],
+        map,
+        { deferPostLoad: true }
+    );
+    map.objects.push(tree);
+    tree.maxHP = 10;
+    tree.hp = 0.75;
+    tree.ignite();
+
+    globalThis.frameCount = 0;
+    tree.update();
+    assert.equal(tree.burned, false);
+    assert.equal(tree.hp, 0.25);
+    assert.equal(tree._renderedFireIntensityScale, 4);
+
+    globalThis.frameCount = 1;
+    tree.update();
+    assert.equal(tree.burned, true);
+    assert.ok(tree._renderedFireIntensityScale < 4);
+    assert.ok(tree._renderedFireIntensityScale > 1);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
 test("removeFromGame does not double-destroy renderer display object aliases", () => {
     restoreGlobals();
     installTestGlobals();
@@ -422,6 +677,47 @@ test("wall-mounted preview depth billboard draws only the camera-side wall plane
         -2, 1, 0,
         -2, 1, 0,
         -2, 1, 0
+    ]);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("generated building exterior depth billboard honors vertical texture anchor", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const obj = Object.create(globalThis.StaticObject.prototype);
+    obj.type = "prototypeBuildingExterior";
+    obj.category = "";
+    obj.rotationAxis = "billboard";
+    obj.x = 10;
+    obj.y = 20;
+    obj.z = 0;
+    obj.depthBillboardUseVerticalAnchorY = true;
+    obj.pixiSprite = new globalThis.PIXI.Sprite(new globalThis.PIXI.Texture());
+    obj.pixiSprite.width = 400;
+    obj.pixiSprite.height = 200;
+    obj.pixiSprite.anchor.set(0.5, 0.25);
+
+    const mesh = obj.updateDepthBillboardMesh(
+        { app: { screen: { width: 800, height: 600 } } },
+        { x: 0, y: 0, z: 0, viewscale: 100, xyratio: 1 },
+        {
+            alphaCutoff: 0.01,
+            useVerticalAnchorY: true
+        }
+    );
+
+    assert.ok(mesh);
+    const positions = Array.from(mesh.geometry.getBuffer("aWorldPosition").data);
+    assert.deepEqual(positions.slice(0, 12), [
+        8, 20, -1.5,
+        12, 20, -1.5,
+        12, 20, 0.5,
+        8, 20, 0.5
     ]);
 
     delete require.cache[STATIC_OBJECTS_MODULE_PATH];

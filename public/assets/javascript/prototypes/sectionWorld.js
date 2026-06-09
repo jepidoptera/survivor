@@ -118,6 +118,13 @@
     );
     const { createSectionWorldImportHelpers } = sectionWorldImport;
 
+    const sectionWorldBuildings = resolveSectionWorldModule(
+        "__sectionWorldBuildings",
+        "./sectionWorldBuildings.js",
+        "sectionWorldBuildings.js"
+    );
+    const { installSectionWorldBuildingApis } = sectionWorldBuildings;
+
     const sectionGeometry = resolveSectionWorldModule(
         "__sectionGeometry",
         "../map/sectionGeometry.js",
@@ -1690,6 +1697,7 @@
             assignNodesToSections,
             buildPrototypeSummary,
             initializePrototypeRuntimeState,
+            installSectionWorldBuildingApis,
             setActiveCenter
         });
         installSectionWorldTraversalApis(map, { globalScope });
@@ -1852,6 +1860,7 @@
             upsertPrototypeObjectRecord
         });
         const {
+            enqueuePrototypeAsyncBuildingSync: enqueuePrototypeAsyncBuildingSyncPlanner,
             enqueuePrototypeAsyncObjectSync: enqueuePrototypeAsyncObjectSyncPlanner,
             enqueuePrototypeAsyncWallSync: enqueuePrototypeAsyncWallSyncPlanner,
             enqueuePrototypeAsyncAnimalSync: enqueuePrototypeAsyncAnimalSyncPlanner,
@@ -1860,6 +1869,7 @@
         attachFlushPrototypeBubbleShiftSession();
         attachBubbleShiftControlApis({
             updateActiveBubbleForActor,
+            enqueuePrototypeAsyncBuildingSync: enqueuePrototypeAsyncBuildingSyncPlanner,
             enqueuePrototypeAsyncWallSync: enqueuePrototypeAsyncWallSyncPlanner,
             enqueuePrototypeAsyncObjectSync: enqueuePrototypeAsyncObjectSyncPlanner,
             enqueuePrototypeAsyncAnimalSync: enqueuePrototypeAsyncAnimalSyncPlanner,
@@ -1965,6 +1975,8 @@
 
         assignNodesToSections(map, prototypeState);
         attachSectionWorldApis(map, prototypeState);
+        installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState(prototypeState.buildingPlacements || []);
         if (typeof map.ensurePrototypeBlockedEdges === "function") {
             map.ensurePrototypeBlockedEdges();
         }
@@ -2022,6 +2034,8 @@
             nextRecordIds: { walls: 1, objects: 1, animals: 1, powerups: 1 }
         }, makeSectionKey({ q: 0, r: 0 }));
         attachSectionWorldApis(map, emptyState);
+        installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState([]);
         globalScope.RUNAROUND_PROTOTYPE_WIZARD_STATE = null;
         globalScope.RUNAROUND_PROTOTYPE_SPAWN = {
             x: Math.max(0, Math.floor((Number(map.width) || 0) * 0.5)),

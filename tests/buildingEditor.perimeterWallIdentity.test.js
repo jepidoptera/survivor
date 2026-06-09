@@ -1,5 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const BUILDING_RENDERER_SOURCE_PATH = path.join(__dirname, "../public/building-editor/BuildingRenderer.js");
+const WALL_SECTION_UNIT_SOURCE_PATH = path.join(__dirname, "../public/assets/javascript/gameobjects/wallSectionUnit.js");
 
 async function loadModel() {
     return import("../public/building-editor/BuildingModel.js");
@@ -20,6 +25,30 @@ async function loadPlaytestRuntime() {
 async function loadGeometry() {
     return import("../public/building-editor/BuildingGeometry.js");
 }
+
+test("building exterior depth metric export uses packed nearest-sampled data texture", () => {
+    const source = fs.readFileSync(BUILDING_RENDERER_SOURCE_PATH, "utf8");
+    const floorDepthFs = source.match(/const FLOOR_DEPTH_FS = `([\s\S]*?)`;/);
+
+    assert.ok(floorDepthFs);
+    assert.match(floorDepthFs[1], /uniform float uDepthBias;/);
+    assert.match(floorDepthFs[1], /uniform float uBuildingExteriorDepthMetricBias;/);
+    assert.match(source, /vec3 encodeExteriorDepthMetric\(float value\)/);
+    assert.match(source, /float metricBias = uDepthBias \+ uBuildingExteriorDepthMetricBias;/);
+    assert.match(source, /vExteriorDepthMetric \+ metricBias - uBuildingExteriorDepthMetricOrigin/);
+    assert.match(source, /gl_FragColor = vec4\(encodeExteriorDepthMetric\(encodedMetric\), 1\.0\);/);
+    assert.match(source, /function configureExteriorDepthMetricTexture\(texture\)/);
+    assert.match(source, /baseTexture\.scaleMode = PIXI\.SCALE_MODES\.NEAREST;/);
+    assert.match(source, /baseTexture\.mipmap = PIXI\.MIPMAP_MODES\.OFF;/);
+    assert.match(source, /configureExteriorDepthMetricTexture\(depthMetricTexture\);/);
+});
+
+test("building exterior wall depth metric export uses the same packed RGB format", () => {
+    const source = fs.readFileSync(WALL_SECTION_UNIT_SOURCE_PATH, "utf8");
+
+    assert.match(source, /vec3 encodeExteriorDepthMetric\(float value\)/);
+    assert.match(source, /gl_FragColor = vec4\(encodeExteriorDepthMetric\(encodedMetric\), 1\.0\);/);
+});
 
 async function loadSelectTool() {
     return import("../public/building-editor/tools/SelectTool.js");
@@ -1563,6 +1592,35 @@ test("renderer wall units rebuild from saved mitered geometry on creation", asyn
     });
 });
 
+test("renderer wall units use floor default wall texture and invalidate stale texture geometry", async () => {
+    loadWallSectionUnit();
+    const { BuildingEditorState } = await loadState();
+    const { BuildingRenderer } = await loadRenderer();
+    const model = await loadModel();
+    const state = new BuildingEditorState();
+    const floor = state.selectedFloor();
+    const floorId = model.getFloorId(floor);
+    const wall = model.getBuildingWalls(state.building)
+        .find((candidate) => String(candidate.fragmentId || candidate.floorId) === floorId);
+
+    floor.defaultWallTexturePath = "/assets/images/walls/brick.jpg";
+    delete wall.wallTexturePath;
+
+    const renderer = Object.create(BuildingRenderer.prototype);
+    renderer.state = state;
+    renderer.wallUnitById = new Map();
+
+    const entry = renderer.ensureWallUnit(wall, floor);
+    assert.equal(entry.unit.wallTexturePath, floor.defaultWallTexturePath);
+
+    entry.unit._depthGeometryCache = { key: "stale-texture" };
+    wall.wallTexturePath = "/assets/images/walls/concrete.jpg";
+    renderer.updateWallTexturePhase(entry.unit, wall, floor);
+
+    assert.equal(entry.unit.wallTexturePath, wall.wallTexturePath);
+    assert.equal(entry.unit._depthGeometryCache, null);
+});
+
 test("peak roofs store a draggable peak point with center snapping", async () => {
     const { BuildingEditorState } = await loadState();
     const model = await loadModel();
@@ -1831,6 +1889,202 @@ test("floor UVs use repeatsPerMapUnitX and repeatsPerMapUnitY from the texture m
             globalThis.PIXI = previousPixi;
         }
     }
+});
+
+test("floor mesh can render with a tiny z lift for exterior bitmap export", async () => {
+    const previousPixi = globalThis.PIXI;
+    try {
+        const { floor } = await createTestBuilding();
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.floorSurfaceZLift = 0.001;
+        renderer.getFloorDepthState = () => null;
+        renderer.getSurfaceTexture = (texturePath) => ({ texturePath });
+        let capturedPositions = null;
+        class GeometryStub {
+            addAttribute(name, data) {
+                if (name === "aWorldPosition") capturedPositions = Array.from(data);
+                return this;
+            }
+            addIndex() { return this; }
+        }
+        globalThis.PIXI = {
+            Geometry: GeometryStub,
+            Shader: { from: () => ({ uniforms: {} }) },
+            Mesh: class MeshStub {
+                constructor(geometry, shader) {
+                    this.geometry = geometry;
+                    this.shader = shader;
+                }
+            },
+            DRAW_MODES: { TRIANGLES: 0 }
+        };
+
+        renderer.createFloorMesh(floor, {
+            points: floor.outerPolygon.map((point) => ({ x: Number(point.x), y: Number(point.y) })),
+            indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+        }, {});
+
+        assert.ok(capturedPositions);
+        capturedPositions
+            .filter((_value, index) => index % 3 === 2)
+            .forEach((z) => assert.ok(Math.abs(z - 0.001) < 0.0000001));
+    } finally {
+        if (typeof previousPixi === "undefined") {
+            delete globalThis.PIXI;
+        } else {
+            globalThis.PIXI = previousPixi;
+        }
+    }
+});
+
+test("floor mesh exports extra exterior depth metric clearance without moving geometry", async () => {
+    const previousPixi = globalThis.PIXI;
+    try {
+        const { floor } = await createTestBuilding();
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.floorSurfaceZLift = 0.001;
+        renderer.getFloorDepthState = () => null;
+        renderer.getSurfaceTexture = (texturePath) => ({ texturePath });
+        let capturedPositions = null;
+        let capturedUniforms = null;
+        class GeometryStub {
+            addAttribute(name, data) {
+                if (name === "aWorldPosition") capturedPositions = Array.from(data);
+                return this;
+            }
+            addIndex() { return this; }
+        }
+        globalThis.PIXI = {
+            Geometry: GeometryStub,
+            Shader: {
+                from(_vs, _fs, uniforms) {
+                    capturedUniforms = uniforms;
+                    return { uniforms };
+                }
+            },
+            Mesh: class MeshStub {
+                constructor(geometry, shader) {
+                    this.geometry = geometry;
+                    this.shader = shader;
+                }
+            },
+            DRAW_MODES: { TRIANGLES: 0 }
+        };
+
+        renderer.createFloorMesh(floor, {
+            points: floor.outerPolygon.map((point) => ({ x: Number(point.x), y: Number(point.y) })),
+            indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+        }, {});
+
+        assert.ok(capturedPositions);
+        assert.equal(capturedUniforms.uBuildingExteriorDepthMetricBias, 0.035);
+        capturedPositions
+            .filter((_value, index) => index % 3 === 2)
+            .forEach((z) => assert.ok(Math.abs(z - 0.001) < 0.0000001));
+    } finally {
+        if (typeof previousPixi === "undefined") {
+            delete globalThis.PIXI;
+        } else {
+            globalThis.PIXI = previousPixi;
+        }
+    }
+});
+
+test("renderer fails loudly if column runtime is missing", async () => {
+    const previousColumnUnit = globalThis.ColumnUnit;
+    try {
+        delete globalThis.ColumnUnit;
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+
+        assert.throws(() => {
+            renderer.ensureColumnUnit({ id: 17, position: { x: 0, y: 0 } }, { fragmentId: "floor-1" });
+        }, /column 17 rendering requires ColumnUnit/);
+    } finally {
+        if (typeof previousColumnUnit === "undefined") {
+            delete globalThis.ColumnUnit;
+        } else {
+            globalThis.ColumnUnit = previousColumnUnit;
+        }
+    }
+});
+
+test("mounted object meshes support exterior depth metric data pass", async () => {
+    const previousPixi = globalThis.PIXI;
+    try {
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.getFloorDepthState = () => null;
+        let capturedUniforms = null;
+        class GeometryStub {
+            addAttribute() { return this; }
+            addIndex() { return this; }
+        }
+        globalThis.PIXI = {
+            Geometry: GeometryStub,
+            Shader: {
+                from(_vs, _fs, uniforms) {
+                    capturedUniforms = uniforms;
+                    return { uniforms };
+                }
+            },
+            Mesh: class MeshStub {
+                constructor(geometry, shader) {
+                    this.geometry = geometry;
+                    this.shader = shader;
+                }
+            },
+            DRAW_MODES: { TRIANGLES: 0 }
+        };
+
+        const mesh = renderer.createMountedObjectMesh({ texturePath: "initial" });
+
+        assert.ok(mesh);
+        assert.equal(capturedUniforms.uBuildingExteriorDepthMetricDataPass, 0);
+        assert.ok(capturedUniforms.uBuildingExteriorDepthMetricRange instanceof Float32Array);
+        assert.equal(capturedUniforms.uBuildingExteriorDepthMetricOrigin, 0);
+    } finally {
+        if (typeof previousPixi === "undefined") {
+            delete globalThis.PIXI;
+        } else {
+            globalThis.PIXI = previousPixi;
+        }
+    }
+});
+
+test("mounted object mesh update replaces stale sampler with window texture", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const textureRequests = [];
+    renderer.getSurfaceTexture = (texturePath, fallback) => {
+        textureRequests.push({ texturePath, fallback });
+        return { texturePath, fallback };
+    };
+    renderer.mountedObjectWorldQuad = () => null;
+    const mesh = {
+        _texturePath: "/assets/images/flooring/stair-tread.png",
+        shader: {
+            uniforms: {
+                uSampler: { texturePath: "/assets/images/flooring/stair-tread.png" }
+            }
+        }
+    };
+
+    const updated = renderer.updateMountedObjectMesh(mesh, {
+        id: 3,
+        category: "windows",
+        texturePath: "/assets/images/windows/window.png"
+    }, { floor: { fragmentId: "floor-1" } });
+
+    assert.equal(updated, false);
+    assert.equal(mesh._texturePath, "/assets/images/windows/window.png");
+    assert.deepEqual(textureRequests, [{
+        texturePath: "/assets/images/windows/window.png",
+        fallback: "/assets/images/windows/window.png"
+    }]);
+    assert.equal(mesh.shader.uniforms.uSampler.texturePath, "/assets/images/windows/window.png");
 });
 
 test("dome roofs build equidistant z levels on a hemispherical curve", async () => {

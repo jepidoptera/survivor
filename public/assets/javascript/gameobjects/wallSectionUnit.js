@@ -30,6 +30,7 @@ varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
 varying float vWorldZ;
+varying float vExteriorDepthMetric;
 void main(void) {
     float cosR = cos(uCameraRotation);
     float sinR = sin(uCameraRotation);
@@ -48,6 +49,7 @@ void main(void) {
     float screenX = camDx * uViewScale;
     float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
     float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
+    vExteriorDepthMetric = rotatedWorld.y * pitchHeight + aWorldPosition.z * pitchFloor;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -68,6 +70,7 @@ varying vec2 vUvs;
 varying vec4 vColor;
 varying float vTextureMix;
 varying float vWorldZ;
+varying float vExteriorDepthMetric;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uBrightness;
@@ -75,6 +78,19 @@ uniform float uAlphaCutoff;
 uniform float uClipMinZ;
 uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
+uniform float uBuildingExteriorDepthMetricDataPass;
+uniform vec2 uBuildingExteriorDepthMetricRange;
+uniform float uBuildingExteriorDepthMetricOrigin;
+
+vec3 encodeExteriorDepthMetric(float value) {
+    float clamped = clamp(value, 0.0, 1.0);
+    float r = floor(clamped * 255.0);
+    float remainder = clamped * 255.0 - r;
+    float g = floor(remainder * 255.0);
+    remainder = remainder * 255.0 - g;
+    float b = floor(remainder * 255.0);
+    return vec3(r, g, b) / 255.0;
+}
 
 vec3 adjustSaturation(vec3 color, float saturation) {
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -107,6 +123,13 @@ void main(void) {
         float invSpan = uBuildingCutawayDataZRange.y;
         float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
         gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    if (uBuildingExteriorDepthMetricDataPass > 0.5) {
+        float minMetric = uBuildingExteriorDepthMetricRange.x;
+        float invSpan = uBuildingExteriorDepthMetricRange.y;
+        float encodedMetric = clamp(((vExteriorDepthMetric - uBuildingExteriorDepthMetricOrigin) - minMetric) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodeExteriorDepthMetric(encodedMetric), 1.0);
         return;
     }
     gl_FragColor = outColor;
@@ -3643,6 +3666,9 @@ void main(void) {
                 uClipMinZ: -1000000,
                 uBuildingCutawayDataPass: 0,
                 uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
+                uBuildingExteriorDepthMetricDataPass: 0,
+                uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
+                uBuildingExteriorDepthMetricOrigin: 0,
                 uSampler: PIXI.Texture.WHITE
             });
             const mesh = new PIXI.Mesh(geometry, shader, state, PIXI.DRAW_MODES.TRIANGLES);
