@@ -72,6 +72,56 @@ test("RenderingCamera initializes fallback camera z from wizard layer base", () 
     assert.equal(camera.prevZ, 7);
 });
 
+test("RenderingCamera follows wizard stair support z between floor layers", () => {
+    const context = loadCameraContext();
+    const camera = new context.RenderingCamera();
+
+    camera.update({
+        camera: null,
+        wizard: {
+            x: 100,
+            y: 200,
+            currentLayer: 0,
+            currentLayerBaseZ: 0,
+            z: 1.5,
+            _stairSupport: { localZ: 1.5, baseZ: 1.5, continuousLocalZ: 1.125, continuousBaseZ: 1.125 }
+        },
+        viewport: { width: 40, height: 30 },
+        viewscale: 1,
+        xyratio: 1,
+        map: null,
+        renderAlpha: 1
+    });
+
+    assert.equal(camera.z, 1.125);
+    assert.equal(camera.prevZ, 1.125);
+});
+
+test("RenderingCamera keeps stair follow z continuous when the active layer flips at the top", () => {
+    const context = loadCameraContext();
+    const camera = new context.RenderingCamera();
+
+    camera.update({
+        camera: null,
+        wizard: {
+            x: 100,
+            y: 200,
+            currentLayer: 1,
+            currentLayerBaseZ: 3,
+            z: 0,
+            _stairSupport: { localZ: 0, baseZ: 3 }
+        },
+        viewport: { width: 40, height: 30 },
+        viewscale: 1,
+        xyratio: 1,
+        map: null,
+        renderAlpha: 1
+    });
+
+    assert.equal(camera.z, 3);
+    assert.equal(camera.prevZ, 3);
+});
+
 test("centerViewport seeds viewport z from wizard layer before first movement tick", () => {
     const context = loadRenderRuntimeContext();
     context.wizard = { x: 100, y: 200, currentLayer: 2, currentLayerBaseZ: 7 };
@@ -80,6 +130,40 @@ test("centerViewport seeds viewport z from wizard layer before first movement ti
 
     assert.equal(context.viewport.z, 7);
     assert.equal(context.viewport.prevZ, 7);
+});
+
+test("centerViewport follows wizard stair support z before the layer changes", () => {
+    const context = loadRenderRuntimeContext();
+    context.wizard = {
+        x: 100,
+        y: 200,
+        currentLayer: 0,
+        currentLayerBaseZ: 0,
+        z: 1.5,
+        _stairSupport: { localZ: 1.5, baseZ: 1.5, continuousLocalZ: 1.125, continuousBaseZ: 1.125 }
+    };
+
+    context.centerViewport(context.wizard, 0, 0);
+
+    assert.equal(context.viewport.z, 1.125);
+    assert.equal(context.viewport.prevZ, 1.125);
+});
+
+test("centerViewport keeps stair follow z continuous at the upper endpoint", () => {
+    const context = loadRenderRuntimeContext();
+    context.wizard = {
+        x: 100,
+        y: 200,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        z: 0,
+        _stairSupport: { localZ: 0, baseZ: 3 }
+    };
+
+    context.centerViewport(context.wizard, 0, 0);
+
+    assert.equal(context.viewport.z, 3);
+    assert.equal(context.viewport.prevZ, 3);
 });
 
 test("centerViewport resyncs stale ground-level viewport z from wizard layer", () => {

@@ -133,10 +133,12 @@ function loadTraversalClasses() {
             }
         }
     };
+    context.window = context;
     context.globalThis = context;
     vm.createContext(context);
 
     const files = [
+        path.join(__dirname, "../public/assets/javascript/gameobjects/hitbox.js"),
         path.join(__dirname, "../public/assets/javascript/shared/StairTraversal.js"),
         path.join(__dirname, "../public/assets/javascript/Map.js"),
         path.join(__dirname, "../public/assets/javascript/gameobjects/Character.js"),
@@ -813,7 +815,7 @@ test("GameMap.findPathAStar routes from a ground source node onto a floor transi
     assert.equal(path[0].getWorldPositionAt(0.5).z, 1.5);
 });
 
-test("straight stair transitions materialize treads and sample endpoint baseZ values", () => {
+test("tread path stair records sample endpoint baseZ values", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 5;
     map.height = 1;
@@ -848,40 +850,50 @@ test("straight stair transitions materialize treads and sample endpoint baseZ va
         traversalLayer: 2
     });
 
-    map.registerFloorTransition({
+    map.registerStairRuntimeRecord({
         id: "custom_stairs",
-        type: "stairs",
-        stairKind: "straight",
-        from: { x: 0, y: 0, floorId: "custom_lower" },
-        to: { x: 4, y: 0, floorId: "custom_higher" },
-        bidirectional: true,
-        metadata: {
-            straightStair: {
-                lowerPoint: { x: 0, y: 0 },
-                higherPoint: { x: 4, y: 0 },
-                width: 1,
-                stepCount: 4,
-                texturePath: "/assets/images/flooring/woodfloor.png"
-            }
-        }
+        lowerPoint: { x: 0, y: 0 },
+        higherPoint: { x: 4, y: 0 },
+        lowerZ: 1,
+        higherZ: 8,
+        lowerLevel: 0,
+        higherLevel: 2,
+        lowerFragmentId: "custom_lower",
+        higherFragmentId: "custom_higher",
+        lowerSurfaceId: "custom_lower_surface",
+        higherSurfaceId: "custom_higher_surface",
+        width: 1,
+        stepCount: 4,
+        riserDepth: 0,
+        texturePath: "/assets/images/flooring/woodfloor.png",
+        treads: [
+            { left: { x: 0, y: -0.5 }, right: { x: 0, y: 0.5 } },
+            { left: { x: 4, y: -0.5 }, right: { x: 4, y: 0.5 } }
+        ]
     });
-    map.connectFloorTransitions();
 
     const stair = map.stairsById.get("custom_stairs");
     assert.ok(stair);
+    assert.equal(stair.stairKind, "treadPath");
     assert.equal(stair.lowerZ, 1);
     assert.equal(stair.higherZ, 8);
-    assert.equal(stair.treads.length, 4);
-    assert.equal(stair.treads[3].baseZ, 8);
+    assert.equal(stair.treads.length, 2);
 
-    const edge = map.getOutgoingEdges(lowerNode).find(e => e && e.toNode === higherNode);
-    assert.ok(edge);
+    const edge = {
+        fromNode: lowerNode,
+        toNode: higherNode,
+        type: "stairs",
+        metadata: { stairId: "custom_stairs" }
+    };
     assert.equal(edge.type, "stairs");
-    assert.equal(edge.metadata.stairId, "custom_stairs");
     assert.equal(map.createPathStep(edge).getWorldPositionAt(0.5).z, 4.5);
 
-    const reverseEdge = map.getOutgoingEdges(higherNode).find(e => e && e.toNode === lowerNode);
-    assert.ok(reverseEdge);
+    const reverseEdge = {
+        fromNode: higherNode,
+        toNode: lowerNode,
+        type: "stairs",
+        metadata: { stairId: "custom_stairs" }
+    };
     assert.equal(map.createPathStep(reverseEdge).getWorldPositionAt(0.5).z, 4.5);
 });
 
@@ -939,6 +951,10 @@ test("StairTraversal tread path preserves local coordinates on bent saved treads
         StairTraversal.endpointLineCrossed(frame, { x: 0.5, y: -0.2 }, { x: 0.5, y: 0.2 }, "higher"),
         false
     );
+
+    const beforeLowerMouth = StairTraversal.localPointForPathFrame(frame, { x: 0.5, y: -0.75 });
+    assert.equal(beforeLowerMouth.leftRight >= 0 && beforeLowerMouth.leftRight <= 1, true);
+    assert.equal(StairTraversal.localInsidePathFrame(frame, beforeLowerMouth, 0), false);
 });
 
 test("StairTraversal tread path keeps leftRight continuous across connected turn sections", () => {
@@ -982,7 +998,7 @@ test("StairTraversal tread path keeps leftRight continuous across connected turn
     assertApproxEqual(localAfterTurn.leftRight, 0.25, 0.0001);
 });
 
-test("straight stair occupancy uses endpoint crossing and continuous stair-local support", () => {
+test("tread path stair occupancy uses endpoint crossing and rendered tread-height support", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 6;
     map.height = 3;
@@ -1034,23 +1050,24 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     });
     const lowerNode = map.createFloorNodeFromSource(map.nodes[0][0], lowerFragment, { baseZ: 0, traversalLayer: 0 });
     const higherNode = map.createFloorNodeFromSource(map.nodes[0][4], higherFragment, { baseZ: 3, traversalLayer: 1 });
-    map.registerFloorTransition({
+    map.registerStairRuntimeRecord({
         id: "walkable_stairs",
-        type: "stairs",
-        stairKind: "straight",
-        from: { x: lowerNode.xindex, y: lowerNode.yindex, floorId: "lower" },
-        to: { x: higherNode.xindex, y: higherNode.yindex, floorId: "higher" },
-        bidirectional: true,
-        metadata: {
-            straightStair: {
-                lowerPoint: { x: 0, y: 0 },
-                higherPoint: { x: 3, y: 0 },
-                width: 1,
-                stepCount: 3
-            }
-        }
+        lowerPoint: { x: 0, y: 0 },
+        higherPoint: { x: 3, y: 0 },
+        lowerZ: 0,
+        higherZ: 3,
+        lowerLevel: 0,
+        higherLevel: 1,
+        lowerSurfaceId: "lower_surface",
+        higherSurfaceId: "higher_surface",
+        width: 1,
+        stepCount: 3,
+        riserDepth: 0,
+        treads: [
+            { left: { x: 0, y: -0.5 }, right: { x: 0, y: 0.5 } },
+            { left: { x: 3, y: -0.5 }, right: { x: 3, y: 0.5 } }
+        ]
     });
-    map.connectFloorTransitions();
 
     const actor = {
         x: -0.5,
@@ -1064,15 +1081,45 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
 
     const firstEntry = map.resolveActorStairMovementOccupancy(0.5, 0, actor);
     assert.equal(firstEntry.allowed, true);
-    assert.equal(firstEntry.support.upDown, 0.5 / 3);
+    assertApproxEqual(firstEntry.support.upDown, 0.5 / 3, 0.00001);
     assert.equal(firstEntry.support.leftRight, 0.5);
+    const lowerFirstStepEntry = map.resolveActorStairMovementOccupancy(0.95, 0, actor);
+    assert.equal(lowerFirstStepEntry.handled, true);
+    assert.equal(lowerFirstStepEntry.allowed, true);
+    assertApproxEqual(lowerFirstStepEntry.support.upDown, 0.95 / 3, 0.00001);
     assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0, actor).allowed, true);
+
+    const mouthActor = {
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+    const mouthEntry = map.resolveActorStairMovementOccupancy(0.25, 0, mouthActor);
+    assert.equal(mouthEntry.handled, true);
+    assert.equal(mouthEntry.allowed, true);
+    assertApproxEqual(mouthEntry.support.upDown, 0.25 / 3, 0.00001);
+
+    const preMouthActor = {
+        x: -1,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        node: lowerNode
+    };
+    const preMouthEntry = map.resolveActorStairMovementOccupancy(-0.5, 0, preMouthActor);
+    assert.equal(preMouthEntry.handled, false);
 
     actor._pendingVectorMovementSupport = firstEntry.support;
     map.applyActorResolvedMovementSupport(actor, 0.5, 0);
     actor.x = 0.5;
     actor.y = 0;
-    assert.equal(actor.z, 0.5);
+    assertApproxEqual(actor.z, 0, 0.0001);
     assert.equal(actor.currentLayer, 0);
     assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0, actor).allowed, true);
 
@@ -1080,16 +1127,122 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     map.applyActorResolvedMovementSupport(actor, 1.5, 0);
     actor.x = 1.5;
     actor.y = 0;
-    assert.equal(actor.z, 1.5);
+    assertApproxEqual(actor.z, 1, 0.0001);
     assert.equal(actor.currentLayer, 0);
-    assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0.75, actor).allowed, false);
+    const stairSideSlide = map.resolveActorStairMovementOccupancy(1.5, 0.75, actor);
+    assert.equal(stairSideSlide.allowed, true);
+    assert.equal(stairSideSlide.support.leftRight, 1);
+    assert.equal(stairSideSlide.support.point.y, 0.5);
+    const stairCharacter = Object.create(Character.prototype);
+    Object.assign(stairCharacter, {
+        type: "wizard",
+        map,
+        x: 1.5,
+        y: 0,
+        z: 1,
+        prevX: 1.5,
+        prevY: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundRadius: 0,
+        movementVector: { x: 0, y: 1 },
+        _stairSupport: { ...actor._stairSupport },
+        updateHitboxes() {}
+    });
+    assert.equal(stairCharacter._applyVectorMovementPosition(1.5, 0.75, {}), true);
+    assertApproxEqual(stairCharacter.x, 1.5, 0.0001);
+    assertApproxEqual(stairCharacter.y, 0.5, 0.0001);
+    assert.equal(stairCharacter._stairSupport.leftRight, 1);
+    const earlyStairCharacter = Object.create(Character.prototype);
+    Object.assign(earlyStairCharacter, {
+        type: "wizard",
+        map,
+        x: 1.5,
+        y: 0,
+        z: 1,
+        prevX: 1.5,
+        prevY: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundRadius: 0,
+        speed: 1,
+        frameRate: 1,
+        moving: false,
+        movementVector: { x: 0, y: 0.75 },
+        _stairSupport: { ...actor._stairSupport },
+        isFrozen: () => false,
+        getVectorMovementMaxSpeed: () => 1,
+        prepareVectorMovementContext() {
+            throw new Error("stair movement should resolve before static collision collection");
+        },
+        updateHitboxes() {}
+    });
+    assert.equal(earlyStairCharacter.moveDirection({ x: 0, y: 1 }, { lockMovementVector: true }), true);
+    assertApproxEqual(earlyStairCharacter.x, 1.5, 0.0001);
+    assertApproxEqual(earlyStairCharacter.y, 0.5, 0.0001);
+    const reacquireStairCharacter = Object.create(Character.prototype);
+    Object.assign(reacquireStairCharacter, {
+        type: "wizard",
+        map,
+        x: 1.5,
+        y: 0,
+        z: 1,
+        prevX: 1.5,
+        prevY: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundRadius: 0.3,
+        speed: 1,
+        frameRate: 1,
+        moving: false,
+        movementVector: { x: 0.4, y: 0 },
+        isFrozen: () => false,
+        getVectorMovementMaxSpeed: () => 1,
+        prepareVectorMovementContext() {
+            throw new Error("actor already on stair should reacquire stair support before static collision collection");
+        },
+        updateHitboxes() {}
+    });
+    assert.equal(reacquireStairCharacter.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
+    assert.ok(reacquireStairCharacter.x > 1.5, "stair movement should continue after reacquiring support");
+    assert.equal(reacquireStairCharacter._stairSupport.stairId, "walkable_stairs");
+    const upperReacquireStairCharacter = Object.create(Character.prototype);
+    Object.assign(upperReacquireStairCharacter, {
+        type: "wizard",
+        map,
+        x: 2.5,
+        y: 0,
+        z: 3,
+        prevX: 2.5,
+        prevY: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        groundRadius: 0.3,
+        speed: 1,
+        frameRate: 1,
+        moving: false,
+        movementVector: { x: -0.4, y: 0 },
+        isFrozen: () => false,
+        getVectorMovementMaxSpeed: () => 1,
+        prepareVectorMovementContext() {
+            throw new Error("upper-layer actor already on stair should reacquire stair support before static collision collection");
+        },
+        updateHitboxes() {}
+    });
+    assert.equal(upperReacquireStairCharacter.moveDirection({ x: -1, y: 0 }, { lockMovementVector: true }), true);
+    assert.ok(upperReacquireStairCharacter.x < 2.5, "upper-layer stair recovery should allow descending movement");
+    assert.equal(upperReacquireStairCharacter._stairSupport.stairId, "walkable_stairs");
     assert.equal(map.resolveActorStairMovementOccupancy(3.5, 0, actor).allowed, true);
 
     actor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(2.5, 0, actor).support;
     map.applyActorResolvedMovementSupport(actor, 2.5, 0);
     actor.x = 2.5;
     actor.y = 0;
-    assert.equal(actor.z, 2.5);
+    assertApproxEqual(actor.z, 2, 0.0001);
     assert.equal(actor.currentLayer, 0);
     assert.equal(map.resolveActorStairMovementOccupancy(3.5, 0, actor).allowed, true);
 
@@ -1103,6 +1256,24 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
         node: higherNode
     };
     assert.equal(map.resolveActorStairMovementOccupancy(2.5, 0, topActor).allowed, true);
+    const upperFirstStepEntry = map.resolveActorStairMovementOccupancy(2.05, 0, topActor);
+    assert.equal(upperFirstStepEntry.handled, true);
+    assert.equal(upperFirstStepEntry.allowed, true);
+    assertApproxEqual(upperFirstStepEntry.support.upDown, 2.05 / 3, 0.00001);
+
+    const topMouthActor = {
+        x: 3,
+        y: 0,
+        z: 3,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        node: higherNode
+    };
+    const topMouthEntry = map.resolveActorStairMovementOccupancy(2.75, 0, topMouthActor);
+    assert.equal(topMouthEntry.handled, true);
+    assert.equal(topMouthEntry.allowed, true);
+    assertApproxEqual(topMouthEntry.support.upDown, 2.75 / 3, 0.00001);
 
     const sideActor = {
         x: 1.5,
@@ -1116,6 +1287,7 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     const sideEntry = map.resolveActorStairMovementOccupancy(1.5, 0.25, sideActor);
     assert.equal(sideEntry.handled, true);
     assert.equal(sideEntry.allowed, false);
+    assert.equal(sideEntry.slideAlongStairFootprint, true);
 
     const wideActor = {
         x: -0.5,
@@ -1130,7 +1302,84 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     assert.equal(map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).allowed, true);
     const bottomSideEntry = map.resolveActorStairMovementOccupancy(0.5, 0.25, wideActor);
     assert.equal(bottomSideEntry.handled, true);
-    assert.equal(bottomSideEntry.allowed, false);
+    assert.equal(bottomSideEntry.allowed, true);
+    assertApproxEqual(bottomSideEntry.support.leftRight, 0.7, 0.0001);
+    assertApproxEqual(bottomSideEntry.support.point.y, 0.2, 0.0001);
+    const nearMouthWideActor = { ...wideActor, x: -0.25, y: 0 };
+    const nearMouthEntry = map.resolveActorStairMovementOccupancy(-0.2, 0, nearMouthWideActor);
+    assert.equal(nearMouthEntry.handled, true);
+    assert.equal(nearMouthEntry.allowed, true);
+    assert.equal(nearMouthEntry.support.upDown, 0);
+    const originalFloorSupportAtWorldPosition = map.getFloorSupportAtWorldPosition.bind(map);
+    map.getFloorSupportAtWorldPosition = (x, y, layer, options = {}) => {
+        if (Math.round(Number(layer) || 0) === 0 && Number(x) > -0.05 && Number(x) < 0.15) {
+            return null;
+        }
+        return originalFloorSupportAtWorldPosition(x, y, layer, options);
+    };
+    const cutoutMouthActor = { ...wideActor, x: 0.02, y: 0 };
+    const cutoutMouthEntry = map.resolveActorStairMovementOccupancy(0.1, 0, cutoutMouthActor);
+    assert.equal(cutoutMouthEntry.handled, true);
+    assert.equal(cutoutMouthEntry.allowed, true);
+    assertApproxEqual(cutoutMouthEntry.support.upDown, 0.1 / 3, 0.0001);
+    map.getFloorSupportAtWorldPosition = originalFloorSupportAtWorldPosition;
+    const sideOverlapEntry = map.resolveActorStairMovementOccupancy(1.5, 0.75, wideActor);
+    assert.equal(sideOverlapEntry.handled, true);
+    assert.equal(sideOverlapEntry.allowed, false);
+    assert.equal(sideOverlapEntry.slideAlongStairFootprint, true);
+    const clearSideActor = { ...wideActor, x: 1.5, y: 0.95 };
+    const sideClearEntry = map.resolveActorStairMovementOccupancy(1.5, 0.9, clearSideActor);
+    assert.equal(sideClearEntry.handled, false);
+    const highClearanceSideEntry = map.resolveActorStairMovementOccupancy(2.5, 0.75, wideActor);
+    assert.equal(highClearanceSideEntry.handled, false);
+    const walkableStair = map.stairsById.get("walkable_stairs");
+    walkableStair.riserDepth = 0.25;
+    const riserDepthSideEntry = map.resolveActorStairMovementOccupancy(2.5, 0.75, wideActor);
+    assert.equal(riserDepthSideEntry.handled, true);
+    assert.equal(riserDepthSideEntry.allowed, false);
+    assert.equal(riserDepthSideEntry.slideAlongStairFootprint, true);
+    walkableStair.riserDepth = 0;
+    higherFragment.holes = [[
+        { x: 2.5, y: -0.5 },
+        { x: 3.5, y: -0.5 },
+        { x: 3.5, y: 0.5 },
+        { x: 2.5, y: 0.5 }
+    ]];
+    const upperCutoutBlockers = map.getStairFootprintMovementBlockers(walkableStair, {
+        type: "floor",
+        layer: 1,
+        baseZ: 3,
+        fragmentId: "higher",
+        surfaceId: "higher_surface"
+    });
+    assert.equal(upperCutoutBlockers.length, 1);
+    assert.equal(upperCutoutBlockers[0].endpoint, "higher");
+    assert.equal(map.actorFootprintOverlapsPolygon(upperCutoutBlockers[0]._movementPolygon, 3.25, 0, { groundRadius: 0.3 }), true);
+    higherFragment.holes = [];
+    const floorSideCharacter = Object.create(Character.prototype);
+    Object.assign(floorSideCharacter, {
+        type: "wizard",
+        map,
+        x: 1.0,
+        y: 0.86,
+        z: 0,
+        prevX: 1.0,
+        prevY: 0.86,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundRadius: 0.3,
+        speed: 1,
+        frameRate: 1,
+        moving: false,
+        movementVector: { x: 0.2, y: -0.4 },
+        isFrozen: () => false,
+        getVectorMovementMaxSpeed: () => 1,
+        updateHitboxes() {}
+    });
+    assert.equal(floorSideCharacter.moveDirection({ x: 0.4472, y: -0.8944 }, { lockMovementVector: true }), true);
+    assert.ok(floorSideCharacter.x > 1.0, "stair side collision should preserve tangential motion");
+    assert.ok(Math.hypot(floorSideCharacter.movementVector.x, floorSideCharacter.movementVector.y) > 0.01);
 
     wideActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).support;
     map.applyActorResolvedMovementSupport(wideActor, 0.5, 0);
@@ -1138,7 +1387,9 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     wideActor.y = 0;
     const stairSideExit = map.resolveActorStairMovementOccupancy(0.5, 0.25, wideActor);
     assert.equal(stairSideExit.handled, true);
-    assert.equal(stairSideExit.allowed, false);
+    assert.equal(stairSideExit.allowed, true);
+    assertApproxEqual(stairSideExit.support.leftRight, 0.7, 0.0001);
+    assertApproxEqual(stairSideExit.support.point.y, 0.2, 0.0001);
 
     const higherSplitFragment = map.registerFloorFragment({
         fragmentId: "higher_split",
@@ -1213,16 +1464,20 @@ test("straight stair occupancy uses endpoint crossing and continuous stair-local
     map.applyActorResolvedMovementSupport(wizardActor, 0.5, 0);
     wizardActor.x = 0.5;
     wizardActor.y = 0;
-    assert.equal(wizardActor._stairSupport.baseZ, 0.5);
-    assert.equal(wizardActor._stairSupport.localZ, 0.5);
-    assert.equal(wizardActor.z, 0.5);
+    assertApproxEqual(wizardActor._stairSupport.baseZ, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.localZ, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 0.5, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 0.5, 0.0001);
+    assertApproxEqual(wizardActor.z, 0, 0.0001);
     assert.equal(wizardActor.currentLayerBaseZ, 0);
 
     wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(1.5, 0, wizardActor).support;
     map.applyActorResolvedMovementSupport(wizardActor, 1.5, 0);
-    assert.equal(wizardActor._stairSupport.baseZ, 1.5);
-    assert.equal(wizardActor._stairSupport.localZ, 1.5);
-    assert.equal(wizardActor.z, 1.5);
+    assertApproxEqual(wizardActor._stairSupport.baseZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.localZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 1.5, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 1.5, 0.0001);
+    assertApproxEqual(wizardActor.z, 1, 0.0001);
     assert.equal(wizardActor.currentLayerBaseZ, 0);
 });
 
@@ -1283,14 +1538,24 @@ test("worker path reconciliation preserves live stair portal metadata", () => {
     higher.fragmentId = "higher";
     map.floorNodeIndex.set(lower.id, lower);
     map.floorNodeIndex.set(higher.id, higher);
-    map.stairsById.set("async_stairs", {
+    map.registerStairRuntimeRecord({
         id: "async_stairs",
         lowerNodeId: lower.id,
         higherNodeId: higher.id,
         lowerPoint: { x: 0, y: 0 },
         higherPoint: { x: 0, y: 2 },
         lowerZ: 0,
-        higherZ: 5
+        higherZ: 5,
+        lowerLevel: 0,
+        higherLevel: 1,
+        lowerSurfaceId: "lower_surface",
+        higherSurfaceId: "higher_surface",
+        stepCount: 4,
+        riserDepth: 0,
+        treads: [
+            { left: { x: -0.5, y: 0 }, right: { x: 0.5, y: 0 } },
+            { left: { x: -0.5, y: 2 }, right: { x: 0.5, y: 2 } }
+        ]
     });
     lower.portalEdges = [{
         fromNode: lower,
@@ -1449,6 +1714,30 @@ test("GameMap groups overlapping upper floor fragments into buildings", () => {
     assert.ok(building.fragmentGraph instanceof Map);
     assert.deepEqual(Array.from(building.fragmentGraph.get("lower").above), ["upper"]);
     assert.deepEqual(Array.from(building.fragmentGraph.get("upper").below), ["lower"]);
+});
+
+test("GameMap excludes cutaway-rendered building fragments from generic floor buildings", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    map.registerFloorFragment({
+        fragmentId: "building-floor",
+        surfaceId: "building-surface",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        renderedByBuildingCutaway: true
+    });
+
+    const buildings = map.ensureFloorBuildings();
+
+    assert.equal(buildings.size, 0);
+    assert.equal(map.floorBuildingByFragmentId.has("building-floor"), false);
+    assert.equal(map.floorsById.get("building-floor").buildingId, undefined);
 });
 
 test("GameMap attaches placed upper-floor scenery to the owning building manifest", () => {

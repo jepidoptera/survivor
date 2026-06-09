@@ -1168,7 +1168,7 @@ export function createStraightStair({
     const stair = {
         type: "stairs",
         id: nextStairId(),
-        stairKind: "straight",
+        stairKind: "treadPath",
         floorId: resolvedFloorId,
         startPoint: { x: Number(resolvedStartPoint.x), y: Number(resolvedStartPoint.y) },
         endPoint: { x: Number(resolvedEndPoint.x), y: Number(resolvedEndPoint.y) },

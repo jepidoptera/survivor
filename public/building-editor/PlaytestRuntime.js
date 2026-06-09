@@ -31,6 +31,7 @@ export function buildPlaytestStairFloorBlockers({
     traversal,
     runtimeStair,
     height,
+    riserDepth,
     stairId,
     upperOpeningPolygons
 }) {
@@ -51,21 +52,52 @@ export function buildPlaytestStairFloorBlockers({
     if (!Number.isFinite(riseHeight) || riseHeight <= 0) {
         throw new Error(`playtest stair ${resolvedStairId} blocker build requires a positive height`);
     }
+    const stepCount = Number.isFinite(Number(runtimeStair.stepCount))
+        ? Math.max(1, Math.round(Number(runtimeStair.stepCount)))
+        : 1;
+    const resolvedRiserDepth = Number(riserDepth);
+    if (!Number.isFinite(resolvedRiserDepth) || resolvedRiserDepth < 0) {
+        throw new Error(`playtest stair ${resolvedStairId} blocker build requires a non-negative riser depth`);
+    }
 
-    const lowerBlockerUpDown = Math.min(1, PLAYTEST_STAIR_OPENING_BLOCKER_HEIGHT / riseHeight);
-    const lowerBlockerPolygon = traversal.pathPolygonForUpDownRange(runtimeStair.traversalFrame, 0, lowerBlockerUpDown);
-    assertPlaytestBlockerPolygon(lowerBlockerPolygon, `playtest stair ${resolvedStairId} lower movement blocker`);
+    const lowerBlockerRanges = [];
+    let activeRange = null;
+    for (let index = 0; index < stepCount; index++) {
+        const treadHeight = riseHeight * (index / stepCount);
+        if (treadHeight - resolvedRiserDepth >= PLAYTEST_STAIR_OPENING_BLOCKER_HEIGHT - 0.000001) {
+            if (activeRange) {
+                lowerBlockerRanges.push(activeRange);
+                activeRange = null;
+            }
+            continue;
+        }
+        const min = index / stepCount;
+        const max = (index + 1) / stepCount;
+        if (activeRange) {
+            activeRange.max = max;
+        } else {
+            activeRange = { min, max };
+        }
+    }
+    if (activeRange) lowerBlockerRanges.push(activeRange);
+    if (lowerBlockerRanges.length === 0) {
+        throw new Error(`playtest stair ${resolvedStairId} lower movement blocker requires at least one low-clearance tread`);
+    }
 
     if (!Array.isArray(upperOpeningPolygons) || upperOpeningPolygons.length === 0) {
         throw new Error(`playtest stair ${resolvedStairId} upper movement blocker requires generated opening polygons`);
     }
 
-    const blockers = [{
-        floorId: lowerFloorId,
-        stairId: resolvedStairId,
-        endpoint: "lower",
-        polygon: lowerBlockerPolygon
-    }];
+    const blockers = lowerBlockerRanges.map((range, index) => {
+        const polygon = traversal.pathPolygonForUpDownRange(runtimeStair.traversalFrame, range.min, range.max);
+        assertPlaytestBlockerPolygon(polygon, `playtest stair ${resolvedStairId} lower movement blocker ${index}`);
+        return {
+            floorId: lowerFloorId,
+            stairId: resolvedStairId,
+            endpoint: "lower",
+            polygon
+        };
+    });
 
     upperOpeningPolygons.forEach((polygon, index) => {
         assertPlaytestBlockerPolygon(polygon, `playtest stair ${resolvedStairId} upper movement blocker ${index}`);

@@ -30,6 +30,9 @@ const windowContextMenu = document.querySelector("#windowContextMenu");
 const layerContextMenu = document.querySelector("#layerContextMenu");
 const floorElevation = document.querySelector("#floorElevation");
 const polygonElevation = document.querySelector("#polygonElevation");
+const polygonRegularToggle = document.querySelector("#polygonRegularToggle");
+const polygonRegularSides = document.querySelector("#polygonRegularSides");
+const polygonRegularSidesControl = polygonRegularSides ? polygonRegularSides.closest("label") : null;
 const polygonFinalize = document.querySelector("#polygonFinalize");
 const floorHeight = document.querySelector("#floorHeight");
 const roofMode = document.querySelector("#roofMode");
@@ -335,7 +338,7 @@ function buildPlaytestRuntime() {
             const runtimeStair = {
                 id: stairId,
                 sourceStair: stair,
-                stairKind: "straight",
+                stairKind: "treadPath",
                 lowerPoint,
                 higherPoint,
                 lowerZ,
@@ -352,6 +355,7 @@ function buildPlaytestRuntime() {
                 traversal,
                 runtimeStair,
                 height,
+                riserDepth: stair.riserDepth,
                 stairId,
                 upperOpeningPolygons: state.stairOpeningPolygonsForValidation(stair, higherFloor)
             }));
@@ -2591,6 +2595,9 @@ function summarizeSelection(selectedFloor, selectedWall, floors, walls) {
         const draft = state.activePolygonDraft();
         const action = state.tool === "polygon" ? "add polygon" : "cut polygon";
         if (draft && draft.completed === true) return `${action}, ${draft.points.length} editable vertices`;
+        if (draft && draft.regularPolygon && draft.regularPolygon.phase === "sideChoice") {
+            return `${action}, regular ${Number(state.polygonToolSides)} sides`;
+        }
         if (draft && Array.isArray(draft.points) && draft.points.length > 0) return `${action}, ${draft.points.length} point${draft.points.length === 1 ? "" : "s"}`;
         return `${action}, elevation ${Number(state.polygonToolElevation)}`;
     }
@@ -2742,6 +2749,9 @@ function syncUi() {
     if (wallProtrudeEndpoints) wallProtrudeEndpoints.hidden = wallProtrudeEndpoints.hidden || !showVertexEndpointControls;
     if (roofDomeLevelsControl) roofDomeLevelsControl.hidden = roofDomeLevelsControl.hidden || activeRoofMode(selectedRoofEntries) !== "dome";
     if (polygonElevation) polygonElevation.value = Number(state.polygonToolElevation);
+    if (polygonRegularToggle) polygonRegularToggle.checked = state.polygonToolRegularPolygon === true;
+    if (polygonRegularSides) polygonRegularSides.value = Number(state.polygonToolSides);
+    if (polygonRegularSidesControl) polygonRegularSidesControl.hidden = polygonRegularSidesControl.hidden || state.polygonToolRegularPolygon !== true;
     if (polygonFinalize) polygonFinalize.disabled = !state.canFinalizePolygonDraft();
     renderLayerPanel(floors);
     if (selectedFloor) {
@@ -3334,6 +3344,14 @@ floorElevation.addEventListener("change", () => {
 
 polygonElevation.addEventListener("change", () => {
     withErrorBoundary(() => state.updatePolygonToolElevation(polygonElevation.value));
+});
+
+polygonRegularToggle.addEventListener("change", () => {
+    withErrorBoundary(() => state.updatePolygonToolRegularPolygon(polygonRegularToggle.checked));
+});
+
+polygonRegularSides.addEventListener("change", () => {
+    withErrorBoundary(() => state.updatePolygonToolSides(polygonRegularSides.value));
 });
 
 polygonFinalize.addEventListener("click", () => {

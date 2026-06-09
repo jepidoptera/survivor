@@ -1242,6 +1242,44 @@ class Wizard extends Character {
             }
         }
 
+        if (this.map && typeof this.map.collectPrototypeBuildingMovementBlockersInBounds === "function") {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const prototypeBlockers = this.map.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, wizardLayer);
+            for (let i = 0; i < prototypeBlockers.length; i++) {
+                const obj = prototypeBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (nearbyObjectSet.has(obj)) continue;
+                nearbyObjectSet.add(obj);
+                nearbyObjects.push(obj);
+            }
+        }
+
+        if (this.map && typeof this.map.collectStairFootprintMovementBlockersInBounds === "function") {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const obj = stairBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (nearbyObjectSet.has(obj)) continue;
+                nearbyObjectSet.add(obj);
+                nearbyObjects.push(obj);
+            }
+        }
+
         return {
             nearbyObjects,
             nearbyCharacters: options.includeCharacterBlockers === true

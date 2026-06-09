@@ -33,6 +33,14 @@
                     Elevation
                     <input id="polygonElevation" type="number" step="0.25">
                 </label>
+                <label class="checkLabel" data-tool-scope="polygon scissors">
+                    <input id="polygonRegularToggle" type="checkbox">
+                    Regular polygon
+                </label>
+                <label data-tool-scope="polygon scissors">
+                    Sides
+                    <input id="polygonRegularSides" type="number" min="3" max="24" step="1">
+                </label>
                 <button type="button" id="polygonFinalize" data-tool-scope="polygon scissors" disabled>Finalize</button>
                 <label data-selection-scope="level floor floorVertex">
                     Elevation

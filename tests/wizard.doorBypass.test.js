@@ -174,6 +174,66 @@ test("wizard selected floor keeps traversal layer synchronized for enemy targeti
     assert.equal(wizard.currentLayerBaseZ, 3);
 });
 
+test("wizard movement context includes direct prototype building blockers without upper floor nodes", () => {
+    const baseNode = {
+        xindex: 0,
+        yindex: 0,
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        baseZ: 0,
+        objects: []
+    };
+    const blocker = {
+        type: "prototypeBuildingMovementBlocker",
+        traversalLayer: 1,
+        level: 1,
+        bottomZ: 3,
+        height: 3,
+        isPassable: false,
+        gone: false,
+        groundPlaneHitbox: new PolygonHitbox([
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ]),
+        _prototypeBuildingMovementBlocker: true
+    };
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        map: {
+            width: 1,
+            height: 1,
+            nodes: [[baseNode]],
+            worldToNode() {
+                return baseNode;
+            },
+            getNodesInIndexWindow() {
+                return [baseNode];
+            },
+            getFloorNodeAtLayer() {
+                return null;
+            },
+            collectPrototypeBuildingMovementBlockersInBounds(bounds, layer) {
+                assert.equal(layer, 1);
+                assert.ok(bounds.minX <= 0 && bounds.maxX >= 0);
+                return [blocker];
+            }
+        }
+    });
+
+    const context = wizard.prepareVectorMovementContext(0.25, 0, 0.35, {});
+
+    assert.equal(context.nearbyObjects.includes(blocker), true);
+});
+
 test("wizard does not bypass wall collisions just because the current position is inside a door", () => {
     const wallHitbox = new PolygonHitbox([
         { x: -6, y: -3 },

@@ -1068,11 +1068,19 @@
 
     function rebuildPrototypeFloorRuntime(map, state) {
         if (map && typeof map.rebuildFloorRuntimeFromSectionState === "function") {
-            return map.rebuildFloorRuntimeFromSectionState(state, {
+            const stats = map.rebuildFloorRuntimeFromSectionState(state, {
                 synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
                 doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment,
                 transitions: Array.isArray(state && state.floorTransitions) ? state.floorTransitions : []
             });
+            if (
+                typeof map.syncPrototypeBuildingGeometryRuntime === "function" &&
+                typeof map.registerFloorFragment === "function" &&
+                typeof map.registerStairRuntimeRecord === "function"
+            ) {
+                map.syncPrototypeBuildingGeometryRuntime();
+            }
+            return stats;
         }
         if (!map || !state || !(state.sectionAssetsByKey instanceof Map) || !(state.nodesBySectionKey instanceof Map)) {
             return { fragmentCount: 0, nodeCount: 0, transitionCount: 0 };

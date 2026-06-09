@@ -10,6 +10,19 @@ class TestPolygonHitbox {
         this.type = "polygon";
         this.points = points;
     }
+    getBounds() {
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const point of this.points) {
+            minX = Math.min(minX, Number(point.x));
+            minY = Math.min(minY, Number(point.y));
+            maxX = Math.max(maxX, Number(point.x));
+            maxY = Math.max(maxY, Number(point.y));
+        }
+        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    }
 }
 
 function createNode(xindex, yindex) {
@@ -22,16 +35,93 @@ function createNode(xindex, yindex) {
     };
 }
 
-function createPrototypeNodeMap(width = 12, height = 12) {
+function createPrototypeNodeMap(width = 12, height = 12, options = {}) {
+    const materializeFloorNodes = options.materializeFloorNodes !== false;
     const allNodesByCoordKey = new Map();
     for (let x = -2; x < width; x++) {
         for (let y = -2; y < height; y++) {
             allNodesByCoordKey.set(`${x},${y}`, createNode(x, y));
         }
     }
+    const floorNodeLayerIndex = new Map();
+    const floorNodesById = new Map();
+    const getFloorLayerNodeKey = (x, y, traversalLayer = 0) => (
+        `${Number(x)},${Number(y)},${Number.isFinite(traversalLayer) ? Number(traversalLayer) : 0}`
+    );
     return {
+        floorsById: new Map(),
+        floorFragmentsBySurfaceId: new Map(),
+        floorFragmentsBySectionKey: new Map(),
+        floorNodeLayerIndex,
+        floorNodesById,
+        stairsById: new Map(),
         _prototypeSectionState: { allNodesByCoordKey },
-        markBuildingRenderCacheDirty() {}
+        markBuildingRenderCacheDirty() {},
+        getFloorLayerNodeKey,
+        getFloorNodeAtLayer(x, y, layer = 0) {
+            const nodes = floorNodeLayerIndex.get(getFloorLayerNodeKey(x, y, layer)) || [];
+            return nodes[0] || null;
+        },
+        registerFloorFragment(fragment) {
+            const normalized = {
+                ...fragment,
+                fragmentId: fragment.fragmentId,
+                surfaceId: fragment.surfaceId || fragment.fragmentId,
+                ownerSectionKey: fragment.ownerSectionKey || "",
+                level: Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0,
+                nodeBaseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : 0
+            };
+            this.floorsById.set(normalized.fragmentId, normalized);
+            if (!this.floorFragmentsBySurfaceId.has(normalized.surfaceId)) {
+                this.floorFragmentsBySurfaceId.set(normalized.surfaceId, new Set());
+            }
+            this.floorFragmentsBySurfaceId.get(normalized.surfaceId).add(normalized.fragmentId);
+            if (normalized.ownerSectionKey) {
+                if (!this.floorFragmentsBySectionKey.has(normalized.ownerSectionKey)) {
+                    this.floorFragmentsBySectionKey.set(normalized.ownerSectionKey, new Set());
+                }
+                this.floorFragmentsBySectionKey.get(normalized.ownerSectionKey).add(normalized.fragmentId);
+            }
+            if (materializeFloorNodes && normalized.level !== 0) {
+                const floorNodes = [];
+                for (const baseNode of allNodesByCoordKey.values()) {
+                    const floorNode = {
+                        xindex: baseNode.xindex,
+                        yindex: baseNode.yindex,
+                        x: baseNode.x,
+                        y: baseNode.y,
+                        objects: [],
+                        traversalLayer: normalized.level,
+                        level: normalized.level,
+                        baseZ: normalized.nodeBaseZ,
+                        surfaceId: normalized.surfaceId,
+                        fragmentId: normalized.fragmentId,
+                        ownerSectionKey: normalized.ownerSectionKey || "",
+                        sourceNode: baseNode
+                    };
+                    floorNodes.push(floorNode);
+                    const key = getFloorLayerNodeKey(floorNode.xindex, floorNode.yindex, normalized.level);
+                    if (!floorNodeLayerIndex.has(key)) floorNodeLayerIndex.set(key, []);
+                    floorNodeLayerIndex.get(key).push(floorNode);
+                }
+                floorNodesById.set(normalized.fragmentId, floorNodes);
+            }
+            return normalized;
+        },
+        unregisterFloorFragments(fragmentIds) {
+            let removed = 0;
+            for (const fragmentId of fragmentIds) {
+                const fragment = this.floorsById.get(fragmentId);
+                if (!fragment) continue;
+                this.floorsById.delete(fragmentId);
+                removed += 1;
+            }
+            return removed;
+        },
+        registerStairRuntimeRecord(stair) {
+            this.stairsById.set(stair.id, { ...stair, stairKind: "treadPath" });
+            return this.stairsById.get(stair.id);
+        }
     };
 }
 
@@ -98,6 +188,106 @@ function createBuildingSaveWithDoorAndColumn() {
     };
 }
 
+function createBuildingSaveWithTreadPathStair() {
+    const square = [
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 4, y: 4 },
+        { x: 0, y: 4 }
+    ];
+    return {
+        schema: "survivor-building-v1",
+        floorFragments: [
+            {
+                fragmentId: "floor-0",
+                level: 0,
+                nodeBaseZ: 0,
+                outerPolygon: square,
+                stairs: [{
+                    type: "stairs",
+                    id: 12,
+                    floorId: "floor-0",
+                    startPoint: { x: 1, y: 1 },
+                    endPoint: { x: 2, y: 1 },
+                    bottomZ: 0,
+                    height: 3,
+                    direction: "up",
+                    width: 1,
+                    stepCount: 6,
+                    riserDepth: 0.5,
+                    treads: [
+                        { left: { x: 1, y: 0.5 }, right: { x: 1, y: 1.5 } },
+                        { left: { x: 2, y: 0.5 }, right: { x: 2, y: 1.5 } }
+                    ]
+                }]
+            },
+            {
+                fragmentId: "floor-1",
+                level: 1,
+                nodeBaseZ: 3,
+                outerPolygon: square,
+                stairs: []
+            }
+        ],
+        wallSections: [],
+        mountedWallObjects: []
+    };
+}
+
+function createBuildingSaveWithUpperFloorBlockers() {
+    const square = [
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 4, y: 4 },
+        { x: 0, y: 4 }
+    ];
+    return {
+        schema: "survivor-building-v1",
+        floorFragments: [
+            {
+                fragmentId: "floor-0",
+                level: 0,
+                nodeBaseZ: 0,
+                outerPolygon: square,
+                columns: []
+            },
+            {
+                fragmentId: "floor-1",
+                level: 1,
+                nodeBaseZ: 3,
+                outerPolygon: square,
+                columns: [{
+                    id: "upper-column",
+                    position: { x: 3, y: 3 },
+                    sideCount: 4,
+                    width: 0.5,
+                    depth: 0.5,
+                    rotation: 0
+                }]
+            }
+        ],
+        wallSections: [
+            {
+                id: "lower-wall",
+                floorId: "floor-0",
+                fragmentId: "floor-0",
+                startPoint: { x: 0, y: 0 },
+                endPoint: { x: 0, y: 4 },
+                thickness: 0.4
+            },
+            {
+                id: "upper-wall",
+                floorId: "floor-1",
+                fragmentId: "floor-1",
+                startPoint: { x: 4, y: 0 },
+                endPoint: { x: 4, y: 4 },
+                thickness: 0.4
+            }
+        ],
+        mountedWallObjects: []
+    };
+}
+
 function pointInPolygon(point, polygon) {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -116,6 +306,17 @@ function collectBuildingBlockers(map) {
         for (const obj of node.objects) {
             if (obj && obj._prototypeBuildingMovementBlocker === true) {
                 blockers.add(obj);
+            }
+        }
+    }
+    if (map.floorNodesById instanceof Map) {
+        for (const nodes of map.floorNodesById.values()) {
+            for (const node of nodes) {
+                for (const obj of node.objects || []) {
+                    if (obj && obj._prototypeBuildingMovementBlocker === true) {
+                        blockers.add(obj);
+                    }
+                }
             }
         }
     }
@@ -154,6 +355,176 @@ test("building placements block walls and columns, not the whole base floor", ()
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 0, y: 2 }, polygon)), false);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 2, y: 2 }, polygon)), false);
         assert.equal(map._prototypeBuildingState.movementBlockersDirty, false);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building placement movement blockers preserve upper-floor layers", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const buildingData = createBuildingSaveWithUpperFloorBlockers();
+        const placement = map.addPrototypeBuildingPlacement({
+            id: "building:upper-blocker-house",
+            buildingSaveName: "upper blocker house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData });
+
+        assert.equal(placement.movementBlockerPolygons.length, 3);
+        const layers = placement.movementBlockerPolygons.map((entry) => entry.traversalLayer).sort();
+        assert.deepEqual(layers, [0, 1, 1]);
+        const upperEntries = placement.movementBlockerPolygons.filter((entry) => entry.traversalLayer === 1);
+        assert.equal(upperEntries.length, 2);
+        upperEntries.forEach((entry) => {
+            assert.equal(entry.bottomZ, 3);
+            assert.equal(entry.height, 3);
+        });
+
+        const blockers = collectBuildingBlockers(map);
+        assert.equal(blockers.length, 3);
+        const upperBlockers = blockers.filter((blocker) => blocker.traversalLayer === 1);
+        assert.equal(upperBlockers.length, 2);
+        upperBlockers.forEach((blocker) => {
+            assert.equal(blocker.level, 1);
+            assert.equal(blocker.bottomZ, 3);
+            assert.equal(blocker.height, 3);
+            assert.ok(blocker._prototypeBuildingMovementNodes.length > 0);
+            blocker._prototypeBuildingMovementNodes.forEach((node) => {
+                assert.equal(node.traversalLayer, 1);
+                assert.equal(node.objects.includes(blocker), true);
+            });
+        });
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building movement blockers recompute stale saved geometry when building data is available", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState([{
+            ...createPlacement("building:stale-blocker-house"),
+            buildingSaveName: "upper blocker house"
+        }]);
+        const placement = map.getPrototypeBuildingPlacements()[0];
+        assert.equal(placement.movementBlockerGeometryVersion, "");
+        assert.equal(placement.movementBlockerPolygons.length, 1);
+
+        map._prototypeBuildingState.buildingDataBySaveName.set(
+            "upper blocker house",
+            createBuildingSaveWithUpperFloorBlockers()
+        );
+        map.syncPrototypeBuildingGeometryRuntime();
+        buildings.markPrototypeBuildingMovementBlockersDirty(map);
+        map.syncPrototypeBuildingMovementBlockers();
+
+        assert.equal(placement.movementBlockerPolygons.length, 3);
+        const layers = placement.movementBlockerPolygons.map((entry) => entry.traversalLayer).sort();
+        assert.deepEqual(layers, [0, 1, 1]);
+        const upperEntries = placement.movementBlockerPolygons.filter((entry) => entry.traversalLayer === 1);
+        assert.equal(upperEntries.every((entry) => entry.bottomZ === 3 && entry.height === 3), true);
+        assert.ok(placement.movementBlockerGeometryVersion);
+        const blockers = collectBuildingBlockers(map);
+        const upperBlockers = blockers.filter((blocker) => blocker.traversalLayer === 1);
+        assert.equal(upperBlockers.length, 2);
+        assert.equal(upperBlockers.every((blocker) => blocker.bottomZ === 3 && blocker.height === 3), true);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building movement blockers can be collected directly when upper floor nodes are absent", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(12, 12, { materializeFloorNodes: false });
+        buildings.installSectionWorldBuildingApis(map);
+        const buildingData = createBuildingSaveWithUpperFloorBlockers();
+        map.addPrototypeBuildingPlacement({
+            id: "building:direct-upper-blocker-house",
+            buildingSaveName: "upper blocker house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData });
+
+        const nodeAttachedBlockers = collectBuildingBlockers(map);
+        assert.equal(nodeAttachedBlockers.filter((blocker) => blocker.traversalLayer === 1).length, 0);
+
+        const directUpperBlockers = map.collectPrototypeBuildingMovementBlockersInBounds({
+            minX: 0,
+            minY: 0,
+            maxX: 4,
+            maxY: 4
+        }, 1);
+        assert.equal(directUpperBlockers.length, 2);
+        directUpperBlockers.forEach((blocker) => {
+            assert.equal(blocker.traversalLayer, 1);
+            assert.equal(blocker.bottomZ, 3);
+            assert.equal(blocker.height, 3);
+            assert.equal(blocker._prototypeBuildingMovementBlocker, true);
+        });
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building placements register imported floor polygons and tread-path stairs for wizard geometry", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        map.addPrototypeBuildingPlacement({
+            id: "building:stair-house",
+            buildingSaveName: "stair house",
+            transform: { x: 10, y: 20, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStair() });
+
+        assert.equal(map.floorsById.has("building:stair-house:floor:floor-0"), true);
+        assert.equal(map.floorsById.has("building:stair-house:floor:floor-1"), true);
+        assert.equal(map.floorsById.get("building:stair-house:floor:floor-0").renderedByBuildingCutaway, true);
+        assert.equal(map.floorsById.get("building:stair-house:floor:floor-1").renderedByBuildingCutaway, true);
+        assert.equal(map.stairsById.size, 1);
+        const stair = map.stairsById.get("building:stair-house:stair:floor-0:12");
+        assert.ok(stair);
+        assert.equal(stair.stairKind, "treadPath");
+        assert.equal(stair.lowerFragmentId, "building:stair-house:floor:floor-0");
+        assert.equal(stair.higherFragmentId, "building:stair-house:floor:floor-1");
+        assert.deepEqual(stair.lowerPoint, { x: 11, y: 21 });
+        assert.deepEqual(stair.higherPoint, { x: 12, y: 21 });
+        assert.equal(stair.treads[0].left.x, 11);
+        assert.equal(stair.treads[0].left.y, 20.5);
+        assert.equal(stair.riserDepth, 0.5);
+        assert.equal(stair.renderedByBuildingCutaway, true);
+        const cutawayBuildings = map.getPrototypeBuildingCutawayBuildings();
+        assert.equal(cutawayBuildings.length, 1);
+        const stairEntry = cutawayBuildings[0].staticObjects.find((entry) => entry && entry.item && entry.item.type === "treadPathStair");
+        assert.ok(stairEntry);
+        assert.equal(stairEntry.item.stair.stairKind, "treadPath");
+        assert.deepEqual(stairEntry.item.stair.lowerPoint, stair.lowerPoint);
+        assert.deepEqual(stairEntry.item.stair.higherPoint, stair.higherPoint);
+        assert.equal(stairEntry.item.stair.stepCount, stair.stepCount);
     } finally {
         if (previousPolygonHitbox === undefined) {
             delete globalThis.PolygonHitbox;

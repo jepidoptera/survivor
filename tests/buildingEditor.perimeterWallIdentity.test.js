@@ -4033,7 +4033,7 @@ test("createStraightStair produces a valid footprint and rejects invalid setting
     });
 
     assert.equal(stair.type, "stairs");
-    assert.equal(stair.stairKind, "straight");
+    assert.equal(stair.stairKind, "treadPath");
     assert.equal(stair.direction, "down");
     assert.equal(stair.width, 1);
     assert.equal(stair.texturePath, "/assets/images/flooring/cobblestones.png");
@@ -4570,7 +4570,7 @@ test("playtest runtime blocks movement through generated upper-floor stair openi
     const runtimeStair = {
         id: stairId,
         sourceStair: stair,
-        stairKind: "straight",
+        stairKind: "treadPath",
         lowerPoint: stair.treads[0].center,
         higherPoint: stair.treads[stair.treads.length - 1].center,
         lowerZ: Number(stair.bottomZ),
@@ -4579,6 +4579,7 @@ test("playtest runtime blocks movement through generated upper-floor stair openi
         higherFloorId: upperFloorId,
         width: Number(stair.width),
         stepCount: Number(stair.stepCount) || 1,
+        riserDepth: Number(stair.riserDepth),
         treads: stair.treads
     };
     runtimeStair.traversalFrame = StairTraversal.createTreadPathFrame(runtimeStair);
@@ -4588,6 +4589,7 @@ test("playtest runtime blocks movement through generated upper-floor stair openi
         traversal: StairTraversal,
         runtimeStair,
         height: stair.height,
+        riserDepth: stair.riserDepth,
         stairId,
         upperOpeningPolygons
     });

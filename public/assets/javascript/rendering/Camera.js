@@ -83,9 +83,20 @@
                 const wizardBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
                     ? Number(wizard.currentLayerBaseZ)
                     : wizardLayer * 3;
-                const wizardCameraZ = wizard && wizard._floorFallState && wizard._floorFallState.active && Number.isFinite(wizard.z)
-                    ? wizardBaseZ + Number(wizard.z)
-                    : wizardBaseZ;
+                let wizardCameraZ = wizardBaseZ;
+                if (wizard && wizard._floorFallState && wizard._floorFallState.active && Number.isFinite(wizard.z)) {
+                    wizardCameraZ = wizardBaseZ + Number(wizard.z);
+                } else if (wizard && wizard._stairSupport && typeof wizard._stairSupport === "object") {
+                    if (Number.isFinite(wizard._stairSupport.continuousLocalZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.continuousLocalZ);
+                    } else if (Number.isFinite(wizard._stairSupport.continuousBaseZ)) {
+                        wizardCameraZ = Number(wizard._stairSupport.continuousBaseZ);
+                    } else if (Number.isFinite(wizard._stairSupport.localZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.localZ);
+                    } else if (Number.isFinite(wizard._stairSupport.baseZ)) {
+                        wizardCameraZ = Number(wizard._stairSupport.baseZ);
+                    }
+                }
                 this.x = wizard.x - width * 0.5;
                 this.y = wizard.y - height * 0.5;
                 this.z = wizardCameraZ;

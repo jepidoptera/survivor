@@ -762,6 +762,26 @@ class Character {
             ? Math.round(Number(node.traversalLayer))
             : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
         const seen = useLayerFilter ? new Set() : null;
+        const addExtraBlockers = () => {
+            if (!this.map || typeof this.map.collectStairFootprintMovementBlockersInBounds !== "function") return;
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const extraSeen = seen || new Set(nearbyObjects);
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const obj = stairBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (extraSeen.has(obj)) continue;
+                extraSeen.add(obj);
+                nearbyObjects.push(obj);
+            }
+        };
 
         const collectFromNode = (node) => {
             if (!node || !Array.isArray(node.objects)) return;
@@ -791,6 +811,7 @@ class Character {
                     : nearbyNodes[i];
                 collectFromNode(node);
             }
+            addExtraBlockers();
             return nearbyObjects;
         }
 
@@ -808,6 +829,7 @@ class Character {
                 collectFromNode(node);
             }
         }
+        addExtraBlockers();
         return nearbyObjects;
     }
 
@@ -1552,6 +1574,16 @@ class Character {
             }
             return false;
         }
+        const supportPoint = this._pendingVectorMovementSupport &&
+            this._pendingVectorMovementSupport.point &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.x)) &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.y))
+            ? this._pendingVectorMovementSupport.point
+            : null;
+        if (supportPoint) {
+            targetX = Number(supportPoint.x);
+            targetY = Number(supportPoint.y);
+        }
         const position = this._setVectorMovementPositionRaw(targetX, targetY);
         if (this.map && typeof this.map.applyActorResolvedMovementSupport === "function") {
             this.map.applyActorResolvedMovementSupport(this, position.wrappedX, position.wrappedY, options);
@@ -1645,6 +1677,35 @@ class Character {
         const newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
         const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
         const movementRadius = this.getVectorMovementCollisionRadius(options);
+
+        if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+            if (stairOccupancy && stairOccupancy.handled === true) {
+                if (stairOccupancy.allowed === true) {
+                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                    const supportPoint = stairOccupancy.support &&
+                        stairOccupancy.support.point &&
+                        Number.isFinite(Number(stairOccupancy.support.point.x)) &&
+                        Number.isFinite(Number(stairOccupancy.support.point.y))
+                        ? stairOccupancy.support.point
+                        : null;
+                    return this._applyVectorMovementPosition(
+                        supportPoint ? Number(supportPoint.x) : newX,
+                        supportPoint ? Number(supportPoint.y) : newY,
+                        options
+                    );
+                }
+                if (stairOccupancy.slideAlongStairFootprint !== true) {
+                    if (this.movementVector && typeof this.movementVector === "object") {
+                        this.movementVector.x = 0;
+                        this.movementVector.y = 0;
+                    }
+                    this.moving = false;
+                    return false;
+                }
+            }
+        }
+
         const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
 
         if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {

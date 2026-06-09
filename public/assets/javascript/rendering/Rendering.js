@@ -3389,7 +3389,9 @@ void main(void) {
 
         getStairRenderObject(stair, mapRef = null) {
             if (!stair) return null;
+            if (stair.renderedByBuildingCutaway === true) return null;
             if (stair.stairKind === "straight") return this.getStraightStairRenderObject(stair, mapRef);
+            if (stair.stairKind === "treadPath") return this.getTreadPathStairRenderObject(stair, mapRef);
             const stairId = typeof stair.id === "string" && stair.id.length > 0
                 ? stair.id
                 : (typeof stair.transitionId === "string" ? stair.transitionId : "(unknown)");
@@ -3399,10 +3401,57 @@ void main(void) {
             throw new Error(`unsupported stair render kind ${kind} for stair ${stairId}`);
         }
 
+        getTreadPathStairRenderObject(stair, mapRef = null) {
+            if (!stair || stair.stairKind !== "treadPath") return null;
+            const stairId = typeof stair.id === "string" && stair.id.length > 0
+                ? stair.id
+                : (typeof stair.transitionId === "string" ? stair.transitionId : "");
+            if (!stairId) throw new Error("tread path stair render record missing id");
+            const lowerPoint = stair.lowerPoint || null;
+            const higherPoint = stair.higherPoint || null;
+            const lowerX = Number(lowerPoint && lowerPoint.x);
+            const lowerY = Number(lowerPoint && lowerPoint.y);
+            const higherX = Number(higherPoint && higherPoint.x);
+            const higherY = Number(higherPoint && higherPoint.y);
+            if (!Number.isFinite(lowerX) || !Number.isFinite(lowerY) || !Number.isFinite(higherX) || !Number.isFinite(higherY)) {
+                throw new Error(`tread path stair ${stairId} has invalid render object endpoints`);
+            }
+            const lowerLevel = Number.isFinite(stair.lowerLevel) ? Math.round(Number(stair.lowerLevel)) : 0;
+            if (!(this.stairRenderObjectById instanceof Map)) this.stairRenderObjectById = new Map();
+            const cacheKey = `treadPathStair:${stairId}`;
+            let item = this.stairRenderObjectById.get(cacheKey);
+            if (!item) {
+                item = {
+                    id: cacheKey,
+                    type: "treadPathStair",
+                    isStairRenderObject: true,
+                    gone: false,
+                    vanishing: false,
+                    visible: true
+                };
+                this.stairRenderObjectById.set(cacheKey, item);
+            }
+            item.stairId = stairId;
+            item.stair = stair;
+            item.map = mapRef || null;
+            item.level = lowerLevel;
+            item.traversalLayer = lowerLevel;
+            item.lowerFragmentId = typeof stair.lowerFragmentId === "string" ? stair.lowerFragmentId : "";
+            item.higherFragmentId = typeof stair.higherFragmentId === "string" ? stair.higherFragmentId : "";
+            item.lowerSurfaceId = typeof stair.lowerSurfaceId === "string" ? stair.lowerSurfaceId : "";
+            item.higherSurfaceId = typeof stair.higherSurfaceId === "string" ? stair.higherSurfaceId : "";
+            item.x = (lowerX + higherX) * 0.5;
+            item.y = (lowerY + higherY) * 0.5;
+            item.lowerPoint = stair.lowerPoint;
+            item.higherPoint = stair.higherPoint;
+            return item;
+        }
+
         collectVisibleStairRenderObjects(ctx, mapRef, seen, out) {
             if (!mapRef || !(mapRef.stairsById instanceof Map) || !seen || !out) return 0;
             let added = 0;
             for (const stair of mapRef.stairsById.values()) {
+                if (stair && stair.renderedByBuildingCutaway === true) continue;
                 const item = this.getStairRenderObject(stair, mapRef);
                 if (!item || seen.has(item)) continue;
                 seen.add(item);
@@ -3439,6 +3488,7 @@ void main(void) {
             const map = mapRef || (ctx && ctx.map) || global.map || null;
             if (!map || !(map.stairsById instanceof Map)) return out;
             for (const stair of map.stairsById.values()) {
+                if (stair && stair.renderedByBuildingCutaway === true) continue;
                 const item = this.getStairRenderObject(stair, map);
                 if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) {
                     out.push(item);
@@ -3514,7 +3564,7 @@ void main(void) {
                 pushPoint(item.startX, item.startY);
                 pushPoint(item.endX, item.endY);
             }
-            if (item && item.type === "straightStair") {
+            if (item && (item.type === "straightStair" || item.type === "treadPathStair")) {
                 const stair = item.stair || null;
                 const lowerPoint = stair && stair.lowerPoint ? stair.lowerPoint : item.lowerPoint;
                 const higherPoint = stair && stair.higherPoint ? stair.higherPoint : item.higherPoint;
@@ -4537,14 +4587,10 @@ void main(void) {
                     if (!item || item._cutawayCompositeFrame !== frameId) continue;
                     if (!this.isBuildingCutawayStructuralItem(item)) continue;
                     const captureAlpha = this.getBuildingCutawayCompositeCaptureAlphaForItem(item);
-                    add(item._renderingDepthMesh, captureAlpha);
-                    add(item._compositeUnderlayMesh, captureAlpha);
-                    add(item._renderingDisplayObject, captureAlpha);
-                    add(item._flowerBurnFragmentContainer, captureAlpha);
-                    add(item.pixiSprite, captureAlpha);
-                    add(item.fireSprite, captureAlpha);
-                    add(item._doorBottomFaceDebugGraphics, captureAlpha);
-                    if (item.type === "roof") add(item.pixiMesh, captureAlpha);
+                    const displayObjects = this.collectBuildingInteriorDisplayObjectsForItem(item);
+                    for (let d = 0; d < displayObjects.length; d++) {
+                        add(displayObjects[d], captureAlpha);
+                    }
                 }
             }
             return out;
@@ -4603,11 +4649,8 @@ void main(void) {
                     if (!item || item.type !== "wallSection" || item._cutawayCompositeFrame !== frameId) continue;
                     if (item.gone || item.vanishing) continue;
                     expectedWalls += 1;
-                    if (
-                        selected.has(item._renderingDepthMesh) ||
-                        selected.has(item._renderingDisplayObject) ||
-                        selected.has(item.pixiSprite)
-                    ) {
+                    const displayObjects = this.collectBuildingInteriorDisplayObjectsForItem(item);
+                    if (displayObjects.some(displayObject => selected.has(displayObject))) {
                         selectedWalls += 1;
                     }
                 }
@@ -12973,6 +13016,170 @@ void main(void) {
             };
         }
 
+        buildTreadPathStairMeshGeometry(stair) {
+            if (!stair || stair.stairKind !== "treadPath") return null;
+            const traversal = (typeof globalThis !== "undefined" && globalThis.StairTraversal)
+                ? globalThis.StairTraversal
+                : null;
+            if (
+                !traversal ||
+                typeof traversal.createTreadPathFrame !== "function" ||
+                typeof traversal.pointFromPathLocal !== "function" ||
+                typeof traversal.treadPathSteppedBaseZ !== "function"
+            ) {
+                throw new Error("tread path stair rendering requires StairTraversal runtime");
+            }
+            const stairId = typeof stair.id === "string" && stair.id.length > 0 ? stair.id : "(unknown)";
+            const lowerZ = Number(stair.lowerZ);
+            const higherZ = Number(stair.higherZ);
+            if (!Number.isFinite(lowerZ) || !Number.isFinite(higherZ)) {
+                throw new Error(`tread path stair ${stairId} has invalid render z endpoints`);
+            }
+            const frame = stair.traversalFrame || traversal.createTreadPathFrame(stair);
+            const stepCount = Number.isFinite(Number(stair.stepCount))
+                ? Math.max(1, Math.round(Number(stair.stepCount)))
+                : Math.max(1, Array.isArray(stair.treads) ? stair.treads.length - 1 : 1);
+            const texturePath = typeof stair.texturePath === "string" ? stair.texturePath : "";
+            const repeat = this.getFloorVisualTextureRepeat(texturePath || FLOOR_VISUAL_CAVE_TEXTURE_PATH);
+            const repeatX = repeat && Number.isFinite(repeat.x) ? Number(repeat.x) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const repeatY = repeat && Number.isFinite(repeat.y) ? Number(repeat.y) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const positions = [];
+            const uvs = [];
+            const shades = [];
+            const indices = [];
+            const faceTypes = [];
+            const pushFace = (verts, uvList, shade, faceType) => {
+                const base = positions.length / 3;
+                if (base + 4 > 65535) {
+                    throw new Error(`tread path stair ${stairId} render mesh exceeds 65535 vertices`);
+                }
+                for (let i = 0; i < 4; i++) {
+                    const v = verts[i];
+                    if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
+                        throw new Error(`tread path stair ${stairId} render mesh has a non-finite vertex`);
+                    }
+                    positions.push(Number(v.x), Number(v.y), Number(v.z));
+                    const uv = uvList[i] || { u: 0, v: 0 };
+                    uvs.push(Number(uv.u) || 0, Number(uv.v) || 0);
+                    shades.push(Number.isFinite(shade) ? Number(shade) : 1);
+                }
+                indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+                faceTypes.push(faceType);
+            };
+
+            for (let i = 0; i < stepCount; i++) {
+                const u0 = i / stepCount;
+                const u1 = (i + 1) / stepCount;
+                const left0 = traversal.pointFromPathLocal(frame, u0, 0);
+                const right0 = traversal.pointFromPathLocal(frame, u0, 1);
+                const right1 = traversal.pointFromPathLocal(frame, u1, 1);
+                const left1 = traversal.pointFromPathLocal(frame, u1, 0);
+                const treadZ = traversal.treadPathSteppedBaseZ(lowerZ, higherZ, stepCount, i);
+                const previousZ = i === 0
+                    ? lowerZ
+                    : traversal.treadPathSteppedBaseZ(lowerZ, higherZ, stepCount, i - 1);
+                const run0 = Math.max(0, frame.pathLength * u0);
+                const run1 = Math.max(0, frame.pathLength * u1);
+                const width0 = Math.hypot(right0.x - left0.x, right0.y - left0.y);
+                const width1 = Math.hypot(right1.x - left1.x, right1.y - left1.y);
+                const width = Math.max(width0, width1, 0.001);
+                const rise = Math.abs(treadZ - previousZ);
+
+                pushFace(
+                    [
+                        { ...left0, z: treadZ },
+                        { ...left1, z: treadZ },
+                        { ...right1, z: treadZ },
+                        { ...right0, z: treadZ }
+                    ],
+                    [
+                        { u: run0 * repeatX, v: 0 },
+                        { u: run1 * repeatX, v: 0 },
+                        { u: run1 * repeatX, v: width * repeatY },
+                        { u: run0 * repeatX, v: width * repeatY }
+                    ],
+                    1,
+                    "tread"
+                );
+
+                if (rise > 0.000001) {
+                    pushFace(
+                        [
+                            { ...right0, z: previousZ },
+                            { ...left0, z: previousZ },
+                            { ...left0, z: treadZ },
+                            { ...right0, z: treadZ }
+                        ],
+                        [
+                            { u: 0, v: rise * repeatY },
+                            { u: width * repeatX, v: rise * repeatY },
+                            { u: width * repeatX, v: 0 },
+                            { u: 0, v: 0 }
+                        ],
+                        0.74,
+                        "riser"
+                    );
+                }
+            }
+
+            const lastLeft = traversal.pointFromPathLocal(frame, 1, 0);
+            const lastRight = traversal.pointFromPathLocal(frame, 1, 1);
+            const finalTreadZ = traversal.treadPathSteppedBaseZ(lowerZ, higherZ, stepCount, stepCount - 1);
+            const finalRise = Math.abs(higherZ - finalTreadZ);
+            if (finalRise > 0.000001) {
+                const finalWidth = Math.max(
+                    Math.hypot(lastRight.x - lastLeft.x, lastRight.y - lastLeft.y),
+                    0.001
+                );
+                pushFace(
+                    [
+                        { ...lastLeft, z: finalTreadZ },
+                        { ...lastRight, z: finalTreadZ },
+                        { ...lastRight, z: higherZ },
+                        { ...lastLeft, z: higherZ }
+                    ],
+                    [
+                        { u: 0, v: finalRise * repeatY },
+                        { u: finalWidth * repeatX, v: finalRise * repeatY },
+                        { u: finalWidth * repeatX, v: 0 },
+                        { u: 0, v: 0 }
+                    ],
+                    0.74,
+                    "riser"
+                );
+            }
+
+            const treadSignature = Array.isArray(stair.treads)
+                ? stair.treads.map(tread => [
+                    Number(tread && tread.left && tread.left.x).toFixed(4),
+                    Number(tread && tread.left && tread.left.y).toFixed(4),
+                    Number(tread && tread.right && tread.right.x).toFixed(4),
+                    Number(tread && tread.right && tread.right.y).toFixed(4)
+                ].join(",")).join(";")
+                : "";
+            return {
+                positions: new Float32Array(positions),
+                uvs: new Float32Array(uvs),
+                shades: new Float32Array(shades),
+                indices: new Uint16Array(indices),
+                vertexCount: positions.length / 3,
+                triangleCount: indices.length / 3,
+                faceTypes,
+                texturePath: texturePath || FLOOR_VISUAL_CAVE_TEXTURE_PATH,
+                signature: [
+                    stair.id || "",
+                    "treadPath",
+                    lowerZ.toFixed(4),
+                    higherZ.toFixed(4),
+                    stepCount,
+                    texturePath,
+                    repeatX.toFixed(6),
+                    repeatY.toFixed(6),
+                    treadSignature
+                ].join("|")
+            };
+        }
+
         createStraightStairMesh(entry) {
             if (!entry || !entry.geometry || typeof PIXI === "undefined" || !PIXI.Geometry || !PIXI.Mesh || !PIXI.Shader) {
                 return null;
@@ -13088,6 +13295,61 @@ void main(void) {
                 };
                 entry.mesh = this.createStraightStairMesh(entry);
                 if (!entry.mesh) return null;
+                this.stairMeshById.set(cacheKey, entry);
+            } else {
+                entry.geometry = geometry;
+            }
+            const itemLayer = Number.isFinite(item._renderLayerIndex)
+                ? item._renderLayerIndex
+                : this.getLayerIndexForObject(item, 0);
+            entry.tint = this.getLayerDarkenedTint(0xffffff, itemLayer);
+            entry.alpha = Number.isFinite(item._renderLayerAlpha)
+                ? Math.max(0, Math.min(1, Number(item._renderLayerAlpha)))
+                : 1;
+            if (!this.updateStraightStairMesh(entry, ctx)) return null;
+            item._renderingDisplayObject = entry.mesh;
+            item._renderingDepthMesh = entry.mesh;
+            return entry.mesh;
+        }
+
+        getTreadPathStairRenderDisplayObject(item, ctx) {
+            if (!item || item.type !== "treadPathStair") return null;
+            const mapRef = (ctx && ctx.map) || item.map || (this.camera && this.camera.map) || global.map || null;
+            const stair = item.stair || (
+                mapRef && mapRef.stairsById instanceof Map && typeof item.stairId === "string"
+                    ? mapRef.stairsById.get(item.stairId)
+                    : null
+            );
+            if (!stair || stair.stairKind !== "treadPath") {
+                throw new Error(`tread path stair render object ${item.stairId || "(unknown)"} missing runtime stair record`);
+            }
+            const stairId = typeof stair.id === "string" && stair.id.length > 0
+                ? stair.id
+                : (typeof stair.transitionId === "string" ? stair.transitionId : "");
+            if (!stairId) throw new Error("tread path stair render record missing id");
+            const geometry = this.buildTreadPathStairMeshGeometry(stair);
+            if (!geometry) return null;
+            if (!(this.stairMeshById instanceof Map)) this.stairMeshById = new Map();
+            const cacheKey = `treadPathStair:${stairId}`;
+            let entry = this.stairMeshById.get(cacheKey);
+            if (!entry || entry.signature !== geometry.signature) {
+                if (entry && entry.mesh) {
+                    if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
+                    if (typeof entry.mesh.destroy === "function") {
+                        entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
+                    }
+                }
+                entry = {
+                    key: cacheKey,
+                    signature: geometry.signature,
+                    geometry,
+                    mesh: null,
+                    tint: 0xffffff,
+                    alpha: 1
+                };
+                entry.mesh = this.createStraightStairMesh(entry);
+                if (!entry.mesh) return null;
+                entry.mesh.name = "treadPathStairDepthMesh";
                 this.stairMeshById.set(cacheKey, entry);
             } else {
                 entry.geometry = geometry;
@@ -13302,6 +13564,10 @@ void main(void) {
                 for (const [fragmentId, fragment] of map.floorsById.entries()) {
                     scannedFragments += 1;
                     if (!fragment) continue;
+                    if (fragment.renderedByBuildingCutaway === true) {
+                        skippedLevelIsolation += 1;
+                        continue;
+                    }
                     const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
                     if (mazeLayerOnly && level !== wizardLayer) {
                         skippedLevelIsolation += 1;
@@ -14587,7 +14853,7 @@ void main(void) {
                     this.updateRoofPreview(item, ctx.wizard || global.wizard || null);
                     continue;
                 }
-                if (item.type === "straightStair") {
+                if (item.type === "straightStair" || item.type === "treadPathStair") {
                     continue;
                 }
                 const isWallMountedSpatial = this.isWallMountedSpatialItem(item);
@@ -14655,9 +14921,11 @@ void main(void) {
                     }
                     continue;
                 }
-                const isStraightStairItem = item.type === "straightStair";
-                let displayObj = isStraightStairItem
-                    ? this.getStraightStairRenderDisplayObject(item, ctx)
+                const isStairItem = item.type === "straightStair" || item.type === "treadPathStair";
+                let displayObj = isStairItem
+                    ? (item.type === "treadPathStair"
+                        ? this.getTreadPathStairRenderDisplayObject(item, ctx)
+                        : this.getStraightStairRenderDisplayObject(item, ctx))
                     : ((item.type === "roof")
                         ? (item.pixiMesh || null)
                         : (item._flowerBurnFragmentContainer || item.pixiSprite || null));
@@ -14752,8 +15020,8 @@ void main(void) {
                 if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
                     displayObj.renderable = true;
                 }
-                if (isStraightStairItem) {
-                    this.logPlaceObjectRenderDebug("display-straight-stair-object", item, {
+                if (isStairItem) {
+                    this.logPlaceObjectRenderDebug("display-stair-object", item, {
                         displayObjectName: displayObj && displayObj.name ? displayObj.name : "",
                         containerName: container && container.name ? container.name : ""
                     });
@@ -15001,17 +15269,17 @@ void main(void) {
             const wizardLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : this.getLayerBaseZForLevel(wizardLayer);
-            const supportedShadowLayer = findNearestSupportedFloorLayer(
-                ctx && ctx.map ? ctx.map : null,
-                renderPos.x,
-                renderPos.y,
-                wizardLayer
-            );
-            const shadowLayerBaseZ = Number.isFinite(supportedShadowLayer)
-                ? this.getLayerBaseZForLevel(supportedShadowLayer)
-                : wizardLayerBaseZ;
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
+            const jumpHeight = Number.isFinite(wizard.jumpHeight) ? Math.max(0, Number(wizard.jumpHeight)) : 0;
+            const stairShadowLocalZ = wizard._stairSupport &&
+                typeof wizard._stairSupport === "object" &&
+                Number.isFinite(Number(wizard._stairSupport.localZ))
+                ? Number(wizard._stairSupport.localZ)
+                : null;
+            const shadowLocalZ = stairShadowLocalZ !== null
+                ? stairShadowLocalZ
+                : Math.max(0, interpolatedJumpHeight - jumpHeight);
             const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
             const wizardCenterY = pGround.y - jumpOffsetPx - (this.camera.viewscale * 0.25);
             const renderNowMs = Number.isFinite(ctx.renderNowMs)
@@ -15134,12 +15402,12 @@ void main(void) {
 
             const shadowProxy = this.ensureWizardShadowProxy();
             if (!deathAnimationActive && shadowProxy && typeof shadowProxy.updateDepthBillboardMesh === "function") {
-                shadowProxy._renderLayerBaseZ = shadowLayerBaseZ;
+                shadowProxy._renderLayerBaseZ = wizardLayerBaseZ;
                 shadowProxy._renderDepthBias = WIZARD_SHADOW_DEPTH_BIAS_UNITS;
                 shadowProxy.map = wizard.map || global.map || null;
                 shadowProxy.x = renderPos.x;
                 shadowProxy.y = renderPos.y + 0.18;
-                shadowProxy.z = 0;
+                shadowProxy.z = shadowLocalZ;
                 shadowProxy.visible = true;
                 shadowProxy.gone = false;
                 shadowProxy.vanishing = false;
@@ -17925,7 +18193,11 @@ void main(void) {
             }
             proxy.x = worldX;
             proxy.y = worldY;
-            proxy.z = Number.isFinite(Number(cache.level)) ? Number(cache.level) : 0;
+            // Interior bitmaps are captured in projection space relative to the
+            // building origin, including the floor's world Z. Re-projecting the
+            // proxy by its floor index shifts upper floors away from movement
+            // geometry.
+            proxy.z = 0;
             proxy.width = worldWidth;
             proxy.height = worldHeight;
             // The interior bitmap is captured after applying the placement z-rotation to the building model.

@@ -3703,6 +3703,34 @@ jQuery(() => {
             return Math.round(Number.isFinite(layer) ? Number(layer) : 0) * 3;
         }
 
+        function getWizardCameraFollowZ(wizardRef, fallbackBaseZ = 0) {
+            if (!wizardRef) return fallbackBaseZ;
+            const layer = Number.isFinite(wizardRef.currentLayer)
+                ? Math.round(Number(wizardRef.currentLayer))
+                : (Number.isFinite(wizardRef.traversalLayer) ? Math.round(Number(wizardRef.traversalLayer)) : 0);
+            const baseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
+                ? Number(wizardRef.currentLayerBaseZ)
+                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : getLayerBaseZ(layer));
+            if (wizardRef._floorFallState && wizardRef._floorFallState.active && Number.isFinite(wizardRef.z)) {
+                return baseZ + Number(wizardRef.z);
+            }
+            if (wizardRef._stairSupport && typeof wizardRef._stairSupport === "object") {
+                if (Number.isFinite(wizardRef._stairSupport.continuousLocalZ)) {
+                    return baseZ + Number(wizardRef._stairSupport.continuousLocalZ);
+                }
+                if (Number.isFinite(wizardRef._stairSupport.continuousBaseZ)) {
+                    return Number(wizardRef._stairSupport.continuousBaseZ);
+                }
+                if (Number.isFinite(wizardRef._stairSupport.localZ)) {
+                    return baseZ + Number(wizardRef._stairSupport.localZ);
+                }
+                if (Number.isFinite(wizardRef._stairSupport.baseZ)) {
+                    return Number(wizardRef._stairSupport.baseZ);
+                }
+            }
+            return baseZ;
+        }
+
         // Gravity in world-units/sec² for the floor-fall animation.
         const FLOOR_FALL_GRAVITY = -9;
         // Negative z threshold at which the fall "lands" (sprite has slid off screen).
@@ -4197,13 +4225,10 @@ jQuery(() => {
             // Re-read layer state after updateWizardFall so the landing frame
             // gets the correct cameraFollowZ (-3 for level -1) instead of the
             // pre-landing value that was captured before the fall settled.
-            const isNowFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
             const postFallLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : wizardLayerBaseZ;
-            const cameraFollowZ = isNowFalling
-                ? (postFallLayerBaseZ + (Number.isFinite(wizard.z) ? Number(wizard.z) : 0))
-                : postFallLayerBaseZ;
+            const cameraFollowZ = getWizardCameraFollowZ(wizard, postFallLayerBaseZ);
             viewport.prevZ = Number.isFinite(viewport.z) ? Number(viewport.z) : 0;
             viewport.z = cameraFollowZ;
             if (map && typeof map.updatePrototypeSectionBubble === "function") {

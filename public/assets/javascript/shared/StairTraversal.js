@@ -444,7 +444,20 @@
             if (!best || result.error < best.error) best = result;
         });
         if (!best) throw new Error(`stair ${frame.stairId} has no tread path sections`);
-        const upDown = best.section.startU + (best.section.endU - best.section.startU) * best.sectionT;
+        let upDown = best.section.startU + (best.section.endU - best.section.startU) * best.sectionT;
+        const clampedLeftRight = clamp01(best.leftRight);
+        const endpointExtensionTolerance = 0.001;
+        if (best.section === frame.sections[0] && best.sectionT <= endpointExtensionTolerance) {
+            const endpointPoint = pointFromPathLocal(frame, 0, clampedLeftRight);
+            const tangent = pathTangentAt(frame, 0, clampedLeftRight);
+            const signed = ((candidate.x - endpointPoint.x) * tangent.x) + ((candidate.y - endpointPoint.y) * tangent.y);
+            if (signed < 0) upDown = signed / frame.pathLength;
+        } else if (best.section === frame.sections[frame.sections.length - 1] && best.sectionT >= 1 - endpointExtensionTolerance) {
+            const endpointPoint = pointFromPathLocal(frame, 1, clampedLeftRight);
+            const tangent = pathTangentAt(frame, 1, clampedLeftRight);
+            const signed = ((candidate.x - endpointPoint.x) * tangent.x) + ((candidate.y - endpointPoint.y) * tangent.y);
+            if (signed > 0) upDown = 1 + (signed / frame.pathLength);
+        }
         const pointOnPath = {
             x: best.crossline.a.x + best.crossline.dx * best.leftRight,
             y: best.crossline.a.y + best.crossline.dy * best.leftRight
@@ -462,17 +475,45 @@
     }
 
     function localInsidePathFrame(frame, local, actorRadius = 0, epsilon = EPSILON) {
-        if (!local || !Number.isFinite(local.upDown) || !Number.isFinite(local.leftRight)) return false;
+        if (
+            !local ||
+            !Number.isFinite(local.upDown) ||
+            !Number.isFinite(local.leftRight) ||
+            !Number.isFinite(local.projectionError)
+        ) return false;
         const section = sectionForUpDown(frame, local.upDown);
         const span = Math.max(EPSILON, section.endU - section.startU);
         const sectionT = clamp01((clamp01(local.upDown) - section.startU) / span);
         const crossline = sectionCrossline(section, sectionT);
         const radius = Math.max(0, Number(actorRadius) || 0);
         const inset = crossline.length > EPSILON ? radius / crossline.length : Infinity;
+        const projectionTolerance = Math.max(epsilon, 0.001);
         return local.upDown >= -epsilon &&
             local.upDown <= 1 + epsilon &&
+            local.projectionError <= projectionTolerance &&
             local.leftRight >= inset - epsilon &&
             local.leftRight <= 1 - inset + epsilon;
+    }
+
+    function localFootprintOverlapsPathFrame(frame, local, actorRadius = 0, epsilon = EPSILON) {
+        if (
+            !local ||
+            !Number.isFinite(local.upDown) ||
+            !Number.isFinite(local.leftRight) ||
+            !Number.isFinite(local.projectionError)
+        ) return false;
+        const section = sectionForUpDown(frame, local.upDown);
+        const span = Math.max(EPSILON, section.endU - section.startU);
+        const sectionT = clamp01((clamp01(local.upDown) - section.startU) / span);
+        const crossline = sectionCrossline(section, sectionT);
+        const radius = Math.max(0, Number(actorRadius) || 0);
+        const sideExpansion = crossline.length > EPSILON ? radius / crossline.length : 0;
+        const projectionTolerance = Math.max(epsilon, 0.001);
+        return local.upDown >= -epsilon &&
+            local.upDown <= 1 + epsilon &&
+            local.projectionError <= projectionTolerance &&
+            local.leftRight >= -sideExpansion - epsilon &&
+            local.leftRight <= 1 + sideExpansion + epsilon;
     }
 
     function endpointCrossed(previousLocal, nextLocal, endpoint) {
@@ -494,7 +535,7 @@
         const leftRight = Math.max(0, Math.min(1, Number(local.leftRight)));
         const stepCount = Number.isFinite(stair.stepCount) ? Math.max(1, Math.round(Number(stair.stepCount))) : 1;
         const treadIndex = Math.max(0, Math.min(stepCount - 1, Math.floor(upDown * stepCount)));
-        const baseZ = frame.lowerZ + (frame.higherZ - frame.lowerZ) * upDown;
+        const baseZ = frame.lowerZ + (frame.higherZ - frame.lowerZ) * ((treadIndex + 1) / (stepCount + 1));
         const point = pointFromLocal(frame, upDown, leftRight - 0.5);
         return {
             type: "stair",
@@ -510,13 +551,24 @@
         };
     }
 
+    function treadPathSteppedBaseZ(lowerZ, higherZ, stepCount, treadIndex) {
+        const low = finiteNumber(lowerZ, "tread path lowerZ");
+        const high = finiteNumber(higherZ, "tread path higherZ");
+        const count = Number.isFinite(Number(stepCount)) ? Math.max(1, Math.round(Number(stepCount))) : 1;
+        const index = Number.isFinite(Number(treadIndex)) ? Math.round(Number(treadIndex)) : 0;
+        if (index < 0 || index >= count) {
+            throw new Error(`tread path stair has invalid tread index ${index}`);
+        }
+        return low + (high - low) * (index / count);
+    }
+
     function supportFromPathLocal(stair, frame, local) {
         if (!stair || !frame || !local) throw new Error("tread path stair support requires stair, frame, and local point");
         const upDown = clamp01(local.upDown);
         const leftRight = Math.max(0, Math.min(1, Number(local.leftRight)));
         const stepCount = Number.isFinite(stair.stepCount) ? Math.max(1, Math.round(Number(stair.stepCount))) : 1;
         const treadIndex = Math.max(0, Math.min(stepCount - 1, Math.floor(upDown * stepCount)));
-        const baseZ = frame.lowerZ + (frame.higherZ - frame.lowerZ) * upDown;
+        const baseZ = treadPathSteppedBaseZ(frame.lowerZ, frame.higherZ, stepCount, treadIndex);
         const point = pointFromPathLocal(frame, upDown, leftRight);
         return {
             type: "stair",
@@ -644,9 +696,11 @@
         localPointForPathFrame,
         localInsideStraightFrame,
         localInsidePathFrame,
+        localFootprintOverlapsPathFrame,
         endpointCrossed,
         supportFromStraightLocal,
         supportFromPathLocal,
+        treadPathSteppedBaseZ,
         moveStraightLocal,
         movePathLocal,
         pointFromLocal,

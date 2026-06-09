@@ -148,6 +148,23 @@
         if (obj._floorFallState && obj._floorFallState.active && Number.isFinite(obj.z)) {
             return baseZ + Number(obj.z);
         }
+        if (
+            obj._stairSupport &&
+            typeof obj._stairSupport === "object"
+        ) {
+            if (Number.isFinite(obj._stairSupport.continuousLocalZ)) {
+                return baseZ + Number(obj._stairSupport.continuousLocalZ);
+            }
+            if (Number.isFinite(obj._stairSupport.continuousBaseZ)) {
+                return Number(obj._stairSupport.continuousBaseZ);
+            }
+            if (Number.isFinite(obj._stairSupport.localZ)) {
+                return baseZ + Number(obj._stairSupport.localZ);
+            }
+            if (Number.isFinite(obj._stairSupport.baseZ)) {
+                return Number(obj._stairSupport.baseZ);
+            }
+        }
         return baseZ;
     }
 

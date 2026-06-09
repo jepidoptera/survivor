@@ -100,6 +100,8 @@ const DEFAULT_COLUMN_WIDTH = 0.25;
 const COLUMN_DIMENSION_MAX = 2;
 const STAIR_WIDTH_MIN = 0.2;
 const STAIR_WIDTH_MAX = 5;
+const REGULAR_POLYGON_SIDES_MIN = 3;
+const REGULAR_POLYGON_SIDES_MAX = 24;
 const ROOF_SNAP_IMPORTANCE = Object.freeze({
     perimeterWallOuterCorner: 4,
     lowerFloorVertex: 3,
@@ -201,6 +203,14 @@ function normalizeStairStepCount(value, label = "stair step count") {
         throw new Error(`${label} must be an integer between 1 and 200`);
     }
     return stepCount;
+}
+
+function normalizeRegularPolygonSides(value, label = "regular polygon sides") {
+    const sides = Math.round(Number(value));
+    if (!Number.isInteger(sides) || sides < REGULAR_POLYGON_SIDES_MIN || sides > REGULAR_POLYGON_SIDES_MAX) {
+        throw new Error(`${label} must be an integer between ${REGULAR_POLYGON_SIDES_MIN} and ${REGULAR_POLYGON_SIDES_MAX}`);
+    }
+    return sides;
 }
 
 function defaultStairRiserDepth(height, stepCount) {
@@ -1096,6 +1106,8 @@ export class BuildingEditorState extends EventTarget {
         this.hoverWorldPoint = null;
         this.renderError = "";
         this.polygonToolElevation = 0;
+        this.polygonToolRegularPolygon = false;
+        this.polygonToolSides = 6;
         this.inputs = {
             floorElevation: 0,
             floorHeight: DEFAULTS.wallHeight,
@@ -4733,6 +4745,26 @@ export class BuildingEditorState extends EventTarget {
         this.emitChange();
     }
 
+    updatePolygonToolRegularPolygon(enabled) {
+        const nextEnabled = enabled === true;
+        if (this.polygonToolRegularPolygon === nextEnabled) return;
+        this.polygonToolRegularPolygon = nextEnabled;
+        if (this.draft && this.draft.kind === "polygonEdit") {
+            this.draft = null;
+        }
+        this.emitChange();
+    }
+
+    updatePolygonToolSides(value) {
+        const sides = normalizeRegularPolygonSides(value);
+        this.polygonToolSides = sides;
+        if (this.draft && this.draft.kind === "polygonEdit" && this.draft.regularPolygon) {
+            this.draft.regularPolygon.sides = sides;
+            this.draft.previewPoints = null;
+        }
+        this.emitChange();
+    }
+
     updateSelectedFloorHeight(value) {
         const floor = this.selectedFloor();
         if (!floor) throw new Error("cannot update floor height without a selected floor");
@@ -5888,6 +5920,7 @@ export class BuildingEditorState extends EventTarget {
         const origin = draft &&
             draft.kind === "polygonEdit" &&
             Array.isArray(draft.points) &&
+            !(draft.regularPolygon && draft.regularPolygon.phase === "sideChoice") &&
             draft.points.length > 0
             ? draft.points[draft.points.length - 1]
             : null;

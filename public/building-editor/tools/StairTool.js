@@ -10,6 +10,7 @@ const STAIR_WALL_LADDER_SNAP_PIXELS = 10;
 const SNAPPED_TREAD_ANGLE_STEP = Math.PI / 12;
 const ARC_DELTA_SNAP_THRESHOLD = Math.PI / 24;
 const ARC_DELTA_SNAP_GEOMETRY_EPSILON = 0.00001;
+const WINDING_ARC_FINISH_SUPPRESSION_DELTA = Math.PI * 1.5;
 
 function finitePoint(point) {
     return !!point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y));
@@ -218,6 +219,13 @@ function treadLinesCross(a, b) {
 function treadLinesConflict(a, b) {
     if (!segmentsIntersect(a.left, a.right, b.left, b.right)) return false;
     return !segmentIntersectionIsOnlySharedEndpoint(a.left, a.right, b.left, b.right);
+}
+
+function stairDraftHasWindingPendingArc(draft) {
+    const pendingDelta = Number(draft && draft.pendingTread && draft.pendingTread.arcDeltaAngle);
+    if (Number.isFinite(pendingDelta) && Math.abs(pendingDelta) >= WINDING_ARC_FINISH_SUPPRESSION_DELTA) return true;
+    const stateDelta = Number(draft && draft.pendingArcState && draft.pendingArcState.deltaAngle);
+    return Number.isFinite(stateDelta) && Math.abs(stateDelta) >= WINDING_ARC_FINISH_SUPPRESSION_DELTA;
 }
 
 function snapNearestTreadEndpoints(previous, pending) {
@@ -530,8 +538,10 @@ export class StairTool {
         }
         const draft = this._activeDraft();
         if (draft && draft.started && draft.completed !== true && draft.ladder !== true) {
+            const windingPendingArc = stairDraftHasWindingPendingArc(draft);
             const finishHover = Array.isArray(draft.treads) &&
                 draft.treads.length >= 2 &&
+                !windingPendingArc &&
                 this._pointHitsFinalTreadLine(this.lastWorldPoint, threshold, options);
             const hoverChanged = this._setFinishTreadHover(draft, finishHover);
             if (finishHover) {
@@ -596,7 +606,11 @@ export class StairTool {
             return;
         }
         if (draft && draft.started) {
-            if (draft.ladder !== true && this._pointHitsFinalTreadLine(this.lastWorldPoint, threshold, options)) {
+            if (
+                draft.ladder !== true &&
+                !stairDraftHasWindingPendingArc(draft) &&
+                this._pointHitsFinalTreadLine(this.lastWorldPoint, threshold, options)
+            ) {
                 if (!Array.isArray(draft.treads) || draft.treads.length < 2) return;
                 draft.completed = true;
                 draft.pendingTread = null;

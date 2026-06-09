@@ -39,6 +39,11 @@ function loadRenderingImpl(options = {}) {
     context.globalThis = context;
 
     vm.createContext(context);
+    const stairTraversalSource = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/shared/StairTraversal.js"),
+        "utf8"
+    );
+    vm.runInContext(stairTraversalSource, context, { filename: "StairTraversal.js" });
     const buildingInteriorViewSource = fs.readFileSync(
         path.join(__dirname, "../public/assets/javascript/rendering/BuildingInteriorView.js"),
         "utf8"
@@ -490,6 +495,7 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
             bounds: { worldWidth: 10, worldHeight: 8 },
             pixelsPerWorldUnit: 72,
             xyratio: 0.66,
+            level: 1,
             anchorX: 0.25,
             anchorY: 0.75,
             depthMetric: { min: -1, span: 2 }
@@ -502,6 +508,7 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
     assert.equal(updateThis.rotationAxis, "ground");
     assert.equal(updateThis.x, 1);
     assert.equal(updateThis.y, 2);
+    assert.equal(updateThis.z, 0);
     assert.equal(updateThis.width, 10);
     assert.equal(updateThis.height, 8);
     assert.equal(updateThis.placementRotation, 0);
@@ -1032,6 +1039,37 @@ test("building cutaway composite selected objects carry fall reveal capture alph
     assert.equal(displayObject._buildingCutawayCompositeCaptureAlpha, 0.2);
 });
 
+test("building cutaway composite captures wall depth display meshes", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer._layerCutawayFrameId = 11;
+    const displayObject = {
+        parent: {},
+        visible: true,
+        renderable: true
+    };
+    const item = {
+        type: "wallSection",
+        _cutawayCompositeFrame: 11,
+        _depthDisplayMesh: displayObject
+    };
+    const state = {
+        triggers: [{
+            building: {},
+            renderCache: {
+                renderItems: [{ item }]
+            }
+        }]
+    };
+
+    const selected = renderer.getBuildingCutawayCompositeDisplayObjects(state);
+    const diagnostics = renderer.getBuildingCutawayCompositeWallSelectionDiagnostics(state, selected);
+
+    assert.equal(selected.has(displayObject), true);
+    assert.equal(diagnostics.expectedWalls, 1);
+    assert.equal(diagnostics.selectedWalls, 1);
+});
+
 test("visible object collection includes objects attached to upper floor nodes", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -1202,6 +1240,10 @@ test("wizard body layer uses shared 3d depth layer while hat remains an overlay"
     assert.match(source, /const overlayContainer = \(this\.layers && \(this\.layers\.entities \|\| this\.layers\.characters \|\| this\.layers\.depthObjects\)\) \|\| null;/);
     assert.match(source, /keepWizardShieldInCharacterLayer\(wizard\.shieldGraphics\)/);
     assert.doesNotMatch(source, /keepWizardShieldInCharacterLayer\(hat\)/);
+    assert.match(source, /wizard\._stairSupport[\s\S]+Number\.isFinite\(Number\(wizard\._stairSupport\.localZ\)\)/);
+    assert.match(source, /const shadowLocalZ = stairShadowLocalZ !== null[\s\S]+Math\.max\(0, interpolatedJumpHeight - jumpHeight\);/);
+    assert.match(source, /shadowProxy\._renderLayerBaseZ = wizardLayerBaseZ;/);
+    assert.match(source, /shadowProxy\.z = shadowLocalZ;/);
 });
 
 test("building interior foreground promotion moves display object temporarily and restores it", () => {
@@ -4205,6 +4247,40 @@ test("straight stairs build a full 3d mesh with treads, risers, and sides", () =
     assert.equal(Math.max(...zValues), 3);
 });
 
+test("tread path stairs render a floor-height entry tread and final upper riser", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+
+    const geometry = renderer.buildTreadPathStairMeshGeometry({
+        id: "path-stairs-a",
+        stairKind: "treadPath",
+        lowerPoint: { x: 0, y: 0 },
+        higherPoint: { x: 3, y: 0 },
+        lowerZ: 0,
+        higherZ: 3,
+        lowerLevel: 0,
+        higherLevel: 1,
+        width: 1,
+        stepCount: 3,
+        treads: [
+            { left: { x: 0, y: -0.5 }, right: { x: 0, y: 0.5 } },
+            { left: { x: 3, y: -0.5 }, right: { x: 3, y: 0.5 } }
+        ]
+    });
+
+    assert.ok(geometry);
+    assert.equal(geometry.faceTypes.filter(type => type === "tread").length, 3);
+    assert.equal(geometry.faceTypes.filter(type => type === "riser").length, 3);
+    const treadZValues = [];
+    for (let faceIndex = 0; faceIndex < geometry.faceTypes.length; faceIndex++) {
+        if (geometry.faceTypes[faceIndex] !== "tread") continue;
+        const vertexStart = faceIndex * 4 * 3;
+        treadZValues.push(geometry.positions[vertexStart + 2]);
+    }
+    assert.deepEqual(treadZValues.map(z => Number(z.toFixed(6))), [0, 1, 2]);
+    assert.equal(Math.max(...Array.from(geometry.positions).filter((_, index) => index % 3 === 2)), 3);
+});
+
 test("straight stair records are not collected as floor visual polygons", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -4234,6 +4310,32 @@ test("straight stair records are not collected as floor visual polygons", () => 
     });
 
     assert.equal(Array.isArray(entries), true);
+    assert.equal(entries.length, 0);
+});
+
+test("building cutaway-rendered floor fragments are not collected as floor visual polygons", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const entries = renderer.collectFloorVisualEntries({
+        map: {
+            floorsById: new Map([["building-floor", {
+                fragmentId: "building-floor",
+                surfaceId: "building-surface",
+                level: 1,
+                nodeBaseZ: 3,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 4, y: 0 },
+                    { x: 4, y: 4 },
+                    { x: 0, y: 4 }
+                ],
+                holes: [],
+                renderedByBuildingCutaway: true
+            }]])
+        },
+        wizard: { currentLayer: 0 }
+    });
+
     assert.equal(entries.length, 0);
 });
 

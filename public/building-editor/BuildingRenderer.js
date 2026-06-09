@@ -7733,25 +7733,31 @@ export class BuildingRenderer {
             return;
         }
         if (!draft || !Array.isArray(draft.points) || !draft.points.length) return;
+        const previewPoints = draft.kind === "polygonEdit" &&
+            Array.isArray(draft.previewPoints) &&
+            draft.previewPoints.length >= 3
+            ? draft.previewPoints
+            : null;
+        const drawingPoints = previewPoints || draft.points;
         const z = this.activePlaneZ();
         const color = draft.kind === "wall"
             ? 0x78b7ff
             : (draft.operation === "subtract" ? 0xff8a8a : 0x80e0bd);
         gfx.lineStyle(2, color, 1);
-        const first = this.worldToScreen(draft.points[0], z);
+        const first = this.worldToScreen(drawingPoints[0], z);
         gfx.moveTo(first.x, first.y);
-        for (let index = 1; index < draft.points.length; index++) {
-            const point = this.worldToScreen(draft.points[index], z);
+        for (let index = 1; index < drawingPoints.length; index++) {
+            const point = this.worldToScreen(drawingPoints[index], z);
             gfx.lineTo(point.x, point.y);
         }
-        if (draft.kind === "polygonEdit" && draft.completed === true && draft.points.length >= 3) {
+        if (draft.kind === "polygonEdit" && ((draft.completed === true && drawingPoints.length >= 3) || previewPoints)) {
             gfx.lineTo(first.x, first.y);
         }
-        if (draft.kind === "polygonEdit" && draft.completed !== true && draft.points.length > 0 && this.state.hoverWorldPoint) {
+        if (draft.kind === "polygonEdit" && draft.completed !== true && !previewPoints && draft.points.length > 0 && this.state.hoverWorldPoint) {
             const hover = this.worldToScreen(this.state.hoverWorldPoint, z);
             gfx.lineTo(hover.x, hover.y);
         }
-        draft.points.forEach((point, index) => {
+        drawingPoints.forEach((point, index) => {
             const screen = this.worldToScreen(point, z);
             gfx.beginFill(0x111820, 1);
             const selected = draft.kind === "polygonEdit" && Number(draft.selectedVertexIndex) === index;

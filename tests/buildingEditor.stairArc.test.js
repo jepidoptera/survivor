@@ -195,6 +195,109 @@ test("stair wall snap only moves pending tread position and keeps winding", asyn
     assert.ok(Math.abs(draft.pendingArcState.deltaAngle - 5 * Math.PI / 2) < 0.000001);
 });
 
+test("stair tool keeps winding when the pointer crosses the finish tread line", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    let changeCount = 0;
+    const previous = {
+        left: { x: 1, y: 0 },
+        right: { x: 3, y: 0 },
+        center: { x: 2, y: 0 },
+        angle: 0
+    };
+    const draft = {
+        kind: "stair",
+        started: true,
+        completed: false,
+        floorId: "floor",
+        width: 2,
+        treads: [previous],
+        pendingTread: {
+            left: { x: Math.cos(-0.08), y: Math.sin(-0.08) },
+            right: { x: Math.cos(-0.08) * 3, y: Math.sin(-0.08) * 3 },
+            center: { x: Math.cos(-0.08) * 2, y: Math.sin(-0.08) * 2 },
+            angle: -0.08,
+            arcDeltaAngle: 2 * Math.PI - 0.08,
+            arcNearDeltaAngle: 2 * Math.PI - 0.08
+        },
+        pendingArcState: {
+            treadIndex: 0,
+            kind: "annular",
+            deltaAngle: 2 * Math.PI - 0.08
+        }
+    };
+    const tool = new StairTool({
+        draft,
+        emitChange() {
+            changeCount++;
+        }
+    });
+    tool._pointHitsFinalTreadLine = () => true;
+    tool._pendingTreadForPoint = () => ({
+        wallSnapped: false,
+        tread: {
+            left: { x: Math.cos(-0.03), y: Math.sin(-0.03) },
+            right: { x: Math.cos(-0.03) * 3, y: Math.sin(-0.03) * 3 },
+            center: { x: Math.cos(-0.03) * 2, y: Math.sin(-0.03) * 2 },
+            angle: -0.03
+        }
+    });
+
+    tool.pointerMove({ x: 2, y: 0 });
+
+    assert.equal(draft.completed, false);
+    assert.equal(draft.finishTreadHover, false);
+    assert.ok(draft.pendingTread, "winding preview should stay active at the finish line crossing");
+    assert.ok(Math.abs(draft.pendingTread.arcDeltaAngle - 2 * Math.PI) < 0.000001);
+    assert.ok(changeCount > 0);
+});
+
+test("stair tool commits a winding pending tread instead of finishing at the crossed tread line", async () => {
+    const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
+    let finished = false;
+    const previous = {
+        left: { x: 1, y: 0 },
+        right: { x: 3, y: 0 },
+        center: { x: 2, y: 0 },
+        angle: 0
+    };
+    const draft = {
+        kind: "stair",
+        started: true,
+        completed: false,
+        floorId: "floor",
+        width: 2,
+        treads: [previous],
+        pendingTread: {
+            left: { x: Math.cos(Math.PI / 2), y: Math.sin(Math.PI / 2) },
+            right: { x: Math.cos(Math.PI / 2) * 3, y: Math.sin(Math.PI / 2) * 3 },
+            center: { x: Math.cos(Math.PI / 2) * 2, y: Math.sin(Math.PI / 2) * 2 },
+            angle: Math.PI / 2,
+            arcDeltaAngle: 5 * Math.PI / 2,
+            arcNearDeltaAngle: 5 * Math.PI / 2
+        },
+        pendingArcState: {
+            treadIndex: 0,
+            kind: "annular",
+            deltaAngle: 5 * Math.PI / 2
+        }
+    };
+    const tool = new StairTool({
+        draft,
+        emitChange() {}
+    });
+    tool._pointHitsFinalTreadLine = () => true;
+    tool.finish = () => {
+        finished = true;
+    };
+
+    tool.pointerDown({ x: 0, y: 2 });
+
+    assert.equal(finished, false);
+    assert.equal(draft.completed, false);
+    assert.equal(draft.treads.length, 2);
+    assert.equal(draft.pendingTread, null);
+});
+
 test("stair arc metadata fails loudly when it contradicts tread geometry", async () => {
     const { BuildingRenderer } = await import("../public/building-editor/BuildingRenderer.js");
     const renderer = Object.create(BuildingRenderer.prototype);
