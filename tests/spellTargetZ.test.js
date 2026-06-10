@@ -523,6 +523,33 @@ test("spell target point uses depth billboard projected quad coordinates", () =>
     assert.equal(aim.z, 4.0);
 });
 
+test("spell target aim point uses prototype building geometric center", () => {
+    const context = loadSpellContext();
+    const aim = context.getSpellTargetAimPoint(
+        { map: null },
+        {
+            type: "prototypeBuildingPlacement",
+            x: 4,
+            y: 5,
+            z: 0,
+            rotationAxis: "ground",
+            width: 10,
+            height: 8,
+            _depthBillboardWorldPositions: [
+                1, 2, 0,
+                9, 2, 0,
+                9, 2, 6,
+                1, 2, 6
+            ],
+            spellTargetPoint: null
+        }
+    );
+
+    assert.equal(aim.x, 4);
+    assert.equal(aim.y, 5);
+    assert.equal(aim.z, 0);
+});
+
 test("spell forced target aim updates projectile visual target z", () => {
     const context = loadSpellContext();
     const spell = new context.Spell(0, 0);
@@ -638,6 +665,34 @@ test("fireball cast initializes floor-relative visual z", () => {
     assert.equal(fireball.visualBaseZ, 6);
     assert.equal(fireball.visualTargetZ, 6.5);
     assert.equal(fireball.z, context.Fireball.FLIGHT_Z);
+});
+
+test("fireball can ignite a directly picked building placement", () => {
+    const context = loadProjectileSpellContext();
+    const fireball = new context.Fireball();
+    const target = {
+        type: "prototypeBuildingPlacement",
+        x: 11,
+        y: 12,
+        z: 0,
+        hp: 100,
+        maxHp: 100,
+        flamability: 1,
+        isOnFire: false,
+        ignite() {
+            this.isOnFire = true;
+        }
+    };
+    fireball.x = 11;
+    fireball.y = 12;
+    fireball.radius = 0.25;
+    fireball.forcedTarget = target;
+    context.onscreenObjects = [];
+
+    fireball.land();
+
+    assert.equal(target.hp < 100, true);
+    assert.equal(target.isOnFire, true);
 });
 
 test("spikes propagate caster floor z to spawned projectiles", () => {

@@ -4,8 +4,8 @@
     const BUILDING_PLACEMENT_SCHEMA = "survivor-building-placement-v1";
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
     const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v3";
-    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v4-z-baked";
-    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-v3-vertical-span";
+    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v7-lower-floor-openings";
+    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stair-hole-v4";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
 
     function finiteNumber(value, label) {
@@ -140,6 +140,54 @@
             if (!key || seen.has(key)) continue;
             seen.add(key);
             out.push(key);
+        }
+        return out;
+    }
+
+    function cloneBuildingPlacementRef(placement) {
+        if (!placement || typeof placement !== "object") {
+            throw new Error("building section ref requires a placement");
+        }
+        return {
+            id: normalizePlacementId(placement.id, 0),
+            buildingSaveName: nonEmptyString(placement.buildingSaveName, `building placement ${placement.id} buildingSaveName`)
+        };
+    }
+
+    function cloneBuildingPlacementRefs(refs, label = "buildingRefs") {
+        if (refs === undefined || refs === null) return [];
+        if (!Array.isArray(refs)) {
+            throw new Error(`${label} must be an array`);
+        }
+        const out = [];
+        const seen = new Set();
+        for (let i = 0; i < refs.length; i++) {
+            const ref = refs[i];
+            if (!ref || typeof ref !== "object" || Array.isArray(ref)) {
+                throw new Error(`${label} ${i} must be an object`);
+            }
+            const id = normalizePlacementId(ref.id, i);
+            if (seen.has(id)) {
+                throw new Error(`${label} contains duplicate building ref ${id}`);
+            }
+            seen.add(id);
+            out.push({
+                id,
+                buildingSaveName: nonEmptyString(ref.buildingSaveName, `${label} ${i} buildingSaveName`)
+            });
+        }
+        return out;
+    }
+
+    function normalizeBuildingPlacementIdSet(ids, state) {
+        const rawIds = ids instanceof Set ? Array.from(ids) : (Array.isArray(ids) ? ids : []);
+        const out = new Set();
+        for (let i = 0; i < rawIds.length; i++) {
+            const id = normalizePlacementId(rawIds[i], i);
+            if (state && state.placementsById instanceof Map && !state.placementsById.has(id)) {
+                throw new Error(`active building selection references missing placement ${id}`);
+            }
+            out.add(id);
         }
         return out;
     }
@@ -476,6 +524,153 @@
         return points;
     }
 
+    function pointOnSegment(point, a, b, epsilon = 0.000001) {
+        const px = Number(point && point.x);
+        const py = Number(point && point.y);
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
+        const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+        if (Math.abs(cross) > epsilon) return false;
+        return px >= Math.min(ax, bx) - epsilon &&
+            px <= Math.max(ax, bx) + epsilon &&
+            py >= Math.min(ay, by) - epsilon &&
+            py <= Math.max(ay, by) + epsilon;
+    }
+
+    function segmentsIntersect(a, b, c, d, epsilon = 0.000001) {
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        const cx = Number(c && c.x);
+        const cy = Number(c && c.y);
+        const dx = Number(d && d.x);
+        const dy = Number(d && d.y);
+        if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+        const cross = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+        const abC = cross(ax, ay, bx, by, cx, cy);
+        const abD = cross(ax, ay, bx, by, dx, dy);
+        const cdA = cross(cx, cy, dx, dy, ax, ay);
+        const cdB = cross(cx, cy, dx, dy, bx, by);
+        if (
+            ((abC > epsilon && abD < -epsilon) || (abC < -epsilon && abD > epsilon)) &&
+            ((cdA > epsilon && cdB < -epsilon) || (cdA < -epsilon && cdB > epsilon))
+        ) {
+            return true;
+        }
+        return pointOnSegment(c, a, b, epsilon) ||
+            pointOnSegment(d, a, b, epsilon) ||
+            pointOnSegment(a, c, d, epsilon) ||
+            pointOnSegment(b, c, d, epsilon);
+    }
+
+    function polygonsIntersect(a, b) {
+        if (!Array.isArray(a) || a.length < 3 || !Array.isArray(b) || b.length < 3) return false;
+        if (!boundsOverlap(boundsForPolygon(a), boundsForPolygon(b))) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (pointInRing(a[i], b)) return true;
+        }
+        for (let i = 0; i < b.length; i++) {
+            if (pointInRing(b[i], a)) return true;
+        }
+        for (let i = 0; i < a.length; i++) {
+            const a0 = a[i];
+            const a1 = a[(i + 1) % a.length];
+            for (let j = 0; j < b.length; j++) {
+                if (segmentsIntersect(a0, a1, b[j], b[(j + 1) % b.length])) return true;
+            }
+        }
+        return false;
+    }
+
+    function requireBuildingStairTraversal() {
+        const traversal = globalScope && globalScope.StairTraversal;
+        if (!traversal || typeof traversal.createTreadPathFrame !== "function" || typeof traversal.pathPolygonForUpDownRange !== "function") {
+            throw new Error("building stair-hole movement blocking requires StairTraversal tread path support");
+        }
+        return traversal;
+    }
+
+    function computeRuntimeStairUpperOpeningPolygons(stair, traversal) {
+        if (!stair) return [];
+        const frame = traversal.createTreadPathFrame(stair);
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const lowerZ = finiteNumber(stair.lowerZ, `building stair ${stair.id} lowerZ`);
+        const higherZ = finiteNumber(stair.higherZ, `building stair ${stair.id} higherZ`);
+        const height = higherZ - lowerZ;
+        if (!(height > 0)) {
+            throw new Error(`building stair ${stair.id} upper opening requires positive height`);
+        }
+        const thresholdZ = higherZ - 2;
+        const polygons = [];
+        for (let index = 0; index < stepCount; index++) {
+            const stepZ = lowerZ + height * ((index + 1) / (stepCount + 1));
+            if (stepZ < thresholdZ - 0.000001 || stepZ > higherZ + 0.000001) continue;
+            const polygon = traversal.pathPolygonForUpDownRange(frame, index / stepCount, (index + 1) / stepCount);
+            if (!Array.isArray(polygon) || polygon.length < 3) {
+                throw new Error(`building stair ${stair.id} upper opening step ${index} requires a polygon`);
+            }
+            polygons.push(polygon);
+        }
+        if (polygons.length === 0) {
+            throw new Error(`building stair ${stair.id} upper opening requires at least one high step polygon`);
+        }
+        return polygons;
+    }
+
+    function computeBuildingPlacementStairHoleBlockers(buildingData, placement, fragments) {
+        const runtimeStairs = createPrototypeBuildingStairRuntimeRecords(buildingData, placement, fragments);
+        if (runtimeStairs.length === 0) return [];
+        const fragmentsById = new Map(fragments.map((fragment) => [fragment.fragmentId, fragment]));
+        const blockers = [];
+        for (let s = 0; s < runtimeStairs.length; s++) {
+            const stair = runtimeStairs[s];
+            const higherFragment = fragmentsById.get(stair.higherFragmentId);
+            if (!higherFragment) {
+                throw new Error(`building stair ${stair.id} references missing higher floor ${stair.higherFragmentId}`);
+            }
+            const holes = Array.isArray(higherFragment.holes) ? higherFragment.holes : [];
+            const traversal = requireBuildingStairTraversal();
+            const layer = getBuildingFloorLayer(higherFragment);
+            const bottomZ = getBuildingLayerBaseZ(higherFragment, layer);
+            const height = buildingElementHeight(higherFragment, {});
+            const openingPolygons = computeRuntimeStairUpperOpeningPolygons(stair, traversal);
+            for (let p = 0; p < openingPolygons.length; p++) {
+                blockers.push({
+                    polygon: openingPolygons[p],
+                    level: layer,
+                    traversalLayer: layer,
+                    bottomZ,
+                    height
+                });
+            }
+            if (holes.length === 0) continue;
+            const frame = traversal.createTreadPathFrame(stair);
+            const footprint = traversal.pathPolygonForUpDownRange(frame, 0, 1);
+            if (!Array.isArray(footprint) || footprint.length < 3) {
+                throw new Error(`building stair ${stair.id} hole blocker requires a footprint polygon`);
+            }
+            for (let h = 0; h < holes.length; h++) {
+                const hole = holes[h];
+                if (!Array.isArray(hole) || hole.length < 3) continue;
+                if (!polygonsIntersect(hole, footprint)) continue;
+                blockers.push({
+                    polygon: hole,
+                    level: layer,
+                    traversalLayer: layer,
+                    bottomZ,
+                    height
+                });
+            }
+        }
+        return blockers;
+    }
+
     function buildingElementBottomZ(floor, layer, element) {
         if (Number.isFinite(Number(element && element.bottomZ))) return Number(element.bottomZ);
         return getBuildingLayerBaseZ(floor, layer);
@@ -538,6 +733,16 @@
                 });
             }
         }
+        const localPlacement = {
+            ...placement,
+            transform: { x: 0, y: 0, rotation: 0 }
+        };
+        const interiorPolygonsByFloor = computeInteriorPolygonsByFloor(buildingData, localPlacement);
+        const fragments = [];
+        for (let i = 0; i < floors.length; i++) {
+            fragments.push(createPrototypeBuildingFragment(localPlacement, floors[i], i, interiorPolygonsByFloor));
+        }
+        localEntries.push(...computeBuildingPlacementStairHoleBlockers(buildingData, localPlacement, fragments));
         return localEntries.map((entry, index) => ({
             polygon: normalizePolygon(
                 entry.polygon.map((point) => transformPoint(point, placement.transform)),
@@ -1296,6 +1501,7 @@
         if (!(state.movementBlockersByPlacementId instanceof Map)) return false;
         for (let i = 0; i < placements.length; i++) {
             const placement = placements[i];
+            if (!isPrototypeBuildingPlacementDesired(state, placement)) continue;
             const polygons = getPlacementMovementBlockerPolygons(null, placement, { scheduleLoad: false });
             const pending = state.pendingMovementGeometryByPlacementId instanceof Map &&
                 state.pendingMovementGeometryByPlacementId.has(placement && placement.id);
@@ -1361,6 +1567,7 @@
         let awaitingGeometry = 0;
         for (let i = 0; i < placements.length; i++) {
             const placement = placements[i];
+            if (!isPrototypeBuildingPlacementDesired(state, placement)) continue;
             const polygons = getPlacementMovementBlockerPolygons(map, placement, { scheduleLoad: true });
             if (polygons === null) {
                 state.movementBlockersByPlacementId.set(placement.id, []);
@@ -1532,6 +1739,9 @@
             lastSyncStats: null,
             lastMovementBlockerStats: null,
             lastMovementBlockerError: null,
+            lastSectionRefStats: null,
+            hasActiveBuildingSelection: false,
+            activeDesiredSignature: null,
             contentVersion: 1,
             nextPlacementSerial: 1,
             rawPlacements: Array.isArray(records) ? records.slice() : []
@@ -1559,6 +1769,96 @@
             sectionLinks: indexed
         };
         return state.lastIndexStats;
+    }
+
+    function syncPrototypeBuildingPlacementRefsToSections(map) {
+        const buildingState = map && map._prototypeBuildingState;
+        const sectionState = map && map._prototypeSectionState;
+        const assets = Array.isArray(sectionState && sectionState.orderedSectionAssets)
+            ? sectionState.orderedSectionAssets
+            : [];
+        if (!buildingState || assets.length === 0) return { sections: 0, refs: 0 };
+        const assetsByKey = sectionState.sectionAssetsByKey instanceof Map
+            ? sectionState.sectionAssetsByKey
+            : new Map(assets.map((asset) => [asset && asset.key, asset]).filter((entry) => entry[0]));
+        for (let i = 0; i < assets.length; i++) {
+            if (assets[i]) assets[i].buildingRefs = [];
+        }
+        let refs = 0;
+        const placements = Array.isArray(buildingState.orderedPlacements) ? buildingState.orderedPlacements : [];
+        for (let i = 0; i < placements.length; i++) {
+            const placement = placements[i];
+            if (!placement || !placement.id) continue;
+            const keys = normalizeSectionKeys(placement.overlappedSectionKeys);
+            const ref = cloneBuildingPlacementRef(placement);
+            for (let k = 0; k < keys.length; k++) {
+                const sectionKey = keys[k];
+                const asset = assetsByKey.get(sectionKey);
+                if (!asset) {
+                    throw new Error(`building placement ${placement.id} references missing section ${sectionKey}`);
+                }
+                if (!Array.isArray(asset.buildingRefs)) asset.buildingRefs = [];
+                asset.buildingRefs.push({ ...ref });
+                refs += 1;
+            }
+        }
+        buildingState.lastSectionRefStats = { sections: assets.length, refs };
+        return buildingState.lastSectionRefStats;
+    }
+
+    function isPrototypeBuildingPlacementDesired(state, placement) {
+        if (!placement || !placement.id) return false;
+        if (!state || state.hasActiveBuildingSelection !== true) return true;
+        return state.desiredBuildingIds instanceof Set && state.desiredBuildingIds.has(placement.id);
+    }
+
+    function destroyPrototypeBuildingPlacementBitmapEntries(state, placementId) {
+        if (!state || !placementId) return;
+        if (state.exteriorBitmapsById instanceof Map) {
+            const exteriorEntry = state.exteriorBitmapsById.get(placementId);
+            destroyPrototypeBuildingBitmapEntry(exteriorEntry);
+            state.exteriorBitmapsById.delete(placementId);
+        }
+        if (state.pendingExteriorBitmapLoadsById instanceof Map) {
+            state.pendingExteriorBitmapLoadsById.delete(placementId);
+        }
+        if (state.interiorBitmapsByKey instanceof Map) {
+            for (const [key, entry] of Array.from(state.interiorBitmapsByKey.entries())) {
+                if (!key.startsWith(`${placementId}|`)) continue;
+                destroyPrototypeBuildingBitmapEntry(entry);
+                state.interiorBitmapsByKey.delete(key);
+            }
+        }
+        if (state.pendingInteriorBitmapLoadsByKey instanceof Map) {
+            for (const key of Array.from(state.pendingInteriorBitmapLoadsByKey.keys())) {
+                if (key.startsWith(`${placementId}|`)) state.pendingInteriorBitmapLoadsByKey.delete(key);
+            }
+        }
+        if (state.cutawayBuildingsByPlacementId instanceof Map) {
+            state.cutawayBuildingsByPlacementId.delete(placementId);
+        }
+    }
+
+    function translateBuildingPlacementPolygons(polygons, dx, dy, label) {
+        if (!Array.isArray(polygons)) return polygons;
+        return polygons.map((entry, index) => {
+            if (Array.isArray(entry)) {
+                return normalizePolygon(entry, `${label} ${index}`).map((point) => ({
+                    x: point.x + dx,
+                    y: point.y + dy
+                }));
+            }
+            if (entry && typeof entry === "object" && Array.isArray(entry.polygon)) {
+                return {
+                    ...entry,
+                    polygon: normalizePolygon(entry.polygon, `${label} ${index} polygon`).map((point) => ({
+                        x: point.x + dx,
+                        y: point.y + dy
+                    }))
+                };
+            }
+            throw new Error(`${label} ${index} must be a polygon or movement blocker entry`);
+        });
     }
 
     function clearPrototypeBuildingGeometryRuntime(map, placementId) {
@@ -1607,6 +1907,11 @@
         for (let i = 0; i < state.orderedPlacements.length; i++) {
             const placement = state.orderedPlacements[i];
             if (!placement || !placement.id) continue;
+            if (!isPrototypeBuildingPlacementDesired(state, placement)) {
+                clearPrototypeBuildingGeometryRuntime(map, placement.id);
+                if (state.loadedBuildingsById instanceof Map) state.loadedBuildingsById.delete(placement.id);
+                continue;
+            }
             const buildingData = state.buildingDataBySaveName instanceof Map
                 ? state.buildingDataBySaveName.get(placement.buildingSaveName)
                 : null;
@@ -1638,6 +1943,7 @@
             }
             state.runtimeFloorFragmentIdsByPlacementId.set(placement.id, fragments.map((fragment) => fragment.fragmentId));
             state.runtimeStairIdsByPlacementId.set(placement.id, stairIds);
+            if (state.loadedBuildingsById instanceof Map) state.loadedBuildingsById.set(placement.id, placement);
             floors += fragments.length;
             stairs += stairIds.length;
         }
@@ -1684,6 +1990,7 @@
             });
             this._prototypeBuildingState = state;
             rebuildBuildingPlacementIndex(this);
+            syncPrototypeBuildingPlacementRefsToSections(this);
             markPrototypeBuildingMovementBlockersDirty(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {
                 syncPrototypeBuildingMovementBlockers(this);
@@ -1694,6 +2001,7 @@
         map.exportPrototypeBuildingPlacements = function exportPrototypeBuildingPlacements() {
             const state = this._prototypeBuildingState;
             if (!state || !Array.isArray(state.orderedPlacements)) return [];
+            syncPrototypeBuildingPlacementRefsToSections(this);
             return state.orderedPlacements.map((placement) => JSON.parse(JSON.stringify(placement)));
         };
 
@@ -1702,6 +2010,138 @@
             return state && Array.isArray(state.orderedPlacements)
                 ? state.orderedPlacements.slice()
                 : [];
+        };
+
+        map.syncPrototypeBuildingPlacementRefs = function syncPrototypeBuildingPlacementRefs() {
+            return syncPrototypeBuildingPlacementRefsToSections(this);
+        };
+
+        map.setPrototypeBuildingDesiredPlacementIds = function setPrototypeBuildingDesiredPlacementIds(ids) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const desiredIds = normalizeBuildingPlacementIdSet(ids, state);
+            const desiredSignature = Array.from(desiredIds).sort().join("|");
+            const previousSignature = state.hasActiveBuildingSelection === true && typeof state.activeDesiredSignature === "string"
+                ? state.activeDesiredSignature
+                : null;
+            state.hasActiveBuildingSelection = true;
+            state.desiredBuildingIds = desiredIds;
+            state.activeDesiredSignature = desiredSignature;
+            let unloaded = 0;
+            if (state.loadedBuildingsById instanceof Map) {
+                for (const id of Array.from(state.loadedBuildingsById.keys())) {
+                    if (desiredIds.has(id)) continue;
+                    clearPrototypeBuildingGeometryRuntime(this, id);
+                    state.loadedBuildingsById.delete(id);
+                    if (state.cutawayBuildingsByPlacementId instanceof Map) {
+                        state.cutawayBuildingsByPlacementId.delete(id);
+                    }
+                    unloaded += 1;
+                }
+            }
+            if (previousSignature !== desiredSignature || unloaded > 0) {
+                markPrototypeBuildingMovementBlockersDirty(this);
+                maybeSyncPrototypeBuildingGeometryRuntime(this);
+                if (hasPrototypeBuildingMovementNodeRegistry(this)) {
+                    syncPrototypeBuildingMovementBlockers(this);
+                }
+                if (typeof this.markBuildingRenderCacheDirty === "function") {
+                    this.markBuildingRenderCacheDirty();
+                }
+            }
+            return {
+                changed: previousSignature !== desiredSignature,
+                desired: desiredIds.size,
+                unloaded
+            };
+        };
+
+        map.ensurePrototypeBuildingPlacementsForSectionKeys = function ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const keys = sectionKeys instanceof Set ? Array.from(sectionKeys) : (Array.isArray(sectionKeys) ? sectionKeys : []);
+            const desiredIds = new Set();
+            for (let i = 0; i < keys.length; i++) {
+                const key = String(keys[i] || "").trim();
+                if (!key) continue;
+                const ids = state.buildingIdsBySectionKey instanceof Map
+                    ? state.buildingIdsBySectionKey.get(key)
+                    : null;
+                if (!(ids instanceof Set)) continue;
+                ids.forEach((id) => desiredIds.add(id));
+            }
+            const placementIds = normalizeBuildingPlacementIdSet(desiredIds, state);
+            if (placementIds.size === 0) {
+                state.lastLoadStats = { requested: 0, cached: 0, pending: 0 };
+                return Promise.resolve([]);
+            }
+            if (typeof this.loadPrototypeBuildingEditorSaveData !== "function") {
+                throw new Error("prototype building streaming requires loadPrototypeBuildingEditorSaveData");
+            }
+            if (!(state.pendingLoadsById instanceof Map)) state.pendingLoadsById = new Map();
+            const promises = [];
+            let cached = 0;
+            let pending = 0;
+            for (const placementId of placementIds) {
+                const placement = state.placementsById.get(placementId);
+                if (!placement) {
+                    throw new Error(`cannot load missing building placement ${placementId}`);
+                }
+                const cachedData = state.buildingDataBySaveName instanceof Map
+                    ? state.buildingDataBySaveName.get(placement.buildingSaveName)
+                    : null;
+                if (cachedData) {
+                    placement.loadState = "ready";
+                    state.loadedBuildingsById.set(placementId, placement);
+                    cached += 1;
+                    continue;
+                }
+                const existing = state.pendingLoadsById.get(placementId);
+                if (existing) {
+                    promises.push(existing);
+                    pending += 1;
+                    continue;
+                }
+                placement.loadState = "loading";
+                const promise = this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+                    .then((buildingData) => {
+                        placement.loadState = "ready";
+                        state.loadedBuildingsById.set(placementId, placement);
+                        if (!placementHasCurrentMovementBlockerGeometry(placement)) {
+                            setPlacementMovementBlockerPolygons(
+                                placement,
+                                computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
+                            );
+                        }
+                        maybeSyncPrototypeBuildingGeometryRuntime(this);
+                        markPrototypeBuildingMovementBlockersDirty(this);
+                        if (hasPrototypeBuildingMovementNodeRegistry(this)) {
+                            syncPrototypeBuildingMovementBlockers(this);
+                        }
+                        return placement;
+                    })
+                    .catch((error) => {
+                        placement.loadState = "error";
+                        state.lastLoadError = error && error.message ? error.message : String(error);
+                        throw error;
+                    })
+                    .finally(() => {
+                        state.pendingLoadsById.delete(placementId);
+                    });
+                state.pendingLoadsById.set(placementId, promise);
+                promises.push(promise);
+                pending += 1;
+            }
+            maybeSyncPrototypeBuildingGeometryRuntime(this);
+            if (hasPrototypeBuildingMovementNodeRegistry(this)) {
+                syncPrototypeBuildingMovementBlockers(this);
+            }
+            state.lastLoadStats = { requested: placementIds.size, cached, pending };
+            return Promise.all(promises);
         };
 
         map.computePrototypeBuildingFootprint = function computePrototypeBuildingFootprint(buildingData, placementRecord) {
@@ -1747,6 +2187,7 @@
             state.orderedPlacements.push(placement);
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
+            syncPrototypeBuildingPlacementRefsToSections(this);
             markPrototypeBuildingMovementBlockersDirty(this);
             maybeSyncPrototypeBuildingGeometryRuntime(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {
@@ -2070,6 +2511,7 @@
             for (let i = 0; i < state.orderedPlacements.length; i++) {
                 const placement = state.orderedPlacements[i];
                 if (!placement || !placement.id) continue;
+                if (!isPrototypeBuildingPlacementDesired(state, placement)) continue;
                 const buildingData = state.buildingDataBySaveName instanceof Map
                     ? state.buildingDataBySaveName.get(placement.buildingSaveName)
                     : null;
@@ -2108,28 +2550,11 @@
             if (!state || !state.placementsById.has(placementId)) return false;
             state.placementsById.delete(placementId);
             state.orderedPlacements = state.orderedPlacements.filter((placement) => placement.id !== placementId);
-            const exteriorEntry = state.exteriorBitmapsById.get(placementId);
-            destroyPrototypeBuildingBitmapEntry(exteriorEntry);
-            state.exteriorBitmapsById.delete(placementId);
-            state.pendingExteriorBitmapLoadsById.delete(placementId);
-            if (state.interiorBitmapsByKey instanceof Map) {
-                for (const [key, entry] of state.interiorBitmapsByKey.entries()) {
-                    if (!key.startsWith(`${placementId}|`)) continue;
-                    destroyPrototypeBuildingBitmapEntry(entry);
-                    state.interiorBitmapsByKey.delete(key);
-                }
-            }
-            if (state.pendingInteriorBitmapLoadsByKey instanceof Map) {
-                for (const key of Array.from(state.pendingInteriorBitmapLoadsByKey.keys())) {
-                    if (key.startsWith(`${placementId}|`)) state.pendingInteriorBitmapLoadsByKey.delete(key);
-                }
-            }
-            if (state.cutawayBuildingsByPlacementId instanceof Map) {
-                state.cutawayBuildingsByPlacementId.delete(placementId);
-            }
+            destroyPrototypeBuildingPlacementBitmapEntries(state, placementId);
             clearPrototypeBuildingGeometryRuntime(this, placementId);
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
+            syncPrototypeBuildingPlacementRefsToSections(this);
             markPrototypeBuildingMovementBlockersDirty(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {
                 syncPrototypeBuildingMovementBlockers(this);
@@ -2141,6 +2566,86 @@
                 globalScope.invalidateMinimap();
             }
             return true;
+        };
+
+        map.updatePrototypeBuildingPlacementTransform = function updatePrototypeBuildingPlacementTransform(id, transform) {
+            const placementId = normalizePlacementId(id, 0);
+            const state = this._prototypeBuildingState;
+            if (!state || !state.placementsById.has(placementId)) {
+                throw new Error(`cannot move missing building placement ${placementId}`);
+            }
+            const placement = state.placementsById.get(placementId);
+            const previousTransform = placement.transform || {};
+            const nextTransform = {
+                x: finiteNumber(transform && transform.x, `building placement ${placementId} transform.x`),
+                y: finiteNumber(transform && transform.y, `building placement ${placementId} transform.y`),
+                rotation: Number.isFinite(Number(transform && transform.rotation))
+                    ? Number(transform.rotation)
+                    : (Number(previousTransform.rotation) || 0)
+            };
+            const previousRotation = Number(previousTransform.rotation) || 0;
+            const rotationChanged = Math.abs(nextTransform.rotation - previousRotation) > 0.000001;
+            const dx = nextTransform.x - finiteNumber(previousTransform.x, `building placement ${placementId} current transform.x`);
+            const dy = nextTransform.y - finiteNumber(previousTransform.y, `building placement ${placementId} current transform.y`);
+            const buildingData = state.buildingDataBySaveName instanceof Map
+                ? state.buildingDataBySaveName.get(placement.buildingSaveName)
+                : null;
+
+            placement.transform = nextTransform;
+            if (buildingData) {
+                placement.footprintPolygons = computeBuildingPlacementFootprint(buildingData, placement);
+                setPlacementMovementBlockerPolygons(
+                    placement,
+                    computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
+                );
+            } else {
+                if (rotationChanged) {
+                    placement.transform = previousTransform;
+                    throw new Error(`cannot rotate building placement ${placementId} before its building save is loaded`);
+                }
+                placement.footprintPolygons = normalizeFootprintPolygons(
+                    translateBuildingPlacementPolygons(
+                        placement.footprintPolygons,
+                        dx,
+                        dy,
+                        `building placement ${placementId} footprintPolygons`
+                    ),
+                    `building placement ${placementId} footprintPolygons`
+                );
+                if (placement.movementBlockerPolygons !== null) {
+                    setPlacementMovementBlockerPolygons(
+                        placement,
+                        translateBuildingPlacementPolygons(
+                            placement.movementBlockerPolygons,
+                            dx,
+                            dy,
+                            `building placement ${placementId} movementBlockerPolygons`
+                        )
+                    );
+                }
+            }
+            if (placement.footprintPolygons.length === 0) {
+                placement.transform = previousTransform;
+                throw new Error(`missing footprint after moving building placement ${placementId}`);
+            }
+            placement.overlappedSectionKeys = computeOverlappedSectionKeysForFootprint(this, placement.footprintPolygons);
+            destroyPrototypeBuildingPlacementBitmapEntries(state, placementId);
+            clearPrototypeBuildingGeometryRuntime(this, placementId);
+            state.contentVersion += 1;
+            rebuildBuildingPlacementIndex(this);
+            syncPrototypeBuildingPlacementRefsToSections(this);
+            markPrototypeBuildingMovementBlockersDirty(this);
+            maybeSyncPrototypeBuildingGeometryRuntime(this);
+            if (hasPrototypeBuildingMovementNodeRegistry(this)) {
+                syncPrototypeBuildingMovementBlockers(this);
+            }
+            if (typeof this.markBuildingRenderCacheDirty === "function") {
+                this.markBuildingRenderCacheDirty();
+            }
+            if (typeof globalScope.invalidateMinimap === "function") {
+                globalScope.invalidateMinimap();
+            }
+            return placement;
         };
 
         map.preparePrototypeBuildingPlacement = async function preparePrototypeBuildingPlacement(buildingSaveName, transform) {
@@ -2201,8 +2706,10 @@
         createPrototypeBuildingState,
         markPrototypeBuildingMovementBlockersDirty,
         installSectionWorldBuildingApis,
+        cloneBuildingPlacementRefs,
         normalizeBuildingPlacementRecord,
         rebuildBuildingPlacementIndex,
+        syncPrototypeBuildingPlacementRefsToSections,
         collectPrototypeBuildingMovementBlockersInBounds,
         syncPrototypeBuildingMovementBlockers,
         syncPrototypeBuildingGeometryRuntime

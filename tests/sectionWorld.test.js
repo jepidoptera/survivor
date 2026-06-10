@@ -3540,6 +3540,70 @@ test("prototype trigger display objects come from the registry and keep a stable
     ]);
 });
 
+test("prototype trigger registry lookup returns a multi-section trigger from any covered section", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+
+    map._prototypeTriggerState.triggerDefsById.set(91, {
+        id: 91,
+        type: "triggerArea",
+        isTriggerArea: true,
+        x: 0,
+        y: 0,
+        points: [
+            { x: -1, y: -1 },
+            { x: 7, y: -1 },
+            { x: 7, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        coverageSectionKeys: ["0,0", "1,0"],
+        script: { playerEnters: "mazeMode=true;" }
+    });
+    map.rebuildPrototypeTriggerRegistry();
+
+    assert.deepEqual(map.getPrototypeTriggerDefsForSectionKeys(["0,0"]).map(def => def.id), [91]);
+    assert.deepEqual(map.getPrototypeTriggerDefsForSectionKeys(["1,0"]).map(def => def.id), [91]);
+    assert.deepEqual(map.getPrototypeTriggerDefsForSectionKeys(["0,0", "1,0"]).map(def => def.id), [91]);
+});
+
+test("prototype trigger traversal query samples the movement segment, not only the destination section", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    map.getPrototypeSectionKeyForWorldPoint = (x) => Number(x) < 5 ? "0,0" : "1,0";
+
+    map._prototypeTriggerState.triggerDefsById.set(92, {
+        id: 92,
+        type: "triggerArea",
+        isTriggerArea: true,
+        x: 0,
+        y: 0,
+        points: [
+            { x: -1, y: -1 },
+            { x: 4, y: -1 },
+            { x: 4, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        coverageSectionKeys: ["0,0"],
+        script: { playerExits: "mazeMode=false;" }
+    });
+    map.rebuildPrototypeTriggerRegistry();
+
+    const actor = { x: 6, y: 0 };
+    const destinationOnlyEntries = map.getPrototypeActiveTriggerTraversalEntriesForActor(actor, { force: true });
+    assert.deepEqual(destinationOnlyEntries, []);
+
+    const segmentEntries = map.getPrototypeActiveTriggerTraversalEntriesForActor(actor, {
+        force: true,
+        fromX: 0,
+        fromY: 0,
+        toX: 6,
+        toY: 0
+    });
+    assert.equal(segmentEntries.length, 1);
+    assert.equal(segmentEntries[0].obj.id, 92);
+    assert.ok(segmentEntries[0].hitbox, "registry trigger should provide a definition-backed hitbox");
+});
+
 test("savePrototypeSectionWorldToServerSlot does not lose locally built walls when hydratePrototypeSectionAssets runs with stale server data", async () => {
     // Reproduces the bug: when a section is unhydrated (_prototypeSectionHydrated = false)
     // and the player has already built walls there, saving causes hydratePrototypeSectionAssets

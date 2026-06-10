@@ -25,6 +25,8 @@ const GEOMETRY_EPSILON = 0.000001;
 const COLLAPSED_WALL_INTERSECTION_AREA_EPSILON = 0.25;
 const COLLAPSED_WALL_FOOTPRINT_SUBTRACTION_SCALE = 1.01;
 const COLLAPSED_WALL_FRONT_DEPTH_EPSILON = 0.05;
+const COLLAPSED_WALL_MOUNTED_OBJECT_ALPHA = 0.5;
+const COLLAPSED_WALL_WINDOW_ALPHA = 0.1;
 const SCENE_LIGHT_TILT_RADIANS = 20 * Math.PI / 180;
 const SCENE_LIGHT_DIFFUSE = 0.95;
 const SCENE_LIGHT_MIN = 0.58;
@@ -155,6 +157,7 @@ vec3 encodeExteriorDepthMetric(float value) {
 void main(void) {
     vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
     outColor.rgb *= vLightFactor;
+    outColor.rgb *= uTint.a;
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingExteriorDepthMetricDataPass > 0.5) {
         float minMetric = uBuildingExteriorDepthMetricRange.x;
@@ -2661,9 +2664,11 @@ function collectExteriorBitmapProjectionPoints(building) {
     return points;
 }
 
-function collectInteriorBitmapProjectionPoints(building, floor) {
+function collectInteriorBitmapProjectionPoints(building, floor, renderedFloors = null) {
     const points = [];
     const floorId = getFloorId(floor);
+    const floors = Array.isArray(renderedFloors) && renderedFloors.length > 0 ? renderedFloors : [floor];
+    const floorIds = new Set(floors.map((entry) => getFloorId(entry)));
     const addPoint = (point, z = 0) => {
         const x = Number(point && point.x);
         const y = Number(point && point.y);
@@ -2671,47 +2676,50 @@ function collectInteriorBitmapProjectionPoints(building, floor) {
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pz)) return;
         points.push({ x, y, z: pz });
     };
-    const floorZ = getFloorElevation(floor);
-    const floorHeight = Number(floor && floor.floorHeight);
-    const topZ = floorZ + (Number.isFinite(floorHeight) && floorHeight > 0
-        ? floorHeight
-        : Number(floor && floor.defaultWallHeight) || DEFAULTS.wallHeight);
-    const rings = [floor && floor.outerPolygon]
-        .concat(Array.isArray(floor && floor.holes) ? floor.holes : []);
-    rings.forEach((ring) => {
-        (Array.isArray(ring) ? ring : []).forEach((point) => {
-            addPoint(point, floorZ);
-            addPoint(point, topZ);
+    floors.forEach((visibleFloor) => {
+        const floorZ = getFloorElevation(visibleFloor);
+        const floorHeight = Number(visibleFloor && visibleFloor.floorHeight);
+        const topZ = floorZ + (Number.isFinite(floorHeight) && floorHeight > 0
+            ? floorHeight
+            : Number(visibleFloor && visibleFloor.defaultWallHeight) || DEFAULTS.wallHeight);
+        const rings = [visibleFloor && visibleFloor.outerPolygon]
+            .concat(Array.isArray(visibleFloor && visibleFloor.holes) ? visibleFloor.holes : []);
+        rings.forEach((ring) => {
+            (Array.isArray(ring) ? ring : []).forEach((point) => {
+                addPoint(point, floorZ);
+                addPoint(point, topZ);
+            });
+        });
+        getFloorColumns(visibleFloor).forEach((column) => {
+            const bottomZ = Number(column && column.bottomZ);
+            const height = Number(column && column.height);
+            columnVertices(column).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
+        });
+        getFloorBeams(visibleFloor).forEach((beam) => {
+            if (beam && beam.start) addPoint(beam.start, beam.start.z);
+            if (beam && beam.end) addPoint(beam.end, beam.end.z);
+        });
+        getFloorStairs(visibleFloor).forEach((stair) => {
+            const bottomZ = Number(stair && stair.bottomZ) || floorZ;
+            const height = Number(stair && stair.height) || 0;
+            stairFootprintPoints(stair).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
         });
     });
     getBuildingWalls(building).forEach((wall) => {
         const ownerFloor = findFloor(building, wall && (wall.fragmentId || wall.floorId));
-        if (!ownerFloor || getFloorId(ownerFloor) !== floorId) return;
+        if (!ownerFloor || !floorIds.has(getFloorId(ownerFloor))) return;
+        const floorZ = getFloorElevation(ownerFloor);
         const wallPointsForBounds = wallCenterlinePoints(building, wall, ownerFloor);
         const wallTopZ = floorZ + Math.max(0, Number(wall && wall.height) || Number(ownerFloor && ownerFloor.defaultWallHeight) || DEFAULTS.wallHeight);
         wallPointsForBounds.forEach((point) => {
             addPoint(point, floorZ);
             addPoint(point, wallTopZ);
-        });
-    });
-    getFloorColumns(floor).forEach((column) => {
-        const bottomZ = Number(column && column.bottomZ);
-        const height = Number(column && column.height);
-        columnVertices(column).forEach((point) => {
-            addPoint(point, bottomZ);
-            addPoint(point, bottomZ + height);
-        });
-    });
-    getFloorBeams(floor).forEach((beam) => {
-        if (beam && beam.start) addPoint(beam.start, beam.start.z);
-        if (beam && beam.end) addPoint(beam.end, beam.end.z);
-    });
-    getFloorStairs(floor).forEach((stair) => {
-        const bottomZ = Number(stair && stair.bottomZ) || floorZ;
-        const height = Number(stair && stair.height) || 0;
-        stairFootprintPoints(stair).forEach((point) => {
-            addPoint(point, bottomZ);
-            addPoint(point, bottomZ + height);
         });
     });
     if (points.length === 0) {
@@ -4057,6 +4065,52 @@ export class BuildingRenderer {
         const staticHoles = (Array.isArray(floor && floor.holes) ? floor.holes : [])
             .filter((ring) => Array.isArray(ring) && ring.length >= 3);
         return [...staticHoles, ...this.stairOpeningHolesForFloor(floor)];
+    }
+
+    floorIdsVisibleThroughFloorOpenings(floor) {
+        if (!floor) return new Set();
+        const floorId = getFloorId(floor);
+        const floorZ = getFloorElevation(floor);
+        const holeRings = this.floorSurfaceHoles(floor);
+        if (holeRings.length === 0) return new Set();
+        const clipper = polygonClipper(`floor ${floorId} visible-through openings`);
+        const holePolygons = holeRings.map((ring, index) => [
+            closedClipRing(ring, `floor ${floorId} visible-through opening ${index}`)
+        ]);
+        const holeGeometry = clipper.union(...holePolygons);
+        if (!Array.isArray(holeGeometry) || holeGeometry.length === 0) return new Set();
+        const visible = new Set();
+        getBuildingFloors(this.state.building)
+            .filter((candidate) => candidate && getFloorId(candidate) !== floorId)
+            .filter((candidate) => getFloorElevation(candidate) < floorZ - GEOMETRY_EPSILON)
+            .sort((a, b) => getFloorElevation(a) - getFloorElevation(b))
+            .forEach((candidate) => {
+                const candidateId = getFloorId(candidate);
+                const candidateGeometry = [this.floorClipPolygon(candidate, `floor ${candidateId} visible-through candidate`)];
+                const intersection = clipper.intersection(holeGeometry, candidateGeometry);
+                if (clipGeometryArea(intersection) > GEOMETRY_EPSILON) visible.add(candidateId);
+            });
+        return visible;
+    }
+
+    floorIdsVisibleBelowFloor(floor) {
+        if (!floor) return new Set();
+        const floorId = getFloorId(floor);
+        const floorZ = getFloorElevation(floor);
+        const clipper = polygonClipper(`floor ${floorId} visible lower floors`);
+        const floorGeometry = [this.floorClipPolygon(floor, `floor ${floorId} visible lower floor source`)];
+        const visible = new Set();
+        getBuildingFloors(this.state.building)
+            .filter((candidate) => candidate && getFloorId(candidate) !== floorId)
+            .filter((candidate) => getFloorElevation(candidate) < floorZ - GEOMETRY_EPSILON)
+            .sort((a, b) => getFloorElevation(a) - getFloorElevation(b))
+            .forEach((candidate) => {
+                const candidateId = getFloorId(candidate);
+                const candidateGeometry = [this.floorClipPolygon(candidate, `floor ${candidateId} visible lower candidate`)];
+                const intersection = clipper.intersection(floorGeometry, candidateGeometry);
+                if (clipGeometryArea(intersection) > GEOMETRY_EPSILON) visible.add(candidateId);
+            });
+        return visible;
     }
 
     syncFloorMesh(floor, alpha) {
@@ -5671,6 +5725,13 @@ export class BuildingRenderer {
 
     shouldDrawWallCollapsed(wall, floor, wallEntries = null) {
         if (this.state.renderStyle() !== "interior") return false;
+        if (
+            this.playtestFloorRenderOverride &&
+            this.playtestFloorRenderOverride.fullHeightWallFloorIds instanceof Set &&
+            this.playtestFloorRenderOverride.fullHeightWallFloorIds.has(getFloorId(floor))
+        ) {
+            return false;
+        }
         if (this.state.selectedWallIds().length > 0) return false;
         if (!this.wallIsInFrontOfFloor(wall, floor, wallEntries)) return false;
         const openArea = this.floorOpenAreaScreenGeometry(floor, wallEntries);
@@ -6399,6 +6460,16 @@ export class BuildingRenderer {
         return alphaById;
     }
 
+    shouldResolveMountedObjectFloor(floor) {
+        if (!floor) return false;
+        const floorId = getFloorId(floor);
+        const override = this.playtestFloorRenderOverride;
+        if (override && override.floorIds instanceof Set) {
+            return override.floorIds.has(floorId);
+        }
+        return this.state.isFloorSelected(floorId);
+    }
+
     drawGameStyleBuilding() {
         this.floorLayer.clear();
         this.wallLayer.clear();
@@ -6423,7 +6494,12 @@ export class BuildingRenderer {
         this.buildingUnit.alpha = exterior ? 0.92 : 1;
         floors.forEach((floor) => {
             const floorAlpha = floorAlphaById.get(getFloorId(floor)) ?? (exterior ? 0.92 : 1);
-            const mesh = this.syncFloorMesh(floor, floorAlpha);
+            const suppressFloorMesh = !!(
+                this.playtestFloorRenderOverride &&
+                this.playtestFloorRenderOverride.suppressFloorMeshIds instanceof Set &&
+                this.playtestFloorRenderOverride.suppressFloorMeshIds.has(getFloorId(floor))
+            );
+            const mesh = suppressFloorMesh ? null : this.syncFloorMesh(floor, floorAlpha);
             if (mesh) {
                 const holes = this.floorSurfaceHoles(floor);
                 liveFloorMeshIds.add(getFloorId(floor));
@@ -6832,7 +6908,7 @@ export class BuildingRenderer {
         if (object.mountKind === "gable") {
             const floor = findFloor(this.state.building, object.floorId);
             if (!floor) throw new Error(`mounted wall object ${object.id} references missing gable floor ${object.floorId}`);
-            if (!this.state.isFloorSelected(getFloorId(floor))) return null;
+            if (!this.shouldResolveMountedObjectFloor(floor)) return null;
             const gable = getRoofGables(floor).find((candidate) => String(candidate.id) === String(object.gableId));
             if (!gable) throw new Error(`mounted wall object ${object.id} references missing gable ${object.gableId}`);
             return this.gableMountedObjectPlacementFromSegment(
@@ -6854,7 +6930,7 @@ export class BuildingRenderer {
         if (!wall) throw new Error(`mounted wall object ${object.id} references missing wall ${object.wallId}`);
         const floor = findFloor(this.state.building, wall.fragmentId || wall.floorId);
         if (!floor) throw new Error(`mounted wall object ${object.id} references wall ${wall.id} with missing floor`);
-        if (!this.state.isFloorSelected(getFloorId(floor))) return null;
+        if (!this.shouldResolveMountedObjectFloor(floor)) return null;
         const points = wallCenterlinePoints(this.state.building, wall, floor);
         if (points.length !== 2) throw new Error(`mounted wall object ${object.id} wall ${wall.id} does not resolve to two points`);
         const a = points[0];
@@ -7202,12 +7278,12 @@ export class BuildingRenderer {
             } else if (mesh.parent !== this.buildingUnit) {
                 this.buildingUnit.addChild(mesh);
             }
-            const floorAlpha = floorAlphaById.get(floorId) ?? 1;
-            const collapsedAlpha = placement.mountKind === "gable"
-                ? 1
-                : (this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries) ? 0.5 : 1);
             this.updateMountedObjectMesh(mesh, object, placement, {
-                alphaMultiplier: floorAlpha * collapsedAlpha
+                alphaMultiplier: this.mountedObjectAlphaMultiplier(
+                    object,
+                    placement,
+                    floorAlphaById.get(floorId) ?? 1
+                )
             });
             this.lastMountedObjectPickEntries.push({
                 ...placement,
@@ -7218,6 +7294,43 @@ export class BuildingRenderer {
         for (const [id, mesh] of this.mountedObjectMeshById.entries()) {
             if (!liveIds.has(id)) mesh.visible = false;
         }
+    }
+
+    mountedObjectAlphaMultiplier(object, placement, floorAlpha = 1) {
+        const floorId = placement && placement.floor ? getFloorId(placement.floor) : "";
+        const numericFloorAlpha = Number(floorAlpha);
+        const normalizedFloorAlpha = Number.isFinite(numericFloorAlpha)
+            ? Math.max(0, Math.min(1, numericFloorAlpha))
+            : 1;
+        if (this.mountedObjectShouldRenderFullOpacity(floorId)) return normalizedFloorAlpha;
+        if (placement && placement.mountKind === "gable") return normalizedFloorAlpha;
+        const collapsedAlpha = this.shouldDrawWallCollapsed(placement.wall, placement.floor, this.lastWallPickEntries)
+            ? this.collapsedWallMountedObjectAlpha(object)
+            : 1;
+        return normalizedFloorAlpha * collapsedAlpha;
+    }
+
+    mountedObjectShouldRenderFullOpacity(floorId) {
+        const override = this.playtestFloorRenderOverride;
+        if (!override) return false;
+        const normalizedFloorId = String(floorId || "");
+        if (!normalizedFloorId) return false;
+        if (
+            override.fullOpacityMountedObjectFloorIds instanceof Set &&
+            override.fullOpacityMountedObjectFloorIds.has(normalizedFloorId)
+        ) {
+            return true;
+        }
+        return !!(
+            override.fullHeightWallFloorIds instanceof Set &&
+            override.fullHeightWallFloorIds.has(normalizedFloorId)
+        );
+    }
+
+    collapsedWallMountedObjectAlpha(object) {
+        return String(object && object.category || "").trim().toLowerCase() === "windows"
+            ? COLLAPSED_WALL_WINDOW_ALPHA
+            : COLLAPSED_WALL_MOUNTED_OBJECT_ALPHA;
     }
 
     drawMountedObjectPreview() {
@@ -8738,7 +8851,25 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
         floor,
         floorId
     } = setup;
+    const previousFloorRenderOverride = exportRenderer.playtestFloorRenderOverride;
     try {
+        const visibleThroughFloorIds = exportRenderer.floorIdsVisibleThroughFloorOpenings(floor);
+        const visibleLowerFloorIds = exportRenderer.floorIdsVisibleBelowFloor(floor);
+        visibleThroughFloorIds.forEach((id) => visibleLowerFloorIds.add(id));
+        const interiorBitmapFloorIds = new Set([floorId, ...visibleLowerFloorIds]);
+        const interiorBitmapFloors = getBuildingFloors(state.building)
+            .filter((candidate) => interiorBitmapFloorIds.has(getFloorId(candidate)))
+            .sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        if (!interiorBitmapFloorIds.has(floorId) || interiorBitmapFloors.length === 0) {
+            throw new Error(`building interior bitmap export could not resolve visible floors for ${floorId}`);
+        }
+        exportRenderer.playtestFloorRenderOverride = {
+            floorIds: interiorBitmapFloorIds,
+            suppressFloorMeshIds: visibleLowerFloorIds,
+            fullHeightWallFloorIds: visibleLowerFloorIds,
+            fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,
+            suppressFade: true
+        };
         await Promise.all([
             exportRenderer.ensureFloorTextureConfigLoaded(),
             exportRenderer.ensureRoofTextureConfigLoaded()
@@ -8749,7 +8880,7 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
         }
         const interiorTexturePaths = exteriorBitmapTexturePaths(state.building);
         await Promise.all(interiorTexturePaths.map((path) => loadPixiTexturePath(path, "building interior bitmap")));
-        const projectionPoints = collectInteriorBitmapProjectionPoints(state.building, floor);
+        const projectionPoints = collectInteriorBitmapProjectionPoints(state.building, floor, interiorBitmapFloors);
         let initialBounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
         const width = Math.ceil(initialBounds.width + padding * 2);
         const height = Math.ceil(initialBounds.height + padding * 2);
@@ -8857,6 +8988,7 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
     } catch (error) {
         throw new Error(`building interior bitmap export failed: ${error && error.message ? error.message : error}`);
     } finally {
+        exportRenderer.playtestFloorRenderOverride = previousFloorRenderOverride;
         destroyBuildingBitmapExportSetup(setup);
     }
 }

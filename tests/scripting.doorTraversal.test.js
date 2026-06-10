@@ -271,6 +271,49 @@ test("door exit still fires after the door drops out of the nearby query", () =>
     assert.equal(wizard._doorTraversalStateById.get(door._doorRuntimeId).inside, false);
 });
 
+test("definition-backed trigger fires one enter and one exit during continuous traversal", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+    scripting.on("script:playerExits", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 43,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true",
+            playerExits: "mazeMode=false"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        fragmentId: "section:0,0:ground",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+    const entries = [{ obj: triggerArea, hitbox }];
+
+    scripting.processTriggerAreaTraversalEvents(wizard, -2, 0, -0.5, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, -0.5, 0, 0.5, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, 0.5, 0, 2, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, 2, 0, 3, 0, entries, 0);
+
+    assert.deepEqual(events.map(event => event.eventName), ["playerEnters", "playerExits"]);
+    assert.equal(events[0].target, triggerArea);
+    assert.equal(events[1].target, triggerArea);
+    assert.equal(wizard._triggerAreaTraversalStateById.get("trigger:43").inside, false);
+});
+
 test("player.hurt aliases hurtPlayer for backward-compatible scripting", async () => {
     const scripting = loadScripting();
     const wizard = {

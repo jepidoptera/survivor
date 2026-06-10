@@ -1716,6 +1716,100 @@ class Wizard extends Character {
         this.updateModeToggleUi();
     }
     
+    getSavedMovementLayerState() {
+        const out = {};
+        if (Number.isFinite(this.z)) out.z = Number(this.z);
+        if (Number.isFinite(this.currentLayer)) out.currentLayer = Math.round(Number(this.currentLayer));
+        if (Number.isFinite(this.traversalLayer)) out.traversalLayer = Math.round(Number(this.traversalLayer));
+        if (Number.isFinite(this.currentLayerBaseZ)) out.currentLayerBaseZ = Number(this.currentLayerBaseZ);
+        if (typeof this.surfaceId === "string" && this.surfaceId.length > 0) out.surfaceId = this.surfaceId;
+        if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) out.fragmentId = this.fragmentId;
+        return out;
+    }
+
+    normalizeSavedStairSupportRecord(record, label = "wizard stair support") {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+            throw new Error(`${label} must be an object`);
+        }
+        const stairId = typeof record.stairId === "string" ? record.stairId.trim() : "";
+        if (!stairId) throw new Error(`${label} is missing stairId`);
+        const out = { stairId };
+        const optionalFiniteFields = [
+            "treadIndex",
+            "upDown",
+            "leftRight",
+            "baseZ",
+            "localZ",
+            "continuousBaseZ",
+            "continuousLocalZ"
+        ];
+        optionalFiniteFields.forEach((field) => {
+            if (record[field] === undefined || record[field] === null) return;
+            const value = Number(record[field]);
+            if (!Number.isFinite(value)) {
+                throw new Error(`${label} has non-finite ${field}`);
+            }
+            out[field] = field === "treadIndex" ? Math.round(value) : value;
+        });
+        if (!Number.isFinite(out.upDown) || !Number.isFinite(out.leftRight)) {
+            if (!Number.isInteger(out.treadIndex)) {
+                throw new Error(`${label} must include finite upDown/leftRight or a treadIndex`);
+            }
+        }
+        return out;
+    }
+
+    getSavedStairSupportState() {
+        if (!this._stairSupport) return null;
+        return this.normalizeSavedStairSupportRecord(this._stairSupport, "wizard active stair support");
+    }
+
+    hasPendingSavedMovementSupport() {
+        return !!(this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object");
+    }
+
+    restoreSavedMovementSupport(options = {}) {
+        const pending = this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object"
+            ? this._pendingSavedStairSupport
+            : null;
+        if (!pending) return null;
+        const deferIfMissing = options && options.deferIfMissing === true;
+        if (!this.map || typeof this.map.getActorStairSupportFromState !== "function" || typeof this.map.applyActorResolvedMovementSupport !== "function") {
+            if (deferIfMissing) return null;
+            throw new Error("wizard save references stair support before movement support APIs are available");
+        }
+        if (!(this.map.stairsById instanceof Map) || !this.map.stairsById.has(pending.stairId)) {
+            if (deferIfMissing) return null;
+            throw new Error(`wizard save references missing stair ${pending.stairId}`);
+        }
+
+        this._stairSupport = { ...pending };
+        const support = this.map.getActorStairSupportFromState(this);
+        if (!support || support.type !== "stair") {
+            throw new Error(`wizard save could not resolve stair support for ${pending.stairId}`);
+        }
+        const supportPoint = support.point && Number.isFinite(support.point.x) && Number.isFinite(support.point.y)
+            ? support.point
+            : { x: this.x, y: this.y };
+        let resolvedX = Number(supportPoint.x);
+        let resolvedY = Number(supportPoint.y);
+        if (this.map && typeof this.map.wrapWorldX === "function") resolvedX = this.map.wrapWorldX(resolvedX);
+        if (this.map && typeof this.map.wrapWorldY === "function") resolvedY = this.map.wrapWorldY(resolvedY);
+        this.x = resolvedX;
+        this.y = resolvedY;
+        this._pendingVectorMovementSupport = support;
+        const applied = this.map.applyActorResolvedMovementSupport(this, resolvedX, resolvedY);
+        if (!applied || applied.type !== "stair" || applied.stairId !== pending.stairId) {
+            throw new Error(`wizard save restored ${pending.stairId} to non-stair movement support`);
+        }
+        this._pendingSavedStairSupport = null;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        if (typeof this.updateHitboxes === "function") this.updateHitboxes();
+        return applied;
+    }
+
     saveJson() {
         const viewportX = (this.map && typeof this.map.wrapWorldX === "function")
             ? this.map.wrapWorldX(viewport.x)
@@ -1723,10 +1817,11 @@ class Wizard extends Character {
         const viewportY = (this.map && typeof this.map.wrapWorldY === "function")
             ? this.map.wrapWorldY(viewport.y)
             : viewport.y;
-        return {
+        const data = {
             type: 'wizard',
             x: (this.map && typeof this.map.wrapWorldX === "function") ? this.map.wrapWorldX(this.x) : this.x,
             y: (this.map && typeof this.map.wrapWorldY === "function") ? this.map.wrapWorldY(this.y) : this.y,
+            ...this.getSavedMovementLayerState(),
             hp: this.hp,
             maxHp: this.maxHp,
             mp: this.mp,
@@ -1792,6 +1887,9 @@ class Wizard extends Character {
                 y: viewportY
             }
         };
+        const stairSupport = this.getSavedStairSupportState();
+        if (stairSupport) data.stairSupport = stairSupport;
+        return data;
     }
 
     loadJson(data) {
@@ -1822,6 +1920,19 @@ class Wizard extends Character {
 
         if (data.x !== undefined) this.x = data.x;
         if (data.y !== undefined) this.y = data.y;
+        if (Number.isFinite(data.z)) this.z = Number(data.z);
+        if (Number.isFinite(data.currentLayer)) this.currentLayer = Math.round(Number(data.currentLayer));
+        if (Number.isFinite(data.traversalLayer)) this.traversalLayer = Math.round(Number(data.traversalLayer));
+        if (Number.isFinite(data.currentLayerBaseZ)) this.currentLayerBaseZ = Number(data.currentLayerBaseZ);
+        if (typeof data.surfaceId === "string") this.surfaceId = data.surfaceId;
+        if (typeof data.fragmentId === "string") this.fragmentId = data.fragmentId;
+        this._stairSupport = null;
+        this._pendingSavedStairSupport = null;
+        if (Object.prototype.hasOwnProperty.call(data, "stairSupport") && data.stairSupport !== null) {
+            const stairSupport = this.normalizeSavedStairSupportRecord(data.stairSupport, "saved wizard stair support");
+            this._stairSupport = { ...stairSupport };
+            this._pendingSavedStairSupport = { ...stairSupport };
+        }
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
         this.ensureMagicPointsInitialized(true);
@@ -1989,6 +2100,7 @@ class Wizard extends Character {
         this.prevX = this.x;
         this.prevY = this.y;
         this.prevZ = this.z;
+        this.restoreSavedMovementSupport({ deferIfMissing: true });
         this.prevJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
         if (typeof mousePos !== "undefined") {
             if (

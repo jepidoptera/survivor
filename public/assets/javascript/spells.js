@@ -4231,6 +4231,39 @@ const SpellSystem = (() => {
             return false;
         }
 
+        if (target.type === "prototypeBuildingPlacement") {
+            if (typeof mapRef.updatePrototypeBuildingPlacementTransform !== "function") {
+                throw new Error(`cannot move prototype building placement ${target.buildingPlacementId || target.id} without map.updatePrototypeBuildingPlacementTransform`);
+            }
+            const placementTransform = target.placement && target.placement.transform ? target.placement.transform : {};
+            const currentOriginX = Number(placementTransform.x);
+            const currentOriginY = Number(placementTransform.y);
+            if (!Number.isFinite(currentOriginX) || !Number.isFinite(currentOriginY)) {
+                throw new Error(`cannot move prototype building placement ${target.buildingPlacementId || target.id} without a finite placement origin`);
+            }
+            const movedOrigin = wrapWorldPointForMap(mapRef, currentOriginX + dx, currentOriginY + dy);
+            const currentRotation = Number.isFinite(target.placementRotation)
+                ? Number(target.placementRotation)
+                : (Number.isFinite(target.rotation)
+                    ? Number(target.rotation)
+                    : Number(target.placement && target.placement.transform && target.placement.transform.rotation) || 0);
+            const placement = mapRef.updatePrototypeBuildingPlacementTransform(
+                target.buildingPlacementId || target.id,
+                {
+                    x: movedOrigin.x,
+                    y: movedOrigin.y,
+                    rotation: currentRotation
+                }
+            );
+            target.placement = placement;
+            target.x = wrappedTarget.x;
+            target.y = wrappedTarget.y;
+            target.rotation = Number(placement.transform.rotation) || 0;
+            target.placementRotation = target.rotation;
+            target.gone = false;
+            return true;
+        }
+
         const mountedWallPlacement = getMoveObjectMountedWallPlacement(target, wrappedTarget.x, wrappedTarget.y, mapRef);
         if (mountedWallPlacement) {
             return applyMoveObjectMountedWallPlacement(target, mountedWallPlacement, dragState);
@@ -5195,7 +5228,12 @@ const SpellSystem = (() => {
         const _t3 = performance.now();
 
         if (wizardRef.map && typeof wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor === "function") {
-            const triggerEntries = wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor(wizardRef);
+            const triggerEntries = wizardRef.map.getPrototypeActiveTriggerTraversalEntriesForActor(wizardRef, {
+                fromX,
+                fromY,
+                toX,
+                toY
+            });
             for (let i = 0; i < triggerEntries.length; i++) {
                 const entry = triggerEntries[i];
                 const obj = entry && entry.obj;

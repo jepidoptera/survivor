@@ -1355,6 +1355,20 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     assert.equal(upperCutoutBlockers.length, 1);
     assert.equal(upperCutoutBlockers[0].endpoint, "higher");
     assert.equal(map.actorFootprintOverlapsPolygon(upperCutoutBlockers[0]._movementPolygon, 3.25, 0, { groundRadius: 0.3 }), true);
+    const upperCutoutActor = {
+        x: 3.75,
+        y: 0,
+        z: 3,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        groundRadius: 0.3,
+        node: higherNode
+    };
+    const upperCutoutEntry = map.resolveActorStairMovementOccupancy(3.25, 0, upperCutoutActor);
+    assert.equal(upperCutoutEntry.handled, true);
+    assert.equal(upperCutoutEntry.allowed, false);
+    assert.equal(upperCutoutEntry.slideAlongStairFootprint, true);
     higherFragment.holes = [];
     const floorSideCharacter = Object.create(Character.prototype);
     Object.assign(floorSideCharacter, {
@@ -1449,6 +1463,43 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     assert.equal(overheadActor.currentLayer, 2);
     assert.equal(overheadActor.currentLayerBaseZ, 6);
     assert.equal(overheadActor.z, 6);
+
+    const upperFloorOverStairsFragment = map.registerFloorFragment({
+        fragmentId: "upper_floor_over_stairs",
+        surfaceId: "higher_surface",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 1, y: -1 },
+            { x: 2, y: -1 },
+            { x: 2, y: 1 },
+            { x: 1, y: 1 }
+        ],
+        holes: []
+    });
+    const upperFloorOverStairsNode = map.createFloorNodeFromSource(
+        map.nodes[0][2],
+        upperFloorOverStairsFragment,
+        { baseZ: 3, traversalLayer: 1 }
+    );
+    const upperFloorOverStairsActor = {
+        type: "wizard",
+        x: 1.5,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        node: upperFloorOverStairsNode
+    };
+    const upperFloorOverStairsOccupancy = map.resolveActorStairMovementOccupancy(1.6, 0, upperFloorOverStairsActor);
+    assert.equal(upperFloorOverStairsOccupancy.handled, false);
+    map.applyActorResolvedMovementSupport(upperFloorOverStairsActor, 1.6, 0);
+    assert.equal(upperFloorOverStairsActor._stairSupport, null);
+    assert.equal(upperFloorOverStairsActor.currentLayer, 1);
+    assert.equal(upperFloorOverStairsActor.currentLayerBaseZ, 3);
+    assert.equal(upperFloorOverStairsActor.z, 0);
 
     const wizardActor = {
         type: "wizard",

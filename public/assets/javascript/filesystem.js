@@ -1033,13 +1033,7 @@ function loadGameStateFromLocalStorageKey(saveKey) {
     if (!parsed.ok) return parsed;
     const loaded = loadGameState(parsed.data);
     if (!loaded) {
-        return {
-            ok: false,
-            reason: "load-failed",
-            error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                ? globalThis.lastLoadGameStateError
-                : null
-        };
+        return getLastLoadGameStateFailureResult();
     }
     setActiveLocalSaveSlotKey(parsed.key);
     if (wizard) {
@@ -1052,6 +1046,15 @@ function loadGameStateFromLocalStorageKey(saveKey) {
         }
     }
     return { ok: true, key: parsed.key, data: parsed.data };
+}
+
+async function loadGameStateFromLocalStorageKeyAsync(saveKey) {
+    const result = loadGameStateFromLocalStorageKey(saveKey);
+    if (!result || !result.ok) return result;
+    if (!await finalizeLoadedGameStateAsync()) {
+        return getLastLoadGameStateFailureResult();
+    }
+    return result;
 }
 
 function saveGameStateToIndexedDb(saveKey) {
@@ -1207,7 +1210,7 @@ function getIndexedDbSavedGameState(saveKey = null) {
 }
 
 function loadGameStateFromIndexedDbKey(saveKey) {
-    return getIndexedDbSavedGameState(saveKey).then(parsed => {
+    return getIndexedDbSavedGameState(saveKey).then(async parsed => {
         if (!parsed || !parsed.ok) return parsed || { ok: false, reason: "missing" };
         if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
             globalThis.markPrototypeStartupPerf("indexeddb-save-data-ready", {
@@ -1217,13 +1220,10 @@ function loadGameStateFromIndexedDbKey(saveKey) {
         }
         const loaded = loadGameState(parsed.data);
         if (!loaded) {
-            return {
-                ok: false,
-                reason: "load-failed",
-                error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                    ? globalThis.lastLoadGameStateError
-                    : null
-            };
+            return getLastLoadGameStateFailureResult();
+        }
+        if (!await finalizeLoadedGameStateAsync()) {
+            return getLastLoadGameStateFailureResult();
         }
         if (
             parsed.prototypeSectionStoreBacked &&
@@ -1428,6 +1428,9 @@ function saveGameState(options = {}) {
 
     if (map && map._prototypeSectionState) {
         const state = map._prototypeSectionState;
+        if (typeof map.syncPrototypeBuildingPlacementRefs === "function") {
+            map.syncPrototypeBuildingPlacementRefs();
+        }
         const activeKeys = (typeof map.getPrototypeActiveSectionKeys === "function")
             ? Array.from(map.getPrototypeActiveSectionKeys())
             : [];
@@ -1481,7 +1484,8 @@ function saveGameState(options = {}) {
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
+                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
+                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
                 });
             }
         }
@@ -1496,6 +1500,9 @@ function saveGameState(options = {}) {
             sections,
             triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
                 ? map.exportPrototypeTriggerDefinitions()
+                : [],
+            buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
+                ? map.exportPrototypeBuildingPlacements()
                 : []
         };
     }
@@ -1706,6 +1713,76 @@ function getSavedGameState(saveKey = null) {
         return { ok: false, reason: "invalid-save-structure", key: resolvedKey };
     }
     return { ...parsed, key: resolvedKey };
+}
+
+function getLastLoadGameStateFailureResult(reason = "load-failed") {
+    return {
+        ok: false,
+        reason,
+        error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
+            ? globalThis.lastLoadGameStateError
+            : null
+    };
+}
+
+function collectSectionKeysForPendingWizardMovementSupport() {
+    const keys = new Set();
+    if (!map) return keys;
+    if (typeof map.getPrototypeActiveSectionKeys === "function") {
+        const activeKeys = map.getPrototypeActiveSectionKeys();
+        if (activeKeys && typeof activeKeys.forEach === "function") {
+            activeKeys.forEach((key) => {
+                if (typeof key === "string" && key.length > 0) keys.add(key);
+            });
+        }
+    }
+    if (typeof map.getPrototypeBubbleSectionKeys === "function") {
+        const bubbleKeys = map.getPrototypeBubbleSectionKeys();
+        if (bubbleKeys && typeof bubbleKeys.forEach === "function") {
+            bubbleKeys.forEach((key) => {
+                if (typeof key === "string" && key.length > 0) keys.add(key);
+            });
+        }
+    }
+    if (
+        wizard &&
+        Number.isFinite(wizard.x) &&
+        Number.isFinite(wizard.y) &&
+        typeof map.getPrototypeSectionKeyForWorldPoint === "function"
+    ) {
+        const key = map.getPrototypeSectionKeyForWorldPoint(wizard.x, wizard.y);
+        if (typeof key === "string" && key.length > 0) keys.add(key);
+    }
+    return keys;
+}
+
+async function finalizeLoadedGameStateAsync() {
+    if (!wizard || typeof wizard.hasPendingSavedMovementSupport !== "function" || !wizard.hasPendingSavedMovementSupport()) {
+        return true;
+    }
+    try {
+        if (map && typeof map.syncPrototypeBuildingPlacementRefs === "function") {
+            map.syncPrototypeBuildingPlacementRefs();
+        }
+        const sectionKeys = collectSectionKeysForPendingWizardMovementSupport();
+        if (map && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function" && sectionKeys.size > 0) {
+            await map.ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys);
+        }
+        if (map && typeof map.syncPrototypeBuildingGeometryRuntime === "function") {
+            map.syncPrototypeBuildingGeometryRuntime();
+        }
+        wizard.restoreSavedMovementSupport();
+        if (map && typeof map.updatePrototypeSectionBubble === "function") {
+            map.updatePrototypeSectionBubble(wizard, { force: true });
+        }
+        return true;
+    } catch (e) {
+        console.error("Error finalizing loaded wizard movement support:", e);
+        if (typeof globalThis !== "undefined") {
+            globalThis.lastLoadGameStateError = e;
+        }
+        return false;
+    }
 }
 
 function sanitizeSavedGameState(saveKey = null) {
@@ -2064,6 +2141,13 @@ function loadGameState(saveData) {
             }
         }
 
+        if (wizard && typeof wizard.hasPendingSavedMovementSupport === "function" && wizard.hasPendingSavedMovementSupport()) {
+            if (typeof wizard.restoreSavedMovementSupport !== "function") {
+                throw new Error("saved wizard movement support is pending without a restore method");
+            }
+            wizard.restoreSavedMovementSupport({ deferIfMissing: true });
+        }
+
         if (saveData.groundTiles) {
             decodeGroundTiles(map, saveData.groundTiles);
         }
@@ -2294,7 +2378,13 @@ function importSaveFile(file) {
             }
 
             const loaded = loadGameState(parsed.data);
-            resolve(loaded ? { ok: true } : { ok: false, reason: "load-failed" });
+            if (!loaded) {
+                resolve(getLastLoadGameStateFailureResult());
+                return;
+            }
+            finalizeLoadedGameStateAsync().then((finalized) => {
+                resolve(finalized ? { ok: true } : getLastLoadGameStateFailureResult());
+            });
         };
         reader.onerror = () => resolve({ ok: false, reason: "read-failed", error: reader.error });
         reader.readAsText(file);
@@ -2489,14 +2579,11 @@ async function loadGameStateFromServerFile(options = {}) {
             return { ok: false, reason: payload && payload.reason ? payload.reason : 'request-failed' };
         }
         const loaded = loadGameState(payload.data);
-        if (loaded) return { ok: true };
-        return {
-            ok: false,
-            reason: "load-failed",
-            error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                ? globalThis.lastLoadGameStateError
-                : null
-        };
+        if (!loaded) return getLastLoadGameStateFailureResult();
+        if (!await finalizeLoadedGameStateAsync()) {
+            return getLastLoadGameStateFailureResult();
+        }
+        return { ok: true };
     } catch (e) {
         return { ok: false, reason: "network-failed", error: e };
     }
@@ -2525,6 +2612,7 @@ if (typeof module !== 'undefined' && module.exports) {
         saveGameStateToLocalStorage,
         saveGameStateToIndexedDb,
         loadGameStateFromLocalStorageKey,
+        loadGameStateFromLocalStorageKeyAsync,
         loadGameStateFromIndexedDbKey,
         isReservedLocalSaveSlotKey,
         inferWizardDifficultyFromSaveData,
@@ -2532,6 +2620,7 @@ if (typeof module !== 'undefined' && module.exports) {
         downloadSaveFile,
         importSaveFile,
         pickAndLoadSaveFile,
+        finalizeLoadedGameStateAsync,
         saveGameStateToServerFile,
         savePrototypeSectionWorldToServerSlot,
         loadGameStateFromServerFile,

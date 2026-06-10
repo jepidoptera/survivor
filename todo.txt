@@ -148,22 +148,22 @@ X rugs on an upper floor are visible in the building overlay
 
 
 large trigger area architecture checklist:
-  [ ] add stable trigger ids to saved trigger-area records
-  [ ] add prototype trigger-definition registry state on map
-  [ ] build trigger registry from section asset records, not runtime objects
-  [ ] compute trigger bounds and coverage section keys from polygon footprints
-  [ ] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
-  [ ] change trigger traversal candidate gathering to query the trigger registry
-  [ ] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
-  [ ] preserve enter/exit state by stable trigger id instead of runtime-object residency
+  [x] add stable trigger ids to saved trigger-area records
+  [x] add prototype trigger-definition registry state on map
+  [x] build trigger registry from section asset records, not runtime objects
+  [x] compute trigger bounds and coverage section keys from polygon footprints
+  [x] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
+  [x] change trigger traversal candidate gathering to query the trigger registry
+  [x] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
+  [x] preserve enter/exit state by stable trigger id instead of runtime-object residency
   [ ] decide script policy: metadata-safe immediate execution vs hydrate/materialize-on-demand
   [ ] add temporary trigger script target materialization for `this` if needed
   [ ] keep ownerSectionKey as persistence home, separate from coverage authority
-  [ ] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
+  [x] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
   [ ] test: player enters trigger before owner section loads
   [ ] test: player exits trigger after owner section unloads
-  [ ] test: multi-section trigger coverage lookup returns the trigger from any covered section
-  [ ] test: large trigger does not double-fire enter or exit during continuous traversal
+  [x] test: multi-section trigger coverage lookup returns the trigger from any covered section
+  [x] test: large trigger does not double-fire enter or exit during continuous traversal
   [ ] test: trigger scripts using `this` still work when the owner section is not materialized
 
 

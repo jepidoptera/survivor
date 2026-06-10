@@ -85,7 +85,7 @@ test("prototype building interior bitmap signature includes floor and render dat
         "utf8"
     );
 
-    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v4-z-baked";/);
+    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v7-lower-floor-openings";/);
     assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),\s+String\(floorId \|\| ""\),/);
     const interiorSignatureBody = source.slice(
         source.indexOf("function interiorBitmapSettingsSignature"),
@@ -101,7 +101,10 @@ test("prototype building interior bitmap signature includes floor and render dat
     assert.match(rendererSource, /renderBuildingExteriorBitmap[\s\S]*?rotateModelAroundOrigin: false,/);
     assert.match(rendererSource, /renderBuildingInteriorBitmap[\s\S]*?rotateModelAroundOrigin: true,/);
     assert.match(rendererSource, /state\.layerSelectionMode = "floor";/);
-    assert.match(rendererSource, /collectInteriorBitmapProjectionPoints\(state\.building, floor\)/);
+    assert.match(rendererSource, /floorIdsVisibleThroughFloorOpenings\(floor\)/);
+    assert.match(rendererSource, /floorIdsVisibleBelowFloor\(floor\)/);
+    assert.match(rendererSource, /collectInteriorBitmapProjectionPoints\(state\.building, floor, interiorBitmapFloors\)/);
+    assert.match(rendererSource, /playtestFloorRenderOverride = \{\s+floorIds: interiorBitmapFloorIds,\s+suppressFloorMeshIds: visibleLowerFloorIds,\s+fullHeightWallFloorIds: visibleLowerFloorIds,\s+fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,\s+suppressFade: true\s+\};/);
     assert.match(rendererSource, /assertInteriorBitmapRenderableSurfaces\(floor\)/);
 });
 
@@ -283,7 +286,16 @@ test("building exterior bitmap rendering requires a depth metric texture", () =>
     assert.throws(() => {
         renderer.renderPrototypeBuildingExteriorBitmap(
             { app: { renderer: { gl: { getExtension() { return {}; } } } } },
-            { id: "building:placed-1", transform: { x: 1, y: 2 } },
+        {
+            id: "building:placed-1",
+            transform: { x: 1, y: 2 },
+            footprintPolygons: [[
+                { x: 0, y: 0 },
+                { x: 2, y: 0 },
+                { x: 2, y: 2 },
+                { x: 0, y: 2 }
+            ]]
+        },
             {
                 id: "building:placed-1",
                 status: "ready",
@@ -367,10 +379,26 @@ test("building exterior bitmap rendering uses vertical texture anchor", () => {
         depthObjects,
         objects3d
     };
+    let removedPlacementId = null;
+    const mapRef = {
+        removePrototypeBuildingPlacement(id) {
+            removedPlacementId = id;
+            return true;
+        }
+    };
 
     renderer.renderPrototypeBuildingExteriorBitmap(
-        { app: { renderer: { gl: {} } }, map: {} },
-        { id: "building:placed-1", transform: { x: 1, y: 2 } },
+        { app: { renderer: { gl: {} } }, map: mapRef },
+        {
+            id: "building:placed-1",
+            transform: { x: 1, y: 2 },
+            footprintPolygons: [[
+                { x: 1, y: 2 },
+                { x: 7, y: 2 },
+                { x: 7, y: 6 },
+                { x: 1, y: 6 }
+            ]]
+        },
         {
             id: "building:placed-1",
             status: "ready",
@@ -396,6 +424,14 @@ test("building exterior bitmap rendering uses vertical texture anchor", () => {
     assert.equal(mesh.state.blend, true);
     assert.equal(objects3d.children.includes(mesh), true);
     assert.equal(depthObjects.children.includes(mesh), false);
+    assert.equal(renderer.pickRenderItems.length, 1);
+    assert.equal(renderer.pickRenderItems[0].item.type, "prototypeBuildingPlacement");
+    assert.equal(renderer.pickRenderItems[0].item.buildingPlacementId, "building:placed-1");
+    assert.equal(renderer.pickRenderItems[0].item.x, 4);
+    assert.equal(renderer.pickRenderItems[0].item.y, 4);
+    assert.equal(renderer.pickRenderItems[0].displayObj, mesh);
+    assert.equal(renderer.pickRenderItems[0].item.removeFromGame(), true);
+    assert.equal(removedPlacementId, "building:placed-1");
 });
 
 test("building interior bitmap rendering projects a visible ground mesh", () => {
@@ -412,6 +448,7 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
     const mesh = {
         shader: {
             uniforms: {
+                uTint: new Float32Array([1, 1, 1, 1]),
                 uBuildingExteriorDepthMetricUse: 0,
                 uBuildingExteriorDepthMetricSampler: null,
                 uBuildingExteriorDepthMetricRange: new Float32Array(2)
@@ -453,6 +490,9 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
     RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh(_ctx, _camera, options) {
         updateThis = this;
         updateOptions = options;
+        mesh.shader.uniforms.uTint[3] = Number.isFinite(this.pixiSprite && this.pixiSprite.alpha)
+            ? this.pixiSprite.alpha
+            : 1;
         return mesh;
     };
     RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
@@ -499,7 +539,8 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
             anchorX: 0.25,
             anchorY: 0.75,
             depthMetric: { min: -1, span: 2 }
-        }
+        },
+        { alpha: 0.375 }
     );
 
     assert.equal(renderedMesh, mesh);
@@ -514,6 +555,7 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
     assert.equal(updateThis.placementRotation, 0);
     assert.equal(updateThis.pixiSprite.visible, false);
     assert.equal(updateThis.pixiSprite.renderable, false);
+    assert.equal(updateThis.pixiSprite.alpha, 0.375);
     assert.equal(updateThis.pixiSprite.width, 360);
     assert.equal(updateThis.pixiSprite.height, 288);
     assert.equal(updateThis.pixiSprite.anchor.x, 0.25);
@@ -528,9 +570,11 @@ test("building interior bitmap rendering projects a visible ground mesh", () => 
     assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricSampler.width, 100);
     assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricRange[0], -1);
     assert.equal(mesh.shader.uniforms.uBuildingExteriorDepthMetricRange[1], 0.5);
+    assert.equal(mesh.shader.uniforms.uTint[3], 0.375);
     assert.equal(uvUpdated, true);
     assert.deepEqual(Array.from(uvBuffer.data), [0, 0, 1, 0, 1, 1, 0, 1]);
     assert.equal(mesh.zIndex, 2147483647);
+    assert.equal(mesh.alpha, 0.375);
     assert.equal(objects3d.sortableChildren, true);
     assert.equal(objects3d.children.includes(mesh), true);
 });
@@ -1429,6 +1473,98 @@ test("building interior overlay floor clips real floor texture entries", () => {
         { x: 8, y: 8 },
         { x: 2, y: 8 }
     ]));
+});
+
+test("building interior overlay skips synthetic lower floor polygons visible through active floor holes", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.collectFloorVisualEntries = () => [
+        {
+            key: "fragment:upper",
+            level: 2,
+            baseZ: 6,
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: [[
+                { x: 4, y: 4 },
+                { x: 6, y: 4 },
+                { x: 6, y: 6 },
+                { x: 4, y: 6 }
+            ]],
+            texture: null,
+            textureBounds: null,
+            textureRepeat: null,
+            texturePath: "/upper.png",
+            tint: 0xffffff,
+            alpha: 1,
+            depthBias: 0.001,
+            isHoleOverlay: false
+        },
+        {
+            key: "fragment:lower:through:upper",
+            level: 1,
+            baseZ: 3,
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: [],
+            texture: null,
+            textureBounds: null,
+            textureRepeat: null,
+            texturePath: "/lower.png",
+            tint: 0xdddddd,
+            alpha: 1,
+            depthBias: 0.001,
+            isHoleOverlay: false,
+            visibleThroughFragmentId: "upper"
+        },
+        {
+            key: "fragment:basement",
+            level: 1,
+            baseZ: 0,
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: [],
+            texture: null,
+            textureBounds: null,
+            textureRepeat: null,
+            texturePath: "/basement.png",
+            tint: 0x999999,
+            alpha: 1,
+            depthBias: 0.001,
+            isHoleOverlay: false
+        }
+    ];
+
+    const entries = renderer.collectBuildingInteriorOverlayFloorEntries({}, {
+        id: "active",
+        fragmentId: "upper",
+        level: 2,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        }
+    }, { buildingId: "house" });
+
+    assert.equal(entries.some(entry => entry.key.includes("fragment:upper")), true);
+    assert.equal(entries.some(entry => entry.key.includes("fragment:lower:through:upper")), false);
+    assert.equal(entries.some(entry => entry.key.includes("fragment:basement")), false);
 });
 
 test("prototype building interior overlay does not cover exported floor bitmap with world ground", () => {
@@ -2550,6 +2686,470 @@ test("prototype building active interior requests and renders source floor bitma
     assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), ["interior bitmap mesh"]);
 });
 
+test("prototype building interior floor transitions fade upper floor bitmaps in and out", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-test-house",
+        buildingSaveName: "test house",
+        transform: { x: 3, y: 4, rotation: 0.25 }
+    };
+    const caches = new Map([
+        ["floor-0", {
+            id: "building:placed-test-house|floor-0",
+            placementId: placement.id,
+            floorId: "floor-0",
+            status: "ready",
+            texture: {},
+            depthMetricTexture: {},
+            depthMetric: { min: -1, span: 2 },
+            bounds: { worldWidth: 8, worldHeight: 6 }
+        }],
+        ["floor-1", {
+            id: "building:placed-test-house|floor-1",
+            placementId: placement.id,
+            floorId: "floor-1",
+            status: "ready",
+            texture: {},
+            depthMetricTexture: {},
+            depthMetric: { min: -1, span: 2 },
+            bounds: { worldWidth: 8, worldHeight: 6 }
+        }]
+    ]);
+    const requested = [];
+    const rendered = [];
+    const capturedSnapshots = [];
+    const renderedSnapshots = [];
+    let hiddenSnapshots = 0;
+    let hiddenIds = null;
+    const map = {
+        getPrototypeBuildingInteriorBitmap(id, floorId) {
+            requested.push({ phase: "get", id, floorId });
+            return caches.get(floorId) || null;
+        },
+        requestPrototypeBuildingInteriorBitmap() {
+            throw new Error("ready prototype interior bitmap should not be requested");
+        }
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            fragmentId: `${placement.id}:floor:floor-1`,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-1"
+            }
+        },
+        interiorFloorTransition: {
+            fromTriggerLevel: 1,
+            toTriggerLevel: 2,
+            fromSourceFloorId: "floor-0",
+            toSourceFloorId: "floor-1",
+            progress: 0.25
+        }
+    };
+    renderer.getLayerCutawayState = () => ({
+        active: true,
+        triggers: [trigger]
+    });
+    renderer.renderPrototypeBuildingInteriorBitmap = (ctx, renderedPlacement, renderedCache, options) => {
+        rendered.push({
+            ctx,
+            placement: renderedPlacement,
+            cache: renderedCache,
+            alpha: options && options.alpha,
+            zIndexOffset: options && options.zIndexOffset
+        });
+        return { name: `interior bitmap mesh ${renderedCache.floorId}` };
+    };
+    renderer.capturePrototypeBuildingInteriorFloorSnapshot = (ctx, renderedPlacement, renderedCache, transition) => {
+        capturedSnapshots.push({
+            ctx,
+            placement: renderedPlacement,
+            floorId: renderedCache.floorId,
+            fromSourceFloorId: transition && transition.fromSourceFloorId,
+            toSourceFloorId: transition && transition.toSourceFloorId,
+            progress: transition && transition.progress
+        });
+        renderer.prototypeBuildingInteriorFloorSnapshot = {
+            active: true,
+            signature: renderer.getPrototypeBuildingInteriorFloorSnapshotSignature(ctx, renderedPlacement, transition)
+        };
+        renderer.prototypeBuildingInteriorFloorSnapshotSprite = { visible: true };
+        return true;
+    };
+    renderer.renderPrototypeBuildingInteriorFloorSnapshot = (ctx, transition) => {
+        const alpha = renderer.getPrototypeBuildingInteriorBitmapTransitionAlphas(transition).fromAlpha;
+        renderedSnapshots.push({
+            ctx,
+            fromSourceFloorId: transition && transition.fromSourceFloorId,
+            toSourceFloorId: transition && transition.toSourceFloorId,
+            alpha
+        });
+        renderer.prototypeBuildingInteriorFloorSnapshotSprite = { visible: true };
+        return { name: `snapshot:${transition && transition.fromSourceFloorId}` };
+    };
+    renderer.hidePrototypeBuildingInteriorFloorSnapshot = () => {
+        hiddenSnapshots += 1;
+        renderer.prototypeBuildingInteriorFloorSnapshot = null;
+        if (renderer.prototypeBuildingInteriorFloorSnapshotSprite) {
+            renderer.prototypeBuildingInteriorFloorSnapshotSprite.visible = false;
+        }
+    };
+    renderer.hideUnusedPrototypeBuildingInteriors = (activeIds) => {
+        hiddenIds = new Set(activeIds);
+    };
+
+    const renderedMeshes = renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(requested.map(entry => entry.floorId), ["floor-0", "floor-1"]);
+    assert.deepEqual(rendered.map(entry => ({
+        floorId: entry.cache.floorId,
+        alpha: entry.alpha,
+        zIndexOffset: entry.zIndexOffset
+    })), [
+        { floorId: "floor-1", alpha: 1, zIndexOffset: 0 }
+    ]);
+    assert.deepEqual(capturedSnapshots.map(entry => ({
+        floorId: entry.floorId,
+        fromSourceFloorId: entry.fromSourceFloorId,
+        toSourceFloorId: entry.toSourceFloorId,
+        progress: entry.progress
+    })), [
+        { floorId: "floor-0", fromSourceFloorId: "floor-0", toSourceFloorId: "floor-1", progress: 0.25 }
+    ]);
+    assert.deepEqual(renderedSnapshots.map(entry => ({
+        fromSourceFloorId: entry.fromSourceFloorId,
+        toSourceFloorId: entry.toSourceFloorId,
+        alpha: entry.alpha
+    })), [
+        { fromSourceFloorId: "floor-0", toSourceFloorId: "floor-1", alpha: 0.75 }
+    ]);
+    assert.deepEqual([...hiddenIds], [
+        "building:placed-test-house|floor-1"
+    ]);
+    assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), [
+        "interior bitmap mesh floor-1"
+    ]);
+
+    requested.length = 0;
+    rendered.length = 0;
+    capturedSnapshots.length = 0;
+    renderedSnapshots.length = 0;
+    hiddenIds = null;
+    trigger.activeInteriorRegion.fragmentId = `${placement.id}:floor:floor-0`;
+    trigger.activeInteriorRegion.fragment._prototypeBuildingSourceFragmentId = "floor-0";
+    trigger.interiorFloorTransition = {
+        fromTriggerLevel: 2,
+        toTriggerLevel: 1,
+        fromSourceFloorId: "floor-1",
+        toSourceFloorId: "floor-0",
+        progress: 0.25
+    };
+
+    renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(rendered.map(entry => ({
+        floorId: entry.cache.floorId,
+        alpha: entry.alpha,
+        zIndexOffset: entry.zIndexOffset
+    })), [
+        { floorId: "floor-0", alpha: 1, zIndexOffset: 0 },
+    ]);
+    assert.deepEqual(capturedSnapshots.map(entry => ({
+        floorId: entry.floorId,
+        fromSourceFloorId: entry.fromSourceFloorId,
+        toSourceFloorId: entry.toSourceFloorId,
+        progress: entry.progress
+    })), [
+        { floorId: "floor-1", fromSourceFloorId: "floor-1", toSourceFloorId: "floor-0", progress: 0.25 }
+    ]);
+    assert.deepEqual(renderedSnapshots.map(entry => ({
+        fromSourceFloorId: entry.fromSourceFloorId,
+        toSourceFloorId: entry.toSourceFloorId,
+        alpha: entry.alpha
+    })), [
+        { fromSourceFloorId: "floor-1", toSourceFloorId: "floor-0", alpha: 0.75 }
+    ]);
+
+    rendered.length = 0;
+    renderedSnapshots.length = 0;
+    hiddenSnapshots = 0;
+    delete trigger.interiorFloorTransition;
+    renderer.prototypeBuildingInteriorFloorSnapshot = { active: true, signature: "old-transition" };
+    renderer.prototypeBuildingInteriorFloorSnapshotSprite = { visible: true };
+
+    renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(rendered.map(entry => ({
+        floorId: entry.cache.floorId,
+        alpha: entry.alpha,
+        zIndexOffset: entry.zIndexOffset
+    })), [
+        { floorId: "floor-0", alpha: 1, zIndexOffset: 0 }
+    ]);
+    assert.deepEqual(renderedSnapshots, []);
+    assert.equal(hiddenSnapshots, 1);
+});
+
+test("building interior visual region switches one meter below the upper floor", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const lowerFragment = {
+        fragmentId: "house-l1",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 8, y: 0 },
+            { x: 8, y: 8 },
+            { x: 0, y: 8 }
+        ],
+        holes: []
+    };
+    const upperFragment = {
+        fragmentId: "house-l2",
+        level: 2,
+        nodeBaseZ: 6,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 8, y: 0 },
+            { x: 8, y: 8 },
+            { x: 0, y: 8 }
+        ],
+        holes: [[
+            { x: 3, y: 3 },
+            { x: 5, y: 3 },
+            { x: 5, y: 5 },
+            { x: 3, y: 5 }
+        ]]
+    };
+    const renderCache = {
+        interiorRegions: [
+            {
+                id: "fragment:house-l1",
+                kind: "floorFragment",
+                level: 1,
+                fragment: lowerFragment,
+                fragmentId: "house-l1",
+                polygon: renderer.getFloorFragmentInteriorPolygon(lowerFragment)
+            },
+            {
+                id: "fragment:house-l2",
+                kind: "floorFragment",
+                level: 2,
+                fragment: upperFragment,
+                fragmentId: "house-l2",
+                polygon: renderer.getFloorFragmentInteriorPolygon(upperFragment)
+            }
+        ]
+    };
+
+    const belowThreshold = renderer.getBuildingInteriorVisualRegionAtPoint(renderCache, 4, 4, 1, 4.99);
+    const atThreshold = renderer.getBuildingInteriorVisualRegionAtPoint(renderCache, 4, 4, 1, 5);
+
+    assert.equal(belowThreshold.fragmentId, "house-l1");
+    assert.equal(atThreshold.fragmentId, "house-l2");
+});
+
+test("building interior visual region prefers bitmap-backed floor over ground footprint", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const lowerFragment = {
+        fragmentId: "house-l0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 8, y: 0 },
+            { x: 8, y: 8 },
+            { x: 0, y: 8 }
+        ],
+        holes: [[
+            { x: 3, y: 3 },
+            { x: 5, y: 3 },
+            { x: 5, y: 5 },
+            { x: 3, y: 5 }
+        ]]
+    };
+    const renderCache = {
+        interiorRegions: [
+            {
+                id: "fragment:house-l0",
+                kind: "floorFragment",
+                level: 0,
+                fragment: lowerFragment,
+                fragmentId: "house-l0",
+                polygon: renderer.getFloorFragmentInteriorPolygon(lowerFragment)
+            },
+            {
+                id: "groundFootprint:0",
+                kind: "groundFootprint",
+                level: 0,
+                polygon: {
+                    outer: [
+                        { x: 0, y: 0 },
+                        { x: 8, y: 0 },
+                        { x: 8, y: 8 },
+                        { x: 0, y: 8 }
+                    ],
+                    holes: []
+                }
+            }
+        ]
+    };
+
+    const region = renderer.getBuildingInteriorVisualRegionAtPoint(renderCache, 4, 4, 0, 0.5);
+
+    assert.equal(region.kind, "floorFragment");
+    assert.equal(region.fragmentId, "house-l0");
+});
+
+test("prototype ground-footprint interior trigger does not require a source floor bitmap", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-ground",
+        buildingSaveName: "test house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        level: 0,
+        activeInteriorRegion: {
+            id: "groundFootprint:0",
+            kind: "groundFootprint",
+            level: 0,
+            polygon: {
+                outer: [
+                    { x: 0, y: 0 },
+                    { x: 1, y: 0 },
+                    { x: 1, y: 1 },
+                    { x: 0, y: 1 }
+                ],
+                holes: []
+            }
+        }
+    };
+    const map = {
+        getPrototypeBuildingInteriorBitmap() {
+            throw new Error("ground-footprint prototype region should not request an interior bitmap");
+        },
+        requestPrototypeBuildingInteriorBitmap() {
+            throw new Error("ground-footprint prototype region should not render an interior bitmap");
+        }
+    };
+    let hiddenIds = null;
+    renderer.getLayerCutawayState = () => ({
+        active: true,
+        triggers: [trigger]
+    });
+    renderer.hideUnusedPrototypeBuildingInteriors = (activeIds) => {
+        hiddenIds = new Set(activeIds);
+    };
+
+    assert.equal(renderer.getBuildingInteriorFloorTransitionSourceId(trigger), "groundFootprint:0");
+    renderer.updateBuildingInteriorFloorTransitions([trigger], 1000);
+    const renderedMeshes = renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual([...renderedMeshes], []);
+    assert.deepEqual([...hiddenIds], []);
+});
+
+test("prototype interior transition skips ground-footprint outgoing bitmap source", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-ground-transition",
+        buildingSaveName: "test house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    };
+    const cache = {
+        id: `${placement.id}|floor-1`,
+        placementId: placement.id,
+        floorId: "floor-1",
+        status: "ready",
+        texture: {},
+        depthMetricTexture: {},
+        depthMetric: { min: -1, span: 2 },
+        bounds: { worldWidth: 8, worldHeight: 6 }
+    };
+    const requestedFloorIds = [];
+    const rendered = [];
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            fragmentId: `${placement.id}:floor:floor-1`,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-1"
+            }
+        },
+        interiorFloorTransition: {
+            fromTriggerLevel: 0,
+            toTriggerLevel: 1,
+            fromSourceFloorId: "groundFootprint:0",
+            toSourceFloorId: "floor-1",
+            progress: 0.25
+        }
+    };
+    const map = {
+        getPrototypeBuildingInteriorBitmap(_id, floorId) {
+            requestedFloorIds.push(floorId);
+            return floorId === "floor-1" ? cache : null;
+        },
+        requestPrototypeBuildingInteriorBitmap(_placement, floorId) {
+            requestedFloorIds.push(floorId);
+            if (floorId === "groundFootprint:0") {
+                throw new Error("ground-footprint transition source should not request an interior bitmap");
+            }
+            return cache;
+        }
+    };
+    renderer.getLayerCutawayState = () => ({
+        active: true,
+        triggers: [trigger]
+    });
+    renderer.renderPrototypeBuildingInteriorBitmap = (_ctx, _placement, renderedCache, options) => {
+        rendered.push({
+            floorId: renderedCache.floorId,
+            alpha: options && options.alpha
+        });
+        return { name: `mesh:${renderedCache.floorId}` };
+    };
+    renderer.hideUnusedPrototypeBuildingInteriors = () => {};
+
+    renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(requestedFloorIds, ["floor-1"]);
+    assert.deepEqual(rendered, [{ floorId: "floor-1", alpha: 1 }]);
+});
+
 test("prototype building interior bitmaps are tracked by the objects3d lifecycle", () => {
     const source = fs.readFileSync(
         path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
@@ -3265,6 +3865,85 @@ test("active building interior walls flatten when camera and player face opposit
     assert.equal(plan.items.has(visibleWindow), true);
 });
 
+test("building interior render plan keeps below-hole floor walls full height", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const upperWall = {
+        type: "wallSection",
+        bottomZ: 6,
+        isVisibleInMazeModeFacingRule: () => false
+    };
+    const lowerWall = {
+        type: "wallSection",
+        bottomZ: 3,
+        isVisibleInMazeModeFacingRule: () => false
+    };
+    const lowerDoor = {
+        type: "door",
+        category: "doors",
+        traversalLayer: 1
+    };
+    const lowerWindow = {
+        type: "window",
+        category: "windows",
+        traversalLayer: 1
+    };
+    const upperRegion = {
+        id: "fragment:upper",
+        fragmentId: "upper",
+        level: 2,
+        polygon: { outer: [], holes: [] },
+        staticObjects: [{ item: upperWall }]
+    };
+    const lowerRegion = {
+        id: "fragment:lower",
+        fragmentId: "lower",
+        level: 1,
+        polygon: { outer: [], holes: [] },
+        staticObjects: [{ item: lowerWall }, { item: lowerDoor }, { item: lowerWindow }]
+    };
+    const building = {
+        buildingId: "building:house",
+        holeVisibleFragments: new Map([["upper", new Set(["lower"])]])
+    };
+    const cutawayState = {
+        triggers: [{
+            building,
+            activeInteriorRegion: upperRegion,
+            renderCache: { interiorRegions: [upperRegion, lowerRegion] }
+        }]
+    };
+
+    const plan = renderer.buildBuildingInteriorRenderPlan({ wizard: { x: 1, y: 1 } }, cutawayState);
+
+    assert.equal(plan.items.has(upperWall), true);
+    assert.equal(plan.items.has(lowerWall), true);
+    assert.equal(plan.items.has(lowerDoor), true);
+    assert.equal(plan.items.has(lowerWindow), true);
+    assert.equal(plan.wallTopFaceOnly.get(upperWall), true);
+    assert.equal(plan.wallTopFaceOnly.get(lowerWall), false);
+});
+
+test("building interior foreground openings ignore lower-layer ghost alpha", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const lowerWindow = {
+        type: "window",
+        category: "windows",
+        rotationAxis: "spatial",
+        mountedWallSectionUnitId: 101
+    };
+    const ordinaryItem = {
+        type: "table"
+    };
+    const plan = {
+        items: new Set([lowerWindow, ordinaryItem])
+    };
+
+    assert.equal(renderer.getRenderAlphaForObjectItem(lowerWindow, 0.1, 1, plan), 1);
+    assert.equal(renderer.getRenderAlphaForObjectItem(ordinaryItem, 0.1, 1, plan), 0.1);
+});
+
 test("building cutaway capture temporarily restores flattened active walls to full geometry", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -3868,6 +4547,76 @@ test("building cutaway ghosts all fragments in active building", () => {
     });
     assert.equal(fadeExitDoneState.active, false);
     assert.equal(fadeExitDoneState.triggers.length, 0);
+});
+
+test("building cutaway fades upper floor fragments during interior floor changes", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const upper = {
+        fragmentId: "house-l2",
+        surfaceId: "house",
+        buildingId: "building:house",
+        level: 2
+    };
+    const building = { buildingId: "building:house" };
+    const makeTrigger = (level) => ({
+        building,
+        buildingId: "building:house",
+        activeInteriorRegion: { id: `fragment:house-l${level - 1}` },
+        level,
+        alpha: 0.1,
+        fragmentIds: new Set(["house-l1", "house-l2"]),
+        surfaceIds: new Set(["house"])
+    });
+
+    const lowerTrigger = makeTrigger(2);
+    renderer.updateBuildingInteriorFloorTransitions([lowerTrigger], 1000);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [lowerTrigger]
+    }), 0.1);
+
+    const upperFadeStart = makeTrigger(3);
+    renderer.updateBuildingInteriorFloorTransitions([upperFadeStart], 2000);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [upperFadeStart]
+    }), 0.1);
+
+    const upperFadeMid = makeTrigger(3);
+    renderer.updateBuildingInteriorFloorTransitions([upperFadeMid], 2250);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [upperFadeMid]
+    }), 0.55);
+
+    const upperFadeDone = makeTrigger(3);
+    renderer.updateBuildingInteriorFloorTransitions([upperFadeDone], 2500);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [upperFadeDone]
+    }), 1);
+
+    const lowerFadeStart = makeTrigger(2);
+    renderer.updateBuildingInteriorFloorTransitions([lowerFadeStart], 3000);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [lowerFadeStart]
+    }), 1);
+
+    const lowerFadeMid = makeTrigger(2);
+    renderer.updateBuildingInteriorFloorTransitions([lowerFadeMid], 3250);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [lowerFadeMid]
+    }), 0.55);
+
+    const lowerFadeDone = makeTrigger(2);
+    renderer.updateBuildingInteriorFloorTransitions([lowerFadeDone], 3500);
+    assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, {
+        active: true,
+        triggers: [lowerFadeDone]
+    }), 0.1);
 });
 
 test("building render cache includes roofs by footprint when wall ids are unavailable", () => {

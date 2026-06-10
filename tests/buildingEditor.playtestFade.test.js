@@ -82,6 +82,104 @@ test("building editor playtest snapshot capture override renders the source floo
     assert.equal(renderer.renderedFloorAlphaMap([lower], false).get("floor-lower"), 1);
 });
 
+test("building editor interior bitmap override keeps through-hole floor walls full height", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const { renderer, lower, upper } = createRenderer(BuildingRenderer);
+    renderer.state.selectedWallIds = () => [];
+    renderer.playtestFloorRenderOverride = {
+        floorIds: new Set(["floor-lower", "floor-upper"]),
+        suppressFloorMeshIds: new Set(["floor-lower"]),
+        fullHeightWallFloorIds: new Set(["floor-lower"]),
+        suppressFade: true
+    };
+    renderer.wallIsInFrontOfFloor = () => true;
+    renderer.floorOpenAreaScreenGeometry = () => [[[
+        { X: 0, Y: 0 },
+        { X: 10, Y: 0 },
+        { X: 10, Y: 10 },
+        { X: 0, Y: 10 }
+    ]]];
+    renderer.wallScreenImagePolygon = () => [[[
+        { X: 0, Y: 0 },
+        { X: 10, Y: 0 },
+        { X: 10, Y: 10 },
+        { X: 0, Y: 10 }
+    ]]];
+
+    assert.equal(renderer.shouldDrawWallCollapsed({ id: "lower-wall" }, lower), false);
+});
+
+test("building editor cutaway wall windows use tenth opacity", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+
+    assert.equal(renderer.collapsedWallMountedObjectAlpha({ category: "windows" }), 0.1);
+    assert.equal(renderer.collapsedWallMountedObjectAlpha({ category: "doors" }), 0.5);
+});
+
+test("building editor visible-through floors keep mounted openings opaque", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const { renderer, lower } = createRenderer(BuildingRenderer);
+    renderer.lastWallPickEntries = [];
+    renderer.shouldDrawWallCollapsed = () => true;
+    renderer.playtestFloorRenderOverride = {
+        floorIds: new Set(["floor-lower", "floor-upper"]),
+        fullOpacityMountedObjectFloorIds: new Set(["floor-lower"]),
+        suppressFade: true
+    };
+
+    const placement = { floor: lower, wall: { id: "lower-wall" } };
+
+    assert.equal(renderer.mountedObjectAlphaMultiplier({ category: "windows" }, placement, 1), 1);
+    assert.equal(renderer.mountedObjectAlphaMultiplier({ category: "doors" }, placement, 1), 1);
+});
+
+test("building editor interior bitmap override resolves lower-floor mounted openings", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const { renderer, lower, upper } = createRenderer(BuildingRenderer);
+    const wall = {
+        id: 101,
+        floorId: "floor-lower",
+        fragmentId: "floor-lower",
+        startPoint: { kind: "point", x: 0, y: 0 },
+        endPoint: { kind: "point", x: 4, y: 0 },
+        height: 3,
+        thickness: 0.2
+    };
+    const windowObject = {
+        id: 201,
+        category: "windows",
+        wallId: 101,
+        wallT: 0.5,
+        width: 1,
+        height: 1,
+        zOffset: 1,
+        mountedWallFacingSign: 1
+    };
+    renderer.state.building.wallSections = [wall];
+    renderer.state.building.mountedWallObjects = [windowObject];
+    renderer.state.isFloorSelected = (floorId) => String(floorId) === "floor-upper";
+    renderer.playtestFloorRenderOverride = {
+        floorIds: new Set(["floor-lower", "floor-upper"]),
+        suppressFade: true
+    };
+
+    const placement = renderer.mountedObjectPlacement(windowObject);
+
+    assert.ok(placement);
+    assert.equal(placement.floor, lower);
+    assert.notEqual(placement.floor, upper);
+});
+
+test("building editor surface shader premultiplies tint alpha", async () => {
+    const source = await require("node:fs/promises").readFile(
+        require("node:path").join(__dirname, "../public/building-editor/BuildingRenderer.js"),
+        "utf8"
+    );
+
+    assert.match(source, /outColor\.rgb \*= vLightFactor;\s+outColor\.rgb \*= uTint\.a;/);
+});
+
 test("building editor playtest floor snapshot sprite uses render-texture y flip", async () => {
     const { BuildingRenderer } = await loadRenderer();
     const { renderer } = createRenderer(BuildingRenderer);

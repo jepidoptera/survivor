@@ -1764,9 +1764,32 @@
         map.refreshPrototypeActiveTriggerSetForActor = function refreshPrototypeActiveTriggerSetForActor(actor, options = {}) {
             if (!actor || !this._prototypeTriggerState) return [];
             const force = !!(options && options.force === true);
-            const sectionKey = (typeof this.getPrototypeSectionKeyForWorldPoint === "function")
-                ? this.getPrototypeSectionKeyForWorldPoint(actor.x, actor.y)
-                : "";
+            const sectionKeys = new Set();
+            const addSectionKeyForPoint = (x, y) => {
+                if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
+                if (typeof this.getPrototypeSectionKeyForWorldPoint !== "function") return;
+                const key = this.getPrototypeSectionKeyForWorldPoint(Number(x), Number(y));
+                if (typeof key === "string" && key.length > 0) {
+                    sectionKeys.add(key);
+                }
+            };
+            const toX = Number.isFinite(Number(options && options.toX)) ? Number(options.toX) : Number(actor.x);
+            const toY = Number.isFinite(Number(options && options.toY)) ? Number(options.toY) : Number(actor.y);
+            const fromX = Number.isFinite(Number(options && options.fromX)) ? Number(options.fromX) : toX;
+            const fromY = Number.isFinite(Number(options && options.fromY)) ? Number(options.fromY) : toY;
+            addSectionKeyForPoint(toX, toY);
+            addSectionKeyForPoint(fromX, fromY);
+            const distance = Math.hypot(toX - fromX, toY - fromY);
+            const sampleStep = Math.max(0.5, Number(options && options.pathSampleStepWorld) || 2);
+            const steps = Math.max(1, Math.ceil(distance / sampleStep));
+            for (let step = 1; step < steps; step++) {
+                const t = step / steps;
+                addSectionKeyForPoint(
+                    fromX + ((toX - fromX) * t),
+                    fromY + ((toY - fromY) * t)
+                );
+            }
+            const sectionKey = Array.from(sectionKeys).sort().join("|");
             const registryVersion = Number(this._prototypeTriggerState.registryVersion) || 0;
             if (
                 !force &&
@@ -1776,7 +1799,7 @@
             ) {
                 return actor._prototypeActiveTriggerTraversalEntries;
             }
-            const defs = sectionKey ? this.getPrototypeTriggerDefsForSectionKeys([sectionKey]) : [];
+            const defs = sectionKeys.size > 0 ? this.getPrototypeTriggerDefsForSectionKeys(Array.from(sectionKeys)) : [];
             const entries = defs.map((def) => ({
                 obj: def,
                 hitbox: def && def._prototypeTriggerHitbox ? def._prototypeTriggerHitbox : buildPrototypeTriggerTraversalHitbox(def && def.points)

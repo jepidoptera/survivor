@@ -222,7 +222,8 @@
                         clearanceByTile: {},
                         objects: [],
                         animals: [],
-                        powerups: []
+                        powerups: [],
+                        buildingRefs: []
                     };
                     orderedSectionAssets.push(asset);
                     sectionAssetsByKey.set(asset.key, asset);

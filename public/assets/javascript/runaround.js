@@ -2262,11 +2262,14 @@ jQuery(() => {
         }
     }
 
-    function loadNamedLocalSave(saveKey) {
-        if (typeof loadGameStateFromLocalStorageKey !== "function") {
+    async function loadNamedLocalSave(saveKey) {
+        const loadLocalSave = (typeof loadGameStateFromLocalStorageKeyAsync === "function")
+            ? loadGameStateFromLocalStorageKeyAsync
+            : loadGameStateFromLocalStorageKey;
+        if (typeof loadLocalSave !== "function") {
             return { ok: false, reason: "local-load-unavailable" };
         }
-        const result = loadGameStateFromLocalStorageKey(saveKey);
+        const result = await loadLocalSave(saveKey);
         if (result && result.ok) {
             setLastSaveReloadDirective({ source: "local" });
             if (wizard && typeof wizard.updateStatusBars === "function") {
@@ -2344,7 +2347,7 @@ jQuery(() => {
                 }
                 const loadResult = isPrototypeIndexedDbRoute()
                     ? await loadNamedPrototypeSave(loadChoice.key)
-                    : loadNamedLocalSave(loadChoice.key);
+                    : await loadNamedLocalSave(loadChoice.key);
                 if (loadResult && loadResult.ok) {
                     clearDialogs();
                     return true;
@@ -4903,8 +4906,11 @@ jQuery(() => {
             ? startupConfig.prototypeAutoLoadServerSlot.trim()
             : "";
 
-        if (localSlot.length > 0 && typeof loadGameStateFromLocalStorageKey === "function") {
-            const localResult = loadGameStateFromLocalStorageKey(localSlot);
+        const loadLocalSave = (typeof loadGameStateFromLocalStorageKeyAsync === "function")
+            ? loadGameStateFromLocalStorageKeyAsync
+            : loadGameStateFromLocalStorageKey;
+        if (localSlot.length > 0 && typeof loadLocalSave === "function") {
+            const localResult = await loadLocalSave(localSlot);
             if (localResult && localResult.ok) {
                 setLastSaveReloadDirective({ source: "local", key: localSlot });
                 message(`Loaded prototype local save '${localSlot}'`);

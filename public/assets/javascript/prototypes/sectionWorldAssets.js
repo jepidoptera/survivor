@@ -472,6 +472,35 @@
                 }));
         }
 
+        function clonePrototypeBuildingRefs(rawRefs, label = "section buildingRefs") {
+            if (rawRefs === undefined || rawRefs === null) return [];
+            if (!Array.isArray(rawRefs)) {
+                throw new Error(`${label} must be an array`);
+            }
+            const refs = [];
+            const seen = new Set();
+            for (let i = 0; i < rawRefs.length; i++) {
+                const ref = rawRefs[i];
+                if (!ref || typeof ref !== "object" || Array.isArray(ref)) {
+                    throw new Error(`${label} ${i} must be an object`);
+                }
+                const id = String(ref.id === undefined || ref.id === null ? "" : ref.id).trim();
+                if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
+                    throw new Error(`${label} ${i} requires a valid building placement id`);
+                }
+                const buildingSaveName = String(ref.buildingSaveName === undefined || ref.buildingSaveName === null ? "" : ref.buildingSaveName).trim();
+                if (!buildingSaveName) {
+                    throw new Error(`${label} ${i} requires buildingSaveName`);
+                }
+                if (seen.has(id)) {
+                    throw new Error(`${label} contains duplicate building ref ${id}`);
+                }
+                seen.add(id);
+                refs.push({ id, buildingSaveName });
+            }
+            return refs;
+        }
+
         function clonePrototypeFloorTransitions(rawTransitions) {
             if (!Array.isArray(rawTransitions)) return [];
             const cloned = [];
@@ -579,6 +608,7 @@
             asset.objects = Array.isArray(rawAsset.objects) ? rawAsset.objects.map((obj) => ({ ...obj })) : [];
             asset.animals = Array.isArray(rawAsset.animals) ? rawAsset.animals.map((animal) => ({ ...animal })) : [];
             asset.powerups = Array.isArray(rawAsset.powerups) ? rawAsset.powerups.map((powerup) => ({ ...powerup })) : [];
+            asset.buildingRefs = clonePrototypeBuildingRefs(rawAsset.buildingRefs, `section ${asset.key} buildingRefs`);
             asset._prototypeBlockedEdgesDirty = !Array.isArray(rawAsset.blockedEdges)
                 || (asset.blockedEdges.length === 0 && asset.walls.length > 0);
             asset._prototypeClearanceDirty = Object.keys(asset.clearanceByTile).length !== asset.tileCoordKeys.length;
@@ -592,6 +622,7 @@
             applyRawPrototypeSectionAssetToStateAsset,
             bakePrototypeFloorFragmentTileCoordKeys,
             clonePrototypeBlockedEdges,
+            clonePrototypeBuildingRefs,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorRecords,
             clonePrototypeFloorHoleRecords,

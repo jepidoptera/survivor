@@ -331,7 +331,12 @@ class Fireball extends globalThis.Spell {
             return false;
         };
 
-        for (let obj of onscreenObjects) {
+        const impactCandidates = Array.isArray(onscreenObjects) ? onscreenObjects.slice() : [];
+        if (directTarget && !impactCandidates.includes(directTarget)) {
+            impactCandidates.push(directTarget);
+        }
+
+        for (let obj of impactCandidates) {
             if (!obj || obj.gone || obj.vanishing) continue;
             if (globalThis.Spell.isGroundLayerTarget(obj)) continue;
             if (obj.type === "tree" && obj !== directTarget) continue;

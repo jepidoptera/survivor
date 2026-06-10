@@ -281,6 +281,9 @@
                         if (!asset) continue;
                         applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, this, state.basis);
                         reassignHydratedPrototypeAssetRecordIds(this, asset);
+                        if (typeof this.syncPrototypeBuildingPlacementRefs === "function") {
+                            this.syncPrototypeBuildingPlacementRefs();
+                        }
                         if (materialize && state.useSparseNodes === true) {
                             addSparseNodesForSection(this, state, asset);
                             refreshSparseNodesForSectionAsset(this, state, asset);
@@ -308,6 +311,11 @@
                             }
                             if (typeof this.syncPrototypePowerups === "function") {
                                 this.syncPrototypePowerups();
+                            }
+                            if (typeof this.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
+                                this.ensurePrototypeBuildingPlacementsForSectionKeys(new Set(loadedActiveKeys)).catch((error) => {
+                                    console.error("[prototype building hydrate]", error && error.message ? error.message : error);
+                                });
                             }
                             if (typeof this.applyPrototypeSectionClearance === "function") {
                                 this.applyPrototypeSectionClearance(new Set(loadedActiveKeys));
@@ -447,6 +455,9 @@
             this.rebuildPrototypeSectionObjectNameRegistry();
             ensurePrototypeBlockedEdges(this);
             rebuildPrototypeSectionClearance(this);
+            if (typeof this.syncPrototypeBuildingPlacementRefs === "function") {
+                this.syncPrototypeBuildingPlacementRefs();
+            }
             const keyFilter = sectionKeys instanceof Set
                 ? sectionKeys
                 : (Array.isArray(sectionKeys) ? new Set(sectionKeys) : null);
@@ -474,7 +485,8 @@
                     clearanceByTile: clonePrototypeClearanceByTile(asset.clearanceByTile),
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
+                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
+                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
                 }));
         };
         map.exportPrototypeFloorTransitions = function exportPrototypeFloorTransitions() {

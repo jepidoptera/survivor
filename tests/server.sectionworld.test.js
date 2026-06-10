@@ -116,7 +116,10 @@ test("sectionworld API preserves top-level building placements after a save/load
                     walls: [],
                     objects: [],
                     animals: [],
-                    powerups: []
+                    powerups: [],
+                    buildingRefs: [
+                        { id: "building:test-house", buildingSaveName: "the house" }
+                    ]
                 }
             ]
         };
@@ -129,6 +132,9 @@ test("sectionworld API preserves top-level building placements after a save/load
         assert.equal(loadResult.status, 200);
         assert.equal(loadResult.body.ok, true);
         assert.deepEqual(loadResult.body.buildings, [buildingRecord]);
+        assert.deepEqual(loadResult.body.sections[0].buildingRefs, [
+            { id: "building:test-house", buildingSaveName: "the house" }
+        ]);
         assert.deepEqual(loadResult.body.sections[0].objects, []);
         assert.ok(fs.existsSync(path.join(slotDir, "buildings.json")));
         assert.equal(fs.existsSync(path.join(slotDir, "building:test-house.json")), false);

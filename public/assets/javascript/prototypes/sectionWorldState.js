@@ -152,7 +152,8 @@
                     clearanceByTile: {},
                     objects: [],
                     animals: [],
-                    powerups: []
+                    powerups: [],
+                    buildingRefs: []
                 };
                 const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
                     ? createPrototypeImplicitGroundFloorFragment(asset, basis)
@@ -223,7 +224,8 @@
                 clearanceByTile: {},
                 objects: [],
                 animals: [],
-                powerups: []
+                powerups: [],
+                buildingRefs: []
             };
             const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
                 ? createPrototypeImplicitGroundFloorFragment(asset, basis)

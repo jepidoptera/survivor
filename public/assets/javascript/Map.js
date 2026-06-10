@@ -2521,6 +2521,18 @@ class GameMap {
         return typeof actor.drawHat === "function" && typeof actor.drawShield === "function";
     }
 
+    actorAppearsOnFloorSupport(actor, floorSupport) {
+        if (!floorSupport || floorSupport.type !== "floor") return false;
+        const actorZ = Number(actor && actor.z);
+        if (!Number.isFinite(actorZ)) return true;
+        const tolerance = 0.0001;
+        if (this.actorUsesLocalMovementZ(actor)) {
+            return Math.abs(actorZ) <= tolerance;
+        }
+        const floorBaseZ = Number(floorSupport.baseZ);
+        return Number.isFinite(floorBaseZ) && Math.abs(actorZ - floorBaseZ) <= tolerance;
+    }
+
     getActorMovementSupportRadius(actor = null, options = {}) {
         if (Number.isFinite(options && options.supportRadius)) return Math.max(0, Number(options.supportRadius));
         if (actor && typeof actor.getVectorMovementCollisionRadius === "function") {
@@ -2838,6 +2850,12 @@ class GameMap {
                 if (!stair) continue;
                 const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
                 if (!endpoint) continue;
+                if (
+                    endpoint === "higher" &&
+                    this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)
+                ) {
+                    return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
+                }
                 if (!this.actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options)) continue;
                 const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, options);
                 if (entrySupport) {
@@ -2846,14 +2864,16 @@ class GameMap {
             }
         }
 
-        const reacquiredStairSupport = this.getActorStairSupportAtWorldPosition(
-            Number(actor && actor.x),
-            Number(actor && actor.y),
-            actor,
-            options
-        );
-        if (reacquiredStairSupport) {
-            return this.resolveActorStairLocalMovement(reacquiredStairSupport, worldX, worldY, actor, options);
+        if (!this.actorAppearsOnFloorSupport(actor, currentFloorSupport)) {
+            const reacquiredStairSupport = this.getActorStairSupportAtWorldPosition(
+                Number(actor && actor.x),
+                Number(actor && actor.y),
+                actor,
+                options
+            );
+            if (reacquiredStairSupport) {
+                return this.resolveActorStairLocalMovement(reacquiredStairSupport, worldX, worldY, actor, options);
+            }
         }
 
         if (currentFloorSupport) {

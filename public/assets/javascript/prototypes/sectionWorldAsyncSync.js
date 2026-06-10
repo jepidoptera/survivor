@@ -1597,20 +1597,32 @@
                     if (!(ids instanceof Set)) return;
                     ids.forEach((id) => desiredBuildingIds.add(id));
                 });
-                const desiredSignature = Array.from(desiredBuildingIds).sort().join("|");
-                const previousSignature = typeof buildingState.activeDesiredSignature === "string"
-                    ? buildingState.activeDesiredSignature
-                    : "";
-                buildingState.desiredBuildingIds = desiredBuildingIds;
-                buildingState.activeDesiredSignature = desiredSignature;
+                const result = typeof map.setPrototypeBuildingDesiredPlacementIds === "function"
+                    ? map.setPrototypeBuildingDesiredPlacementIds(desiredBuildingIds)
+                    : { changed: false, desired: desiredBuildingIds.size, unloaded: 0 };
+                if (desiredBuildingIds.size > 0 && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
+                    const loadPromise = map.ensurePrototypeBuildingPlacementsForSectionKeys(activeSectionKeys)
+                        .then(() => {
+                            if (typeof map.syncPrototypeBuildingGeometryRuntime === "function") {
+                                map.syncPrototypeBuildingGeometryRuntime();
+                            }
+                        })
+                        .catch((error) => {
+                            buildingState.lastLoadError = error && error.message ? error.message : String(error);
+                            console.error("[prototype building sync]", buildingState.lastLoadError);
+                        });
+                    loadPromise.catch(() => {});
+                }
                 buildingState.lastSyncStats = {
                     ms: Number((prototypeNow() - start).toFixed(2)),
                     placements: Array.isArray(buildingState.orderedPlacements) ? buildingState.orderedPlacements.length : 0,
                     desired: desiredBuildingIds.size,
                     active: buildingState.loadedBuildingsById instanceof Map ? buildingState.loadedBuildingsById.size : 0,
-                    changed: desiredSignature !== previousSignature
+                    pending: buildingState.pendingLoadsById instanceof Map ? buildingState.pendingLoadsById.size : 0,
+                    changed: !!(result && result.changed),
+                    unloaded: Number(result && result.unloaded) || 0
                 };
-                session.buildingsChanged = desiredSignature !== previousSignature;
+                session.buildingsChanged = !!(result && result.changed);
             })]);
         };
 

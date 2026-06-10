@@ -36,7 +36,7 @@ function loadWizardClass() {
         roof: null,
         wizard: null,
         player: null,
-        viewport: { x: 0, y: 0 },
+        viewport: { x: 0, y: 0, width: 100, height: 100 },
         viewscale: 1,
         xyratio: 1,
         objectLayer: [],
@@ -390,6 +390,149 @@ test("wizard can still bypass through a narrow mounted door opening", () => {
     const bypass = wizard.canBypassVectorMovementCollisions(0, 0, 0.1, 0, 0.3, context, {});
 
     assert.equal(bypass, true);
+});
+
+test("wizard save/load preserves stair support until runtime stairs are rebuilt", () => {
+    const savingWizard = Object.create(Wizard.prototype);
+    Object.assign(savingWizard, {
+        x: 1.25,
+        y: 2.5,
+        z: 1.25,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        surfaceId: "lower_surface",
+        fragmentId: "lower_fragment",
+        hp: 100,
+        maxHp: 100,
+        map: {
+            wrapWorldX(value) { return value; },
+            wrapWorldY(value) { return value; }
+        },
+        _stairSupport: {
+            stairId: "building:stairs-a",
+            treadIndex: 1,
+            upDown: 0.4166667,
+            leftRight: 0.25,
+            baseZ: 1,
+            localZ: 1,
+            continuousBaseZ: 1.25,
+            continuousLocalZ: 1.25
+        },
+        getTemperature() { return 0; },
+        getTemperatureBaseline() { return 0; },
+        serializeInventory() { return []; }
+    });
+
+    const saved = savingWizard.saveJson();
+    assert.equal(saved.z, 1.25);
+    assert.equal(saved.currentLayer, 0);
+    assert.equal(saved.currentLayerBaseZ, 0);
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.stairSupport)), {
+        stairId: "building:stairs-a",
+        treadIndex: 1,
+        upDown: 0.4166667,
+        leftRight: 0.25,
+        baseZ: 1,
+        localZ: 1,
+        continuousBaseZ: 1.25,
+        continuousLocalZ: 1.25
+    });
+
+    const loadMap = {
+        stairsById: new Map(),
+        wrapWorldX(value) { return value; },
+        wrapWorldY(value) { return value; },
+        worldToNode() {
+            return { traversalLayer: 0, baseZ: 0, objects: [] };
+        },
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        getActorStairSupportFromState(actor) {
+            const state = actor._stairSupport;
+            assert.equal(state.stairId, "building:stairs-a");
+            return {
+                type: "stair",
+                stairId: state.stairId,
+                treadIndex: state.treadIndex,
+                upDown: state.upDown,
+                leftRight: state.leftRight,
+                baseZ: state.baseZ,
+                point: { x: 4.5, y: 6.25 },
+                stair: {
+                    id: state.stairId,
+                    lowerLevel: 0,
+                    higherLevel: 1,
+                    lowerZ: 0,
+                    higherZ: 3
+                }
+            };
+        },
+        applyActorResolvedMovementSupport(actor, x, y) {
+            const support = actor._pendingVectorMovementSupport;
+            actor._pendingVectorMovementSupport = null;
+            actor.x = x;
+            actor.y = y;
+            actor._stairSupport = {
+                stairId: support.stairId,
+                treadIndex: support.treadIndex,
+                upDown: support.upDown,
+                leftRight: support.leftRight,
+                baseZ: support.baseZ,
+                localZ: support.baseZ,
+                continuousBaseZ: 1.25,
+                continuousLocalZ: 1.25
+            };
+            actor.z = support.baseZ;
+            actor.currentLayer = 0;
+            actor.traversalLayer = 0;
+            actor.currentLayerBaseZ = 0;
+            return support;
+        }
+    };
+    const loadedWizard = Object.create(Wizard.prototype);
+    Object.assign(loadedWizard, {
+        map: loadMap,
+        node: null,
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        ensureMagicPointsInitialized() {},
+        getTemperatureBaseline() { return 0; },
+        setTemperature() {},
+        isFrozen() { return false; },
+        applyFrozenState() {},
+        setGameMode(value) { this.gameMode = value; },
+        setDifficulty(value) { this.difficulty = value; },
+        loadInventory() {},
+        updateHitboxes() {},
+        refreshSpellSelector() {},
+        refreshEditorSelector() {},
+        updateModeToggleUi() {}
+    });
+
+    loadedWizard.loadJson({
+        x: saved.x,
+        y: saved.y,
+        z: saved.z,
+        currentLayer: saved.currentLayer,
+        traversalLayer: saved.traversalLayer,
+        currentLayerBaseZ: saved.currentLayerBaseZ,
+        stairSupport: saved.stairSupport,
+        viewport: { x: 0, y: 0 }
+    });
+
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), true);
+    assert.equal(loadedWizard._stairSupport.stairId, "building:stairs-a");
+    loadMap.stairsById.set("building:stairs-a", { id: "building:stairs-a" });
+    loadedWizard.restoreSavedMovementSupport();
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(loadedWizard.x, 4.5);
+    assert.equal(loadedWizard.y, 6.25);
+    assert.equal(loadedWizard._stairSupport.stairId, "building:stairs-a");
 });
 
 test("wizard draw keeps dead wizard on standing frame", () => {
