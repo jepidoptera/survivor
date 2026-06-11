@@ -3,8 +3,8 @@
 
     const BUILDING_PLACEMENT_SCHEMA = "survivor-building-placement-v1";
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
-    const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v4-runtime-floor-layers";
-    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v10-runtime-floor-layers";
+    const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v5-alpha-mask-runtime-floor-layers";
+    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v17-edge-aligned-platform-cap";
     const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v7-runtime-floor-layers";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
@@ -2256,6 +2256,15 @@
                     }
                     if (!result.depthMetricTexture || !result.depthMetric || !(Number(result.depthMetric.span) > 0)) {
                         throw new Error(`building exterior bitmap render returned no depth metric texture for ${placementId}`);
+                    }
+                    if (
+                        !result.alphaMask ||
+                        !result.alphaMask.pixels ||
+                        typeof result.alphaMask.pixels.length !== "number" ||
+                        !(Number(result.alphaMask.width) > 0) ||
+                        !(Number(result.alphaMask.height) > 0)
+                    ) {
+                        throw new Error(`building exterior bitmap render returned no alpha mask for ${placementId}`);
                     }
                     const previous = state.exteriorBitmapsById.get(placementId);
                     if (

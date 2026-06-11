@@ -73,6 +73,7 @@ precision highp float;
 attribute vec3 aWorldPosition;
 attribute vec3 aWorldNormal;
 attribute vec2 aUvs;
+attribute float aSurfaceLightFactor;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
 uniform float uCameraZ;
@@ -89,6 +90,7 @@ uniform vec2 uLightClamp;
 uniform float uOverheadSlopeLighting;
 varying vec2 vUvs;
 varying float vLightFactor;
+varying float vSurfaceLightFactor;
 varying float vExteriorDepthMetric;
 void main(void) {
     float cosR = cos(uCameraRotation);
@@ -129,6 +131,7 @@ void main(void) {
     float directionalLightFactor = clamp(1.0 + (lightDot - overheadBaseline) * uLightDiffuse, uLightClamp.x, uLightClamp.y);
     float slopeLightFactor = mix(uLightClamp.x, 1.0, smoothstep(0.0, 1.0, clamp(normal.z, 0.0, 1.0)));
     vLightFactor = mix(directionalLightFactor, slopeLightFactor, clamp(uOverheadSlopeLighting, 0.0, 1.0));
+    vSurfaceLightFactor = aSurfaceLightFactor;
     vUvs = aUvs;
 }
 `;
@@ -137,6 +140,7 @@ const FLOOR_DEPTH_FS = `
 precision highp float;
 varying vec2 vUvs;
 varying float vLightFactor;
+varying float vSurfaceLightFactor;
 varying float vExteriorDepthMetric;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
@@ -159,6 +163,7 @@ void main(void) {
     vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
     outColor.rgb *= vLightFactor;
     outColor.rgb *= uTint.a;
+    outColor.rgb *= vSurfaceLightFactor;
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingExteriorDepthMetricDataPass > 0.5) {
         float minMetric = uBuildingExteriorDepthMetricRange.x;
@@ -300,6 +305,44 @@ function configureExteriorDepthMetricTexture(texture) {
     }
     if (typeof baseTexture.update === "function") baseTexture.update();
     return texture;
+}
+
+function extractRenderTextureAlphaMask(renderer, texture, label) {
+    if (!renderer || !renderer.gl || !renderer.renderTexture || typeof renderer.renderTexture.bind !== "function") {
+        throw new Error(`${label} requires a Pixi WebGL render texture target`);
+    }
+    if (!texture || !texture.baseTexture || !texture.frame) {
+        throw new Error(`${label} requires a Pixi render texture`);
+    }
+    const resolution = Math.max(1, Number(texture.baseTexture.resolution) || 1);
+    const frame = texture.frame;
+    const width = Math.max(1, Math.floor(Number(frame.width) * resolution + 1e-4));
+    const height = Math.max(1, Math.floor(Number(frame.height) * resolution + 1e-4));
+    const rgba = new Uint8Array(width * height * 4);
+    const gl = renderer.gl;
+    renderer.renderTexture.bind(texture);
+    gl.readPixels(
+        Number(frame.x || 0) * resolution,
+        Number(frame.y || 0) * resolution,
+        width,
+        height,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        rgba
+    );
+    const error = typeof gl.getError === "function" ? gl.getError() : 0;
+    if (error) {
+        throw new Error(`${label} gl.readPixels failed with WebGL error ${error}`);
+    }
+    const alpha = new Uint8Array(width * height);
+    for (let i = 0, p = 3; i < alpha.length; i++, p += 4) {
+        alpha[i] = rgba[p];
+    }
+    return {
+        width,
+        height,
+        pixels: alpha
+    };
 }
 
 function wallTexturePathForRender(wall, floor) {
@@ -3032,6 +3075,7 @@ function destroyBuildingBitmapExportSetup(setup) {
     if (!setup) return;
     const exportRenderer = setup.exportRenderer;
     const stage = setup.stage;
+    sanitizePixiGeometryDestroyState(setup.rendererRef, exportRenderer && exportRenderer.root);
     if (exportRenderer && exportRenderer.root && exportRenderer.root.parent && typeof exportRenderer.root.parent.removeChild === "function") {
         exportRenderer.root.parent.removeChild(exportRenderer.root);
     }
@@ -3041,6 +3085,29 @@ function destroyBuildingBitmapExportSetup(setup) {
     if (stage && typeof stage.destroy === "function") {
         stage.destroy({ children: true, texture: false, baseTexture: false });
     }
+}
+
+function sanitizePixiGeometryDestroyState(renderer, displayObject) {
+    const contextUid = renderer && renderer.geometry && renderer.geometry.CONTEXT_UID;
+    if (!Number.isFinite(Number(contextUid)) || !displayObject) return;
+    const visit = (node) => {
+        if (!node) return;
+        const geometry = node.geometry || null;
+        const vaos = geometry && geometry.glVertexArrayObjects;
+        if (geometry && Array.isArray(geometry.buffers) && vaos && vaos[contextUid]) {
+            // Pixi 5.2.4 can leave unused geometry buffers without GL refs while still
+            // registering a VAO for the geometry. Teardown only needs to release buffers
+            // that were actually uploaded for this context.
+            geometry.buffers = geometry.buffers.filter((buffer) => (
+                buffer &&
+                buffer._glBuffers &&
+                buffer._glBuffers[contextUid]
+            ));
+        }
+        const children = Array.isArray(node.children) ? node.children : [];
+        for (let i = 0; i < children.length; i++) visit(children[i]);
+    };
+    visit(displayObject);
 }
 
 export class BuildingRenderer {
@@ -3962,6 +4029,7 @@ export class BuildingRenderer {
         const positions = new Float32Array(triangulation.points.length * 3);
         const normals = new Float32Array(triangulation.points.length * 3);
         const uvs = new Float32Array(triangulation.points.length * 2);
+        const surfaceLightFactors = new Float32Array(triangulation.points.length);
         triangulation.points.forEach((point, index) => {
             const pointZ = Number.isFinite(Number(point.z)) ? Number(point.z) : z;
             positions[index * 3] = Number(point.x);
@@ -3974,11 +4042,15 @@ export class BuildingRenderer {
             const hasCustomUv = Number.isFinite(Number(point.u)) && Number.isFinite(Number(point.v));
             uvs[index * 2] = hasCustomUv ? Number(point.u) : Number(point.x) * textureRepeatX;
             uvs[index * 2 + 1] = hasCustomUv ? Number(point.v) : Number(point.y) * textureRepeatY;
+            surfaceLightFactors[index] = Number.isFinite(Number(point.surfaceLightFactor))
+                ? Math.max(SCENE_LIGHT_MIN, Math.min(SCENE_LIGHT_MAX, Number(point.surfaceLightFactor)))
+                : 1;
         });
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
             .addAttribute("aWorldNormal", normals, 3)
             .addAttribute("aUvs", uvs, 2)
+            .addAttribute("aSurfaceLightFactor", surfaceLightFactors, 1)
             .addIndex(triangulation.indices);
         const shader = PIXI.Shader.from(FLOOR_DEPTH_VS, FLOOR_DEPTH_FS, {
             uScreenSize: new Float32Array([1, 1]),
@@ -4107,6 +4179,33 @@ export class BuildingRenderer {
             return INTERIOR_BITMAP_LOWER_TERRAIN_SHADOW_LIGHT_FACTOR;
         }
         return 1;
+    }
+
+    stairCutoutReliefStepLightFactors(stair, steps, baseLightFactor) {
+        if (!stair || !Array.isArray(steps) || steps.length === 0) return new Map();
+        const baseFactor = Number.isFinite(Number(baseLightFactor))
+            ? Math.max(SCENE_LIGHT_MIN, Math.min(1, Number(baseLightFactor)))
+            : 1;
+        if (!(baseFactor < 0.999)) return new Map();
+        const bottomZ = Number(stair && stair.bottomZ);
+        const height = Number(stair && stair.height);
+        if (!Number.isFinite(bottomZ) || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} needs finite elevation data for cutaway relief`);
+        }
+        const topZ = String(stair.direction || "up") === "down" ? bottomZ : bottomZ + height;
+        const thresholdZ = topZ - 2;
+        const selected = steps
+            .filter((step) => Number(step && step.z) >= thresholdZ - GEOMETRY_EPSILON && Number(step && step.z) <= topZ + GEOMETRY_EPSILON)
+            .sort((a, b) => Number(a.z) - Number(b.z));
+        const factors = new Map();
+        if (!selected.length) return factors;
+        selected.forEach((step, index) => {
+            const reliefAlpha = (index + 1) / selected.length;
+            const easedReliefAlpha = reliefAlpha * reliefAlpha;
+            const factor = baseFactor + (1 - baseFactor) * easedReliefAlpha;
+            factors.set(Number(step.globalStepIndex), Math.max(SCENE_LIGHT_MIN, Math.min(1, factor)));
+        });
+        return factors;
     }
 
     floorShadowTint(tint, floor) {
@@ -4472,7 +4571,10 @@ export class BuildingRenderer {
                     polygon,
                     lowerEdge: isDownStair
                         ? [{ ...outer1 }, { ...inner1 }]
-                        : [{ ...outer0 }, { ...inner0 }]
+                        : [{ ...outer0 }, { ...inner0 }],
+                    upperEdge: isDownStair
+                        ? [{ ...outer0 }, { ...inner0 }]
+                        : [{ ...outer1 }, { ...inner1 }]
                 });
             }
         });
@@ -4505,12 +4607,23 @@ export class BuildingRenderer {
             repeatsPerMapUnitX: options.riserTextureRepeatX,
             repeatsPerMapUnitY: options.riserTextureRepeatY
         }, FLOOR_TEXTURE_REPEAT);
+        const baseSurfaceLightFactor = Number.isFinite(Number(options.surfaceLightFactor))
+            ? Math.max(SCENE_LIGHT_MIN, Math.min(1, Number(options.surfaceLightFactor)))
+            : 1;
+        const cutoutReliefLightFactors = this.stairCutoutReliefStepLightFactors(stair, steps, baseSurfaceLightFactor);
+        const surfaceLightFactorForStep = (step) => {
+            const index = Number(step && step.globalStepIndex);
+            if (cutoutReliefLightFactors.has(index)) return cutoutReliefLightFactors.get(index);
+            return baseSurfaceLightFactor;
+        };
         const treadPoints = [];
         const treadIndices = [];
         const riserPoints = [];
         const riserIndices = [];
-        const pushRiserPoint = (point) => {
-            riserPoints.push(point);
+        const platformCapPoints = [];
+        const platformCapIndices = [];
+        const pushRiserPoint = (point, surfaceLightFactor = baseSurfaceLightFactor) => {
+            riserPoints.push({ ...point, surfaceLightFactor });
             return riserPoints.length - 1;
         };
         const same2d = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) <= GEOMETRY_EPSILON;
@@ -4528,7 +4641,7 @@ export class BuildingRenderer {
             if (length <= GEOMETRY_EPSILON) return { x: 0, y: 0, z: 1 };
             return { x: nx / length, y: ny / length, z: nz / length };
         };
-        const addVerticalFace = (a, b, topZ, bottomZA, bottomZB) => {
+        const addVerticalFace = (a, b, topZ, bottomZA, bottomZB, surfaceLightFactor = baseSurfaceLightFactor) => {
             const ax = Number(a.x);
             const ay = Number(a.y);
             const bx = Number(b.x);
@@ -4545,13 +4658,13 @@ export class BuildingRenderer {
             const p1 = { x: bx, y: by, z: topZ };
             const p2 = { x: bx, y: by, z: bottomZB };
             const normal = normalForFace(p0, p1, p2);
-            const aTop = pushRiserPoint({ ...p0, u: u0, v: vTop, normal });
-            const bTop = pushRiserPoint({ ...p1, u: u1, v: vTop, normal });
-            const bBottom = pushRiserPoint({ ...p2, u: u1, v: -bottomZB * riserTextureRepeat.repeatsPerMapUnitY, normal });
-            const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * riserTextureRepeat.repeatsPerMapUnitY, normal });
+            const aTop = pushRiserPoint({ ...p0, u: u0, v: vTop, normal }, surfaceLightFactor);
+            const bTop = pushRiserPoint({ ...p1, u: u1, v: vTop, normal }, surfaceLightFactor);
+            const bBottom = pushRiserPoint({ ...p2, u: u1, v: -bottomZB * riserTextureRepeat.repeatsPerMapUnitY, normal }, surfaceLightFactor);
+            const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * riserTextureRepeat.repeatsPerMapUnitY, normal }, surfaceLightFactor);
             riserIndices.push(aTop, bBottom, bTop, aTop, aBottom, bBottom);
         };
-        const addBottomFace = (ring, bottomZFor) => {
+        const addBottomFace = (ring, bottomZFor, surfaceLightFactor = baseSurfaceLightFactor) => {
             const bottomRing = positiveAreaRing(ring).map((point) => ({
                 x: Number(point.x),
                 y: Number(point.y),
@@ -4576,7 +4689,8 @@ export class BuildingRenderer {
                         ...point,
                         u: point.x * riserTextureRepeat.repeatsPerMapUnitX,
                         v: point.y * riserTextureRepeat.repeatsPerMapUnitY,
-                        normal
+                        normal,
+                        surfaceLightFactor
                     });
                 });
                 riserIndices.push(offset, offset + 1, offset + 2);
@@ -4673,7 +4787,88 @@ export class BuildingRenderer {
                 }
             };
         };
+        const translatedUpperRiserStep = (step) => {
+            const lowerEdge = Array.isArray(step && step.lowerEdge) ? step.lowerEdge : [];
+            const upperEdge = Array.isArray(step && step.upperEdge) ? step.upperEdge : [];
+            const lowerA = lowerEdge[0];
+            const lowerB = lowerEdge[1];
+            const upperA = upperEdge[0];
+            const upperB = upperEdge[1];
+            if (![lowerA, lowerB, upperA, upperB].every(finite2dPoint)) {
+                throw new Error(`stair ${stair.id || "(new)"} final upper riser requires finite step edges`);
+            }
+            const lowerDx = Number(lowerB.x) - Number(lowerA.x);
+            const lowerDy = Number(lowerB.y) - Number(lowerA.y);
+            const upperDx = Number(upperB.x) - Number(upperA.x);
+            const upperDy = Number(upperB.y) - Number(upperA.y);
+            const lowerLengthSq = lowerDx * lowerDx + lowerDy * lowerDy;
+            if (lowerLengthSq <= GEOMETRY_EPSILON * GEOMETRY_EPSILON || Math.hypot(upperDx, upperDy) <= GEOMETRY_EPSILON) {
+                throw new Error(`stair ${stair.id || "(new)"} final upper riser has no step run`);
+            }
+            const transformPoint = (point) => {
+                const px = Number(point.x) - Number(lowerA.x);
+                const py = Number(point.y) - Number(lowerA.y);
+                const dot = upperDx * lowerDx + upperDy * lowerDy;
+                const cross = upperDy * lowerDx - upperDx * lowerDy;
+                return {
+                    x: Number(upperA.x) + (dot * px - cross * py) / lowerLengthSq,
+                    y: Number(upperA.y) + (cross * px + dot * py) / lowerLengthSq
+                };
+            };
+            const sourceRing = Array.isArray(step && step.polygon) ? step.polygon : [];
+            const ring = positiveAreaRing(sourceRing.map(transformPoint));
+            if (!Array.isArray(ring) || ring.length < 3 || Math.abs(polygonSignedArea(ring)) <= GEOMETRY_EPSILON) {
+                throw new Error(`stair ${stair.id || "(new)"} final upper riser phantom step is degenerate`);
+            }
+            const transformEdge = (edge) => edge.map(transformPoint);
+            const upperFloorZ = String(stair && stair.direction || "up") === "down"
+                ? baseZ
+                : baseZ + height;
+            const z = upperFloorZ - 0.001;
+            if (!Number.isFinite(z)) {
+                throw new Error(`stair ${stair.id || "(new)"} final upper riser requires a finite platform elevation`);
+            }
+            return {
+                ...step,
+                globalStepIndex: Number(step.globalStepIndex) + 1,
+                z,
+                polygon: ring,
+                lowerEdge: transformEdge(lowerEdge),
+                upperEdge: transformEdge(upperEdge),
+                surfaceLightFactor: surfaceLightFactorForStep(step)
+            };
+        };
+        const addStepRiserGeometry = (step, stepSurfaceLightFactor) => {
+            const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const bottomZFor = (point) => stepBottomZFor(step, point);
+            for (let index = 0; index < ring.length; index++) {
+                const a = ring[index];
+                const b = ring[(index + 1) % ring.length];
+                addVerticalFace(a, b, Number(step.z), bottomZFor(a), bottomZFor(b), stepSurfaceLightFactor);
+            }
+            addBottomFace(ring, bottomZFor, stepSurfaceLightFactor);
+        };
+        const addPlatformCapGeometry = (step, stepSurfaceLightFactor) => {
+            const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const triangulation = triangulateSurface(ring, []);
+            if (!triangulation) {
+                throw new Error(`stair ${stair.id || "(new)"} final platform cap could not be triangulated`);
+            }
+            const offset = platformCapPoints.length;
+            triangulation.points.forEach((point) => {
+                platformCapPoints.push({
+                    ...point,
+                    z: step.z,
+                    normal: { x: 0, y: 0, z: 1 },
+                    surfaceLightFactor: stepSurfaceLightFactor
+                });
+            });
+            triangulation.indices.forEach((index) => {
+                platformCapIndices.push(offset + Number(index));
+            });
+        };
         steps.forEach((step) => {
+            const stepSurfaceLightFactor = surfaceLightFactorForStep(step);
             const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
             const uvFrame = treadUvFrame(step, ring);
             const triangulation = triangulateSurface(ring, []);
@@ -4683,33 +4878,44 @@ export class BuildingRenderer {
             const offset = treadPoints.length;
             triangulation.points.forEach((point) => {
                 const uv = uvFrame.uvFor(point);
-                treadPoints.push({ ...point, z: step.z, u: uv.u, v: uv.v, normal: { x: 0, y: 0, z: 1 } });
+                treadPoints.push({
+                    ...point,
+                    z: step.z,
+                    u: uv.u,
+                    v: uv.v,
+                    normal: { x: 0, y: 0, z: 1 },
+                    surfaceLightFactor: stepSurfaceLightFactor
+                });
             });
             triangulation.indices.forEach((index) => {
                 treadIndices.push(offset + Number(index));
             });
             if (resolvedRiserDepth <= GEOMETRY_EPSILON) return;
-            const bottomZFor = (point) => stepBottomZFor(step, point);
-            for (let index = 0; index < ring.length; index++) {
-                const a = ring[index];
-                const b = ring[(index + 1) % ring.length];
-                addVerticalFace(a, b, Number(step.z), bottomZFor(a), bottomZFor(b));
-            }
-            addBottomFace(ring, bottomZFor);
+            addStepRiserGeometry(step, stepSurfaceLightFactor);
         });
+        if (resolvedRiserDepth > GEOMETRY_EPSILON && steps.length > 0) {
+            const isDownStair = String(stair && stair.direction || "up") === "down";
+            const upperStep = isDownStair ? steps[0] : steps[steps.length - 1];
+            const phantomStep = translatedUpperRiserStep(upperStep);
+            addStepRiserGeometry(phantomStep, phantomStep.surfaceLightFactor);
+            addPlatformCapGeometry(phantomStep, phantomStep.surfaceLightFactor);
+        }
         if (!treadPoints.length || treadIndices.length < 3) {
             throw new Error(`stair ${stair.id || "(new)"} did not produce renderable step geometry`);
         }
         const combinedPoints = [
             ...treadPoints,
-            ...riserPoints
+            ...riserPoints,
+            ...platformCapPoints
         ];
         const combinedIndices = [
             ...treadIndices,
-            ...riserIndices.map((index) => Number(index) + treadPoints.length)
+            ...riserIndices.map((index) => Number(index) + treadPoints.length),
+            ...platformCapIndices.map((index) => Number(index) + treadPoints.length + riserPoints.length)
         ];
         const treadIndexArray = treadPoints.length > 65535 ? Uint32Array : Uint16Array;
         const riserIndexArray = riserPoints.length > 65535 ? Uint32Array : Uint16Array;
+        const platformCapIndexArray = platformCapPoints.length > 65535 ? Uint32Array : Uint16Array;
         const combinedIndexArray = combinedPoints.length > 65535 ? Uint32Array : Uint16Array;
         return {
             points: combinedPoints,
@@ -4721,7 +4927,12 @@ export class BuildingRenderer {
             riser: {
                 points: riserPoints,
                 indices: new riserIndexArray(riserIndices)
-            }
+            },
+            platformCap: {
+                points: platformCapPoints,
+                indices: new platformCapIndexArray(platformCapIndices)
+            },
+            cutoutReliefLightFactors
         };
     }
 
@@ -4737,7 +4948,27 @@ export class BuildingRenderer {
         });
     }
 
-    createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig = null, riserTextureRepeatConfig = null) {
+    stairUpperFloorForCap(stair) {
+        const building = this.state && this.state.building;
+        if (!building) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} platform cap requires building floor data`);
+        const bottomZ = Number(stair && stair.bottomZ);
+        const height = Number(stair && stair.height);
+        if (!Number.isFinite(bottomZ) || !Number.isFinite(height) || height <= 0) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} platform cap requires finite elevation data`);
+        }
+        const upperZ = String(stair && stair.direction || "up") === "down"
+            ? bottomZ
+            : bottomZ + height;
+        const upperFloor = getBuildingFloors(building).find((candidate) => (
+            Math.abs(getFloorElevation(candidate) - upperZ) <= GEOMETRY_EPSILON
+        ));
+        if (!upperFloor) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} platform cap cannot find upper floor at elevation ${upperZ}`);
+        }
+        return upperFloor;
+    }
+
+    createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig = null, riserTextureRepeatConfig = null, platformCapFloor = null, platformCapTextureRepeatConfig = null) {
         if (!triangulation || !triangulation.tread) {
             throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} triangulation is missing tread geometry`);
         }
@@ -4748,13 +4979,22 @@ export class BuildingRenderer {
         const riserMesh = hasRiser
             ? this.createStairMeshPart(floor, stair, triangulation.riser, stairRiserTexturePath(stair), "buildingEditorStairRiserMesh", riserTextureRepeatConfig)
             : null;
-        if (!treadMesh || (hasRiser && !riserMesh)) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} split mesh could not be created`);
+        const hasPlatformCap = !!(triangulation.platformCap && triangulation.platformCap.points && triangulation.platformCap.points.length && triangulation.platformCap.indices && triangulation.platformCap.indices.length >= 3);
+        if (hasPlatformCap && !platformCapFloor) {
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} platform cap requires the upper floor texture source`);
+        }
+        const platformCapMesh = hasPlatformCap
+            ? this.createStairMeshPart(platformCapFloor, stair, triangulation.platformCap, platformCapFloor.floorTexturePath, "buildingEditorStairPlatformCapMesh", platformCapTextureRepeatConfig)
+            : null;
+        if (!treadMesh || (hasRiser && !riserMesh) || (hasPlatformCap && !platformCapMesh)) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} split mesh could not be created`);
         if (riserMesh) container.addChild(riserMesh);
         container.addChild(treadMesh);
+        if (platformCapMesh) container.addChild(platformCapMesh);
         container.visible = false;
         container.interactive = false;
         container._stairTreadMesh = treadMesh;
         container._stairRiserMesh = riserMesh;
+        container._stairPlatformCapMesh = platformCapMesh;
         return container;
     }
 
@@ -4762,7 +5002,14 @@ export class BuildingRenderer {
         const key = stairMeshKey(floor, stair);
         const treadTextureRepeatConfig = this.floorTextureRepeatConfig(stairTreadTexturePath(stair));
         const riserTextureRepeatConfig = this.floorTextureRepeatConfig(stairRiserTexturePath(stair));
-        const signature = stairMeshSignature(floor, stair, treadTextureRepeatConfig, riserTextureRepeatConfig);
+        const platformCapFloor = this.stairUpperFloorForCap(stair);
+        const platformCapTextureRepeatConfig = this.floorTextureRepeatConfig(platformCapFloor.floorTexturePath);
+        const baseSurfaceLightFactor = this.floorShadowLightFactor(floor);
+        const signature = [
+            stairMeshSignature(floor, stair, treadTextureRepeatConfig, riserTextureRepeatConfig),
+            `platformCap:${getFloorId(platformCapFloor)}:${normalizeTexturePath(platformCapFloor.floorTexturePath, DEFAULTS.floorTexture)}:${textureRepeatSignature(platformCapTextureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`,
+            `surfaceLight:${Number(baseSurfaceLightFactor).toFixed(4)}`
+        ].join(";");
         let entry = this.stairMeshById.get(key);
         if (!entry || entry.signature !== signature) {
             if (entry && entry.mesh) {
@@ -4773,9 +5020,10 @@ export class BuildingRenderer {
                 treadTextureRepeatX: treadTextureRepeatConfig.repeatsPerMapUnitX,
                 treadTextureRepeatY: treadTextureRepeatConfig.repeatsPerMapUnitY,
                 riserTextureRepeatX: riserTextureRepeatConfig.repeatsPerMapUnitX,
-                riserTextureRepeatY: riserTextureRepeatConfig.repeatsPerMapUnitY
+                riserTextureRepeatY: riserTextureRepeatConfig.repeatsPerMapUnitY,
+                surfaceLightFactor: baseSurfaceLightFactor
             });
-            const mesh = this.createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig, riserTextureRepeatConfig);
+            const mesh = this.createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig, riserTextureRepeatConfig, platformCapFloor, platformCapTextureRepeatConfig);
             if (!mesh) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} mesh could not be created`);
             this.buildingUnit.addChild(mesh);
             entry = { signature, mesh };
@@ -4787,13 +5035,20 @@ export class BuildingRenderer {
         this.updateSurfaceMeshUniforms(entry.mesh._stairTreadMesh, floor, alpha, {
             texturePath: stairTreadTexturePath(stair),
             textureFallback: DEFAULTS.floorTexture,
-            lightFactor: this.floorShadowLightFactor(floor)
+            lightFactor: 1
         });
         if (entry.mesh._stairRiserMesh) {
             this.updateSurfaceMeshUniforms(entry.mesh._stairRiserMesh, floor, alpha, {
                 texturePath: stairRiserTexturePath(stair),
                 textureFallback: DEFAULTS.floorTexture,
-                lightFactor: this.floorShadowLightFactor(floor)
+                lightFactor: 1
+            });
+        }
+        if (entry.mesh._stairPlatformCapMesh) {
+            this.updateSurfaceMeshUniforms(entry.mesh._stairPlatformCapMesh, platformCapFloor, alpha, {
+                texturePath: platformCapFloor.floorTexturePath,
+                textureFallback: DEFAULTS.floorTexture,
+                lightFactor: 1
             });
         }
         return entry.mesh;
@@ -7297,10 +7552,12 @@ export class BuildingRenderer {
             1, 1,
             0, 1
         ]);
+        const surfaceLightFactors = new Float32Array([1, 1, 1, 1]);
         const geometry = new PIXI.Geometry()
             .addAttribute("aWorldPosition", positions, 3)
             .addAttribute("aWorldNormal", normals, 3)
             .addAttribute("aUvs", uvs, 2)
+            .addAttribute("aSurfaceLightFactor", surfaceLightFactors, 1)
             .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
         const shader = PIXI.Shader.from(FLOOR_DEPTH_VS, FLOOR_DEPTH_FS, {
             uScreenSize: new Float32Array([1, 1]),
@@ -8920,9 +9177,15 @@ export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
                 restoreDepthMetricPass();
             }
         });
+        const alphaMask = extractRenderTextureAlphaMask(
+            rendererRef,
+            texture,
+            "building exterior bitmap alpha mask"
+        );
         return {
             texture,
             depthMetricTexture,
+            alphaMask,
             width,
             height,
             anchorX: originScreen.x / width,

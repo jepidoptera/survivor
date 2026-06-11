@@ -33,6 +33,7 @@
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
     const BUILDING_CUTAWAY_GHOST_ALPHA = 0.1;
     const BUILDING_CUTAWAY_INTERIOR_ALPHA = 0.5;
+    const PROTOTYPE_BUILDING_EXTERIOR_CUTAWAY_ALPHA_THRESHOLD = 8;
     const BUILDING_CUTAWAY_COMPOSITE_VERSION = 5;
     const BUILDING_CUTAWAY_CACHE_PX_PER_WORLD = 64;
     const BUILDING_CUTAWAY_CACHE_MAX_TEXTURE_SIZE = 4096;
@@ -1661,7 +1662,7 @@ void main(void) {
             return null;
         }
 
-        getBottommostUpperBuildingFragments(map, building) {
+        getLowestBuildingFragments(map, building) {
             const fragments = this.getBuildingFragments(map, building);
             let minLevel = Infinity;
             const out = [];
@@ -1669,7 +1670,6 @@ void main(void) {
                 const fragment = fragments[i];
                 if (!fragment) continue;
                 const level = this.getLayerIndexFromValue(fragment.level, 0);
-                if (level <= 0) continue;
                 if (level < minLevel) {
                     minLevel = level;
                     out.length = 0;
@@ -1689,7 +1689,7 @@ void main(void) {
             ) {
                 return building.groundProjectionPolygons;
             }
-            const fragments = this.getBottommostUpperBuildingFragments(map, building);
+            const fragments = this.getLowestBuildingFragments(map, building);
             const polygons = [];
             for (let i = 0; i < fragments.length; i++) {
                 const fragment = fragments[i];
@@ -2294,12 +2294,23 @@ void main(void) {
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 const activeRegion = trigger && trigger.activeInteriorRegion;
-                if (!activeRegion) continue;
-                const activeRegionId = typeof activeRegion.id === "string" ? activeRegion.id : "";
+                if (!trigger || (!activeRegion && !trigger.building)) continue;
                 const renderCache = trigger && trigger.renderCache;
                 if (!renderCache) {
                     throw new Error("missing building interior render cache");
                 }
+                const activeEntries = Array.isArray(renderCache.renderItems) ? renderCache.renderItems : [];
+                if (!activeRegion) {
+                    for (let j = 0; j < activeEntries.length; j++) {
+                        const entry = activeEntries[j];
+                        const item = entry && entry.item;
+                        if (this.shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef)) {
+                            plan.items.add(item);
+                        }
+                    }
+                    continue;
+                }
+                const activeRegionId = typeof activeRegion.id === "string" ? activeRegion.id : "";
                 const prototypeInteriorBitmapReady = this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
                 if (prototypeInteriorBitmapReady) {
                     const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
@@ -2315,7 +2326,6 @@ void main(void) {
                     }
                     continue;
                 }
-                const activeEntries = Array.isArray(renderCache.renderItems) ? renderCache.renderItems : [];
                 for (let j = 0; j < activeEntries.length; j++) {
                     const entry = activeEntries[j];
                     const item = entry && entry.item;
@@ -3100,6 +3110,106 @@ void main(void) {
             return cache && Array.isArray(cache.occlusionPolygons) ? cache.occlusionPolygons : [];
         }
 
+        getPrototypeBuildingExteriorBitmapForCutaway(ctx, mapRef, placement) {
+            if (!placement || typeof placement.id !== "string" || placement.id.length === 0) {
+                throw new Error("prototype building cutaway bitmap requires a placement id");
+            }
+            const map = mapRef || (ctx && ctx.map) || global.map || null;
+            if (!map || typeof map.getPrototypeBuildingExteriorBitmap !== "function") return null;
+            let cache = map.getPrototypeBuildingExteriorBitmap(placement.id);
+            if (cache && cache.status === "error") {
+                throw new Error(`prototype building exterior ${placement.id} bitmap failed: ${cache.error || "unknown error"}`);
+            }
+            if ((!cache || cache.status === "loading") && typeof map.requestPrototypeBuildingExteriorBitmap === "function") {
+                const appRef = (ctx && ctx.app) || global.app || null;
+                const rendererRef = (ctx && ctx.app && ctx.app.renderer) || (global.app && global.app.renderer) || null;
+                if (!appRef || !rendererRef) return null;
+                cache = map.requestPrototypeBuildingExteriorBitmap(placement, {
+                    app: appRef,
+                    renderer: rendererRef,
+                    pitch: Math.PI / 4,
+                    pixelsPerWorldUnit: 72,
+                    paddingPixels: 48,
+                    maxDimension: 2048
+                });
+            }
+            if (cache && cache.status === "error") {
+                throw new Error(`prototype building exterior ${placement.id} bitmap failed: ${cache.error || "unknown error"}`);
+            }
+            return cache && cache.status === "ready" ? cache : null;
+        }
+
+        getPrototypeBuildingExteriorAlphaMask(ctx, cache) {
+            if (!cache || !cache.texture) {
+                throw new Error("prototype building exterior alpha mask requires a ready texture");
+            }
+            const mask = cache.alphaMask || null;
+            if (
+                !mask ||
+                !mask.pixels ||
+                typeof mask.pixels.length !== "number" ||
+                !(Number(mask.width) > 0) ||
+                !(Number(mask.height) > 0)
+            ) {
+                throw new Error(`prototype building exterior ${cache.id || "(unknown)"} ready cache is missing its alpha mask`);
+            }
+            return mask;
+        }
+
+        isPrototypeBuildingExteriorBitmapPointOpaque(ctx, placement, cache, projectedPoint) {
+            if (!placement || !cache || !projectedPoint) return false;
+            const transform = placement.transform || {};
+            const worldX = Number(transform.x);
+            const worldY = Number(transform.y);
+            if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+                throw new Error(`prototype building exterior ${placement.id || cache.id || "(unknown)"} requires a finite placement transform for cutaway`);
+            }
+            const worldWidth = cache.bounds && Number.isFinite(cache.bounds.worldWidth)
+                ? Math.max(0.01, Number(cache.bounds.worldWidth))
+                : Math.max(0.01, Number(cache.width || 1) / Math.max(1e-6, Number(cache.pixelsPerWorldUnit) || 72));
+            const worldHeight = cache.bounds && Number.isFinite(cache.bounds.worldHeight)
+                ? Math.max(0.01, Number(cache.bounds.worldHeight))
+                : Math.max(0.01, Number(cache.height || 1) / (Math.max(1e-6, Number(cache.pixelsPerWorldUnit) || 72) * Math.max(1e-6, Number(cache.xyratio) || 0.66)));
+            const anchorX = Number.isFinite(cache.anchorX) ? Number(cache.anchorX) : 0.5;
+            const anchorY = Number.isFinite(cache.anchorY) ? Number(cache.anchorY) : 1;
+            const left = worldX - anchorX * worldWidth;
+            const top = worldY - anchorY * worldHeight;
+            const u = (Number(projectedPoint.x) - left) / worldWidth;
+            const v = (Number(projectedPoint.y) - top) / worldHeight;
+            if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return false;
+            const mask = this.getPrototypeBuildingExteriorAlphaMask(ctx, cache);
+            const px = Math.max(0, Math.min(mask.width - 1, Math.floor(u * mask.width)));
+            const flippedV = 1 - v;
+            const py = Math.max(0, Math.min(mask.height - 1, Math.floor(flippedV * mask.height)));
+            const alpha = mask.pixels[py * mask.width + px];
+            return alpha > PROTOTYPE_BUILDING_EXTERIOR_CUTAWAY_ALPHA_THRESHOLD;
+        }
+
+        getWizardShadowCenterCutawayPoint(wizard, resolvedPosition, wizardBaseZ) {
+            const x = Number(resolvedPosition && resolvedPosition.x);
+            const y = Number(resolvedPosition && resolvedPosition.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            const baseZ = Number.isFinite(wizardBaseZ) ? Number(wizardBaseZ) : 0;
+            const stairSupport = wizard && wizard._stairSupport && typeof wizard._stairSupport === "object"
+                ? wizard._stairSupport
+                : null;
+            let shadowLocalZ = 0;
+            if (stairSupport && Number.isFinite(Number(stairSupport.continuousLocalZ))) {
+                shadowLocalZ = Number(stairSupport.continuousLocalZ);
+            } else if (stairSupport && Number.isFinite(Number(stairSupport.localZ))) {
+                shadowLocalZ = Number(stairSupport.localZ);
+            } else {
+                const interpolatedZ = Number.isFinite(Number(resolvedPosition && resolvedPosition.z))
+                    ? Number(resolvedPosition.z)
+                    : (Number.isFinite(Number(wizard && wizard.z)) ? Number(wizard.z) : 0);
+                const jumpHeight = Number.isFinite(Number(wizard && wizard.jumpHeight))
+                    ? Math.max(0, Number(wizard.jumpHeight))
+                    : 0;
+                shadowLocalZ = Math.max(0, interpolatedZ - jumpHeight);
+            }
+            return this.projectWorldPointToCutawayPlane(x, y + 0.18, baseZ + shadowLocalZ);
+        }
+
         getLayerCutawayState(ctx) {
             if (ctx && ctx._renderingLayerCutawayState) return ctx._renderingLayerCutawayState;
             const diagnosticsEnabled = !!this.currentFrameMetrics;
@@ -3235,12 +3345,16 @@ void main(void) {
 
             if (typeof map.getPrototypeBuildingCutawayBuildings === "function") {
                 const prototypeBuildings = map.getPrototypeBuildingCutawayBuildings();
-                const wizardProjection = this.projectWorldPointToCutawayPlane(x, y, wizardWorldZ);
+                const wizardProjection = this.getWizardShadowCenterCutawayPoint(wizard, wizardPos, wizardBaseZ);
                 if (wizardProjection && Array.isArray(prototypeBuildings)) {
                     for (let i = 0; i < prototypeBuildings.length; i++) {
                         const building = prototypeBuildings[i];
                         buildingsScanned += 1;
                         if (!building) continue;
+                        const placement = building._prototypeBuildingPlacement || null;
+                        if (!placement || typeof placement.id !== "string") {
+                            throw new Error(`prototype building cutaway record ${building.buildingId || "(unknown)"} is missing its placement`);
+                        }
                         const buildingMaxLevel = this.getLayerIndexFromValue(building.maxLevel, -Infinity);
                         const buildingTopZ = Number.isFinite(Number(building.maxTopZ))
                             ? Number(building.maxTopZ)
@@ -3254,15 +3368,14 @@ void main(void) {
                         if (!renderCache) continue;
                         const occlusionPolygons = renderCache.occlusionPolygons;
                         const groundProjectionPolygons = renderCache.groundProjectionPolygons;
-                        buildingBoundsTests += 1;
-                        if (!this.isCutawayPointInsideBounds(wizardProjection, renderCache.occlusionBounds)) {
-                            continue;
-                        }
-                        buildingPointTests += 1;
-                        if (!floorVisualPolygonsContainPoint(occlusionPolygons, wizardProjection.x, wizardProjection.y)) {
-                            continue;
-                        }
                         const buildingAlpha = this.getBuildingCutawayEntryAlpha(building.buildingId, nowMs);
+                        buildingBoundsTests += 1;
+                        buildingPointTests += 1;
+                        const exteriorCache = this.getPrototypeBuildingExteriorBitmapForCutaway(ctx, map, placement);
+                        if (!exteriorCache) continue;
+                        if (!this.isPrototypeBuildingExteriorBitmapPointOpaque(ctx, placement, exteriorCache, wizardProjection)) {
+                            continue;
+                        }
                         const activeInteriorRegion = this.getBuildingInteriorVisualRegionAtPoint(renderCache, x, y, wizardLayer, wizardWorldZ);
                         const visibleThroughLevel = activeInteriorRegion
                             ? this.getLayerIndexFromValue(activeInteriorRegion.level, 0)
@@ -4057,6 +4170,9 @@ void main(void) {
                     const item = entry && entry.item;
                     if (!item || item.gone || item.vanishing) continue;
                     const level = this.getLayerIndexFromValue(entry.level, 0);
+                    if (this.shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef)) {
+                        continue;
+                    }
                     if (level >= triggerLevel) {
                         const layerFadeAlpha = this.getLiveLayerFadeMultiplier(level, nowMs);
                         item._renderLayerIndex = level;
@@ -6875,6 +6991,17 @@ void main(void) {
             const regionLevel = this.getLayerIndexFromValue(region && region.level, 0);
             const itemLevel = this.getBuildingInteriorEntryLayer(item, entry, regionLevel);
             return itemLevel === regionLevel;
+        }
+
+        shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef) {
+            if (!item || item.gone || item.vanishing) return false;
+            if (!trigger || !trigger.building || trigger.activeInteriorRegion) return false;
+            if (!this.isBuildingCutawayDoorItem(item)) return false;
+            if (item === wizardRef) return false;
+            if (!this.isScriptVisible(item)) return false;
+            const bottomLevel = this.getLayerIndexFromValue(trigger.building.minLevel, 0);
+            const itemLevel = this.getBuildingInteriorEntryLayer(item, entry, bottomLevel);
+            return itemLevel === bottomLevel;
         }
 
         isBuildingInteriorWindowHiddenByCollapsedWall(item, ctx, wizardRef) {
@@ -15473,6 +15600,13 @@ void main(void) {
                     if (mesh) currentDisplayObjects.add(mesh);
                 });
             }
+            this.renderPrototypeBuildingExteriorGroundDoors(
+                ctx,
+                cutawayState,
+                buildingInteriorRenderPlan,
+                container,
+                currentDisplayObjects
+            );
 
             // Ensure wall-mounted depth billboards (windows/doors) win picker hits over wall sections.
             // Their visible pixels should be targetable even when coplanar with section meshes.
@@ -18400,6 +18534,149 @@ void main(void) {
             return proxy;
         }
 
+        ensurePrototypeBuildingExteriorDoorSprite(item) {
+            if (!item || typeof item.id !== "string" || item.id.length === 0) {
+                throw new Error("prototype building exterior door render requires a door id");
+            }
+            const texturePath = typeof item.texturePath === "string" && item.texturePath.length > 0
+                ? item.texturePath
+                : "";
+            if (!texturePath) {
+                throw new Error(`prototype building exterior door ${item.id} is missing its texture`);
+            }
+            if (typeof PIXI === "undefined" || !PIXI.Sprite || !PIXI.Texture || typeof PIXI.Texture.from !== "function") {
+                throw new Error("prototype building exterior door rendering requires Pixi texture support");
+            }
+            if (!this.prototypeBuildingExteriorDoorSpritesById) {
+                this.prototypeBuildingExteriorDoorSpritesById = new Map();
+            }
+            let entry = this.prototypeBuildingExteriorDoorSpritesById.get(item.id);
+            if (!entry) {
+                entry = {
+                    texturePath: "",
+                    sprite: new PIXI.Sprite(PIXI.Texture.from(texturePath))
+                };
+                entry.sprite.name = `prototypeBuildingExteriorDoor:${item.id}`;
+                entry.sprite.interactive = false;
+                this.prototypeBuildingExteriorDoorSpritesById.set(item.id, entry);
+            } else if (entry.texturePath !== texturePath) {
+                entry.sprite.texture = PIXI.Texture.from(texturePath);
+            }
+            entry.texturePath = texturePath;
+            const sprite = entry.sprite;
+            if (sprite.anchor && typeof sprite.anchor.set === "function") {
+                sprite.anchor.set(
+                    Number.isFinite(item.placeableAnchorX) ? Number(item.placeableAnchorX) : 0.5,
+                    Number.isFinite(item.placeableAnchorY) ? Number(item.placeableAnchorY) : 1
+                );
+            }
+            sprite.alpha = 1;
+            sprite.tint = 0xFFFFFF;
+            sprite.visible = false;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) sprite.renderable = false;
+            return sprite;
+        }
+
+        ensurePrototypeBuildingExteriorDoorProxy(item, sprite) {
+            if (!item || typeof item.id !== "string" || item.id.length === 0 || !sprite) return null;
+            if (!this.prototypeBuildingExteriorDoorProxiesById) {
+                this.prototypeBuildingExteriorDoorProxiesById = new Map();
+            }
+            let proxy = this.prototypeBuildingExteriorDoorProxiesById.get(item.id);
+            if (!proxy) {
+                proxy = {
+                    type: "door",
+                    category: "doors",
+                    rotationAxis: "spatial",
+                    pixiSprite: sprite,
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    width: 1,
+                    height: 1,
+                    gone: false,
+                    vanishing: false,
+                    visible: true,
+                    tint: 0xFFFFFF,
+                    _renderLayerBaseZ: 0,
+                    _renderDepthBias: 0,
+                    _depthBillboardMesh: null,
+                    _depthBillboardWorldPositions: null,
+                    _depthBillboardLastSignature: "",
+                    _depthBillboardLastUvSignature: "",
+                    _depthBillboardMeshMode: ""
+                };
+                const staticProto = (typeof global.StaticObject === "function" && global.StaticObject.prototype)
+                    ? global.StaticObject.prototype
+                    : null;
+                if (!staticProto || typeof staticProto.updateDepthBillboardMesh !== "function") {
+                    throw new Error("prototype building exterior door requires StaticObject depth billboard rendering");
+                }
+                if (typeof staticProto.ensureDepthBillboardMesh === "function") {
+                    proxy.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
+                }
+                if (typeof staticProto.updateDepthBillboardUvsForTexture === "function") {
+                    proxy.updateDepthBillboardUvsForTexture = staticProto.updateDepthBillboardUvsForTexture;
+                }
+                if (typeof staticProto._ensureCompositeUnderlayMesh === "function") {
+                    proxy._ensureCompositeUnderlayMesh = staticProto._ensureCompositeUnderlayMesh;
+                }
+                if (typeof staticProto._destroyCompositeUnderlayMesh === "function") {
+                    proxy._destroyCompositeUnderlayMesh = staticProto._destroyCompositeUnderlayMesh;
+                }
+                proxy.updateDepthBillboardMesh = staticProto.updateDepthBillboardMesh;
+                this.prototypeBuildingExteriorDoorProxiesById.set(item.id, proxy);
+            }
+            proxy.pixiSprite = sprite;
+            return proxy;
+        }
+
+        configurePrototypeBuildingExteriorDoorProxy(proxy, item, entry, trigger, ctx = null) {
+            if (!proxy || !item) return null;
+            const level = Number.isFinite(entry && entry.level)
+                ? this.getLayerIndexFromValue(entry.level, 0)
+                : this.getBuildingInteriorEntryLayer(item, entry, this.getLayerIndexFromValue(trigger && trigger.building && trigger.building.minLevel, 0));
+            const sprite = proxy.pixiSprite;
+            proxy.id = `${String(item.id)}:fullOpacityExteriorDoor`;
+            proxy.sourceDoorItem = item;
+            proxy.map = (ctx && ctx.map) || global.map || null;
+            proxy.texturePath = item.texturePath;
+            proxy.x = Number.isFinite(item.x) ? Number(item.x) : 0;
+            proxy.y = Number.isFinite(item.y) ? Number(item.y) : 0;
+            proxy.z = Number.isFinite(item.z) ? Number(item.z) : 0;
+            proxy.width = Math.max(0.01, Number.isFinite(item.width) ? Number(item.width) : 1);
+            proxy.height = Math.max(0.01, Number.isFinite(item.height) ? Number(item.height) : 1);
+            proxy.rotationAxis = "spatial";
+            proxy.placementRotation = Number.isFinite(item.placementRotation) ? Number(item.placementRotation) : 0;
+            proxy.rotation = proxy.placementRotation;
+            proxy.placeableAnchorX = Number.isFinite(item.placeableAnchorX) ? Number(item.placeableAnchorX) : 0.5;
+            proxy.placeableAnchorY = Number.isFinite(item.placeableAnchorY) ? Number(item.placeableAnchorY) : 1;
+            proxy.compositeLayers = Array.isArray(item.compositeLayers) ? item.compositeLayers : null;
+            proxy.isOpen = item.isOpen === true;
+            proxy._doorLockedOpen = item._doorLockedOpen === true;
+            proxy.isFallenDoorEffect = false;
+            proxy.depthBillboardFaceCenters = item.depthBillboardFaceCenters || null;
+            proxy._prototypeMountedWallSection = item._prototypeMountedWallSection || null;
+            proxy.mountedWallSectionUnitId = Number.isInteger(item.mountedWallSectionUnitId)
+                ? Number(item.mountedWallSectionUnitId)
+                : 0;
+            proxy.mountedSectionId = Number.isInteger(item.mountedSectionId) ? Number(item.mountedSectionId) : null;
+            proxy.mountedWallLineGroupId = Number.isInteger(item.mountedWallLineGroupId) ? Number(item.mountedWallLineGroupId) : null;
+            proxy.mountedWallFacingSign = Number.isFinite(item.mountedWallFacingSign) ? Number(item.mountedWallFacingSign) : null;
+            proxy.traversalLayer = level;
+            proxy.level = level;
+            proxy._renderLayerIndex = level;
+            proxy._renderLayerBaseZ = this.getLayerBaseZForLevel(level);
+            proxy._renderLayerFadeAlpha = 1;
+            proxy._renderLayerAlpha = 1;
+            proxy._renderDepthBias = Number.isFinite(item.renderDepthOffset) ? Number(item.renderDepthOffset) : 0;
+            if (sprite) {
+                sprite.alpha = 1;
+                sprite.tint = 0xFFFFFF;
+            }
+            return proxy;
+        }
+
         getPrototypeBuildingPlacementGeometricCenter(placement) {
             const polygons = Array.isArray(placement && placement.footprintPolygons)
                 ? placement.footprintPolygons
@@ -19142,7 +19419,27 @@ void main(void) {
             return false;
         }
 
-        renderPrototypeBuildingExteriorBitmap(ctx, placement, cache) {
+        getPrototypeBuildingExteriorCutawayAlpha(placement, ctx = null) {
+            if (!placement || typeof placement.id !== "string" || placement.id.length === 0) {
+                throw new Error("prototype building exterior cutaway alpha requires a placement id");
+            }
+            const state = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            let alpha = 1;
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                const triggerPlacement = trigger && trigger.building && trigger.building._prototypeBuildingPlacement;
+                if (!triggerPlacement || triggerPlacement.id !== placement.id) continue;
+                if (trigger.activeInteriorRegion) continue;
+                const triggerAlpha = Number.isFinite(trigger.alpha)
+                    ? Math.max(0, Math.min(1, Number(trigger.alpha)))
+                    : BUILDING_CUTAWAY_GHOST_ALPHA;
+                alpha = Math.min(alpha, triggerAlpha);
+            }
+            return alpha;
+        }
+
+        renderPrototypeBuildingExteriorBitmap(ctx, placement, cache, options = null) {
             if (!placement || !cache || cache.status !== "ready" || !cache.texture) return null;
             if (!cache.depthMetricTexture || !cache.depthMetric || !(Number(cache.depthMetric.span) > 0)) {
                 throw new Error(`prototype building exterior ${cache.id || placement.id} is missing its depth metric texture`);
@@ -19160,7 +19457,8 @@ void main(void) {
                 : Math.max(0.01, Number(cache.height || 1) / (Math.max(1e-6, Number(cache.pixelsPerWorldUnit) || 72) * Math.max(1e-6, Number(cache.xyratio) || 0.66)));
             sprite.width = worldWidth * Math.max(1e-6, Number(this.camera && this.camera.viewscale) || 1);
             sprite.height = worldHeight * Math.max(1e-6, Number(this.camera && this.camera.viewscale) || 1) * Math.max(1e-6, Number(this.camera && this.camera.xyratio) || 0.66);
-            sprite.alpha = 1;
+            const alpha = Math.max(0, Math.min(1, Number.isFinite(options && options.alpha) ? Number(options.alpha) : 1));
+            sprite.alpha = alpha;
             sprite.visible = false;
             if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) sprite.renderable = false;
             proxy.x = Number(transform.x);
@@ -19189,6 +19487,13 @@ void main(void) {
                 throw new Error(`prototype building exterior ${cache.id || placement.id} depth mesh is missing shader uniforms`);
             }
             const uniforms = mesh.shader.uniforms;
+            if (uniforms.uTint && uniforms.uTint.length >= 4) {
+                const tint = Number.isFinite(sprite.tint) ? Math.max(0, Math.min(0xffffff, Math.floor(sprite.tint))) : 0xffffff;
+                uniforms.uTint[0] = (((tint >> 16) & 0xff) / 255) * alpha;
+                uniforms.uTint[1] = (((tint >> 8) & 0xff) / 255) * alpha;
+                uniforms.uTint[2] = ((tint & 0xff) / 255) * alpha;
+                uniforms.uTint[3] = alpha;
+            }
             if (!Object.prototype.hasOwnProperty.call(uniforms, "uBuildingExteriorDepthMetricUse")) {
                 throw new Error(`prototype building exterior ${cache.id || placement.id} shader lacks depth metric support`);
             }
@@ -19204,7 +19509,7 @@ void main(void) {
             }
             container.addChild(mesh);
             mesh.visible = true;
-            mesh.alpha = 1;
+            mesh.alpha = alpha;
             if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) mesh.renderable = true;
             const pickTarget = this.ensurePrototypeBuildingPlacementPickTarget(
                 placement,
@@ -19217,6 +19522,119 @@ void main(void) {
             }
             this.addPickRenderItem(pickTarget, mesh, { forceInclude: true });
             return mesh;
+        }
+
+        renderPrototypeBuildingExteriorGroundDoor(ctx, item, entry, trigger, container, currentDisplayObjects = null) {
+            if (!this.shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, (ctx && ctx.wizard) || global.wizard || null)) {
+                return [];
+            }
+            const sprite = this.ensurePrototypeBuildingExteriorDoorSprite(item);
+            const proxy = this.ensurePrototypeBuildingExteriorDoorProxy(item, sprite);
+            if (!proxy) return [];
+            this.configurePrototypeBuildingExteriorDoorProxy(proxy, item, entry, trigger, ctx);
+            const exteriorSide = this.getBuildingCutawayMountedExteriorSide(
+                item,
+                (ctx && ctx._renderingLayerCutawayState) || null,
+                ctx,
+                (ctx && ctx.map) || global.map || null
+            );
+            const mesh = proxy.updateDepthBillboardMesh(ctx, this.camera, {
+                alphaCutoff: TREE_ALPHA_CUTOFF,
+                mazeMode: false,
+                forceMountedWallSide: exteriorSide === "front" || exteriorSide === "back" ? exteriorSide : null,
+                drawOnlyMountedWallSide: exteriorSide === "front" || exteriorSide === "back"
+            });
+            if (!mesh) return [];
+            const rendered = [];
+            const addDisplay = (displayObj) => {
+                if (!displayObj) return;
+                if (displayObj.parent !== container && container && typeof container.addChild === "function") {
+                    container.addChild(displayObj);
+                }
+                displayObj.visible = true;
+                if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
+                    displayObj.renderable = true;
+                }
+                rendered.push(displayObj);
+                if (currentDisplayObjects instanceof Set) currentDisplayObjects.add(displayObj);
+                this.addPickRenderItem(item, displayObj, { forceInclude: true });
+            };
+            addDisplay(proxy._compositeUnderlayShouldRender === true ? proxy._compositeUnderlayMesh : null);
+            addDisplay(mesh);
+            item._renderingDepthMesh = mesh;
+            item._prototypeBuildingExteriorDoorProxy = proxy;
+            return rendered;
+        }
+
+        hideUnusedPrototypeBuildingExteriorGroundDoors(activeIds = null) {
+            const active = activeIds instanceof Set ? activeIds : new Set();
+            const proxies = this.prototypeBuildingExteriorDoorProxiesById;
+            if (proxies instanceof Map) {
+                proxies.forEach((proxy, id) => {
+                    if (active.has(id)) return;
+                    const displays = [
+                        proxy && proxy._depthBillboardMesh,
+                        proxy && proxy._compositeUnderlayMesh,
+                        proxy && proxy.pixiSprite
+                    ];
+                    for (let i = 0; i < displays.length; i++) {
+                        const displayObj = displays[i];
+                        if (!displayObj) continue;
+                        displayObj.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(displayObj, "renderable")) {
+                            displayObj.renderable = false;
+                        }
+                    }
+                });
+            }
+            const sprites = this.prototypeBuildingExteriorDoorSpritesById;
+            if (sprites instanceof Map) {
+                sprites.forEach((entry, id) => {
+                    if (active.has(id)) return;
+                    const sprite = entry && entry.sprite;
+                    if (!sprite) return;
+                    sprite.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                        sprite.renderable = false;
+                    }
+                });
+            }
+        }
+
+        renderPrototypeBuildingExteriorGroundDoors(ctx, cutawayState, foregroundPlan, container, currentDisplayObjects = null) {
+            const activeIds = new Set();
+            if (!foregroundPlan || !(foregroundPlan.items instanceof Set) || !container) {
+                this.hideUnusedPrototypeBuildingExteriorGroundDoors(activeIds);
+                return [];
+            }
+            const state = cutawayState || (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const rendered = [];
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.building || trigger.activeInteriorRegion) continue;
+                const cache = trigger.renderCache || null;
+                const entries = Array.isArray(cache && cache.renderItems) ? cache.renderItems : [];
+                for (let j = 0; j < entries.length; j++) {
+                    const entry = entries[j];
+                    const item = entry && entry.item;
+                    if (!item || !foregroundPlan.items.has(item)) continue;
+                    const displayObjects = this.renderPrototypeBuildingExteriorGroundDoor(
+                        ctx,
+                        item,
+                        entry,
+                        trigger,
+                        container,
+                        currentDisplayObjects
+                    );
+                    if (displayObjects.length > 0) {
+                        activeIds.add(item.id);
+                        for (let d = 0; d < displayObjects.length; d++) rendered.push(displayObjects[d]);
+                    }
+                }
+            }
+            this.hideUnusedPrototypeBuildingExteriorGroundDoors(activeIds);
+            return rendered;
         }
 
         renderPrototypeBuildingExteriors(ctx) {
@@ -19245,7 +19663,8 @@ void main(void) {
                     });
                 }
                 if (cache && cache.status === "ready") {
-                    const mesh = this.renderPrototypeBuildingExteriorBitmap(ctx, placement, cache);
+                    const alpha = this.getPrototypeBuildingExteriorCutawayAlpha(placement, ctx);
+                    const mesh = this.renderPrototypeBuildingExteriorBitmap(ctx, placement, cache, { alpha });
                     if (mesh) activeIds.add(placement.id);
                 }
             }
