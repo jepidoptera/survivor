@@ -71323,7 +71323,7 @@
       "_wasOnFire": false,
       "scriptingName": "road1052",
       "fillTexturePath": "/assets/images/flooring/dirt.jpg",
-      "id": 11130
+      "id": 11324
     },
     {
       "type": "roof",
@@ -71706,7 +71706,7 @@
         5631
       ],
       "scriptingName": "roof4",
-      "id": 11131
+      "id": 11325
     },
     {
       "type": "placedObject",
@@ -74821,7 +74821,7 @@
       "tint": 16777215,
       "chaseRadius": -1,
       "scriptingName": "deer8",
-      "id": 290
+      "id": 31
     },
     {
       "type": "deer",
@@ -74855,8 +74855,9 @@
       "tint": 16777215,
       "chaseRadius": -1,
       "scriptingName": "squirrel46",
-      "id": 291
+      "id": 117
     }
   ],
-  "powerups": []
+  "powerups": [],
+  "buildingRefs": []
 }

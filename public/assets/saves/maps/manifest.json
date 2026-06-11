@@ -1,8 +1,14 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -40.97505608193722,
-    "y": 141.71799729609452,
+    "x": -149.3183690270323,
+    "y": 209.49460804460037,
+    "z": 0,
+    "currentLayer": 0,
+    "traversalLayer": 0,
+    "currentLayerBaseZ": 0,
+    "surfaceId": "overworld_ground_surface",
+    "fragmentId": "section:-4,0:ground",
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -18,11 +24,11 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "placeobject",
-    "activeAura": "speed",
+    "currentSpell": "flooredit",
+    "activeAura": "healing",
     "activeAuras": [
-      "speed",
-      "healing"
+      "healing",
+      "speed"
     ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
@@ -140,7 +146,8 @@
       "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
-    "selectedEditorCategory": "roof",
+    "selectedPowerupFileName": "chalice.png",
+    "selectedEditorCategory": "powerups",
     "selectedFloorEditLevel": 0,
     "selectedWallHeight": 3,
     "selectedWallThickness": 0.375,
@@ -215,18 +222,18 @@
     ],
     "inventory": {
       "spellCredits": 4,
-      "gold": 45
+      "gold": 420
     },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -56.4656617830908,
-      "y": 123.35017270875774
+      "x": -180.3183690270323,
+      "y": 182.4839606997006
     }
   },
   "los": {
     "mazeMode": false
   },
-  "activeCenterKey": "-2,-1"
+  "activeCenterKey": "-4,0"
 }

@@ -150252,7 +150252,7 @@
       "tint": 16777215,
       "chaseRadius": -1,
       "scriptingName": "squirrel46",
-      "id": 117
+      "id": 290
     },
     {
       "type": "bear",
@@ -150320,7 +150320,7 @@
       "tint": 16777215,
       "chaseRadius": -1,
       "scriptingName": "deer8",
-      "id": 31
+      "id": 291
     },
     {
       "type": "squirrel",
@@ -150581,5 +150581,6 @@
       "scriptingName": "powerup81",
       "id": 10
     }
-  ]
+  ],
+  "buildingRefs": []
 }

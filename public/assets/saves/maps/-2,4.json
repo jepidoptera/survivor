@@ -22185,5 +22185,6 @@
   "clearanceByTile": {},
   "objects": [],
   "animals": [],
-  "powerups": []
+  "powerups": [],
+  "buildingRefs": []
 }
