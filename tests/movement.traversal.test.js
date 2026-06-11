@@ -1293,15 +1293,18 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     actor.y = 0;
     assertApproxEqual(actor.z, 0, 0.0001);
     assert.equal(actor.currentLayer, 0);
-    assert.equal(map.resolveActorStairMovementOccupancy(1.5, 0, actor).allowed, true);
+    const firstStepTargetX = 0.5 + Math.hypot(3, 3) / 3;
+    assert.equal(map.resolveActorStairMovementOccupancy(firstStepTargetX, 0, actor).allowed, true);
 
-    actor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(1.5, 0, actor).support;
-    map.applyActorResolvedMovementSupport(actor, 1.5, 0);
-    actor.x = 1.5;
+    const firstStepSupport = map.resolveActorStairMovementOccupancy(firstStepTargetX, 0, actor).support;
+    actor._pendingVectorMovementSupport = firstStepSupport;
+    map.applyActorResolvedMovementSupport(actor, firstStepTargetX, 0);
+    actor.x = firstStepSupport.point.x;
     actor.y = 0;
     assertApproxEqual(actor.z, 1, 0.0001);
+    assertApproxEqual(actor.x, 1, 0.0001);
     assert.equal(actor.currentLayer, 0);
-    const stairSideSlide = map.resolveActorStairMovementOccupancy(1.5, 0.75, actor);
+    const stairSideSlide = map.resolveActorStairMovementOccupancy(actor.x, 0.75, actor);
     assert.equal(stairSideSlide.allowed, true);
     assert.equal(stairSideSlide.support.leftRight, 1);
     assert.equal(stairSideSlide.support.point.y, 0.5);
@@ -1309,10 +1312,10 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     Object.assign(stairCharacter, {
         type: "wizard",
         map,
-        x: 1.5,
+        x: actor.x,
         y: 0,
-        z: 1,
-        prevX: 1.5,
+        z: actor.z,
+        prevX: actor.x,
         prevY: 0,
         currentLayer: 0,
         traversalLayer: 0,
@@ -1322,7 +1325,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         _stairSupport: { ...actor._stairSupport },
         updateHitboxes() {}
     });
-    assert.equal(stairCharacter._applyVectorMovementPosition(1.5, 0.75, {}), true);
+    assert.equal(stairCharacter._applyVectorMovementPosition(actor.x, 0.75, {}), true);
     assertApproxEqual(stairCharacter.x, 1, 0.0001);
     assertApproxEqual(stairCharacter.y, 0.5, 0.0001);
     assert.equal(stairCharacter._stairSupport.leftRight, 1);
@@ -1330,10 +1333,10 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     Object.assign(earlyStairCharacter, {
         type: "wizard",
         map,
-        x: 1.5,
+        x: actor.x,
         y: 0,
-        z: 1,
-        prevX: 1.5,
+        z: actor.z,
+        prevX: actor.x,
         prevY: 0,
         currentLayer: 0,
         traversalLayer: 0,
@@ -1814,8 +1817,8 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     assertApproxEqual(wizardActor.z, 0, 0.0001);
     assert.equal(wizardActor.currentLayerBaseZ, 0);
 
-    wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(1.5, 0, wizardActor).support;
-    map.applyActorResolvedMovementSupport(wizardActor, 1.5, 0);
+    wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(firstStepTargetX, 0, wizardActor).support;
+    map.applyActorResolvedMovementSupport(wizardActor, firstStepTargetX, 0);
     assertApproxEqual(wizardActor._stairSupport.baseZ, 1, 0.0001);
     assertApproxEqual(wizardActor._stairSupport.localZ, 1, 0.0001);
     assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 1, 0.0001);

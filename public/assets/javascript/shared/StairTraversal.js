@@ -168,6 +168,9 @@
         if (!(width > EPSILON)) throw new Error(`stair ${stairId} traversal requires a positive width`);
         const lowerZ = finiteNumber(stair.lowerZ !== undefined ? stair.lowerZ : stair.bottomZ, `stair ${stairId} lowerZ`);
         const higherZ = finiteNumber(stair.higherZ !== undefined ? stair.higherZ : lowerZ + stair.height, `stair ${stairId} higherZ`);
+        const verticalSpan = higherZ - lowerZ;
+        const surfaceLength = Math.hypot(length, verticalSpan);
+        if (!(surfaceLength > EPSILON)) throw new Error(`stair ${stairId} traversal requires non-zero surface length`);
         return {
             kind: "straight",
             stairId,
@@ -178,6 +181,8 @@
             width,
             halfWidth: width * 0.5,
             length,
+            verticalSpan,
+            surfaceLength,
             along: { x: dx / length, y: dy / length },
             cross: { x: -dy / length, y: dx / length },
             run: { x: dx, y: dy }
@@ -346,6 +351,9 @@
         }
         alignTreadPathSectionOrientations(sections, treads, stairId);
         const pathLength = sections.reduce((sum, section) => sum + section.length, 0);
+        const verticalSpan = higherZ - lowerZ;
+        const surfaceLength = Math.hypot(pathLength, verticalSpan);
+        if (!(surfaceLength > EPSILON)) throw new Error(`stair ${stairId} tread path traversal requires non-zero surface length`);
         let cursor = 0;
         sections.forEach((section) => {
             section.startU = cursor / pathLength;
@@ -360,6 +368,8 @@
             lowerZ,
             higherZ,
             pathLength,
+            verticalSpan,
+            surfaceLength,
             lowerPoint: treads[0].center,
             higherPoint: treads[treads.length - 1].center
         };
@@ -632,10 +642,12 @@
         const y = Number(movementVector && movementVector.y) || 0;
         const dt = Math.max(0, Number(deltaSeconds) || 0);
         const scalar = Math.max(0, Number(speed) || 0) * dt;
+        const surfaceLength = finiteNumber(frame.surfaceLength, `stair ${frame.stairId} surfaceLength`);
+        if (!(surfaceLength > EPSILON)) throw new Error(`stair ${frame.stairId} movement requires positive surface length`);
         const along = (x * frame.along.x + y * frame.along.y) * scalar;
         const side = (x * frame.cross.x + y * frame.cross.y) * scalar;
         return {
-            upDown: Number(currentLocal.upDown) + along / frame.length,
+            upDown: Number(currentLocal.upDown) + along / surfaceLength,
             leftRight: Number(currentLocal.leftRight) + side / frame.width
         };
     }
@@ -687,10 +699,12 @@
             ? { x: crossline.dx / crossline.length, y: crossline.dy / crossline.length }
             : { x: 0, y: 0 };
         const tangent = pathTangentAt(frame, currentLocal.upDown, currentLocal.leftRight);
+        const surfaceLength = finiteNumber(frame.surfaceLength, `stair ${frame.stairId} surfaceLength`);
+        if (!(surfaceLength > EPSILON)) throw new Error(`stair ${frame.stairId} movement requires positive surface length`);
         const along = (x * tangent.x + y * tangent.y) * scalar;
         const side = (x * sideUnit.x + y * sideUnit.y) * scalar;
         return {
-            upDown: Number(currentLocal.upDown) + along / frame.pathLength,
+            upDown: Number(currentLocal.upDown) + along / surfaceLength,
             leftRight: Number(currentLocal.leftRight) + (crossline.length > EPSILON ? side / crossline.length : 0),
             projectionError: 0
         };
