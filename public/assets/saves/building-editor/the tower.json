@@ -549,7 +549,7 @@
         }
       ],
       "holes": [],
-      "floorTexturePath": "/assets/images/flooring/cave.jpg",
+      "floorTexturePath": "/assets/images/flooring/cobblestones.png",
       "roof": {
         "type": "roof",
         "id": "roof-89",
