@@ -2259,10 +2259,13 @@ class GameMap {
             }
             const min = index / stepCount;
             const max = (index + 1) / stepCount;
+            const entryMouthClearance = 1 / stepCount;
+            if (max <= entryMouthClearance + 0.000001) continue;
+            const resolvedMin = Math.max(min, entryMouthClearance);
             if (activeRange) {
                 activeRange.max = max;
             } else {
-                activeRange = { min, max };
+                activeRange = { min: resolvedMin, max };
             }
         }
         if (activeRange) ranges.push(activeRange);
@@ -2490,9 +2493,11 @@ class GameMap {
             const frame = this.getStairTraversalFrame(stair);
             const upDown = Math.max(0, Math.min(1, Number(state.upDown)));
             const leftRight = Math.max(0, Math.min(1, Number(state.leftRight)));
-            const point = traversal.pointFromPathLocal(frame, upDown, leftRight);
-            const local = traversal.localPointForPathFrame(frame, point);
-            return traversal.supportFromPathLocal(stair, frame, local);
+            return traversal.supportFromPathLocal(stair, frame, {
+                upDown,
+                leftRight,
+                projectionError: 0
+            });
         }
         return this.getStairTreadSupport(stair, state.treadIndex);
     }
@@ -2556,9 +2561,37 @@ class GameMap {
         if (!stair) return null;
         const traversal = this.requireStairTraversal();
         const frame = this.getStairTraversalFrame(stair);
-        const local = traversal.localPointForPathFrame(frame, { x, y });
-        const clamped = this.clampStairLocalSide(frame, local, actor, options);
+        const endpoint = options && options.endpoint;
+        if (endpoint !== "lower" && endpoint !== "higher") {
+            throw new Error(`unknown stair endpoint: ${endpoint}`);
+        }
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const local = traversal.localPointForPathFrame(frame, { x, y }, localOptions);
+        const clamped = this.clampStairLocalSide(frame, {
+            ...local,
+            upDown: endpoint === "lower" ? 0 : 1,
+            projectionError: 0
+        }, actor, options);
         return traversal.supportFromPathLocal(stair, frame, clamped);
+    }
+
+    stairEndpointProjectionOptions(stair, endpoint) {
+        if (endpoint !== "lower" && endpoint !== "higher") return {};
+        return endpoint === "lower"
+            ? { upDownHint: 0 }
+            : { upDownHint: 1 };
+    }
+
+    stairEndpointMouthProjectionOptions(stair, endpoint) {
+        const options = this.stairEndpointProjectionOptions(stair, endpoint);
+        if (!options.upDownHint && options.upDownHint !== 0) return options;
+        const stepCount = Number.isFinite(Number(stair && stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const mouthRange = Math.max(0.05, 1 / stepCount);
+        return endpoint === "lower"
+            ? { ...options, maxUpDown: mouthRange }
+            : { ...options, minUpDown: 1 - mouthRange };
     }
 
     getStairEndpointStepRange(stair, endpoint) {
@@ -2731,8 +2764,9 @@ class GameMap {
         if (!actor || !stair || !endpoint) return false;
         const traversal = this.requireStairTraversal();
         const frame = this.getStairTraversalFrame(stair);
-        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y });
-        const nextLocal = traversal.localPointForPathFrame(frame, { x: worldX, y: worldY });
+        const endpointOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, endpointOptions);
+        const nextLocal = traversal.localPointForPathFrame(frame, { x: worldX, y: worldY }, endpointOptions);
         const previousUpDown = Number(previousLocal.upDown);
         const nextUpDown = Number(nextLocal.upDown);
         if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown)) return false;
@@ -2743,49 +2777,11 @@ class GameMap {
                 : null;
         if (directionMatches === null) throw new Error(`unknown stair endpoint: ${endpoint}`);
         if (!directionMatches) return false;
-        const radius = this.getActorMovementSupportRadius(actor, options);
-        const mouthTolerance = Math.max(0.05, (radius + 0.001) / Math.max(0.001, Number(frame.pathLength) || 0));
-        const projectionTolerance = Math.max(0.001, radius + 0.001);
-        const crosslineLength = Math.max(0.001, Number(nextLocal.crosslineLength) || 0);
-        const sideExpansion = Math.max(0, radius) / crosslineLength;
-        const touchesStairFootprint = typeof traversal.localFootprintOverlapsPathFrame === "function"
-            ? traversal.localFootprintOverlapsPathFrame(frame, nextLocal, radius)
-            : traversal.localInsidePathFrame(frame, nextLocal, radius);
-        const touchesEndpointMouth = endpoint === "lower"
-            ? nextUpDown >= -mouthTolerance && nextUpDown <= mouthTolerance
-            : nextUpDown >= 1 - mouthTolerance && nextUpDown <= 1 + mouthTolerance;
-        const touchesEntryArea = touchesEndpointMouth &&
-            Number.isFinite(nextLocal.leftRight) &&
-            nextLocal.leftRight >= -sideExpansion - 0.000001 &&
-            nextLocal.leftRight <= 1 + sideExpansion + 0.000001 &&
-            Number.isFinite(nextLocal.projectionError) &&
-            nextLocal.projectionError <= projectionTolerance;
-        if (!touchesStairFootprint && !touchesEntryArea) return false;
-        const endpointStepRange = this.getStairEndpointStepRange(stair, endpoint);
-        const nextInsideEndpointStep = endpointStepRange &&
-            nextUpDown >= endpointStepRange.min - mouthTolerance &&
-            nextUpDown <= endpointStepRange.max + mouthTolerance &&
-            Number.isFinite(nextLocal.leftRight) &&
-            nextLocal.leftRight >= -sideExpansion - 0.000001 &&
-            nextLocal.leftRight <= 1 + sideExpansion + 0.000001 &&
-            Number.isFinite(nextLocal.projectionError) &&
-            nextLocal.projectionError <= projectionTolerance;
-        if (nextInsideEndpointStep) {
-            return true;
-        }
-        if (traversal.endpointLineCrossed(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint)) {
-            return true;
-        }
-        const sideTolerance = 0.000001;
-        const previousAtEndpoint = endpoint === "lower"
-            ? previousUpDown >= -mouthTolerance && previousUpDown <= mouthTolerance
-            : previousUpDown >= 1 - mouthTolerance && previousUpDown <= 1 + mouthTolerance;
-        return previousAtEndpoint &&
-            Number.isFinite(previousLocal.leftRight) &&
-            previousLocal.leftRight >= -sideTolerance &&
-            previousLocal.leftRight <= 1 + sideTolerance &&
-            Number.isFinite(previousLocal.projectionError) &&
-            previousLocal.projectionError <= projectionTolerance;
+        const crossedEndpoint = traversal.endpointLineCrossed(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint);
+        if (!crossedEndpoint) return false;
+        return Number.isFinite(nextLocal.leftRight) &&
+            nextLocal.leftRight >= -0.000001 &&
+            nextLocal.leftRight <= 1.000001;
     }
 
     resolveActorStairLocalMovement(currentStairSupport, worldX, worldY, actor = null, options = {}) {
@@ -2857,14 +2853,17 @@ class GameMap {
                     return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
                 }
                 if (!this.actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options)) continue;
-                const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, options);
+                const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
+                    ...options,
+                    endpoint
+                });
                 if (entrySupport) {
                     return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
                 }
             }
         }
 
-        if (!this.actorAppearsOnFloorSupport(actor, currentFloorSupport)) {
+        if (!this.actorUsesLocalMovementZ(actor) && !this.actorAppearsOnFloorSupport(actor, currentFloorSupport)) {
             const reacquiredStairSupport = this.getActorStairSupportAtWorldPosition(
                 Number(actor && actor.x),
                 Number(actor && actor.y),
@@ -3279,11 +3278,98 @@ class GameMap {
         return nodes.length;
     }
 
-    unregisterFloorFragments(fragmentIds) {
+    removeObjectsForDeletedFloorFragments(fragmentIds) {
+        const ids = fragmentIds instanceof Set
+            ? fragmentIds
+            : new Set(Array.isArray(fragmentIds) ? fragmentIds.filter(id => typeof id === "string" && id.length > 0) : []);
+        if (ids.size === 0) return { runtimeObjects: 0, savedRecords: 0 };
+
+        const runtimeObjects = new Set();
+        const addRuntimeObject = (obj) => {
+            if (!obj || obj.gone) return;
+            const fragmentId = typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : "");
+            const manifestFragmentId = typeof obj._floorBuildingManifestFragmentId === "string"
+                ? obj._floorBuildingManifestFragmentId
+                : "";
+            if ((fragmentId && ids.has(fragmentId)) || (manifestFragmentId && ids.has(manifestFragmentId))) {
+                runtimeObjects.add(obj);
+            }
+        };
+
+        if (this.floorNodesById instanceof Map) {
+            ids.forEach((fragmentId) => {
+                const nodes = this.floorNodesById.get(fragmentId) || [];
+                if (!Array.isArray(nodes)) return;
+                for (let i = 0; i < nodes.length; i++) {
+                    const node = nodes[i];
+                    if (!node) continue;
+                    const objects = Array.isArray(node.objects) ? node.objects : [];
+                    for (let j = 0; j < objects.length; j++) addRuntimeObject(objects[j]);
+                    const visibilityObjects = Array.isArray(node.visibilityObjects) ? node.visibilityObjects : [];
+                    for (let j = 0; j < visibilityObjects.length; j++) addRuntimeObject(visibilityObjects[j]);
+                }
+            });
+        }
+        if (Array.isArray(this.objects)) {
+            for (let i = 0; i < this.objects.length; i++) addRuntimeObject(this.objects[i]);
+        }
+        const objectState = this._prototypeObjectState || null;
+        if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            for (const runtimeObj of objectState.activeRuntimeObjectsByRecordId.values()) addRuntimeObject(runtimeObj);
+        }
+
+        runtimeObjects.forEach((obj) => {
+            if (!obj || obj.gone) return;
+            if (typeof obj.removeFromGame === "function") {
+                obj.removeFromGame();
+            } else if (typeof obj.remove === "function") {
+                obj.remove();
+            } else if (typeof obj.delete === "function") {
+                obj.delete();
+            } else {
+                obj.gone = true;
+            }
+        });
+
+        let savedRecords = 0;
+        const sectionState = this._prototypeSectionState || null;
+        if (sectionState && sectionState.sectionAssetsByKey instanceof Map) {
+            for (const asset of sectionState.sectionAssetsByKey.values()) {
+                const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
+                if (!records || records.length === 0) continue;
+                const nextRecords = records.filter((record) => {
+                    const fragmentId = typeof record?.fragmentId === "string" ? record.fragmentId : "";
+                    if (!fragmentId || !ids.has(fragmentId)) return true;
+                    savedRecords += 1;
+                    return false;
+                });
+                if (nextRecords.length === records.length) continue;
+                asset.objects = nextRecords;
+                asset._prototypeNamedObjectRecordIdByName = null;
+                asset._prototypeNamedObjectConflictRecordIdsByName = null;
+                asset._prototypeClearanceDirty = true;
+            }
+        }
+
+        if (objectState && savedRecords > 0) {
+            objectState.captureScanNeeded = true;
+        }
+        if ((runtimeObjects.size > 0 || savedRecords > 0) && typeof this.markBuildingRenderCacheDirty === "function") {
+            this.markBuildingRenderCacheDirty();
+        }
+        return { runtimeObjects: runtimeObjects.size, savedRecords };
+    }
+
+    unregisterFloorFragments(fragmentIds, options = {}) {
         const ids = fragmentIds instanceof Set
             ? Array.from(fragmentIds)
             : (Array.isArray(fragmentIds) ? fragmentIds.slice() : []);
         if (ids.length === 0) return 0;
+        if (options && options.removeAttachedObjects === true) {
+            this.removeObjectsForDeletedFloorFragments(ids);
+        }
         let removedCount = 0;
         for (let idIndex = 0; idIndex < ids.length; idIndex++) {
             const fragmentId = ids[idIndex];

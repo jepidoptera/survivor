@@ -483,6 +483,13 @@ function treadStoredArcDelta(tread, key, label) {
     return value;
 }
 
+function treadHasStoredArcDelta(tread, key = "arcDeltaAngle") {
+    if (!Object.prototype.hasOwnProperty.call(tread || {}, key)) return false;
+    const value = Number(tread[key]);
+    if (!Number.isFinite(value)) throw new Error(`stair ${key} must be finite`);
+    return Math.abs(value) > 0.000001;
+}
+
 function stairArcDelta(startAngle, endAngle, tread, key, label, referenceDelta = null) {
     const rawDelta = shortestAngleDelta(startAngle, endAngle);
     const storedDelta = treadStoredArcDelta(tread, key, label);
@@ -615,15 +622,24 @@ function chooseParallelStairTreadPairing(a, b) {
 function allocateCountsByArea(sections, totalCount) {
     const count = Math.max(1, Math.round(Number(totalCount) || 1));
     const active = sections
-        .map((section, index) => ({ section, index, area: Math.max(0, Number(section && section.area) || 0) }))
+        .map((section, index) => ({
+            section,
+            index,
+            area: Math.max(0, Number(section && section.area) || 0),
+            minCount: Math.max(1, Math.round(Number(section && section.minStepCount) || 1))
+        }))
         .filter((entry) => entry.area > 0.000001);
     const counts = new Array(sections.length).fill(0);
     if (!active.length) {
         counts[0] = count;
         return counts;
     }
+    const required = active.reduce((sum, entry) => sum + entry.minCount, 0);
+    if (count < required) {
+        throw new Error(`stair step allocation requires at least ${required} steps for the current arc geometry`);
+    }
     const totalArea = active.reduce((sum, entry) => sum + entry.area, 0);
-    if (count >= active.length) active.forEach((entry) => { counts[entry.index] = 1; });
+    if (count >= required) active.forEach((entry) => { counts[entry.index] = entry.minCount; });
     const remaining = count - counts.reduce((sum, value) => sum + value, 0);
     const shares = active.map((entry) => {
         const exact = remaining * entry.area / totalArea;
@@ -6313,6 +6329,20 @@ export class BuildingEditorState extends EventTarget {
     stairSectionBetweenTreads(previousTread, nextTread, label = "stair section") {
         const previous = normalizedStairTread(previousTread, `${label} previous tread`);
         const next = normalizedStairTread(nextTread, `${label} next tread`);
+        const connected = connectedStairTreadEndpoint(previous, next);
+        if (connected && treadHasStoredArcDelta(next, "arcDeltaAngle")) {
+            const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
+            const radius = pointDistance(center, connected.aOther);
+            const startAngle = Math.atan2(connected.aOther.y - center.y, connected.aOther.x - center.x);
+            const endAngle = Math.atan2(connected.bOther.y - center.y, connected.bOther.x - center.x);
+            const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle", `${label} next tread`);
+            return {
+                area: Math.abs(0.5 * radius * radius * deltaAngle),
+                minStepCount: Math.abs(deltaAngle) >= Math.PI * 2 - 0.000001 ? 2 : 1,
+                pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
+                pointInner: () => ({ ...center })
+            };
+        }
         const directionCross = Math.sin(next.angle - previous.angle);
         if (Math.abs(directionCross) <= 0.000001) {
             const paired = chooseParallelStairTreadPairing(previous, next);
@@ -6328,7 +6358,6 @@ export class BuildingEditorState extends EventTarget {
                 pointInner: (t) => interpolatePoint(paired.side1Start, paired.side1End, t)
             };
         }
-        const connected = connectedStairTreadEndpoint(previous, next);
         if (connected) {
             const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
             const radius = pointDistance(center, connected.aOther);
@@ -6337,6 +6366,7 @@ export class BuildingEditorState extends EventTarget {
             const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle", `${label} next tread`);
             return {
                 area: Math.abs(0.5 * radius * radius * deltaAngle),
+                minStepCount: Math.abs(deltaAngle) >= Math.PI * 2 - 0.000001 ? 2 : 1,
                 pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
                 pointInner: () => ({ ...center })
             };
@@ -6359,6 +6389,7 @@ export class BuildingEditorState extends EventTarget {
         const nearDeltaAngle = stairArcDelta(nearStartAngle, nearEndAngle, next, "arcNearDeltaAngle", `${label} next tread`, farDeltaAngle);
         return {
             area: Math.abs(0.5 * Math.abs(farDeltaAngle) * (farRadius * farRadius - nearRadius * nearRadius)),
+            minStepCount: Math.abs(farDeltaAngle) >= Math.PI * 2 - 0.000001 ? 2 : 1,
             pointOuter: (t) => arcPoint(crossing, farRadius, farStartAngle, farDeltaAngle, t),
             pointInner: (t) => arcPoint(crossing, nearRadius, nearStartAngle, nearDeltaAngle, t)
         };

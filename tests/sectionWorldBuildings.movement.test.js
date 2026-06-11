@@ -828,6 +828,51 @@ test("removing a building placement removes its movement blockers from nodes", (
     }
 });
 
+test("removing a building placement deletes objects attached to its runtime floor fragments", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState([createPlacement("building:remove-object-house")]);
+        map._prototypeBuildingState.runtimeFloorFragmentIdsByPlacementId.set("building:remove-object-house", [
+            "building:remove-object-house:floor:upper"
+        ]);
+        let unregisterCall = null;
+        map.unregisterFloorFragments = (fragmentIds, options = {}) => {
+            unregisterCall = { fragmentIds, options };
+            return fragmentIds.length;
+        };
+
+        assert.equal(map.removePrototypeBuildingPlacement("building:remove-object-house"), true);
+        assert.deepEqual(unregisterCall.fragmentIds, ["building:remove-object-house:floor:upper"]);
+        assert.equal(unregisterCall.options.removeAttachedObjects, true);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("deleted floor fragments prune attached object records before runtime unregister", () => {
+    const mapSource = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/Map.js"),
+        "utf8"
+    );
+    const floorEditSource = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
+        "utf8"
+    );
+
+    assert.match(mapSource, /removeObjectsForDeletedFloorFragments\(fragmentIds\)/);
+    assert.match(mapSource, /record\?\.fragmentId[\s\S]*ids\.has\(fragmentId\)/);
+    assert.match(mapSource, /asset\.objects = nextRecords;/);
+    assert.match(mapSource, /options && options\.removeAttachedObjects === true[\s\S]*removeObjectsForDeletedFloorFragments\(ids\)/);
+    assert.match(floorEditSource, /unregisterFloorFragments\(removedFragmentIds, \{ removeAttachedObjects: true \}\)/);
+});
+
 test("movement node-window queries sync dirty building blockers before collision collection", () => {
     const source = fs.readFileSync(
         path.join(__dirname, "../public/assets/javascript/prototypes/sectionWorldApiInstallers.js"),

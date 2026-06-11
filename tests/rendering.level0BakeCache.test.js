@@ -75,6 +75,31 @@ test("prototype building exterior bitmap signature includes render data version"
     assert.match(source, /EXTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),/);
 });
 
+test("prototype building bitmap bakes use larger defaults with a WebGL max texture diagnostic", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/prototypes/sectionWorldBuildings.js"),
+        "utf8"
+    );
+    const rendererSource = fs.readFileSync(
+        path.join(__dirname, "../public/building-editor/BuildingRenderer.js"),
+        "utf8"
+    );
+
+    assert.match(source, /const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;/);
+    assert.match(source, /const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;/);
+    assert.match(source, /paddingPixels: Number\.isFinite\(Number\(options\.paddingPixels\)\)[\s\S]*?: DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS,/);
+    assert.match(source, /maxDimension: Number\.isFinite\(Number\(options\.maxDimension\)\)[\s\S]*?: DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION/);
+    assert.match(rendererSource, /const EXTERIOR_BITMAP_DEFAULT_PADDING = 96;/);
+    assert.match(rendererSource, /const EXTERIOR_BITMAP_MAX_DIMENSION = 4096;/);
+    assert.match(rendererSource, /function resolveBuildingBitmapMaxDimension\(rendererRef, requestedMaxDimension, label\)/);
+    assert.match(rendererSource, /exceeds WebGL MAX_TEXTURE_SIZE/);
+    assert.match(rendererSource, /function fitBuildingBitmapExportResolution\(setup, projectionPoints, label\)/);
+    assert.match(rendererSource, /resolutionScale: pixelsPerWorldUnit \/ requestedPixelsPerWorldUnit/);
+    assert.match(rendererSource, /requestedPixelsPerWorldUnit/);
+    assert.doesNotMatch(rendererSource, /throw new Error\(`building exterior bitmap \$\{width\}x\$\{height\} exceeds max dimension/);
+    assert.doesNotMatch(rendererSource, /throw new Error\(`building interior bitmap \$\{width\}x\$\{height\} exceeds max dimension/);
+});
+
 test("prototype building interior bitmap signature includes floor and render data version", () => {
     const source = fs.readFileSync(
         path.join(__dirname, "../public/assets/javascript/prototypes/sectionWorldBuildings.js"),
@@ -104,6 +129,9 @@ test("prototype building interior bitmap signature includes floor and render dat
     assert.match(rendererSource, /floorIdsVisibleThroughFloorOpenings\(floor\)/);
     assert.match(rendererSource, /floorIdsVisibleBelowFloor\(floor\)/);
     assert.match(rendererSource, /collectInteriorBitmapProjectionPoints\(state\.building, floor, interiorBitmapFloors\)/);
+    assert.match(rendererSource, /anchorX: originScreen\.x \/ width,/);
+    assert.match(rendererSource, /anchorY: originScreen\.y \/ height,/);
+    assert.doesNotMatch(rendererSource, /anchorX: Math\.max\(0, Math\.min\(1, originScreen\.x \/ width\)\)/);
     assert.match(rendererSource, /playtestFloorRenderOverride = \{\s+floorIds: interiorBitmapFloorIds,\s+suppressFloorMeshIds: visibleLowerFloorIds,\s+fullHeightWallFloorIds: visibleLowerFloorIds,\s+fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,\s+suppressFade: true\s+\};/);
     assert.match(rendererSource, /assertInteriorBitmapRenderableSurfaces\(floor\)/);
 });
@@ -118,6 +146,15 @@ test("main game Pixi renderer requests a depth buffer", () => {
     assert.match(source, /gamePixiView\.getContext\("webgl2", gameWebglContextAttributes\)/);
     assert.match(source, /gameContextAttributes\.depth !== true/);
     assert.match(source, /new PIXI\.Application\(\{[\s\S]*?\bview:\s*gamePixiView,[\s\S]*?\bcontext:\s*gamePixiContext,[\s\S]*?\}\);/);
+});
+
+test("ground depth billboard mesh signature includes sprite anchor", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/gameobjects/staticObjects.js"),
+        "utf8"
+    );
+
+    assert.match(source, /worldX, worldY, groundVisualZ, worldWidth, worldDepthY, angleDeg,\s+anchorX, anchorY, groundLayerNudge/);
 });
 
 test("level 0 ground bake nodes are expanded once per stable bubble", () => {
@@ -2684,6 +2721,174 @@ test("prototype building active interior requests and renders source floor bitma
     assert.equal(rendered.cache, cache);
     assert.deepEqual([...hiddenIds], [cache.id]);
     assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), ["interior bitmap mesh"]);
+});
+
+test("ready prototype interior bitmap suppresses duplicate live interior geometry", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-test-house",
+        buildingSaveName: "test house",
+        transform: { x: 3, y: 4, rotation: 0.25 }
+    };
+    const wallItem = {
+        id: "wall-1",
+        type: "wallSection",
+        gone: false,
+        vanishing: false
+    };
+    const stairItem = {
+        id: "stair-1",
+        type: "treadPathStair",
+        gone: false,
+        vanishing: false,
+        visible: true
+    };
+    const region = {
+        id: "floor-region-0",
+        fragmentId: `${placement.id}:floor:floor-0`,
+        level: 0,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: 1, y: 1 }
+            ],
+            holes: []
+        },
+        staticObjects: [
+            { item: wallItem, level: 0 },
+            { item: stairItem, level: 0 }
+        ]
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            ...region,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-0"
+            }
+        },
+        renderCache: {
+            renderItems: [
+                { item: wallItem, level: 0 },
+                { item: stairItem, level: 0 }
+            ],
+            interiorRegions: [region]
+        }
+    };
+    const cache = {
+        id: "building:placed-test-house|floor-0",
+        placementId: placement.id,
+        floorId: "floor-0",
+        status: "ready",
+        texture: {}
+    };
+    const bitmapLookups = [];
+    const map = {
+        getPrototypeBuildingInteriorBitmap(id, floorId) {
+            bitmapLookups.push({ id, floorId });
+            return cache;
+        }
+    };
+    renderer.getBuildingInteriorDynamicCharacterCandidates = () => [];
+
+    const plan = renderer.buildBuildingInteriorRenderPlan(
+        { map, wizard: { x: 0, y: 0 } },
+        { active: true, triggers: [trigger] }
+    );
+
+    assert.deepEqual(bitmapLookups, [{ id: placement.id, floorId: "floor-0" }]);
+    assert.equal(plan.active, false);
+    assert.equal(plan.items.has(wallItem), false);
+    assert.equal(plan.items.has(stairItem), false);
+});
+
+test("ready prototype interior bitmap does not promote stale live interior display objects", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-test-house",
+        buildingSaveName: "test house",
+        transform: { x: 3, y: 4, rotation: 0.25 }
+    };
+    const staleDisplayObject = {
+        visible: true,
+        renderable: true,
+        parent: null
+    };
+    const stairItem = {
+        id: "stair-1",
+        type: "treadPathStair",
+        gone: false,
+        vanishing: false,
+        _renderingDisplayObject: staleDisplayObject
+    };
+    const region = {
+        id: "floor-region-0",
+        fragmentId: `${placement.id}:floor:floor-0`,
+        level: 0,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: 1, y: 1 }
+            ],
+            holes: []
+        },
+        staticObjects: [
+            { item: stairItem, level: 0 }
+        ]
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            ...region,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-0"
+            }
+        },
+        renderCache: {
+            interiorRegions: [region]
+        }
+    };
+    const map = {
+        getPrototypeBuildingInteriorBitmap(id, floorId) {
+            assert.equal(id, placement.id);
+            assert.equal(floorId, "floor-0");
+            return {
+                id: `${placement.id}|floor-0`,
+                placementId: placement.id,
+                floorId: "floor-0",
+                status: "ready",
+                texture: {}
+            };
+        }
+    };
+    let promoted = 0;
+    renderer.promoteDisplayObjectForBuildingInterior = () => {
+        promoted += 1;
+        return true;
+    };
+
+    const promotedCount = renderer.promoteActiveBuildingInteriorRegions(
+        { map, wizard: { x: 0, y: 0 } },
+        { active: true, triggers: [trigger] },
+        { addChild() {} },
+        new Set(),
+        { items: new Set(), wallTopFaceOnly: new Map(), doorInteriorSide: new Map() }
+    );
+
+    assert.equal(promotedCount, 0);
+    assert.equal(promoted, 0);
 });
 
 test("prototype building interior floor transitions fade upper floor bitmaps in and out", () => {

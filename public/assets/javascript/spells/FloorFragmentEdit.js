@@ -618,7 +618,9 @@
 
             const fragmentContents = collectFloorFragmentContents(mapRef, removedFragmentIds);
             fragmentContents.forEach(obj => contentsToRefresh.add(obj));
-            if (removedFragmentIds.length > 0) mapRef.unregisterFloorFragments(removedFragmentIds);
+            if (removedFragmentIds.length > 0) {
+                mapRef.unregisterFloorFragments(removedFragmentIds, { removeAttachedObjects: true });
+            }
             if (fragmentRecords.length > 0) mapRef.registerFloorFragmentsForSection(sectionKey, state, fragmentRecords);
             if (blockingHelpers && typeof blockingHelpers.applyPrototypeBlockedEdgesForSection === "function") {
                 blockingHelpers.applyPrototypeBlockedEdgesForSection(mapRef, sectionKey);

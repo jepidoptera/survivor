@@ -52,6 +52,39 @@ test("stair arc metadata preserves sweeps beyond a full turn", async () => {
     );
 });
 
+test("connected arc metadata wins over parallel tread geometry", async () => {
+    const { BuildingRenderer } = await import("../public/building-editor/BuildingRenderer.js");
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const previous = {
+        left: { x: 0, y: 0 },
+        right: { x: -2, y: 0 }
+    };
+    const next = {
+        left: { x: 2, y: 0 },
+        right: { x: 0, y: 0 },
+        arcDeltaAngle: Math.PI
+    };
+    const stair = {
+        id: "parallel_connected_arc",
+        direction: "up",
+        bottomZ: 0,
+        height: 3,
+        stepCount: 6,
+        treads: [previous, next]
+    };
+
+    const section = renderer.stairSectionBetweenTreads(previous, next, "parallel connected test");
+    const steps = renderer.stairStepPolygons(stair);
+
+    assert.equal(section.kind, "wedge");
+    assert.ok(Math.abs(section.area - 0.5 * Math.PI * 4) < 0.000001);
+    assert.equal(steps.length, 6);
+    assert.ok(steps.every((step) => Math.abs(step.polygon.reduce((sum, point, index, ring) => {
+        const nextPoint = ring[(index + 1) % ring.length];
+        return sum + point.x * nextPoint.y - nextPoint.x * point.y;
+    }, 0) * 0.5) > 0.000001));
+});
+
 test("stair tool keeps pending drag winding beyond a full turn", async () => {
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");
     const tool = new StairTool({});

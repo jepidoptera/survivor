@@ -108,6 +108,11 @@
         return delta;
     }
 
+    function treadHasStoredArcDelta(tread, key = "arcDeltaAngle") {
+        if (!tread || !Object.prototype.hasOwnProperty.call(tread, key)) return false;
+        return Math.abs(finiteNumber(tread[key], key)) > EPSILON;
+    }
+
     function normalizedTread(tread, label) {
         if (!tread || typeof tread !== "object") throw new Error(`${label} must be a tread`);
         const left = finitePoint(tread.left, `${label}.left`);
@@ -209,6 +214,19 @@
     }
 
     function createTreadSection(previous, next, index, label) {
+        const connected = connectedTreadEndpoint(previous, next);
+        if (connected && treadHasStoredArcDelta(next, "arcDeltaAngle")) {
+            const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
+            const radius = pointDistance(center, connected.aOther);
+            const startAngle = Math.atan2(connected.aOther.y - center.y, connected.aOther.x - center.x);
+            const endAngle = Math.atan2(connected.bOther.y - center.y, connected.bOther.x - center.x);
+            const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle");
+            return {
+                index,
+                pointA: () => ({ ...center }),
+                pointB: (t) => arcPoint(center, radius, startAngle, deltaAngle, t)
+            };
+        }
         const directionCross = Math.sin(next.angle - previous.angle);
         if (Math.abs(directionCross) <= EPSILON) {
             const paired = chooseParallelPairing(previous, next);
@@ -218,7 +236,6 @@
                 pointB: (t) => interpolatePoint(paired.sideBStart, paired.sideBEnd, t)
             };
         }
-        const connected = connectedTreadEndpoint(previous, next);
         if (connected) {
             const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
             const radius = pointDistance(center, connected.aOther);
@@ -400,10 +417,17 @@
         };
     }
 
-    function localPointForPathFrame(frame, point) {
+    function localPointForPathFrame(frame, point, options = {}) {
         if (!frame || frame.kind !== "treadPath") throw new Error("tread path local point requires a tread path frame");
         const candidate = finitePoint(point, `stair ${frame.stairId} sample point`);
         let best = null;
+        const upDownHint = Number(options && options.upDownHint);
+        const hasUpDownHint = Number.isFinite(upDownHint);
+        const minUpDown = Number(options && options.minUpDown);
+        const maxUpDown = Number(options && options.maxUpDown);
+        const hasMinUpDown = Number.isFinite(minUpDown);
+        const hasMaxUpDown = Number.isFinite(maxUpDown);
+        const hintErrorTolerance = Math.max(EPSILON, Number(options && options.hintErrorTolerance) || 0.001);
         const evaluate = (section, rawT) => {
             const sectionT = clamp01(rawT);
             const crossline = sectionCrossline(section, sectionT);
@@ -417,18 +441,32 @@
                 y: crossline.a.y + crossline.dy * clampedLeftRight
             };
             const error = pointDistance(candidate, projected);
-            return { section, sectionT, leftRight, crossline, error };
+            const upDown = section.startU + (section.endU - section.startU) * sectionT;
+            return { section, sectionT, leftRight, crossline, error, upDown };
+        };
+        const preferResult = (candidateResult, currentBest) => {
+            if (!candidateResult) return false;
+            if (hasMinUpDown && candidateResult.upDown < minUpDown - EPSILON) return false;
+            if (hasMaxUpDown && candidateResult.upDown > maxUpDown + EPSILON) return false;
+            if (!currentBest) return true;
+            if (hasUpDownHint && Math.abs(candidateResult.error - currentBest.error) <= hintErrorTolerance) {
+                return Math.abs(candidateResult.upDown - upDownHint) + EPSILON < Math.abs(currentBest.upDown - upDownHint);
+            }
+            return candidateResult.error < currentBest.error;
         };
         frame.sections.forEach((section) => {
             let sampleT = 0;
             let sampleError = Infinity;
+            let sampleBest = null;
             for (let i = 0; i <= 24; i++) {
                 const result = evaluate(section, i / 24);
-                if (result.error < sampleError) {
+                if (preferResult(result, sampleBest)) {
                     sampleT = result.sectionT;
                     sampleError = result.error;
+                    sampleBest = result;
                 }
             }
+            if (!sampleBest) return;
             let low = Math.max(0, sampleT - 1 / 24);
             let high = Math.min(1, sampleT + 1 / 24);
             for (let i = 0; i < 18; i++) {
@@ -441,7 +479,11 @@
                 }
             }
             const result = evaluate(section, (low + high) * 0.5);
-            if (!best || result.error < best.error) best = result;
+            if (preferResult(result, best)) {
+                best = result;
+            } else if (preferResult(sampleBest, best)) {
+                best = sampleBest;
+            }
         });
         if (!best) throw new Error(`stair ${frame.stairId} has no tread path sections`);
         let upDown = best.section.startU + (best.section.endU - best.section.startU) * best.sectionT;

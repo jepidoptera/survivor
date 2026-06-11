@@ -1527,6 +1527,9 @@ class Character {
 
     _checkOccupancy(targetX, targetY, options) {
         if (!this.map) return true;
+        if (this._pendingVectorMovementSupport && typeof this._pendingVectorMovementSupport === "object") {
+            return true;
+        }
         if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
             const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
             if (stairOccupancy && stairOccupancy.handled === true) {

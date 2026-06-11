@@ -2281,6 +2281,21 @@ void main(void) {
                 if (!renderCache) {
                     throw new Error("missing building interior render cache");
                 }
+                const prototypeInteriorBitmapReady = this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
+                if (prototypeInteriorBitmapReady) {
+                    const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
+                    for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
+                        const region = regions[regionIndex];
+                        if (!region) continue;
+                        for (let j = 0; j < dynamicCharacters.length; j++) {
+                            const character = dynamicCharacters[j];
+                            if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
+                                plan.items.add(character);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 const activeEntries = Array.isArray(renderCache.renderItems) ? renderCache.renderItems : [];
                 for (let j = 0; j < activeEntries.length; j++) {
                     const entry = activeEntries[j];
@@ -2352,6 +2367,24 @@ void main(void) {
             }
             plan.active = plan.items.size > 0;
             return plan;
+        }
+
+        isPrototypeBuildingInteriorBitmapReady(ctx, trigger) {
+            if (!this.isPrototypeBuildingCutawayTrigger(trigger) || !trigger.activeInteriorRegion) return false;
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            if (!mapRef || typeof mapRef.getPrototypeBuildingInteriorBitmap !== "function") return false;
+            const placement = trigger.building && trigger.building._prototypeBuildingPlacement;
+            if (!placement || !placement.id) {
+                throw new Error(`prototype building interior trigger ${trigger && trigger.buildingId || "(unknown)"} is missing its placement`);
+            }
+            const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
+            if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return false;
+            const cache = mapRef.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
+            if (!cache || cache.status !== "ready") return false;
+            if (!cache.texture) {
+                throw new Error(`prototype building interior ${cache.id || placement.id} ready cache is missing its texture`);
+            }
+            return true;
         }
 
         getCompiledBuildingRenderCache(ctx, map, building) {
@@ -6608,6 +6641,7 @@ void main(void) {
                 const trigger = triggers[i];
                 const region = trigger && trigger.activeInteriorRegion;
                 if (!region) continue;
+                if (this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger)) continue;
                 const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
                 const visibleRegions = regions.length > 0 ? regions : [region];
                 for (let regionIndex = 0; regionIndex < visibleRegions.length; regionIndex++) {

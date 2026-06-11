@@ -53,8 +53,8 @@ const PLAYTEST_WIZARD_HAT_RENDER_Y_OFFSET_UNITS = 0.14;
 const PLAYTEST_WIZARD_HAT_COLOR = 0x000099;
 const PLAYTEST_WIZARD_HAT_BAND_COLOR = 0xffd700;
 const PLAYTEST_WIZARD_SHADOW_RENDER_Z_OFFSET_UNITS = 0.1;
-const EXTERIOR_BITMAP_DEFAULT_PADDING = 48;
-const EXTERIOR_BITMAP_MAX_DIMENSION = 2048;
+const EXTERIOR_BITMAP_DEFAULT_PADDING = 96;
+const EXTERIOR_BITMAP_MAX_DIMENSION = 4096;
 
 function roofMeshKey(floor, roof = null) {
     const floorId = getFloorId(floor);
@@ -2106,6 +2106,13 @@ function treadStoredArcDelta(tread, key, label) {
     return value;
 }
 
+function treadHasStoredArcDelta(tread, key = "arcDeltaAngle") {
+    if (!Object.prototype.hasOwnProperty.call(tread || {}, key)) return false;
+    const value = Number(tread[key]);
+    if (!Number.isFinite(value)) throw new Error(`stair ${key} must be finite`);
+    return Math.abs(value) > GEOMETRY_EPSILON;
+}
+
 function stairArcDelta(startAngle, endAngle, tread, key, label, referenceDelta = null) {
     const rawDelta = shortestAngleDelta(startAngle, endAngle);
     const storedDelta = treadStoredArcDelta(tread, key, label);
@@ -2244,19 +2251,28 @@ function chooseParallelTreadPairing(a, b) {
 function allocateCountsByArea(sections, totalCount) {
     const count = Math.max(1, Math.round(Number(totalCount) || 1));
     const active = sections
-        .map((section, index) => ({ section, index, area: Math.max(0, Number(section && section.area) || 0) }))
+        .map((section, index) => ({
+            section,
+            index,
+            area: Math.max(0, Number(section && section.area) || 0),
+            minCount: Math.max(1, Math.round(Number(section && section.minStepCount) || 1))
+        }))
         .filter((entry) => entry.area > GEOMETRY_EPSILON);
     const counts = new Array(sections.length).fill(0);
     if (!active.length) {
         counts[0] = count;
         return counts;
     }
+    const required = active.reduce((sum, entry) => sum + entry.minCount, 0);
+    if (count < required) {
+        throw new Error(`stair step allocation requires at least ${required} steps for the current arc geometry`);
+    }
     const totalArea = active.reduce((sum, entry) => sum + entry.area, 0);
-    if (count >= active.length) {
+    if (count >= required) {
         active.forEach((entry) => {
-            counts[entry.index] = 1;
+            counts[entry.index] = entry.minCount;
         });
-        const remaining = count - active.length;
+        const remaining = count - required;
         const extras = active.map((entry) => {
             const exact = remaining * entry.area / totalArea;
             return { ...entry, exact, floor: Math.floor(exact), remainder: exact - Math.floor(exact) };
@@ -2587,6 +2603,28 @@ function finiteNumberOr(value, fallback, label) {
     throw new Error(`${label} must be a finite number`);
 }
 
+function rendererMaxTextureSize(rendererRef) {
+    const gl = rendererRef && rendererRef.gl
+        ? rendererRef.gl
+        : (rendererRef && rendererRef.context && rendererRef.context.gl ? rendererRef.context.gl : null);
+    if (!gl || typeof gl.getParameter !== "function" || gl.MAX_TEXTURE_SIZE === undefined) return null;
+    const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    return Number.isFinite(maxTextureSize) && maxTextureSize > 0 ? maxTextureSize : null;
+}
+
+function resolveBuildingBitmapMaxDimension(rendererRef, requestedMaxDimension, label) {
+    const maxDimension = Math.max(64, Math.round(finitePositiveNumber(
+        requestedMaxDimension,
+        EXTERIOR_BITMAP_MAX_DIMENSION,
+        `${label} bitmap maxDimension`
+    )));
+    const hardwareMaxDimension = rendererMaxTextureSize(rendererRef);
+    if (hardwareMaxDimension !== null && maxDimension > hardwareMaxDimension) {
+        throw new Error(`${label} bitmap maxDimension ${maxDimension} exceeds WebGL MAX_TEXTURE_SIZE ${hardwareMaxDimension}`);
+    }
+    return maxDimension;
+}
+
 function collectExteriorBitmapProjectionPoints(building) {
     const points = [];
     const addPoint = (point, z = 0) => {
@@ -2843,6 +2881,67 @@ function configureBuildingBitmapExportCamera(state, pixelsPerWorldUnit, pitch, r
     state.camera.zoom = pixelsPerWorldUnit;
 }
 
+function fitBuildingBitmapExportResolution(setup, projectionPoints, label) {
+    const state = setup && setup.state;
+    const exportRenderer = setup && setup.exportRenderer;
+    const requestedPixelsPerWorldUnit = finitePositiveNumber(
+        setup && setup.pixelsPerWorldUnit,
+        72,
+        `${label} bitmap pixelsPerWorldUnit`
+    );
+    const padding = Math.max(0, Math.round(Number(setup && setup.padding) || 0));
+    const maxDimension = Math.max(64, Math.round(Number(setup && setup.maxDimension) || EXTERIOR_BITMAP_MAX_DIMENSION));
+    const rawPitch = Number(setup && setup.pitch);
+    const pitch = clampCameraPitch(Number.isFinite(rawPitch) ? rawPitch : CAMERA_DEFAULT_PITCH);
+    const cameraRotation = Number.isFinite(Number(setup && setup.cameraRotation))
+        ? Number(setup.cameraRotation)
+        : (Number.isFinite(Number(setup && setup.rotation)) ? Number(setup.rotation) : 0);
+    const contentBudget = maxDimension - padding * 2;
+    if (!(contentBudget > 0)) {
+        throw new Error(`${label} bitmap maxDimension ${maxDimension} is too small for ${padding}px padding`);
+    }
+
+    let pixelsPerWorldUnit = requestedPixelsPerWorldUnit;
+    let bounds = null;
+    let width = 0;
+    let height = 0;
+    let requestedWidth = 0;
+    let requestedHeight = 0;
+    for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) {
+            configureBuildingBitmapExportCamera(state, pixelsPerWorldUnit, pitch, cameraRotation);
+        }
+        bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        width = Math.ceil(bounds.width + padding * 2);
+        height = Math.ceil(bounds.height + padding * 2);
+        if (attempt === 0) {
+            requestedWidth = width;
+            requestedHeight = height;
+        }
+        if (width <= maxDimension && height <= maxDimension) {
+            return {
+                bounds,
+                width,
+                height,
+                pixelsPerWorldUnit,
+                requestedPixelsPerWorldUnit,
+                resolutionScale: pixelsPerWorldUnit / requestedPixelsPerWorldUnit,
+                requestedWidth,
+                requestedHeight
+            };
+        }
+
+        const scaleX = bounds.width > 0 ? contentBudget / bounds.width : 1;
+        const scaleY = bounds.height > 0 ? contentBudget / bounds.height : 1;
+        const scale = Math.min(scaleX, scaleY, 1);
+        if (!(scale > 0) || !Number.isFinite(scale)) {
+            throw new Error(`${label} bitmap ${width}x${height} cannot fit within max dimension ${maxDimension}`);
+        }
+        pixelsPerWorldUnit = Math.max(0.0001, pixelsPerWorldUnit * scale * 0.999);
+    }
+    throw new Error(`${label} bitmap ${width}x${height} still exceeds max dimension ${maxDimension} after resolution scaling`);
+}
+
 function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}) {
     const label = typeof config.label === "string" && config.label.length > 0
         ? config.label
@@ -2869,11 +2968,11 @@ function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}
         EXTERIOR_BITMAP_DEFAULT_PADDING,
         `${label} bitmap paddingPixels`
     )));
-    const maxDimension = Math.max(64, Math.round(finitePositiveNumber(
+    const maxDimension = resolveBuildingBitmapMaxDimension(
+        rendererRef,
         options && options.maxDimension,
-        EXTERIOR_BITMAP_MAX_DIMENSION,
-        `${label} bitmap maxDimension`
-    )));
+        label
+    );
     const rotation = finiteNumberOr(options && options.rotation, 0, `${label} bitmap rotation`);
     const pitch = clampCameraPitch(finiteNumberOr(
         options && options.pitch,
@@ -2889,11 +2988,12 @@ function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}
     const configured = typeof config.configureState === "function"
         ? (config.configureState(state, options) || {})
         : {};
+    const cameraRotation = config.rotateModelAroundOrigin === true ? 0 : rotation;
     configureBuildingBitmapExportCamera(
         state,
         pixelsPerWorldUnit,
         pitch,
-        config.rotateModelAroundOrigin === true ? 0 : rotation
+        cameraRotation
     );
 
     const stage = new PIXI.Container();
@@ -2918,6 +3018,7 @@ function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}
         padding,
         maxDimension,
         rotation,
+        cameraRotation,
         pitch,
         state,
         stage,
@@ -4172,6 +4273,28 @@ export class BuildingRenderer {
     stairSectionBetweenTreads(previousTread, nextTread, label = "stair section") {
         const previous = normalizedTread(previousTread, `${label} previous tread`);
         const next = normalizedTread(nextTread, `${label} next tread`);
+        const connected = connectedTreadEndpoint(previous, next);
+        if (connected && treadHasStoredArcDelta(next, "arcDeltaAngle")) {
+            const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
+            const outer0 = connected.aOther;
+            const outer1 = connected.bOther;
+            const radius = pointDistance(center, outer0);
+            if (Math.abs(radius - pointDistance(center, outer1)) > Math.max(0.001, radius * 0.01)) {
+                throw new Error(`${label} connected tread endpoints do not share a consistent stair width`);
+            }
+            const startAngle = Math.atan2(outer0.y - center.y, outer0.x - center.x);
+            const endAngle = Math.atan2(outer1.y - center.y, outer1.x - center.x);
+            const deltaAngle = stairArcDelta(startAngle, endAngle, next, "arcDeltaAngle", `${label} next tread`);
+            const area = Math.abs(0.5 * radius * radius * deltaAngle);
+            return {
+                kind: "wedge",
+                area,
+                minStepCount: Math.abs(deltaAngle) >= Math.PI * 2 - GEOMETRY_EPSILON ? 2 : 1,
+                pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
+                pointInner: () => ({ ...center }),
+                ring: positiveAreaRing([outer0, outer1, center])
+            };
+        }
         const directionCross = Math.sin(next.angle - previous.angle);
         if (Math.abs(directionCross) <= GEOMETRY_EPSILON) {
             const paired = chooseParallelTreadPairing(previous, next);
@@ -4191,7 +4314,6 @@ export class BuildingRenderer {
             };
         }
 
-        const connected = connectedTreadEndpoint(previous, next);
         if (connected) {
             const center = { x: Number(connected.aPoint.x), y: Number(connected.aPoint.y) };
             const outer0 = connected.aOther;
@@ -4207,6 +4329,7 @@ export class BuildingRenderer {
             return {
                 kind: "wedge",
                 area,
+                minStepCount: Math.abs(deltaAngle) >= Math.PI * 2 - GEOMETRY_EPSILON ? 2 : 1,
                 pointOuter: (t) => arcPoint(center, radius, startAngle, deltaAngle, t),
                 pointInner: () => ({ ...center }),
                 ring: positiveAreaRing([outer0, outer1, center])
@@ -4243,6 +4366,7 @@ export class BuildingRenderer {
         return {
             kind: "annular",
             area,
+            minStepCount: Math.abs(farDeltaAngle) >= Math.PI * 2 - GEOMETRY_EPSILON ? 2 : 1,
             pointOuter: (t) => arcPoint(crossing, farRadius, farStartAngle, farDeltaAngle, t),
             pointInner: (t) => arcPoint(crossing, nearRadius, nearStartAngle, nearDeltaAngle, t),
             ring: positiveAreaRing([
@@ -8678,7 +8802,7 @@ export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
     });
     const {
         rendererRef,
-        pixelsPerWorldUnit,
+        pixelsPerWorldUnit: requestedPixelsPerWorldUnit,
         padding,
         maxDimension,
         rotation,
@@ -8699,12 +8823,10 @@ export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
         const exteriorTexturePaths = exteriorBitmapTexturePaths(state.building);
         await Promise.all(exteriorTexturePaths.map((path) => loadPixiTexturePath(path, "building exterior bitmap")));
         const projectionPoints = collectExteriorBitmapProjectionPoints(state.building);
-        let initialBounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
-        const width = Math.ceil(initialBounds.width + padding * 2);
-        const height = Math.ceil(initialBounds.height + padding * 2);
-        if (width > maxDimension || height > maxDimension) {
-            throw new Error(`building exterior bitmap ${width}x${height} exceeds max dimension ${maxDimension}`);
-        }
+        const fitted = fitBuildingBitmapExportResolution(setup, projectionPoints, "building exterior");
+        const pixelsPerWorldUnit = fitted.pixelsPerWorldUnit;
+        const width = fitted.width;
+        const height = fitted.height;
         setExteriorBitmapScreen(appLike, width, height);
         let bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
         const dx = (width * 0.5) - bounds.centerX;
@@ -8773,9 +8895,11 @@ export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
             depthMetricTexture,
             width,
             height,
-            anchorX: Math.max(0, Math.min(1, originScreen.x / width)),
-            anchorY: Math.max(0, Math.min(1, originScreen.y / height)),
+            anchorX: originScreen.x / width,
+            anchorY: originScreen.y / height,
             pixelsPerWorldUnit,
+            requestedPixelsPerWorldUnit,
+            resolutionScale: fitted.resolutionScale,
             xyratio: GAME_XY_RATIO,
             floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT,
             rotation,
@@ -8789,7 +8913,10 @@ export async function renderBuildingExteriorBitmap(buildingData, options = {}) {
             bounds: {
                 screen: bounds,
                 worldWidth: width / pixelsPerWorldUnit,
-                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO)
+                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO),
+                requestedWidth: fitted.requestedWidth,
+                requestedHeight: fitted.requestedHeight,
+                maxDimension
             },
             camera: {
                 x: Number(state.camera.x),
@@ -8840,7 +8967,7 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
     });
     const {
         rendererRef,
-        pixelsPerWorldUnit,
+        pixelsPerWorldUnit: requestedPixelsPerWorldUnit,
         padding,
         maxDimension,
         rotation,
@@ -8881,12 +9008,10 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
         const interiorTexturePaths = exteriorBitmapTexturePaths(state.building);
         await Promise.all(interiorTexturePaths.map((path) => loadPixiTexturePath(path, "building interior bitmap")));
         const projectionPoints = collectInteriorBitmapProjectionPoints(state.building, floor, interiorBitmapFloors);
-        let initialBounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
-        const width = Math.ceil(initialBounds.width + padding * 2);
-        const height = Math.ceil(initialBounds.height + padding * 2);
-        if (width > maxDimension || height > maxDimension) {
-            throw new Error(`building interior bitmap ${width}x${height} exceeds max dimension ${maxDimension}`);
-        }
+        const fitted = fitBuildingBitmapExportResolution(setup, projectionPoints, "building interior");
+        const pixelsPerWorldUnit = fitted.pixelsPerWorldUnit;
+        const width = fitted.width;
+        const height = fitted.height;
         setExteriorBitmapScreen(appLike, width, height);
         let bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
         const dx = (width * 0.5) - bounds.centerX;
@@ -8956,9 +9081,11 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
             depthMetricTexture,
             width,
             height,
-            anchorX: Math.max(0, Math.min(1, originScreen.x / width)),
-            anchorY: Math.max(0, Math.min(1, originScreen.y / height)),
+            anchorX: originScreen.x / width,
+            anchorY: originScreen.y / height,
             pixelsPerWorldUnit,
+            requestedPixelsPerWorldUnit,
+            resolutionScale: fitted.resolutionScale,
             xyratio: GAME_XY_RATIO,
             floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT,
             rotation,
@@ -8974,7 +9101,10 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
             bounds: {
                 screen: bounds,
                 worldWidth: width / pixelsPerWorldUnit,
-                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO)
+                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO),
+                requestedWidth: fitted.requestedWidth,
+                requestedHeight: fitted.requestedHeight,
+                maxDimension
             },
             camera: {
                 x: Number(state.camera.x),

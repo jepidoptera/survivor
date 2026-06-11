@@ -874,7 +874,7 @@ function playtestResolveStairWallSlide(traversal, stair, currentLocal, candidate
     const slideLocal = playtestClampStairLocalSide(
         traversal,
         frame,
-        traversal.localPointForPathFrame(frame, slidePoint),
+        traversal.localPointForPathFrame(frame, slidePoint, { upDownHint: currentLocal.upDown }),
         radius
     );
     return playtestStairLocalAllowed(traversal, stair, slideLocal, radius) ? slideLocal : null;
@@ -893,9 +893,7 @@ function resolvePlaytestStairMovement(traversal, stair, wizard, direction, stepD
         stepDistance
     );
     if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
-        const exitCandidate = playtestClampStairLocalSide(traversal, frame, nextLocal, radius);
-        const wallSlide = playtestResolveStairWallSlide(traversal, stair, currentLocal, exitCandidate, radius);
-        return wallSlide || currentLocal;
+        return nextLocal;
     }
     if (traversal.localInsidePathFrame(frame, nextLocal, radius) && playtestStairLocalAllowed(traversal, stair, nextLocal, radius)) {
         return nextLocal;
@@ -928,6 +926,45 @@ function playtestStairEntryDirectionMatches(previousLocal, candidateLocal, endpo
     if (endpoint === "lower") return candidateUpDown > previousUpDown + 0.000001;
     if (endpoint === "higher") return candidateUpDown < previousUpDown - 0.000001;
     throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+}
+
+function playtestStairEndpointLocalOptions(stair, endpoint) {
+    if (endpoint === "lower") return { upDownHint: 0 };
+    if (endpoint === "higher") return { upDownHint: 1 };
+    throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+}
+
+function playtestStairEndpointMouthLocalOptions(stair, endpoint) {
+    const options = playtestStairEndpointLocalOptions(stair, endpoint);
+    const stepCount = Number.isFinite(Number(stair && stair.stepCount))
+        ? Math.max(1, Math.round(Number(stair.stepCount)))
+        : 1;
+    const mouthRange = Math.max(0.05, 1 / stepCount);
+    if (endpoint === "lower") return { ...options, maxUpDown: mouthRange };
+    if (endpoint === "higher") return { ...options, minUpDown: 1 - mouthRange };
+    throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+}
+
+function playtestStairEndpointEntrySupport(traversal, stair, candidate, endpoint, radius) {
+    const local = traversal.localPointForPathFrame(
+        stair.traversalFrame,
+        candidate,
+        playtestStairEndpointMouthLocalOptions(stair, endpoint)
+    );
+    const clamped = playtestClampStairLocalSide(traversal, stair.traversalFrame, {
+        ...local,
+        upDown: endpoint === "lower" ? 0 : 1,
+        projectionError: 0
+    }, radius);
+    return playtestStairSupport(stair, clamped);
+}
+
+function playtestStairEndpointCrossesWidth(traversal, stair, local, endpoint, radius) {
+    const endpointUpDown = endpoint === "lower" ? 0 : (endpoint === "higher" ? 1 : null);
+    if (endpointUpDown === null) throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+    if (!local || !Number.isFinite(Number(local.leftRight))) return false;
+    return Number(local.leftRight) >= -0.000001 &&
+        Number(local.leftRight) <= 1.000001;
 }
 
 function cloneEditorSelection(selection) {
@@ -1131,11 +1168,6 @@ function updatePlaytestWizard(deltaSeconds) {
         const stair = playtestRuntime.stairs.find((entry) => entry.id === stairId);
         if (!stair) throw new Error(`playtest wizard references missing stair ${stairId}`);
         const nextLocal = resolvePlaytestStairMovement(traversal, stair, wizard, direction, stepDistance);
-        const nextPoint = traversal.pointFromPathLocal(
-            stair.traversalFrame,
-            nextLocal.upDown,
-            nextLocal.leftRight
-        );
         if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
             const targetFloorId = nextLocal.upDown < 0 ? stair.lowerFloorId : stair.higherFloorId;
             const exitPoint = traversal.exitPointFromPathLocal(stair.traversalFrame, nextLocal);
@@ -1148,6 +1180,11 @@ function updatePlaytestWizard(deltaSeconds) {
             }
             return;
         }
+        const nextPoint = traversal.pointFromPathLocal(
+            stair.traversalFrame,
+            nextLocal.upDown,
+            nextLocal.leftRight
+        );
         if (!traversal.localInsidePathFrame(stair.traversalFrame, nextLocal, wizard.radius)) {
             setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
             return;
@@ -1165,14 +1202,14 @@ function updatePlaytestWizard(deltaSeconds) {
     for (const stair of playtestRuntime.stairs) {
         const endpoint = connectedStairEndpointForFloor(stair, wizard.floorId);
         if (!endpoint) continue;
-        const previousLocal = traversal.localPointForPathFrame(stair.traversalFrame, wizard);
-        const candidateLocal = traversal.localPointForPathFrame(stair.traversalFrame, candidate);
+        const previousLocal = traversal.localPointForPathFrame(stair.traversalFrame, wizard, playtestStairEndpointMouthLocalOptions(stair, endpoint));
+        const candidateLocal = traversal.localPointForPathFrame(stair.traversalFrame, candidate, playtestStairEndpointMouthLocalOptions(stair, endpoint));
         if (
             traversal.endpointLineCrossed(stair.traversalFrame, wizard, candidate, endpoint) &&
             playtestStairEntryDirectionMatches(previousLocal, candidateLocal, endpoint) &&
-            traversal.localInsidePathFrame(stair.traversalFrame, candidateLocal, wizard.radius)
+            playtestStairEndpointCrossesWidth(traversal, stair, candidateLocal, endpoint, wizard.radius)
         ) {
-            applyPlaytestStairSupport(wizard, playtestStairSupport(stair, candidateLocal, candidate));
+            applyPlaytestStairSupport(wizard, playtestStairEndpointEntrySupport(traversal, stair, candidate, endpoint, wizard.radius));
             setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
             return;
         }
