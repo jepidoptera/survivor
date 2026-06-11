@@ -2106,6 +2106,59 @@ test("GameMap.getFloorNodeAtLayer materializes placed-building floor nodes on de
     }), created);
 });
 
+test("GameMap.getFloorNodeAtLayer materializes from explicit prototype source node", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 0;
+    map.height = 0;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.nodes = [];
+    map.resetFloorRuntimeState();
+
+    const upperFragment = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:floor-fragment-26",
+        surfaceId: "building:placed-5:surface:floor-fragment-26",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 4,
+        outerPolygon: [
+            { x: -156, y: 208 },
+            { x: -155, y: 208 },
+            { x: -155, y: 209 },
+            { x: -156, y: 209 }
+        ],
+        holes: []
+    });
+    const prototypeBaseNode = {
+        xindex: 512,
+        yindex: 384,
+        x: -155.6,
+        y: 208.7,
+        clearance: 1,
+        _prototypeSectionKey: "building:placed-5"
+    };
+
+    assert.equal(map.getNode(prototypeBaseNode.xindex, prototypeBaseNode.yindex, 0), null);
+
+    const created = map.getFloorNodeAtLayer(prototypeBaseNode.xindex, prototypeBaseNode.yindex, 1, {
+        fragmentId: upperFragment.fragmentId,
+        surfaceId: upperFragment.surfaceId,
+        sectionKey: upperFragment.ownerSectionKey,
+        sourceNode: prototypeBaseNode,
+        worldX: -155.58889172819775,
+        worldY: 208.6960504173884,
+        allowScan: true
+    });
+
+    assert.ok(created);
+    assert.equal(created.sourceNode, prototypeBaseNode);
+    assert.equal(created.traversalLayer, 1);
+    assert.equal(created.baseZ, 4);
+    assert.equal(created.fragmentId, upperFragment.fragmentId);
+    assert.equal(created.surfaceId, upperFragment.surfaceId);
+    assert.equal(map.floorNodesById.get(upperFragment.fragmentId).length, 1);
+});
+
 test("GameMap groups overlapping upper floor fragments into buildings", () => {
     const map = Object.create(GameMap.prototype);
     map.resetFloorRuntimeState();

@@ -908,3 +908,183 @@ test("movement node-window queries sync dirty building blockers before collision
     );
     assert.match(source, /getNodesInIndexWindow[\s\S]*syncPrototypeBuildingMovementBlockers/);
 });
+
+test("prototype building wall render layer uses runtime traversal layer before physical bottomZ", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
+        "utf8"
+    );
+    assert.match(
+        source,
+        /item\.type === "wallSection" && item\._prototypeBuildingPlacementId && Number\.isFinite\(item\.traversalLayer\)[\s\S]*return this\.getLayerIndexFromValue\(item\.traversalLayer, fallback\);[\s\S]*item\.type === "wallSection" && Number\.isFinite\(item\.bottomZ\)/
+    );
+});
+
+test("placed building runtime layers use floor order instead of nodeBaseZ divided by three", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(4, 4, { materializeFloorNodes: false });
+        buildings.installSectionWorldBuildingApis(map);
+        const placement = createPlacement("building:tower");
+        map.initializePrototypeBuildingState([placement]);
+        map._prototypeBuildingState.buildingDataBySaveName.set(placement.buildingSaveName, {
+            schema: "survivor-building-v1",
+            floorFragments: [
+                {
+                    fragmentId: "ground",
+                    surfaceId: "ground",
+                    level: 0,
+                    nodeBaseZ: 0,
+                    floorHeight: 30,
+                    outerPolygon: [
+                        { x: 0, y: 0 },
+                        { x: 4, y: 0 },
+                        { x: 4, y: 4 },
+                        { x: 0, y: 4 }
+                    ],
+                    holes: []
+                },
+                {
+                    fragmentId: "tower-top",
+                    surfaceId: "tower-top",
+                    level: 10,
+                    nodeBaseZ: 30,
+                    floorHeight: 4,
+                    outerPolygon: [
+                        { x: 0, y: 0 },
+                        { x: 4, y: 0 },
+                        { x: 4, y: 4 },
+                        { x: 0, y: 4 }
+                    ],
+                    holes: []
+                }
+            ],
+            wallSections: [],
+            mountedWallObjects: []
+        });
+
+        const stats = map.syncPrototypeBuildingGeometryRuntime();
+        const top = map.floorsById.get("building:tower:floor:tower-top");
+
+        assert.equal(stats.floors, 2);
+        assert.ok(top);
+        assert.equal(top.level, 1);
+        assert.equal(top.nodeBaseZ, 30);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("placed building stair landing resolves unique floor at target z without endpoint containment", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(4, 4, { materializeFloorNodes: false });
+        buildings.installSectionWorldBuildingApis(map);
+        const placement = createPlacement("building:tower");
+        map.initializePrototypeBuildingState([placement]);
+        map._prototypeBuildingState.buildingDataBySaveName.set(placement.buildingSaveName, {
+            schema: "survivor-building-v1",
+            floorFragments: [
+                {
+                    fragmentId: "ground",
+                    surfaceId: "ground",
+                    level: 0,
+                    nodeBaseZ: 0,
+                    outerPolygon: [
+                        { x: 0, y: 0 },
+                        { x: 4, y: 0 },
+                        { x: 4, y: 4 },
+                        { x: 0, y: 4 }
+                    ],
+                    holes: [],
+                    stairs: [{
+                        id: 1,
+                        stairKind: "treadPath",
+                        bottomZ: 0,
+                        height: 30,
+                        direction: "up",
+                        startPoint: { x: 1, y: 1 },
+                        endPoint: { x: 10, y: 10 },
+                        treads: [
+                            {
+                                left: { x: 0.5, y: 1 },
+                                right: { x: 1.5, y: 1 },
+                                center: { x: 1, y: 1 }
+                            },
+                            {
+                                left: { x: 9.5, y: 10 },
+                                right: { x: 10.5, y: 10 },
+                                center: { x: 10, y: 10 }
+                            }
+                        ]
+                    }]
+                },
+                {
+                    fragmentId: "tower-top",
+                    surfaceId: "tower-top",
+                    level: 10,
+                    nodeBaseZ: 30,
+                    nodeBaseZOffset: 0,
+                    outerPolygon: [
+                        { x: 0, y: 0 },
+                        { x: 4, y: 0 },
+                        { x: 4, y: 4 },
+                        { x: 0, y: 4 }
+                    ],
+                    holes: []
+                }
+            ],
+            wallSections: [{
+                id: 1,
+                floorId: "tower-top",
+                fragmentId: "tower-top",
+                startPoint: { x: 0, y: 0 },
+                endPoint: { x: 4, y: 0 },
+                height: 4,
+                thickness: 0.25,
+                bottomZ: 30,
+                traversalLayer: 10
+            }],
+            mountedWallObjects: []
+        });
+
+        const stats = map.syncPrototypeBuildingGeometryRuntime();
+        const stair = map.stairsById.get("building:tower:stair:ground:1");
+        const blockers = buildings.computeBuildingPlacementMovementBlockerPolygons(
+            map._prototypeBuildingState.buildingDataBySaveName.get(placement.buildingSaveName),
+            placement
+        );
+        const cutaway = buildings.createPrototypeBuildingCutawayRecord(
+            map._prototypeBuildingState.buildingDataBySaveName.get(placement.buildingSaveName),
+            placement
+        );
+        const wallItem = cutaway.staticObjects.find((entry) => entry && entry.item && entry.item.type === "wallSection");
+
+        assert.equal(stats.stairs, 1);
+        assert.ok(stair);
+        assert.equal(stair.higherFragmentId, "building:tower:floor:tower-top");
+        assert.equal(stair.higherZ, 30);
+        assert.equal(map.floorsById.get("building:tower:floor:tower-top").nodeBaseZ, 30);
+        assert.equal(map.floorsById.get("building:tower:floor:tower-top").nodeBaseZOffset, 27);
+        assert.equal(blockers[0].traversalLayer, 1);
+        assert.equal(blockers[0].bottomZ, 30);
+        assert.ok(wallItem);
+        assert.equal(wallItem.item.traversalLayer, 1);
+        assert.equal(wallItem.level, 1);
+        assert.equal(wallItem.item.bottomZ, 30);
+        assert.equal(cutaway.maxLevel, 1);
+        assert.equal(cutaway.maxTopZ, 34);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});

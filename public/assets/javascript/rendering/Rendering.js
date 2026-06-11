@@ -1311,6 +1311,9 @@ void main(void) {
 
         getLayerIndexForObject(item, fallback = 0) {
             if (!item) return this.getLayerIndexFromValue(fallback, 0);
+            if (item.type === "wallSection" && item._prototypeBuildingPlacementId && Number.isFinite(item.traversalLayer)) {
+                return this.getLayerIndexFromValue(item.traversalLayer, fallback);
+            }
             if (item.type === "wallSection" && Number.isFinite(item.bottomZ)) {
                 const layerHeight = (typeof FLOOR_LAYER_DEFAULT_HEIGHT_UNITS !== "undefined" && Number.isFinite(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS) && FLOOR_LAYER_DEFAULT_HEIGHT_UNITS > 0)
                     ? Number(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
@@ -3239,9 +3242,11 @@ void main(void) {
                         buildingsScanned += 1;
                         if (!building) continue;
                         const buildingMaxLevel = this.getLayerIndexFromValue(building.maxLevel, -Infinity);
-                        const buildingTopZ = Number.isFinite(buildingMaxLevel)
-                            ? this.getLayerBaseZForLevel(buildingMaxLevel + 1)
-                            : Infinity;
+                        const buildingTopZ = Number.isFinite(Number(building.maxTopZ))
+                            ? Number(building.maxTopZ)
+                            : (Number.isFinite(buildingMaxLevel)
+                                ? this.getLayerBaseZForLevel(buildingMaxLevel + 1)
+                                : Infinity);
                         if (wizardLayer > buildingMaxLevel || wizardWorldZ >= buildingTopZ - 1e-6) {
                             continue;
                         }

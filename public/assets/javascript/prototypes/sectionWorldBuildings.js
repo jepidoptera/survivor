@@ -3,9 +3,9 @@
 
     const BUILDING_PLACEMENT_SCHEMA = "survivor-building-placement-v1";
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
-    const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v3";
-    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v9-lower-terrain-shadow";
-    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v6";
+    const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v4-runtime-floor-layers";
+    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v10-runtime-floor-layers";
+    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v7-runtime-floor-layers";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;
@@ -16,6 +16,10 @@
             throw new Error(`${label} must be a finite number`);
         }
         return num;
+    }
+
+    function hasFiniteNumericValue(value) {
+        return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value));
     }
 
     function nonEmptyString(value, label) {
@@ -355,11 +359,45 @@
     }
 
     function getBuildingLayerBaseZ(floor, layer = 0) {
-        if (Number.isFinite(Number(floor && floor.nodeBaseZ))) return Number(floor.nodeBaseZ);
-        const offset = Number.isFinite(Number(floor && floor.nodeBaseZOffset))
+        if (hasFiniteNumericValue(floor && floor.nodeBaseZ)) return Number(floor.nodeBaseZ);
+        if (hasFiniteNumericValue(floor && floor.elevation)) return Number(floor.elevation);
+        const offset = hasFiniteNumericValue(floor && floor.nodeBaseZOffset)
             ? Number(floor.nodeBaseZOffset)
             : 0;
         return (Number(layer) || 0) * 3 + offset;
+    }
+
+    function assignBuildingFloorRuntimeTraversalLayers(buildingData) {
+        const floors = Array.isArray(buildingData && buildingData.floorFragments)
+            ? buildingData.floorFragments
+            : [];
+        const ordered = floors
+            .map((floor, index) => ({
+                floor,
+                index,
+                baseZ: getBuildingLayerBaseZ(floor, index)
+            }))
+            .sort((a, b) => {
+                if (a.baseZ !== b.baseZ) return a.baseZ - b.baseZ;
+                return a.index - b.index;
+            });
+        const ordinalByFloor = new Map();
+        for (let i = 0; i < ordered.length; i++) {
+            ordinalByFloor.set(ordered[i].floor, i);
+        }
+        for (let i = 0; i < floors.length; i++) {
+            const floor = floors[i];
+            if (!floor || typeof floor !== "object") continue;
+            const layer = Number.isFinite(Number(floor.traversalLayer))
+                ? Math.round(Number(floor.traversalLayer))
+                : (ordinalByFloor.has(floor) ? ordinalByFloor.get(floor) : i);
+            Object.defineProperty(floor, "_prototypeRuntimeTraversalLayer", {
+                value: layer,
+                writable: true,
+                configurable: true,
+                enumerable: false
+            });
+        }
     }
 
     function getBuildingFloorId(floor, fallback = "") {
@@ -368,12 +406,13 @@
     }
 
     function getBuildingFloorLayer(floor) {
-        const candidates = [
-            floor && floor.traversalLayer,
-            floor && floor.level,
-            floor && Number(floor.nodeBaseZ) / 3,
-            floor && Number(floor.nodeBaseZOffset) / 3
-        ];
+        const candidates = [];
+        if (hasFiniteNumericValue(floor && floor.traversalLayer)) candidates.push(floor.traversalLayer);
+        if (hasFiniteNumericValue(floor && floor._prototypeRuntimeTraversalLayer)) candidates.push(floor._prototypeRuntimeTraversalLayer);
+        if (hasFiniteNumericValue(floor && floor.level)) candidates.push(floor.level);
+        if (hasFiniteNumericValue(floor && floor.nodeBaseZ)) candidates.push(Number(floor.nodeBaseZ) / 3);
+        if (hasFiniteNumericValue(floor && floor.elevation)) candidates.push(Number(floor.elevation) / 3);
+        if (hasFiniteNumericValue(floor && floor.nodeBaseZOffset)) candidates.push(Number(floor.nodeBaseZOffset) / 3);
         for (let i = 0; i < candidates.length; i++) {
             const value = Number(candidates[i]);
             if (Number.isFinite(value)) return Math.round(value);
@@ -543,6 +582,7 @@
 
     function computeBuildingPlacementMovementBlockerPolygons(buildingData, placementRecord) {
         assertValidBuildingEditorSave(buildingData, placementRecord && placementRecord.buildingSaveName);
+        assignBuildingFloorRuntimeTraversalLayers(buildingData);
         const placement = normalizeBuildingPlacementRecord(placementRecord);
         const floorIdsByLayer = new Map();
         const floorsById = new Map();
@@ -560,9 +600,9 @@
             const wall = walls[i];
             const wallFloorId = String(wall && (wall.fragmentId || wall.floorId) || "");
             const ownerFloor = floorsById.get(wallFloorId) || null;
-            const layer = Number.isFinite(Number(wall && wall.traversalLayer))
-                ? Math.round(Number(wall.traversalLayer))
-                : (floorIdsByLayer.has(wallFloorId) ? floorIdsByLayer.get(wallFloorId) : 0);
+            const layer = floorIdsByLayer.has(wallFloorId)
+                ? floorIdsByLayer.get(wallFloorId)
+                : (Number.isFinite(Number(wall && wall.traversalLayer)) ? Math.round(Number(wall.traversalLayer)) : 0);
             const bottomZ = buildingElementBottomZ(ownerFloor, layer, wall);
             const height = buildingElementHeight(ownerFloor, wall);
             const polygons = wallMovementBlockerPolygons(buildingData, wall);
@@ -576,9 +616,7 @@
             const columns = Array.isArray(floor && floor.columns) ? floor.columns : [];
             for (let c = 0; c < columns.length; c++) {
                 const column = columns[c];
-                const layer = Number.isFinite(Number(column && column.traversalLayer))
-                    ? Math.round(Number(column.traversalLayer))
-                    : floorLayer;
+                const layer = floorLayer;
                 localEntries.push({
                     polygon: columnMovementBlockerPolygon(column),
                     level: layer,
@@ -709,6 +747,7 @@
         const sourceFloorId = getBuildingFloorId(floor, index);
         if (!sourceFloorId) throw new Error(`building placement ${placement.id} floor ${index} missing floor id`);
         const layer = getBuildingFloorLayer(floor);
+        const baseZ = getBuildingLayerBaseZ(floor, layer);
         const fragmentId = `${placement.id}:floor:${sourceFloorId}`;
         const surfaceId = `${placement.id}:surface:${String(floor && floor.surfaceId || sourceFloorId)}`;
         const holes = [];
@@ -722,8 +761,8 @@
             surfaceId,
             ownerSectionKey: placement.id,
             level: layer,
-            nodeBaseZ: getBuildingLayerBaseZ(floor, layer),
-            nodeBaseZOffset: Number.isFinite(Number(floor && floor.nodeBaseZOffset)) ? Number(floor.nodeBaseZOffset) : 0,
+            nodeBaseZ: baseZ,
+            nodeBaseZOffset: baseZ - (layer * 3),
             outerPolygon: interiorPolygonsByFloor instanceof Map && interiorPolygonsByFloor.has(sourceFloorId)
                 ? normalizePolygon(interiorPolygonsByFloor.get(sourceFloorId), `building placement ${placement.id} floor ${sourceFloorId} interiorPolygon`)
                 : transformPolygon(floor && floor.outerPolygon, placement.transform, `building placement ${placement.id} floor ${sourceFloorId} outerPolygon`),
@@ -734,15 +773,15 @@
         };
     }
 
-    function createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, index) {
+    function createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, index) {
         const wallId = String(wall && wall.id);
         if (!wallId) throw new Error(`building placement ${placement.id} wall ${index} missing wall id`);
         const points = wallCenterlinePoints(wall);
         const sourceFloorId = String(wall && (wall.fragmentId || wall.floorId) || "");
         const fragmentId = sourceFloorToFragmentId.get(sourceFloorId) || "";
-        const layer = Number.isFinite(Number(wall && wall.traversalLayer))
-            ? Math.round(Number(wall.traversalLayer))
-            : 0;
+        const layer = sourceFloorToLayer instanceof Map && sourceFloorToLayer.has(sourceFloorId)
+            ? sourceFloorToLayer.get(sourceFloorId)
+            : (Number.isFinite(Number(wall && wall.traversalLayer)) ? Math.round(Number(wall.traversalLayer)) : 0);
         return {
             ...(wall || {}),
             type: "wallSection",
@@ -832,15 +871,19 @@
 
     function createPrototypeBuildingCutawayRecord(buildingData, placementRecord) {
         assertValidBuildingEditorSave(buildingData, placementRecord && placementRecord.buildingSaveName);
+        assignBuildingFloorRuntimeTraversalLayers(buildingData);
         const placement = normalizeBuildingPlacementRecord(placementRecord);
         const fragments = [];
         const sourceFloorToFragmentId = new Map();
+        const sourceFloorToLayer = new Map();
         const interiorPolygonsByFloor = computeInteriorPolygonsByFloor(buildingData, placement);
         for (let i = 0; i < buildingData.floorFragments.length; i++) {
             const floor = buildingData.floorFragments[i];
             const fragment = createPrototypeBuildingFragment(placement, floor, i, interiorPolygonsByFloor);
             fragments.push(fragment);
-            sourceFloorToFragmentId.set(getBuildingFloorId(floor, i), fragment.fragmentId);
+            const sourceFloorId = getBuildingFloorId(floor, i);
+            sourceFloorToFragmentId.set(sourceFloorId, fragment.fragmentId);
+            sourceFloorToLayer.set(sourceFloorId, fragment.level);
         }
         if (fragments.length === 0) {
             throw new Error(`building placement ${placement.id} has no cutaway floor fragments`);
@@ -851,7 +894,7 @@
         const walls = Array.isArray(buildingData.wallSections) ? buildingData.wallSections : [];
         for (let i = 0; i < walls.length; i++) {
             const wall = walls[i];
-            const wallItem = createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, i);
+            const wallItem = createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, i);
             wallItemsBySourceId.set(String(wall && wall.id), wallItem);
             renderItems.push({
                 item: wallItem,
@@ -890,17 +933,42 @@
 
         let minLevel = Infinity;
         let maxLevel = -Infinity;
+        let minBaseZ = Infinity;
+        let maxTopZ = -Infinity;
         const fragmentIds = new Set();
         const surfaceIds = new Set();
         for (let i = 0; i < fragments.length; i++) {
             const level = getBuildingFloorLayer(fragments[i]);
+            const baseZ = getBuildingLayerBaseZ(fragments[i], level);
+            const floorHeight = Number.isFinite(Number(fragments[i].floorHeight)) && Number(fragments[i].floorHeight) > 0
+                ? Number(fragments[i].floorHeight)
+                : DEFAULT_BUILDING_WALL_HEIGHT;
             minLevel = Math.min(minLevel, level);
             maxLevel = Math.max(maxLevel, level);
+            minBaseZ = Math.min(minBaseZ, baseZ);
+            maxTopZ = Math.max(maxTopZ, baseZ + floorHeight);
             fragmentIds.add(fragments[i].fragmentId);
             surfaceIds.add(fragments[i].surfaceId);
         }
+        for (let i = 0; i < renderItems.length; i++) {
+            const item = renderItems[i] && renderItems[i].item;
+            if (!item) continue;
+            const bottomZ = Number.isFinite(Number(item.bottomZ))
+                ? Number(item.bottomZ)
+                : (Number.isFinite(Number(item.z)) ? Number(item.z) : null);
+            const height = Number.isFinite(Number(item.height)) && Number(item.height) > 0
+                ? Number(item.height)
+                : 0;
+            if (bottomZ !== null) {
+                minBaseZ = Math.min(minBaseZ, bottomZ);
+                maxTopZ = Math.max(maxTopZ, bottomZ + height);
+            }
+        }
         if (!Number.isFinite(minLevel) || !Number.isFinite(maxLevel)) {
             throw new Error(`building placement ${placement.id} cutaway record has invalid floor levels`);
+        }
+        if (!Number.isFinite(minBaseZ) || !Number.isFinite(maxTopZ)) {
+            throw new Error(`building placement ${placement.id} cutaway record has invalid physical z bounds`);
         }
 
         const building = {
@@ -909,6 +977,8 @@
             buildingSaveName: placement.buildingSaveName,
             minLevel,
             maxLevel,
+            minBaseZ,
+            maxTopZ,
             fragmentIds,
             surfaceIds,
             fragments,
@@ -963,18 +1033,33 @@
 
     function findBuildingRuntimeFloorAtZ(fragments, z, point, stairId, endpointLabel) {
         const targetZ = finiteNumber(z, `stair ${stairId} ${endpointLabel} z`);
+        const zMatches = [];
         const matches = [];
+        const candidates = [];
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
             if (!fragment) continue;
             const fragmentZ = getBuildingLayerBaseZ(fragment, getBuildingFloorLayer(fragment));
+            candidates.push({
+                id: getBuildingFloorId(fragment, i),
+                level: fragment.level,
+                traversalLayer: fragment.traversalLayer,
+                nodeBaseZ: fragment.nodeBaseZ,
+                elevation: fragment.elevation,
+                resolvedZ: fragmentZ
+            });
             if (Math.abs(fragmentZ - targetZ) > 0.000001) continue;
+            zMatches.push(fragment);
             if (!fragmentContainsWorldPoint(fragment, point)) continue;
             matches.push(fragment);
         }
         matches.sort((a, b) => polygonArea(a.outerPolygon) - polygonArea(b.outerPolygon));
         if (matches[0]) return matches[0];
-        throw new Error(`building stair ${stairId} cannot resolve ${endpointLabel} floor at z ${targetZ}`);
+        if (zMatches.length === 1) return zMatches[0];
+        if (zMatches.length > 1) {
+            throw new Error(`building stair ${stairId} cannot resolve ${endpointLabel} floor at z ${targetZ}: ${zMatches.length} floors share that height and none contains the endpoint`);
+        }
+        throw new Error(`building stair ${stairId} cannot resolve ${endpointLabel} floor at z ${targetZ}; candidates=${JSON.stringify(candidates)}`);
     }
 
     function transformStairTread(tread, transform, label) {
@@ -1773,6 +1858,7 @@
             if (typeof map.registerStairRuntimeRecord !== "function") {
                 throw new Error("building geometry runtime requires registerStairRuntimeRecord");
             }
+            assignBuildingFloorRuntimeTraversalLayers(buildingData);
             const interiorPolygonsByFloor = computeInteriorPolygonsByFloor(buildingData, placement);
             const fragments = [];
             for (let f = 0; f < buildingData.floorFragments.length; f++) {

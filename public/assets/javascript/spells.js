@@ -468,6 +468,12 @@ const SpellSystem = (() => {
         return Math.max(FLOOR_EDIT_LEVEL_MIN, Math.min(FLOOR_EDIT_LEVEL_MAX, Math.round(n)));
     }
 
+    function normalizeRuntimeFloorLayer(layer, fallback = 0) {
+        const n = Number(layer);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.round(n);
+    }
+
     function getSelectedFloorEditLevel(wizardRef) {
         if (wizardRef && Number.isFinite(wizardRef.selectedFloorEditLevel)) {
             return normalizeFloorEditLevel(wizardRef.selectedFloorEditLevel);
@@ -6054,14 +6060,17 @@ const SpellSystem = (() => {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         if (!mapRef || !(mapRef.floorsById instanceof Map)) return null;
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
+        const normalizeTargetLayer = options && options.preserveRuntimeLevels === true
+            ? normalizeRuntimeFloorLayer
+            : normalizeFloorEditLevel;
         const visibleFragmentIds = options && options.visibleFragmentIds instanceof Set
             ? options.visibleFragmentIds
             : null;
         const maxLevel = Number.isFinite(options && options.maxLevel)
-            ? normalizeFloorEditLevel(options.maxLevel)
+            ? normalizeTargetLayer(options.maxLevel)
             : Infinity;
         const exactLevel = Number.isFinite(options && options.exactLevel)
-            ? normalizeFloorEditLevel(options.exactLevel)
+            ? normalizeTargetLayer(options.exactLevel)
             : null;
         const includeGround = !!(options && options.includeGround === true);
         let best = null;
@@ -6069,7 +6078,7 @@ const SpellSystem = (() => {
             if (!fragment) continue;
             const fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
             if (visibleFragmentIds && (!fragmentId || !visibleFragmentIds.has(fragmentId))) continue;
-            const level = Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0;
+            const level = Number.isFinite(fragment.level) ? normalizeTargetLayer(fragment.level) : 0;
             if (exactLevel !== null && level !== exactLevel) continue;
             if (level === 0 && !includeGround) continue;
             if (level > maxLevel) continue;
@@ -6077,8 +6086,24 @@ const SpellSystem = (() => {
             if (fragment._floorEditEmpty === true) continue;
             if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
             const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (level * 3);
-            const point = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
-            if (!point || !isPointInsideFloorEditorFragment(point.x, point.y, fragment)) continue;
+            let point = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
+            let pointInside = !!(point && isPointInsideFloorEditorFragment(point.x, point.y, fragment));
+            if (
+                !pointInside &&
+                visibleFragmentIds &&
+                fragment.renderedByBuildingCutaway === true &&
+                baseZ !== 0
+            ) {
+                const bakedProjectionPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, 0);
+                if (
+                    bakedProjectionPoint &&
+                    isPointInsideFloorEditorFragment(bakedProjectionPoint.x, bakedProjectionPoint.y, fragment)
+                ) {
+                    point = bakedProjectionPoint;
+                    pointInside = true;
+                }
+            }
+            if (!pointInside) continue;
             const area = getFloorEditorPolygonArea(fragment.outerPolygon);
             if (
                 !best ||
@@ -6138,6 +6163,7 @@ const SpellSystem = (() => {
             sectionKey,
             surfaceId: fragment && typeof fragment.surfaceId === "string" ? fragment.surfaceId : "",
             fragmentId: fragment && typeof fragment.fragmentId === "string" ? fragment.fragmentId : "",
+            sourceNode: baseNode,
             worldX,
             worldY,
             allowScan: true
@@ -6174,7 +6200,8 @@ const SpellSystem = (() => {
                 }
             }
             floorTarget = getVisibleFloorPolygonTargetAtScreenPoint(wizardRef, screenPoint.screenX, screenPoint.screenY, {
-                ...visibleFloorOptions
+                ...visibleFloorOptions,
+                preserveRuntimeLevels: true
             });
             if (floorTarget && floorTarget.point) {
                 targetPoint = floorTarget.point;
@@ -8360,12 +8387,54 @@ const SpellSystem = (() => {
             const projectile = new globalThis.Teleport();
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
             const teleportTarget = resolveTeleportVisualTarget(wizardRef, worldX, worldY, castOptions);
+            if (typeof console !== "undefined" && typeof console.log === "function") {
+                const floorFragment = teleportTarget && teleportTarget.floorTarget && teleportTarget.floorTarget.fragment
+                    ? teleportTarget.floorTarget.fragment
+                    : null;
+                console.log("[TeleportDebug] resolved-target", {
+                    inputWorldX: worldX,
+                    inputWorldY: worldY,
+                    screenX: teleportTarget && teleportTarget.screenX,
+                    screenY: teleportTarget && teleportTarget.screenY,
+                    resolvedX: teleportTarget && teleportTarget.x,
+                    resolvedY: teleportTarget && teleportTarget.y,
+                    layer: teleportTarget && teleportTarget.layer,
+                    baseZ: teleportTarget && teleportTarget.baseZ,
+                    hasNode: !!(teleportTarget && teleportTarget.node),
+                    node: teleportTarget && teleportTarget.node ? {
+                        xindex: teleportTarget.node.xindex,
+                        yindex: teleportTarget.node.yindex,
+                        traversalLayer: teleportTarget.node.traversalLayer,
+                        baseZ: teleportTarget.node.baseZ,
+                        fragmentId: teleportTarget.node.fragmentId,
+                        surfaceId: teleportTarget.node.surfaceId
+                    } : null,
+                    floorTarget: floorFragment ? {
+                        fragmentId: floorFragment.fragmentId,
+                        surfaceId: floorFragment.surfaceId,
+                        ownerSectionKey: floorFragment.ownerSectionKey,
+                        level: floorFragment.level,
+                        nodeBaseZ: floorFragment.nodeBaseZ,
+                        renderedByBuildingCutaway: floorFragment.renderedByBuildingCutaway === true
+                    } : null
+                });
+            }
             wizardRef.castDelay = true;
+            const teleportFloorFragment = teleportTarget && teleportTarget.floorTarget && teleportTarget.floorTarget.fragment
+                ? teleportTarget.floorTarget.fragment
+                : null;
             projectiles.push(projectile.cast(teleportTarget.x, teleportTarget.y, {
                 ...castOptions,
                 destinationNode: teleportTarget.node,
                 destinationLayer: teleportTarget.layer,
-                destinationBaseZ: teleportTarget.baseZ
+                destinationBaseZ: teleportTarget.baseZ,
+                destinationFragmentId: teleportFloorFragment && typeof teleportFloorFragment.fragmentId === "string"
+                    ? teleportFloorFragment.fragmentId
+                    : "",
+                destinationSurfaceId: teleportFloorFragment && typeof teleportFloorFragment.surfaceId === "string"
+                    ? teleportFloorFragment.surfaceId
+                    : "",
+                teleportDebugTarget: teleportTarget
             }));
             wizardRef.casting = true;
             setTimeout(() => {

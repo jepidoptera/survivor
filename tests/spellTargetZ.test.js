@@ -1177,17 +1177,17 @@ test("teleport visual target uses rendered prototype interior floor fragments", 
         level: 1,
         nodeBaseZ: 3,
         outerPolygon: [
-            { x: 0, y: 4 },
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
             { x: 4, y: 4 },
-            { x: 4, y: 6 },
-            { x: 0, y: 6 }
+            { x: 0, y: 4 }
         ],
         holes: []
     };
-    const baseNode = { xindex: 2, yindex: 5 };
+    const baseNode = { xindex: 2, yindex: 2 };
     const upperNode = {
         xindex: 2,
-        yindex: 5,
+        yindex: 2,
         traversalLayer: 1,
         baseZ: 3,
         fragmentId: upperFloor.fragmentId,
@@ -1213,18 +1213,18 @@ test("teleport visual target uses rendered prototype interior floor fragments", 
             wrapWorldY: y => y,
             worldToNode(x, y) {
                 assert.equal(x, 2);
-                assert.equal(y, 5);
+                assert.equal(y, 2);
                 return baseNode;
             },
             getFloorNodeAtLayer(x, y, layer, options) {
                 assert.equal(x, 2);
-                assert.equal(y, 5);
+                assert.equal(y, 2);
                 assert.equal(layer, 1);
                 assert.equal(options.sectionKey, "tower-placement");
                 assert.equal(options.fragmentId, upperFloor.fragmentId);
                 assert.equal(options.surfaceId, upperFloor.surfaceId);
                 assert.equal(options.worldX, 2);
-                assert.equal(options.worldY, 5);
+                assert.equal(options.worldY, 2);
                 return upperNode;
             }
         }
@@ -1233,7 +1233,7 @@ test("teleport visual target uses rendered prototype interior floor fragments", 
     const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
-    assert.equal(target.y, 5);
+    assert.equal(target.y, 2);
     assert.equal(target.layer, 1);
     assert.equal(target.baseZ, 3);
     assert.equal(target.node, upperNode);
@@ -1462,6 +1462,29 @@ test("teleport cast synchronizes wizard to the destination node layer", () => {
     assert.equal(context.wizard.currentLayerBaseZ, 0);
     assert.equal(context.wizard.z, 0);
     assert.equal(context.wizard._floorFallState, null);
+    assert.equal(context.wizard.magic, 75);
+});
+
+test("teleport cast accepts a floor fragment destination without a node", () => {
+    const { context } = loadTeleportContext();
+    const spell = new context.Teleport();
+
+    spell.cast(-145.5, 191.25, {
+        destinationNode: null,
+        destinationLayer: 1,
+        destinationBaseZ: 30,
+        destinationFragmentId: "building:placed-3:floor:floor-fragment-90",
+        destinationSurfaceId: "building:placed-3:surface:floor-fragment-90"
+    });
+
+    assert.equal(context.wizard.x, -145.5);
+    assert.equal(context.wizard.y, 191.25);
+    assert.equal(context.wizard.node, null);
+    assert.equal(context.wizard.currentLayer, 1);
+    assert.equal(context.wizard.traversalLayer, 1);
+    assert.equal(context.wizard.currentLayerBaseZ, 30);
+    assert.equal(context.wizard.fragmentId, "building:placed-3:floor:floor-fragment-90");
+    assert.equal(context.wizard.surfaceId, "building:placed-3:surface:floor-fragment-90");
     assert.equal(context.wizard.magic, 75);
 });
 

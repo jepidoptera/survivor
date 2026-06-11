@@ -71,7 +71,7 @@ test("prototype building exterior bitmap signature includes render data version"
         "utf8"
     );
 
-    assert.match(source, /const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v3";/);
+    assert.match(source, /const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v4-runtime-floor-layers";/);
     assert.match(source, /EXTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),/);
 });
 
@@ -110,7 +110,7 @@ test("prototype building interior bitmap signature includes floor and render dat
         "utf8"
     );
 
-    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v9-lower-terrain-shadow";/);
+    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v10-runtime-floor-layers";/);
     assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),\s+String\(floorId \|\| ""\),/);
     const interiorSignatureBody = source.slice(
         source.indexOf("function interiorBitmapSettingsSignature"),

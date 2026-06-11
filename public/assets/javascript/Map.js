@@ -3202,6 +3202,11 @@ class GameMap {
         const surfaceId = (options && typeof options.surfaceId === "string") ? options.surfaceId : "";
         const fragmentId = (options && typeof options.fragmentId === "string") ? options.fragmentId : "";
         const allowScan = !options || options.allowScan !== false;
+        const explicitSourceNode = options && options.sourceNode &&
+            Number(options.sourceNode.xindex) === xi &&
+            Number(options.sourceNode.yindex) === yi
+            ? options.sourceNode
+            : null;
 
         if (surfaceId || fragmentId) {
             const directFragmentIds = fragmentId
@@ -3275,9 +3280,7 @@ class GameMap {
                 ? Math.round(Number(fragment.level))
                 : 0;
             if (fragment && fragmentLayer === targetLayer) {
-                const sourceNode = targetLayer === 0
-                    ? this.getNode(xi, yi, 0)
-                    : (this.getNode(xi, yi, 0) || null);
+                const sourceNode = explicitSourceNode || this.getNode(xi, yi, 0);
                 const supportX = Number.isFinite(options && options.worldX)
                     ? Number(options.worldX)
                     : (Number.isFinite(sourceNode && sourceNode.x) ? Number(sourceNode.x) : NaN);
