@@ -171,6 +171,28 @@ function clipGeometryIsEmpty2D(geometry) {
     return true;
 }
 
+function clipRingToPolygonPoints2D(ring, label = "clip ring") {
+    if (!Array.isArray(ring) || ring.length < 4) {
+        throw new Error(`${label} requires a closed ring`);
+    }
+    const points = [];
+    const limit = ring.length > 1 &&
+        Math.abs(Number(ring[0][0]) - Number(ring[ring.length - 1][0])) <= 1e-9 &&
+        Math.abs(Number(ring[0][1]) - Number(ring[ring.length - 1][1])) <= 1e-9
+        ? ring.length - 1
+        : ring.length;
+    for (let i = 0; i < limit; i++) {
+        const x = Number(ring[i] && ring[i][0]);
+        const y = Number(ring[i] && ring[i][1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point`);
+        }
+        points.push({ x, y });
+    }
+    if (points.length < 3) throw new Error(`${label} produced fewer than three points`);
+    return points;
+}
+
 function distanceToSegment2D(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
@@ -2178,6 +2200,8 @@ class GameMap {
                 fragmentId: best.fragmentId,
                 surfaceId: best.surfaceId,
                 sectionKey: best.ownerSectionKey || "",
+                worldX: x,
+                worldY: y,
                 allowScan: true
             }) || null;
         }
@@ -2186,6 +2210,8 @@ class GameMap {
                 fragmentId: best.fragmentId,
                 surfaceId: best.surfaceId,
                 sectionKey: best.ownerSectionKey || "",
+                worldX: x,
+                worldY: y,
                 allowScan: true
             }) || baseNode;
         }
@@ -2259,13 +2285,10 @@ class GameMap {
             }
             const min = index / stepCount;
             const max = (index + 1) / stepCount;
-            const entryMouthClearance = 1 / stepCount;
-            if (max <= entryMouthClearance + 0.000001) continue;
-            const resolvedMin = Math.max(min, entryMouthClearance);
             if (activeRange) {
                 activeRange.max = max;
             } else {
-                activeRange = { min: resolvedMin, max };
+                activeRange = { min, max };
             }
         }
         if (activeRange) ranges.push(activeRange);
@@ -2292,18 +2315,69 @@ class GameMap {
         }
         if (!fragment) throw new Error(`stair ${stair.id || "(unknown)"} references missing higher floor ${higherFragmentId}`);
         const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
-        if (holes.length === 0) return [];
         const traversal = this.requireStairTraversal();
         const frame = this.getStairTraversalFrame(stair);
         const footprint = traversal.pathPolygonForUpDownRange(frame, 0, 1);
         if (!Array.isArray(footprint) || footprint.length < 3) {
             throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires a footprint polygon`);
         }
-        return holes.filter((hole) => (
-            Array.isArray(hole) &&
-            hole.length >= 3 &&
-            polygonsOverlap2D(hole, footprint)
-        ));
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const topStep = traversal.pathPolygonForUpDownRange(frame, 1 - (1 / stepCount), 1);
+        if (!Array.isArray(topStep) || topStep.length < 3) {
+            throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires a top-step polygon`);
+        }
+        if (holes.length === 0) {
+            const lowerZ = Number(stair.lowerZ);
+            const higherZ = Number(stair.higherZ);
+            const height = higherZ - lowerZ;
+            if (!Number.isFinite(height) || !(height > 0)) {
+                throw new Error(`stair ${stair.id || "(unknown)"} implicit upper movement blocker requires positive height`);
+            }
+            const thresholdZ = higherZ - 2;
+            const implicit = [];
+            for (let index = 0; index < stepCount; index++) {
+                if (index === stepCount - 1) continue;
+                const stepZ = lowerZ + height * ((index + 1) / (stepCount + 1));
+                if (stepZ < thresholdZ - 0.000001 || stepZ > higherZ + 0.000001) continue;
+                const polygon = traversal.pathPolygonForUpDownRange(frame, index / stepCount, (index + 1) / stepCount);
+                if (!Array.isArray(polygon) || polygon.length < 3) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} implicit upper movement blocker step ${index} requires a polygon`);
+                }
+                implicit.push(polygon);
+            }
+            return implicit;
+        }
+        const clipper = getPolygonClippingApi2D();
+        if (!clipper || typeof clipper.difference !== "function") {
+            throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires polygon-clipping`);
+        }
+        const topStepRing = polygonToClipRing2D(topStep);
+        if (!topStepRing) throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker has invalid top-step polygon`);
+        const blockers = [];
+        holes.forEach((hole, holeIndex) => {
+            if (!Array.isArray(hole) || hole.length < 3 || !polygonsOverlap2D(hole, footprint)) return;
+            const holeRing = polygonToClipRing2D(hole);
+            if (!holeRing) throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker has invalid hole ${holeIndex}`);
+            const clipped = clipper.difference([[holeRing]], [[topStepRing]]);
+            if (!Array.isArray(clipped)) {
+                throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker clipping failed`);
+            }
+            clipped.forEach((polygon, polygonIndex) => {
+                if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker produced malformed polygon ${polygonIndex}`);
+                }
+                if (polygon.length > 1) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker cannot contain holes after top-step exclusion`);
+                }
+                blockers.push(clipRingToPolygonPoints2D(
+                    polygon[0],
+                    `stair ${stair.id || "(unknown)"} upper movement blocker ${holeIndex}:${polygonIndex}`
+                ));
+            });
+        });
+        return blockers;
     }
 
     createStairMovementBlocker(stair, polygon, layer = 0, baseZ = null, endpoint = "", index = 0) {
@@ -2344,6 +2418,8 @@ class GameMap {
             gone: false,
             groundPlaneHitbox: new PolygonHitboxCtor(polygon),
             _stairFootprintMovementBlocker: true,
+            _stairEndpoint: endpoint,
+            _stairRecord: stair,
             _movementBounds: bounds,
             _movementPolygon: polygon,
             _movementPolygonSignature: polygonSignature
@@ -2409,6 +2485,7 @@ class GameMap {
             for (let i = 0; i < stairBlockers.length; i++) {
                 const blocker = stairBlockers[i];
                 if (!blocker) continue;
+                if (this.actorCanIgnoreStairFootprintMovementBlocker(blocker, actor, options)) continue;
                 if (!polygonBoundsOverlap2D(queryBounds, blocker._movementBounds)) continue;
                 blockers.push(blocker);
             }
@@ -2557,6 +2634,22 @@ class GameMap {
         return false;
     }
 
+    actorCanIgnoreStairFootprintMovementBlocker(blocker, actor = null, options = {}) {
+        if (!blocker || blocker._stairFootprintMovementBlocker !== true) return false;
+        const stair = blocker._stairRecord || null;
+        if (!stair || !actor) return false;
+        const candidateX = Number(options && options.candidateX);
+        const candidateY = Number(options && options.candidateY);
+        if (!Number.isFinite(candidateX) || !Number.isFinite(candidateY)) return false;
+        if (blocker._stairEndpoint === "higher") {
+            return this.actorApproachesStairEndpointMouth(stair, actor, candidateX, candidateY, "higher", options) === true;
+        }
+        if (blocker._stairEndpoint === "lower") {
+            return this.actorMovesAwayFromStairEndpointMouth(stair, actor, candidateX, candidateY, "lower", options) === true;
+        }
+        return false;
+    }
+
     getActorStairEndpointEntrySupport(stair, x, y, actor = null, options = {}) {
         if (!stair) return null;
         const traversal = this.requireStairTraversal();
@@ -2575,6 +2668,29 @@ class GameMap {
         return traversal.supportFromPathLocal(stair, frame, clamped);
     }
 
+    getActorStairTopStepSideEntrySupport(stair, x, y, actor = null, options = {}) {
+        if (!stair || !actor) return null;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const range = this.getStairEndpointStepRange(stair, "higher");
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, "higher");
+        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, localOptions);
+        const nextLocal = traversal.localPointForPathFrame(frame, { x, y }, localOptions);
+        const previousUpDown = Number(previousLocal && previousLocal.upDown);
+        const nextUpDown = Number(nextLocal && nextLocal.upDown);
+        const nextLeftRight = Number(nextLocal && nextLocal.leftRight);
+        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown) || !Number.isFinite(nextLeftRight)) return null;
+        if (!(nextUpDown < previousUpDown - 0.000001)) return null;
+        if (nextUpDown < range.min - 0.000001 || nextUpDown > range.max + 0.000001) return null;
+        if (nextLeftRight < -0.000001 || nextLeftRight > 1.000001) return null;
+        const clamped = this.clampStairLocalSide(frame, {
+            ...nextLocal,
+            upDown: Math.max(range.min, Math.min(range.max, nextUpDown)),
+            projectionError: 0
+        }, actor, options);
+        return traversal.supportFromPathLocal(stair, frame, clamped);
+    }
+
     stairEndpointProjectionOptions(stair, endpoint) {
         if (endpoint !== "lower" && endpoint !== "higher") return {};
         return endpoint === "lower"
@@ -2583,15 +2699,7 @@ class GameMap {
     }
 
     stairEndpointMouthProjectionOptions(stair, endpoint) {
-        const options = this.stairEndpointProjectionOptions(stair, endpoint);
-        if (!options.upDownHint && options.upDownHint !== 0) return options;
-        const stepCount = Number.isFinite(Number(stair && stair.stepCount))
-            ? Math.max(1, Math.round(Number(stair.stepCount)))
-            : 1;
-        const mouthRange = Math.max(0.05, 1 / stepCount);
-        return endpoint === "lower"
-            ? { ...options, maxUpDown: mouthRange }
-            : { ...options, minUpDown: 1 - mouthRange };
+        return this.requireStairTraversal().endpointMouthProjectionOptions(stair, endpoint);
     }
 
     getStairEndpointStepRange(stair, endpoint) {
@@ -2764,24 +2872,61 @@ class GameMap {
         if (!actor || !stair || !endpoint) return false;
         const traversal = this.requireStairTraversal();
         const frame = this.getStairTraversalFrame(stair);
-        const endpointOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
-        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, endpointOptions);
-        const nextLocal = traversal.localPointForPathFrame(frame, { x: worldX, y: worldY }, endpointOptions);
-        const previousUpDown = Number(previousLocal.upDown);
-        const nextUpDown = Number(nextLocal.upDown);
-        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown)) return false;
-        const directionMatches = endpoint === "lower"
-            ? nextUpDown > previousUpDown + 0.000001
+        const entry = traversal.pathEndpointEntryState(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint, {
+            actorRadius: this.getActorMovementSupportRadius(actor, options),
+            stair
+        });
+        return entry.enters === true;
+    }
+
+    actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options = {}) {
+        if (!actor || !stair || !endpoint) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const entry = traversal.pathEndpointEntryState(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint, {
+            actorRadius: this.getActorMovementSupportRadius(actor, options),
+            stair
+        });
+        if (
+            endpoint === "higher" &&
+            entry.directionMatches === true &&
+            entry.crossesEndpointWidth === true &&
+            Number(entry.previousLocal && entry.previousLocal.upDown) >= 1 - 0.000001
+        ) {
+            return true;
+        }
+        return entry.enters !== true &&
+            entry.directionMatches === true &&
+            entry.footprintReachedEndpoint === true &&
+            entry.crossesEndpointWidth === true;
+    }
+
+    actorMovesAwayFromStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options = {}) {
+        if (!actor || !stair || !endpoint) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, localOptions);
+        const nextLocal = traversal.localPointForPathFrame(frame, { x: worldX, y: worldY }, localOptions);
+        const previousUpDown = Number(previousLocal && previousLocal.upDown);
+        const nextUpDown = Number(nextLocal && nextLocal.upDown);
+        const nextLeftRight = Number(nextLocal && nextLocal.leftRight);
+        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown) || !Number.isFinite(nextLeftRight)) return false;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        const mouthTolerance = Math.max(0.02, radius / Math.max(0.001, Number(frame.pathLength) || 0) + 0.000001);
+        const movingAway = endpoint === "lower"
+            ? nextUpDown < previousUpDown - 0.000001
             : endpoint === "higher"
-                ? nextUpDown < previousUpDown - 0.000001
+                ? nextUpDown > previousUpDown + 0.000001
                 : null;
-        if (directionMatches === null) throw new Error(`unknown stair endpoint: ${endpoint}`);
-        if (!directionMatches) return false;
-        const crossedEndpoint = traversal.endpointLineCrossed(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint);
-        if (!crossedEndpoint) return false;
-        return Number.isFinite(nextLocal.leftRight) &&
-            nextLocal.leftRight >= -0.000001 &&
-            nextLocal.leftRight <= 1.000001;
+        if (movingAway === null) throw new Error(`unknown stair endpoint: ${endpoint}`);
+        if (!movingAway) return false;
+        const nearEndpoint = endpoint === "lower"
+            ? previousUpDown <= mouthTolerance
+            : previousUpDown >= 1 - mouthTolerance;
+        return nearEndpoint &&
+            nextLeftRight >= -0.000001 &&
+            nextLeftRight <= 1.000001;
     }
 
     resolveActorStairLocalMovement(currentStairSupport, worldX, worldY, actor = null, options = {}) {
@@ -2846,19 +2991,40 @@ class GameMap {
                 if (!stair) continue;
                 const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
                 if (!endpoint) continue;
+                if (this.actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options)) {
+                    const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
+                        ...options,
+                        endpoint
+                    });
+                    if (entrySupport) {
+                        return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
+                    }
+                }
+                if (endpoint === "higher") {
+                    const topStepSideEntrySupport = this.getActorStairTopStepSideEntrySupport(stair, worldX, worldY, actor, options);
+                    if (topStepSideEntrySupport) {
+                        return { handled: true, allowed: true, support: topStepSideEntrySupport, currentSupport: currentFloorSupport };
+                    }
+                }
                 if (
                     endpoint === "higher" &&
-                    this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)
+                    this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options) &&
+                    !this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)
                 ) {
                     return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
                 }
-                if (!this.actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options)) continue;
-                const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
-                    ...options,
-                    endpoint
-                });
-                if (entrySupport) {
-                    return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
+                if (
+                    endpoint === "higher" &&
+                    this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options) &&
+                    !this.getFloorSupportAtWorldPosition(worldX, worldY, currentLayer, options)
+                ) {
+                    const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
+                        ...options,
+                        endpoint
+                    });
+                    if (entrySupport) {
+                        return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
+                    }
                 }
             }
         }
@@ -2878,8 +3044,31 @@ class GameMap {
         if (currentFloorSupport) {
             for (const stair of this.stairsById.values()) {
                 if (!stair) continue;
-                if (!this.getStairEndpointForFloorSupport(currentFloorSupport, stair)) continue;
+                const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
+                if (!endpoint) continue;
                 if (!this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)) continue;
+                if (this.actorMovesAwayFromStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
+                    return {
+                        handled: true,
+                        allowed: true,
+                        support: {
+                            ...currentFloorSupport,
+                            point: { x: Number(worldX), y: Number(worldY) }
+                        },
+                        currentSupport: currentFloorSupport
+                    };
+                }
+                if (this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
+                    return {
+                        handled: true,
+                        allowed: true,
+                        support: {
+                            ...currentFloorSupport,
+                            point: { x: Number(worldX), y: Number(worldY) }
+                        },
+                        currentSupport: currentFloorSupport
+                    };
+                }
                 return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
             }
         }
@@ -2958,6 +3147,11 @@ class GameMap {
         actor.currentLayer = nextLayer;
         actor.traversalLayer = nextLayer;
         actor.currentLayerBaseZ = Number.isFinite(nextBaseZ) ? Number(nextBaseZ) : nextLayer * 3;
+        if (this.actorUsesLocalMovementZ(actor) && Number.isFinite(actor.prevZ)) {
+            const previousWorldZ = previousBaseZ + Number(actor.prevZ);
+            actor.prevZ = previousWorldZ - actor.currentLayerBaseZ;
+        }
+
         if (support.node) actor.node = support.node;
         if (support.surfaceId) actor.surfaceId = support.surfaceId;
         if (support.fragmentId) actor.fragmentId = support.fragmentId;
@@ -3073,6 +3267,38 @@ class GameMap {
                     return candidate;
                 }
                 if (!fallback) fallback = candidate;
+            }
+        }
+        if (!fallback && fragmentId && this.floorsById instanceof Map) {
+            const fragment = this.floorsById.get(fragmentId) || null;
+            const fragmentLayer = Number.isFinite(fragment && fragment.level)
+                ? Math.round(Number(fragment.level))
+                : 0;
+            if (fragment && fragmentLayer === targetLayer) {
+                const sourceNode = targetLayer === 0
+                    ? this.getNode(xi, yi, 0)
+                    : (this.getNode(xi, yi, 0) || null);
+                const supportX = Number.isFinite(options && options.worldX)
+                    ? Number(options.worldX)
+                    : (Number.isFinite(sourceNode && sourceNode.x) ? Number(sourceNode.x) : NaN);
+                const supportY = Number.isFinite(options && options.worldY)
+                    ? Number(options.worldY)
+                    : (Number.isFinite(sourceNode && sourceNode.y) ? Number(sourceNode.y) : NaN);
+                if (
+                    sourceNode &&
+                    Number.isFinite(supportX) &&
+                    Number.isFinite(supportY) &&
+                    this.isPointSupportedByFloorFragment(fragment, supportX, supportY)
+                ) {
+                    const created = this.createFloorNodeFromSource(sourceNode, fragment, {
+                        baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : targetLayer * 3,
+                        traversalLayer: targetLayer
+                    });
+                    if (created) {
+                        this._connectFloorNodesIncremental([created], new Set([created.id]));
+                        return created;
+                    }
+                }
             }
         }
         return fallback;

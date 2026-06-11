@@ -984,6 +984,8 @@ test("teleport visual target selects the highest visible floor under the cursor"
                 assert.equal(options.sectionKey, "section-a");
                 assert.equal(options.fragmentId, floorRecord.fragmentId);
                 assert.equal(options.surfaceId, floorRecord.surfaceId);
+                assert.equal(options.worldX, 2);
+                assert.equal(options.worldY, -10);
                 return floorNode;
             }
         }
@@ -1062,6 +1064,8 @@ test("teleport visual target can select upper floors while wizard is on ground",
                 assert.equal(layer, 3);
                 assert.equal(options.fragmentId, upperFloor.fragmentId);
                 assert.equal(options.surfaceId, upperFloor.surfaceId);
+                assert.equal(options.worldX, 2);
+                assert.equal(options.worldY, 11);
                 return upperNode;
             }
         }
@@ -1158,6 +1162,82 @@ test("teleport visual target ignores upper floors during interior view", () => {
     assert.equal(target.layer, 1);
     assert.equal(target.baseZ, 3);
     assert.equal(target.node, currentFloorNode);
+});
+
+test("teleport visual target uses rendered prototype interior floor fragments", () => {
+    const context = loadSpellContext();
+    context.viewport = { x: 0, y: 0, z: 0 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const upperFloor = {
+        fragmentId: "tower-placement:floor:upper",
+        surfaceId: "tower-placement:surface:upper",
+        ownerSectionKey: "tower-placement",
+        renderedByBuildingCutaway: true,
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 4 },
+            { x: 4, y: 4 },
+            { x: 4, y: 6 },
+            { x: 0, y: 6 }
+        ],
+        holes: []
+    };
+    const baseNode = { xindex: 2, yindex: 5 };
+    const upperNode = {
+        xindex: 2,
+        yindex: 5,
+        traversalLayer: 1,
+        baseZ: 3,
+        fragmentId: upperFloor.fragmentId,
+        surfaceId: upperFloor.surfaceId
+    };
+    context.Rendering = {
+        isBuildingInteriorPresentationActive(ctx) {
+            assert.equal(ctx.wizard.currentLayer, 0);
+            return true;
+        },
+        getBuildingInteriorVisibleFloorFragmentIds(ctx) {
+            assert.equal(ctx.wizard.currentLayer, 0);
+            return new context.Set([upperFloor.fragmentId]);
+        }
+    };
+    const wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: 0,
+        map: {
+            floorsById: new context.Map([[upperFloor.fragmentId, upperFloor]]),
+            wrapWorldX: x => x,
+            wrapWorldY: y => y,
+            worldToNode(x, y) {
+                assert.equal(x, 2);
+                assert.equal(y, 5);
+                return baseNode;
+            },
+            getFloorNodeAtLayer(x, y, layer, options) {
+                assert.equal(x, 2);
+                assert.equal(y, 5);
+                assert.equal(layer, 1);
+                assert.equal(options.sectionKey, "tower-placement");
+                assert.equal(options.fragmentId, upperFloor.fragmentId);
+                assert.equal(options.surfaceId, upperFloor.surfaceId);
+                assert.equal(options.worldX, 2);
+                assert.equal(options.worldY, 5);
+                return upperNode;
+            }
+        }
+    };
+
+    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+
+    assert.equal(target.x, 2);
+    assert.equal(target.y, 5);
+    assert.equal(target.layer, 1);
+    assert.equal(target.baseZ, 3);
+    assert.equal(target.node, upperNode);
+    assert.equal(target.floorTarget.fragment, upperFloor);
 });
 
 test("teleport visual target keeps ground above underground fragments", () => {

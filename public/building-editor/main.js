@@ -376,6 +376,7 @@ function spawnPlaytestWizard() {
         x: point.x,
         y: point.y,
         z: getFloorElevation(floor),
+        cameraZ: getFloorElevation(floor),
         radius: PLAYTEST_WIZARD_RADIUS,
         speed: PLAYTEST_WIZARD_SPEED,
         moving: false,
@@ -389,6 +390,26 @@ function spawnPlaytestWizard() {
         onStair: false,
         stairSupport: null
     };
+}
+
+function playtestContinuousStairCameraZ(support) {
+    if (!support || !support.stair) throw new Error("playtest stair camera z requires stair support");
+    const stair = support.stair;
+    const lowerZ = Number(stair.lowerZ);
+    const higherZ = Number(stair.higherZ);
+    const upDown = Number(support.upDown);
+    if (!Number.isFinite(lowerZ) || !Number.isFinite(higherZ) || !Number.isFinite(upDown)) {
+        throw new Error(`playtest stair ${stair.id || "(unknown)"} camera z requires finite stair z and up/down`);
+    }
+    const clamped = Math.max(0, Math.min(1, upDown));
+    return lowerZ + (higherZ - lowerZ) * clamped;
+}
+
+function playtestWizardCameraZ(wizard) {
+    if (!wizard || wizard.active !== true) return 0;
+    if (Number.isFinite(Number(wizard.cameraZ))) return Number(wizard.cameraZ);
+    if (Number.isFinite(Number(wizard.z))) return Number(wizard.z);
+    throw new Error("playtest wizard camera requires finite z");
 }
 
 function setPlaytestWizardFacing(wizard, direction) {
@@ -505,6 +526,7 @@ function applyPlaytestStairSupport(wizard, support) {
     wizard.x = support.point.x;
     wizard.y = support.point.y;
     wizard.z = support.baseZ;
+    wizard.cameraZ = playtestContinuousStairCameraZ(support);
     wizard.floorId = support.upDown >= 1 ? support.stair.higherFloorId : support.stair.lowerFloorId;
     wizard.onStair = true;
     wizard.stairSupport = {
@@ -519,9 +541,11 @@ function applyPlaytestFloorSupport(wizard, support, point) {
     wizard.x = point.x;
     wizard.y = point.y;
     wizard.z = support.z;
+    wizard.cameraZ = support.z;
     wizard.floorId = support.floorId;
     wizard.onStair = false;
     wizard.stairSupport = null;
+    wizard.stairTravelDirection = 0;
     focusPlaytestFloorAfterFloorSupport(support.floorId);
 }
 
@@ -737,10 +761,40 @@ function playtestWallCollisionAt(point, floorId, radius, movement = null) {
     } : null;
 }
 
-function playtestFloorMovementAllowedAt(point, floorId, radius) {
+function playtestCandidateApproachesStairEndpointMouth(previousPoint, candidate, floorId, radius) {
+    if (!playtestRuntime || !Array.isArray(playtestRuntime.stairs)) return false;
+    const traversal = requireEditorStairTraversal();
+    for (const stair of playtestRuntime.stairs) {
+        const endpoint = connectedStairEndpointForFloor(stair, floorId);
+        if (!endpoint) continue;
+        const entry = traversal.pathEndpointEntryState(stair.traversalFrame, previousPoint, candidate, endpoint, {
+            actorRadius: radius,
+            stair
+        });
+        if (
+            entry.enters !== true &&
+            entry.directionMatches === true &&
+            entry.footprintReachedEndpoint === true &&
+            entry.crossesEndpointWidth === true
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function playtestFloorMovementAllowedAt(point, floorId, radius, options = {}) {
     const floorSupport = playtestFloorSupportAt(point, floorId);
     if (!floorSupport || String(floorSupport.floorId) !== String(floorId)) return false;
-    if (playtestFloorMovementBlockedAt(point, floorId)) return false;
+    if (playtestFloorMovementBlockedAt(point, floorId)) {
+        const previousPoint = options && options.previousPoint;
+        if (
+            !previousPoint ||
+            !playtestCandidateApproachesStairEndpointMouth(previousPoint, point, floorId, radius)
+        ) {
+            return false;
+        }
+    }
     return !playtestWallCollisionAt(point, floorId, radius);
 }
 
@@ -766,7 +820,7 @@ function resolvePlaytestFloorMovement(wizard, candidate) {
     const previousPoint = { x: Number(wizard.x), y: Number(wizard.y) };
     const floorId = wizard.floorId;
     const radius = Number.isFinite(Number(wizard.radius)) ? Math.max(0, Number(wizard.radius)) : PLAYTEST_WIZARD_RADIUS;
-    if (playtestFloorMovementAllowedAt(candidate, floorId, radius)) return candidate;
+    if (playtestFloorMovementAllowedAt(candidate, floorId, radius, { previousPoint })) return candidate;
     const requested = {
         x: Number(candidate.x) - previousPoint.x,
         y: Number(candidate.y) - previousPoint.y
@@ -780,7 +834,7 @@ function resolvePlaytestFloorMovement(wizard, candidate) {
         x: previousPoint.x + firstSlide.x,
         y: previousPoint.y + firstSlide.y
     };
-    if (playtestFloorMovementAllowedAt(firstCandidate, floorId, radius)) return firstCandidate;
+    if (playtestFloorMovementAllowedAt(firstCandidate, floorId, radius, { previousPoint })) return firstCandidate;
     const secondContact = playtestFloorMovementContact(previousPoint, firstCandidate, floorId, radius, firstSlide);
     if (!secondContact) return previousPoint;
     const secondSlide = playtestSlideMovement(firstSlide, secondContact);
@@ -789,7 +843,7 @@ function resolvePlaytestFloorMovement(wizard, candidate) {
         x: previousPoint.x + secondSlide.x,
         y: previousPoint.y + secondSlide.y
     };
-    return playtestFloorMovementAllowedAt(secondCandidate, floorId, radius) ? secondCandidate : previousPoint;
+    return playtestFloorMovementAllowedAt(secondCandidate, floorId, radius, { previousPoint }) ? secondCandidate : previousPoint;
 }
 
 function playtestStairSideLimits(traversal, frame, upDown, radius) {
@@ -815,8 +869,10 @@ function playtestClampStairLocalSide(traversal, frame, local, radius) {
         throw new Error(`playtest stair ${frame && frame.stairId ? frame.stairId : "(unknown)"} is too narrow for the wizard hitbox`);
     }
     return {
+        ...local,
         upDown: Number(local.upDown),
-        leftRight: Math.max(limits.min, Math.min(limits.max, Number(local.leftRight)))
+        leftRight: Math.max(limits.min, Math.min(limits.max, Number(local.leftRight))),
+        projectionError: 0
     };
 }
 
@@ -935,14 +991,7 @@ function playtestStairEndpointLocalOptions(stair, endpoint) {
 }
 
 function playtestStairEndpointMouthLocalOptions(stair, endpoint) {
-    const options = playtestStairEndpointLocalOptions(stair, endpoint);
-    const stepCount = Number.isFinite(Number(stair && stair.stepCount))
-        ? Math.max(1, Math.round(Number(stair.stepCount)))
-        : 1;
-    const mouthRange = Math.max(0.05, 1 / stepCount);
-    if (endpoint === "lower") return { ...options, maxUpDown: mouthRange };
-    if (endpoint === "higher") return { ...options, minUpDown: 1 - mouthRange };
-    throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+    return requireEditorStairTraversal().endpointMouthProjectionOptions(stair, endpoint);
 }
 
 function playtestStairEndpointEntrySupport(traversal, stair, candidate, endpoint, radius) {
@@ -960,8 +1009,7 @@ function playtestStairEndpointEntrySupport(traversal, stair, candidate, endpoint
 }
 
 function playtestStairEndpointCrossesWidth(traversal, stair, local, endpoint, radius) {
-    const endpointUpDown = endpoint === "lower" ? 0 : (endpoint === "higher" ? 1 : null);
-    if (endpointUpDown === null) throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
+    if (endpoint !== "lower" && endpoint !== "higher") throw new Error(`unknown playtest stair endpoint: ${endpoint}`);
     if (!local || !Number.isFinite(Number(local.leftRight))) return false;
     return Number(local.leftRight) >= -0.000001 &&
         Number(local.leftRight) <= 1.000001;
@@ -1148,35 +1196,49 @@ function updatePlaytestWizard(deltaSeconds) {
     const dx = Number(playtestMouseWorld.x) - Number(wizard.x);
     const dy = Number(playtestMouseWorld.y) - Number(wizard.y);
     const distance = Math.hypot(dx, dy);
-    if (!(distance > 0.03)) {
-        wizard.moving = false;
-        wizard.movementVector = { x: 0, y: 0 };
-        return;
-    }
-    const direction = { x: dx / distance, y: dy / distance };
-    if (!playtestForwardPressed) {
-        wizard.moving = false;
-        wizard.movementVector = { x: 0, y: 0 };
-        setPlaytestWizardFacing(wizard, direction);
-        return;
-    }
-    const stepDistance = Math.min(distance, PLAYTEST_WIZARD_SPEED * Math.max(0, Number(deltaSeconds) || 0));
+    const direction = distance > 0.03 ? { x: dx / distance, y: dy / distance } : { x: 0, y: -1 };
     const previousPoint = { x: Number(wizard.x), y: Number(wizard.y) };
 
     if (wizard.onStair) {
+        if (!playtestForwardPressed) {
+            wizard.moving = false;
+            wizard.movementVector = { x: 0, y: 0 };
+            if (distance > 0.03) setPlaytestWizardFacing(wizard, direction);
+            return;
+        }
         const stairId = wizard.stairSupport && wizard.stairSupport.stairId;
         const stair = playtestRuntime.stairs.find((entry) => entry.id === stairId);
         if (!stair) throw new Error(`playtest wizard references missing stair ${stairId}`);
-        const nextLocal = resolvePlaytestStairMovement(traversal, stair, wizard, direction, stepDistance);
+        const travelDirection = Number(wizard.stairTravelDirection);
+        let fallbackDirection = direction;
+        if (travelDirection === 1 || travelDirection === -1) {
+            const currentUpDown = Number(wizard.stairSupport && wizard.stairSupport.upDown);
+            const currentLeftRight = Number(wizard.stairSupport && wizard.stairSupport.leftRight);
+            const fromPoint = traversal.pointFromPathLocal(stair.traversalFrame, currentUpDown, currentLeftRight);
+            const toPoint = traversal.pointFromPathLocal(
+                stair.traversalFrame,
+                Math.max(0, Math.min(1, currentUpDown + travelDirection * 0.001)),
+                currentLeftRight
+            );
+            const tangentX = Number(toPoint.x) - Number(fromPoint.x);
+            const tangentY = Number(toPoint.y) - Number(fromPoint.y);
+            const tangentLength = Math.hypot(tangentX, tangentY);
+            if (tangentLength > PLAYTEST_COLLISION_EPSILON) {
+                fallbackDirection = { x: tangentX / tangentLength, y: tangentY / tangentLength };
+            }
+        }
+        const stairDirection = distance > 0.03 ? direction : fallbackDirection;
+        const stepDistance = PLAYTEST_WIZARD_SPEED * Math.max(0, Number(deltaSeconds) || 0);
+        const nextLocal = resolvePlaytestStairMovement(traversal, stair, wizard, stairDirection, stepDistance);
         if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
             const targetFloorId = nextLocal.upDown < 0 ? stair.lowerFloorId : stair.higherFloorId;
             const exitPoint = traversal.exitPointFromPathLocal(stair.traversalFrame, nextLocal);
             const floorSupport = playtestFloorSupportAt(exitPoint, targetFloorId);
             if (floorSupport && floorSupport.floorId === targetFloorId) {
                 applyPlaytestFloorSupport(wizard, floorSupport, exitPoint);
-                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, stairDirection);
             } else {
-                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+                setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, stairDirection);
             }
             return;
         }
@@ -1186,13 +1248,31 @@ function updatePlaytestWizard(deltaSeconds) {
             nextLocal.leftRight
         );
         if (!traversal.localInsidePathFrame(stair.traversalFrame, nextLocal, wizard.radius)) {
-            setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+            setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, stairDirection);
             return;
         }
+        const previousUpDown = Number(wizard.stairSupport && wizard.stairSupport.upDown);
         applyPlaytestStairSupport(wizard, playtestStairSupport(stair, nextLocal, nextPoint));
-        setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
+        const stairDelta = Number(nextLocal.upDown) - previousUpDown;
+        if (Math.abs(stairDelta) > PLAYTEST_COLLISION_EPSILON) {
+            wizard.stairTravelDirection = stairDelta > 0 ? 1 : -1;
+        }
+        setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, stairDirection);
         return;
     }
+
+    if (!(distance > 0.03)) {
+        wizard.moving = false;
+        wizard.movementVector = { x: 0, y: 0 };
+        return;
+    }
+    if (!playtestForwardPressed) {
+        wizard.moving = false;
+        wizard.movementVector = { x: 0, y: 0 };
+        setPlaytestWizardFacing(wizard, direction);
+        return;
+    }
+    const stepDistance = Math.min(distance, PLAYTEST_WIZARD_SPEED * Math.max(0, Number(deltaSeconds) || 0));
 
     const candidate = {
         x: Number(wizard.x) + direction.x * stepDistance,
@@ -1202,14 +1282,13 @@ function updatePlaytestWizard(deltaSeconds) {
     for (const stair of playtestRuntime.stairs) {
         const endpoint = connectedStairEndpointForFloor(stair, wizard.floorId);
         if (!endpoint) continue;
-        const previousLocal = traversal.localPointForPathFrame(stair.traversalFrame, wizard, playtestStairEndpointMouthLocalOptions(stair, endpoint));
-        const candidateLocal = traversal.localPointForPathFrame(stair.traversalFrame, candidate, playtestStairEndpointMouthLocalOptions(stair, endpoint));
-        if (
-            traversal.endpointLineCrossed(stair.traversalFrame, wizard, candidate, endpoint) &&
-            playtestStairEntryDirectionMatches(previousLocal, candidateLocal, endpoint) &&
-            playtestStairEndpointCrossesWidth(traversal, stair, candidateLocal, endpoint, wizard.radius)
-        ) {
+        const entry = traversal.pathEndpointEntryState(stair.traversalFrame, wizard, candidate, endpoint, {
+            actorRadius: wizard.radius,
+            stair
+        });
+        if (entry.enters === true) {
             applyPlaytestStairSupport(wizard, playtestStairEndpointEntrySupport(traversal, stair, candidate, endpoint, wizard.radius));
+            wizard.stairTravelDirection = endpoint === "lower" ? 1 : -1;
             setPlaytestWizardVisualMotion(wizard, previousPoint, deltaSeconds, direction);
             return;
         }
@@ -1253,13 +1332,14 @@ function centerPlaytestCameraOnWizard() {
     if (!renderer || typeof renderer.centerCameraOnWorldPoint !== "function") {
         throw new Error("building editor playtest requires camera centering support");
     }
-    renderer.centerCameraOnWorldPoint({ x: wizard.x, y: wizard.y }, wizard.z);
+    const cameraZ = playtestWizardCameraZ(wizard);
+    renderer.centerCameraOnWorldPoint({ x: wizard.x, y: wizard.y }, cameraZ);
     if (
         lastStagePointer &&
         Number.isFinite(Number(lastStagePointer.x)) &&
         Number.isFinite(Number(lastStagePointer.y))
     ) {
-        playtestMouseWorld = renderer.screenToWorld(lastStagePointer, wizard.z);
+        playtestMouseWorld = renderer.screenToWorld(lastStagePointer, cameraZ);
     } else {
         playtestMouseWorld = { x: Number(wizard.x), y: Number(wizard.y) };
     }
@@ -3577,7 +3657,7 @@ app.stage.on("pointerdown", (event) => {
         const screenPoint = { x: event.data.global.x, y: event.data.global.y };
         renderer.setScreenPickerDebugPoint(screenPoint);
         if (state.playtestWizard && state.playtestWizard.active === true) {
-            playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+            playtestMouseWorld = renderer.screenToWorld(screenPoint, playtestWizardCameraZ(state.playtestWizard));
             panning = null;
             return;
         }
@@ -3672,7 +3752,7 @@ app.stage.on("pointermove", (event) => {
             return;
         }
         if (state.playtestWizard && state.playtestWizard.active === true) {
-            playtestMouseWorld = renderer.screenToWorld(lastStagePointer, state.playtestWizard.z);
+            playtestMouseWorld = renderer.screenToWorld(lastStagePointer, playtestWizardCameraZ(state.playtestWizard));
             return;
         }
         state.updateHoverPoint(worldFromEvent(event));
@@ -3690,7 +3770,7 @@ app.stage.on("pointermove", (event) => {
 app.stage.on("pointerup", (event) => {
     const screenPoint = { x: event.data.global.x, y: event.data.global.y };
     if (state.playtestWizard && state.playtestWizard.active === true) {
-        playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+        playtestMouseWorld = renderer.screenToWorld(screenPoint, playtestWizardCameraZ(state.playtestWizard));
         panning = null;
         return;
     }
@@ -3706,7 +3786,7 @@ app.stage.on("pointerup", (event) => {
 app.stage.on("pointerupoutside", (event) => {
     const screenPoint = { x: event.data.global.x, y: event.data.global.y };
     if (state.playtestWizard && state.playtestWizard.active === true) {
-        playtestMouseWorld = renderer.screenToWorld(screenPoint, state.playtestWizard.z);
+        playtestMouseWorld = renderer.screenToWorld(screenPoint, playtestWizardCameraZ(state.playtestWizard));
         panning = null;
         return;
     }

@@ -4606,7 +4606,7 @@ test("playtest runtime blocks movement through generated upper-floor stair openi
         blocker.endpoint === "lower" &&
         String(blocker.floorId) === String(lowerFloorId) &&
         pointInPolygon({ x: 0.5, y: 0.5 }, blocker.polygon)
-    )), false);
+    )), true);
     assert.ok(blockers.some((blocker) => (
         blocker.endpoint === "lower" &&
         String(blocker.floorId) === String(lowerFloorId) &&

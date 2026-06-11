@@ -691,7 +691,8 @@
         const side = (x * sideUnit.x + y * sideUnit.y) * scalar;
         return {
             upDown: Number(currentLocal.upDown) + along / frame.pathLength,
-            leftRight: Number(currentLocal.leftRight) + (crossline.length > EPSILON ? side / crossline.length : 0)
+            leftRight: Number(currentLocal.leftRight) + (crossline.length > EPSILON ? side / crossline.length : 0),
+            projectionError: 0
         };
     }
 
@@ -730,6 +731,51 @@
         return segmentsIntersect(previous, next, line.a, line.b);
     }
 
+    function endpointMouthProjectionOptions(stair, endpoint) {
+        if (endpoint !== "lower" && endpoint !== "higher") throw new Error(`unknown stair endpoint: ${endpoint}`);
+        const stepCount = Number.isFinite(Number(stair && stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const mouthRange = Math.max(0.05, 1 / stepCount);
+        return endpoint === "lower"
+            ? { upDownHint: 0, maxUpDown: mouthRange }
+            : { upDownHint: 1, minUpDown: 1 - mouthRange };
+    }
+
+    function pathEndpointEntryState(frame, previousPoint, nextPoint, endpoint, options = {}) {
+        if (!frame || frame.kind !== "treadPath") throw new Error("tread path endpoint entry requires a tread path frame");
+        if (endpoint !== "lower" && endpoint !== "higher") throw new Error(`unknown stair endpoint: ${endpoint}`);
+        const projectionOptions = endpointMouthProjectionOptions(options && options.stair, endpoint);
+        const previousLocal = localPointForPathFrame(frame, previousPoint, projectionOptions);
+        const nextLocal = localPointForPathFrame(frame, nextPoint, projectionOptions);
+        const previousUpDown = Number(previousLocal.upDown);
+        const nextUpDown = Number(nextLocal.upDown);
+        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown)) {
+            return { enters: false, previousLocal, nextLocal, directionMatches: false, crossedEndpoint: false, footprintReachedEndpoint: false };
+        }
+        const directionMatches = endpoint === "lower"
+            ? nextUpDown > previousUpDown + EPSILON
+            : nextUpDown < previousUpDown - EPSILON;
+        const crossedEndpoint = endpointLineCrossed(frame, previousPoint, nextPoint, endpoint);
+        const radius = Math.max(0, Number(options && options.actorRadius) || 0);
+        const frontEdgeTolerance = radius / Math.max(0.001, Number(frame.pathLength) || 0);
+        const footprintReachedEndpoint = endpoint === "lower"
+            ? previousUpDown <= EPSILON && nextUpDown >= -frontEdgeTolerance - EPSILON
+            : previousUpDown >= 1 - EPSILON && nextUpDown <= 1 + frontEdgeTolerance + EPSILON;
+        const crossesEndpointWidth = Number.isFinite(nextLocal.leftRight) &&
+            nextLocal.leftRight >= -EPSILON &&
+            nextLocal.leftRight <= 1 + EPSILON;
+        return {
+            enters: directionMatches && crossedEndpoint && crossesEndpointWidth,
+            previousLocal,
+            nextLocal,
+            directionMatches,
+            crossedEndpoint,
+            footprintReachedEndpoint,
+            crossesEndpointWidth
+        };
+    }
+
     const api = {
         EPSILON,
         createStraightFrame,
@@ -750,7 +796,9 @@
         exitPointFromPathLocal,
         pathPolygonForUpDownRange,
         endpointLineForPathFrame,
-        endpointLineCrossed
+        endpointLineCrossed,
+        endpointMouthProjectionOptions,
+        pathEndpointEntryState
     };
 
     globalScope.StairTraversal = api;

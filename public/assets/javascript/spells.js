@@ -6054,6 +6054,9 @@ const SpellSystem = (() => {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         if (!mapRef || !(mapRef.floorsById instanceof Map)) return null;
         if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
+        const visibleFragmentIds = options && options.visibleFragmentIds instanceof Set
+            ? options.visibleFragmentIds
+            : null;
         const maxLevel = Number.isFinite(options && options.maxLevel)
             ? normalizeFloorEditLevel(options.maxLevel)
             : Infinity;
@@ -6064,6 +6067,8 @@ const SpellSystem = (() => {
         let best = null;
         for (const fragment of mapRef.floorsById.values()) {
             if (!fragment) continue;
+            const fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
+            if (visibleFragmentIds && (!fragmentId || !visibleFragmentIds.has(fragmentId))) continue;
             const level = Number.isFinite(fragment.level) ? normalizeFloorEditLevel(fragment.level) : 0;
             if (exactLevel !== null && level !== exactLevel) continue;
             if (level === 0 && !includeGround) continue;
@@ -6106,6 +6111,14 @@ const SpellSystem = (() => {
         return !!renderingApi.isBuildingInteriorPresentationActive({ wizard: wizardRef || null, map: mapRef || null });
     }
 
+    function getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef) {
+        const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
+        if (!renderingApi || typeof renderingApi.getBuildingInteriorVisibleFloorFragmentIds !== "function") return null;
+        const ids = renderingApi.getBuildingInteriorVisibleFloorFragmentIds({ wizard: wizardRef || null, map: mapRef || null });
+        if (!(ids instanceof Set) || ids.size === 0) return null;
+        return ids;
+    }
+
     function resolveTeleportNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
         if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
         const baseNode = mapRef.worldToNode(worldX, worldY);
@@ -6125,6 +6138,8 @@ const SpellSystem = (() => {
             sectionKey,
             surfaceId: fragment && typeof fragment.surfaceId === "string" ? fragment.surfaceId : "",
             fragmentId: fragment && typeof fragment.fragmentId === "string" ? fragment.fragmentId : "",
+            worldX,
+            worldY,
             allowScan: true
         });
     }
@@ -6149,9 +6164,14 @@ const SpellSystem = (() => {
                 visibleFloorOptions.includeGround = false;
                 visibleFloorOptions.exactLevel = currentLayer;
             } else if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
-                visibleFloorOptions.maxLevel = Number.isFinite(wizardRef && wizardRef.currentLayer)
-                    ? Number(wizardRef.currentLayer)
-                    : (Number.isFinite(wizardRef && wizardRef.traversalLayer) ? Number(wizardRef.traversalLayer) : 0);
+                const interiorVisibleFragmentIds = getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef);
+                if (interiorVisibleFragmentIds) {
+                    visibleFloorOptions.visibleFragmentIds = interiorVisibleFragmentIds;
+                } else {
+                    visibleFloorOptions.maxLevel = Number.isFinite(wizardRef && wizardRef.currentLayer)
+                        ? Number(wizardRef.currentLayer)
+                        : (Number.isFinite(wizardRef && wizardRef.traversalLayer) ? Number(wizardRef.traversalLayer) : 0);
+                }
             }
             floorTarget = getVisibleFloorPolygonTargetAtScreenPoint(wizardRef, screenPoint.screenX, screenPoint.screenY, {
                 ...visibleFloorOptions

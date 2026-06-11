@@ -110,7 +110,7 @@ test("prototype building interior bitmap signature includes floor and render dat
         "utf8"
     );
 
-    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v7-lower-floor-openings";/);
+    assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v9-lower-terrain-shadow";/);
     assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),\s+String\(floorId \|\| ""\),/);
     const interiorSignatureBody = source.slice(
         source.indexOf("function interiorBitmapSettingsSignature"),
@@ -132,7 +132,11 @@ test("prototype building interior bitmap signature includes floor and render dat
     assert.match(rendererSource, /anchorX: originScreen\.x \/ width,/);
     assert.match(rendererSource, /anchorY: originScreen\.y \/ height,/);
     assert.doesNotMatch(rendererSource, /anchorX: Math\.max\(0, Math\.min\(1, originScreen\.x \/ width\)\)/);
-    assert.match(rendererSource, /playtestFloorRenderOverride = \{\s+floorIds: interiorBitmapFloorIds,\s+suppressFloorMeshIds: visibleLowerFloorIds,\s+fullHeightWallFloorIds: visibleLowerFloorIds,\s+fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,\s+suppressFade: true\s+\};/);
+    assert.match(rendererSource, /const INTERIOR_BITMAP_LOWER_TERRAIN_SHADOW_LIGHT_FACTOR = 0\.62;/);
+    assert.match(rendererSource, /playtestFloorRenderOverride = \{\s+floorIds: interiorBitmapFloorIds,\s+fullHeightWallFloorIds: visibleLowerFloorIds,\s+fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,\s+lowerTerrainShadowFloorIds: visibleLowerFloorIds,\s+suppressFade: true\s+\};/);
+    assert.match(rendererSource, /floorShadowLightFactor\(floor\)/);
+    assert.match(rendererSource, /lowerTerrainShadowFloorIds instanceof Set/);
+    assert.doesNotMatch(rendererSource, /renderBuildingInteriorBitmap[\s\S]*?suppressFloorMeshIds: visibleLowerFloorIds/);
     assert.match(rendererSource, /assertInteriorBitmapRenderableSurfaces\(floor\)/);
 });
 

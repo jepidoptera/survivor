@@ -2230,6 +2230,22 @@ void main(void) {
             return out;
         }
 
+        getBuildingInteriorVisibleFloorFragmentIds(ctx = null) {
+            const state = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const fragmentIds = new Set();
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.activeInteriorRegion) continue;
+                const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
+                for (let r = 0; r < regions.length; r++) {
+                    const fragmentId = this.getBuildingInteriorRegionFragmentId(regions[r]);
+                    if (fragmentId) fragmentIds.add(fragmentId);
+                }
+            }
+            return fragmentIds;
+        }
+
         getBuildingInteriorRegionFragmentId(region) {
             if (!region) return "";
             if (typeof region.fragmentId === "string" && region.fragmentId.length > 0) return region.fragmentId;
@@ -20212,6 +20228,10 @@ void main(void) {
         isBuildingInteriorPresentationActive(ctx = null) {
             if (!singleton || typeof singleton.isBuildingInteriorPresentationActive !== "function") return false;
             return !!singleton.isBuildingInteriorPresentationActive(ctx);
+        },
+        getBuildingInteriorVisibleFloorFragmentIds(ctx = null) {
+            if (!singleton || typeof singleton.getBuildingInteriorVisibleFloorFragmentIds !== "function") return new Set();
+            return singleton.getBuildingInteriorVisibleFloorFragmentIds(ctx);
         },
         disable() {
             if (!singleton) return;

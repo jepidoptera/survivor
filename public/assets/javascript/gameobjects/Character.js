@@ -773,7 +773,11 @@ class Character {
                 maxY: Math.max(currentY, newY) + padding
             };
             const extraSeen = seen || new Set(nearbyObjects);
-            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, {
+                ...options,
+                candidateX: newX,
+                candidateY: newY
+            });
             for (let i = 0; i < stairBlockers.length; i++) {
                 const obj = stairBlockers[i];
                 if (!this.doesObjectBlockVectorMovement(obj, options)) continue;

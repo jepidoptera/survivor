@@ -144,6 +144,7 @@ X floor fragment edges slow but don't stop movement
   trees can't place within building footprint rectangle
 X rugs on an upper floor are visible in the building overlay
   inside and outside doors have opposite handles
+  delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads
 
 
 

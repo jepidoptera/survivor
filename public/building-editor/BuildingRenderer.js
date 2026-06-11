@@ -31,6 +31,7 @@ const SCENE_LIGHT_TILT_RADIANS = 20 * Math.PI / 180;
 const SCENE_LIGHT_DIFFUSE = 0.95;
 const SCENE_LIGHT_MIN = 0.58;
 const SCENE_LIGHT_MAX = 1.36;
+const INTERIOR_BITMAP_LOWER_TERRAIN_SHADOW_LIGHT_FACTOR = 0.62;
 const ROOF_OVERHEAD_SLOPE_LIGHTING = 0.55;
 const DEFAULT_WALL_TEXTURE_REPEAT = 0.1;
 const GABLE_MOUNT_WALL_THICKNESS = 0.08;
@@ -4082,7 +4083,8 @@ export class BuildingRenderer {
     updateFloorMeshUniforms(mesh, floor, alpha) {
         this.updateSurfaceMeshUniforms(mesh, floor, alpha, {
             texturePath: floor.floorTexturePath,
-            textureFallback: DEFAULTS.floorTexture
+            textureFallback: DEFAULTS.floorTexture,
+            lightFactor: this.floorShadowLightFactor(floor)
         });
     }
 
@@ -4092,6 +4094,29 @@ export class BuildingRenderer {
             textureFallback: "/assets/images/roofs/slate.png",
             overheadSlopeLighting: ROOF_OVERHEAD_SLOPE_LIGHTING
         });
+    }
+
+    floorShadowLightFactor(floor) {
+        const override = this.playtestFloorRenderOverride;
+        const floorId = floor ? getFloorId(floor) : "";
+        if (
+            override &&
+            override.lowerTerrainShadowFloorIds instanceof Set &&
+            override.lowerTerrainShadowFloorIds.has(floorId)
+        ) {
+            return INTERIOR_BITMAP_LOWER_TERRAIN_SHADOW_LIGHT_FACTOR;
+        }
+        return 1;
+    }
+
+    floorShadowTint(tint, floor) {
+        const factor = this.floorShadowLightFactor(floor);
+        if (!(factor < 0.999)) return Number.isFinite(tint) ? Math.max(0, Math.min(0xffffff, Math.floor(tint))) : 0xffffff;
+        const baseTint = Number.isFinite(tint) ? Math.max(0, Math.min(0xffffff, Math.floor(tint))) : 0xffffff;
+        const r = Math.round(((baseTint >> 16) & 0xff) * factor);
+        const g = Math.round(((baseTint >> 8) & 0xff) * factor);
+        const b = Math.round((baseTint & 0xff) * factor);
+        return (r << 16) | (g << 8) | b;
     }
 
     stairOpeningStepPolygonsForFloor(stair, floor) {
@@ -4761,12 +4786,14 @@ export class BuildingRenderer {
         entry.mesh.visible = true;
         this.updateSurfaceMeshUniforms(entry.mesh._stairTreadMesh, floor, alpha, {
             texturePath: stairTreadTexturePath(stair),
-            textureFallback: DEFAULTS.floorTexture
+            textureFallback: DEFAULTS.floorTexture,
+            lightFactor: this.floorShadowLightFactor(floor)
         });
         if (entry.mesh._stairRiserMesh) {
             this.updateSurfaceMeshUniforms(entry.mesh._stairRiserMesh, floor, alpha, {
                 texturePath: stairRiserTexturePath(stair),
-                textureFallback: DEFAULTS.floorTexture
+                textureFallback: DEFAULTS.floorTexture,
+                lightFactor: this.floorShadowLightFactor(floor)
             });
         }
         return entry.mesh;
@@ -5926,6 +5953,7 @@ export class BuildingRenderer {
         const bottomFaceOnly = this.shouldDrawWallCollapsed(wall, floor, wallEntries);
         const localTextureU = this.shouldUseExteriorPerimeterTextureU(wall);
         const sceneBrightness = this.wallSceneBrightnessPercent(wall, floor);
+        const baseTint = selected ? 0xffd27a : 0xffffff;
         const mesh = entry.unit.getDepthMeshDisplayObject({
             camera: this.gameCamera(),
             app: this.app,
@@ -5934,9 +5962,9 @@ export class BuildingRenderer {
             cameraPitch: cameraPitch(this.state.camera),
             cameraRotation: Number(this.state.camera.rotation) || 0,
             cameraRotationCenter: this.state.camera.rotationCenter || this.state.buildingCenter(),
-            tint: selected ? 0xffd27a : 0xffffff,
+            tint: this.floorShadowTint(baseTint, floor),
             alpha,
-            brightness: sceneBrightness + (selected ? 12 : 0),
+            brightness: (sceneBrightness + (selected ? 12 : 0)) * this.floorShadowLightFactor(floor),
             bottomFaceOnly,
             localTextureU
         });
@@ -6006,6 +6034,7 @@ export class BuildingRenderer {
         const entry = this.ensureColumnUnit(column, floor);
         if (!entry) return null;
         const selected = this.state.isColumnSelected(column.id);
+        const baseTint = selected ? 0xffd27a : 0xffffff;
         const mesh = entry.unit.getDepthMeshDisplayObject({
             camera: this.gameCamera(),
             app: this.app,
@@ -6014,9 +6043,9 @@ export class BuildingRenderer {
             cameraPitch: cameraPitch(this.state.camera),
             cameraRotation: Number(this.state.camera.rotation) || 0,
             cameraRotationCenter: this.state.camera.rotationCenter || this.state.buildingCenter(),
-            tint: selected ? 0xffd27a : 0xffffff,
+            tint: this.floorShadowTint(baseTint, floor),
             alpha,
-            brightness: selected ? 12 : 0
+            brightness: (selected ? 12 : 0) * this.floorShadowLightFactor(floor)
         });
         if (!mesh) return null;
         if (mesh.parent !== this.buildingUnit) this.buildingUnit.addChild(mesh);
@@ -7367,7 +7396,8 @@ export class BuildingRenderer {
         const alpha = Math.max(0, Math.min(1, Number(source.previewAlpha ?? 1) * alphaMultiplier));
         this.updateSurfaceMeshUniforms(mesh, placement.floor, alpha, {
             texturePath,
-            textureFallback: source.category === "windows" ? "/assets/images/windows/window.png" : "/assets/images/doors/door5.png"
+            textureFallback: source.category === "windows" ? "/assets/images/windows/window.png" : "/assets/images/doors/door5.png",
+            lightFactor: this.floorShadowLightFactor(placement.floor)
         });
         mesh.visible = true;
         return true;
@@ -8992,9 +9022,9 @@ export async function renderBuildingInteriorBitmap(buildingData, options = {}) {
         }
         exportRenderer.playtestFloorRenderOverride = {
             floorIds: interiorBitmapFloorIds,
-            suppressFloorMeshIds: visibleLowerFloorIds,
             fullHeightWallFloorIds: visibleLowerFloorIds,
             fullOpacityMountedObjectFloorIds: visibleLowerFloorIds,
+            lowerTerrainShadowFloorIds: visibleLowerFloorIds,
             suppressFade: true
         };
         await Promise.all([

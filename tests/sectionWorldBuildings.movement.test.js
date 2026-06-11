@@ -237,7 +237,19 @@ function createBuildingSaveWithTreadPathStair() {
 
 function createBuildingSaveWithImplicitTreadPathStairOpening() {
     const building = createBuildingSaveWithTreadPathStair();
-    building.floorFragments[0].stairs[0].stepCount = 1;
+    building.floorFragments[0].stairs[0].stepCount = 2;
+    return building;
+}
+
+function createBuildingSaveWithTreadPathStairHole() {
+    const building = createBuildingSaveWithTreadPathStair();
+    building.floorFragments[0].stairs[0].stepCount = 2;
+    building.floorFragments[1].holes = [[
+        { x: 1, y: 0.5 },
+        { x: 2, y: 0.5 },
+        { x: 2, y: 1.5 },
+        { x: 1, y: 1.5 }
+    ]];
     return building;
 }
 
@@ -691,7 +703,7 @@ test("building placements register imported floor polygons and tread-path stairs
     }
 });
 
-test("building stair openings become upper-floor movement blockers without saved floor holes", () => {
+test("building stair openings are not baked into generic movement blockers", () => {
     const previousPolygonHitbox = globalThis.PolygonHitbox;
     globalThis.PolygonHitbox = TestPolygonHitbox;
     try {
@@ -703,23 +715,39 @@ test("building stair openings become upper-floor movement blockers without saved
             transform: { x: 0, y: 0, rotation: 0 }
         }, { buildingData: createBuildingSaveWithImplicitTreadPathStairOpening() });
 
-        assert.equal(placement.movementBlockerPolygons.length, 1);
-        const holeBlocker = placement.movementBlockerPolygons[0];
-        assert.equal(holeBlocker.traversalLayer, 1);
-        assert.equal(holeBlocker.bottomZ, 3);
-        assert.equal(holeBlocker.height, 3);
-        assert.equal(pointInPolygon({ x: 1.5, y: 1 }, holeBlocker.polygon), true);
-        assert.equal(pointInPolygon({ x: 2, y: 1 }, holeBlocker.polygon), false);
+        assert.equal(placement.movementBlockerPolygons.length, 0);
 
         const blockers = collectBuildingBlockers(map);
-        assert.equal(blockers.length, 1);
-        assert.equal(blockers[0].traversalLayer, 1);
-        assert.equal(pointInPolygon({ x: 1.5, y: 1 }, blockers[0].groundPlaneHitbox.points), true);
-        assert.equal(pointInPolygon({ x: 2, y: 1 }, blockers[0].groundPlaneHitbox.points), false);
+        assert.equal(blockers.length, 0);
 
         const stair = map.stairsById.get("building:stair-hole-house:stair:floor-0:12");
         assert.ok(stair);
         assert.deepEqual(stair.higherPoint, { x: 2, y: 1 });
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building stair saved floor holes are not baked into generic movement blockers", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const placement = map.addPrototypeBuildingPlacement({
+            id: "building:stair-saved-hole-house",
+            buildingSaveName: "stair saved hole house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStairHole() });
+
+        assert.equal(placement.movementBlockerPolygons.length, 0);
+        const blockers = collectBuildingBlockers(map);
+        assert.equal(blockers.length, 0);
+        assert.ok(map.stairsById.get("building:stair-saved-hole-house:stair:floor-0:12"));
     } finally {
         if (previousPolygonHitbox === undefined) {
             delete globalThis.PolygonHitbox;

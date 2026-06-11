@@ -4,8 +4,8 @@
     const BUILDING_PLACEMENT_SCHEMA = "survivor-building-placement-v1";
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
     const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v3";
-    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v7-lower-floor-openings";
-    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stair-hole-v4";
+    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v9-lower-terrain-shadow";
+    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v6";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;
@@ -526,153 +526,6 @@
         return points;
     }
 
-    function pointOnSegment(point, a, b, epsilon = 0.000001) {
-        const px = Number(point && point.x);
-        const py = Number(point && point.y);
-        const ax = Number(a && a.x);
-        const ay = Number(a && a.y);
-        const bx = Number(b && b.x);
-        const by = Number(b && b.y);
-        if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
-        const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
-        if (Math.abs(cross) > epsilon) return false;
-        return px >= Math.min(ax, bx) - epsilon &&
-            px <= Math.max(ax, bx) + epsilon &&
-            py >= Math.min(ay, by) - epsilon &&
-            py <= Math.max(ay, by) + epsilon;
-    }
-
-    function segmentsIntersect(a, b, c, d, epsilon = 0.000001) {
-        const ax = Number(a && a.x);
-        const ay = Number(a && a.y);
-        const bx = Number(b && b.x);
-        const by = Number(b && b.y);
-        const cx = Number(c && c.x);
-        const cy = Number(c && c.y);
-        const dx = Number(d && d.x);
-        const dy = Number(d && d.y);
-        if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
-        const cross = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
-        const abC = cross(ax, ay, bx, by, cx, cy);
-        const abD = cross(ax, ay, bx, by, dx, dy);
-        const cdA = cross(cx, cy, dx, dy, ax, ay);
-        const cdB = cross(cx, cy, dx, dy, bx, by);
-        if (
-            ((abC > epsilon && abD < -epsilon) || (abC < -epsilon && abD > epsilon)) &&
-            ((cdA > epsilon && cdB < -epsilon) || (cdA < -epsilon && cdB > epsilon))
-        ) {
-            return true;
-        }
-        return pointOnSegment(c, a, b, epsilon) ||
-            pointOnSegment(d, a, b, epsilon) ||
-            pointOnSegment(a, c, d, epsilon) ||
-            pointOnSegment(b, c, d, epsilon);
-    }
-
-    function polygonsIntersect(a, b) {
-        if (!Array.isArray(a) || a.length < 3 || !Array.isArray(b) || b.length < 3) return false;
-        if (!boundsOverlap(boundsForPolygon(a), boundsForPolygon(b))) return false;
-        for (let i = 0; i < a.length; i++) {
-            if (pointInRing(a[i], b)) return true;
-        }
-        for (let i = 0; i < b.length; i++) {
-            if (pointInRing(b[i], a)) return true;
-        }
-        for (let i = 0; i < a.length; i++) {
-            const a0 = a[i];
-            const a1 = a[(i + 1) % a.length];
-            for (let j = 0; j < b.length; j++) {
-                if (segmentsIntersect(a0, a1, b[j], b[(j + 1) % b.length])) return true;
-            }
-        }
-        return false;
-    }
-
-    function requireBuildingStairTraversal() {
-        const traversal = globalScope && globalScope.StairTraversal;
-        if (!traversal || typeof traversal.createTreadPathFrame !== "function" || typeof traversal.pathPolygonForUpDownRange !== "function") {
-            throw new Error("building stair-hole movement blocking requires StairTraversal tread path support");
-        }
-        return traversal;
-    }
-
-    function computeRuntimeStairUpperOpeningPolygons(stair, traversal) {
-        if (!stair) return [];
-        const frame = traversal.createTreadPathFrame(stair);
-        const stepCount = Number.isFinite(Number(stair.stepCount))
-            ? Math.max(1, Math.round(Number(stair.stepCount)))
-            : 1;
-        const lowerZ = finiteNumber(stair.lowerZ, `building stair ${stair.id} lowerZ`);
-        const higherZ = finiteNumber(stair.higherZ, `building stair ${stair.id} higherZ`);
-        const height = higherZ - lowerZ;
-        if (!(height > 0)) {
-            throw new Error(`building stair ${stair.id} upper opening requires positive height`);
-        }
-        const thresholdZ = higherZ - 2;
-        const polygons = [];
-        for (let index = 0; index < stepCount; index++) {
-            const stepZ = lowerZ + height * ((index + 1) / (stepCount + 1));
-            if (stepZ < thresholdZ - 0.000001 || stepZ > higherZ + 0.000001) continue;
-            const polygon = traversal.pathPolygonForUpDownRange(frame, index / stepCount, (index + 1) / stepCount);
-            if (!Array.isArray(polygon) || polygon.length < 3) {
-                throw new Error(`building stair ${stair.id} upper opening step ${index} requires a polygon`);
-            }
-            polygons.push(polygon);
-        }
-        if (polygons.length === 0) {
-            throw new Error(`building stair ${stair.id} upper opening requires at least one high step polygon`);
-        }
-        return polygons;
-    }
-
-    function computeBuildingPlacementStairHoleBlockers(buildingData, placement, fragments) {
-        const runtimeStairs = createPrototypeBuildingStairRuntimeRecords(buildingData, placement, fragments);
-        if (runtimeStairs.length === 0) return [];
-        const fragmentsById = new Map(fragments.map((fragment) => [fragment.fragmentId, fragment]));
-        const blockers = [];
-        for (let s = 0; s < runtimeStairs.length; s++) {
-            const stair = runtimeStairs[s];
-            const higherFragment = fragmentsById.get(stair.higherFragmentId);
-            if (!higherFragment) {
-                throw new Error(`building stair ${stair.id} references missing higher floor ${stair.higherFragmentId}`);
-            }
-            const holes = Array.isArray(higherFragment.holes) ? higherFragment.holes : [];
-            const traversal = requireBuildingStairTraversal();
-            const layer = getBuildingFloorLayer(higherFragment);
-            const bottomZ = getBuildingLayerBaseZ(higherFragment, layer);
-            const height = buildingElementHeight(higherFragment, {});
-            const openingPolygons = computeRuntimeStairUpperOpeningPolygons(stair, traversal);
-            for (let p = 0; p < openingPolygons.length; p++) {
-                blockers.push({
-                    polygon: openingPolygons[p],
-                    level: layer,
-                    traversalLayer: layer,
-                    bottomZ,
-                    height
-                });
-            }
-            if (holes.length === 0) continue;
-            const frame = traversal.createTreadPathFrame(stair);
-            const footprint = traversal.pathPolygonForUpDownRange(frame, 0, 1);
-            if (!Array.isArray(footprint) || footprint.length < 3) {
-                throw new Error(`building stair ${stair.id} hole blocker requires a footprint polygon`);
-            }
-            for (let h = 0; h < holes.length; h++) {
-                const hole = holes[h];
-                if (!Array.isArray(hole) || hole.length < 3) continue;
-                if (!polygonsIntersect(hole, footprint)) continue;
-                blockers.push({
-                    polygon: hole,
-                    level: layer,
-                    traversalLayer: layer,
-                    bottomZ,
-                    height
-                });
-            }
-        }
-        return blockers;
-    }
-
     function buildingElementBottomZ(floor, layer, element) {
         if (Number.isFinite(Number(element && element.bottomZ))) return Number(element.bottomZ);
         return getBuildingLayerBaseZ(floor, layer);
@@ -735,16 +588,6 @@
                 });
             }
         }
-        const localPlacement = {
-            ...placement,
-            transform: { x: 0, y: 0, rotation: 0 }
-        };
-        const interiorPolygonsByFloor = computeInteriorPolygonsByFloor(buildingData, localPlacement);
-        const fragments = [];
-        for (let i = 0; i < floors.length; i++) {
-            fragments.push(createPrototypeBuildingFragment(localPlacement, floors[i], i, interiorPolygonsByFloor));
-        }
-        localEntries.push(...computeBuildingPlacementStairHoleBlockers(buildingData, localPlacement, fragments));
         return localEntries.map((entry, index) => ({
             polygon: normalizePolygon(
                 entry.polygon.map((point) => transformPoint(point, placement.transform)),

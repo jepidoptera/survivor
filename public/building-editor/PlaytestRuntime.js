@@ -73,13 +73,10 @@ export function buildPlaytestStairFloorBlockers({
         }
         const min = index / stepCount;
         const max = (index + 1) / stepCount;
-        const entryMouthClearance = 1 / stepCount;
-        if (max <= entryMouthClearance + 0.000001) continue;
-        const resolvedMin = Math.max(min, entryMouthClearance);
         if (activeRange) {
             activeRange.max = max;
         } else {
-            activeRange = { min: resolvedMin, max };
+            activeRange = { min, max };
         }
     }
     if (activeRange) lowerBlockerRanges.push(activeRange);
