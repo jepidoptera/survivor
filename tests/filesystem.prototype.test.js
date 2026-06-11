@@ -234,6 +234,100 @@ test("loadGameState re-syncs prototype animals and powerups after loading sectio
     assert.equal(counters.powerups, 1);
 });
 
+test("loadGameState skips stale upper-floor placed objects from legacy static object payload", () => {
+    const map = createRectMap();
+    const calls = {
+        ensureFloorBuildings: 0,
+        staticObjects: []
+    };
+    const liveFragmentId = "floor_area:-4,0:4:0";
+    const staleFragmentId = "floor_area:-4,0:7:0";
+    map.objects = [];
+    map.floorBuildingByFragmentId = new Map([[liveFragmentId, { placementId: "building:live" }]]);
+    map.ensureFloorBuildings = () => {
+        calls.ensureFloorBuildings += 1;
+    };
+    map.loadPrototypeSectionWorld = () => true;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = { loadJson() {} };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = {
+        loadJson(data) {
+            calls.staticObjects.push(data);
+            return null;
+        }
+    };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args);
+    try {
+        const loaded = filesystem.loadGameState({
+            wizard: { x: 0, y: 0 },
+            animals: [],
+            powerups: [],
+            staticObjects: [
+                {
+                    type: "placedObject",
+                    category: "Rugs",
+                    x: 12,
+                    y: 34,
+                    level: 1,
+                    fragmentId: staleFragmentId,
+                    surfaceId: staleFragmentId
+                },
+                {
+                    type: "placedObject",
+                    category: "Rugs",
+                    x: 16,
+                    y: 38,
+                    level: 1,
+                    fragmentId: liveFragmentId,
+                    surfaceId: liveFragmentId
+                }
+            ],
+            prototypeSectionWorld: {
+                version: 1,
+                activeCenterKey: "0,0",
+                sections: []
+            }
+        });
+
+        assert.equal(loaded, true);
+        assert.equal(calls.ensureFloorBuildings > 0, true);
+        assert.equal(calls.staticObjects.length, 1);
+        assert.equal(calls.staticObjects[0].fragmentId, liveFragmentId);
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0][0], "[static object restore] skipped orphaned upper-floor placed object records");
+        assert.deepEqual(warnings[0][1], {
+            count: 1,
+            samples: [{
+                type: "placedObject",
+                fragmentId: staleFragmentId,
+                surfaceId: staleFragmentId,
+                level: 1,
+                x: 12,
+                y: 34
+            }]
+        });
+    } finally {
+        console.warn = originalWarn;
+    }
+});
+
 test("loaded wizard stair support waits for pending prototype building geometry", async () => {
     const counters = {
         ensureBuildings: 0,

@@ -3374,6 +3374,76 @@ test("syncPrototypeObjects reloads untouched furniture records using their secti
     assert.equal(runtimeObj.getNode(), sectionNode);
 });
 
+test("syncPrototypeObjects prunes orphaned upper-floor placed object records before load", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [
+                    {
+                        id: 501,
+                        type: "placedObject",
+                        category: "furniture",
+                        texturePath: "/assets/images/furniture/circlerug.png",
+                        x: 3,
+                        y: 3,
+                        traversalLayer: 1,
+                        level: 1,
+                        fragmentId: "floor_area:-4,0:7:0"
+                    }
+                ],
+                animals: [],
+                powerups: []
+            }
+        ]
+    })), true);
+
+    map.floorBuildingByFragmentId = new Map();
+    map.ensureFloorBuildings = () => new Map();
+
+    let loadCalled = false;
+    globalThis.StaticObject = {
+        loadJson() {
+            loadCalled = true;
+            throw new Error("orphaned upper-floor object should be pruned before load");
+        }
+    };
+    const originalWarn = console.warn;
+    let warning = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), true);
+    } finally {
+        console.warn = originalWarn;
+    }
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    assert.equal(sectionAsset.objects.length, 0);
+    assert.equal(loadCalled, false);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 0);
+    assert.equal(warning[0], "[prototype object sanitize] removed orphaned upper-floor placed objects");
+    assert.equal(warning[1].count, 1);
+    assert.equal(warning[1].samples[0].fragmentId, "floor_area:-4,0:7:0");
+});
+
 test("loadPrototypeSectionWorld extracts trigger records into a registry and materializes them for active sections", () => {
     const map = createPrototypeMap();
     attachPrototypeApis(map, createEmptyPrototypeState());

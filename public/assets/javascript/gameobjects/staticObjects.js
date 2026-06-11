@@ -2515,7 +2515,8 @@ void main(void) {
                 const tlDx = leftOff * cosT - farOff * sinT;
                 const tlDy = leftOff * sinT + farOff * cosT;
                 signature = [
-                    worldX, worldY, groundVisualZ, worldWidth, worldDepthY, angleDeg, groundLayerNudge
+                    worldX, worldY, groundVisualZ, worldWidth, worldDepthY, angleDeg,
+                    anchorX, anchorY, groundLayerNudge
                 ].map(v => Number(v).toFixed(4)).join("|");
                 if (signature !== this._depthBillboardLastSignature && this._depthBillboardWorldPositions) {
                     const positions = this._depthBillboardWorldPositions;

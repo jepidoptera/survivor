@@ -283,19 +283,58 @@
             return hasViewport && hasWizardFields;
         };
 
+        const isOrphanedUpperFloorPlacedObjectRecord = (record) => {
+            if (!record || typeof record !== "object" || record.type !== "placedObject") return false;
+            const layer = Number.isFinite(Number(record.traversalLayer))
+                ? Math.round(Number(record.traversalLayer))
+                : (Number.isFinite(Number(record.level)) ? Math.round(Number(record.level)) : 0);
+            if (layer <= 0) return false;
+            const fragmentId = typeof record.fragmentId === "string" && record.fragmentId.length > 0
+                ? record.fragmentId
+                : "";
+            if (!fragmentId) return true;
+            if (typeof map.ensureFloorBuildings === "function") {
+                map.ensureFloorBuildings();
+            }
+            if (!(map.floorBuildingByFragmentId instanceof Map)) return false;
+            return !map.floorBuildingByFragmentId.has(fragmentId);
+        };
+
         const sanitizePrototypeObjectRecords = () => {
             const state = map._prototypeSectionState;
             if (!state || !(state.sectionAssetsByKey instanceof Map)) return false;
             let removedAny = false;
+            let orphanedUpperFloorObjects = 0;
+            const orphanedSamples = [];
             for (const asset of state.sectionAssetsByKey.values()) {
                 const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
                 if (!Array.isArray(records) || records.length === 0) continue;
-                const nextRecords = records.filter((record) => !isInvalidPrototypeObjectRecord(record));
+                const nextRecords = records.filter((record) => {
+                    if (isInvalidPrototypeObjectRecord(record)) return false;
+                    if (isOrphanedUpperFloorPlacedObjectRecord(record)) {
+                        orphanedUpperFloorObjects += 1;
+                        if (orphanedSamples.length < 5) {
+                            orphanedSamples.push({
+                                sectionKey: typeof asset.key === "string" ? asset.key : "",
+                                recordId: Number.isInteger(Number(record && record.id)) ? Number(record.id) : null,
+                                fragmentId: typeof record?.fragmentId === "string" ? record.fragmentId : ""
+                            });
+                        }
+                        return false;
+                    }
+                    return true;
+                });
                 if (nextRecords.length === records.length) continue;
                 asset.objects = nextRecords;
                 rebuildPrototypeAssetObjectNameRegistry(asset);
                 markPrototypeClearanceDirty(asset);
                 removedAny = true;
+            }
+            if (orphanedUpperFloorObjects > 0 && typeof console !== "undefined" && typeof console.warn === "function") {
+                console.warn("[prototype object sanitize] removed orphaned upper-floor placed objects", {
+                    count: orphanedUpperFloorObjects,
+                    samples: orphanedSamples
+                });
             }
             return removedAny;
         };

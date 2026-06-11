@@ -7,6 +7,8 @@
     const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v7-lower-floor-openings";
     const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stair-hole-v4";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
+    const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
+    const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;
 
     function finiteNumber(value, label) {
         const num = Number(value);
@@ -213,10 +215,10 @@
             : 72;
         const paddingPixels = Number.isFinite(Number(options.paddingPixels))
             ? Number(options.paddingPixels)
-            : 48;
+            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS;
         const maxDimension = Number.isFinite(Number(options.maxDimension))
             ? Number(options.maxDimension)
-            : 2048;
+            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION;
         const pitch = Number.isFinite(Number(options.pitch))
             ? Number(options.pitch)
             : Math.PI / 4;
@@ -245,10 +247,10 @@
             : 72;
         const paddingPixels = Number.isFinite(Number(options.paddingPixels))
             ? Number(options.paddingPixels)
-            : 48;
+            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS;
         const maxDimension = Number.isFinite(Number(options.maxDimension))
             ? Number(options.maxDimension)
-            : 2048;
+            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION;
         const pitch = Number.isFinite(Number(options.pitch))
             ? Number(options.pitch)
             : Math.PI / 4;
@@ -1861,7 +1863,7 @@
         });
     }
 
-    function clearPrototypeBuildingGeometryRuntime(map, placementId) {
+    function clearPrototypeBuildingGeometryRuntime(map, placementId, options = {}) {
         const state = map && map._prototypeBuildingState;
         if (!state || !placementId) return 0;
         if (!(state.runtimeFloorFragmentIdsByPlacementId instanceof Map)) {
@@ -1876,7 +1878,9 @@
             if (typeof map.unregisterFloorFragments !== "function") {
                 throw new Error(`building placement ${placementId} cannot clear runtime floors without unregisterFloorFragments`);
             }
-            removed += map.unregisterFloorFragments(fragmentIds);
+            removed += map.unregisterFloorFragments(fragmentIds, {
+                removeAttachedObjects: options.removeAttachedObjects === true
+            });
         }
         state.runtimeFloorFragmentIdsByPlacementId.delete(placementId);
         const stairIds = state.runtimeStairIdsByPlacementId.get(placementId) || [];
@@ -2313,10 +2317,10 @@
                             : 72,
                         paddingPixels: Number.isFinite(Number(options.paddingPixels))
                             ? Number(options.paddingPixels)
-                            : 48,
+                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS,
                         maxDimension: Number.isFinite(Number(options.maxDimension))
                             ? Number(options.maxDimension)
-                            : 2048
+                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION
                     });
                     if (!result || !result.texture) {
                         throw new Error(`building exterior bitmap render returned no texture for ${placementId}`);
@@ -2439,10 +2443,10 @@
                             : 72,
                         paddingPixels: Number.isFinite(Number(options.paddingPixels))
                             ? Number(options.paddingPixels)
-                            : 48,
+                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS,
                         maxDimension: Number.isFinite(Number(options.maxDimension))
                             ? Number(options.maxDimension)
-                            : 2048
+                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION
                     });
                     if (!result || !result.texture) {
                         throw new Error(`building interior bitmap render returned no texture for ${placementId} floor ${sourceFloorId}`);
@@ -2551,7 +2555,7 @@
             state.placementsById.delete(placementId);
             state.orderedPlacements = state.orderedPlacements.filter((placement) => placement.id !== placementId);
             destroyPrototypeBuildingPlacementBitmapEntries(state, placementId);
-            clearPrototypeBuildingGeometryRuntime(this, placementId);
+            clearPrototypeBuildingGeometryRuntime(this, placementId, { removeAttachedObjects: true });
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
             syncPrototypeBuildingPlacementRefsToSections(this);

@@ -1661,6 +1661,44 @@ function isPrototypeLegacyStaticRecord(objData) {
     return type === "road" || type === "tree" || type === "roof" || type === "wallSection";
 }
 
+function getSavedStaticObjectTraversalLayer(objData) {
+    if (!objData || typeof objData !== "object") return 0;
+    if (Number.isFinite(objData.traversalLayer)) return Math.round(Number(objData.traversalLayer));
+    if (Number.isFinite(objData.level)) return Math.round(Number(objData.level));
+    return 0;
+}
+
+function summarizeOrphanedUpperFloorStaticRecord(objData) {
+    return {
+        type: typeof (objData && objData.type) === "string" ? objData.type : "",
+        fragmentId: typeof (objData && objData.fragmentId) === "string" ? objData.fragmentId : "",
+        surfaceId: typeof (objData && objData.surfaceId) === "string" ? objData.surfaceId : "",
+        level: getSavedStaticObjectTraversalLayer(objData),
+        x: Number.isFinite(objData && objData.x) ? Number(objData.x) : null,
+        y: Number.isFinite(objData && objData.y) ? Number(objData.y) : null
+    };
+}
+
+function isOrphanedUpperFloorStaticRecord(objData, mapInstance) {
+    if (!objData || typeof objData !== "object" || objData.type !== "placedObject") return false;
+    const layer = getSavedStaticObjectTraversalLayer(objData);
+    if (layer <= 0) return false;
+
+    const fragmentId = (typeof objData.fragmentId === "string" && objData.fragmentId.length > 0)
+        ? objData.fragmentId
+        : "";
+    if (!fragmentId) return true;
+
+    if (!mapInstance || typeof mapInstance !== "object") return false;
+    if (typeof mapInstance.ensureFloorBuildings === "function") {
+        mapInstance.ensureFloorBuildings();
+    }
+    if (mapInstance.floorBuildingByFragmentId instanceof Map) {
+        return !mapInstance.floorBuildingByFragmentId.has(fragmentId);
+    }
+    return false;
+}
+
 function summarizePrototypeSectionAssets(sectionAssets) {
     const summary = {
         sections: 0,
@@ -2052,8 +2090,17 @@ function loadGameState(saveData) {
             const loadedWallSections = [];
             const loadedRoofs = [];
             const restoredKeys = new Set();
+            let skippedOrphanedUpperFloorStaticObjects = 0;
+            const orphanedUpperFloorStaticObjectSamples = [];
             saveData.staticObjects.forEach((objData, index) => {
                 if (hasPrototypeSectionWorld && isPrototypeLegacyStaticRecord(objData)) {
+                    return;
+                }
+                if (hasPrototypeSectionWorld && isOrphanedUpperFloorStaticRecord(objData, map)) {
+                    skippedOrphanedUpperFloorStaticObjects += 1;
+                    if (orphanedUpperFloorStaticObjectSamples.length < 5) {
+                        orphanedUpperFloorStaticObjectSamples.push(summarizeOrphanedUpperFloorStaticRecord(objData));
+                    }
                     return;
                 }
                 const key = buildRestoreStaticObjectKey(objData, index);
@@ -2101,6 +2148,12 @@ function loadGameState(saveData) {
                     // Objects handle their own node registration
                 }
             });
+            if (skippedOrphanedUpperFloorStaticObjects > 0) {
+                console.warn("[static object restore] skipped orphaned upper-floor placed object records", {
+                    count: skippedOrphanedUpperFloorStaticObjects,
+                    samples: orphanedUpperFloorStaticObjectSamples
+                });
+            }
             const _st1 = performance.now();
             console.log(`[LOAD TIMING]   forEach restore loop: ${(_st1 - _st0).toFixed(1)}ms`);
 
