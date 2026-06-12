@@ -1572,45 +1572,38 @@ void main(void) {
             if (visualLayer !== physicalLayer) {
                 return this.getLayerBaseZForLevel(visualLayer);
             }
-            return Number.isFinite(wizard && wizard.currentLayerBaseZ)
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            return Number.isFinite(support && support.baseZ)
+                ? Number(support.baseZ)
+                : Number.isFinite(wizard && wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : this.getLayerBaseZForLevel(visualLayer);
         }
 
         getWizardContinuousWorldZ(wizardRef = null, fallbackBaseZ = 0) {
             const wizard = wizardRef || global.wizard || null;
-            const baseZ = Number.isFinite(wizard && wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : 0);
-            const fallState = wizard && wizard._floorFallState;
-            if (fallState && fallState.active && Number.isFinite(fallState.targetLayer)) {
-                const fromLayer = this.getLayerIndexFromValue(fallState.fromLayer, NaN);
-                const toLayer = this.getLayerIndexFromValue(fallState.targetLayer, NaN);
-                if (Number.isFinite(fromLayer) && Number.isFinite(toLayer) && toLayer < fromLayer) {
-                    return this.getLayerBaseZForLevel(toLayer);
-                }
-                if (Number.isFinite(Number(wizard.z))) {
-                    return baseZ + Number(wizard.z);
-                }
-            }
-            const stairSupport = wizard && wizard._stairSupport && typeof wizard._stairSupport === "object"
-                ? wizard._stairSupport
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
                 : null;
-            if (stairSupport) {
-                if (Number.isFinite(Number(stairSupport.continuousBaseZ))) {
-                    return Number(stairSupport.continuousBaseZ);
+            const baseZ = Number.isFinite(support && support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard && wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : 0));
+            if (support && support.type === "stair") {
+                if (Number.isFinite(Number(support.continuousBaseZ))) {
+                    return Number(support.continuousBaseZ);
                 }
-                if (Number.isFinite(Number(stairSupport.continuousLocalZ))) {
-                    return baseZ + Number(stairSupport.continuousLocalZ);
+                if (Number.isFinite(Number(support.continuousLocalZ))) {
+                    return baseZ + Number(support.continuousLocalZ);
                 }
-                if (Number.isFinite(Number(stairSupport.baseZ))) {
-                    return Number(stairSupport.baseZ);
-                }
-                if (Number.isFinite(Number(stairSupport.localZ))) {
-                    return baseZ + Number(stairSupport.localZ);
+                if (Number.isFinite(Number(support.localZ))) {
+                    return baseZ + Number(support.localZ);
                 }
             }
-            return baseZ;
+            return baseZ + (Number.isFinite(Number(wizard && wizard.z)) ? Number(wizard.z) : 0);
         }
 
         projectWorldPointToCutawayPlane(x, y, z = 0) {
@@ -3190,14 +3183,18 @@ void main(void) {
             const y = Number(resolvedPosition && resolvedPosition.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
             const baseZ = Number.isFinite(wizardBaseZ) ? Number(wizardBaseZ) : 0;
-            const stairSupport = wizard && wizard._stairSupport && typeof wizard._stairSupport === "object"
-                ? wizard._stairSupport
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
                 : null;
             let shadowLocalZ = 0;
-            if (stairSupport && Number.isFinite(Number(stairSupport.continuousLocalZ))) {
-                shadowLocalZ = Number(stairSupport.continuousLocalZ);
-            } else if (stairSupport && Number.isFinite(Number(stairSupport.localZ))) {
-                shadowLocalZ = Number(stairSupport.localZ);
+            if (wizard && wizard._floorFallState && wizard._floorFallState.active) {
+                shadowLocalZ = 0;
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.continuousLocalZ))) {
+                shadowLocalZ = Number(support.continuousLocalZ);
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.localZ))) {
+                shadowLocalZ = Number(support.localZ);
+            } else if (wizard && wizard.isJumping) {
+                shadowLocalZ = 0;
             } else {
                 const interpolatedZ = Number.isFinite(Number(resolvedPosition && resolvedPosition.z))
                     ? Number(resolvedPosition.z)
@@ -15793,21 +15790,35 @@ void main(void) {
                     y: Number.isFinite(wizard.y) ? wizard.y : 0,
                     z: Number.isFinite(wizard.z) ? wizard.z : 0
                 };
-            const wizardLayer = this.getLayerIndexFromValue(wizard.currentLayer, 0);
-            const wizardLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : this.getLayerBaseZForLevel(wizardLayer);
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            const wizardLayer = this.getLayerIndexFromValue(
+                support && Number.isFinite(support.layer)
+                    ? support.layer
+                    : wizard.currentLayer,
+                0
+            );
+            const wizardLayerBaseZ = support && Number.isFinite(support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : this.getLayerBaseZForLevel(wizardLayer));
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             const jumpHeight = Number.isFinite(wizard.jumpHeight) ? Math.max(0, Number(wizard.jumpHeight)) : 0;
-            const stairShadowLocalZ = wizard._stairSupport &&
-                typeof wizard._stairSupport === "object" &&
-                Number.isFinite(Number(wizard._stairSupport.localZ))
-                ? Number(wizard._stairSupport.localZ)
-                : null;
-            const shadowLocalZ = stairShadowLocalZ !== null
-                ? stairShadowLocalZ
-                : Math.max(0, interpolatedJumpHeight - jumpHeight);
+            let shadowLocalZ = 0;
+            if (wizard._floorFallState && wizard._floorFallState.active) {
+                shadowLocalZ = 0;
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.continuousLocalZ))) {
+                shadowLocalZ = Number(support.continuousLocalZ);
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.localZ))) {
+                shadowLocalZ = Number(support.localZ);
+            } else if (wizard.isJumping) {
+                shadowLocalZ = 0;
+            } else {
+                shadowLocalZ = Math.max(0, interpolatedJumpHeight - jumpHeight);
+            }
             const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
             const wizardCenterY = pGround.y - jumpOffsetPx - (this.camera.viewscale * 0.25);
             const renderNowMs = Number.isFinite(ctx.renderNowMs)

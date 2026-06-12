@@ -138,32 +138,24 @@
 
     function resolveViewportFollowZ(obj) {
         if (!obj) return null;
-        const layer = Number.isFinite(obj.currentLayer)
-            ? Math.round(Number(obj.currentLayer))
-            : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null);
-        const baseZ = Number.isFinite(obj.currentLayerBaseZ)
-            ? Number(obj.currentLayerBaseZ)
-            : (Number.isFinite(layer) ? layer * 3 : null);
+        const support = obj.currentMovementSupport && typeof obj.currentMovementSupport === "object"
+            ? obj.currentMovementSupport
+            : null;
+        const layer = Number.isFinite(support && support.layer)
+            ? Math.round(Number(support.layer))
+            : (Number.isFinite(obj.currentLayer)
+                ? Math.round(Number(obj.currentLayer))
+                : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null));
+        const baseZ = Number.isFinite(support && support.baseZ)
+            ? Number(support.baseZ)
+            : (Number.isFinite(obj.currentLayerBaseZ)
+                ? Number(obj.currentLayerBaseZ)
+                : (Number.isFinite(layer) ? layer * 3 : null));
         if (!Number.isFinite(baseZ)) return null;
-        if (obj._floorFallState && obj._floorFallState.active && Number.isFinite(obj.z)) {
-            return baseZ + Number(obj.z);
-        }
-        if (
-            obj._stairSupport &&
-            typeof obj._stairSupport === "object"
-        ) {
-            if (Number.isFinite(obj._stairSupport.continuousLocalZ)) {
-                return baseZ + Number(obj._stairSupport.continuousLocalZ);
-            }
-            if (Number.isFinite(obj._stairSupport.continuousBaseZ)) {
-                return Number(obj._stairSupport.continuousBaseZ);
-            }
-            if (Number.isFinite(obj._stairSupport.localZ)) {
-                return baseZ + Number(obj._stairSupport.localZ);
-            }
-            if (Number.isFinite(obj._stairSupport.baseZ)) {
-                return Number(obj._stairSupport.baseZ);
-            }
+        if (support && support.type === "stair") {
+            if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);
+            if (Number.isFinite(support.continuousBaseZ)) return Number(support.continuousBaseZ);
+            if (Number.isFinite(support.localZ)) return baseZ + Number(support.localZ);
         }
         return baseZ;
     }

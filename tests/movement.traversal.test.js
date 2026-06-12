@@ -1196,7 +1196,8 @@ test("GameMap trusts stored stair-local support on overlapping spiral turns", ()
     map.getStairTraversalFrame = () => stair.traversalFrame;
 
     const support = map.getActorStairSupportFromState({
-        _stairSupport: {
+        currentMovementSupport: {
+            type: "stair",
             stairId: stair.id,
             upDown: 0.99,
             leftRight: 1
@@ -1238,6 +1239,7 @@ test("Character applies pending stair exit support without recomputing stale sta
         prevX: 0,
         prevY: 0,
         movementVector: { x: 1, y: 0 },
+        currentMovementSupport: { type: "stair", stairId: "old_stair", upDown: 0.99, leftRight: 0.5 },
         _stairSupport: { stairId: "old_stair", upDown: 0.99, leftRight: 0.5 },
         _pendingVectorMovementSupport: {
             type: "floor",
@@ -1414,6 +1416,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         currentLayerBaseZ: 0,
         groundRadius: 0,
         movementVector: { x: 0, y: 1 },
+        currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
         _stairSupport: { ...actor._stairSupport },
         updateHitboxes() {}
     });
@@ -1438,6 +1441,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         frameRate: 1,
         moving: false,
         movementVector: { x: 0, y: 0.75 },
+        currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
         _stairSupport: { ...actor._stairSupport },
         isFrozen: () => false,
         getVectorMovementMaxSpeed: () => 1,

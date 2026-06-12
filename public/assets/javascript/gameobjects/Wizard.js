@@ -345,6 +345,7 @@ class Wizard extends Character {
         this.jumpPolyC = 0;
         this.jumpHeight = 0;
         this._doorTraversalStateById = new Map();
+        this._pendingSavedFloorMovementSupport = null;
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
         const initialTraversalLayer = Number.isFinite(this.traversalLayer)
@@ -545,11 +546,17 @@ class Wizard extends Character {
     }
 
     updateJump(dtSec) {
-        const supportZ = (
-            this._stairSupport &&
-            typeof this._stairSupport === "object" &&
-            Number.isFinite(this._stairSupport.localZ)
-        ) ? Number(this._stairSupport.localZ) : 0;
+        this._jumpEndedThisFrame = false;
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const supportZ = support && support.type === "stair"
+            ? (
+                Number.isFinite(Number(support.continuousLocalZ))
+                    ? Number(support.continuousLocalZ)
+                    : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : 0)
+            )
+            : 0;
         if (typeof this.isFrozen === "function" && this.isFrozen()) {
             this.z = supportZ + (Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0));
             return;
@@ -579,6 +586,7 @@ class Wizard extends Character {
             this.jumpMode = "single";
             this.jumpLockedMovingBackward = false;
             this.z = supportZ;
+            this._jumpEndedThisFrame = true;
         }
     }
     startTripleJump() {
@@ -902,6 +910,19 @@ class Wizard extends Character {
         const applied = Math.max(0, prevHp - this.hp);
         if (typeof this.updateStatusBars === "function") {
             this.updateStatusBars();
+        }
+        if (applied > 0 && this.hp <= 0 && !this.dead) {
+            if (
+                typeof this.isAdventureMode === "function" &&
+                this.isAdventureMode() &&
+                typeof this.updateAdventureDeathState === "function"
+            ) {
+                this.updateAdventureDeathState();
+            } else if (typeof this.die === "function") {
+                this.die();
+            } else {
+                this.dead = true;
+            }
         }
         return applied;
     }
@@ -1782,15 +1803,160 @@ class Wizard extends Character {
     }
 
     getSavedStairSupportState() {
-        if (!this._stairSupport) return null;
-        return this.normalizeSavedStairSupportRecord(this._stairSupport, "wizard active stair support");
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        if (!support || support.type !== "stair") return null;
+        return this.normalizeSavedStairSupportRecord(support, "wizard active stair support");
+    }
+
+    normalizeSavedFloorMovementSupportRecord(record, label = "wizard floor support") {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+            throw new Error(`${label} must be an object`);
+        }
+        const x = Number(record.x);
+        const y = Number(record.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} is missing finite x/y`);
+        }
+        const currentLayer = Number.isFinite(record.currentLayer)
+            ? Math.round(Number(record.currentLayer))
+            : (Number.isFinite(record.traversalLayer) ? Math.round(Number(record.traversalLayer)) : 0);
+        const baseZ = Number.isFinite(record.currentLayerBaseZ)
+            ? Number(record.currentLayerBaseZ)
+            : currentLayer * 3;
+        const out = {
+            x,
+            y,
+            z: Number.isFinite(record.z) ? Number(record.z) : 0,
+            currentLayer,
+            traversalLayer: Number.isFinite(record.traversalLayer) ? Math.round(Number(record.traversalLayer)) : currentLayer,
+            currentLayerBaseZ: baseZ,
+            surfaceId: typeof record.surfaceId === "string" ? record.surfaceId : "",
+            fragmentId: typeof record.fragmentId === "string" ? record.fragmentId : ""
+        };
+        return out;
     }
 
     hasPendingSavedMovementSupport() {
-        return !!(this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object");
+        return !!(
+            (this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object") ||
+            (this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object")
+        );
+    }
+
+    resolveSavedFloorMovementSupport(record, options = {}) {
+        const deferIfMissing = options && options.deferIfMissing === true;
+        if (!this.map || typeof this.map.setActorCurrentMovementSupport !== "function") {
+            if (deferIfMissing) return null;
+            throw new Error("wizard save references floor support before movement support APIs are available");
+        }
+        const targetLayer = Number.isFinite(record.currentLayer) ? Math.round(Number(record.currentLayer)) : 0;
+        const x = Number(record.x);
+        const y = Number(record.y);
+        const savedFragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
+        const savedSurfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+        let support = null;
+        if (typeof this.map.getFloorSupportAtWorldPosition === "function") {
+            support = this.map.getFloorSupportAtWorldPosition(x, y, targetLayer) || null;
+        }
+        const supportFragmentId = support && typeof support.fragmentId === "string" ? support.fragmentId : "";
+        if (support && savedFragmentId && supportFragmentId !== savedFragmentId) {
+            support = null;
+        }
+        if (!support && savedFragmentId) {
+            const fragment = this.map.floorsById instanceof Map
+                ? this.map.floorsById.get(savedFragmentId) || null
+                : null;
+            if (!fragment) {
+                if (deferIfMissing) return null;
+                throw new Error(`wizard save references missing floor fragment ${savedFragmentId}`);
+            }
+            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (fragmentLayer !== targetLayer) {
+                throw new Error(`wizard save floor fragment ${savedFragmentId} is on layer ${fragmentLayer}, not saved layer ${targetLayer}`);
+            }
+            if (typeof this.map.isPointSupportedByFloorFragment === "function" && !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
+                throw new Error(`wizard save point is outside saved floor fragment ${savedFragmentId}`);
+            }
+            const baseNode = typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null;
+            let node = baseNode;
+            if (baseNode && typeof this.map.getFloorNodeAtLayer === "function") {
+                node = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                    fragmentId: savedFragmentId,
+                    surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                    sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+                    worldX: x,
+                    worldY: y,
+                    allowScan: true
+                }) || baseNode;
+            }
+            support = {
+                type: "floor",
+                layer: targetLayer,
+                baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : Number(record.currentLayerBaseZ),
+                fragment,
+                fragmentId: savedFragmentId,
+                surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                node
+            };
+        }
+        if (!support && targetLayer === 0 && !savedFragmentId) {
+            support = {
+                type: "ground",
+                layer: 0,
+                baseZ: 0,
+                node: typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null
+            };
+        }
+        if (!support) {
+            if (deferIfMissing) return null;
+            throw new Error(`wizard save could not resolve floor support for layer ${targetLayer}`);
+        }
+        if (targetLayer !== 0 && support.type !== "floor") {
+            throw new Error(`wizard save resolved layer ${targetLayer} to non-floor support`);
+        }
+        if (savedFragmentId && support.type === "floor") {
+            const resolvedFragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+            if (resolvedFragmentId !== savedFragmentId) {
+                throw new Error(`wizard save restored floor ${savedFragmentId} to ${resolvedFragmentId || "no floor fragment"}`);
+            }
+        }
+        return support;
+    }
+
+    restoreSavedFloorMovementSupport(options = {}) {
+        const pending = this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object"
+            ? this._pendingSavedFloorMovementSupport
+            : null;
+        if (!pending) return null;
+        const support = this.resolveSavedFloorMovementSupport(pending, options);
+        if (!support) return null;
+        let resolvedX = Number(pending.x);
+        let resolvedY = Number(pending.y);
+        if (this.map && typeof this.map.wrapWorldX === "function") resolvedX = this.map.wrapWorldX(resolvedX);
+        if (this.map && typeof this.map.wrapWorldY === "function") resolvedY = this.map.wrapWorldY(resolvedY);
+        this.x = resolvedX;
+        this.y = resolvedY;
+        const savedLocalZ = Number.isFinite(pending.z) ? Number(pending.z) : 0;
+        const applied = this.map.setActorCurrentMovementSupport(this, support, { suppressLayerTransition: true });
+        if (!applied || applied.type !== support.type) {
+            throw new Error("wizard save restored to invalid movement support");
+        }
+        this.z = savedLocalZ;
+        this._pendingSavedFloorMovementSupport = null;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        if (typeof this.updateHitboxes === "function") this.updateHitboxes();
+        return applied;
     }
 
     restoreSavedMovementSupport(options = {}) {
+        if (this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object") {
+            const floorSupport = this.restoreSavedFloorMovementSupport(options);
+            if (floorSupport) return floorSupport;
+        }
         const pending = this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object"
             ? this._pendingSavedStairSupport
             : null;
@@ -1805,6 +1971,7 @@ class Wizard extends Character {
             throw new Error(`wizard save references missing stair ${pending.stairId}`);
         }
 
+        this.currentMovementSupport = { type: "stair", ...pending };
         this._stairSupport = { ...pending };
         const support = this.map.getActorStairSupportFromState(this);
         if (!support || support.type !== "stair") {
@@ -1950,10 +2117,25 @@ class Wizard extends Character {
         if (typeof data.fragmentId === "string") this.fragmentId = data.fragmentId;
         this._stairSupport = null;
         this._pendingSavedStairSupport = null;
+        this._pendingSavedFloorMovementSupport = null;
         if (Object.prototype.hasOwnProperty.call(data, "stairSupport") && data.stairSupport !== null) {
             const stairSupport = this.normalizeSavedStairSupportRecord(data.stairSupport, "saved wizard stair support");
+            this.currentMovementSupport = { type: "stair", ...stairSupport };
             this._stairSupport = { ...stairSupport };
             this._pendingSavedStairSupport = { ...stairSupport };
+        } else {
+            this._pendingSavedFloorMovementSupport = this.normalizeSavedFloorMovementSupportRecord({
+                ...data,
+                x: this.x,
+                y: this.y,
+                z: this.z,
+                currentLayer: this.currentLayer,
+                traversalLayer: this.traversalLayer,
+                currentLayerBaseZ: this.currentLayerBaseZ,
+                surfaceId: this.surfaceId,
+                fragmentId: this.fragmentId
+            }, "saved wizard floor support");
+            this.restoreSavedFloorMovementSupport({ deferIfMissing: true });
         }
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;

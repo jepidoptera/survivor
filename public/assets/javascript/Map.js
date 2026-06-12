@@ -2194,7 +2194,15 @@ class GameMap {
         try {
             const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
             const radius = this.getActorMovementSupportRadius(actor, options);
-            const cachedFragment = actor && actor._activeFloorFragment;
+            const currentSupport = actor && actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+                ? actor.currentMovementSupport
+                : null;
+            const cachedFragment = currentSupport &&
+                currentSupport.type === "floor" &&
+                currentSupport.fragmentId &&
+                this.floorsById instanceof Map
+                ? this.floorsById.get(currentSupport.fragmentId) || null
+                : null;
             if (cachedFragment) {
                 const cachedFragmentId = typeof cachedFragment.fragmentId === "string"
                     ? cachedFragment.fragmentId
@@ -2711,8 +2719,8 @@ class GameMap {
     }
 
     getActorStairSupportFromState(actor) {
-        const state = actor && actor._stairSupport && typeof actor._stairSupport === "object"
-            ? actor._stairSupport
+        const state = actor && actor.currentMovementSupport && typeof actor.currentMovementSupport === "object" && actor.currentMovementSupport.type === "stair"
+            ? actor.currentMovementSupport
             : null;
         if (!state) return null;
         const stairId = typeof state.stairId === "string" ? state.stairId : "";
@@ -2782,13 +2790,13 @@ class GameMap {
 
     getActorKnownFloorSupport(actor = null, layer = null, options = {}) {
         if (!actor || typeof actor !== "object") return null;
-        if (actor._stairSupport && typeof actor._stairSupport === "object") return null;
-        const targetLayer = Number.isFinite(layer)
-            ? Math.round(Number(layer))
-            : this.getActorTraversalLayer(actor, options);
         const currentSupport = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
             ? actor.currentMovementSupport
             : null;
+        if (currentSupport && currentSupport.type === "stair") return null;
+        const targetLayer = Number.isFinite(layer)
+            ? Math.round(Number(layer))
+            : this.getActorTraversalLayer(actor, options);
         if (
             currentSupport &&
             currentSupport.type === "floor" &&
@@ -2809,13 +2817,10 @@ class GameMap {
                 };
             }
         }
-        let fragment = actor._activeFloorFragment && typeof actor._activeFloorFragment === "object"
-            ? actor._activeFloorFragment
-            : null;
         const actorFragmentId = typeof actor.fragmentId === "string" ? actor.fragmentId : "";
-        if (!fragment && actorFragmentId && this.floorsById instanceof Map) {
-            fragment = this.floorsById.get(actorFragmentId) || null;
-        }
+        const fragment = actorFragmentId && this.floorsById instanceof Map
+            ? this.floorsById.get(actorFragmentId) || null
+            : null;
         if (!fragment) return null;
         const fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
         if (fragmentId && this.floorsById instanceof Map && this.floorsById.get(fragmentId) !== fragment) return null;
@@ -2895,6 +2900,7 @@ class GameMap {
                 treadIndex: Number.isFinite(support.treadIndex) ? Math.round(Number(support.treadIndex)) : null,
                 upDown: Number.isFinite(support.upDown) ? Number(support.upDown) : null,
                 leftRight: Number.isFinite(support.leftRight) ? Number(support.leftRight) : null,
+                localZ,
                 continuousBaseZ,
                 continuousLocalZ
             };
@@ -3323,8 +3329,11 @@ class GameMap {
                 ? options._movementSupportCache.stairOccupancyByKey
                 : null;
             const currentLayerForCache = this.getActorTraversalLayer(actor, options);
-            const stairStateForCache = actor && actor._stairSupport && typeof actor._stairSupport === "object"
-                ? `${actor._stairSupport.stairId || ""}:${Number(actor._stairSupport.upDown)}:${Number(actor._stairSupport.leftRight)}`
+            const currentSupportForCache = actor && actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+                ? actor.currentMovementSupport
+                : null;
+            const stairStateForCache = currentSupportForCache && currentSupportForCache.type === "stair"
+                ? `${currentSupportForCache.stairId || ""}:${Number(currentSupportForCache.upDown)}:${Number(currentSupportForCache.leftRight)}`
                 : "";
             const occupancyCacheKey = occupancyCache
                 ? `${currentLayerForCache}:${Number(actor && actor.x)}:${Number(actor && actor.y)}:${Number(worldX)}:${Number(worldY)}:${stairStateForCache}`

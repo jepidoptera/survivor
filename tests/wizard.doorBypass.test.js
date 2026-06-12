@@ -174,6 +174,61 @@ test("wizard selected floor keeps traversal layer synchronized for enemy targeti
     assert.equal(wizard.currentLayerBaseZ, 3);
 });
 
+test("wizard takeDamage calls die when damage is lethal", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.hp = 5;
+    wizard.maxHp = 5;
+    wizard.difficulty = 3;
+    wizard.dead = false;
+    wizard.magic = 0;
+    wizard.shieldHp = 0;
+    wizard.maxShieldHp = 0;
+    wizard.isAdventureMode = () => false;
+    let dieCalls = 0;
+    wizard.die = () => {
+        dieCalls++;
+        wizard.dead = true;
+    };
+    wizard.updateStatusBars = () => {};
+
+    const applied = wizard.takeDamage(10);
+
+    assert.equal(applied, 5);
+    assert.equal(wizard.hp, 0);
+    assert.equal(wizard.dead, true);
+    assert.equal(dieCalls, 1);
+});
+
+test("wizard takeDamage routes lethal adventure damage through adventure death state", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.hp = 5;
+    wizard.maxHp = 5;
+    wizard.difficulty = 3;
+    wizard.dead = false;
+    wizard.magic = 0;
+    wizard.shieldHp = 0;
+    wizard.maxShieldHp = 0;
+    wizard.isAdventureMode = () => true;
+    wizard.die = () => {
+        throw new Error("adventure damage should use updateAdventureDeathState");
+    };
+    let adventureDeathCalls = 0;
+    wizard.updateAdventureDeathState = () => {
+        adventureDeathCalls++;
+        wizard.dead = true;
+        wizard.hp = 0;
+        return true;
+    };
+    wizard.updateStatusBars = () => {};
+
+    const applied = wizard.takeDamage(10);
+
+    assert.equal(applied, 5);
+    assert.equal(wizard.hp, 0);
+    assert.equal(wizard.dead, true);
+    assert.equal(adventureDeathCalls, 1);
+});
+
 test("wizard movement context includes direct prototype building blockers without upper floor nodes", () => {
     const baseNode = {
         xindex: 0,

@@ -1172,6 +1172,20 @@ jQuery(() => {
         }
     }
 
+    function restoreWizardSavedMovementSupportAfterBubble(wizardRef, options = {}) {
+        if (
+            !wizardRef ||
+            typeof wizardRef.hasPendingSavedMovementSupport !== "function" ||
+            !wizardRef.hasPendingSavedMovementSupport()
+        ) {
+            return null;
+        }
+        if (typeof wizardRef.restoreSavedMovementSupport !== "function") {
+            throw new Error("saved wizard movement support is pending without a restore method");
+        }
+        return wizardRef.restoreSavedMovementSupport(options);
+    }
+
     function reloadWithStartupLoadDirective(directive) {
         const queued = queueStartupLoadDirective(directive);
         if (!queued) return false;
@@ -1352,6 +1366,7 @@ jQuery(() => {
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard, { force: true });
             }
+            restoreWizardSavedMovementSupportAfterBubble(wizard);
             if (typeof centerViewport === "function") {
                 centerViewport(wizard, 0, 0);
             }
@@ -2230,6 +2245,7 @@ jQuery(() => {
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard, { force: true });
             }
+            restoreWizardSavedMovementSupportAfterBubble(wizard);
             if (typeof centerViewport === "function") {
                 centerViewport(wizard, 0, 0);
             }
@@ -3709,30 +3725,98 @@ jQuery(() => {
             return Math.round(Number.isFinite(layer) ? Number(layer) : 0) * 3;
         }
 
+        function getSupportedFallTargetLayerBelow(x, y, fromLayer, mapRef) {
+            const startLayer = Number.isFinite(fromLayer) ? Math.round(Number(fromLayer)) : 0;
+            const lowestLayer = Math.min(0, getLowestRegisteredFloorLayer(mapRef));
+            for (let checkLayer = startLayer - 1; checkLayer >= lowestLayer; checkLayer--) {
+                if (isPositionSupportedAtLayer(x, y, checkLayer, mapRef)) {
+                    return checkLayer;
+                }
+            }
+            return null;
+        }
+
+        function getMovementSupportLayer(support, fallback = 0) {
+            if (support && Number.isFinite(support.layer)) return Math.round(Number(support.layer));
+            return Math.round(Number.isFinite(fallback) ? Number(fallback) : 0);
+        }
+
+        function getMovementSupportBaseZ(support, fallbackLayer = 0) {
+            if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
+            return getLayerBaseZ(getMovementSupportLayer(support, fallbackLayer));
+        }
+
+        function resolveWizardFloorSupportFragment(wizardRef, mapRef) {
+            const support = wizardRef && wizardRef.currentMovementSupport;
+            if (!support || support.type !== "floor") return null;
+            if (support.fragment && typeof support.fragment === "object") return support.fragment;
+            const fragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+            if (!fragmentId || !(mapRef && mapRef.floorsById instanceof Map)) return null;
+            return mapRef.floorsById.get(fragmentId) || null;
+        }
+
+        function resolveFallLandingSupport(wizardRef, mapRef, targetLayer) {
+            if (!Number.isFinite(targetLayer)) return null;
+            const toLayer = Math.round(Number(targetLayer));
+            const landingSupport = (mapRef && typeof mapRef.getFloorSupportAtWorldPosition === "function")
+                ? mapRef.getFloorSupportAtWorldPosition(wizardRef.x, wizardRef.y, toLayer)
+                : null;
+            if (landingSupport) return landingSupport;
+            if (toLayer === 0) {
+                return {
+                    type: "ground",
+                    layer: 0,
+                    baseZ: 0,
+                    node: mapRef && typeof mapRef.worldToNode === "function"
+                        ? mapRef.worldToNode(wizardRef.x, wizardRef.y)
+                        : null
+                };
+            }
+            throw new Error(`wizard floor fall landing has no support at layer ${toLayer}`);
+        }
+
+        function applyWizardMovementSupportPreservingWorldZ(wizardRef, support, mapRef) {
+            if (!wizardRef || !support) return null;
+            const supportMap = mapRef || wizardRef.map || (typeof map !== "undefined" ? map : null);
+            if (!supportMap || typeof supportMap.setActorCurrentMovementSupport !== "function") {
+                throw new Error("wizard movement support rebase requires movement support APIs");
+            }
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const currentLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            const currentBaseZ = getMovementSupportBaseZ(currentSupport, currentLayer);
+            const previousWorldZ = currentBaseZ + (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0);
+            const previousPrevWorldZ = currentBaseZ + (Number.isFinite(wizardRef.prevZ) ? Number(wizardRef.prevZ) : (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0));
+            const applied = supportMap.setActorCurrentMovementSupport(wizardRef, support, {
+                suppressLayerTransition: true
+            });
+            if (!applied) {
+                throw new Error("wizard movement support rebase failed");
+            }
+            const nextBaseZ = getMovementSupportBaseZ(applied, getMovementSupportLayer(applied, 0));
+            wizardRef.z = previousWorldZ - nextBaseZ;
+            wizardRef.prevZ = previousPrevWorldZ - nextBaseZ;
+            return applied;
+        }
+
         function getWizardCameraFollowZ(wizardRef, fallbackBaseZ = 0) {
             if (!wizardRef) return fallbackBaseZ;
-            const layer = Number.isFinite(wizardRef.currentLayer)
+            const support = wizardRef.currentMovementSupport || null;
+            const fallbackLayer = Number.isFinite(wizardRef.currentLayer)
                 ? Math.round(Number(wizardRef.currentLayer))
                 : (Number.isFinite(wizardRef.traversalLayer) ? Math.round(Number(wizardRef.traversalLayer)) : 0);
-            const baseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
-                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : getLayerBaseZ(layer));
-            if (wizardRef._floorFallState && wizardRef._floorFallState.active && Number.isFinite(wizardRef.z)) {
-                return baseZ + Number(wizardRef.z);
+            const baseZ = support
+                ? getMovementSupportBaseZ(support, fallbackLayer)
+                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : getLayerBaseZ(fallbackLayer));
+            if (support && support.type === "stair") {
+                if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);
+                if (Number.isFinite(support.continuousBaseZ)) return Number(support.continuousBaseZ);
+                if (Number.isFinite(support.localZ)) return baseZ + Number(support.localZ);
             }
-            if (wizardRef._stairSupport && typeof wizardRef._stairSupport === "object") {
-                if (Number.isFinite(wizardRef._stairSupport.continuousLocalZ)) {
-                    return baseZ + Number(wizardRef._stairSupport.continuousLocalZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.continuousBaseZ)) {
-                    return Number(wizardRef._stairSupport.continuousBaseZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.localZ)) {
-                    return baseZ + Number(wizardRef._stairSupport.localZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.baseZ)) {
-                    return Number(wizardRef._stairSupport.baseZ);
-                }
+            if (wizardRef._floorFallState && wizardRef._floorFallState.active) {
+                return baseZ + (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0);
             }
             return baseZ;
         }
@@ -3742,31 +3826,62 @@ jQuery(() => {
         // Negative z threshold at which the fall "lands" (sprite has slid off screen).
         const FLOOR_FALL_LAND_Z = -2.0;
 
+        function getFallImpactDamage(fromBaseZ, toBaseZ) {
+            const startZ = Number(fromBaseZ);
+            const endZ = Number(toBaseZ);
+            if (!Number.isFinite(startZ) || !Number.isFinite(endZ)) return 0;
+            const fallHeight = Math.max(0, startZ - endZ);
+            return fallHeight * fallHeight;
+        }
+
+        function resetWizardJumpState(wizardRef) {
+            if (!wizardRef) return;
+            wizardRef.isJumping = false;
+            wizardRef.jumpElapsedSec = 0;
+            wizardRef.jumpHeight = 0;
+            wizardRef.jumpCount = 0;
+            wizardRef.jumpMode = "single";
+            wizardRef.jumpLockedMovingBackward = false;
+            wizardRef._jumpEndedThisFrame = false;
+        }
+
         // Begin a fall animation. Any finite targetLayer means land there;
         // null means there is no floor below and the fall is lethal.
-        function startWizardFall(wizardRef, targetLayer) {
+        function startWizardFall(wizardRef, targetLayer, mapRef = null) {
             if (!wizardRef || (wizardRef._floorFallState && wizardRef._floorFallState.active)) return;
-            const fromLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
-            const fromBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
-                : getLayerBaseZ(fromLayer);
-            const targetBaseZ = Number.isFinite(targetLayer) ? getLayerBaseZ(targetLayer) : null;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const fromLayer = getMovementSupportLayer(currentSupport, Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0);
+            const fromBaseZ = getMovementSupportBaseZ(currentSupport, fromLayer);
+            const hasFiniteTargetLayer = Number.isFinite(targetLayer);
+            const landingMap = mapRef || wizardRef.map || (typeof map !== "undefined" ? map : null);
+            const landingSupport = hasFiniteTargetLayer
+                ? resolveFallLandingSupport(wizardRef, landingMap, targetLayer)
+                : null;
+            const landingBaseZ = landingSupport
+                ? getMovementSupportBaseZ(landingSupport, targetLayer)
+                : fromBaseZ;
+            let initialLocalZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
+            if (landingSupport) {
+                applyWizardMovementSupportPreservingWorldZ(wizardRef, landingSupport, landingMap);
+                initialLocalZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
+            }
             wizardRef._floorFallState = {
                 active: true,
                 velocityZ: 0,
                 targetLayer,
                 fromLayer,
                 fromBaseZ,
-                landZ: Number.isFinite(targetBaseZ)
-                    ? Math.min(FLOOR_FALL_LAND_Z, targetBaseZ - fromBaseZ)
+                landingSupport,
+                landingBaseZ,
+                landZ: hasFiniteTargetLayer
+                    ? 0
                     : FLOOR_FALL_LAND_Z
             };
             // Clear any movement path so the wizard doesn't teleport mid-fall.
             wizardRef.path = [];
             wizardRef.nextNode = null;
-            wizardRef.isJumping = false;
-            wizardRef.jumpHeight = 0;
-            wizardRef.z = 0;
+            resetWizardJumpState(wizardRef);
+            wizardRef.z = initialLocalZ;
         }
 
         // Advance fall physics. Must be called every sim frame while a fall is active.
@@ -3774,6 +3889,7 @@ jQuery(() => {
             if (!wizardRef || !wizardRef._floorFallState || !wizardRef._floorFallState.active) return;
             const state = wizardRef._floorFallState;
             const dt = Math.max(0, Number(dtSec) || 0);
+            wizardRef.prevZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
             state.velocityZ += FLOOR_FALL_GRAVITY * dt;
             wizardRef.z = (Number.isFinite(wizardRef.z) ? wizardRef.z : 0) + state.velocityZ * dt;
 
@@ -3783,10 +3899,21 @@ jQuery(() => {
             // ── Landing ──────────────────────────────────────────────────────────
             wizardRef._floorFallState = null;
             wizardRef.z = 0;
+            resetWizardJumpState(wizardRef);
 
             if (Number.isFinite(state.targetLayer)) {
                 const toLayer = Math.round(Number(state.targetLayer));
-                const toBaseZ = getLayerBaseZ(toLayer);
+                const support = state.landingSupport || wizardRef.currentMovementSupport || null;
+                const toBaseZ = getMovementSupportBaseZ(support, toLayer);
+                const landingMap = wizardRef.map || (typeof map !== "undefined" ? map : null);
+                if (support) {
+                    if (!landingMap || typeof landingMap.setActorCurrentMovementSupport !== "function") {
+                        throw new Error("wizard floor fall landing requires movement support APIs");
+                    }
+                    landingMap.setActorCurrentMovementSupport(wizardRef, support, {
+                        suppressLayerTransition: true
+                    });
+                }
                 const previousLayer = Number.isFinite(wizardRef.currentLayer) ? Number(wizardRef.currentLayer) : null;
                 const previousBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ) ? Number(wizardRef.currentLayerBaseZ) : null;
                 wizardRef.selectedFloorEditLevel = toLayer;
@@ -3811,6 +3938,37 @@ jQuery(() => {
                     startedAtMs: Number.isFinite(renderNowMs) ? Number(renderNowMs) : Date.now(),
                     durationMs: 320
                 };
+                const fallHeight = Math.max(0, Number(state.fromBaseZ) - Number(toBaseZ));
+                const fallDamage = getFallImpactDamage(state.fromBaseZ, toBaseZ);
+                if (fallDamage > 0) {
+                    if (typeof wizardRef.takeDamage === "function") {
+                        wizardRef.takeDamage(fallDamage, {
+                            source: "fall",
+                            fallHeight,
+                            fromBaseZ: state.fromBaseZ,
+                            toBaseZ
+                        });
+                    } else if (Number.isFinite(wizardRef.hp)) {
+                        wizardRef.hp = Math.max(0, Number(wizardRef.hp) - fallDamage);
+                        if (typeof wizardRef.updateStatusBars === "function") wizardRef.updateStatusBars();
+                        if (
+                            Number.isFinite(wizardRef.hp) &&
+                            wizardRef.hp <= 0 &&
+                            !wizardRef.dead &&
+                            typeof wizardRef.isAdventureMode === "function" &&
+                            wizardRef.isAdventureMode() &&
+                            typeof wizardRef.updateAdventureDeathState === "function"
+                        ) {
+                            wizardRef.updateAdventureDeathState();
+                        } else if (Number.isFinite(wizardRef.hp) && wizardRef.hp <= 0 && !wizardRef.dead) {
+                            if (typeof wizardRef.die === "function") {
+                                wizardRef.die();
+                            } else {
+                                wizardRef.dead = true;
+                            }
+                        }
+                    }
+                }
                 if (typeof message === "function") {
                     message("You land on the floor below.");
                 }
@@ -3829,6 +3987,45 @@ jQuery(() => {
 
         // Called every frame after movement. Detects whether the wizard stepped into
         // a hole and starts the fall animation if not already falling.
+        function updateWizardAirborneMovementSupport(wizardRef, mapRef) {
+            if (!wizardRef || !wizardRef.isJumping || wizardRef.dead) return false;
+            if (!(mapRef && mapRef.floorsById instanceof Map && mapRef.floorsById.size > 0)) return false;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const currentLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            if (currentLayer <= 0 || !currentSupport || currentSupport.type !== "floor") return false;
+            const fragment = resolveWizardFloorSupportFragment(wizardRef, mapRef);
+            if (
+                !fragment ||
+                typeof mapRef.isPointSupportedByFloorFragment !== "function" ||
+                mapRef.isPointSupportedByFloorFragment(fragment, wizardRef.x, wizardRef.y)
+            ) {
+                return false;
+            }
+            const targetLayer = getSupportedFallTargetLayerBelow(wizardRef.x, wizardRef.y, currentLayer, mapRef);
+            const landingSupport = Number.isFinite(targetLayer)
+                ? resolveFallLandingSupport(wizardRef, mapRef, targetLayer)
+                : null;
+            if (!landingSupport) return false;
+            applyWizardMovementSupportPreservingWorldZ(wizardRef, landingSupport, mapRef);
+            wizardRef._floorFallState = {
+                active: true,
+                velocityZ: 0,
+                targetLayer,
+                fromLayer: currentLayer,
+                fromBaseZ: getMovementSupportBaseZ(currentSupport, currentLayer),
+                landingSupport,
+                landingBaseZ: getMovementSupportBaseZ(landingSupport, targetLayer),
+                landZ: 0
+            };
+            wizardRef.path = [];
+            wizardRef.nextNode = null;
+            resetWizardJumpState(wizardRef);
+            return true;
+        }
+
         function checkWizardFloorFall(wizardRef, mapRef) {
             if (!wizardRef || wizardRef.dead) return;
             // Already in a fall — nothing to do here; updateWizardFall handles it.
@@ -3858,36 +4055,31 @@ jQuery(() => {
             const prevX = Number.isFinite(wizardRef.prevX) ? Number(wizardRef.prevX) : wx;
             const prevY = Number.isFinite(wizardRef.prevY) ? Number(wizardRef.prevY) : wy;
 
-            // Use wizard.currentLayer to restrict the scan to fragments at the wizard's
-            // actual layer. Without this, a building floor polygon (level 1-3) that
-            // overlaps the underground cave's XY footprint would be found first in the
-            // Map iteration order, making checkWizardFloorFall think the wizard is
-            // "supported" and skip the boundary snap entirely.
-            const wizardLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const wizardLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            if (currentSupport && currentSupport.type === "stair") return;
+            if (wizardLayer !== 0 && (!currentSupport || currentSupport.type !== "floor")) {
+                throw new Error("wizard non-ground movement requires currentMovementSupport floor");
+            }
 
-            let contextFragment = null;
+            let contextFragment = resolveWizardFloorSupportFragment(wizardRef, mapRef);
+            if (
+                contextFragment &&
+                (
+                    !Array.isArray(contextFragment.outerPolygon) ||
+                    contextFragment.outerPolygon.length < 3 ||
+                    (Number.isFinite(contextFragment.level) ? Math.round(Number(contextFragment.level)) : 0) !== wizardLayer
+                )
+            ) {
+                throw new Error("wizard currentMovementSupport references invalid floor fragment");
+            }
             const layerFragments = typeof mapRef.getFloorFragmentsForLayer === "function"
                 ? mapRef.getFloorFragmentsForLayer(wizardLayer)
                 : Array.from(mapRef.floorsById.values());
-            const cachedFragForCurrentPosition = wizardRef._activeFloorFragment;
-            const cachedFragIdForCurrentPosition = cachedFragForCurrentPosition
-                ? (cachedFragForCurrentPosition.fragmentId || cachedFragForCurrentPosition.id || "")
-                : "";
-            const cachedFragLevelForCurrentPosition = cachedFragForCurrentPosition && Number.isFinite(cachedFragForCurrentPosition.level)
-                ? Math.round(Number(cachedFragForCurrentPosition.level))
-                : 0;
-            if (
-                cachedFragForCurrentPosition &&
-                wizardLayer !== 0 &&
-                cachedFragLevelForCurrentPosition === wizardLayer &&
-                mapRef.floorsById.has(cachedFragIdForCurrentPosition) &&
-                Array.isArray(cachedFragForCurrentPosition.outerPolygon) &&
-                cachedFragForCurrentPosition.outerPolygon.length >= 3 &&
-                pointInPolygon2D(wx, wy, cachedFragForCurrentPosition.outerPolygon)
-            ) {
-                contextFragment = cachedFragForCurrentPosition;
-            }
-            for (let i = 0; !contextFragment && i < layerFragments.length; i++) {
+            for (let i = 0; !contextFragment && wizardLayer === 0 && i < layerFragments.length; i++) {
                 const fragment = layerFragments[i];
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
@@ -3896,54 +4088,10 @@ jQuery(() => {
                 if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
                 if (pointInPolygon2D(wx, wy, fragment.outerPolygon)) { contextFragment = fragment; break; }
             }
-            if (contextFragment) {
-                wizardRef._activeFloorFragment = contextFragment;
-            } else {
-                // Not currently inside any non-zero polygon. Try last-known fragment before
-                // resorting to prevPos scan — once we know the wizard is underground we want
-                // to keep enforcing that fragment's boundary until they explicitly leave.
-                const cachedFrag = wizardRef._activeFloorFragment;
-                const cachedLevel = cachedFrag
-                    ? (Number.isFinite(cachedFrag.level) ? Math.round(cachedFrag.level) : 0)
-                    : 0;
-                contextFragment = (cachedFrag &&
-                    wizardLayer !== 0 &&
-                    cachedLevel === wizardLayer &&
-                    mapRef.floorsById.has(cachedFrag.fragmentId || cachedFrag.id || ""))
-                    ? cachedFrag
-                    : null;
-                // If the cached fragment is gone (section unloaded), fall back to prevPos scan.
-                if (!contextFragment && wizardLayer !== 0) {
-                    for (const fragment of layerFragments) {
-                        if (!fragment) continue;
-                        const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
-                        if (fragLevel === 0) continue;
-                        if (fragLevel !== wizardLayer) continue;
-                        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-                        if (pointInPolygon2D(prevX, prevY, fragment.outerPolygon)) { contextFragment = fragment; break; }
-                    }
-                    if (contextFragment) wizardRef._activeFloorFragment = contextFragment;
-                }
-            }
 
             const contextLayer = contextFragment
                 ? (Number.isFinite(contextFragment.level) ? Math.round(contextFragment.level) : 0)
                 : 0;
-
-            // If the wizard is on a non-zero layer but we couldn't resolve a context
-            // fragment (cache miss, section gap), skip rather than falling through to the
-            // layer-0 paths — the ground polygon covers everything so isPositionSupported
-            // at layer 0 always returns true, which would let the wizard roam freely.
-            if (wizardLayer !== 0 && !contextFragment) return;
-
-            // Clear the cached fragment once the wizard is confirmed back at ground level.
-            // Use wizardLayer (not contextLayer) so an underground wizard whose scan came
-            // up empty doesn't accidentally clear the cache and lose boundary enforcement.
-            if (wizardLayer === 0 && wizardRef._activeFloorFragment) {
-                if (isPositionSupportedAtLayer(wx, wy, 0, mapRef)) {
-                    wizardRef._activeFloorFragment = null;
-                }
-            }
 
             // Supported = wizard's current position is inside their own fragment's polygon.
             if (contextLayer === 0) {
@@ -3963,6 +4111,12 @@ jQuery(() => {
             // or stepped into a hole inside it. Two-pass move-and-slide: find the
             // crossed edge, project movement onto its tangent in the same frame.
             if (contextLayer !== 0) {
+                if (wizardRef._jumpEndedThisFrame === true) {
+                    const targetLayer = getSupportedFallTargetLayerBelow(wx, wy, contextLayer, mapRef);
+                    startWizardFall(wizardRef, targetLayer, mapRef);
+                    return;
+                }
+
                 const outerPoly = contextFragment.outerPolygon;
                 const holes = Array.isArray(contextFragment.holes) ? contextFragment.holes : [];
                 const movDx = wx - prevX, movDy = wy - prevY;
@@ -4080,7 +4234,7 @@ jQuery(() => {
                 }
             }
 
-            startWizardFall(wizardRef, targetLayer);
+            startWizardFall(wizardRef, targetLayer, mapRef);
         }
 
         function advanceNonWizardSimulationStep() {
@@ -4252,16 +4406,23 @@ jQuery(() => {
                 wizard.updateJump(1 / frameRate);
                 movementPerfRecord("movement.step.updateJump", movementSectionStartMs);
                 movementSectionStartMs = movementPerfNow();
+                updateWizardAirborneMovementSupport(wizard, map);
+                movementPerfRecord("movement.step.updateWizardAirborneMovementSupport", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
                 checkWizardFloorFall(wizard, map);
                 movementPerfRecord("movement.step.checkWizardFloorFall", movementSectionStartMs);
             } else {
                 // Keep applying horizontal momentum during the fall — don't steer or brake,
                 // just carry whatever velocity the wizard had when they stepped off the edge.
                 movementSectionStartMs = movementPerfNow();
+                const fallZBeforeHorizontalMove = Number.isFinite(wizard.z) ? Number(wizard.z) : 0;
+                const fallPrevZBeforeHorizontalMove = Number.isFinite(wizard.prevZ) ? Number(wizard.prevZ) : fallZBeforeHorizontalMove;
                 wizard.moveDirection(wizard.movementVector, {
                     lockMovementVector: true,
                     allowUnsupportedPosition: true
                 });
+                wizard.z = fallZBeforeHorizontalMove;
+                wizard.prevZ = fallPrevZBeforeHorizontalMove;
                 movementPerfRecord("movement.step.moveDirection.falling", movementSectionStartMs);
             }
             movementSectionStartMs = movementPerfNow();
@@ -4880,6 +5041,7 @@ jQuery(() => {
     if (map && typeof map.updatePrototypeSectionBubble === "function") {
         map.updatePrototypeSectionBubble(wizard, { force: true });
     }
+    restoreWizardSavedMovementSupportAfterBubble(wizard);
     sizeView();
     centerViewport(wizard, 0, 0);
     
@@ -4906,6 +5068,7 @@ jQuery(() => {
         if (map && typeof map.updatePrototypeSectionBubble === "function") {
             map.updatePrototypeSectionBubble(wizard, { force: true });
         }
+        restoreWizardSavedMovementSupportAfterBubble(wizard);
         centerViewport(wizard, 0, 0);
         wizard.updateStatusBars();
     }

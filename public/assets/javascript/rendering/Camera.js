@@ -77,24 +77,27 @@
             if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
                 const width = viewport && Number.isFinite(viewport.width) ? viewport.width : 40;
                 const height = viewport && Number.isFinite(viewport.height) ? viewport.height : 30;
-                const wizardLayer = Number.isFinite(wizard.currentLayer)
-                    ? Math.round(Number(wizard.currentLayer))
-                    : (Number.isFinite(wizard.traversalLayer) ? Math.round(Number(wizard.traversalLayer)) : 0);
-                const wizardBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                    ? Number(wizard.currentLayerBaseZ)
-                    : wizardLayer * 3;
+                const support = wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                    ? wizard.currentMovementSupport
+                    : null;
+                const wizardLayer = Number.isFinite(support && support.layer)
+                    ? Math.round(Number(support.layer))
+                    : (Number.isFinite(wizard.currentLayer)
+                        ? Math.round(Number(wizard.currentLayer))
+                        : (Number.isFinite(wizard.traversalLayer) ? Math.round(Number(wizard.traversalLayer)) : 0));
+                const wizardBaseZ = Number.isFinite(support && support.baseZ)
+                    ? Number(support.baseZ)
+                    : (Number.isFinite(wizard.currentLayerBaseZ)
+                        ? Number(wizard.currentLayerBaseZ)
+                        : wizardLayer * 3);
                 let wizardCameraZ = wizardBaseZ;
-                if (wizard && wizard._floorFallState && wizard._floorFallState.active && Number.isFinite(wizard.z)) {
-                    wizardCameraZ = wizardBaseZ + Number(wizard.z);
-                } else if (wizard && wizard._stairSupport && typeof wizard._stairSupport === "object") {
-                    if (Number.isFinite(wizard._stairSupport.continuousLocalZ)) {
-                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.continuousLocalZ);
-                    } else if (Number.isFinite(wizard._stairSupport.continuousBaseZ)) {
-                        wizardCameraZ = Number(wizard._stairSupport.continuousBaseZ);
-                    } else if (Number.isFinite(wizard._stairSupport.localZ)) {
-                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.localZ);
-                    } else if (Number.isFinite(wizard._stairSupport.baseZ)) {
-                        wizardCameraZ = Number(wizard._stairSupport.baseZ);
+                if (support && support.type === "stair") {
+                    if (Number.isFinite(support.continuousLocalZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(support.continuousLocalZ);
+                    } else if (Number.isFinite(support.continuousBaseZ)) {
+                        wizardCameraZ = Number(support.continuousBaseZ);
+                    } else if (Number.isFinite(support.localZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(support.localZ);
                     }
                 }
                 this.x = wizard.x - width * 0.5;

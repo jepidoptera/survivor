@@ -84,7 +84,14 @@ test("RenderingCamera follows wizard stair support z between floor layers", () =
             currentLayer: 0,
             currentLayerBaseZ: 0,
             z: 1.5,
-            _stairSupport: { localZ: 1.5, baseZ: 1.5, continuousLocalZ: 1.125, continuousBaseZ: 1.125 }
+            currentMovementSupport: {
+                type: "stair",
+                layer: 0,
+                baseZ: 0,
+                localZ: 1.5,
+                continuousLocalZ: 1.125,
+                continuousBaseZ: 1.125
+            }
         },
         viewport: { width: 40, height: 30 },
         viewscale: 1,
@@ -109,7 +116,7 @@ test("RenderingCamera keeps stair follow z continuous when the active layer flip
             currentLayer: 1,
             currentLayerBaseZ: 3,
             z: 0,
-            _stairSupport: { localZ: 0, baseZ: 3 }
+            currentMovementSupport: { type: "stair", layer: 1, baseZ: 3, localZ: 0 }
         },
         viewport: { width: 40, height: 30 },
         viewscale: 1,
@@ -140,7 +147,14 @@ test("centerViewport follows wizard stair support z before the layer changes", (
         currentLayer: 0,
         currentLayerBaseZ: 0,
         z: 1.5,
-        _stairSupport: { localZ: 1.5, baseZ: 1.5, continuousLocalZ: 1.125, continuousBaseZ: 1.125 }
+        currentMovementSupport: {
+            type: "stair",
+            layer: 0,
+            baseZ: 0,
+            localZ: 1.5,
+            continuousLocalZ: 1.125,
+            continuousBaseZ: 1.125
+        }
     };
 
     context.centerViewport(context.wizard, 0, 0);
@@ -157,7 +171,7 @@ test("centerViewport keeps stair follow z continuous at the upper endpoint", () 
         currentLayer: 1,
         currentLayerBaseZ: 3,
         z: 0,
-        _stairSupport: { localZ: 0, baseZ: 3 }
+        currentMovementSupport: { type: "stair", layer: 1, baseZ: 3, localZ: 0 }
     };
 
     context.centerViewport(context.wizard, 0, 0);

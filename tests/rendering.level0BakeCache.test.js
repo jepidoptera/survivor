@@ -1000,6 +1000,12 @@ test("fall reveal cutaway state uses target visual layer before landing", () => 
         y: 5,
         currentLayer: 1,
         currentLayerBaseZ: 3,
+        z: 3,
+        currentMovementSupport: {
+            type: "ground",
+            layer: 0,
+            baseZ: 0
+        },
         _floorFallState: {
             active: true,
             fromLayer: 1,
@@ -1018,7 +1024,7 @@ test("fall reveal cutaway state uses target visual layer before landing", () => 
     });
 
     assert.equal(state.wizardLayer, 0);
-    assert.equal(state.wizardBaseZ, 0);
+    assert.equal(state.wizardBaseZ, 3);
     assert.equal(state.active, true);
     assert.equal(state.hiddenFromLevel, 1);
     assert.equal(renderer.getFloorFragmentCutawayAlpha(upper, state), 1);
@@ -1329,8 +1335,9 @@ test("wizard body layer uses shared 3d depth layer while hat remains an overlay"
     assert.match(source, /const overlayContainer = \(this\.layers && \(this\.layers\.entities \|\| this\.layers\.characters \|\| this\.layers\.depthObjects\)\) \|\| null;/);
     assert.match(source, /keepWizardShieldInCharacterLayer\(wizard\.shieldGraphics\)/);
     assert.doesNotMatch(source, /keepWizardShieldInCharacterLayer\(hat\)/);
-    assert.match(source, /wizard\._stairSupport[\s\S]+Number\.isFinite\(Number\(wizard\._stairSupport\.localZ\)\)/);
-    assert.match(source, /const shadowLocalZ = stairShadowLocalZ !== null[\s\S]+Math\.max\(0, interpolatedJumpHeight - jumpHeight\);/);
+    assert.match(source, /wizard\.currentMovementSupport[\s\S]+support\.type === "stair"[\s\S]+Number\.isFinite\(Number\(support\.continuousLocalZ\)\)/);
+    assert.match(source, /wizard\._floorFallState && wizard\._floorFallState\.active[\s\S]+shadowLocalZ = 0;/);
+    assert.doesNotMatch(source, /getWizardShadowSupport/);
     assert.match(source, /shadowProxy\._renderLayerBaseZ = wizardLayerBaseZ;/);
     assert.match(source, /shadowProxy\.z = shadowLocalZ;/);
 });
