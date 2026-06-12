@@ -589,7 +589,7 @@ test("saveGameState stores prototype building placements at the world level with
         animals: [],
         powerups: [],
         buildingRefs: [
-            { id: "building:test-house", buildingSaveName: "test house" }
+            { id: "building:test-house", shell: true }
         ]
     };
 
@@ -607,7 +607,7 @@ test("saveGameState stores prototype building placements at the world level with
     map.exportPrototypeBuildingPlacements = () => [buildingRecord];
     map.syncPrototypeBuildingPlacementRefs = () => {
         prototypeSectionAsset.buildingRefs = [
-            { id: "building:test-house", buildingSaveName: "test house" }
+            { id: "building:test-house", shell: true }
         ];
         return true;
     };
@@ -631,6 +631,6 @@ test("saveGameState stores prototype building placements at the world level with
 
     assert.deepEqual(saveData.prototypeSectionWorld.buildings, [buildingRecord]);
     assert.deepEqual(saveData.prototypeSectionWorld.sections[0].buildingRefs, [
-        { id: "building:test-house", buildingSaveName: "test house" }
+        { id: "building:test-house", shell: true }
     ]);
 });

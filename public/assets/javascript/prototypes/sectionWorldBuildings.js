@@ -156,7 +156,7 @@
         }
         return {
             id: normalizePlacementId(placement.id, 0),
-            buildingSaveName: nonEmptyString(placement.buildingSaveName, `building placement ${placement.id} buildingSaveName`)
+            shell: true
         };
     }
 
@@ -179,10 +179,92 @@
             seen.add(id);
             out.push({
                 id,
-                buildingSaveName: nonEmptyString(ref.buildingSaveName, `${label} ${i} buildingSaveName`)
+                shell: ref.shell === false ? false : true
             });
         }
         return out;
+    }
+
+    function ensurePrototypeDirtyWorldUnits(state) {
+        if (!state || typeof state !== "object") return null;
+        if (!state.dirtyWorldUnits || typeof state.dirtyWorldUnits !== "object") {
+            state.dirtyWorldUnits = {
+                sections: new Set(),
+                buildings: new Set()
+            };
+        }
+        if (!(state.dirtyWorldUnits.sections instanceof Set)) {
+            state.dirtyWorldUnits.sections = new Set(state.dirtyWorldUnits.sections || []);
+        }
+        if (!(state.dirtyWorldUnits.buildings instanceof Set)) {
+            state.dirtyWorldUnits.buildings = new Set(state.dirtyWorldUnits.buildings || []);
+        }
+        return state.dirtyWorldUnits;
+    }
+
+    function markPrototypeBuildingUnitDirty(state, buildingId) {
+        const dirty = ensurePrototypeDirtyWorldUnits(state);
+        if (!dirty) return false;
+        dirty.buildings.add(normalizePlacementId(buildingId, 0));
+        return true;
+    }
+
+    function markPrototypeSectionUnitsDirty(state, sectionKeys) {
+        const dirty = ensurePrototypeDirtyWorldUnits(state);
+        const keys = normalizeSectionKeys(sectionKeys);
+        if (!dirty) return false;
+        keys.forEach((key) => dirty.sections.add(key));
+        return keys.length > 0;
+    }
+
+    function setBuildingInstanceRecord(state, rawInstance, options = {}) {
+        if (!state || typeof state !== "object") {
+            throw new Error("building instance registry requires building state");
+        }
+        const instance = normalizeBuildingInstanceRecord(rawInstance, 0);
+        if (!(state.buildingInstancesById instanceof Map)) state.buildingInstancesById = new Map();
+        if (!(state.buildingDataByInstanceId instanceof Map)) state.buildingDataByInstanceId = new Map();
+        state.buildingInstancesById.set(instance.id, instance);
+        state.buildingDataByInstanceId.set(instance.id, instance);
+        if (options.markDirty === true) markPrototypeBuildingUnitDirty(state, instance.id);
+        return instance;
+    }
+
+    function getBuildingInstanceRecord(state, placementOrId) {
+        const placementId = typeof placementOrId === "string"
+            ? normalizePlacementId(placementOrId, 0)
+            : (placementOrId && placementOrId.id ? normalizePlacementId(placementOrId.id, 0) : "");
+        if (!placementId || !state || !(state.buildingInstancesById instanceof Map)) return null;
+        return state.buildingInstancesById.get(placementId) || null;
+    }
+
+    function getBuildingDataForPlacement(state, placement) {
+        if (!state || !placement) return null;
+        const instance = getBuildingInstanceRecord(state, placement);
+        if (instance) return instance;
+        if (state.buildingDataByInstanceId instanceof Map && state.buildingDataByInstanceId.has(placement.id)) {
+            return state.buildingDataByInstanceId.get(placement.id);
+        }
+        return state.buildingDataBySaveName instanceof Map
+            ? (state.buildingDataBySaveName.get(placement.buildingSaveName) || null)
+            : null;
+    }
+
+    function updatePlacementFromInstance(placement, instance) {
+        if (!placement || !instance) return placement;
+        placement.sourceBuildingSaveName = instance.sourceBuildingSaveName;
+        placement.buildingSaveName = instance.sourceBuildingSaveName;
+        placement.contentVersion = instance.contentVersion;
+        placement.transform = { ...instance.transform };
+        placement.footprintPolygons = normalizeFootprintPolygons(instance.footprintPolygons);
+        placement.movementBlockerPolygons = instance.movementBlockerPolygons === null
+            ? null
+            : normalizeMovementBlockerPolygons(instance.movementBlockerPolygons);
+        placement.movementBlockerGeometryVersion = instance.movementBlockerGeometryVersion || "";
+        placement.overlappedSectionKeys = normalizeSectionKeys(instance.touchedSectionKeys || instance.overlappedSectionKeys);
+        placement.touchedSectionKeys = placement.overlappedSectionKeys.slice();
+        placement.loadState = instance.loadState || placement.loadState || "unloaded";
+        return placement;
     }
 
     function normalizeBuildingPlacementIdSet(ids, state) {
@@ -212,6 +294,10 @@
         return hashString(JSON.stringify(buildingData));
     }
 
+    function deepCloneJson(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
     function exteriorBitmapSettingsSignature(placement, options = {}, dataSignature = "") {
         const transform = placement && placement.transform ? placement.transform : {};
         const pixelsPerWorldUnit = Number.isFinite(Number(options.pixelsPerWorldUnit))
@@ -228,7 +314,8 @@
             : Math.PI / 4;
         return [
             EXTERIOR_BITMAP_RENDER_DATA_VERSION,
-            String(placement && placement.buildingSaveName || ""),
+            String(placement && placement.id || ""),
+            String(placement && placement.contentVersion || ""),
             Number(transform.rotation || 0).toFixed(6),
             pixelsPerWorldUnit.toFixed(3),
             paddingPixels,
@@ -260,7 +347,8 @@
             : Math.PI / 4;
         return [
             INTERIOR_BITMAP_RENDER_DATA_VERSION,
-            String(placement && placement.buildingSaveName || ""),
+            String(placement && placement.id || ""),
+            String(placement && placement.contentVersion || ""),
             String(floorId || ""),
             Number(transform.rotation || 0).toFixed(6),
             pixelsPerWorldUnit.toFixed(3),
@@ -306,10 +394,15 @@
         const transform = record.transform && typeof record.transform === "object"
             ? record.transform
             : {};
+        const sourceBuildingSaveName = String(
+            record.buildingSaveName || record.sourceBuildingSaveName || record.name || record.id || ""
+        ).trim();
         return {
             schema: BUILDING_PLACEMENT_SCHEMA,
             id: normalizePlacementId(record.id, index),
-            buildingSaveName: nonEmptyString(record.buildingSaveName, `building placement ${index} buildingSaveName`),
+            buildingSaveName: nonEmptyString(sourceBuildingSaveName, `building placement ${index} buildingSaveName`),
+            sourceBuildingSaveName,
+            contentVersion: Number.isFinite(Number(record.contentVersion)) ? Number(record.contentVersion) : 1,
             transform: {
                 x: finiteNumber(transform.x, `building placement ${index} transform.x`),
                 y: finiteNumber(transform.y, `building placement ${index} transform.y`),
@@ -323,10 +416,103 @@
                 ? record.movementBlockerGeometryVersion
                 : "",
             overlappedSectionKeys: normalizeSectionKeys(record.overlappedSectionKeys),
+            touchedSectionKeys: normalizeSectionKeys(record.touchedSectionKeys || record.overlappedSectionKeys),
             loadState: typeof record.loadState === "string" && record.loadState.length > 0
                 ? record.loadState
                 : "unloaded"
         };
+    }
+
+    function normalizeBuildingInstanceRecord(record, index = 0) {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+            throw new Error(`building instance ${index} must be an object`);
+        }
+        assertValidBuildingEditorSave(record, record && (record.sourceBuildingSaveName || record.name || record.id));
+        const instance = deepCloneJson(record);
+        instance.schema = BUILDING_SAVE_SCHEMA;
+        instance.id = normalizePlacementId(instance.id, index);
+        const sourceName = String(
+            instance.sourceBuildingSaveName || instance.buildingSaveName || instance.name || instance.id
+        ).trim();
+        instance.sourceBuildingSaveName = nonEmptyString(sourceName, `building instance ${index} sourceBuildingSaveName`);
+        instance.buildingSaveName = instance.sourceBuildingSaveName;
+        if (typeof instance.name !== "string" || instance.name.trim().length === 0) {
+            instance.name = instance.sourceBuildingSaveName;
+        }
+        const transform = instance.transform && typeof instance.transform === "object" ? instance.transform : {};
+        instance.transform = {
+            x: finiteNumber(transform.x, `building instance ${instance.id} transform.x`),
+            y: finiteNumber(transform.y, `building instance ${instance.id} transform.y`),
+            rotation: Number.isFinite(Number(transform.rotation)) ? Number(transform.rotation) : 0
+        };
+        instance.footprintPolygons = normalizeFootprintPolygons(instance.footprintPolygons);
+        instance.movementBlockerPolygons = instance.movementBlockerPolygons === undefined || instance.movementBlockerPolygons === null
+            ? null
+            : normalizeMovementBlockerPolygons(instance.movementBlockerPolygons);
+        instance.movementBlockerGeometryVersion = typeof instance.movementBlockerGeometryVersion === "string"
+            ? instance.movementBlockerGeometryVersion
+            : "";
+        const touchedSectionKeys = normalizeSectionKeys(instance.touchedSectionKeys || instance.overlappedSectionKeys);
+        instance.touchedSectionKeys = touchedSectionKeys;
+        instance.overlappedSectionKeys = touchedSectionKeys.slice();
+        instance.objects = Array.isArray(instance.objects) ? instance.objects : [];
+        instance.animals = Array.isArray(instance.animals) ? instance.animals : [];
+        instance.triggers = Array.isArray(instance.triggers) ? instance.triggers : [];
+        instance.loadState = typeof instance.loadState === "string" && instance.loadState.length > 0
+            ? instance.loadState
+            : "unloaded";
+        instance.contentVersion = Number.isFinite(Number(instance.contentVersion)) ? Number(instance.contentVersion) : 1;
+        return instance;
+    }
+
+    function createPlacementFromBuildingInstance(instance, index = 0) {
+        const normalized = normalizeBuildingInstanceRecord(instance, index);
+        return normalizeBuildingPlacementRecord({
+            schema: BUILDING_PLACEMENT_SCHEMA,
+            id: normalized.id,
+            buildingSaveName: normalized.sourceBuildingSaveName,
+            sourceBuildingSaveName: normalized.sourceBuildingSaveName,
+            contentVersion: normalized.contentVersion,
+            transform: normalized.transform,
+            footprintPolygons: normalized.footprintPolygons,
+            movementBlockerPolygons: normalized.movementBlockerPolygons,
+            movementBlockerGeometryVersion: normalized.movementBlockerGeometryVersion,
+            overlappedSectionKeys: normalized.touchedSectionKeys,
+            touchedSectionKeys: normalized.touchedSectionKeys,
+            loadState: normalized.loadState
+        }, index);
+    }
+
+    function createBuildingInstanceFromEditorSave(buildingData, placementRecord, options = {}) {
+        assertValidBuildingEditorSave(buildingData, placementRecord && placementRecord.buildingSaveName);
+        const placement = normalizeBuildingPlacementRecord(placementRecord, 0);
+        const instance = deepCloneJson(buildingData);
+        instance.schema = BUILDING_SAVE_SCHEMA;
+        instance.id = placement.id;
+        instance.name = typeof options.name === "string" && options.name.trim().length > 0
+            ? options.name.trim()
+            : placement.buildingSaveName;
+        instance.sourceBuildingSaveName = placement.buildingSaveName;
+        instance.buildingSaveName = placement.buildingSaveName;
+        instance.transform = { ...placement.transform };
+        instance.footprintPolygons = Array.isArray(options.footprintPolygons)
+            ? normalizeFootprintPolygons(options.footprintPolygons)
+            : computeBuildingPlacementFootprint(buildingData, placement);
+        if (Array.isArray(options.movementBlockerPolygons)) {
+            instance.movementBlockerPolygons = normalizeMovementBlockerPolygons(options.movementBlockerPolygons);
+            instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+        } else {
+            instance.movementBlockerPolygons = computeBuildingPlacementMovementBlockerPolygons(buildingData, placement);
+            instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+        }
+        instance.touchedSectionKeys = normalizeSectionKeys(options.touchedSectionKeys || placement.touchedSectionKeys || placement.overlappedSectionKeys);
+        instance.overlappedSectionKeys = instance.touchedSectionKeys.slice();
+        instance.objects = Array.isArray(options.objects) ? deepCloneJson(options.objects) : [];
+        instance.animals = Array.isArray(options.animals) ? deepCloneJson(options.animals) : [];
+        instance.triggers = Array.isArray(options.triggers) ? deepCloneJson(options.triggers) : [];
+        instance.loadState = typeof options.loadState === "string" ? options.loadState : "unloaded";
+        instance.contentVersion = Number.isFinite(Number(options.contentVersion)) ? Number(options.contentVersion) : 1;
+        return normalizeBuildingInstanceRecord(instance, 0);
     }
 
     function assertValidBuildingEditorSave(buildingData, saveName = "") {
@@ -1329,7 +1515,10 @@
             state.lastMovementBlockerError = `building placement ${placement.id} missing structural movement blockers and no building loader is installed`;
             return false;
         }
-        const promise = map.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+        const loadBuildingData = typeof map.loadPrototypeBuildingDataForPlacement === "function"
+            ? map.loadPrototypeBuildingDataForPlacement.bind(map)
+            : map.loadPrototypeBuildingEditorSaveData.bind(map);
+        const promise = loadBuildingData(placement)
             .then((buildingData) => {
                 setPlacementMovementBlockerPolygons(
                     placement,
@@ -1357,10 +1546,7 @@
     function getPlacementMovementBlockerPolygons(map, placement, options = {}) {
         if (!placement || typeof placement !== "object") return [];
         const state = map && map._prototypeBuildingState;
-        const saveName = placement.buildingSaveName;
-        const buildingData = state && state.buildingDataBySaveName instanceof Map
-            ? state.buildingDataBySaveName.get(saveName)
-            : null;
+        const buildingData = state ? getBuildingDataForPlacement(state, placement) : null;
         if (buildingData && !placementHasCurrentMovementBlockerGeometry(placement)) {
             setPlacementMovementBlockerPolygons(
                 placement,
@@ -1650,6 +1836,8 @@
         return {
             placementsById: new Map(),
             orderedPlacements: [],
+            buildingInstancesById: new Map(),
+            buildingDataByInstanceId: new Map(),
             buildingIdsBySectionKey: new Map(),
             loadedBuildingsById: new Map(),
             desiredBuildingIds: new Set(),
@@ -1676,6 +1864,10 @@
             lastSectionRefStats: null,
             hasActiveBuildingSelection: false,
             activeDesiredSignature: null,
+            dirtyWorldUnits: {
+                sections: new Set(),
+                buildings: new Set()
+            },
             contentVersion: 1,
             nextPlacementSerial: 1,
             rawPlacements: Array.isArray(records) ? records.slice() : []
@@ -1689,7 +1881,7 @@
         let indexed = 0;
         for (let i = 0; i < state.orderedPlacements.length; i++) {
             const placement = state.orderedPlacements[i];
-            const keys = normalizeSectionKeys(placement.overlappedSectionKeys);
+            const keys = normalizeSectionKeys(placement.touchedSectionKeys || placement.overlappedSectionKeys);
             for (let k = 0; k < keys.length; k++) {
                 if (!state.buildingIdsBySectionKey.has(keys[k])) {
                     state.buildingIdsBySectionKey.set(keys[k], new Set());
@@ -1723,7 +1915,7 @@
         for (let i = 0; i < placements.length; i++) {
             const placement = placements[i];
             if (!placement || !placement.id) continue;
-            const keys = normalizeSectionKeys(placement.overlappedSectionKeys);
+            const keys = normalizeSectionKeys(placement.touchedSectionKeys || placement.overlappedSectionKeys);
             const ref = cloneBuildingPlacementRef(placement);
             for (let k = 0; k < keys.length; k++) {
                 const sectionKey = keys[k];
@@ -1848,9 +2040,7 @@
                 if (state.loadedBuildingsById instanceof Map) state.loadedBuildingsById.delete(placement.id);
                 continue;
             }
-            const buildingData = state.buildingDataBySaveName instanceof Map
-                ? state.buildingDataBySaveName.get(placement.buildingSaveName)
-                : null;
+            const buildingData = getBuildingDataForPlacement(state, placement);
             clearPrototypeBuildingGeometryRuntime(map, placement.id);
             if (!buildingData) {
                 pending += 1;
@@ -1909,9 +2099,30 @@
 
         map.initializePrototypeBuildingState = function initializePrototypeBuildingState(records = []) {
             const state = createPrototypeBuildingState(records);
-            const normalized = Array.isArray(records)
-                ? records.map((record, index) => normalizeBuildingPlacementRecord(record, index))
-                : [];
+            const normalized = [];
+            const sourceRecords = Array.isArray(records) ? records : [];
+            for (let i = 0; i < sourceRecords.length; i++) {
+                const record = sourceRecords[i];
+                if (record && record.schema === BUILDING_SAVE_SCHEMA && Array.isArray(record.floorFragments)) {
+                    const instance = setBuildingInstanceRecord(state, record);
+                    normalized.push(createPlacementFromBuildingInstance(instance, i));
+                    continue;
+                }
+                if (record && record.buildingData && typeof record.buildingData === "object") {
+                    const placement = normalizeBuildingPlacementRecord(record, i);
+                    const instance = createBuildingInstanceFromEditorSave(record.buildingData, placement, {
+                        footprintPolygons: placement.footprintPolygons,
+                        movementBlockerPolygons: placement.movementBlockerPolygons,
+                        touchedSectionKeys: placement.touchedSectionKeys || placement.overlappedSectionKeys,
+                        loadState: placement.loadState,
+                        contentVersion: placement.contentVersion
+                    });
+                    setBuildingInstanceRecord(state, instance);
+                    normalized.push(createPlacementFromBuildingInstance(instance, i));
+                    continue;
+                }
+                normalized.push(normalizeBuildingPlacementRecord(record, i));
+            }
             const seen = new Set();
             normalized.forEach((placement) => {
                 if (seen.has(placement.id)) {
@@ -1940,6 +2151,30 @@
             if (!state || !Array.isArray(state.orderedPlacements)) return [];
             syncPrototypeBuildingPlacementRefsToSections(this);
             return state.orderedPlacements.map((placement) => JSON.parse(JSON.stringify(placement)));
+        };
+
+        map.exportPrototypeBuildingInstances = function exportPrototypeBuildingInstances() {
+            const state = this._prototypeBuildingState;
+            if (!state || !Array.isArray(state.orderedPlacements)) return [];
+            syncPrototypeBuildingPlacementRefsToSections(this);
+            return state.orderedPlacements.map((placement) => {
+                const instance = getBuildingInstanceRecord(state, placement);
+                if (instance) return deepCloneJson(instance);
+                return deepCloneJson(placement);
+            });
+        };
+
+        map.getPrototypeDirtyWorldUnits = function getPrototypeDirtyWorldUnits() {
+            const state = this._prototypeBuildingState;
+            const dirty = ensurePrototypeDirtyWorldUnits(state);
+            return {
+                sections: dirty ? Array.from(dirty.sections) : [],
+                buildings: dirty ? Array.from(dirty.buildings) : []
+            };
+        };
+
+        map.markPrototypeBuildingUnitDirty = function markPrototypeBuildingUnitDirtyForMap(buildingId) {
+            return markPrototypeBuildingUnitDirty(this._prototypeBuildingState, buildingId);
         };
 
         map.getPrototypeBuildingPlacements = function getPrototypeBuildingPlacements() {
@@ -2028,11 +2263,11 @@
                 if (!placement) {
                     throw new Error(`cannot load missing building placement ${placementId}`);
                 }
-                const cachedData = state.buildingDataBySaveName instanceof Map
-                    ? state.buildingDataBySaveName.get(placement.buildingSaveName)
-                    : null;
+                const cachedData = getBuildingDataForPlacement(state, placement);
                 if (cachedData) {
-                    placement.loadState = "ready";
+                    placement.loadState = "shell";
+                    const instance = getBuildingInstanceRecord(state, placement);
+                    if (instance) instance.loadState = "shell";
                     state.loadedBuildingsById.set(placementId, placement);
                     cached += 1;
                     continue;
@@ -2043,10 +2278,12 @@
                     pending += 1;
                     continue;
                 }
-                placement.loadState = "loading";
-                const promise = this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+                placement.loadState = "loading-shell";
+                const promise = this.loadPrototypeBuildingDataForPlacement(placement)
                     .then((buildingData) => {
-                        placement.loadState = "ready";
+                        placement.loadState = "shell";
+                        const instance = getBuildingInstanceRecord(state, placement);
+                        if (instance) instance.loadState = "shell";
                         state.loadedBuildingsById.set(placementId, placement);
                         if (!placementHasCurrentMovementBlockerGeometry(placement)) {
                             setPlacementMovementBlockerPolygons(
@@ -2114,17 +2351,28 @@
                     placement,
                     computeBuildingPlacementMovementBlockerPolygons(options.buildingData, placement)
                 );
-                state.buildingDataBySaveName.set(placement.buildingSaveName, options.buildingData);
             }
             if (placement.footprintPolygons.length === 0) {
                 throw new Error(`missing footprint for building placement ${placement.id}`);
             }
             placement.overlappedSectionKeys = computeOverlappedSectionKeysForFootprint(this, placement.footprintPolygons);
+            placement.touchedSectionKeys = placement.overlappedSectionKeys.slice();
+            if (options.buildingData) {
+                const instance = createBuildingInstanceFromEditorSave(options.buildingData, placement, {
+                    footprintPolygons: placement.footprintPolygons,
+                    movementBlockerPolygons: placement.movementBlockerPolygons,
+                    touchedSectionKeys: placement.touchedSectionKeys,
+                    loadState: "shell"
+                });
+                setBuildingInstanceRecord(state, instance, { markDirty: true });
+                updatePlacementFromInstance(placement, instance);
+            }
             state.placementsById.set(placement.id, placement);
             state.orderedPlacements.push(placement);
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
             syncPrototypeBuildingPlacementRefsToSections(this);
+            markPrototypeSectionUnitsDirty(state, placement.touchedSectionKeys || placement.overlappedSectionKeys);
             markPrototypeBuildingMovementBlockersDirty(this);
             maybeSyncPrototypeBuildingGeometryRuntime(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {
@@ -2173,6 +2421,18 @@
                     const placements = Array.isArray(state.orderedPlacements) ? state.orderedPlacements : [];
                     placements.forEach((placement) => {
                         if (!placement || placement.buildingSaveName !== saveName) return;
+                        if (!getBuildingInstanceRecord(state, placement)) {
+                            const touchedSectionKeys = normalizeSectionKeys(placement.touchedSectionKeys || placement.overlappedSectionKeys);
+                            const instance = createBuildingInstanceFromEditorSave(buildingData, placement, {
+                                footprintPolygons: placement.footprintPolygons,
+                                movementBlockerPolygons: placement.movementBlockerPolygons,
+                                touchedSectionKeys,
+                                loadState: placement.loadState || "shell",
+                                contentVersion: placement.contentVersion
+                            });
+                            setBuildingInstanceRecord(state, instance, { markDirty: true });
+                            updatePlacementFromInstance(placement, instance);
+                        }
                         if (placementHasCurrentMovementBlockerGeometry(placement)) return;
                         setPlacementMovementBlockerPolygons(
                             placement,
@@ -2197,6 +2457,37 @@
                 });
             state.pendingBuildingDataBySaveName.set(saveName, promise);
             return promise;
+        };
+
+        map.loadPrototypeBuildingDataForPlacement = function loadPrototypeBuildingDataForPlacement(placementOrId) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const placement = typeof placementOrId === "string"
+                ? state.placementsById.get(normalizePlacementId(placementOrId, 0))
+                : placementOrId;
+            if (!placement || typeof placement !== "object") {
+                throw new Error("building data load requires a known placement");
+            }
+            const instance = getBuildingInstanceRecord(state, placement);
+            if (instance) return Promise.resolve(instance);
+            return this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+                .then((buildingData) => {
+                    let migrated = getBuildingInstanceRecord(state, placement);
+                    if (!migrated) {
+                        migrated = createBuildingInstanceFromEditorSave(buildingData, placement, {
+                            footprintPolygons: placement.footprintPolygons,
+                            movementBlockerPolygons: placement.movementBlockerPolygons,
+                            touchedSectionKeys: placement.touchedSectionKeys || placement.overlappedSectionKeys,
+                            loadState: placement.loadState || "shell",
+                            contentVersion: placement.contentVersion
+                        });
+                        setBuildingInstanceRecord(state, migrated, { markDirty: true });
+                        updatePlacementFromInstance(placement, migrated);
+                    }
+                    return migrated;
+                });
         };
 
         map.requestPrototypeBuildingExteriorBitmap = function requestPrototypeBuildingExteriorBitmap(placementOrId, options = {}) {
@@ -2228,7 +2519,7 @@
             if (!appRef || !rendererRef) {
                 throw new Error("building exterior bitmap request requires a Pixi app and renderer");
             }
-            const loadPromise = this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+            const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
                     const dataSignature = buildingDataSignature(buildingData);
                     const signature = exteriorBitmapSettingsSignature(placement, options, dataSignature);
@@ -2362,7 +2653,7 @@
             if (!appRef || !rendererRef) {
                 throw new Error("building interior bitmap request requires a Pixi app and renderer");
             }
-            const loadPromise = this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName)
+            const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
                     const dataSignature = buildingDataSignature(buildingData);
                     const signature = interiorBitmapSettingsSignature(placement, sourceFloorId, options, dataSignature);
@@ -2458,13 +2749,11 @@
                 const placement = state.orderedPlacements[i];
                 if (!placement || !placement.id) continue;
                 if (!isPrototypeBuildingPlacementDesired(state, placement)) continue;
-                const buildingData = state.buildingDataBySaveName instanceof Map
-                    ? state.buildingDataBySaveName.get(placement.buildingSaveName)
-                    : null;
+                const buildingData = getBuildingDataForPlacement(state, placement);
                 if (!buildingData) {
                     pending += 1;
-                    if (typeof this.loadPrototypeBuildingEditorSaveData === "function") {
-                        this.loadPrototypeBuildingEditorSaveData(placement.buildingSaveName).catch((error) => {
+                    if (typeof this.loadPrototypeBuildingDataForPlacement === "function") {
+                        this.loadPrototypeBuildingDataForPlacement(placement).catch((error) => {
                             state.lastCutawayGeometryStats = {
                                 pending,
                                 error: error && error.message ? error.message : String(error)
@@ -2494,13 +2783,19 @@
             const placementId = normalizePlacementId(id, 0);
             const state = this._prototypeBuildingState;
             if (!state || !state.placementsById.has(placementId)) return false;
+            const placement = state.placementsById.get(placementId);
+            const touchedSectionKeys = normalizeSectionKeys(placement && (placement.touchedSectionKeys || placement.overlappedSectionKeys));
             state.placementsById.delete(placementId);
             state.orderedPlacements = state.orderedPlacements.filter((placement) => placement.id !== placementId);
+            if (state.buildingInstancesById instanceof Map) state.buildingInstancesById.delete(placementId);
+            if (state.buildingDataByInstanceId instanceof Map) state.buildingDataByInstanceId.delete(placementId);
             destroyPrototypeBuildingPlacementBitmapEntries(state, placementId);
             clearPrototypeBuildingGeometryRuntime(this, placementId, { removeAttachedObjects: true });
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
             syncPrototypeBuildingPlacementRefsToSections(this);
+            markPrototypeBuildingUnitDirty(state, placementId);
+            markPrototypeSectionUnitsDirty(state, touchedSectionKeys);
             markPrototypeBuildingMovementBlockersDirty(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {
                 syncPrototypeBuildingMovementBlockers(this);
@@ -2533,9 +2828,7 @@
             const rotationChanged = Math.abs(nextTransform.rotation - previousRotation) > 0.000001;
             const dx = nextTransform.x - finiteNumber(previousTransform.x, `building placement ${placementId} current transform.x`);
             const dy = nextTransform.y - finiteNumber(previousTransform.y, `building placement ${placementId} current transform.y`);
-            const buildingData = state.buildingDataBySaveName instanceof Map
-                ? state.buildingDataBySaveName.get(placement.buildingSaveName)
-                : null;
+            const buildingData = getBuildingDataForPlacement(state, placement);
 
             placement.transform = nextTransform;
             if (buildingData) {
@@ -2574,12 +2867,29 @@
                 placement.transform = previousTransform;
                 throw new Error(`missing footprint after moving building placement ${placementId}`);
             }
+            const previousTouchedSectionKeys = normalizeSectionKeys(placement.touchedSectionKeys || placement.overlappedSectionKeys);
             placement.overlappedSectionKeys = computeOverlappedSectionKeysForFootprint(this, placement.footprintPolygons);
+            placement.touchedSectionKeys = placement.overlappedSectionKeys.slice();
+            const instance = getBuildingInstanceRecord(state, placement);
+            if (instance) {
+                instance.transform = { ...placement.transform };
+                instance.footprintPolygons = normalizeFootprintPolygons(placement.footprintPolygons);
+                instance.movementBlockerPolygons = placement.movementBlockerPolygons === null
+                    ? null
+                    : normalizeMovementBlockerPolygons(placement.movementBlockerPolygons);
+                instance.movementBlockerGeometryVersion = placement.movementBlockerGeometryVersion || "";
+                instance.touchedSectionKeys = placement.touchedSectionKeys.slice();
+                instance.overlappedSectionKeys = placement.touchedSectionKeys.slice();
+                instance.contentVersion = Number(instance.contentVersion || 1) + 1;
+                placement.contentVersion = instance.contentVersion;
+                setBuildingInstanceRecord(state, instance, { markDirty: true });
+            }
             destroyPrototypeBuildingPlacementBitmapEntries(state, placementId);
             clearPrototypeBuildingGeometryRuntime(this, placementId);
             state.contentVersion += 1;
             rebuildBuildingPlacementIndex(this);
             syncPrototypeBuildingPlacementRefsToSections(this);
+            markPrototypeSectionUnitsDirty(state, previousTouchedSectionKeys.concat(placement.touchedSectionKeys));
             markPrototypeBuildingMovementBlockersDirty(this);
             maybeSyncPrototypeBuildingGeometryRuntime(this);
             if (hasPrototypeBuildingMovementNodeRegistry(this)) {

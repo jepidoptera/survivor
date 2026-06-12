@@ -407,10 +407,12 @@ const LEGACY_LOCAL_SAVE_KEY = "survivor_save";
 const ACTIVE_LOCAL_SAVE_SLOT_STORAGE_KEY = "survivor_active_save_slot_v1";
 const ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY = "survivor_active_prototype_save_slot_v1";
 const PROTOTYPE_INDEXED_DB_NAME = "survivor_prototype_saves";
-const PROTOTYPE_INDEXED_DB_VERSION = 2;
+const PROTOTYPE_INDEXED_DB_VERSION = 3;
 const PROTOTYPE_INDEXED_DB_STORE = "slots";
 const PROTOTYPE_INDEXED_DB_SECTION_STORE = "slot_sections";
+const PROTOTYPE_INDEXED_DB_BUILDING_STORE = "slot_buildings";
 const PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX = "slotKey";
+const PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX = "slotKey";
 const PROTOTYPE_SECTION_DIRECTIONS = Object.freeze([
     { q: 1, r: 0 },
     { q: 1, r: -1 },
@@ -621,8 +623,41 @@ function makePrototypeSectionStoreRecordId(slotKey, sectionKey) {
     return `${slotKey}::${sectionKey}`;
 }
 
+function makePrototypeBuildingStoreRecordId(slotKey, buildingId) {
+    return `${slotKey}::${buildingId}`;
+}
+
 function clonePrototypeSectionRecord(section) {
     return JSON.parse(JSON.stringify(section));
+}
+
+function clonePrototypeBuildingRecord(building) {
+    return JSON.parse(JSON.stringify(building));
+}
+
+function clonePrototypeBuildingSectionRefs(refs, label = "section buildingRefs") {
+    if (refs === undefined || refs === null) return [];
+    if (!Array.isArray(refs)) {
+        throw new Error(`${label} must be an array`);
+    }
+    const out = [];
+    const seen = new Set();
+    for (let i = 0; i < refs.length; i++) {
+        const ref = refs[i];
+        if (!ref || typeof ref !== "object" || Array.isArray(ref)) {
+            throw new Error(`${label} ${i} must be an object`);
+        }
+        const id = String(ref.id === undefined || ref.id === null ? "" : ref.id).trim();
+        if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
+            throw new Error(`${label} ${i} requires a valid building id`);
+        }
+        if (seen.has(id)) {
+            throw new Error(`${label} contains duplicate building ref ${id}`);
+        }
+        seen.add(id);
+        out.push({ id, shell: ref.shell === false ? false : true });
+    }
+    return out;
 }
 
 function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
@@ -631,13 +666,17 @@ function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
         ? slotData.prototypeSectionWorld
         : null;
     if (!world) {
-        return { slotData, sectionRecords: [] };
+        return { slotData, sectionRecords: [], buildingRecords: [] };
     }
 
     const explicitSections = Array.isArray(options.sectionRecords) ? options.sectionRecords : null;
     const rawSections = explicitSections || (Array.isArray(world.sections) ? world.sections : []);
+    const explicitBuildings = Array.isArray(options.buildingRecords) ? options.buildingRecords : null;
+    const rawBuildings = explicitBuildings || (Array.isArray(world.buildings) ? world.buildings : []);
     const sectionRecords = [];
+    const buildingRecords = [];
     const seenKeys = new Set();
+    const seenBuildingIds = new Set();
     const sectionCoords = Array.isArray(options.sectionCoords)
         ? options.sectionCoords.map((coord) => ({ q: Number(coord && coord.q) || 0, r: Number(coord && coord.r) || 0 }))
         : (Array.isArray(world.sectionCoords) ? world.sectionCoords.slice() : []);
@@ -658,9 +697,18 @@ function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
         }
     }
 
+    for (let i = 0; i < rawBuildings.length; i++) {
+        const building = rawBuildings[i];
+        if (!building || typeof building !== "object") continue;
+        const buildingId = (typeof building.id === "string" && building.id.length > 0) ? building.id : "";
+        if (!buildingId.length || seenBuildingIds.has(buildingId)) continue;
+        seenBuildingIds.add(buildingId);
+        buildingRecords.push(clonePrototypeBuildingRecord(building));
+    }
+
     slotData.prototypeSectionWorld = {
         ...world,
-        version: 2,
+        version: 3,
         sectionCoords,
         activeCenterKey: (typeof options.activeCenterKey === "string" && options.activeCenterKey.length > 0)
             ? options.activeCenterKey
@@ -674,9 +722,10 @@ function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
                     : world.activeCenterKey,
                 sectionCoords
             }),
-        sections: []
+        sections: [],
+        buildings: []
     };
-    return { slotData, sectionRecords };
+    return { slotData, sectionRecords, buildingRecords };
 }
 
 function openPrototypeSaveIndexedDb() {
@@ -705,6 +754,16 @@ function openPrototypeSaveIndexedDb() {
                 const sectionStore = upgradeTxn ? upgradeTxn.objectStore(PROTOTYPE_INDEXED_DB_SECTION_STORE) : null;
                 if (sectionStore && !sectionStore.indexNames.contains(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX)) {
                     sectionStore.createIndex(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX, "slotKey", { unique: false });
+                }
+            }
+            if (!db.objectStoreNames.contains(PROTOTYPE_INDEXED_DB_BUILDING_STORE)) {
+                const buildingStore = db.createObjectStore(PROTOTYPE_INDEXED_DB_BUILDING_STORE, { keyPath: "id" });
+                buildingStore.createIndex(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX, "slotKey", { unique: false });
+            } else {
+                const upgradeTxn = request.transaction;
+                const buildingStore = upgradeTxn ? upgradeTxn.objectStore(PROTOTYPE_INDEXED_DB_BUILDING_STORE) : null;
+                if (buildingStore && !buildingStore.indexNames.contains(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX)) {
+                    buildingStore.createIndex(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX, "slotKey", { unique: false });
                 }
             }
         };
@@ -765,12 +824,17 @@ function withPrototypeSaveStores(mode, work) {
             reject(error);
         };
         try {
-            const transaction = db.transaction([PROTOTYPE_INDEXED_DB_STORE, PROTOTYPE_INDEXED_DB_SECTION_STORE], mode);
+            const transaction = db.transaction([
+                PROTOTYPE_INDEXED_DB_STORE,
+                PROTOTYPE_INDEXED_DB_SECTION_STORE,
+                PROTOTYPE_INDEXED_DB_BUILDING_STORE
+            ], mode);
             const slotStore = transaction.objectStore(PROTOTYPE_INDEXED_DB_STORE);
             const sectionStore = transaction.objectStore(PROTOTYPE_INDEXED_DB_SECTION_STORE);
+            const buildingStore = transaction.objectStore(PROTOTYPE_INDEXED_DB_BUILDING_STORE);
             transaction.onabort = () => finishReject(transaction.error || new Error("indexeddb-transaction-aborted"));
             transaction.onerror = () => finishReject(transaction.error || new Error("indexeddb-transaction-failed"));
-            Promise.resolve(work({ slotStore, sectionStore, transaction })).then(finishResolve).catch(finishReject);
+            Promise.resolve(work({ slotStore, sectionStore, buildingStore, transaction })).then(finishResolve).catch(finishReject);
         } catch (error) {
             finishReject(error);
         }
@@ -815,6 +879,24 @@ function getPrototypeSaveSectionRecords(slotKey, sectionKeys) {
     )).then((records) => records.filter(record => !!record)).catch(() => []);
 }
 
+function getPrototypeSaveBuildingRecords(slotKey) {
+    const normalizedSlotKey = normalizeLocalSaveSlotKey(slotKey);
+    if (!normalizedSlotKey.length) {
+        return Promise.resolve([]);
+    }
+    return withPrototypeSaveStores("readonly", ({ buildingStore }) => new Promise((resolve, reject) => {
+        const index = buildingStore.index(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX);
+        const request = index.getAll(normalizedSlotKey);
+        request.onsuccess = () => {
+            const records = Array.isArray(request.result) ? request.result : [];
+            resolve(records
+                .map(record => record && record.data ? clonePrototypeBuildingRecord(record.data) : null)
+                .filter(record => !!record));
+        };
+        request.onerror = () => reject(request.error || new Error("indexeddb-building-read-failed"));
+    })).catch(() => []);
+}
+
 function listPrototypeSaveSectionStoreKeys(slotKey) {
     const normalizedSlotKey = normalizeLocalSaveSlotKey(slotKey);
     if (!normalizedSlotKey.length) {
@@ -825,6 +907,19 @@ function listPrototypeSaveSectionStoreKeys(slotKey) {
         const request = index.getAllKeys(normalizedSlotKey);
         request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
         request.onerror = () => reject(request.error || new Error("indexeddb-section-key-list-failed"));
+    })).catch(() => []);
+}
+
+function listPrototypeSaveBuildingStoreKeys(slotKey) {
+    const normalizedSlotKey = normalizeLocalSaveSlotKey(slotKey);
+    if (!normalizedSlotKey.length) {
+        return Promise.resolve([]);
+    }
+    return withPrototypeSaveStores("readonly", ({ buildingStore }) => new Promise((resolve, reject) => {
+        const index = buildingStore.index(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX);
+        const request = index.getAllKeys(normalizedSlotKey);
+        request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+        request.onerror = () => reject(request.error || new Error("indexeddb-building-key-list-failed"));
     })).catch(() => []);
 }
 
@@ -876,7 +971,19 @@ function deletePrototypeSaveSlot(saveKey) {
     if (!normalizedKey.length) {
         return Promise.resolve({ ok: false, reason: "missing-save-key" });
     }
-    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore }) => new Promise((resolve, reject) => {
+    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore, buildingStore }) => new Promise((resolve, reject) => {
+        const deleteBuildings = (done) => {
+            const index = buildingStore.index(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX);
+            const buildingKeysRequest = index.getAllKeys(normalizedKey);
+            buildingKeysRequest.onsuccess = () => {
+                const buildingRecordIds = Array.isArray(buildingKeysRequest.result) ? buildingKeysRequest.result : [];
+                for (let i = 0; i < buildingRecordIds.length; i++) {
+                    buildingStore.delete(buildingRecordIds[i]);
+                }
+                done();
+            };
+            buildingKeysRequest.onerror = () => reject(buildingKeysRequest.error || new Error("indexeddb-building-list-failed"));
+        };
         const deleteSections = () => {
             const index = sectionStore.index(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX);
             const sectionKeysRequest = index.getAllKeys(normalizedKey);
@@ -885,17 +992,19 @@ function deletePrototypeSaveSlot(saveKey) {
                 for (let i = 0; i < sectionRecordIds.length; i++) {
                     sectionStore.delete(sectionRecordIds[i]);
                 }
-                const request = slotStore.delete(normalizedKey);
-                request.onsuccess = () => {
-                    const activeKey = getActivePrototypeSaveSlotKey();
-                    if (activeKey === normalizedKey && typeof localStorage !== "undefined") {
-                        try {
-                            localStorage.removeItem(ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY);
-                        } catch (_err) {}
-                    }
-                    resolve({ ok: true, key: normalizedKey });
-                };
-                request.onerror = () => reject(request.error || new Error("indexeddb-delete-failed"));
+                deleteBuildings(() => {
+                    const request = slotStore.delete(normalizedKey);
+                    request.onsuccess = () => {
+                        const activeKey = getActivePrototypeSaveSlotKey();
+                        if (activeKey === normalizedKey && typeof localStorage !== "undefined") {
+                            try {
+                                localStorage.removeItem(ACTIVE_PROTOTYPE_SAVE_SLOT_STORAGE_KEY);
+                            } catch (_err) {}
+                        }
+                        resolve({ ok: true, key: normalizedKey });
+                    };
+                    request.onerror = () => reject(request.error || new Error("indexeddb-delete-failed"));
+                });
             };
             sectionKeysRequest.onerror = () => reject(sectionKeysRequest.error || new Error("indexeddb-section-list-failed"));
         };
@@ -1090,6 +1199,7 @@ function saveGameStateToIndexedDb(saveKey) {
     let explicitSectionCoords = null;
     let explicitActiveCenterKey = null;
     let explicitLoadedSectionKeys = null;
+    let explicitBuildingRecords = null;
     if (map && map._prototypeSectionState) {
         const state = map._prototypeSectionState;
         explicitSectionCoords = Array.isArray(state.sectionCoords) ? state.sectionCoords.slice() : null;
@@ -1104,6 +1214,11 @@ function saveGameStateToIndexedDb(saveKey) {
                 : [];
             explicitSectionRecords = map.exportPrototypeSectionAssets(hydratedKeys);
         }
+        if (typeof map.exportPrototypeBuildingInstances === "function") {
+            explicitBuildingRecords = map.exportPrototypeBuildingInstances();
+        } else if (typeof map.exportPrototypeBuildingPlacements === "function") {
+            explicitBuildingRecords = map.exportPrototypeBuildingPlacements();
+        }
     }
     const isFullSectionSnapshot = !!(
         Array.isArray(explicitSectionCoords) &&
@@ -1113,19 +1228,23 @@ function saveGameStateToIndexedDb(saveKey) {
     );
     const prototypePayload = buildPrototypeSaveSlotMetadata(saveData, {
         sectionRecords: explicitSectionRecords,
+        buildingRecords: explicitBuildingRecords,
         sectionCoords: explicitSectionCoords,
         activeCenterKey: explicitActiveCenterKey,
         loadedSectionKeys: explicitLoadedSectionKeys
     });
     record.data = prototypePayload.slotData;
-    record.version = (record.data && record.data.prototypeSectionWorld && record.data.prototypeSectionWorld.version >= 2) ? 2 : 1;
-    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore }) => new Promise((resolve, reject) => {
+    record.version = (record.data && record.data.prototypeSectionWorld && record.data.prototypeSectionWorld.version >= 3)
+        ? 3
+        : ((record.data && record.data.prototypeSectionWorld && record.data.prototypeSectionWorld.version >= 2) ? 2 : 1);
+    return withPrototypeSaveStores("readwrite", ({ slotStore, sectionStore, buildingStore }) => new Promise((resolve, reject) => {
         const upsertSlot = () => {
             const request = slotStore.put(record);
             request.onsuccess = () => {
                 setActivePrototypeSaveSlotKey(normalizedKey);
                 const storedLength = JSON.stringify(record.data).length
-                    + prototypePayload.sectionRecords.reduce((sum, section) => sum + JSON.stringify(section).length, 0);
+                    + prototypePayload.sectionRecords.reduce((sum, section) => sum + JSON.stringify(section).length, 0)
+                    + prototypePayload.buildingRecords.reduce((sum, building) => sum + JSON.stringify(building).length, 0);
                 resolve({
                     ok: true,
                     key: normalizedKey,
@@ -1152,6 +1271,22 @@ function saveGameStateToIndexedDb(saveKey) {
             });
         }
 
+        const nextBuildingIds = new Set();
+        for (let i = 0; i < prototypePayload.buildingRecords.length; i++) {
+            const building = prototypePayload.buildingRecords[i];
+            const buildingId = String(building && building.id || "").trim();
+            if (!buildingId.length) continue;
+            const id = makePrototypeBuildingStoreRecordId(normalizedKey, buildingId);
+            nextBuildingIds.add(id);
+            buildingStore.put({
+                id,
+                slotKey: normalizedKey,
+                buildingId,
+                timestamp,
+                data: clonePrototypeBuildingRecord(building)
+            });
+        }
+
         const index = sectionStore.index(PROTOTYPE_INDEXED_DB_SECTION_SLOT_INDEX);
         const staleRequest = index.getAllKeys(normalizedKey);
         staleRequest.onsuccess = () => {
@@ -1163,7 +1298,18 @@ function saveGameStateToIndexedDb(saveKey) {
                     sectionStore.delete(id);
                 }
             }
-            upsertSlot();
+            const buildingIndex = buildingStore.index(PROTOTYPE_INDEXED_DB_BUILDING_SLOT_INDEX);
+            const staleBuildingsRequest = buildingIndex.getAllKeys(normalizedKey);
+            staleBuildingsRequest.onsuccess = () => {
+                const existingBuildingIds = Array.isArray(staleBuildingsRequest.result) ? staleBuildingsRequest.result : [];
+                for (let i = 0; i < existingBuildingIds.length; i++) {
+                    const id = existingBuildingIds[i];
+                    if (nextBuildingIds.has(id)) continue;
+                    buildingStore.delete(id);
+                }
+                upsertSlot();
+            };
+            staleBuildingsRequest.onerror = () => reject(staleBuildingsRequest.error || new Error("indexeddb-building-list-failed"));
         };
         staleRequest.onerror = () => reject(staleRequest.error || new Error("indexeddb-section-list-failed"));
     })).catch(error => ({ ok: false, reason: "write-failed", error }));
@@ -1185,25 +1331,49 @@ function getIndexedDbSavedGameState(saveKey = null) {
             Array.isArray(world.sectionCoords) &&
             (!Array.isArray(world.sections) || world.sections.length === 0)
         );
+        const shouldHydrateBuildingsFromStore = !!(
+            world &&
+            Number(world.version) >= 3 &&
+            (!Array.isArray(world.buildings) || world.buildings.length === 0)
+        );
         if (!shouldHydrateSectionsFromStore) {
-            return {
-                ok: true,
-                key: result.key,
-                data: record.data
-            };
+            if (!shouldHydrateBuildingsFromStore) {
+                return {
+                    ok: true,
+                    key: result.key,
+                    data: record.data
+                };
+            }
+            return getPrototypeSaveBuildingRecords(result.key).then((buildings) => {
+                const data = JSON.parse(JSON.stringify(record.data));
+                if (data.prototypeSectionWorld && typeof data.prototypeSectionWorld === "object") {
+                    data.prototypeSectionWorld.buildings = buildings;
+                }
+                return {
+                    ok: true,
+                    key: result.key,
+                    data,
+                    prototypeBuildingStoreBacked: true
+                };
+            });
         }
         const sectionKeys = getPrototypeBubbleSectionKeysFromWorld(world);
-        return getPrototypeSaveSectionRecords(result.key, sectionKeys).then((sections) => {
+        return Promise.all([
+            getPrototypeSaveSectionRecords(result.key, sectionKeys),
+            shouldHydrateBuildingsFromStore ? getPrototypeSaveBuildingRecords(result.key) : Promise.resolve(world.buildings || [])
+        ]).then(([sections, buildings]) => {
             const data = JSON.parse(JSON.stringify(record.data));
             if (data.prototypeSectionWorld && typeof data.prototypeSectionWorld === "object") {
                 data.prototypeSectionWorld.sections = sections;
                 data.prototypeSectionWorld.loadedSectionKeys = sectionKeys;
+                data.prototypeSectionWorld.buildings = buildings;
             }
             return {
                 ok: true,
                 key: result.key,
                 data,
-                prototypeSectionStoreBacked: true
+                prototypeSectionStoreBacked: true,
+                prototypeBuildingStoreBacked: shouldHydrateBuildingsFromStore
             };
         });
     });
@@ -1485,7 +1655,7 @@ function saveGameState(options = {}) {
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
                     powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
-                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
+                    buildingRefs: clonePrototypeBuildingSectionRefs(asset.buildingRefs, `section ${asset.key} buildingRefs`)
                 });
             }
         }
@@ -1501,9 +1671,11 @@ function saveGameState(options = {}) {
             triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
                 ? map.exportPrototypeTriggerDefinitions()
                 : [],
-            buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
-                ? map.exportPrototypeBuildingPlacements()
-                : []
+            buildings: (typeof map.exportPrototypeBuildingInstances === "function")
+                ? map.exportPrototypeBuildingInstances()
+                : ((typeof map.exportPrototypeBuildingPlacements === "function")
+                    ? map.exportPrototypeBuildingPlacements()
+                    : [])
         };
     }
 
@@ -2582,9 +2754,11 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
             ? map.exportPrototypeTriggerDefinitions()
             : [],
-        buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
-            ? map.exportPrototypeBuildingPlacements()
-            : [],
+        buildings: (typeof map.exportPrototypeBuildingInstances === "function")
+            ? map.exportPrototypeBuildingInstances()
+            : ((typeof map.exportPrototypeBuildingPlacements === "function")
+                ? map.exportPrototypeBuildingPlacements()
+                : []),
         sections: exportedSections
     };
     const sectionSummary = summarizePrototypeSectionAssets(exportedSections);

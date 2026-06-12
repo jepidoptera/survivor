@@ -390,7 +390,7 @@ test("building placements write lightweight refs into every touched section", ()
 
     assert.deepEqual(placement.overlappedSectionKeys, ["0,0"]);
     assert.deepEqual(sectionA.buildingRefs, [
-        { id: "building:section-ref-house", buildingSaveName: "test house" }
+        { id: "building:section-ref-house", shell: true }
     ]);
     assert.deepEqual(sectionB.buildingRefs, []);
 
@@ -402,8 +402,41 @@ test("building placements write lightweight refs into every touched section", ()
 
     assert.deepEqual(sectionA.buildingRefs, []);
     assert.deepEqual(sectionB.buildingRefs, [
-        { id: "building:section-ref-house", buildingSaveName: "test house" }
+        { id: "building:section-ref-house", shell: true }
     ]);
+});
+
+test("building placement creates an owned instance save unit", () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", [
+        { x: -1, y: -1 },
+        { x: 6, y: -1 },
+        { x: 6, y: 6 },
+        { x: -1, y: 6 }
+    ]);
+    installSectionAssets(map, [sectionA]);
+    buildings.installSectionWorldBuildingApis(map);
+
+    const buildingData = createBuildingSaveWithDoorAndColumn();
+    const placement = map.addPrototypeBuildingPlacement({
+        id: "building:owned-house",
+        buildingSaveName: "test house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    }, { buildingData });
+
+    buildingData.floorFragments[0].outerPolygon[0].x = 999;
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].schema, "survivor-building-v1");
+    assert.equal(instances[0].id, "building:owned-house");
+    assert.equal(instances[0].sourceBuildingSaveName, "test house");
+    assert.deepEqual(instances[0].transform, placement.transform);
+    assert.deepEqual(instances[0].touchedSectionKeys, ["0,0"]);
+    assert.notEqual(instances[0].floorFragments[0].outerPolygon[0].x, 999);
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: ["0,0"],
+        buildings: ["building:owned-house"]
+    });
 });
 
 test("active section building ensure loads only referenced placements", async () => {

@@ -486,7 +486,24 @@
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
                     powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
-                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
+                    buildingRefs: (() => {
+                        if (!Array.isArray(asset.buildingRefs)) return [];
+                        const refs = [];
+                        const seen = new Set();
+                        for (let i = 0; i < asset.buildingRefs.length; i++) {
+                            const ref = asset.buildingRefs[i];
+                            const id = String(ref && ref.id || "").trim();
+                            if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
+                                throw new Error(`section ${asset.key} buildingRefs ${i} requires a valid building id`);
+                            }
+                            if (seen.has(id)) {
+                                throw new Error(`section ${asset.key} buildingRefs contains duplicate building ref ${id}`);
+                            }
+                            seen.add(id);
+                            refs.push({ id, shell: ref && ref.shell === false ? false : true });
+                        }
+                        return refs;
+                    })()
                 }));
         };
         map.exportPrototypeFloorTransitions = function exportPrototypeFloorTransitions() {

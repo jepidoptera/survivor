@@ -72,7 +72,7 @@ test("prototype building exterior bitmap signature includes render data version"
     );
 
     assert.match(source, /const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v5-alpha-mask-runtime-floor-layers";/);
-    assert.match(source, /EXTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),/);
+    assert.match(source, /EXTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.id \|\| ""\),\s+String\(placement && placement\.contentVersion \|\| ""\),/);
 });
 
 test("prototype building bitmap bakes use larger defaults with a WebGL max texture diagnostic", () => {
@@ -111,7 +111,7 @@ test("prototype building interior bitmap signature includes floor and render dat
     );
 
     assert.match(source, /const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v17-edge-aligned-platform-cap";/);
-    assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.buildingSaveName \|\| ""\),\s+String\(floorId \|\| ""\),/);
+    assert.match(source, /INTERIOR_BITMAP_RENDER_DATA_VERSION,\s+String\(placement && placement\.id \|\| ""\),\s+String\(placement && placement\.contentVersion \|\| ""\),\s+String\(floorId \|\| ""\),/);
     const interiorSignatureBody = source.slice(
         source.indexOf("function interiorBitmapSettingsSignature"),
         source.indexOf("function destroyPrototypeBuildingBitmapEntry")

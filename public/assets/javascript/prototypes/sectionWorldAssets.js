@@ -488,15 +488,11 @@
                 if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
                     throw new Error(`${label} ${i} requires a valid building placement id`);
                 }
-                const buildingSaveName = String(ref.buildingSaveName === undefined || ref.buildingSaveName === null ? "" : ref.buildingSaveName).trim();
-                if (!buildingSaveName) {
-                    throw new Error(`${label} ${i} requires buildingSaveName`);
-                }
                 if (seen.has(id)) {
                     throw new Error(`${label} contains duplicate building ref ${id}`);
                 }
                 seen.add(id);
-                refs.push({ id, buildingSaveName });
+                refs.push({ id, shell: ref.shell === false ? false : true });
             }
             return refs;
         }
