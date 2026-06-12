@@ -1473,15 +1473,16 @@
         return true;
     }
 
-    function syncPrototypeBuildingMovementBlockers(map) {
+    function syncPrototypeBuildingMovementBlockers(map, options = {}) {
         const state = map && map._prototypeBuildingState;
         if (!state) return 0;
         const registry = getPrototypeBuildingMovementNodeRegistry(map);
         const registrySize = registry instanceof Map ? registry.size : 0;
+        const forceValidate = !!(options && options.forceValidate);
         if (
             state.movementBlockersDirty !== true &&
             Number(state.movementBlockerNodeRegistrySize) === registrySize &&
-            arePrototypeBuildingMovementBlockersCurrent(map, state, registry)
+            (forceValidate !== true || arePrototypeBuildingMovementBlockersCurrent(map, state, registry))
         ) {
             return 0;
         }
@@ -1541,8 +1542,11 @@
         if (queryBounds.maxX < queryBounds.minX || queryBounds.maxY < queryBounds.minY) {
             throw new Error("building movement blocker query bounds are inverted");
         }
+        const registry = getPrototypeBuildingMovementNodeRegistry(map);
+        const registrySize = registry instanceof Map ? registry.size : 0;
         if (
             state.movementBlockersDirty === true ||
+            Number(state.movementBlockerNodeRegistrySize) !== registrySize ||
             !(state.movementBlockersByPlacementId instanceof Map) ||
             state.movementBlockersByPlacementId.size === 0
         ) {
@@ -2620,8 +2624,12 @@
             };
         };
 
-        map.syncPrototypeBuildingMovementBlockers = function syncPrototypeBuildingMovementBlockersForMap() {
-            return syncPrototypeBuildingMovementBlockers(this);
+        map.syncPrototypeBuildingMovementBlockers = function syncPrototypeBuildingMovementBlockersForMap(options = {}) {
+            return syncPrototypeBuildingMovementBlockers(this, options);
+        };
+
+        map.markPrototypeBuildingMovementBlockersDirty = function markPrototypeBuildingMovementBlockersDirtyForMap() {
+            return markPrototypeBuildingMovementBlockersDirty(this);
         };
 
         map.collectPrototypeBuildingMovementBlockersInBounds = function collectPrototypeBuildingMovementBlockersInBoundsForMap(bounds, traversalLayer = 0, options = {}) {
