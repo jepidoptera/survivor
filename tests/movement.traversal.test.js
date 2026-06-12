@@ -160,6 +160,98 @@ function assertApproxEqual(actual, expected, epsilon = 0.000001) {
     assert.ok(Math.abs(Number(actual) - Number(expected)) <= epsilon, `${actual} should be within ${epsilon} of ${expected}`);
 }
 
+test("GameMap applies smaller overlapping floor support after walking from ground into a building", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0 })]];
+    map.worldToNode = () => map.nodes[0][0];
+    map.resetFloorRuntimeState();
+
+    const ground = map.registerFloorFragment({
+        fragmentId: "section:-4,0:ground",
+        surfaceId: "overworld_ground_surface",
+        ownerSectionKey: "-4,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -50, y: -50 },
+            { x: 50, y: -50 },
+            { x: 50, y: 50 },
+            { x: -50, y: 50 }
+        ],
+        holes: []
+    });
+    const building = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:floor-fragment-16",
+        surfaceId: "building:placed-5:surface:floor-fragment-16",
+        ownerSectionKey: "building:placed-5",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -2, y: -2 },
+            { x: 2, y: -2 },
+            { x: 2, y: 2 },
+            { x: -2, y: 2 }
+        ],
+        holes: [],
+        renderedByBuildingCutaway: true
+    });
+    const actor = {
+        type: "wizard",
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        fragmentId: ground.fragmentId,
+        surfaceId: ground.surfaceId,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: ground.fragmentId,
+            surfaceId: ground.surfaceId
+        },
+        updateHitboxes() {}
+    };
+    const options = {
+        _movementSupportCache: {
+            actor,
+            lastCheckedOccupancy: {
+                x: 0,
+                y: 0,
+                result: {
+                    handled: false,
+                    allowed: false,
+                    currentSupport: {
+                        type: "floor",
+                        layer: 0,
+                        baseZ: 0,
+                        fragment: ground,
+                        fragmentId: ground.fragmentId,
+                        surfaceId: ground.surfaceId,
+                        node: map.nodes[0][0]
+                    }
+                }
+            }
+        }
+    };
+
+    const directSupport = map.getFloorSupportAtWorldPosition(0, 0, 0);
+    assert.equal(directSupport.fragmentId, building.fragmentId);
+
+    const applied = map.applyActorResolvedMovementSupport(actor, 0, 0, options);
+    assert.equal(applied.fragmentId, building.fragmentId);
+    assert.equal(actor.fragmentId, building.fragmentId);
+    assert.equal(actor.currentMovementSupport.fragmentId, building.fragmentId);
+});
+
 function createNode(xindex, yindex, overrides = {}) {
     return {
         xindex,

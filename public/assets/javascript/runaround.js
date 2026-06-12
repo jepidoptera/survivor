@@ -3667,7 +3667,10 @@ jQuery(() => {
         function isPositionSupportedAtLayer(x, y, layer, mapRef) {
             if (!(mapRef && mapRef.floorsById instanceof Map)) return true;
             let hasFragmentsAtLayer = false;
-            for (const fragment of mapRef.floorsById.values()) {
+            const fragments = typeof mapRef.getFloorFragmentsForLayer === "function"
+                ? mapRef.getFloorFragmentsForLayer(layer)
+                : Array.from(mapRef.floorsById.values());
+            for (const fragment of fragments) {
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
                 if (fragLevel !== layer) continue;
@@ -3863,7 +3866,29 @@ jQuery(() => {
             const wizardLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
 
             let contextFragment = null;
-            for (const fragment of mapRef.floorsById.values()) {
+            const layerFragments = typeof mapRef.getFloorFragmentsForLayer === "function"
+                ? mapRef.getFloorFragmentsForLayer(wizardLayer)
+                : Array.from(mapRef.floorsById.values());
+            const cachedFragForCurrentPosition = wizardRef._activeFloorFragment;
+            const cachedFragIdForCurrentPosition = cachedFragForCurrentPosition
+                ? (cachedFragForCurrentPosition.fragmentId || cachedFragForCurrentPosition.id || "")
+                : "";
+            const cachedFragLevelForCurrentPosition = cachedFragForCurrentPosition && Number.isFinite(cachedFragForCurrentPosition.level)
+                ? Math.round(Number(cachedFragForCurrentPosition.level))
+                : 0;
+            if (
+                cachedFragForCurrentPosition &&
+                wizardLayer !== 0 &&
+                cachedFragLevelForCurrentPosition === wizardLayer &&
+                mapRef.floorsById.has(cachedFragIdForCurrentPosition) &&
+                Array.isArray(cachedFragForCurrentPosition.outerPolygon) &&
+                cachedFragForCurrentPosition.outerPolygon.length >= 3 &&
+                pointInPolygon2D(wx, wy, cachedFragForCurrentPosition.outerPolygon)
+            ) {
+                contextFragment = cachedFragForCurrentPosition;
+            }
+            for (let i = 0; !contextFragment && i < layerFragments.length; i++) {
+                const fragment = layerFragments[i];
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
                 if (fragLevel === 0) continue;
@@ -3889,7 +3914,7 @@ jQuery(() => {
                     : null;
                 // If the cached fragment is gone (section unloaded), fall back to prevPos scan.
                 if (!contextFragment && wizardLayer !== 0) {
-                    for (const fragment of mapRef.floorsById.values()) {
+                    for (const fragment of layerFragments) {
                         if (!fragment) continue;
                         const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
                         if (fragLevel === 0) continue;
@@ -4201,6 +4226,16 @@ jQuery(() => {
             }
 
             const movementStartMs = performance.now();
+            const movementPerfEnabled = typeof globalThis !== "undefined" &&
+                globalThis.movementPerfBreakdownState &&
+                globalThis.movementPerfBreakdownState.enabled === true &&
+                typeof globalThis.recordMovementPerfSection === "function";
+            const movementPerfNow = () => movementPerfEnabled ? performance.now() : 0;
+            const movementPerfRecord = (name, startMs) => {
+                if (!movementPerfEnabled) return;
+                globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+            };
+            let movementSectionStartMs = movementPerfNow();
             const wizardStartX = wizard.x;
             const wizardStartY = wizard.y;
             const wizardLayer = Number.isFinite(wizard.currentLayer) ? Math.round(wizard.currentLayer) : 0;
@@ -4210,34 +4245,51 @@ jQuery(() => {
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             const isFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
             if (!isFalling) {
+                movementSectionStartMs = movementPerfNow();
                 wizard.moveDirection(moveVector, moveOptions);
+                movementPerfRecord("movement.step.moveDirection", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
                 wizard.updateJump(1 / frameRate);
+                movementPerfRecord("movement.step.updateJump", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
                 checkWizardFloorFall(wizard, map);
+                movementPerfRecord("movement.step.checkWizardFloorFall", movementSectionStartMs);
             } else {
                 // Keep applying horizontal momentum during the fall — don't steer or brake,
                 // just carry whatever velocity the wizard had when they stepped off the edge.
+                movementSectionStartMs = movementPerfNow();
                 wizard.moveDirection(wizard.movementVector, {
                     lockMovementVector: true,
                     allowUnsupportedPosition: true
                 });
+                movementPerfRecord("movement.step.moveDirection.falling", movementSectionStartMs);
             }
+            movementSectionStartMs = movementPerfNow();
             updateWizardFall(wizard, 1 / frameRate);
+            movementPerfRecord("movement.step.updateWizardFall", movementSectionStartMs);
             if (typeof wizard.regenerateHealth === "function") {
+                movementSectionStartMs = movementPerfNow();
                 wizard.regenerateHealth(1 / frameRate);
+                movementPerfRecord("movement.step.regenerateHealth", movementSectionStartMs);
             }
             // Re-read layer state after updateWizardFall so the landing frame
             // gets the correct cameraFollowZ (-3 for level -1) instead of the
             // pre-landing value that was captured before the fall settled.
+            movementSectionStartMs = movementPerfNow();
             const postFallLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : wizardLayerBaseZ;
             const cameraFollowZ = getWizardCameraFollowZ(wizard, postFallLayerBaseZ);
             viewport.prevZ = Number.isFinite(viewport.z) ? Number(viewport.z) : 0;
             viewport.z = cameraFollowZ;
+            movementPerfRecord("movement.step.cameraFollowZ", movementSectionStartMs);
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                movementSectionStartMs = movementPerfNow();
                 map.updatePrototypeSectionBubble(wizard);
+                movementPerfRecord("movement.step.updatePrototypeSectionBubble", movementSectionStartMs);
             }
             movementMs = performance.now() - movementStartMs;
+            if (movementPerfEnabled) globalThis.recordMovementPerfSection("movement.step.total", movementMs);
             const collisionStartMs = performance.now();
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);

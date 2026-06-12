@@ -1137,6 +1137,17 @@ class Wizard extends Character {
     }
 
     prepareVectorMovementContext(newX, newY, radius, options = {}) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfNow = () => movementPerfEnabled ? performance.now() : 0;
+        const movementPerfRecord = (name, startMs) => {
+            if (!movementPerfEnabled) return;
+            globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+        };
+        const movementTotalStartMs = movementPerfNow();
+        let movementSectionStartMs = movementTotalStartMs;
         const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
             ? Scripting
             : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
@@ -1182,6 +1193,7 @@ class Wizard extends Character {
                 ? Math.round(Number(node.traversalLayer))
                 : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0)
         );
+        movementSectionStartMs = movementPerfNow();
         if (searchNodes.length > 0) {
             const xIndices = searchNodes.map(node => Number(node.xindex));
             const yIndices = searchNodes.map(node => Number(node.yindex));
@@ -1241,6 +1253,7 @@ class Wizard extends Character {
                 }
             }
         }
+        movementPerfRecord("wizard.prepareContext.nodeScan", movementSectionStartMs);
 
         if (this.map && typeof this.map.collectPrototypeBuildingMovementBlockersInBounds === "function") {
             const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
@@ -1251,7 +1264,10 @@ class Wizard extends Character {
                 maxX: Math.max(currentX, newX) + padding,
                 maxY: Math.max(currentY, newY) + padding
             };
+            movementSectionStartMs = movementPerfNow();
             const prototypeBlockers = this.map.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, wizardLayer);
+            movementPerfRecord("wizard.prepareContext.buildingBlockerCollect", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
             for (let i = 0; i < prototypeBlockers.length; i++) {
                 const obj = prototypeBlockers[i];
                 if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
@@ -1259,6 +1275,7 @@ class Wizard extends Character {
                 nearbyObjectSet.add(obj);
                 nearbyObjects.push(obj);
             }
+            movementPerfRecord("wizard.prepareContext.buildingBlockerFilter", movementSectionStartMs);
         }
 
         if (this.map && typeof this.map.collectStairFootprintMovementBlockersInBounds === "function") {
@@ -1270,7 +1287,10 @@ class Wizard extends Character {
                 maxX: Math.max(currentX, newX) + padding,
                 maxY: Math.max(currentY, newY) + padding
             };
+            movementSectionStartMs = movementPerfNow();
             const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            movementPerfRecord("wizard.prepareContext.stairBlockerCollect", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
             for (let i = 0; i < stairBlockers.length; i++) {
                 const obj = stairBlockers[i];
                 if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
@@ -1278,8 +1298,10 @@ class Wizard extends Character {
                 nearbyObjectSet.add(obj);
                 nearbyObjects.push(obj);
             }
+            movementPerfRecord("wizard.prepareContext.stairBlockerFilter", movementSectionStartMs);
         }
 
+        movementPerfRecord("wizard.prepareContext.total", movementTotalStartMs);
         return {
             nearbyObjects,
             nearbyCharacters: options.includeCharacterBlockers === true

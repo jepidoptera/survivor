@@ -160,7 +160,7 @@
         {
           "type": "stairs",
           "id": 2,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-10",
           "startPoint": {
             "x": -10.745942831401749,
@@ -419,7 +419,7 @@
         {
           "type": "stairs",
           "id": 8,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-41",
           "startPoint": {
             "x": 2.2754588003127334,
@@ -637,7 +637,7 @@
         {
           "type": "stairs",
           "id": 9,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-49",
           "startPoint": {
             "x": 12.534977826640443,
@@ -855,7 +855,7 @@
         {
           "type": "stairs",
           "id": 10,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-59",
           "startPoint": {
             "x": 2.4203199612729684,
@@ -1073,7 +1073,7 @@
         {
           "type": "stairs",
           "id": 11,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-66",
           "startPoint": {
             "x": -8.379835852996287,
@@ -1291,7 +1291,7 @@
         {
           "type": "stairs",
           "id": 13,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-61",
           "startPoint": {
             "x": -6.332901419631701,
@@ -1672,7 +1672,7 @@
         {
           "type": "stairs",
           "id": 16,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-68",
           "startPoint": {
             "x": -1.0190099376011954,
@@ -1866,34 +1866,12 @@
         "gables": []
       },
       "roofs": [],
-      "columns": [
-        {
-          "type": "column",
-          "id": 1,
-          "floorId": "floor-fragment-30",
-          "wallId": null,
-          "heightMode": "fixed",
-          "position": {
-            "x": 0.9317403315109125,
-            "y": -10.959024208027582
-          },
-          "sideCount": 12,
-          "size": 1,
-          "width": 2,
-          "depth": 2,
-          "rotation": 0,
-          "height": 4,
-          "topHeights": null,
-          "bottomZ": 26,
-          "traversalLayer": 8,
-          "texturePath": "/assets/images/walls/stonewall.png"
-        }
-      ],
+      "columns": [],
       "stairs": [
         {
           "type": "stairs",
           "id": 17,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-30",
           "startPoint": {
             "x": 0.8933691442066534,

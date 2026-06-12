@@ -116,12 +116,31 @@ class Teleport extends globalThis.Spell {
         wizard.node = destinationNode || null;
         if (destinationNode && typeof wizard.syncTraversalLayerFromNode === "function") {
             wizard.syncTraversalLayerFromNode(destinationNode);
+        } else if (wizard.map && typeof wizard.map.setActorCurrentMovementSupport === "function" && destinationFragmentId && wizard.map.floorsById instanceof Map) {
+            const destinationFragment = wizard.map.floorsById.get(destinationFragmentId) || null;
+            if (!destinationFragment) {
+                throw new Error(`teleport destination references missing floor fragment ${destinationFragmentId}`);
+            }
+            wizard.map.setActorCurrentMovementSupport(wizard, {
+                type: "floor",
+                layer: destinationLayer,
+                baseZ: destinationBaseZ,
+                fragment: destinationFragment,
+                fragmentId: destinationFragmentId,
+                surfaceId: destinationSurfaceId,
+                node: destinationNode || null
+            }, {
+                suppressLayerTransition: true
+            });
         } else {
             wizard.currentLayer = destinationLayer;
             wizard.traversalLayer = destinationLayer;
             wizard.currentLayerBaseZ = destinationBaseZ;
             if (destinationSurfaceId) wizard.surfaceId = destinationSurfaceId;
             if (destinationFragmentId) wizard.fragmentId = destinationFragmentId;
+            wizard.currentMovementSupport = destinationLayer === 0
+                ? { type: "ground", layer: 0, baseZ: 0 }
+                : null;
         }
         wizard.z = 0;
         wizard._floorFallState = null;

@@ -263,6 +263,82 @@ function toFinitePerfNumber(value, fallback = 0) {
     return Number.isFinite(n) ? n : fallback;
 }
 
+function createMovementPerfBreakdownState() {
+    return {
+        enabled: false,
+        startedAtMs: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : 0,
+        sections: new Map()
+    };
+}
+
+let movementPerfBreakdownState = createMovementPerfBreakdownState();
+
+function resetMovementPerfBreakdown() {
+    const wasEnabled = !!(movementPerfBreakdownState && movementPerfBreakdownState.enabled);
+    movementPerfBreakdownState = createMovementPerfBreakdownState();
+    movementPerfBreakdownState.enabled = wasEnabled;
+    if (typeof globalThis !== "undefined") globalThis.movementPerfBreakdownState = movementPerfBreakdownState;
+    return movementPerfBreakdownState;
+}
+
+function setMovementPerfBreakdownEnabled(enabled = true) {
+    movementPerfBreakdownState.enabled = enabled === true;
+    return movementPerfBreakdownState.enabled;
+}
+
+function recordMovementPerfSection(name, elapsedMs) {
+    if (!movementPerfBreakdownState || movementPerfBreakdownState.enabled !== true) return;
+    if (typeof name !== "string" || name.length === 0) return;
+    const ms = Number(elapsedMs);
+    if (!Number.isFinite(ms) || ms < 0) return;
+    let section = movementPerfBreakdownState.sections.get(name);
+    if (!section) {
+        section = { calls: 0, totalMs: 0, maxMs: 0 };
+        movementPerfBreakdownState.sections.set(name, section);
+    }
+    section.calls += 1;
+    section.totalMs += ms;
+    section.maxMs = Math.max(section.maxMs, ms);
+}
+
+function getMovementPerfBreakdownRows() {
+    const rows = [];
+    const sections = movementPerfBreakdownState && movementPerfBreakdownState.sections instanceof Map
+        ? movementPerfBreakdownState.sections
+        : new Map();
+    for (const [name, section] of sections.entries()) {
+        const calls = Number(section.calls) || 0;
+        const totalMs = Number(section.totalMs) || 0;
+        rows.push({
+            section: name,
+            calls,
+            totalMs: Number(totalMs.toFixed(3)),
+            avgMs: Number((calls > 0 ? totalMs / calls : 0).toFixed(4)),
+            maxMs: Number((Number(section.maxMs) || 0).toFixed(3))
+        });
+    }
+    rows.sort((a, b) => b.totalMs - a.totalMs);
+    return rows;
+}
+
+function printMovementPerfBreakdown(options = {}) {
+    const rows = getMovementPerfBreakdownRows();
+    console.table(rows);
+    if (options && options.resetAfter === true) resetMovementPerfBreakdown();
+    return rows;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.movementPerfBreakdownState = movementPerfBreakdownState;
+    globalThis.setMovementPerfBreakdownEnabled = setMovementPerfBreakdownEnabled;
+    globalThis.resetMovementPerfBreakdown = resetMovementPerfBreakdown;
+    globalThis.recordMovementPerfSection = recordMovementPerfSection;
+    globalThis.getMovementPerfBreakdownRows = getMovementPerfBreakdownRows;
+    globalThis.printMovementPerfBreakdown = printMovementPerfBreakdown;
+}
+
 function getPerfInstrumentationHelpText() {
     return PERF_INSTRUMENTATION_HELP_LINES.join("\n");
 }

@@ -272,6 +272,30 @@ class Character {
         if (node && typeof node.fragmentId === "string") {
             this.fragmentId = node.fragmentId;
         }
+        if (this.map && typeof this.map.setActorCurrentMovementSupport === "function") {
+            if (layer === 0 && !(node && typeof node.fragmentId === "string" && node.fragmentId.length > 0)) {
+                this.map.setActorCurrentMovementSupport(this, { type: "ground", layer: 0, baseZ: 0, node }, {
+                    suppressLayerTransition: true
+                });
+            } else {
+                const fragment = node && typeof node.fragmentId === "string" && this.map.floorsById instanceof Map
+                    ? this.map.floorsById.get(node.fragmentId) || null
+                    : null;
+                if (fragment) {
+                    this.map.setActorCurrentMovementSupport(this, {
+                        type: "floor",
+                        layer,
+                        baseZ: this.currentLayerBaseZ,
+                        fragment,
+                        fragmentId: node.fragmentId,
+                        surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+                        node
+                    }, {
+                        suppressLayerTransition: true
+                    });
+                }
+            }
+        }
         return layer;
     }
 
@@ -1101,60 +1125,72 @@ class Character {
     }
 
     _getFloorFragmentBoundaryPush(cx, cy, radius) {
-        if (this.getCurrentMovementLayer() === 0) return null;
-        if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
-        if (!this.map || !(this.map.floorsById instanceof Map)) return null;
-        const resolvedRadius = Math.max(0, Number(radius) || 0);
-        if (!(resolvedRadius > 0)) return null;
-        const layer = this.getCurrentMovementLayer();
-        for (const fragment of this.map.floorsById.values()) {
-            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
-            if (fragmentLayer !== layer) continue;
-            const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
-            if (!poly || poly.length < 3) continue;
-            let nearestDistSq = Infinity;
-            let nearestCloseX = cx;
-            let nearestCloseY = cy;
-            for (let i = 0; i < poly.length; i++) {
-                const a = poly[i];
-                const b = poly[(i + 1) % poly.length];
-                const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
-                if (!Number.isFinite(ax + ay + bx + by)) continue;
-                const abx = bx - ax, aby = by - ay;
-                const lenSq = abx * abx + aby * aby;
-                const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
-                const closeX = ax + abx * t;
-                const closeY = ay + aby * t;
-                const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
-                if (dSq < nearestDistSq) {
-                    nearestDistSq = dSq;
-                    nearestCloseX = closeX;
-                    nearestCloseY = closeY;
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfStartMs = movementPerfEnabled ? performance.now() : 0;
+        try {
+            if (this.getCurrentMovementLayer() === 0) return null;
+            if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
+            if (!this.map || !(this.map.floorsById instanceof Map)) return null;
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            if (!(resolvedRadius > 0)) return null;
+            const layer = this.getCurrentMovementLayer();
+            const fragments = typeof this.map.getFloorFragmentsForLayer === "function"
+                ? this.map.getFloorFragmentsForLayer(layer)
+                : Array.from(this.map.floorsById.values());
+            for (const fragment of fragments) {
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== layer) continue;
+                const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+                if (!poly || poly.length < 3) continue;
+                let nearestDistSq = Infinity;
+                let nearestCloseX = cx;
+                let nearestCloseY = cy;
+                for (let i = 0; i < poly.length; i++) {
+                    const a = poly[i];
+                    const b = poly[(i + 1) % poly.length];
+                    const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
+                    if (!Number.isFinite(ax + ay + bx + by)) continue;
+                    const abx = bx - ax, aby = by - ay;
+                    const lenSq = abx * abx + aby * aby;
+                    const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
+                    const closeX = ax + abx * t;
+                    const closeY = ay + aby * t;
+                    const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
+                    if (dSq < nearestDistSq) {
+                        nearestDistSq = dSq;
+                        nearestCloseX = closeX;
+                        nearestCloseY = closeY;
+                    }
+                }
+                const dist = Math.sqrt(nearestDistSq);
+                if (!(dist > 1e-6)) continue;
+                const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
+                    ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
+                    : true;
+                if (isInside) {
+                    // Normal: circle overlaps boundary from inside — push center away from edge.
+                    const overlap = resolvedRadius - dist;
+                    if (!(overlap > 1e-6)) continue;
+                    return {
+                        pushX: (cx - nearestCloseX) / dist * overlap,
+                        pushY: (cy - nearestCloseY) / dist * overlap
+                    };
+                } else {
+                    // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
+                    const pullMagnitude = dist + resolvedRadius;
+                    return {
+                        pushX: (nearestCloseX - cx) / dist * pullMagnitude,
+                        pushY: (nearestCloseY - cy) / dist * pullMagnitude
+                    };
                 }
             }
-            const dist = Math.sqrt(nearestDistSq);
-            if (!(dist > 1e-6)) continue;
-            const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
-                ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
-                : true;
-            if (isInside) {
-                // Normal: circle overlaps boundary from inside — push center away from edge.
-                const overlap = resolvedRadius - dist;
-                if (!(overlap > 1e-6)) continue;
-                return {
-                    pushX: (cx - nearestCloseX) / dist * overlap,
-                    pushY: (cy - nearestCloseY) / dist * overlap
-                };
-            } else {
-                // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
-                const pullMagnitude = dist + resolvedRadius;
-                return {
-                    pushX: (nearestCloseX - cx) / dist * pullMagnitude,
-                    pushY: (nearestCloseY - cy) / dist * pullMagnitude
-                };
-            }
+            return null;
+        } finally {
+            if (movementPerfEnabled) globalThis.recordMovementPerfSection("character.floorBoundaryPush", performance.now() - movementPerfStartMs);
         }
-        return null;
     }
 
     _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
@@ -1536,6 +1572,18 @@ class Character {
         }
         if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
             const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
+            const movementSupportCache = options &&
+                options._movementSupportCache &&
+                options._movementSupportCache.actor === this
+                ? options._movementSupportCache
+                : null;
+            if (movementSupportCache) {
+                movementSupportCache.lastCheckedOccupancy = {
+                    x: Number(targetX),
+                    y: Number(targetY),
+                    result: stairOccupancy || null
+                };
+            }
             if (stairOccupancy && stairOccupancy.handled === true) {
                 if (stairOccupancy.allowed === true) {
                     this._pendingVectorMovementSupport = stairOccupancy.support || null;
@@ -1604,11 +1652,33 @@ class Character {
     }
 
     moveDirection(vector, options = {}) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfNow = () => (
+            movementPerfEnabled &&
+            typeof performance !== "undefined" &&
+            performance &&
+            typeof performance.now === "function"
+        ) ? performance.now() : 0;
+        const movementPerfRecord = (name, startMs) => {
+            if (!movementPerfEnabled) return;
+            globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+        };
+        const movementTotalStartMs = movementPerfNow();
+        let movementSectionStartMs = movementTotalStartMs;
         if (this.isFrozen()) {
             this.applyFrozenState({ clearMoveTimeout: false });
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
             return false;
         }
         const lockMovementVector = !!options.lockMovementVector;
+        options._movementSupportCache = {
+            actor: this,
+            floorSupportByKey: new Map(),
+            stairOccupancyByKey: new Map()
+        };
         const maxSpeed = this.getVectorMovementMaxSpeed(options);
         this.currentMaxSpeed = maxSpeed;
         this.isMovingBackward = !!options.animateBackward;
@@ -1673,8 +1743,11 @@ class Character {
 
         if (Math.hypot(this.movementVector.x, this.movementVector.y) < 0.001) {
             this.moving = false;
+            movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
             return false;
         }
+        movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
 
         this.moving = true;
         this.prevX = this.x;
@@ -1685,8 +1758,30 @@ class Character {
         const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
         const movementRadius = this.getVectorMovementCollisionRadius(options);
 
+        if (
+            options._movementSupportCache &&
+            options._movementSupportCache.actor === this &&
+            this.map &&
+            typeof this.map.getActorFloorSupportForStairEntry === "function"
+        ) {
+            const layer = this.getCurrentMovementLayer(options);
+            const knownSupport = typeof this.map.getActorKnownFloorSupport === "function"
+                ? this.map.getActorKnownFloorSupport(this, layer, options)
+                : null;
+            options._movementSupportCache.currentFloorSupport = knownSupport || this.map.getActorFloorSupportForStairEntry(
+                    this,
+                    newX,
+                    newY,
+                    layer,
+                    options
+                );
+            options._movementSupportCache.currentFloorSupportLayer = layer;
+        }
+
         if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            movementSectionStartMs = movementPerfNow();
             const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+            movementPerfRecord("character.moveDirection.stairOccupancy", movementSectionStartMs);
             if (stairOccupancy && stairOccupancy.handled === true) {
                 if (stairOccupancy.allowed === true) {
                     this._pendingVectorMovementSupport = stairOccupancy.support || null;
@@ -1696,11 +1791,15 @@ class Character {
                         Number.isFinite(Number(stairOccupancy.support.point.y))
                         ? stairOccupancy.support.point
                         : null;
-                    return this._applyVectorMovementPosition(
+                    movementSectionStartMs = movementPerfNow();
+                    const applied = this._applyVectorMovementPosition(
                         supportPoint ? Number(supportPoint.x) : newX,
                         supportPoint ? Number(supportPoint.y) : newY,
                         options
                     );
+                    movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+                    movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                    return applied;
                 }
                 if (stairOccupancy.slideAlongStairFootprint !== true) {
                     if (this.movementVector && typeof this.movementVector === "object") {
@@ -1708,19 +1807,35 @@ class Character {
                         this.movementVector.y = 0;
                     }
                     this.moving = false;
+                    movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
                     return false;
                 }
             }
         }
 
+        movementSectionStartMs = movementPerfNow();
         const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
+        movementPerfRecord("character.moveDirection.prepareContext", movementSectionStartMs);
 
+        movementSectionStartMs = movementPerfNow();
         if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {
-            return this._applyVectorMovementPosition(newX, newY, options, movementContext);
+            movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
+            const applied = this._applyVectorMovementPosition(newX, newY, options, movementContext);
+            movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+            return applied;
         }
+        movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
 
+        movementSectionStartMs = movementPerfNow();
         const resolved = this._resolveHitboxMovementConstraints(newX, newY, movementRadius, movementContext, options);
-        return this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+        movementPerfRecord("character.moveDirection.resolveHitbox", movementSectionStartMs);
+        movementSectionStartMs = movementPerfNow();
+        const applied = this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+        return applied;
     }
 
     getTargetMovementVelocity(target) {
