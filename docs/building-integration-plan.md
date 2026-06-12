@@ -1,287 +1,317 @@
-# Saved Building Integration Plan
+# Building World Unit Integration Plan
 
 ## Goal
 
-Move saved Building Editor files into the main game as first-class streamed world assets.
+Make placed buildings first-class world units, parallel to outdoor map sections.
 
-A building exists in global world space. Its footprint is the union of all authored floor polygons projected onto `z = 0`. A building can overlap one or more map sections. When any overlapped section becomes loaded or desired-active, the building must enter the same background load pipeline as sections, walls, objects, floors, and entities.
+A placed building is not data inside an outdoor section. A placed building is its own section-like save unit with its own identity, savefile, dirty state, structural model, interior contents, NPCs, triggers, and runtime load state. Outdoor sections only contain lightweight references that say, "this section overlaps this building, so loading this section also requires at least the building exterior shell."
 
-From outside, a loaded building should render as one depth-tested bitmap/composite: screen pixels plus depth information presented as a single exterior draw. The player can walk in front of it and behind it, and the existing building fade/cutaway behavior should continue to drive visibility. From inside, the current interior floor presentation is already good and should remain the baseline. Later, each floor may also get a one-piece depth-tested screen buffer for faster interior rendering.
+This solves two related problems:
 
-## Non-Goals
+- A building can overlap many outdoor sections without duplicating its data into each section.
+- Moving inside a building should not shift outdoor section bubbles or impose loading penalties when crossing invisible outdoor section boundaries.
 
-- Do not preserve the old straight-stair concept.
-- Do not add silent rendering, loading, save/load, or cache fallbacks for impossible states.
-- Do not functionally replace the existing building fade/cutaway behavior unless the building import requires a narrow adapter.
-- Do not begin with per-floor interior compositing. That is an optimization after correctness is established.
+## Core Concepts
 
-## Current State
+### World Units
 
-Building Editor saves live under `public/assets/saves/building-editor` and use `schema: "survivor-building-v1"`. They already contain:
+The streamed world is made of independently saved world units:
 
-- `floorFragments`
-- `wallSections`
-- `mountedWallObjects`
-- per-floor roofs
-- floor elevations via `nodeBaseZ` / `nodeBaseZOffset`
-- stair tread geometry
+```text
+section:<sectionKey>
+building:<buildingInstanceId>
+```
 
-The main game already has:
+Outdoor sections are still generated and streamed by section bubble. Buildings are discovered through section refs, but once loaded they are their own world unit.
 
-- polygon floor fragments and floor nodes
-- `surfaceId` / `fragmentId` floor identity
-- section-owned floor registration and unregistering
-- inferred floor-building groups used by cutaway and fade rendering
-- depth-tested wall, roof, floor, and billboard render paths
-- building cutaway composite render textures
-- Building Editor playtest floor snapshots that follow the desired fade pattern
-- a shared `StairTraversal` runtime that already supports tread-path stairs
+### Building Instance Save
 
-The biggest gap is not raw rendering capability. The gap is ownership and streaming: saved buildings are not yet placed, indexed, loaded, converted, invalidated, and unloaded as first-class world assets.
+When a building is placed, the game creates a building instance from a copied Building Editor save. The editor save is a template. The placed building owns its copy from that point forward.
 
-## Target Building Model
+Use the existing building save format as the base structural format. The work here is not to invent a separate building-file layout, but to extend the saved building instance with world-instance metadata and building-owned contents such as objects, NPCs, and triggers.
 
-Use a placement manifest separate from section files:
+Example additions to the existing building save shape:
 
 ```js
 {
-  id: "building:house-a",
-  buildingSaveName: "the house",
-  transform: {
-    x: 120.5,
-    y: -44.0,
-    rotation: 0
-  },
+  schema: "survivor-building-v1",
+  id: "building:placed-12",
+  name: "the tower instance",
+  sourceBuildingSaveName: "the tower",
+  transform: { x: 120.5, y: -44.0, rotation: 0 },
+  floorFragments: [],
+  wallSections: [],
+  mountedWallObjects: [],
   footprintPolygons: [],
-  overlappedSectionKeys: [],
+  movementBlockerPolygons: [],
+  touchedSectionKeys: ["0,0", "0,1"],
+  objects: [],
+  animals: [],
+  triggers: [],
   loadState: "unloaded"
 }
 ```
 
-The placement record references the editor save. The imported runtime asset is derived data and can be regenerated.
+The saved building file is the instance-owned structural copy plus its building-owned world contents. Later edits to the original editor template must not rewrite already placed buildings.
 
-Persist placed buildings in the section-world save slot, probably as `public/assets/saves/{slot}/buildings.json` or as a `buildings` field in the slot bundle response. Avoid copying a full building save into every section it overlaps.
+Preview and live runtime data must stay separate:
 
-## Building As Virtual Section
+- Placement previews load from the Building Editor template save by name.
+- Live placed-building rendering, collision, support fragments, objects, NPCs, and triggers load from the specific building instance saved to the current game.
+- Runtime caches should reflect that split. Template-preview caches may be keyed by save name; live building caches must be keyed by building instance id and content version.
 
-A building should behave like a virtual section for loading and ownership, but it should not need to masquerade as a real axial section.
+### Outdoor Section Building Refs
 
-Use stable virtual keys:
-
-```js
-building:<placementId>
-```
-
-Runtime floor fragments, walls, mounted objects, roofs, stairs, and caches should carry enough building identity to remove them by building id without geometric guessing.
-
-Example imported floor identity:
+Each outdoor section touched by a building stores only a lightweight reference:
 
 ```js
 {
-  fragmentId: "building:house-a:floor-fragment-10",
-  surfaceId: "building:house-a:floor-fragment-10",
-  ownerSectionKey: "building:house-a",
-  buildingId: "building:house-a",
-  level: 0,
-  nodeBaseZ: 0,
-  outerPolygon: [...]
+  buildingRefs: [
+    {
+      id: "building:placed-12",
+      shell: true
+    }
+  ]
 }
 ```
 
-`ownerSectionKey` can be a virtual key for runtime bookkeeping. Section overlap remains a separate index.
+The section does not own the building contents, structural model, NPCs, or interior objects. It only provides discovery for exterior shell loading.
 
-## Section Overlap Index
+## Streaming Scope vs Ownership
 
-At map-slot load time:
+Keep these two systems separate.
 
-1. Load building placements.
-2. Load or inspect each referenced building save enough to compute its transformed footprint.
-3. Compute all section keys overlapped by that footprint.
-4. Build:
+### Streaming Scope
+
+Streaming scope controls what is currently loaded and simulated.
+
+Outdoor scope:
+
+- The section bubble follows the wizard.
+- Outdoor sections around the wizard are active.
+- Exterior shells for referenced buildings are loaded.
+
+Building scope:
+
+- The active context is one building instance.
+- The full building interior is loaded.
+- Outdoor section bubble shifting is suspended for indoor movement.
+- The building may still keep nearby outdoor shell/context cached for exits, windows, falling, or rendering.
+
+The wizard may switch scope by walking through a passable opening, jumping from a balcony, falling through a hole, teleporting, or by any other support-fragment transition. Doors are not special streaming/scope authorities; they are passable wall geometry. A wall hole and a door opening should resolve through the same support-fragment transition rules.
+
+### Ownership And Dirty Tracking
+
+Ownership controls where data is saved. It must not depend on the current streaming scope.
+
+Use a dirty registry like:
 
 ```js
-map._prototypeBuildingState = {
-  placementsById: Map,
-  buildingIdsBySectionKey: Map,
-  loadedBuildingsById: Map,
-  desiredBuildingIds: Set,
-  pendingLoadsById: Map
+dirtyWorldUnits = {
+  sections: Set<sectionKey>,
+  buildings: Set<buildingInstanceId>
+};
+```
+
+If the player modifies a building, leaves it, walks outdoors, and saves later, the building instance must still be written. Dirty units stay dirty until saved.
+
+Mutation ownership examples:
+
+- Outdoor terrain/tree/road/free object: owning outdoor section dirty.
+- Building structure/interior object/building NPC: owning building dirty.
+- Object moved from outdoor into building: remove from section, add to building, mark both dirty.
+- Object moved from building to outdoor: remove from building, add to section, mark both dirty.
+- Thrown object leaving a balcony: transfer ownership when support changes.
+
+## Support Fragments
+
+Floor fragments are the bridge between movement, streaming transitions, and persistence ownership.
+
+Every actor/object that needs support tracking has an assigned support fragment:
+
+```js
+{
+  id: "building:placed-12:floor:balcony",
+  ownerType: "building",
+  ownerId: "building:placed-12",
+  z: 6,
+  polygon: []
 }
 ```
 
-When active or pending-active section keys change, desired buildings are:
+Outdoor ground is also a support fragment:
 
 ```js
-union(buildingIdsBySectionKey.get(sectionKey) for each desired sectionKey)
+{
+  id: "section:0,0:ground",
+  ownerType: "section",
+  ownerId: "0,0",
+  z: 0,
+  polygon: []
+}
 ```
 
-If any overlapped section is desired-active, the building is desired-loaded.
+This lets a building contain many fragments with different textures and roles: living room, balcony, roof walk, stair landing, basement floor, etc. Walking from the living room onto the balcony can change support fragment without leaving the building world unit.
 
-## Load Queue Integration
+## Support Validation Rule
 
-Building sync should plug into the existing prototype async session rather than creating a separate scheduler.
+When support validation is required:
 
-The desired ordering is:
+1. If the object footprint still intersects its assigned support fragment, keep it.
+2. Otherwise, starting from the object's current `z`, search downward for the highest support fragment below that intersects the object's footprint.
+3. Include outdoor ground level `z = 0` as a support fragment.
+4. If a fragment is found, assign it.
+5. If the owning world unit changed, transfer persistence ownership and update dirty sets.
+6. If no fragment is found, the object falls into the void and is lost.
 
-1. Layout/materialize section nodes.
-2. Building plan: compute desired building ids from active/pending-active section keys.
-3. Building load/unload tasks.
-4. Wall sync.
-5. Object sync.
-6. Animal/powerup sync.
-7. Floor object indexes and render-cache invalidation.
+There is always a valid outdoor world position in normal play because the outdoor world is continuous and section generation can create missing sections. The exception is deliberately unsupported space, such as a cut hole with nothing below; that is a void/pit and should be allowed to kill or remove the falling thing.
 
-Building load tasks:
+## Support Validation Frequency
 
-- fetch editor save if needed
-- normalize and validate building payload
-- apply placement transform
-- compute footprint and overlap
-- register floor fragments
-- materialize floor nodes
-- instantiate or register wall records
-- instantiate mounted wall objects
-- instantiate roofs
-- register stair runtime records
-- mark building render caches dirty
-- mark exterior composite dirty
+Do not bounds-check every object and NPC every frame.
 
-Building unload tasks:
+Recommended triggers:
 
-- hide/destroy exterior composite
-- unregister stair runtime records
-- remove mounted objects
-- remove roofs
-- remove walls and blocked edges
-- unregister floor nodes/fragments
-- clear building render cache
-- remove loaded-building runtime record
+- Wizard: check during movement, jumping, falling, and other continuous motion because support changes can switch streaming scope.
+- NPCs: normal node/path movement should already know where it is going; validate when displaced outside planned movement, such as knockback, throwing, pushing, scripted teleport, or broken floor underneath.
+- Static objects: validate only when placed, moved, picked up, dropped, thrown, or when their support fragment changes/removes.
+- Physics objects: validate while airborne or moving; stop once settled.
+- Building edits: when a floor fragment is changed or removed, revalidate occupants that were assigned to affected fragments.
 
-Every unload operation should target records by `buildingId` or virtual owner key. Do not find things by scanning approximate positions.
+## Building Load States
+
+Use explicit load states:
+
+```text
+unloaded
+shell
+interior
+```
+
+`shell` includes enough data for outdoor play:
+
+- exterior composite/render proxy
+- footprint
+- outdoor collision/blockers
+- roof/cutaway metadata needed by exterior rendering
+- passable wall/opening geometry needed to decide whether movement can cross the shell
+
+`interior` includes:
+
+- full building structural model
+- all support fragments
+- interior objects
+- NPCs
+- triggers
+- stairs and traversal data
+- per-floor rendering/cutaway data
+
+Loading an outdoor section should require shell load for referenced buildings. Entering or actively simulating a building promotes it to interior.
+
+## Runtime Data Flow
+
+### Placement
+
+1. Player selects a Building Editor save.
+2. Game loads and validates the editor save.
+3. Game creates a new building instance id.
+4. Game deep-copies the editor save into the building instance.
+5. Game computes transformed footprint, blockers, touched section keys, and shell metadata.
+6. Game writes/marks dirty the new building instance.
+7. Game adds lightweight building refs to every touched outdoor section and marks those sections dirty.
+
+### Outdoor Streaming
+
+1. Active outdoor section set changes.
+2. Gather `buildingRefs` from active/desired sections.
+3. Ensure each referenced building shell is loaded.
+4. Render shell/exterior; do not hydrate full interior unless required.
+
+### Building Entry
+
+1. Wizard movement crosses passable geometry and support changes to a building-owned fragment.
+2. Promote that building to `interior`.
+3. Switch wizard streaming scope to `building:<id>`.
+4. Suspend outdoor bubble shifting caused by indoor movement.
+
+### Building Exit
+
+1. Wizard support validation finds an outdoor support fragment, or another non-building owner.
+2. Transfer wizard scope to outdoor.
+3. Resume section bubble streaming from the wizard's world position.
+4. Keep dirty building state dirty until save.
 
 ## Import Converter
 
-Add a converter that turns an editor building save plus placement transform into a main-game runtime building asset.
+The converter turns a building instance's `buildingData` plus placement transform into runtime records.
 
 Responsibilities:
 
-- validate `schema === "survivor-building-v1"`
-- normalize legacy editor shape through the existing editor model where possible
-- transform all points from local building space into global world space
-- prefix all IDs with the placement id
-- preserve floor `level`, `nodeBaseZ`, `holes`, texture paths, and roof metadata
-- convert editor walls into main-game wall records or direct `WallSectionUnit` inputs
-- convert mounted wall objects and remap their wall references to prefixed wall ids
-- convert roofs with prefixed floor/building references
-- compute the footprint union from all floor outer polygons projected to ground
-- compute overlapped section keys from the footprint
-- build one canonical stair model for every stair
+- Validate `schema === "survivor-building-v1"`.
+- Normalize legacy editor shape through existing editor model helpers where possible.
+- Transform all local building points into global world space.
+- Prefix runtime ids with the building instance id.
+- Preserve floor `level`, `nodeBaseZ`, holes, texture paths, roof metadata, and material data.
+- Convert floors into support fragments owned by the building instance.
+- Convert walls into runtime wall/blocker/render records.
+- Convert mounted wall objects and remap wall references to prefixed wall ids.
+- Convert roofs with prefixed floor/building references.
+- Build stair traversal records from tread-path data.
+- Compute footprint and touched outdoor section keys.
+- Treat doors and wall holes as passable geometry, not separate transition records.
 
 Hard failures:
 
-- missing referenced floor
-- missing referenced wall
-- invalid floor polygon
-- invalid stair treads
-- footprint union failure
-- missing texture/composite resource when rendering requires it
+- Missing referenced floor.
+- Missing referenced wall.
+- Invalid floor polygon.
+- Invalid support fragment.
+- Invalid stair treads.
+- Footprint/touched-section computation failure.
+- Missing texture/composite resource when rendering requires it.
 
-## Unified Stair Model
+Per project convention, avoid silent fallback behavior on correctness-critical rendering, loading, cache, build, save, and geometry paths.
 
-Remove the concept of straight stairs from runtime design. There should be one general-purpose stair class/model based on tread paths.
+## Rendering
 
-A straight stair is represented by straight tread geometry. It does not need a separate type.
+### Exterior Shell
 
-Canonical stair shape:
-
-```js
-{
-  type: "stairs",
-  id: "building:house-a:stair-2",
-  lowerFloorId: "building:house-a:floor-fragment-10",
-  higherFloorId: "building:house-a:floor-fragment-41",
-  lowerZ: 0,
-  higherZ: 5,
-  treads: [
-    { left: { x, y }, right: { x, y }, center: { x, y } },
-    { left: { x, y }, right: { x, y }, center: { x, y }, arcDeltaAngle, arcNearDeltaAngle }
-  ],
-  width: 2.2,
-  stepCount: 20,
-  footprint: [...]
-}
-```
-
-`type: "stairs"` should be sufficient once migration is complete. If a transitional discriminator is needed during implementation, use it internally and remove it when the old straight path is gone.
-
-Runtime traversal should use `StairTraversal.createTreadPathFrame` and related path APIs:
-
-- `localPointForPathFrame`
-- `localInsidePathFrame`
-- `supportFromPathLocal`
-- `movePathLocal`
-- `pointFromPathLocal`
-- `exitPointFromPathLocal`
-- `pathPolygonForUpDownRange`
-- `endpointLineCrossed`
-
-The old straight-specific runtime helpers should be collapsed into general stair helpers.
-
-## Exterior Rendering
-
-Outside view target:
-
-- Build or update a per-building exterior composite render texture.
-- Render all exterior structural pieces into it with depth testing.
-- Present the composite as one depth-tested billboard/proxy in the main world render.
-- Hide or suppress the original live structural pieces when the exterior composite is valid and active.
+From outside, a loaded building shell should render as a depth-tested exterior composite/proxy when available.
 
 The exterior composite key should include:
 
-- building id
-- placement transform
+- building instance id
 - building content version
+- placement transform
 - loaded texture readiness version
 - camera rotation/pitch assumptions
 - render scale/resolution assumptions
 
-Because the camera perspective is fixed in normal play, this should be stable most of the time. If camera rotation or pitch becomes variable, either regenerate explicitly or fail loudly if the cache is being used under incompatible camera state.
+If exterior composite presentation is required, a missing or incompatible composite texture is an error. Do not quietly fall back to drawing every structural piece live in the exterior path.
 
-Required invariant:
+### Interior
 
-```text
-If exterior composite presentation is required, missing composite texture is an error.
-```
+The game already has per-floor prototype building interior bitmaps/composites through the `interiorBitmapsByKey` cache and `requestPrototypeBuildingInteriorBitmap` path. The building-world-unit work should preserve that path and retarget its ownership/cache keys from placement/save-name assumptions toward building instance ids.
 
-Do not quietly fall back to drawing every wall live in the exterior path. That would hide the performance bug and make rendering mysteries harder to diagnose.
+Invalidate only the affected floor when possible:
 
-## Interior Rendering
+- object on that floor created/destroyed
+- object render shape/texture changes
+- wall/opening/floor/roof on that floor changes
+- mounted object on that floor changes
 
-Initial integration should keep current live interior rendering.
+Required adaptation:
 
-Later optimization:
+- Interior bitmap keys must include the building instance id and source floor id.
+- Interior bitmap signatures must include building instance content version, not just template save data.
+- A modified building instance must invalidate its own affected floor composites even after the wizard leaves the building.
+- Missing or failed interior bitmap generation should remain a hard diagnostic, not a silent live-render fallback.
 
-```js
-regenerateBuildingFloorComposite(buildingId, floorId, reason)
-```
-
-Each interior floor can have its own depth-tested screen buffer. It should include architectural/static floor content for that floor, while dynamic actors, projectiles, previews, and UI remain live.
-
-Invalidate a floor composite when:
-
-- an object on that floor is created
-- an object on that floor is destroyed
-- an object on that floor changes render shape or texture
-- a wall/opening/floor/roof on that floor changes
-- a mounted object on that floor changes
-
-Do not invalidate every floor unless the mutation genuinely crosses floors.
-
-## Fade And Cutaway Behavior
+### Fade And Cutaway
 
 Keep the existing building fade/cutaway behavior as the functional model.
 
-The important rule for screen-space replacement fades remains:
+For screen-space replacement fades:
 
 1. Capture the outgoing layer/scene into a render texture.
 2. Hide or suppress the outgoing live layer.
@@ -292,94 +322,107 @@ Do not render two partial-alpha copies of the same scene over each other.
 
 For map-space/camera-following fades, fading geometry should remain live in world space so it stays stationary relative to the map.
 
-## Milestones
+## Implementation Milestones
 
-### 1. Unify Stairs
+### 1. Save Format And Registry
 
-- Replace main-game straight-stair runtime paths with one tread-path stair runtime.
-- Migrate any old straight stair definitions by generating two straight tread lines.
-- Update movement support, endpoint crossing, rendering, and tests to use path stairs.
-- Keep failure messages specific for invalid stairs.
+- Extend the existing building save format with placed-instance metadata and building-owned objects/NPCs/triggers.
+- Add building-instance save/load integration parallel to section files.
+- Add dirty world-unit registry for sections and buildings.
+- Add backward-compatible migration from old top-level `prototypeSectionWorld.buildings` records.
 
-### 2. Building Placement Manifest
+### 2. Section Refs
 
-- Add save/load support for placed building records.
-- Add a section-overlap index.
-- Add tests for a building that overlaps one section and multiple sections.
+- Change outdoor sections so they store only lightweight `buildingRefs`.
+- Build an index from section key to building ids.
+- Ensure saving an outdoor section never duplicates full building data.
 
-### 3. Building Import Converter
+### 3. Building Placement
 
-- Convert one saved editor building into transformed runtime floors, walls, mounted objects, roofs, and stairs.
-- Prefix all ids.
-- Register/unregister by building id.
-- Verify no cross-building id collision.
+- On placement, deep-copy the editor save into a new building instance.
+- Compute touched outdoor sections.
+- Add refs to touched sections.
+- Mark building and touched sections dirty.
 
-### 4. Async Building Streaming
+### 4. Shell Loading
 
-- Add building desired-set planning to the section-world async queue.
-- Load a building when any overlapped section becomes desired-active.
-- Unload when no overlapped section remains desired-active.
-- Verify load/unload ordering with walls, objects, and floor nodes.
+- Active outdoor section set gathers building refs.
+- Load/unload building shells independently from full interiors.
+- Keep shell rendering/collision available whenever any touched active section requires it.
 
-### 5. Live Render Integration
+### 5. Interior Scope
 
-- Render imported buildings using existing live wall/roof/floor/interior paths.
-- Confirm current fade/cutaway behavior works for imported buildings.
-- Keep this milestone correctness-first, even if exterior draw call count is still high.
+- Add current world scope:
 
-### 6. Exterior Composite
+```js
+{ type: "sectionWorld" }
+{ type: "building", id: "building:placed-12" }
+```
 
-- Add per-building exterior depth-tested render texture.
-- Present it as one world depth billboard/proxy.
-- Suppress original exterior live structure while the composite is active.
-- Add hard diagnostics for missing/incompatible composites.
+- Promote building to interior on entry.
+- Suspend outdoor bubble shifting while the wizard remains building-supported.
+- Resume outdoor scope when support changes to outdoor ground or another section-owned fragment.
 
-### 7. Interior Floor Composites
+### 6. Support Fragment Ownership
 
-- Add `regenerateBuildingFloorComposite(buildingId, floorId, reason)`.
-- Invalidate narrowly on floor-local mutations.
-- Keep dynamic actors and interactions live.
+- Give every relevant floor/support fragment an owner world unit.
+- Add event-driven support validation.
+- Transfer object/NPC ownership when support owner changes.
+- Implement void fall/loss when no support is found below.
+
+### 7. Object And NPC Persistence
+
+- Store building-owned objects/NPCs in the building instance save.
+- Keep section-owned objects/NPCs in section files.
+- Mark both old and new owners dirty on transfer.
+- Validate thrown/pushed/teleported actors and objects.
+
+### 8. Rendering And Cache Hardening
+
+- Add or adapt exterior shell composite.
+- Preserve and retarget the existing per-floor interior bitmap/composite path for building instances.
+- Add hard diagnostics for missing render/cache invariants.
+- Add narrow invalidation by building/floor/content version.
 
 ## Test Plan
 
-Stairs:
+Persistence:
 
-- straight-looking stair represented as tread path
-- curved/turning stair represented as tread path
-- endpoint crossing lower-to-stair and stair-to-higher
-- failed stair with missing treads throws
-- actor cannot enter stair from the wrong side/opening
-
-Building import:
-
-- imported floors get prefixed fragment ids and surface ids
-- mounted object wall references remap to prefixed wall ids
-- footprint covers the union of floor polygons
-- invalid building save fails loudly
+- Place a building and verify a building instance save is created.
+- Verify touched section files contain only refs.
+- Modify building interior, leave building, save outdoors, reload, and verify interior changes persist.
+- Verify old top-level building placement saves migrate or load compatibly.
 
 Streaming:
 
-- one-section building loads with its section
-- multi-section building loads when any overlapped section loads
-- multi-section building remains loaded while at least one overlapped section is active
-- building unload removes all building-owned runtime records
+- A one-section building shell loads with its section.
+- A multi-section building shell loads when any touched section is active.
+- Moving inside a multi-section building does not shift outdoor section bubble.
+- Leaving from a balcony/roof resumes outdoor section streaming.
+
+Support:
+
+- Living room to balcony changes support fragment but not building world unit.
+- Jump from balcony finds outdoor ground at `z = 0` and transfers to section world.
+- Fall through a hole finds lower floor if present.
+- Fall through a bottomless hole removes/kills the actor/object.
+- Deleting a floor fragment revalidates affected occupants.
+
+Ownership:
+
+- Move object outdoor -> building marks both units dirty.
+- Throw object building -> outdoor marks both units dirty.
+- NPC displaced out of building transfers ownership when support changes.
+- Quiet static objects do not perform continuous per-frame support checks.
 
 Rendering:
 
-- imported building participates in existing cutaway/fade
-- exterior composite suppresses original exterior pieces
-- missing exterior composite texture fails loudly
-- camera-incompatible exterior composite fails loudly
-
-Persistence:
-
-- placed building manifest round-trips through `/api/sectionworld`
-- building placement transform survives save/load
-- no building data is duplicated into every overlapped section file
+- Exterior shell renders from outdoor sections.
+- Full interior renders after entry.
+- Missing required exterior composite fails loudly.
+- Fade/cutaway does not overlap two partial-alpha copies of the same scene.
 
 ## Open Decisions
 
-- Whether placed building manifests live in `buildings.json` or inside `manifest.json`.
-- Whether `ownerSectionKey` should accept virtual building keys directly or whether floor fragments should gain a separate `ownerBuildingId`.
-- Whether exterior composites should be prebuilt during building load or lazily built on first visible exterior frame.
-- How much editor renderer code should be shared with main-game building rendering versus copied into a runtime-specific builder.
+- Whether building interiors should ever be subdivided for extremely large buildings, and what threshold would justify it.
+- How much exterior shell data can be loaded without hydrating full `buildingData`.
