@@ -820,12 +820,41 @@ test("building movement blockers resync when prototype nodes are replaced at the
         assert.ok(oldNode.objects.includes(originalBlocker));
 
         map._prototypeSectionState.allNodesByCoordKey.set("1,1", replacementNode);
+        map.markPrototypeBuildingMovementBlockersDirty();
         map.syncPrototypeBuildingMovementBlockers();
 
         const replacementBlocker = collectBuildingBlockers(map)[0];
         assert.notEqual(replacementBlocker, originalBlocker);
         assert.equal(oldNode.objects.includes(originalBlocker), false);
         assert.equal(replacementNode.objects.includes(replacementBlocker), true);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("clean building movement blocker sync is a cheap no-op unless forced", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(4, 4);
+        buildings.installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState([createPlacement("building:clean-sync-house")]);
+        const originalBlocker = collectBuildingBlockers(map)[0];
+        const originalNode = originalBlocker._prototypeBuildingMovementNodes[0];
+        assert.ok(originalNode.objects.includes(originalBlocker));
+
+        originalNode.objects = originalNode.objects.filter((obj) => obj !== originalBlocker);
+        assert.equal(map.syncPrototypeBuildingMovementBlockers(), 0);
+        assert.equal(originalNode.objects.includes(originalBlocker), false);
+
+        assert.ok(map.syncPrototypeBuildingMovementBlockers({ forceValidate: true }) > 0);
+        const replacementBlocker = collectBuildingBlockers(map)[0];
+        assert.notEqual(replacementBlocker, originalBlocker);
+        assert.equal(originalNode.objects.includes(replacementBlocker), true);
     } finally {
         if (previousPolygonHitbox === undefined) {
             delete globalThis.PolygonHitbox;
