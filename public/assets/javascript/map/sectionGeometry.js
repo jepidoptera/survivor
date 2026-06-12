@@ -159,6 +159,38 @@
         return bestCoord;
     }
 
+    // Returns the 6 world-space corner vertices of the section hexagon for the section
+    // whose center is at `centerAxial` (tile-axial coords), given the meta-grid `basis`.
+    // Each corner is the centroid of this section's center and its two adjacent neighbor
+    // section centers, guaranteeing exact shared edges with no gap or overlap.
+    function getSectionHexagonCorners(centerAxial, basis) {
+        const cq = Number(centerAxial && centerAxial.q) || 0;
+        const cr = Number(centerAxial && centerAxial.r) || 0;
+        const qaq = Number(basis && basis.qAxis && basis.qAxis.q) || 0;
+        const qar = Number(basis && basis.qAxis && basis.qAxis.r) || 0;
+        const raq = Number(basis && basis.rAxis && basis.rAxis.q) || 0;
+        const rar = Number(basis && basis.rAxis && basis.rAxis.r) || 0;
+
+        // Tile-axial offsets from this section center to each of the 6 neighboring section centers
+        const neighborAxials = SECTION_DIRECTIONS.map(d => ({
+            q: cq + d.q * qaq + d.r * raq,
+            r: cr + d.q * qar + d.r * rar
+        }));
+
+        const selfWorld = offsetToWorld(axialToEvenQOffset({ q: cq, r: cr }));
+        const neighborWorlds = neighborAxials.map(a => offsetToWorld(axialToEvenQOffset(a)));
+
+        // Corner i is the centroid of self + neighbor[i] + neighbor[(i+1)%6]
+        return SECTION_DIRECTIONS.map((_, i) => {
+            const n1 = neighborWorlds[i];
+            const n2 = neighborWorlds[(i + 1) % 6];
+            return {
+                x: (selfWorld.x + n1.x + n2.x) / 3,
+                y: (selfWorld.y + n1.y + n2.y) / 3
+            };
+        });
+    }
+
     const api = {
         SECTION_DIRECTIONS,
         evenQOffsetToAxial,
@@ -173,7 +205,8 @@
         makeSectionKey,
         parseSectionKey,
         addSectionCoords,
-        getBubbleKeysForCenter
+        getBubbleKeysForCenter,
+        getSectionHexagonCorners
     };
 
     globalScope.__sectionGeometry = api;

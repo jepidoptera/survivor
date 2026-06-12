@@ -1,15 +1,21 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -40.09762179881314,
-    "y": 132.85034560078182,
+    "x": -149.3183690270323,
+    "y": 209.49460804460037,
+    "z": 0,
+    "currentLayer": 0,
+    "traversalLayer": 0,
+    "currentLayerBaseZ": 0,
+    "surfaceId": "overworld_ground_surface",
+    "fragmentId": "section:-4,0:ground",
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
     "maxMp": 100,
     "temperature": 0,
     "baselineTemperature": 0,
-    "gameMode": "adventure",
+    "gameMode": "god",
     "name": "you",
     "difficulty": 2,
     "magic": 100,
@@ -18,17 +24,20 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "",
-    "activeAura": null,
-    "activeAuras": [],
+    "currentSpell": "flooredit",
+    "activeAura": "healing",
+    "activeAuras": [
+      "healing",
+      "speed"
+    ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "doors",
-    "selectedPlaceableTexturePath": "/assets/images/doors/door2.png",
+    "selectedPlaceableCategory": "roof",
+    "selectedPlaceableTexturePath": "/assets/images/roofs/smallshingles.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/thornflowers.png",
-      "windows": "/assets/images/windows/window.png",
+      "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/crystal%20ball.png",
       "signs": "/assets/images/signs/princess.png",
@@ -47,22 +56,26 @@
       "/assets/images/flowers/fireflower.png": 0,
       "/assets/images/flowers/thornflowers.png": 0,
       "/assets/images/furniture/hexrug.png": 0,
-      "/assets/images/furniture/crystal%20ball.png": 0
+      "/assets/images/furniture/crystal%20ball.png": 0,
+      "/assets/images/windows/pointy%20arch%20window.png": 0,
+      "/assets/images/windows/very%20plain%20arch.png": 0
     },
-    "selectedPlaceableScale": 2.177,
+    "selectedPlaceableScale": 1.023,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
-      "/assets/images/windows/window.png": 1.737,
-      "/assets/images/roofs/smallshingles.png": 1,
+      "/assets/images/windows/window.png": 0.997,
+      "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
       "/assets/images/furniture/circlerug.png": 4,
-      "/assets/images/doors/door2.png": 2.177,
+      "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
-      "/assets/images/flowers/thornflowers.png": 4.308,
-      "/assets/images/furniture/hexrug.png": 19.818,
-      "/assets/images/furniture/crystal%20ball.png": 1.979
+      "/assets/images/flowers/thornflowers.png": 5,
+      "/assets/images/furniture/hexrug.png": 4,
+      "/assets/images/furniture/crystal%20ball.png": 1.979,
+      "/assets/images/windows/pointy%20arch%20window.png": 1.468,
+      "/assets/images/windows/very%20plain%20arch.png": 1.81
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -72,14 +85,16 @@
       "/assets/images/roofs/slate.png": 0,
       "/assets/images/furniture/chair.png": 0,
       "/assets/images/furniture/circlerug.png": 0,
-      "/assets/images/doors/door2.png": 0,
+      "/assets/images/doors/door2.png": 5,
       "/assets/images/flowers/red%20flower.png": 0,
       "/assets/images/flowers/fireflower.png": 0,
       "/assets/images/flowers/thornflowers.png": 0,
-      "/assets/images/furniture/hexrug.png": 30,
-      "/assets/images/furniture/crystal%20ball.png": 30
+      "/assets/images/furniture/hexrug.png": 0,
+      "/assets/images/furniture/crystal%20ball.png": 30,
+      "/assets/images/windows/pointy%20arch%20window.png": 0,
+      "/assets/images/windows/very%20plain%20arch.png": 0
     },
-    "selectedPlaceableRotationAxis": "spatial",
+    "selectedPlaceableRotationAxis": "visual",
     "selectedPlaceableRotationAxisByTexture": {
       "/assets/images/doors/door5.png": "spatial",
       "/assets/images/windows/window.png": "spatial",
@@ -92,10 +107,12 @@
       "/assets/images/flowers/fireflower.png": "none",
       "/assets/images/flowers/thornflowers.png": "none",
       "/assets/images/furniture/hexrug.png": "ground",
-      "/assets/images/furniture/crystal%20ball.png": "visual"
+      "/assets/images/furniture/crystal%20ball.png": "visual",
+      "/assets/images/windows/pointy%20arch%20window.png": "spatial",
+      "/assets/images/windows/very%20plain%20arch.png": "spatial"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 1,
+    "selectedPlaceableAnchorY": 0.5,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -108,7 +125,9 @@
       "/assets/images/flowers/fireflower.png": 0.5,
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
-      "/assets/images/furniture/crystal%20ball.png": 0.5
+      "/assets/images/furniture/crystal%20ball.png": 0.5,
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5,
+      "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -122,31 +141,99 @@
       "/assets/images/flowers/fireflower.png": 0.5,
       "/assets/images/flowers/thornflowers.png": 0.5,
       "/assets/images/furniture/hexrug.png": 0.5,
-      "/assets/images/furniture/crystal%20ball.png": 0.5
+      "/assets/images/furniture/crystal%20ball.png": 0.5,
+      "/assets/images/windows/pointy%20arch%20window.png": 0.5,
+      "/assets/images/windows/very%20plain%20arch.png": 0.5
     },
     "selectedPowerupPlacementScale": 1,
-    "selectedEditorCategory": "doors",
-    "selectedWallHeight": 4,
-    "selectedWallThickness": 0.5,
+    "selectedPowerupFileName": "chalice.png",
+    "selectedEditorCategory": "powerups",
+    "selectedFloorEditLevel": 0,
+    "selectedWallHeight": 3,
+    "selectedWallThickness": 0.375,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
-    "selectedRoofOverhang": 0.8125,
-    "selectedRoofPeakHeight": 8.5,
-    "selectedRoofTextureRepeat": 0.09375,
-    "showEditorPanel": false,
-    "showPerfReadout": false,
-    "spells": [],
-    "inventory": {},
+    "selectedRoofOverhang": 0.6875,
+    "selectedRoofPeakHeight": 8.25,
+    "selectedRoofTextureRepeat": 0.1875,
+    "showEditorPanel": true,
+    "showPerfReadout": true,
+    "spells": [
+      {
+        "name": "fireball",
+        "icon": "/assets/images/thumbnails/fireball.png",
+        "key": "F"
+      },
+      {
+        "name": "freeze",
+        "icon": "/assets/images/magic/iceball.png",
+        "key": "I"
+      },
+      {
+        "name": "spikes",
+        "icon": "/assets/images/magic/spike.png",
+        "key": "K"
+      },
+      {
+        "name": "attacksquirrel",
+        "icon": "/assets/images/animals/squirrel.png",
+        "key": "Q"
+      },
+      {
+        "name": "maze",
+        "icon": "/assets/images/thumbnails/maze.png",
+        "key": "M"
+      },
+      {
+        "name": "teleport",
+        "icon": "/assets/images/magic/teleport.png",
+        "key": "J"
+      },
+      {
+        "name": "shield",
+        "icon": "/assets/images/thumbnails/aura.png",
+        "key": "D"
+      },
+      {
+        "name": "treegrow",
+        "icon": "/assets/images/thumbnails/tree.png",
+        "key": "T"
+      },
+      {
+        "name": "triggerarea",
+        "icon": "/assets/images/thumbnails/wall.png",
+        "key": "G"
+      },
+      {
+        "name": "editscript",
+        "icon": "/assets/images/thumbnails/edit.png",
+        "key": "E+T"
+      },
+      {
+        "name": "firewall",
+        "icon": "/assets/images/thumbnails/firewall.png",
+        "key": "F+W"
+      },
+      {
+        "name": "spawnanimal",
+        "icon": "/assets/images/animals/squirrel.png",
+        "key": "A"
+      }
+    ],
+    "inventory": {
+      "spellCredits": 4,
+      "gold": 420
+    },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -55.59762179881314,
-      "y": 119.34620678283548
+      "x": -180.3183690270323,
+      "y": 182.4839606997006
     }
   },
   "los": {
-    "mazeMode": true
+    "mazeMode": false
   },
-  "activeCenterKey": "-2,-1"
+  "activeCenterKey": "-4,0"
 }

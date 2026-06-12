@@ -86,9 +86,13 @@
             }
 
             const wallState = this._prototypeWallState;
-            if (Number.isInteger(wall._prototypeRecordId)) {
-                removePrototypeRecordById(wallState, Number(wall._prototypeRecordId));
+            const replacedRecordId = Number.isInteger(wall._prototypeRecordId)
+                ? Number(wall._prototypeRecordId)
+                : null;
+            if (Number.isInteger(replacedRecordId)) {
+                removePrototypeRecordById(wallState, replacedRecordId);
             }
+            const replacementRecordIds = [];
             for (let i = 0; i < grouped.length; i++) {
                 const fragment = grouped[i];
                 if (!fragment || endpointsMatch(fragment.startAnchor, fragment.endAnchor)) continue;
@@ -102,8 +106,15 @@
                     _prototypeManagedRecordId: wallState.nextRecordId
                 };
                 asset.walls.push(record);
+                if (Number.isInteger(record.id)) replacementRecordIds.push(Number(record.id));
                 markPrototypeBlockedEdgesDirty(asset);
                 markPrototypeClearanceDirty(asset);
+            }
+            if (Number.isInteger(replacedRecordId) && replacementRecordIds.length > 0 && wallState) {
+                if (!(wallState.pendingMountedWallIdRemaps instanceof Map)) {
+                    wallState.pendingMountedWallIdRemaps = new Map();
+                }
+                wallState.pendingMountedWallIdRemaps.set(replacedRecordId, replacementRecordIds.slice());
             }
 
             const preservedMountedObjects = [];
@@ -138,10 +149,11 @@
             return true;
         };
 
-        map.capturePendingPrototypeWalls = function capturePendingPrototypeWalls() {
+        map.capturePendingPrototypeWalls = function capturePendingPrototypeWalls(options = {}) {
             const wallCtor = globalScope.WallSectionUnit;
             const wallState = this._prototypeWallState;
             if (!wallCtor || !(wallCtor._allSections instanceof Map) || !wallState) return false;
+            const allowRuntimeSignatureCapture = options.allowRuntimeSignatureCapture !== false;
             let changed = false;
             if (wallState.activeRuntimeWallsByRecordId instanceof Map) {
                 for (const [recordId, runtimeWall] of wallState.activeRuntimeWallsByRecordId.entries()) {
@@ -159,6 +171,7 @@
                         ? wall._prototypePersistenceSignature
                         : "";
                     if (currentSignature && previousSignature && currentSignature !== previousSignature) {
+                        if (!allowRuntimeSignatureCapture && wall._prototypeDirty !== true) continue;
                         if (this.capturePrototypeWall(wall)) {
                             changed = true;
                         }

@@ -16,6 +16,12 @@
             refreshSparseNodesForSectionAsset,
             rebuildPrototypeAssetObjectNameRegistry,
             rebuildPrototypeFloorRuntime,
+            createPrototypeImplicitGroundFloorFragment,
+            doesPrototypeNodeBelongToFloorFragment,
+            startSparseNodeBuildForSection,
+            addSparseNodeBuildBatchForSection,
+            commitSparseNodeBuildForSection,
+            connectSparseNodesForSectionBatch,
             normalizePrototypeScriptingName,
             generatePrototypeBubbleUniqueObjectName,
             resolvePrototypeActiveNamedObject,
@@ -24,6 +30,8 @@
             applyPrototypeSectionClearanceToNodes,
             rebuildPrototypeSectionClearance,
             clonePrototypeFloorRecords,
+            clonePrototypeFloorHoleRecords,
+            clonePrototypeFloorVoidRecords,
             clonePrototypeBlockedEdges,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorTransitions,
@@ -34,6 +42,7 @@
             assignNodesToSections,
             buildPrototypeSummary,
             initializePrototypeRuntimeState,
+            installSectionWorldBuildingApis,
             setActiveCenter
         } = deps;
 
@@ -119,6 +128,91 @@
             rebuildPrototypeFloorRuntime(this, state);
             return 1;
         };
+        map.registerSectionFloorNodes = function registerSectionFloorNodes(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return this.registerFloorSection(sectionKey, state, {
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
+                doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
+            });
+        };
+        map.prepareFloorSectionFragmentsForSection = function prepareFloorSectionFragmentsForSection(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return null;
+            return this.prepareFloorSectionFragments(sectionKey, state, {
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
+                doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment
+            });
+        };
+        map.addFloorSectionNodeBatchForSection = function addFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            const sectionNodes = (state.nodesBySectionKey instanceof Map)
+                ? (state.nodesBySectionKey.get(sectionKey) || []) : [];
+            return this.addFloorSectionNodeBatch(sectionKey, state, sectionNodes, start, count, doesPrototypeNodeBelongToFloorFragment);
+        };
+        map.finalizeFloorSectionNodesForSection = function finalizeFloorSectionNodesForSection(sectionKey) {
+            return this.finalizeFloorSectionNodes(sectionKey);
+        };
+        map.getSectionNodeCount = function getSectionNodeCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.nodesBySectionKey instanceof Map)) return 0;
+            const nodes = state.nodesBySectionKey.get(sectionKey);
+            return Array.isArray(nodes) ? nodes.length : 0;
+        };
+        map.getPrototypeTileKeyCount = function getPrototypeTileKeyCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.sectionAssetsByKey instanceof Map)) return 0;
+            const asset = state.sectionAssetsByKey.get(sectionKey);
+            return Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys.length : 0;
+        };
+        map.getSparseNodeCount = function getSparseNodeCount(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state || !(state.nodesBySectionKey instanceof Map)) return 0;
+            const nodes = state.nodesBySectionKey.get(sectionKey);
+            return Array.isArray(nodes) ? nodes.length : 0;
+        };
+        map.startSparseNodeBuildForSection = function startSparseNodeBuildForSection_(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return false;
+            return startSparseNodeBuildForSection(state, sectionKey);
+        };
+        map.addSparseNodeBuildBatchForSection = function addSparseNodeBuildBatchForSection_(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return addSparseNodeBuildBatchForSection(this, state, sectionKey, start, count);
+        };
+        map.commitSparseNodeBuildForSection = function commitSparseNodeBuildForSection_(sectionKey) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return commitSparseNodeBuildForSection(this, state, sectionKey);
+        };
+        map.connectSparseNodesForSectionBatch = function connectSparseNodesForSectionBatch_(sectionKey, start, count) {
+            const state = this._prototypeSectionState;
+            if (!state) return 0;
+            return connectSparseNodesForSectionBatch(state, sectionKey, start, count);
+        };
+        map.prepareFloorSectionUnregisterForSection = function prepareFloorSectionUnregisterForSection(sectionKey) {
+            return this.prepareFloorSectionUnregister(sectionKey);
+        };
+        map.unregisterFloorSectionNodeBatchForSection = function unregisterFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            return this.unregisterFloorSectionNodeBatch(sectionKey, start, count);
+        };
+        map.commitFloorSectionUnregisterForSection = function commitFloorSectionUnregisterForSection(sectionKey) {
+            return this.commitFloorSectionUnregister(sectionKey);
+        };
+        map.prepareFloorSectionConnectionForSection = function prepareFloorSectionConnectionForSection(sectionKey) {
+            return this.prepareFloorSectionConnection(sectionKey);
+        };
+        map.connectFloorSectionNodeBatchForSection = function connectFloorSectionNodeBatchForSection(sectionKey, start, count) {
+            return this.connectFloorSectionNodeBatch(sectionKey, start, count);
+        };
+        map.commitFloorSectionConnectionForSection = function commitFloorSectionConnectionForSection(sectionKey) {
+            return this.commitFloorSectionConnection(sectionKey);
+        };
+        map.unregisterSectionFloorNodes = function unregisterSectionFloorNodes(sectionKey) {
+            return this.unregisterFloorSection(sectionKey);
+        };
         map.getPrototypeHydratedSectionKeys = function getPrototypeHydratedSectionKeys() {
             const state = this._prototypeSectionState;
             if (!state || !(state.loadedSectionAssetKeys instanceof Set)) return [];
@@ -185,8 +279,11 @@
                             asset = this.getPrototypeSectionAsset(sectionKey);
                         }
                         if (!asset) continue;
-                        applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, this);
+                        applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, this, state.basis);
                         reassignHydratedPrototypeAssetRecordIds(this, asset);
+                        if (typeof this.syncPrototypeBuildingPlacementRefs === "function") {
+                            this.syncPrototypeBuildingPlacementRefs();
+                        }
                         if (materialize && state.useSparseNodes === true) {
                             addSparseNodesForSection(this, state, asset);
                             refreshSparseNodesForSectionAsset(this, state, asset);
@@ -214,6 +311,11 @@
                             }
                             if (typeof this.syncPrototypePowerups === "function") {
                                 this.syncPrototypePowerups();
+                            }
+                            if (typeof this.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
+                                this.ensurePrototypeBuildingPlacementsForSectionKeys(new Set(loadedActiveKeys)).catch((error) => {
+                                    console.error("[prototype building hydrate]", error && error.message ? error.message : error);
+                                });
                             }
                             if (typeof this.applyPrototypeSectionClearance === "function") {
                                 this.applyPrototypeSectionClearance(new Set(loadedActiveKeys));
@@ -353,6 +455,9 @@
             this.rebuildPrototypeSectionObjectNameRegistry();
             ensurePrototypeBlockedEdges(this);
             rebuildPrototypeSectionClearance(this);
+            if (typeof this.syncPrototypeBuildingPlacementRefs === "function") {
+                this.syncPrototypeBuildingPlacementRefs();
+            }
             const keyFilter = sectionKeys instanceof Set
                 ? sectionKeys
                 : (Array.isArray(sectionKeys) ? new Set(sectionKeys) : null);
@@ -373,12 +478,15 @@
                     groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
                     groundTiles: (asset.groundTiles && typeof asset.groundTiles === "object") ? { ...asset.groundTiles } : {},
                     floors: clonePrototypeFloorRecords(asset.floors, asset.key),
+                    floorHoles: typeof clonePrototypeFloorHoleRecords === "function" ? clonePrototypeFloorHoleRecords(asset.floorHoles) : [],
+                    floorVoids: typeof clonePrototypeFloorVoidRecords === "function" ? clonePrototypeFloorVoidRecords(asset.floorVoids) : [],
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     blockedEdges: clonePrototypeBlockedEdges(asset.blockedEdges),
                     clearanceByTile: clonePrototypeClearanceByTile(asset.clearanceByTile),
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
+                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
+                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
                 }));
         };
         map.exportPrototypeFloorTransitions = function exportPrototypeFloorTransitions() {
@@ -400,6 +508,10 @@
             );
             assignNodesToSections(this, nextState);
             this._prototypeSectionState = nextState;
+            if (typeof installSectionWorldBuildingApis === "function") {
+                installSectionWorldBuildingApis(this);
+                this.initializePrototypeBuildingState(nextState.buildingPlacements || []);
+            }
             rebuildPrototypeFloorRuntime(this, nextState);
             this._sectionWorld = buildPrototypeSummary(nextState);
             this._twoSectionPrototype = this._sectionWorld;
@@ -461,12 +573,43 @@
             if (!activityNode || activityNode._prototypeVoid === true) return "#000000";
             return activityNode._prototypeSectionActive === true ? "#007700" : "#000000";
         };
-        map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY) {
-            const node = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
+        map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY, actor = null, options = {}) {
+            const baseNode = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
+            const resolveActorLayer = () => {
+                const candidates = [
+                    options && options.traversalLayer,
+                    options && options.currentLayer,
+                    actor && actor.currentLayer,
+                    actor && actor.traversalLayer,
+                    actor && actor.level,
+                    actor && actor.node && actor.node.traversalLayer,
+                    actor && actor.node && actor.node.level
+                ];
+                for (let i = 0; i < candidates.length; i++) {
+                    const value = Number(candidates[i]);
+                    if (Number.isFinite(value)) return Math.round(value);
+                }
+                return 0;
+            };
+            const layer = resolveActorLayer();
+            let node = baseNode;
+            if (layer !== 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+                const sectionKey = typeof baseNode._prototypeSectionKey === "string" ? baseNode._prototypeSectionKey : "";
+                node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                    sectionKey,
+                    allowScan: false
+                }) || null;
+            }
             const activityNode = this.getPrototypeActivityNode(node);
-            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !node.isBlocked());
+            const isBlocked = node && typeof node.isBlocked === "function"
+                ? node.isBlocked()
+                : !!(node && (node.blocked || node.blockedByObjects > 0));
+            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !isBlocked);
         };
         map.getNodesInIndexWindow = function getNodesInIndexWindow(xStart, xEnd, yStart, yEnd) {
+            if (typeof this.syncPrototypeBuildingMovementBlockers === "function") {
+                this.syncPrototypeBuildingMovementBlockers();
+            }
             const state = this._prototypeSectionState;
             const sparseNodes = (state && state.allNodesByCoordKey instanceof Map) ? state.allNodesByCoordKey : null;
             if (!sparseNodes) return [];
@@ -496,7 +639,39 @@
             const maxX = Number(cameraRef.x) + cameraWidth + padXWorld;
             const minY = Number(cameraRef.y) - padYWorld;
             const maxY = Number(cameraRef.y) + cameraHeight + padYWorld;
-            const visible = [];
+            if (!this._visibleNodesReuse) this._visibleNodesReuse = [];
+            const visible = this._visibleNodesReuse;
+            visible.length = 0;
+            if (
+                Number.isFinite(minX) &&
+                Number.isFinite(maxX) &&
+                Number.isFinite(minY) &&
+                Number.isFinite(maxY)
+            ) {
+                const minYi = Math.floor(minY) - 1;
+                const maxYi = Math.ceil(maxY) + 1;
+                let low = 0;
+                let high = loadedNodes.length;
+                while (low < high) {
+                    const mid = (low + high) >> 1;
+                    const nodeYIndex = Number(loadedNodes[mid] && loadedNodes[mid].yindex) || 0;
+                    if (nodeYIndex < minYi) {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
+                    }
+                }
+                for (let i = low; i < loadedNodes.length; i++) {
+                    const node = loadedNodes[i];
+                    if (!node) continue;
+                    const nodeYIndex = Number(node.yindex) || 0;
+                    if (nodeYIndex > maxYi) break;
+                    if (node.x < minX || node.x > maxX) continue;
+                    if (node.y < minY || node.y > maxY) continue;
+                    visible.push(node);
+                }
+                return visible;
+            }
             for (let i = 0; i < loadedNodes.length; i++) {
                 const node = loadedNodes[i];
                 if (!node) continue;

@@ -5,9 +5,18 @@ const VANISH_REMOVE_WIDTH_WORLD = 1;
 function buildVanishTravelPlan(casterX, casterY, targetX, targetY, options = {}) {
     const originX = Number(casterX);
     const originY = Number(casterY);
+    const originZ = Number.isFinite(options.originZ) ? Number(options.originZ) : 0;
     const aimX = Number(targetX);
     const aimY = Number(targetY);
-    if (!Number.isFinite(originX) || !Number.isFinite(originY) || !Number.isFinite(aimX) || !Number.isFinite(aimY)) {
+    const aimZ = Number.isFinite(options.targetZ) ? Number(options.targetZ) : originZ;
+    if (
+        !Number.isFinite(originX) ||
+        !Number.isFinite(originY) ||
+        !Number.isFinite(originZ) ||
+        !Number.isFinite(aimX) ||
+        !Number.isFinite(aimY) ||
+        !Number.isFinite(aimZ)
+    ) {
         return null;
     }
 
@@ -20,34 +29,41 @@ function buildVanishTravelPlan(casterX, casterY, targetX, targetY, options = {})
 
     let xdist = aimX - originX;
     let ydist = aimY - originY;
-    let totalDist = Math.hypot(xdist, ydist);
+    let zdist = aimZ - originZ;
+    let horizontalDist = Math.hypot(xdist, ydist);
 
-    if (totalDist < 0.1) {
-        totalDist = 0.1;
-        xdist = 0.1;
-        ydist = 0;
-    }
-
-    if (totalDist > range) {
-        const fraction = range / totalDist;
+    if (horizontalDist > range) {
+        const fraction = range / horizontalDist;
         ydist *= fraction;
         xdist *= fraction;
-        totalDist = range;
+        horizontalDist = range;
+    }
+
+    let totalDist = Math.hypot(xdist, ydist, zdist);
+    if (totalDist < 0.1) {
+        xdist = 0.1;
+        ydist = 0;
+        zdist = 0;
+        totalDist = 0.1;
     }
 
     const stepX = (xdist / totalDist) * (speed / frameRateValue);
     const stepY = (ydist / totalDist) * (speed / frameRateValue);
-    const stepDist = Math.hypot(stepX, stepY);
+    const stepZ = (zdist / totalDist) * (speed / frameRateValue);
+    const stepDist = Math.hypot(stepX, stepY, stepZ);
     if (!(stepDist > 0)) return null;
 
     return {
         originX,
         originY,
+        originZ,
         targetX: aimX,
         targetY: aimY,
+        targetZ: aimZ,
         totalDist,
         stepX,
         stepY,
+        stepZ,
         stepDist,
         speed,
         range,
@@ -61,8 +77,10 @@ function predictVanishImpactPoint(plan) {
     const mapRef = plan.mapRef || null;
     let x = Number(plan.originX);
     let y = Number(plan.originY);
+    let z = Number.isFinite(plan.originZ) ? Number(plan.originZ) : undefined;
     const stepX = Number(plan.stepX);
     const stepY = Number(plan.stepY);
+    const stepZ = Number.isFinite(plan.stepZ) ? Number(plan.stepZ) : 0;
     const stepDist = Number(plan.stepDist);
     const totalDist = Number(plan.totalDist);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(stepX) || !Number.isFinite(stepY)) return null;
@@ -77,6 +95,7 @@ function predictVanishImpactPoint(plan) {
     for (let tick = 0; tick < maxTicks; tick++) {
         x += stepX;
         y += stepY;
+        if (Number.isFinite(z)) z += stepZ;
         if (mapRef && typeof mapRef.wrapWorldX === "function") {
             x = mapRef.wrapWorldX(x);
         }
@@ -85,19 +104,51 @@ function predictVanishImpactPoint(plan) {
         }
         traveledDist += stepDist;
         if (traveledDist >= totalDist) {
-            return { x, y };
+            return { x, y, z };
         }
     }
 
-    return { x, y };
+    return { x, y, z };
+}
+
+function getVanishCasterWorldZ() {
+    const caster = (typeof wizard !== "undefined") ? wizard : null;
+    const z = (globalThis.Spell && typeof globalThis.Spell.getTargetWorldBaseZ === "function")
+        ? globalThis.Spell.getTargetWorldBaseZ(caster)
+        : (Number.isFinite(caster && caster.currentLayerBaseZ) ? Number(caster.currentLayerBaseZ) : 0);
+    return Number.isFinite(z) ? Number(z) : 0;
+}
+
+function getVanishTargetWorldZ(projectile, fallbackZ) {
+    if (projectile && Number.isFinite(projectile.visualTargetZ)) return Number(projectile.visualTargetZ);
+    if (
+        projectile &&
+        projectile.forcedTarget &&
+        globalThis.Spell &&
+        typeof globalThis.Spell.getTargetWorldBaseZ === "function"
+    ) {
+        const z = globalThis.Spell.getTargetWorldBaseZ(projectile.forcedTarget);
+        if (Number.isFinite(z)) return Number(z);
+    }
+    return Number.isFinite(fallbackZ) ? Number(fallbackZ) : 0;
+}
+
+function isVanishProtectedPlayerTarget(target, wizardRef = null) {
+    if (!target) return false;
+    if (wizardRef && target === wizardRef) return true;
+    const globalWizard = (typeof globalThis !== "undefined" && globalThis.wizard)
+        ? globalThis.wizard
+        : (typeof wizard !== "undefined" ? wizard : null);
+    return !!(globalWizard && target === globalWizard);
 }
 
 
 class Vanish extends globalThis.Spell {
     static supportsObjectTargeting = true;
 
-    static isValidObjectTarget(target, _wizardRef = null) {
+    static isValidObjectTarget(target, wizardRef = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (isVanishProtectedPlayerTarget(target, wizardRef)) return false;
         if (
             globalThis.Spell.isGroundLayerTarget(target) &&
             this.allowGroundLayerDirectTargeting !== true
@@ -122,6 +173,28 @@ class Vanish extends globalThis.Spell {
         this.magicCost = 10;
         this.radius = this.effectRadius;
     }
+
+    retargetMovementTo(point, speedPerFrame = null) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+        const targetZ = Number.isFinite(point.z)
+            ? Number(point.z)
+            : (Number.isFinite(this.targetWorldZ) ? Number(this.targetWorldZ) : (Number.isFinite(this.z) ? Number(this.z) : 0));
+        if (Number.isFinite(point.z)) this.targetWorldZ = targetZ;
+        const currentZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        const dx = Number(point.x) - this.x;
+        const dy = Number(point.y) - this.y;
+        const dz = targetZ - currentZ;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist < 1e-6) return false;
+        const currentSpeed = Math.hypot(this.movement?.x || 0, this.movement?.y || 0, this.movement?.z || 0);
+        const step = Number.isFinite(speedPerFrame)
+            ? Math.max(0, speedPerFrame)
+            : (currentSpeed > 1e-6 ? currentSpeed : (this.speed / frameRate));
+        this.movement.x = (dx / dist) * step;
+        this.movement.y = (dy / dist) * step;
+        this.movement.z = (dz / dist) * step;
+        return true;
+    }
     
     cast(targetX, targetY) {
         // Check magic
@@ -135,11 +208,19 @@ class Vanish extends globalThis.Spell {
         this.visible = true;
         this.x = wizard.x;
         this.y = wizard.y;
-        this.z = 0;
+        const casterWorldZ = getVanishCasterWorldZ();
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = this.visualStartZ;
+        if (this.forcedTarget && !Number.isFinite(this.visualTargetZ)) this.getForcedTargetAimPoint();
+        this.targetWorldZ = getVanishTargetWorldZ(this, this.visualStartZ);
+        this.zIsWorld = true;
+        this.z = this.visualStartZ;
         const travelPlan = buildVanishTravelPlan(this.x, this.y, targetX, targetY, {
             speed: this.speed,
             range: this.range,
             frameRateValue: frameRate,
+            originZ: this.visualStartZ,
+            targetZ: this.targetWorldZ,
             mapRef: this.map || wizard.map || null
         });
         if (!travelPlan) {
@@ -151,7 +232,7 @@ class Vanish extends globalThis.Spell {
         this.movement = {
             x: travelPlan.stepX,
             y: travelPlan.stepY,
-            z: 0,
+            z: travelPlan.stepZ,
         };
         this.x += this.movement.x;
         this.y += this.movement.y;
@@ -171,7 +252,11 @@ class Vanish extends globalThis.Spell {
             if (this.map && typeof this.map.wrapWorldY === "function") {
                 this.y = this.map.wrapWorldY(this.y);
             }
-            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
+            this.traveledDist += Math.hypot(this.movement.x, this.movement.y, this.movement.z);
+            if (Number.isFinite(this.targetWorldZ) && Number.isFinite(this.visualStartZ) && Number.isFinite(this.totalDist) && this.totalDist > 0) {
+                const progress = Math.max(0, Math.min(1, this.traveledDist / this.totalDist));
+                this.z = this.visualStartZ + ((this.targetWorldZ - this.visualStartZ) * progress);
+            }
             
             if (!this.forcedTarget) {
                 // they didn't pinpoint a target, so this is a loose spell
@@ -217,6 +302,7 @@ class Vanish extends globalThis.Spell {
 
     beginTargetVanish(target, impactPoint = null) {
         if (!target || target.gone || target.vanishing) return false;
+        if (isVanishProtectedPlayerTarget(target)) return false;
         if (typeof target.triggerVanishDieEventIfAdventureMode === "function") {
             target.triggerVanishDieEventIfAdventureMode({ cause: "vanish" });
         }
@@ -317,11 +403,19 @@ class EditorVanish extends Vanish {
         this.visible = true;
         this.x = wizard.x;
         this.y = wizard.y;
-        this.z = 0;
+        const casterWorldZ = getVanishCasterWorldZ();
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = this.visualStartZ;
+        if (this.forcedTarget && !Number.isFinite(this.visualTargetZ)) this.getForcedTargetAimPoint();
+        this.targetWorldZ = getVanishTargetWorldZ(this, this.visualStartZ);
+        this.zIsWorld = true;
+        this.z = this.visualStartZ;
         const travelPlan = buildVanishTravelPlan(this.x, this.y, targetX, targetY, {
             speed: this.speed,
             range: this.range,
             frameRateValue: frameRate,
+            originZ: this.visualStartZ,
+            targetZ: this.targetWorldZ,
             mapRef: this.map || wizard.map || null
         });
         if (!travelPlan) {
@@ -333,7 +427,7 @@ class EditorVanish extends Vanish {
         this.movement = {
             x: travelPlan.stepX,
             y: travelPlan.stepY,
-            z: 0,
+            z: travelPlan.stepZ,
         };
         this.x += this.movement.x;
         this.y += this.movement.y;
@@ -353,7 +447,11 @@ class EditorVanish extends Vanish {
             if (this.map && typeof this.map.wrapWorldY === "function") {
                 this.y = this.map.wrapWorldY(this.y);
             }
-            this.traveledDist += Math.sqrt(this.movement.x ** 2 + this.movement.y ** 2);
+            this.traveledDist += Math.hypot(this.movement.x, this.movement.y, this.movement.z);
+            if (Number.isFinite(this.targetWorldZ) && Number.isFinite(this.visualStartZ) && Number.isFinite(this.totalDist) && this.totalDist > 0) {
+                const progress = Math.max(0, Math.min(1, this.traveledDist / this.totalDist));
+                this.z = this.visualStartZ + ((this.targetWorldZ - this.visualStartZ) * progress);
+            }
 
             if (!this.forcedTarget) {
                 this.land();
@@ -375,6 +473,7 @@ class EditorVanish extends Vanish {
 
     vanishTarget(target, impactPoint = null) {
         if (!target || target.gone || target.vanishing) return;
+        if (isVanishProtectedPlayerTarget(target)) return;
         if (target.type === "wallSection" && target._vanishAsWholeSection) {
             target._disableChunkSplitOnVanish = true;
         }
@@ -412,3 +511,4 @@ class EditorVanish extends Vanish {
 
 globalThis.Vanish = Vanish;
 globalThis.EditorVanish = EditorVanish;
+globalThis.isVanishProtectedPlayerTarget = isVanishProtectedPlayerTarget;

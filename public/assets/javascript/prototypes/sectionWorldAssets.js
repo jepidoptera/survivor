@@ -5,7 +5,8 @@
         const {
             hashCoordinatePair,
             hashToUnitFloat,
-            offsetToWorld
+            offsetToWorld,
+            getSectionHexagonCorners
         } = deps;
 
         function getPrototypeGroundTextureCount(map) {
@@ -51,6 +52,227 @@
         function sortPrototypeTileCoordKeys(tileCoordKeys) {
             if (!Array.isArray(tileCoordKeys)) return [];
             return tileCoordKeys.slice().sort(comparePrototypeTileCoordKeys);
+        }
+
+        function prototypeFloorWorldFromTileKey(tileKey) {
+            const [xRaw, yRaw] = String(tileKey || "").split(",");
+            const x = Number(xRaw);
+            const y = Number(yRaw);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            return { x: x * 0.866, y: y + (x % 2 === 0 ? 0.5 : 0) };
+        }
+
+        function getPrototypeFloorHexEdgeMidpoints(centerPoint) {
+            const cx = Number(centerPoint && centerPoint.x);
+            const cy = Number(centerPoint && centerPoint.y);
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) return [];
+            const halfColumnStep = 0.866 / 2;
+            return [
+                { x: cx, y: cy - 0.5 },
+                { x: cx + halfColumnStep, y: cy - 0.25 },
+                { x: cx + halfColumnStep, y: cy + 0.25 },
+                { x: cx, y: cy + 0.5 },
+                { x: cx - halfColumnStep, y: cy + 0.25 },
+                { x: cx - halfColumnStep, y: cy - 0.25 }
+            ];
+        }
+
+        function intersectPrototypeFloorBoundaryLines(pointA, normalA, pointB, normalB) {
+            const a1 = Number(normalA && normalA.x) || 0;
+            const b1 = Number(normalA && normalA.y) || 0;
+            const c1 = (a1 * (Number(pointA && pointA.x) || 0)) + (b1 * (Number(pointA && pointA.y) || 0));
+            const a2 = Number(normalB && normalB.x) || 0;
+            const b2 = Number(normalB && normalB.y) || 0;
+            const c2 = (a2 * (Number(pointB && pointB.x) || 0)) + (b2 * (Number(pointB && pointB.y) || 0));
+            const det = (a1 * b2) - (a2 * b1);
+            if (Math.abs(det) < 1e-9) return null;
+            return {
+                x: ((c1 * b2) - (c2 * b1)) / det,
+                y: ((a1 * c2) - (a2 * c1)) / det
+            };
+        }
+
+        function getPrototypeFloorHexBoundaryVertices(centerPoint) {
+            return getPrototypeFloorHexEdgeMidpoints(centerPoint);
+        }
+
+        function getPrototypeFloorPointKey(point, precision = 1000000) {
+            const x = Math.round((Number(point && point.x) || 0) * precision) / precision;
+            const y = Math.round((Number(point && point.y) || 0) * precision) / precision;
+            return `${x},${y}`;
+        }
+
+        function buildPrototypeFloorBoundaryPolygonFromTiles(tileCoordKeys) {
+            const edgeMap = new Map();
+            const pointByKey = new Map();
+            for (let i = 0; i < tileCoordKeys.length; i++) {
+                const centerPoint = prototypeFloorWorldFromTileKey(tileCoordKeys[i]);
+                if (!centerPoint) continue;
+                const ring = getPrototypeFloorHexEdgeMidpoints(centerPoint);
+                if (ring.length < 3) continue;
+                for (let r = 0; r < ring.length; r++) {
+                    const a = ring[r];
+                    const b = ring[(r + 1) % ring.length];
+                    const aKey = getPrototypeFloorPointKey(a);
+                    const bKey = getPrototypeFloorPointKey(b);
+                    if (aKey === bKey) continue;
+                    if (!pointByKey.has(aKey)) pointByKey.set(aKey, { x: Number(a.x), y: Number(a.y) });
+                    if (!pointByKey.has(bKey)) pointByKey.set(bKey, { x: Number(b.x), y: Number(b.y) });
+                    const edgeKey = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+                    const entry = edgeMap.get(edgeKey);
+                    if (entry) {
+                        entry.count += 1;
+                    } else {
+                        edgeMap.set(edgeKey, { aKey, bKey, count: 1 });
+                    }
+                }
+            }
+
+            const boundaryEdges = [];
+            for (const edge of edgeMap.values()) {
+                if (edge.count === 1) boundaryEdges.push(edge);
+            }
+            if (boundaryEdges.length < 3) return [];
+
+            const adjacency = new Map();
+            const pushNeighbor = (from, to) => {
+                if (!adjacency.has(from)) adjacency.set(from, []);
+                adjacency.get(from).push(to);
+            };
+            for (let i = 0; i < boundaryEdges.length; i++) {
+                const edge = boundaryEdges[i];
+                pushNeighbor(edge.aKey, edge.bKey);
+                pushNeighbor(edge.bKey, edge.aKey);
+            }
+
+            const visitedEdges = new Set();
+            const loops = [];
+            for (let i = 0; i < boundaryEdges.length; i++) {
+                const seed = boundaryEdges[i];
+                const seedKey = seed.aKey < seed.bKey ? `${seed.aKey}|${seed.bKey}` : `${seed.bKey}|${seed.aKey}`;
+                if (visitedEdges.has(seedKey)) continue;
+
+                const loop = [];
+                let start = seed.aKey;
+                let prev = seed.aKey;
+                let curr = seed.bKey;
+                loop.push(pointByKey.get(start));
+                loop.push(pointByKey.get(curr));
+                visitedEdges.add(seedKey);
+
+                for (let guard = 0; guard < boundaryEdges.length + 5; guard++) {
+                    const neighbors = adjacency.get(curr) || [];
+                    let next = null;
+                    for (let n = 0; n < neighbors.length; n++) {
+                        const candidate = neighbors[n];
+                        if (candidate === prev) continue;
+                        const candidateEdgeKey = candidate < curr ? `${candidate}|${curr}` : `${curr}|${candidate}`;
+                        if (visitedEdges.has(candidateEdgeKey)) continue;
+                        next = candidate;
+                        break;
+                    }
+                    if (!next) {
+                        if (neighbors.indexOf(start) !== -1) {
+                            const closeEdgeKey = start < curr ? `${start}|${curr}` : `${curr}|${start}`;
+                            if (!visitedEdges.has(closeEdgeKey)) visitedEdges.add(closeEdgeKey);
+                        }
+                        break;
+                    }
+                    const nextEdgeKey = next < curr ? `${next}|${curr}` : `${curr}|${next}`;
+                    visitedEdges.add(nextEdgeKey);
+                    prev = curr;
+                    curr = next;
+                    if (curr === start) break;
+                    loop.push(pointByKey.get(curr));
+                }
+
+                if (loop.length >= 3) {
+                    const deduped = [];
+                    for (let p = 0; p < loop.length; p++) {
+                        const point = loop[p];
+                        if (!point) continue;
+                        const last = deduped[deduped.length - 1];
+                        if (!last || Math.abs(last.x - point.x) > 1e-9 || Math.abs(last.y - point.y) > 1e-9) {
+                            deduped.push(point);
+                        }
+                    }
+                    if (deduped.length >= 3) loops.push(deduped);
+                }
+            }
+
+            if (loops.length === 0) return [];
+            const area = (polygon) => {
+                let sum = 0;
+                for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                    const a = polygon[j];
+                    const b = polygon[i];
+                    sum += (Number(a && a.x) || 0) * (Number(b && b.y) || 0) - (Number(b && b.x) || 0) * (Number(a && a.y) || 0);
+                }
+                return Math.abs(sum) / 2;
+            };
+            loops.sort((a, b) => area(b) - area(a));
+            return loops[0];
+        }
+
+        function prototypeFloorCross(a, b, c) {
+            return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
+        }
+
+        function buildPrototypeFloorConvexHull(points) {
+            if (!Array.isArray(points)) return [];
+            const normalized = [];
+            for (let i = 0; i < points.length; i++) {
+                const point = points[i];
+                const x = Number(point && point.x);
+                const y = Number(point && point.y);
+                if (Number.isFinite(x) && Number.isFinite(y)) normalized.push({ x, y });
+            }
+            normalized.sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+            if (normalized.length <= 1) return normalized;
+            const unique = [];
+            for (let i = 0; i < normalized.length; i++) {
+                const point = normalized[i];
+                const prev = unique[unique.length - 1];
+                if (!prev || Math.abs(prev.x - point.x) > 1e-9 || Math.abs(prev.y - point.y) > 1e-9) {
+                    unique.push(point);
+                }
+            }
+            if (unique.length <= 2) return unique;
+            const lower = [];
+            for (let i = 0; i < unique.length; i++) {
+                while (lower.length >= 2 && prototypeFloorCross(lower[lower.length - 2], lower[lower.length - 1], unique[i]) <= 0) {
+                    lower.pop();
+                }
+                lower.push(unique[i]);
+            }
+            const upper = [];
+            for (let i = unique.length - 1; i >= 0; i--) {
+                while (upper.length >= 2 && prototypeFloorCross(upper[upper.length - 2], upper[upper.length - 1], unique[i]) <= 0) {
+                    upper.pop();
+                }
+                upper.push(unique[i]);
+            }
+            lower.pop();
+            upper.pop();
+            return lower.concat(upper);
+        }
+
+        function getPrototypeSectionFloorPolygon(asset, basis) {
+            if (!asset || typeof asset !== "object") return [];
+            if (typeof getSectionHexagonCorners === "function") {
+                return getSectionHexagonCorners(asset.centerAxial, basis);
+            }
+            const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+            const boundaryPoints = [];
+            for (let i = 0; i < tileCoordKeys.length; i++) {
+                const center = prototypeFloorWorldFromTileKey(tileCoordKeys[i]);
+                if (!center) continue;
+                const edgeMidpoints = getPrototypeFloorHexEdgeMidpoints(center);
+                for (let j = 0; j < edgeMidpoints.length; j++) {
+                    boundaryPoints.push(edgeMidpoints[j]);
+                }
+            }
+            return buildPrototypeFloorConvexHull(boundaryPoints);
         }
 
         function normalizePrototypeGroundTiles(rawGroundTiles, tileCoordKeys, textureCount) {
@@ -134,6 +356,54 @@
             return cloned;
         }
 
+        function pointInPrototypeFloorPolygon2D(x, y, points) {
+            if (!Array.isArray(points) || points.length < 3) return false;
+            let inside = false;
+            for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+                const xi = Number(points[i] && points[i].x) || 0;
+                const yi = Number(points[i] && points[i].y) || 0;
+                const xj = Number(points[j] && points[j].x) || 0;
+                const yj = Number(points[j] && points[j].y) || 0;
+                const intersect = ((yi > y) !== (yj > y))
+                    && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-7) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function bakePrototypeFloorFragmentTileCoordKeys(asset) {
+            if (!asset || !Array.isArray(asset.floors) || !Array.isArray(asset.tileCoordKeys)) return;
+            for (let i = 0; i < asset.floors.length; i++) {
+                const fragment = asset.floors[i];
+                if (!fragment || typeof fragment !== "object") continue;
+                if (Array.isArray(fragment.tileCoordKeys) && fragment.tileCoordKeys.length > 0) continue;
+                if (fragment._prototypeSynthesizedGround === true) {
+                    fragment.tileCoordKeys = asset.tileCoordKeys.slice();
+                    continue;
+                }
+                const outerPolygon = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : [];
+                if (outerPolygon.length < 3) continue;
+                const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                const baked = [];
+                for (let t = 0; t < asset.tileCoordKeys.length; t++) {
+                    const coordKey = asset.tileCoordKeys[t];
+                    if (typeof coordKey !== "string" || coordKey.length === 0) continue;
+                    const [xRaw, yRaw] = coordKey.split(",");
+                    const nx = Number(xRaw);
+                    const ny = Number(yRaw);
+                    const wx = nx * 0.866;
+                    const wy = ny + (nx % 2 === 0 ? 0.5 : 0);
+                    if (!pointInPrototypeFloorPolygon2D(wx, wy, outerPolygon)) continue;
+                    let inHole = false;
+                    for (let h = 0; h < holes.length; h++) {
+                        if (pointInPrototypeFloorPolygon2D(wx, wy, holes[h])) { inHole = true; break; }
+                    }
+                    if (!inHole) baked.push(coordKey);
+                }
+                fragment.tileCoordKeys = baked;
+            }
+        }
+
         function clonePrototypeFloorRecords(rawRecords, ownerSectionKey) {
             if (!Array.isArray(rawRecords)) return [];
             const sectionKey = (typeof ownerSectionKey === "string") ? ownerSectionKey : "";
@@ -146,6 +416,18 @@
                     : ((typeof record.id === "string" && record.id.length > 0)
                         ? record.id
                         : `section:${sectionKey}:floor:${i}`);
+                const level = Number.isFinite(record.level) ? Math.round(Number(record.level)) : 0;
+                const canonicalBaseZ = level * 3;
+                const explicitOffset = Number.isFinite(record.nodeBaseZOffset) ? Number(record.nodeBaseZOffset) : null;
+                const legacyBaseZ = Number.isFinite(record.nodeBaseZ) ? Number(record.nodeBaseZ) : null;
+                let resolvedOffset = 0;
+                if (Number.isFinite(explicitOffset)) {
+                    resolvedOffset = Number(explicitOffset);
+                } else if (Number.isFinite(legacyBaseZ)) {
+                    const looksLikeLegacyBug = Math.abs(Number(legacyBaseZ) - level) < 1e-6
+                        && Math.abs(Number(legacyBaseZ) - canonicalBaseZ) > 1e-6;
+                    resolvedOffset = looksLikeLegacyBug ? 0 : (Number(legacyBaseZ) - canonicalBaseZ);
+                }
                 cloned.push({
                     ...record,
                     fragmentId,
@@ -155,20 +437,68 @@
                     ownerSectionKey: (typeof record.ownerSectionKey === "string" && record.ownerSectionKey.length > 0)
                         ? record.ownerSectionKey
                         : sectionKey,
-                    level: Number.isFinite(record.level) ? Number(record.level) : 0,
-                    nodeBaseZ: Number.isFinite(record.nodeBaseZ) ? Number(record.nodeBaseZ) : 0,
+                    level,
+                    nodeBaseZOffset: resolvedOffset,
+                    nodeBaseZ: canonicalBaseZ + resolvedOffset,
                     outerPolygon: clonePrototypePointList(record.outerPolygon),
                     holes: clonePrototypePolygonList(record.holes),
-                    visibilityPolygon: Array.isArray(record.visibilityPolygon) && record.visibilityPolygon.length > 0
-                        ? clonePrototypePointList(record.visibilityPolygon)
-                        : clonePrototypePointList(record.outerPolygon),
-                    visibilityHoles: Array.isArray(record.visibilityHoles)
-                        ? clonePrototypePolygonList(record.visibilityHoles)
-                        : clonePrototypePolygonList(record.holes),
                     tileCoordKeys: sortPrototypeTileCoordKeys(record.tileCoordKeys)
                 });
             }
             return cloned;
+        }
+
+        function clonePrototypeFloorHoleRecords(rawRecords) {
+            if (!Array.isArray(rawRecords)) return [];
+            return rawRecords
+                .filter((record) => record && typeof record === "object")
+                .map((record) => ({
+                    ...record,
+                    level: Number.isFinite(record.level) ? Number(record.level) : 0,
+                    points: clonePrototypePointList(record.points),
+                    tileCoordKeys: sortPrototypeTileCoordKeys(record.tileCoordKeys)
+                }));
+        }
+
+        function clonePrototypeFloorVoidRecords(rawRecords) {
+            if (!Array.isArray(rawRecords)) return [];
+            return rawRecords
+                .filter((record) => record && typeof record === "object")
+                .map((record) => ({
+                    ...record,
+                    level: Number.isFinite(record.level) ? Number(record.level) : 0,
+                    points: clonePrototypePointList(record.points),
+                    holes: clonePrototypePolygonList(record.holes)
+                }));
+        }
+
+        function clonePrototypeBuildingRefs(rawRefs, label = "section buildingRefs") {
+            if (rawRefs === undefined || rawRefs === null) return [];
+            if (!Array.isArray(rawRefs)) {
+                throw new Error(`${label} must be an array`);
+            }
+            const refs = [];
+            const seen = new Set();
+            for (let i = 0; i < rawRefs.length; i++) {
+                const ref = rawRefs[i];
+                if (!ref || typeof ref !== "object" || Array.isArray(ref)) {
+                    throw new Error(`${label} ${i} must be an object`);
+                }
+                const id = String(ref.id === undefined || ref.id === null ? "" : ref.id).trim();
+                if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
+                    throw new Error(`${label} ${i} requires a valid building placement id`);
+                }
+                const buildingSaveName = String(ref.buildingSaveName === undefined || ref.buildingSaveName === null ? "" : ref.buildingSaveName).trim();
+                if (!buildingSaveName) {
+                    throw new Error(`${label} ${i} requires buildingSaveName`);
+                }
+                if (seen.has(id)) {
+                    throw new Error(`${label} contains duplicate building ref ${id}`);
+                }
+                seen.add(id);
+                refs.push({ id, buildingSaveName });
+            }
+            return refs;
         }
 
         function clonePrototypeFloorTransitions(rawTransitions) {
@@ -187,8 +517,9 @@
             return cloned;
         }
 
-        function createPrototypeImplicitGroundFloorFragment(asset) {
+        function createPrototypeImplicitGroundFloorFragment(asset, basis) {
             if (!asset || typeof asset !== "object") return null;
+            const outerPolygon = getPrototypeSectionFloorPolygon(asset, basis).map(point => ({ ...point }));
             return {
                 fragmentId: `section:${asset.key}:ground`,
                 surfaceId: "overworld_ground_surface",
@@ -196,17 +527,59 @@
                 level: 0,
                 nodeBaseZ: 0,
                 tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
-                outerPolygon: [],
+                outerPolygon,
                 holes: [],
-                visibilityPolygon: [],
-                visibilityHoles: [],
-                _prototypeSynthesizedGround: true
+                _prototypeGroundFloor: true
             };
         }
 
-        function applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, map) {
+        function ensurePrototypeLevel0FloorRecord(asset, basis) {
+            if (!asset || typeof asset !== "object") return false;
+            if (!Array.isArray(asset.floors)) asset.floors = [];
+            const sectionTileCoordKeys = sortPrototypeTileCoordKeys(asset.tileCoordKeys);
+            let hasLevel0 = false;
+            let changed = false;
+            for (let i = 0; i < asset.floors.length; i++) {
+                const fragment = asset.floors[i];
+                if (!fragment || Number(fragment.level) !== 0) continue;
+                hasLevel0 = true;
+                const outer = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : [];
+                const fragmentTileCoordKeys = sortPrototypeTileCoordKeys(fragment.tileCoordKeys);
+                const coversWholeSection = sectionTileCoordKeys.length > 0
+                    && fragmentTileCoordKeys.length === sectionTileCoordKeys.length
+                    && fragmentTileCoordKeys.every((key, index) => key === sectionTileCoordKeys[index]);
+                if (fragment._prototypeSynthesizedGround === true
+                    || fragment._prototypeGroundFloor === true
+                    || coversWholeSection
+                    || outer.length < 3) {
+                    const ground = createPrototypeImplicitGroundFloorFragment(asset, basis);
+                    if (!ground) continue;
+                    fragment.fragmentId = fragment.fragmentId || ground.fragmentId;
+                    fragment.surfaceId = fragment.surfaceId || ground.surfaceId;
+                    fragment.ownerSectionKey = fragment.ownerSectionKey || ground.ownerSectionKey;
+                    fragment.nodeBaseZ = Number.isFinite(fragment.nodeBaseZ) ? fragment.nodeBaseZ : ground.nodeBaseZ;
+                    fragment.tileCoordKeys = ground.tileCoordKeys.slice();
+                    fragment.outerPolygon = ground.outerPolygon.map(point => ({ ...point }));
+                    fragment.holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                    fragment._prototypeGroundFloor = true;
+                    delete fragment._prototypeSynthesizedGround;
+                    changed = true;
+                }
+            }
+            if (hasLevel0) return changed;
+            const ground = createPrototypeImplicitGroundFloorFragment(asset, basis);
+            if (!ground) return false;
+            asset.floors.unshift(ground);
+            return true;
+        }
+
+        function applyRawPrototypeSectionAssetToStateAsset(asset, rawAsset, map, basis) {
             if (!asset || !rawAsset || typeof rawAsset !== "object") return false;
             const textureCount = getPrototypeGroundTextureCount(map);
+            if (!basis) {
+                basis = (map && map._prototypeSectionState && map._prototypeSectionState.basis)
+                    ? map._prototypeSectionState.basis : null;
+            }
             asset.id = (typeof rawAsset.id === "string" && rawAsset.id.length > 0) ? rawAsset.id : asset.id;
             asset.coord = rawAsset.coord && typeof rawAsset.coord === "object"
                 ? { q: Number(rawAsset.coord.q) || 0, r: Number(rawAsset.coord.r) || 0 }
@@ -225,12 +598,17 @@
             asset.groundTextureId = Number.isFinite(rawAsset.groundTextureId) ? Number(rawAsset.groundTextureId) : asset.groundTextureId;
             asset.groundTiles = normalizePrototypeGroundTiles(rawAsset.groundTiles, asset.tileCoordKeys, textureCount);
             asset.floors = clonePrototypeFloorRecords(rawAsset.floors, asset.key);
+            ensurePrototypeLevel0FloorRecord(asset, basis);
+            asset.floorHoles = clonePrototypeFloorHoleRecords(rawAsset.floorHoles);
+            asset.floorVoids = clonePrototypeFloorVoidRecords(rawAsset.floorVoids);
+            bakePrototypeFloorFragmentTileCoordKeys(asset);
             asset.walls = Array.isArray(rawAsset.walls) ? rawAsset.walls.map((wall) => ({ ...wall })) : [];
             asset.blockedEdges = clonePrototypeBlockedEdges(rawAsset.blockedEdges);
             asset.clearanceByTile = clonePrototypeClearanceByTile(rawAsset.clearanceByTile);
             asset.objects = Array.isArray(rawAsset.objects) ? rawAsset.objects.map((obj) => ({ ...obj })) : [];
             asset.animals = Array.isArray(rawAsset.animals) ? rawAsset.animals.map((animal) => ({ ...animal })) : [];
             asset.powerups = Array.isArray(rawAsset.powerups) ? rawAsset.powerups.map((powerup) => ({ ...powerup })) : [];
+            asset.buildingRefs = clonePrototypeBuildingRefs(rawAsset.buildingRefs, `section ${asset.key} buildingRefs`);
             asset._prototypeBlockedEdgesDirty = !Array.isArray(rawAsset.blockedEdges)
                 || (asset.blockedEdges.length === 0 && asset.walls.length > 0);
             asset._prototypeClearanceDirty = Object.keys(asset.clearanceByTile).length !== asset.tileCoordKeys.length;
@@ -242,12 +620,17 @@
 
         return {
             applyRawPrototypeSectionAssetToStateAsset,
+            bakePrototypeFloorFragmentTileCoordKeys,
             clonePrototypeBlockedEdges,
+            clonePrototypeBuildingRefs,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorRecords,
+            clonePrototypeFloorHoleRecords,
+            clonePrototypeFloorVoidRecords,
             clonePrototypeFloorTransitions,
             createPrototypeImplicitGroundFloorFragment,
             comparePrototypeTileCoordKeys,
+            ensurePrototypeLevel0FloorRecord,
             getPrototypeGroundTextureCount,
             normalizePrototypeGroundTiles,
             pickPrototypeGroundTextureId,

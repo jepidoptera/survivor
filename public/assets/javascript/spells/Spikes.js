@@ -23,6 +23,9 @@ class SpikeProjectile {
         this.x = Number(config.x) || 0;
         this.y = Number(config.y) || 0;
         this.z = 0.2;
+        this.visualBaseZ = Number.isFinite(config.visualBaseZ) ? Number(config.visualBaseZ) : 0;
+        this.visualStartZ = Number.isFinite(config.visualStartZ) ? Number(config.visualStartZ) : this.visualBaseZ;
+        this.currentLayer = Number.isFinite(config.currentLayer) ? Math.round(Number(config.currentLayer)) : Math.round(this.visualBaseZ / 3);
         this.dirX = Number(config.dirX) || 1;
         this.dirY = Number(config.dirY) || 0;
         this.source = config.source || null;
@@ -330,6 +333,12 @@ class Spikes extends globalThis.Spell {
         const castOriginX = wizard.x;
         const castOriginY = wizard.y;
         const mapRef = wizard.map || null;
+        const casterWorldZ = (globalThis.Spell && typeof globalThis.Spell.getTargetWorldBaseZ === "function")
+            ? globalThis.Spell.getTargetWorldBaseZ(wizard)
+            : (Number.isFinite(wizard.currentLayerBaseZ) ? Number(wizard.currentLayerBaseZ) : 0);
+        const casterLayer = Number.isFinite(wizard.currentLayer)
+            ? Math.round(Number(wizard.currentLayer))
+            : Math.round((Number(casterWorldZ) || 0) / 3);
 
         offsets.forEach((offset, index) => {
             setTimeout(() => {
@@ -344,7 +353,10 @@ class Spikes extends globalThis.Spell {
                     dirX,
                     dirY,
                     source: wizard,
-                    map: mapRef
+                    map: mapRef,
+                    visualBaseZ: casterWorldZ,
+                    visualStartZ: casterWorldZ,
+                    currentLayer: casterLayer
                 });
                 projectiles.push(projectile.cast());
             }, Math.round(index * Spikes.HOTKEY_DELAY_MS));

@@ -13,6 +13,7 @@ let debugModePrevHexGridState = null;
 
 let perfPanel = null;
 let showPerfReadout = false;
+let showPerfReadoutDetails = false;
 // Keep detailed perf instrumentation off during normal play.
 // The full accumulator is useful when profiling frame pacing or render/sim regressions,
 // but it adds steady per-frame work and can skew the very numbers it is measuring.
@@ -128,7 +129,15 @@ let simPerfBreakdown = {
     maxFacingMs: 0,
     maxMovementMs: 0,
     maxCollisionMs: 0,
-    maxPointerPostMs: 0
+    maxPointerPostMs: 0,
+    spellMs: 0,
+    animalMs: 0,
+    activeAnimals: 0,
+    spellNearbyMs: 0,
+    spellPowerupsMs: 0,
+    spellRuntimeMs: 0,
+    spellTriggerMs: 0,
+    spellProcessMs: 0,
 };
 const PERF_ACCUM_TOP_SPIKES = 10;
 const PERF_INSTRUMENTATION_HELP_LINES = [
@@ -156,6 +165,7 @@ const PERF_ACCUM_EXTRA_FIELDS = [
     "visibleObjectNodeRefs",
     "visibleObjectVisibilityRefs",
     "visibleObjectDuplicateRefsSkipped",
+    "visibleObjectsSkippedBuildingCutaway",
     "visibleAnimalsAdded",
     "visibleAnimalsSkippedOffscreen",
     "onscreenCacheObjects",
@@ -192,6 +202,44 @@ const PERF_ACCUM_EXTRA_FIELDS = [
     "objects3dLosBuildMs",
     "objects3dLosVisibleSetSize",
     "objects3dLosVisibleWalls",
+    "layerCutawayStateMs",
+    "layerCutawayBuildingsScanned",
+    "layerCutawayBuildingBoundsTests",
+    "layerCutawayBuildingPointTests",
+    "layerCutawayBuildingTriggers",
+    "layerCutawayFloorFallbackScanned",
+    "layerCutawayRenderItemTests",
+    "layerCutawayRenderItemFastPath",
+    "layerCutawayWorldPointTests",
+    "layerCutawayWorldPointFastPath",
+    "buildingRenderCacheHits",
+    "buildingRenderCacheMisses",
+    "buildingRenderCacheBuildMs",
+    "buildingRenderCacheCandidates",
+    "buildingRenderCacheRefsScanned",
+    "buildingRenderCacheItems",
+    "buildingRenderCacheWalls",
+    "buildingRenderCacheGroundWalls",
+    "objects3dBuildingFlagMs",
+    "objects3dCutawayWallFlatMs",
+    "objects3dBuildingMaskMs",
+    "objects3dBuildingHiddenItemsFlagged",
+    "objects3dBuildingGroundWallsForced",
+    "objects3dBuildingVisibleWallTests",
+    "objects3dBuildingVisibleWallsForced",
+    "objects3dCutawayWallFlatCandidates",
+    "objects3dCutawayWallFlatForced",
+    "objects3dBuildingMaskActive",
+    "objects3dBuildingMaskEntries",
+    "objects3dBuildingMaskMeshes",
+    "objects3dBuildingMaskVertices",
+    "objects3dBuildingMaskTriangles",
+    "objects3dBuildingMaskCreated",
+    "objects3dBuildingMaskGeometryUploads",
+    "objects3dBuildingMaskUniformUpdates",
+    "objects3dBuildingMaskAttachOps",
+    "objects3dBuildingMaskHiddenMeshes",
+    "objects3dTopFaceOnlyWalls",
     "objects3dFilterMs",
     "objects3dTransformMs",
     "objects3dDepthMs",
@@ -775,6 +823,7 @@ class DebugViewSettings {
         this._defineBooleanSetting("showTileClearance", () => showTileClearance, value => setShowTileClearanceEnabled(value));
         this._defineBooleanSetting("showPerfReadout", () => showPerfReadout, value => setShowPerfReadout(value));
         this._defineBooleanSetting("showFpsCounter", () => showPerfReadout, value => setShowPerfReadout(value));
+        this._defineBooleanSetting("showPerfReadoutDetails", () => showPerfReadoutDetails, value => setShowPerfReadoutDetails(value));
         this._defineBooleanSetting("perfInstrumentationEnabled", () => perfInstrumentationEnabled, value => setPerfInstrumentationEnabled(value));
         this._defineBooleanSetting("showVisualHitboxes", () => this._showVisualHitboxes !== false, value => {
             this._showVisualHitboxes = !!value;
@@ -812,6 +861,7 @@ class DebugViewSettings {
             showTileClearance: this.showTileClearance,
             showPerfReadout: this.showPerfReadout,
             showFpsCounter: this.showFpsCounter,
+            showPerfReadoutDetails: this.showPerfReadoutDetails,
             perfInstrumentationEnabled: this.perfInstrumentationEnabled,
             showVisualHitboxes: this.showVisualHitboxes,
             showLosFill: this.showLosFill,
@@ -868,6 +918,22 @@ function toggleShowPerfReadout() {
     return showPerfReadout;
 }
 
+function setShowPerfReadoutDetails(enabled) {
+    showPerfReadoutDetails = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.showPerfReadoutDetails = showPerfReadoutDetails;
+    }
+    return showPerfReadoutDetails;
+}
+
+function toggleShowPerfReadoutDetails() {
+    return setShowPerfReadoutDetails(!showPerfReadoutDetails);
+}
+
+function isShowPerfReadoutDetailsEnabled() {
+    return !!showPerfReadoutDetails;
+}
+
 function toggleDebugMode() {
     return setDebugModeEnabled(!debugMode);
 }
@@ -882,6 +948,9 @@ if (typeof globalThis !== "undefined") {
         toggleDebugMode: () => toggleDebugMode(),
         toggleHexGrid: () => toggleHexGrid(),
         togglePerfReadout: () => toggleShowPerfReadout(),
+        togglePerfReadoutDetails: () => toggleShowPerfReadoutDetails(),
+        setPerfReadoutDetails: enabled => setShowPerfReadoutDetails(enabled),
+        isPerfReadoutDetailsEnabled: () => isShowPerfReadoutDetailsEnabled(),
         isPerfInstrumentationEnabled: () => isPerfInstrumentationEnabled(),
         setPerfInstrumentationEnabled: (enabled, options) => setPerfInstrumentationEnabled(enabled, options),
         describePerfInstrumentation: () => describePerfInstrumentation(),
@@ -912,6 +981,10 @@ if (typeof globalThis !== "undefined") {
     globalThis.getPerfAccumulatorSnapshot = getPerfAccumulatorSnapshot;
     globalThis.resetPerfAccumulator = resetPerfAccumulator;
     globalThis.printPerfAccumulator = printPerfAccumulator;
+    globalThis.showPerfReadoutDetails = showPerfReadoutDetails;
+    globalThis.setShowPerfReadoutDetails = setShowPerfReadoutDetails;
+    globalThis.toggleShowPerfReadoutDetails = toggleShowPerfReadoutDetails;
+    globalThis.isShowPerfReadoutDetailsEnabled = isShowPerfReadoutDetailsEnabled;
     globalThis.isPerfInstrumentationEnabled = isPerfInstrumentationEnabled;
     globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
     globalThis.describePerfInstrumentation = describePerfInstrumentation;
@@ -1222,6 +1295,7 @@ function drawGroundPlaneHitboxes(redraw = true) {
 
     objectsWithGroundHitboxes.forEach(obj => {
         const hitbox = obj.groundPlaneHitbox;
+        const hitboxZ = resolveDebugHitboxWorldZ(obj);
         const isWindow = (
             obj &&
             (obj.isPlacedObject || obj.objectType === "placedObject" || obj.type === "placedObject") &&
@@ -1231,12 +1305,12 @@ function drawGroundPlaneHitboxes(redraw = true) {
         groundPlaneHitboxGraphics.lineStyle(2, isWindow ? 0xff00aa : 0x000000, 0.8);
 
         if (hitbox instanceof CircleHitbox) {
-            const center = worldToScreen({x: hitbox.x, y: hitbox.y});
+            const center = worldToScreen({x: hitbox.x, y: hitbox.y, z: hitboxZ});
             const radiusX = hitbox.radius * viewscale;
             const radiusY = hitbox.radius * viewscale * xyratio;
             groundPlaneHitboxGraphics.drawEllipse(center.x, center.y, radiusX, radiusY);
         } else if (hitbox instanceof PolygonHitbox) {
-            const screenPoints = hitbox.points.map(v => worldToScreen(v));
+            const screenPoints = hitbox.points.map(v => worldToScreen({x: v.x, y: v.y, z: hitboxZ}));
             if (screenPoints.length > 0) {
                 groundPlaneHitboxGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
                 for (let i = 1; i < screenPoints.length; i++) {
@@ -1246,6 +1320,62 @@ function drawGroundPlaneHitboxes(redraw = true) {
             }
         }
     });
+}
+
+function isDebugCharacterObject(obj) {
+    return !!(
+        obj &&
+        typeof Character !== "undefined" &&
+        obj instanceof Character
+    );
+}
+
+function isDebugWizardObject(obj) {
+    return !!(
+        obj &&
+        (
+            (typeof wizard !== "undefined" && obj === wizard) ||
+            (typeof globalThis !== "undefined" && globalThis.wizard && obj === globalThis.wizard) ||
+            (obj.constructor && obj.constructor.name === "Wizard")
+        )
+    );
+}
+
+function getDebugTraversalLayer(obj, fallback = 0) {
+    if (!obj) return Number(fallback) || 0;
+    if (Number.isFinite(obj._renderTraversalLayer)) return Math.round(Number(obj._renderTraversalLayer));
+    if (Number.isFinite(obj.traversalLayer)) return Math.round(Number(obj.traversalLayer));
+    if (Number.isFinite(obj.currentLayer)) return Math.round(Number(obj.currentLayer));
+    if (Number.isFinite(obj.level)) return Math.round(Number(obj.level));
+    if (obj.node && Number.isFinite(obj.node.traversalLayer)) return Math.round(Number(obj.node.traversalLayer));
+    if (obj.node && Number.isFinite(obj.node.level)) return Math.round(Number(obj.node.level));
+    return Number(fallback) || 0;
+}
+
+function getDebugLayerBaseZForObject(obj, fallback = 0) {
+    if (isDebugCharacterObject(obj)) return 0;
+    const layerHeight = (
+        typeof FLOOR_LAYER_DEFAULT_HEIGHT_UNITS !== "undefined" &&
+        Number.isFinite(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
+    ) ? Number(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS) : 3;
+    return getDebugTraversalLayer(obj, fallback) * layerHeight;
+}
+
+function resolveDebugHitboxWorldZ(owner) {
+    if (!owner) return 0;
+    const localZ = Number.isFinite(owner.z) ? Number(owner.z) : 0;
+    if (isDebugWizardObject(owner)) {
+        const layerBaseZ = Number.isFinite(owner.currentLayerBaseZ)
+            ? Number(owner.currentLayerBaseZ)
+            : getDebugTraversalLayer(owner, 0) * (
+                typeof FLOOR_LAYER_DEFAULT_HEIGHT_UNITS !== "undefined" &&
+                Number.isFinite(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
+                    ? Number(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
+                    : 3
+            );
+        return layerBaseZ + localZ;
+    }
+    return localZ + getDebugLayerBaseZForObject(owner, 0);
 }
 
 function drawHitboxes(redraw = true) {
@@ -1292,11 +1422,13 @@ function drawHitboxes(redraw = true) {
                     hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
                     const points = hitbox.points;
                     if (!points || points.length === 0) return;
-                    const screenPoints = points.map(p => (worldToScreen({x: p.x, y: p.y})));
+                    const hitboxZ = resolveDebugHitboxWorldZ(obj);
+                    const screenPoints = points.map(p => (worldToScreen({x: p.x, y: p.y, z: hitboxZ})));
                     const flatPoints = screenPoints.flatMap(p => [p.x, p.y]);
                     hitboxGraphics.drawPolygon(flatPoints);
                 } else if (hitbox instanceof CircleHitbox) {
-                    const center = worldToScreen({x: hitbox.x, y: hitbox.y});
+                    const hitboxZ = resolveDebugHitboxWorldZ(obj);
+                    const center = worldToScreen({x: hitbox.x, y: hitbox.y, z: hitboxZ});
                     const radiusPx = hitbox.radius * viewscale;
                     hitboxGraphics.lineStyle(2, 0x33cc33, 0.9);
                     hitboxGraphics.drawCircle(center.x, center.y, radiusPx);
@@ -1305,8 +1437,9 @@ function drawHitboxes(redraw = true) {
         }
     }
 
-    const drawDebugHitboxShape = (hitbox, color = 0xffffff, alpha = 0.95) => {
+    const drawDebugHitboxShape = (hitbox, color = 0xffffff, alpha = 0.95, owner = null) => {
         if (!hitbox) return false;
+        const hitboxZ = resolveDebugHitboxWorldZ(owner);
         const isCircle = (
             hitbox.type === "circle" &&
             Number.isFinite(hitbox.x) &&
@@ -1314,7 +1447,7 @@ function drawHitboxes(redraw = true) {
             Number.isFinite(hitbox.radius)
         );
         if (isCircle) {
-            const center = worldToScreen({x: hitbox.x, y: hitbox.y});
+            const center = worldToScreen({x: hitbox.x, y: hitbox.y, z: hitboxZ});
             hitboxGraphics.lineStyle(2, color, alpha);
             hitboxGraphics.drawCircle(center.x, center.y, hitbox.radius * viewscale);
             return true;
@@ -1323,7 +1456,7 @@ function drawHitboxes(redraw = true) {
         const points = Array.isArray(hitbox.points) ? hitbox.points : null;
         if (points && points.length > 1) {
             const flatPoints = points
-                .map(p => worldToScreen({x: p.x, y: p.y}))
+                .map(p => worldToScreen({x: p.x, y: p.y, z: hitboxZ}))
                 .flatMap(p => [p.x, p.y]);
             hitboxGraphics.lineStyle(2, color, alpha);
             hitboxGraphics.drawPolygon(flatPoints);
@@ -1334,12 +1467,12 @@ function drawHitboxes(redraw = true) {
 
     if (wizard) {
         if (showVisualHitboxes) {
-            drawDebugHitboxShape(wizard.visualHitbox, 0x00ffff, 0.95);
+            drawDebugHitboxShape(wizard.visualHitbox, 0x00ffff, 0.95, wizard);
         }
-        drawDebugHitboxShape(wizard.groundPlaneHitbox, 0xffffff, 0.95);
+        drawDebugHitboxShape(wizard.groundPlaneHitbox, 0xffffff, 0.95, wizard);
 
         if (Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
-            const center = worldToScreen({x: wizard.x, y: wizard.y});
+            const center = worldToScreen({x: wizard.x, y: wizard.y, z: resolveDebugHitboxWorldZ(wizard)});
             hitboxGraphics.lineStyle(2, 0xff00ff, 0.95);
             hitboxGraphics.moveTo(center.x - 8, center.y);
             hitboxGraphics.lineTo(center.x + 8, center.y);
@@ -1354,7 +1487,7 @@ function drawHitboxes(redraw = true) {
             const fireHitbox = showVisualHitboxes
                 ? (obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox)
                 : (obj.groundPlaneHitbox || obj.hitbox);
-            drawDebugHitboxShape(fireHitbox, 0xff3300, 0.95);
+            drawDebugHitboxShape(fireHitbox, 0xff3300, 0.95, obj);
         });
     }
 }

@@ -12,6 +12,187 @@ function pointInPolygon2D(x, y, points) {
     return inside;
 }
 
+function getPolygonBounds2D(points) {
+    if (!Array.isArray(points) || points.length < 3) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+        const x = Number(points[i] && points[i].x);
+        const y = Number(points[i] && points[i].y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+    return { minX, minY, maxX, maxY };
+}
+
+function polygonBoundsOverlap2D(a, b) {
+    if (!a || !b) return false;
+    return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+}
+
+function pointOnSegment2D(px, py, ax, ay, bx, by, eps = 1e-7) {
+    const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+    if (Math.abs(cross) > eps) return false;
+    const dot = (px - ax) * (bx - ax) + (py - ay) * (by - ay);
+    if (dot < -eps) return false;
+    const len2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+    return dot <= len2 + eps;
+}
+
+function getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lenSq = abx * abx + aby * aby;
+    if (!(lenSq > 1e-12)) {
+        const dx = px - ax;
+        const dy = py - ay;
+        return dx * dx + dy * dy;
+    }
+    const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+    const cx = ax + abx * t;
+    const cy = ay + aby * t;
+    const dx = px - cx;
+    const dy = py - cy;
+    return dx * dx + dy * dy;
+}
+
+function getPointPolygonBoundaryDistanceSq2D(px, py, points) {
+    if (!Array.isArray(points) || points.length < 3) return Infinity;
+    let best = Infinity;
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+        best = Math.min(best, getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by));
+    }
+    return best;
+}
+
+function segmentsIntersect2D(a, b, c, d) {
+    if (!a || !b || !c || !d) return false;
+    const ax = Number(a.x), ay = Number(a.y);
+    const bx = Number(b.x), by = Number(b.y);
+    const cx = Number(c.x), cy = Number(c.y);
+    const dx = Number(d.x), dy = Number(d.y);
+    if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+    const orient = (px, py, qx, qy, rx, ry) => {
+        const v = (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
+        if (Math.abs(v) <= 1e-7) return 0;
+        return v > 0 ? 1 : 2;
+    };
+    const o1 = orient(ax, ay, bx, by, cx, cy);
+    const o2 = orient(ax, ay, bx, by, dx, dy);
+    const o3 = orient(cx, cy, dx, dy, ax, ay);
+    const o4 = orient(cx, cy, dx, dy, bx, by);
+    if (o1 !== o2 && o3 !== o4) return true;
+    if (o1 === 0 && pointOnSegment2D(cx, cy, ax, ay, bx, by)) return true;
+    if (o2 === 0 && pointOnSegment2D(dx, dy, ax, ay, bx, by)) return true;
+    if (o3 === 0 && pointOnSegment2D(ax, ay, cx, cy, dx, dy)) return true;
+    if (o4 === 0 && pointOnSegment2D(bx, by, cx, cy, dx, dy)) return true;
+    return false;
+}
+
+function polygonsOverlap2D(aPoints, bPoints) {
+    const a = Array.isArray(aPoints) ? aPoints : [];
+    const b = Array.isArray(bPoints) ? bPoints : [];
+    if (a.length < 3 || b.length < 3) return false;
+    if (!polygonBoundsOverlap2D(getPolygonBounds2D(a), getPolygonBounds2D(b))) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (pointInPolygon2D(Number(a[i].x), Number(a[i].y), b)) return true;
+    }
+    for (let i = 0; i < b.length; i++) {
+        if (pointInPolygon2D(Number(b[i].x), Number(b[i].y), a)) return true;
+    }
+    for (let i = 0; i < a.length; i++) {
+        const a0 = a[i];
+        const a1 = a[(i + 1) % a.length];
+        for (let j = 0; j < b.length; j++) {
+            if (segmentsIntersect2D(a0, a1, b[j], b[(j + 1) % b.length])) return true;
+        }
+    }
+    return false;
+}
+
+function getPolygonClippingApi2D() {
+    return (typeof globalThis !== "undefined" && globalThis.polygonClipping)
+        ? globalThis.polygonClipping
+        : null;
+}
+
+function polygonToClipRing2D(points) {
+    if (!Array.isArray(points) || points.length < 3) return null;
+    const ring = [];
+    for (let i = 0; i < points.length; i++) {
+        const x = Number(points[i] && points[i].x);
+        const y = Number(points[i] && points[i].y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        ring.push([x, y]);
+    }
+    if (ring.length < 3) return null;
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (!last || Math.abs(first[0] - last[0]) > 1e-9 || Math.abs(first[1] - last[1]) > 1e-9) {
+        ring.push([first[0], first[1]]);
+    }
+    return ring;
+}
+
+function floorFragmentToClipGeometry2D(fragment, getPolygonFn) {
+    const outer = typeof getPolygonFn === "function"
+        ? getPolygonFn(fragment)
+        : (fragment && fragment.outerPolygon);
+    const outerRing = polygonToClipRing2D(outer);
+    if (!outerRing) return [];
+    const polygon = [outerRing];
+    const holes = Array.isArray(fragment && fragment.holes) ? fragment.holes : [];
+    for (let i = 0; i < holes.length; i++) {
+        const ring = polygonToClipRing2D(holes[i]);
+        if (ring) polygon.push(ring);
+    }
+    return [polygon];
+}
+
+function clipGeometryIsEmpty2D(geometry) {
+    if (!Array.isArray(geometry) || geometry.length === 0) return true;
+    for (let i = 0; i < geometry.length; i++) {
+        const polygon = geometry[i];
+        if (Array.isArray(polygon) && Array.isArray(polygon[0]) && polygon[0].length >= 4) return false;
+    }
+    return true;
+}
+
+function clipRingToPolygonPoints2D(ring, label = "clip ring") {
+    if (!Array.isArray(ring) || ring.length < 4) {
+        throw new Error(`${label} requires a closed ring`);
+    }
+    const points = [];
+    const limit = ring.length > 1 &&
+        Math.abs(Number(ring[0][0]) - Number(ring[ring.length - 1][0])) <= 1e-9 &&
+        Math.abs(Number(ring[0][1]) - Number(ring[ring.length - 1][1])) <= 1e-9
+        ? ring.length - 1
+        : ring.length;
+    for (let i = 0; i < limit; i++) {
+        const x = Number(ring[i] && ring[i][0]);
+        const y = Number(ring[i] && ring[i][1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point`);
+        }
+        points.push({ x, y });
+    }
+    if (points.length < 3) throw new Error(`${label} produced fewer than three points`);
+    return points;
+}
+
 function distanceToSegment2D(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
@@ -208,6 +389,19 @@ class MinPriorityQueue {
     }
 }
 
+function markFloorNodeRenderObjectCacheDirty(node, obj) {
+    if (!node || typeof node.fragmentId !== "string" || node.fragmentId.length === 0) return;
+    if (!obj) return;
+    const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+    if (animalCtor && obj instanceof animalCtor) return;
+    if (typeof globalThis !== "undefined" && obj === globalThis.wizard) return;
+    if (obj.type === "powerup") return;
+    const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+    if (mapRef && typeof mapRef.markFloorObjectNodeCacheDirty === "function") {
+        mapRef.markFloorObjectNodeCacheDirty();
+    }
+}
+
 class MapNode {
     constructor(x, y, mapWidth, mapHeight) {
         this.x = x * 0.866;
@@ -315,8 +509,10 @@ class MapNode {
 
     addObject(obj) {
         if (!this.objects) this.objects = [];
+        const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
         const wasBlocked = !!(this.blocked || this.blockedByObjects > 0);
         this.objects.push(obj);
+        markFloorNodeRenderObjectCacheDirty(this, obj);
         if (doesObjectBlockTile(obj)) {
             this.blockedByObjects = Math.max(0, Number(this.blockedByObjects) || 0) + 1;
         }
@@ -330,7 +526,16 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        const mapRef = (obj && obj.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+        const shouldDirtyBuildingCache = !!(
+            obj &&
+            obj !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
+            obj.type !== "powerup" &&
+            !(animalCtor && obj instanceof animalCtor)
+        );
+        if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
         if (
             typeof globalThis !== "undefined" &&
             typeof globalThis.invalidateMinimap === "function" &&
@@ -345,6 +550,7 @@ class MapNode {
         if (!this.visibilityObjects) this.visibilityObjects = [];
         if (this.visibilityObjects.includes(obj)) return;
         this.visibilityObjects.push(obj);
+        markFloorNodeRenderObjectCacheDirty(this, obj);
     }
 
     removeObject(obj) {
@@ -354,6 +560,8 @@ class MapNode {
         if (idx === -1) return;
         const removed = this.objects[idx];
         this.objects.splice(idx, 1);
+        const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        markFloorNodeRenderObjectCacheDirty(this, removed);
         if (doesObjectBlockTile(removed)) {
             this.blockedByObjects = Math.max(0, (Number(this.blockedByObjects) || 0) - 1);
         }
@@ -367,7 +575,16 @@ class MapNode {
                 globalThis.map.updateClearanceAround(this);
             }
         }
-        const mapRef = (removed && removed.map) || (typeof globalThis !== "undefined" ? globalThis.map : null) || null;
+        const animalCtor = typeof globalThis !== "undefined" ? globalThis.Animal : null;
+        const shouldDirtyBuildingCache = !!(
+            removed &&
+            removed !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
+            removed.type !== "powerup" &&
+            !(animalCtor && removed instanceof animalCtor)
+        );
+        if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
         if (
             typeof globalThis !== "undefined" &&
             typeof globalThis.invalidateMinimap === "function" &&
@@ -380,7 +597,10 @@ class MapNode {
     removeVisibilityObject(obj) {
         if (!this.visibilityObjects) return;
         const idx = this.visibilityObjects.indexOf(obj);
-        if (idx !== -1) this.visibilityObjects.splice(idx, 1);
+        if (idx !== -1) {
+            this.visibilityObjects.splice(idx, 1);
+            markFloorNodeRenderObjectCacheDirty(this, obj);
+        }
     }
 
     recountBlockingObjects() {
@@ -503,6 +723,15 @@ function anchorNeighborInDirection(anchor, dir) {
 // save files with stale cached clearance are automatically recomputed.
 const CLEARANCE_VERSION = 2;
 
+const _floorNodeCtorWorkMap = new WeakMap();
+function _tryMakeFloorNodeFromCtor(SourceCtor, x, y) {
+    try {
+        return new SourceCtor(x, y, 1, 1);
+    } catch (_err) {
+        return null;
+    }
+}
+
 class GameMap {
     constructor(width, height, options, callback) {
         const _t0 = performance.now();
@@ -529,7 +758,13 @@ class GameMap {
         this.groundPalette = [
             "forest0", "forest1", "forest2", "forest3",
             "forest4", "forest5", "forest6", "forest7", "forest8", "forest9",
-            "forest10", "forest11", "forest12"
+            "forest10", "forest11", "forest12",
+            "forest13", "forest14", "forest15", "forest16", "forest17", "forest18",
+            "forest19", "forest20", "forest21", "forest22", "forest23", "forest24", "forest25",
+            "forest26", "forest27", "forest28", "forest29", "forest30", "forest31",
+            "forest32", "forest33", "forest34", "forest35", "forest36", "forest37", "forest38",
+            "forest39", "forest40", "forest41", "forest42", "forest43", "forest44",
+            "forest45", "forest46", "forest47", "forest48", "forest49", "forest50", "forest51"
         ];
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
         this.groundPalette.forEach((name, idx) => {
@@ -718,6 +953,7 @@ class GameMap {
         if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
         if (!this.gameObjects.includes(obj)) {
             this.gameObjects.push(obj);
+            this.markBuildingRenderCacheDirty();
             return true;
         }
         return false;
@@ -728,6 +964,7 @@ class GameMap {
         const idx = this.gameObjects.indexOf(obj);
         if (idx < 0) return false;
         this.gameObjects.splice(idx, 1);
+        this.markBuildingRenderCacheDirty();
         return true;
     }
 
@@ -837,7 +1074,186 @@ class GameMap {
         this.floorFragmentsBySectionKey = new Map();
         this.floorNodesById = new Map();
         this.floorNodeIndex = new Map();
+        this.floorNodeLayerIndex = new Map();
+        this.buildingsById = new Map();
+        this.floorBuildingByFragmentId = new Map();
+        this._floorBuildingsDirty = true;
+        this._floorBuildingVersion = 0;
+        this._buildingRenderCacheVersion = 0;
         this.transitionsById = new Map();
+        this.stairsById = new Map();
+        this.markFloorObjectNodeCacheDirty();
+    }
+
+    markFloorObjectNodeCacheDirty() {
+        this._floorObjectNodeCacheVersion = (Number(this._floorObjectNodeCacheVersion) || 0) + 1;
+        this._floorObjectNodeSpatialIndexReadyVersion = -1;
+        return this._floorObjectNodeCacheVersion;
+    }
+
+    floorObjectNodeHasIndexedRenderEntries(node) {
+        if (!node) return false;
+        const hasRelevantEntry = (list) => {
+            if (!Array.isArray(list) || list.length === 0) return false;
+            for (let i = 0; i < list.length; i++) {
+                const obj = list[i];
+                if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
+                if (obj.type === "road") continue;
+                return true;
+            }
+            return false;
+        };
+        return hasRelevantEntry(node.objects) || hasRelevantEntry(node.visibilityObjects);
+    }
+
+    beginFloorObjectNodeSpatialIndexBuild() {
+        const source = this.floorNodesById instanceof Map
+            ? Array.from(this.floorNodesById.values())
+            : [];
+        return {
+            map: this,
+            version: Number(this._floorObjectNodeCacheVersion) || 0,
+            mapSize: this.floorNodesById instanceof Map ? this.floorNodesById.size : 0,
+            source,
+            bySectionY: new Map(),
+            allByY: new Map(),
+            rows: [],
+            totalNodes: 0,
+            scanMs: 0,
+            sortMs: 0,
+            committed: false
+        };
+    }
+
+    _addFloorObjectNodeSpatialIndexRow(rowsByY, yKey) {
+        if (!(rowsByY instanceof Map)) return null;
+        let row = rowsByY.get(yKey);
+        if (!Array.isArray(row)) {
+            row = [];
+            rowsByY.set(yKey, row);
+        }
+        return row;
+    }
+
+    _addFloorObjectNodeToSpatialIndexJob(job, node) {
+        if (!job || !node || !this.floorObjectNodeHasIndexedRenderEntries(node)) return;
+        const yKey = Number.isFinite(node.yindex) ? Math.round(Number(node.yindex)) : null;
+        if (!Number.isFinite(yKey)) return;
+        const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+        let sectionRows = job.bySectionY.get(sectionKey);
+        if (!(sectionRows instanceof Map)) {
+            sectionRows = new Map();
+            job.bySectionY.set(sectionKey, sectionRows);
+        }
+        this._addFloorObjectNodeSpatialIndexRow(sectionRows, yKey).push(node);
+        this._addFloorObjectNodeSpatialIndexRow(job.allByY, yKey).push(node);
+        job.totalNodes += 1;
+    }
+
+    scanFloorObjectNodeSpatialIndexBuildRange(job, startIndex, endIndex) {
+        if (!job || job.map !== this || !Array.isArray(job.source)) return 0;
+        const scanStartMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const start = Math.max(0, Math.floor(Number(startIndex) || 0));
+        const end = Math.min(job.source.length, Math.max(start, Math.floor(Number(endIndex) || 0)));
+        let scanned = 0;
+        for (let i = start; i < end; i++) {
+            const nodeArr = job.source[i];
+            if (!Array.isArray(nodeArr)) continue;
+            for (let j = 0; j < nodeArr.length; j++) {
+                this._addFloorObjectNodeToSpatialIndexJob(job, nodeArr[j]);
+                scanned += 1;
+            }
+        }
+        const scanEndMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        job.scanMs += scanEndMs - scanStartMs;
+        return scanned;
+    }
+
+    prepareFloorObjectNodeSpatialIndexSortRows(job) {
+        if (!job || job.map !== this) return 0;
+        const rows = [];
+        for (const sectionRows of job.bySectionY.values()) {
+            if (!(sectionRows instanceof Map)) continue;
+            for (const row of sectionRows.values()) {
+                if (Array.isArray(row) && row.length > 1) rows.push(row);
+            }
+        }
+        for (const row of job.allByY.values()) {
+            if (Array.isArray(row) && row.length > 1) rows.push(row);
+        }
+        job.rows = rows;
+        return rows.length;
+    }
+
+    sortFloorObjectNodeSpatialIndexRows(job, startIndex, endIndex) {
+        if (!job || job.map !== this || !Array.isArray(job.rows)) return 0;
+        const sortStartMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const start = Math.max(0, Math.floor(Number(startIndex) || 0));
+        const end = Math.min(job.rows.length, Math.max(start, Math.floor(Number(endIndex) || 0)));
+        for (let i = start; i < end; i++) {
+            const row = job.rows[i];
+            if (!Array.isArray(row) || row.length < 2) continue;
+            row.sort((left, right) => {
+                const xDelta = (Number(left && left.xindex) || 0) - (Number(right && right.xindex) || 0);
+                if (xDelta !== 0) return xDelta;
+                return String(left && left.id || "").localeCompare(String(right && right.id || ""));
+            });
+        }
+        const sortEndMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        job.sortMs += sortEndMs - sortStartMs;
+        return end - start;
+    }
+
+    commitFloorObjectNodeSpatialIndexBuild(job) {
+        if (!job || job.map !== this) return null;
+        const index = {
+            version: Number(job.version) || 0,
+            mapSize: Number(job.mapSize) || 0,
+            bySectionY: job.bySectionY instanceof Map ? job.bySectionY : new Map(),
+            allByY: job.allByY instanceof Map ? job.allByY : new Map(),
+            totalNodes: Number(job.totalNodes) || 0,
+            rowsBuilt: Array.isArray(job.rows) ? job.rows.length : 0,
+            scanMs: Number(job.scanMs) || 0,
+            sortMs: Number(job.sortMs) || 0
+        };
+        this._floorObjectNodeSpatialIndex = index;
+        this._floorObjectNodeSpatialIndexReadyVersion = index.version;
+        job.committed = true;
+        return index;
+    }
+
+    rebuildFloorObjectNodeSpatialIndex() {
+        const job = this.beginFloorObjectNodeSpatialIndexBuild();
+        this.scanFloorObjectNodeSpatialIndexBuildRange(job, 0, job.source.length);
+        this.prepareFloorObjectNodeSpatialIndexSortRows(job);
+        this.sortFloorObjectNodeSpatialIndexRows(job, 0, job.rows.length);
+        return this.commitFloorObjectNodeSpatialIndexBuild(job);
+    }
+
+    getFloorObjectNodeSpatialIndex() {
+        return this._floorObjectNodeSpatialIndex || null;
+    }
+
+    isFloorObjectNodeSpatialIndexCurrent() {
+        const index = this.getFloorObjectNodeSpatialIndex();
+        return !!(
+            index &&
+            index.version === (Number(this._floorObjectNodeCacheVersion) || 0) &&
+            index.mapSize === (this.floorNodesById instanceof Map ? this.floorNodesById.size : 0)
+        );
+    }
+
+    ensureFloorObjectNodeSpatialIndex() {
+        if (this.isFloorObjectNodeSpatialIndexCurrent()) return this.getFloorObjectNodeSpatialIndex();
+        return this.rebuildFloorObjectNodeSpatialIndex();
     }
 
     getFloorNodeKey(nodeOrX, y = null, surfaceId = "", fragmentId = "") {
@@ -853,6 +1269,48 @@ class GameMap {
         return `${Number(nodeOrX)},${Number(y)},${resolvedSurfaceId},${resolvedFragmentId}`;
     }
 
+    getFloorLayerNodeKey(nodeOrX, y = null, traversalLayer = 0) {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            const layer = Number.isFinite(nodeOrX.traversalLayer)
+                ? Math.round(Number(nodeOrX.traversalLayer))
+                : (Number.isFinite(nodeOrX.level) ? Math.round(Number(nodeOrX.level)) : 0);
+            return `${Number(nodeOrX.xindex)},${Number(nodeOrX.yindex)},${layer}`;
+        }
+        const layer = Number.isFinite(traversalLayer) ? Math.round(Number(traversalLayer)) : 0;
+        return `${Number(nodeOrX)},${Number(y)},${layer}`;
+    }
+
+    _indexFloorNodeByLayer(node) {
+        if (!node) return;
+        if (!(this.floorNodeLayerIndex instanceof Map)) this.floorNodeLayerIndex = new Map();
+        const key = this.getFloorLayerNodeKey(node);
+        if (!this.floorNodeLayerIndex.has(key)) this.floorNodeLayerIndex.set(key, []);
+        const nodes = this.floorNodeLayerIndex.get(key);
+        if (!nodes.includes(node)) nodes.push(node);
+    }
+
+    _unindexFloorNodeByLayer(node) {
+        if (!node || !(this.floorNodeLayerIndex instanceof Map)) return;
+        const key = this.getFloorLayerNodeKey(node);
+        const nodes = this.floorNodeLayerIndex.get(key);
+        if (!Array.isArray(nodes)) return;
+        const index = nodes.indexOf(node);
+        if (index >= 0) nodes.splice(index, 1);
+        if (nodes.length === 0) this.floorNodeLayerIndex.delete(key);
+    }
+
+    _ensureFloorNodeLayerIndex() {
+        if (this.floorNodeLayerIndex instanceof Map) return;
+        this.floorNodeLayerIndex = new Map();
+        if (!(this.floorNodesById instanceof Map)) return;
+        for (const nodes of this.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                this._indexFloorNodeByLayer(nodes[i]);
+            }
+        }
+    }
+
     registerFloorFragment(fragment) {
         if (!fragment || typeof fragment !== "object") return null;
         if (!(this.floorsById instanceof Map)) this.resetFloorRuntimeState();
@@ -862,6 +1320,19 @@ class GameMap {
             : ((typeof fragment.id === "string" && fragment.id.length > 0) ? fragment.id : "");
         if (!fragmentId) return null;
 
+        const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        const canonicalBaseZ = level * 3;
+        const explicitOffset = Number.isFinite(fragment.nodeBaseZOffset) ? Number(fragment.nodeBaseZOffset) : null;
+        const legacyBaseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : null;
+        let resolvedOffset = 0;
+        if (Number.isFinite(explicitOffset)) {
+            resolvedOffset = Number(explicitOffset);
+        } else if (Number.isFinite(legacyBaseZ)) {
+            const looksLikeLegacyBug = Math.abs(Number(legacyBaseZ) - level) < 1e-6
+                && Math.abs(Number(legacyBaseZ) - canonicalBaseZ) > 1e-6;
+            resolvedOffset = looksLikeLegacyBug ? 0 : (Number(legacyBaseZ) - canonicalBaseZ);
+        }
+
         const normalized = {
             ...fragment,
             fragmentId,
@@ -869,16 +1340,11 @@ class GameMap {
                 ? fragment.surfaceId
                 : fragmentId,
             ownerSectionKey: (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "",
-            level: Number.isFinite(fragment.level) ? Number(fragment.level) : 0,
-            nodeBaseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : 0,
+            level,
+            nodeBaseZOffset: resolvedOffset,
+            nodeBaseZ: canonicalBaseZ + resolvedOffset,
             outerPolygon: Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : [],
-            holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : [],
-            visibilityPolygon: Array.isArray(fragment.visibilityPolygon) && fragment.visibilityPolygon.length > 0
-                ? fragment.visibilityPolygon.slice()
-                : (Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : []),
-            visibilityHoles: Array.isArray(fragment.visibilityHoles)
-                ? fragment.visibilityHoles.slice()
-                : (Array.isArray(fragment.holes) ? fragment.holes.slice() : [])
+            holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : []
         };
 
         this.floorsById.set(fragmentId, normalized);
@@ -900,7 +1366,514 @@ class GameMap {
             this.floorFragmentsBySectionKey.get(ownerSectionKey).add(fragmentId);
         }
 
+        this.markFloorBuildingsDirty();
         return normalized;
+    }
+
+    markFloorBuildingsDirty() {
+        this._floorBuildingsDirty = true;
+        this.markBuildingRenderCacheDirty();
+    }
+
+    markBuildingRenderCacheDirty() {
+        this._buildingRenderCacheVersion = (Number(this._buildingRenderCacheVersion) || 0) + 1;
+    }
+
+    rebuildFloorBuildingStaticObjectIndex(building) {
+        if (!building) return null;
+        const byFragment = new Map();
+        const entries = Array.isArray(building.staticObjects) ? building.staticObjects : [];
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (!entry || !entry.item) continue;
+            const refs = Array.isArray(entry.refs) ? entry.refs : [];
+            let added = false;
+            for (let r = 0; r < refs.length; r++) {
+                const fragmentId = refs[r] && typeof refs[r].fragmentId === "string" ? refs[r].fragmentId : "";
+                if (!fragmentId) continue;
+                if (!byFragment.has(fragmentId)) byFragment.set(fragmentId, []);
+                byFragment.get(fragmentId).push(entry);
+                added = true;
+            }
+            if (!added && typeof entry.item.fragmentId === "string" && entry.item.fragmentId.length > 0) {
+                if (!byFragment.has(entry.item.fragmentId)) byFragment.set(entry.item.fragmentId, []);
+                byFragment.get(entry.item.fragmentId).push(entry);
+            }
+        }
+        building.staticObjectsByFragment = byFragment;
+        return byFragment;
+    }
+
+    getFloorBuildingStaticObjectsForFragment(building, fragmentId) {
+        if (!building || typeof fragmentId !== "string" || fragmentId.length === 0) return [];
+        if (!(building.staticObjectsByFragment instanceof Map)) {
+            this.rebuildFloorBuildingStaticObjectIndex(building);
+        }
+        const entries = building.staticObjectsByFragment instanceof Map
+            ? building.staticObjectsByFragment.get(fragmentId)
+            : null;
+        return Array.isArray(entries) ? entries : [];
+    }
+
+    pruneFloorBuildingManifest(building) {
+        if (!building) return false;
+        if (!Array.isArray(building.staticObjects)) {
+            building.staticObjects = [];
+            building._staticObjectManifestSet = new Set();
+            building.staticObjectsByFragment = new Map();
+            return false;
+        }
+        const next = [];
+        const manifestSet = new Set();
+        let changed = false;
+        for (let i = 0; i < building.staticObjects.length; i++) {
+            const entry = building.staticObjects[i];
+            const item = entry && entry.item;
+            if (!item || item.gone || item.vanishing || manifestSet.has(item)) {
+                changed = true;
+                continue;
+            }
+            next.push(entry);
+            manifestSet.add(item);
+        }
+        if (changed) {
+            building.staticObjects = next;
+            this.markBuildingRenderCacheDirty();
+        }
+        building._staticObjectManifestSet = manifestSet;
+        this.rebuildFloorBuildingStaticObjectIndex(building);
+        return changed;
+    }
+
+    addObjectToFloorBuildingManifest(obj, options = {}) {
+        if (!obj || typeof obj !== "object") return false;
+        const fragmentId = typeof options.fragmentId === "string" && options.fragmentId.length > 0
+            ? options.fragmentId
+            : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : ""));
+        if (!fragmentId) return false;
+
+        const targetLevel = Number.isFinite(options.level)
+            ? Math.round(Number(options.level))
+            : (Number.isFinite(obj.traversalLayer)
+                ? Math.round(Number(obj.traversalLayer))
+                : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0));
+        const buildings = this.ensureFloorBuildings();
+        const buildingId = this.floorBuildingByFragmentId instanceof Map
+            ? this.floorBuildingByFragmentId.get(fragmentId)
+            : "";
+        const building = buildingId && buildings instanceof Map ? buildings.get(buildingId) : null;
+        if (!building) {
+            if (targetLevel > 0) {
+                throw new Error(`Unable to attach object to floor building manifest for upper-floor fragment: ${fragmentId}`);
+            }
+            return false;
+        }
+
+        this.pruneFloorBuildingManifest(building);
+        if (building._staticObjectManifestSet.has(obj)) return true;
+
+        const surfaceId = typeof options.surfaceId === "string" && options.surfaceId.length > 0
+            ? options.surfaceId
+            : (typeof obj.surfaceId === "string" && obj.surfaceId.length > 0
+                ? obj.surfaceId
+                : (typeof obj.node?.surfaceId === "string" ? obj.node.surfaceId : ""));
+        const entry = {
+            item: obj,
+            level: targetLevel,
+            refs: [{ surfaceId, fragmentId }]
+        };
+
+        building._staticObjectManifestSet.add(obj);
+        if (!Array.isArray(building.staticObjects)) building.staticObjects = [];
+        building.staticObjects.push(entry);
+        this.rebuildFloorBuildingStaticObjectIndex(building);
+        obj._floorBuildingManifestId = building.buildingId || buildingId;
+        obj._floorBuildingManifestFragmentId = fragmentId;
+        this.markBuildingRenderCacheDirty();
+        return true;
+    }
+
+    removeObjectFromFloorBuildingManifest(obj) {
+        if (!obj || typeof obj !== "object") return false;
+        const buildings = this.ensureFloorBuildings();
+        if (!(buildings instanceof Map) || buildings.size === 0) return false;
+        const candidateIds = new Set();
+        if (typeof obj._floorBuildingManifestId === "string" && obj._floorBuildingManifestId.length > 0) {
+            candidateIds.add(obj._floorBuildingManifestId);
+        }
+        const fragmentId = typeof obj._floorBuildingManifestFragmentId === "string" && obj._floorBuildingManifestFragmentId.length > 0
+            ? obj._floorBuildingManifestFragmentId
+            : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : ""));
+        if (fragmentId && this.floorBuildingByFragmentId instanceof Map) {
+            const buildingId = this.floorBuildingByFragmentId.get(fragmentId);
+            if (buildingId) candidateIds.add(buildingId);
+        }
+        if (candidateIds.size === 0) {
+            for (const buildingId of buildings.keys()) candidateIds.add(buildingId);
+        }
+
+        let removed = false;
+        for (const buildingId of candidateIds) {
+            const building = buildings.get(buildingId);
+            if (!building || !Array.isArray(building.staticObjects)) continue;
+            const before = building.staticObjects.length;
+            building.staticObjects = building.staticObjects.filter(entry => entry && entry.item !== obj);
+            if (!(building._staticObjectManifestSet instanceof Set)) building._staticObjectManifestSet = new Set();
+            building._staticObjectManifestSet.delete(obj);
+            this.pruneFloorBuildingManifest(building);
+            if (building.staticObjects.length !== before) removed = true;
+        }
+        if (removed) {
+            delete obj._floorBuildingManifestId;
+            delete obj._floorBuildingManifestFragmentId;
+            this.markBuildingRenderCacheDirty();
+        }
+        return removed;
+    }
+
+    getFloorFragmentOverlapPolygon(fragment) {
+        if (!fragment) return [];
+        return Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : [];
+    }
+
+    doFloorFragmentsOverlapXY(fragmentA, fragmentB) {
+        if (!fragmentA || !fragmentB || fragmentA === fragmentB) return false;
+        const levelA = Number.isFinite(fragmentA.level) ? Math.round(Number(fragmentA.level)) : 0;
+        const levelB = Number.isFinite(fragmentB.level) ? Math.round(Number(fragmentB.level)) : 0;
+        if (levelA === levelB) return false;
+        const polygonA = this.getFloorFragmentOverlapPolygon(fragmentA);
+        const polygonB = this.getFloorFragmentOverlapPolygon(fragmentB);
+        return polygonsOverlap2D(polygonA, polygonB);
+    }
+
+    buildFloorBuildingFragmentGraph(fragmentIds) {
+        const graph = new Map();
+        const ids = Array.isArray(fragmentIds) ? fragmentIds : [];
+        const fragments = ids
+            .map(id => this.floorsById instanceof Map ? this.floorsById.get(id) : null)
+            .filter(fragment => fragment && typeof fragment.fragmentId === "string");
+        for (let i = 0; i < fragments.length; i++) {
+            graph.set(fragments[i].fragmentId, {
+                fragmentId: fragments[i].fragmentId,
+                above: new Set(),
+                below: new Set()
+            });
+        }
+
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.intersection !== "function" || typeof api.difference !== "function") {
+            for (let i = 0; i < fragments.length; i++) {
+                const source = fragments[i];
+                const sourceLevel = Number.isFinite(source.level) ? Math.round(Number(source.level)) : 0;
+                let nearestLevel = Infinity;
+                const direct = [];
+                for (let j = 0; j < fragments.length; j++) {
+                    const candidate = fragments[j];
+                    if (!candidate || candidate === source) continue;
+                    const candidateLevel = Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0;
+                    if (candidateLevel <= sourceLevel || candidateLevel > nearestLevel) continue;
+                    if (!this.doFloorFragmentsOverlapXY(source, candidate)) continue;
+                    if (candidateLevel < nearestLevel) {
+                        nearestLevel = candidateLevel;
+                        direct.length = 0;
+                    }
+                    direct.push(candidate.fragmentId);
+                }
+                const node = graph.get(source.fragmentId);
+                for (let j = 0; node && j < direct.length; j++) {
+                    node.above.add(direct[j]);
+                    const aboveNode = graph.get(direct[j]);
+                    if (aboveNode) aboveNode.below.add(source.fragmentId);
+                }
+            }
+            return graph;
+        }
+
+        const sortedSources = fragments.slice().sort((a, b) => {
+            const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+            if (levelDelta !== 0) return levelDelta;
+            return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+        });
+        for (let i = 0; i < sortedSources.length; i++) {
+            const source = sortedSources[i];
+            const sourceLevel = Number.isFinite(source.level) ? Math.round(Number(source.level)) : 0;
+            let remaining = floorFragmentToClipGeometry2D(source, this.getFloorFragmentOverlapPolygon.bind(this));
+            if (clipGeometryIsEmpty2D(remaining)) continue;
+            const higher = fragments
+                .filter(candidate => candidate && candidate !== source && (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0) > sourceLevel)
+                .sort((a, b) => {
+                    const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+                    if (levelDelta !== 0) return levelDelta;
+                    return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+                });
+            const node = graph.get(source.fragmentId);
+            for (let j = 0; node && j < higher.length; j++) {
+                const candidate = higher[j];
+                const candidateGeometry = floorFragmentToClipGeometry2D(candidate, this.getFloorFragmentOverlapPolygon.bind(this));
+                if (clipGeometryIsEmpty2D(candidateGeometry)) continue;
+                let intersection = [];
+                try {
+                    intersection = api.intersection(remaining, candidateGeometry);
+                } catch (_err) {
+                    intersection = [];
+                }
+                if (clipGeometryIsEmpty2D(intersection)) continue;
+                node.above.add(candidate.fragmentId);
+                const aboveNode = graph.get(candidate.fragmentId);
+                if (aboveNode) aboveNode.below.add(source.fragmentId);
+                try {
+                    remaining = api.difference(remaining, candidateGeometry);
+                } catch (_err) {
+                    remaining = [];
+                }
+                if (clipGeometryIsEmpty2D(remaining)) break;
+            }
+        }
+        return graph;
+    }
+
+    rebuildFloorBuildings() {
+        if (!(this.floorsById instanceof Map)) {
+            this.buildingsById = new Map();
+            this.floorBuildingByFragmentId = new Map();
+            this._floorBuildingsDirty = false;
+            return this.buildingsById;
+        }
+
+        const previousStaticObjectEntries = [];
+        if (this.buildingsById instanceof Map) {
+            for (const building of this.buildingsById.values()) {
+                const entries = Array.isArray(building && building.staticObjects) ? building.staticObjects : [];
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    if (entry && entry.item) previousStaticObjectEntries.push(entry);
+                }
+            }
+        }
+
+        const fragments = Array.from(this.floorsById.values())
+            .filter(fragment => (
+                fragment &&
+                fragment.renderedByBuildingCutaway !== true &&
+                Number.isFinite(fragment.level) &&
+                Math.round(Number(fragment.level)) > 0 &&
+                Array.isArray(this.getFloorFragmentOverlapPolygon(fragment)) &&
+                this.getFloorFragmentOverlapPolygon(fragment).length >= 3
+            ));
+        const adjacency = new Map();
+        for (let i = 0; i < fragments.length; i++) {
+            const id = fragments[i].fragmentId;
+            if (typeof id === "string" && id.length > 0) adjacency.set(id, new Set());
+        }
+        for (let i = 0; i < fragments.length; i++) {
+            const a = fragments[i];
+            const aId = a.fragmentId;
+            for (let j = i + 1; j < fragments.length; j++) {
+                const b = fragments[j];
+                const bId = b.fragmentId;
+                if (!this.doFloorFragmentsOverlapXY(a, b)) continue;
+                adjacency.get(aId).add(bId);
+                adjacency.get(bId).add(aId);
+            }
+        }
+
+        const buildingsById = new Map();
+        const floorBuildingByFragmentId = new Map();
+        const visited = new Set();
+        let nextIndex = 1;
+        const sortedFragments = fragments.slice().sort((a, b) => {
+            const levelDelta = (Number(a.level) || 0) - (Number(b.level) || 0);
+            if (levelDelta !== 0) return levelDelta;
+            return String(a.fragmentId || "").localeCompare(String(b.fragmentId || ""));
+        });
+        for (let i = 0; i < sortedFragments.length; i++) {
+            const start = sortedFragments[i];
+            const startId = start.fragmentId;
+            if (!startId || visited.has(startId)) continue;
+            const stack = [startId];
+            const fragmentIds = [];
+            const surfaceIds = new Set();
+            const levels = new Set();
+            let minLevel = Infinity;
+            let maxLevel = -Infinity;
+            while (stack.length > 0) {
+                const id = stack.pop();
+                if (!id || visited.has(id)) continue;
+                visited.add(id);
+                const fragment = this.floorsById.get(id);
+                if (!fragment) continue;
+                fragmentIds.push(id);
+                if (typeof fragment.surfaceId === "string" && fragment.surfaceId.length > 0) surfaceIds.add(fragment.surfaceId);
+                const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                levels.add(level);
+                minLevel = Math.min(minLevel, level);
+                maxLevel = Math.max(maxLevel, level);
+                const neighbors = adjacency.get(id);
+                if (!(neighbors instanceof Set)) continue;
+                for (const nextId of neighbors) {
+                    if (!visited.has(nextId)) stack.push(nextId);
+                }
+            }
+            if (fragmentIds.length === 0) continue;
+            fragmentIds.sort();
+            const fragmentGraph = this.buildFloorBuildingFragmentGraph(fragmentIds);
+            const buildingId = `building:${nextIndex++}:${fragmentIds[0]}`;
+            const building = {
+                buildingId,
+                fragmentIds: new Set(fragmentIds),
+                fragmentGraph,
+                surfaceIds,
+                levels,
+                minLevel: Number.isFinite(minLevel) ? minLevel : 0,
+                maxLevel: Number.isFinite(maxLevel) ? maxLevel : 0
+            };
+            const holeVisibleFragments = new Map();
+            const holeApi = getPolygonClippingApi2D();
+            if (holeApi && typeof holeApi.intersection === "function") {
+                for (let j = 0; j < fragmentIds.length; j++) {
+                    const fragId = fragmentIds[j];
+                    const frag = this.floorsById.get(fragId);
+                    if (!frag || !Array.isArray(frag.holes) || frag.holes.length === 0) continue;
+                    const graphNode = fragmentGraph.get(fragId);
+                    if (!graphNode || graphNode.below.size === 0) continue;
+                    const visibleBelow = new Set();
+                    for (let h = 0; h < frag.holes.length; h++) {
+                        const holeRing = polygonToClipRing2D(frag.holes[h]);
+                        if (!holeRing) continue;
+                        const holeGeom = [[holeRing]];
+                        for (const belowId of graphNode.below) {
+                            if (visibleBelow.has(belowId)) continue;
+                            const belowFrag = this.floorsById.get(belowId);
+                            if (!belowFrag) continue;
+                            const belowGeom = floorFragmentToClipGeometry2D(belowFrag, null);
+                            if (clipGeometryIsEmpty2D(belowGeom)) continue;
+                            let result = [];
+                            try {
+                                result = holeApi.intersection(holeGeom, belowGeom);
+                            } catch (_e) {
+                                result = [];
+                            }
+                            if (!clipGeometryIsEmpty2D(result)) visibleBelow.add(belowId);
+                        }
+                    }
+                    if (visibleBelow.size > 0) holeVisibleFragments.set(fragId, visibleBelow);
+                }
+            }
+            building.holeVisibleFragments = holeVisibleFragments;
+            buildingsById.set(buildingId, building);
+            for (let j = 0; j < fragmentIds.length; j++) {
+                const fragmentId = fragmentIds[j];
+                const fragment = this.floorsById.get(fragmentId);
+                if (fragment) fragment.buildingId = buildingId;
+                floorBuildingByFragmentId.set(fragmentId, buildingId);
+            }
+        }
+
+        for (const fragment of this.floorsById.values()) {
+            if (!fragment) continue;
+            if (!floorBuildingByFragmentId.has(fragment.fragmentId)) {
+                delete fragment.buildingId;
+            }
+        }
+
+        if (previousStaticObjectEntries.length > 0) {
+            const addRefForBuilding = (refsByBuildingId, ref) => {
+                if (!ref || typeof ref !== "object") return;
+                const fragmentId = typeof ref.fragmentId === "string" && ref.fragmentId.length > 0
+                    ? ref.fragmentId
+                    : "";
+                if (!fragmentId) return;
+                const buildingId = floorBuildingByFragmentId.get(fragmentId);
+                if (!buildingId || !buildingsById.has(buildingId)) return;
+                if (!refsByBuildingId.has(buildingId)) refsByBuildingId.set(buildingId, []);
+                refsByBuildingId.get(buildingId).push({
+                    surfaceId: typeof ref.surfaceId === "string" ? ref.surfaceId : "",
+                    fragmentId
+                });
+            };
+
+            for (let i = 0; i < previousStaticObjectEntries.length; i++) {
+                const entry = previousStaticObjectEntries[i];
+                const item = entry && entry.item;
+                if (!item || item.gone || item.vanishing) continue;
+                const refsByBuildingId = new Map();
+                const refs = Array.isArray(entry.refs) ? entry.refs : [];
+                for (let r = 0; r < refs.length; r++) addRefForBuilding(refsByBuildingId, refs[r]);
+                if (refsByBuildingId.size === 0) {
+                    addRefForBuilding(refsByBuildingId, {
+                        surfaceId: typeof item.surfaceId === "string" ? item.surfaceId : "",
+                        fragmentId: typeof item.fragmentId === "string" ? item.fragmentId : ""
+                    });
+                }
+                for (const [buildingId, buildingRefs] of refsByBuildingId.entries()) {
+                    const building = buildingsById.get(buildingId);
+                    if (!building || !Array.isArray(buildingRefs) || buildingRefs.length === 0) continue;
+                    if (!(building._staticObjectManifestSet instanceof Set)) {
+                        building._staticObjectManifestSet = new Set();
+                    }
+                    if (building._staticObjectManifestSet.has(item)) continue;
+                    if (!Array.isArray(building.staticObjects)) building.staticObjects = [];
+                    const preservedEntry = {
+                        item,
+                        level: Number.isFinite(entry.level)
+                            ? Math.round(Number(entry.level))
+                            : (Number.isFinite(item.traversalLayer)
+                                ? Math.round(Number(item.traversalLayer))
+                                : (Number.isFinite(item.level) ? Math.round(Number(item.level)) : 0)),
+                        refs: buildingRefs
+                    };
+                    building.staticObjects.push(preservedEntry);
+                    building._staticObjectManifestSet.add(item);
+                    item._floorBuildingManifestId = building.buildingId || buildingId;
+                    item._floorBuildingManifestFragmentId = buildingRefs[0].fragmentId;
+                }
+            }
+
+            for (const building of buildingsById.values()) {
+                if (Array.isArray(building.staticObjects) && building.staticObjects.length > 0) {
+                    this.pruneFloorBuildingManifest(building);
+                }
+            }
+        }
+
+        this.buildingsById = buildingsById;
+        this.floorBuildingByFragmentId = floorBuildingByFragmentId;
+        this._floorBuildingsDirty = false;
+        this._floorBuildingVersion = (Number(this._floorBuildingVersion) || 0) + 1;
+        this.markBuildingRenderCacheDirty();
+        return buildingsById;
+    }
+
+    ensureFloorBuildings() {
+        const hasBuildableFragments = () => {
+            if (!(this.floorsById instanceof Map)) return false;
+            for (const fragment of this.floorsById.values()) {
+                if (
+                    fragment &&
+                    fragment.renderedByBuildingCutaway !== true &&
+                    Number.isFinite(fragment.level) &&
+                    Math.round(Number(fragment.level)) > 0 &&
+                    Array.isArray(this.getFloorFragmentOverlapPolygon(fragment)) &&
+                    this.getFloorFragmentOverlapPolygon(fragment).length >= 3
+                ) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (
+            this._floorBuildingsDirty !== true &&
+            this.buildingsById instanceof Map &&
+            this.floorBuildingByFragmentId instanceof Map &&
+            (this.buildingsById.size > 0 || !hasBuildableFragments())
+        ) {
+            return this.buildingsById;
+        }
+        return this.rebuildFloorBuildings();
     }
 
     registerFloorNode(node, fragment = null) {
@@ -922,19 +1895,24 @@ class GameMap {
 
         if (!(this.floorNodeIndex instanceof Map)) this.floorNodeIndex = new Map();
         this.floorNodeIndex.set(node.id, node);
+        this._indexFloorNodeByLayer(node);
+        this.markFloorObjectNodeCacheDirty();
         return node;
     }
 
     createFloorNodeFromSource(sourceNode, fragment, options = {}) {
         if (!sourceNode || !fragment) return null;
         let floorNode = null;
-        const SourceCtor = sourceNode && typeof sourceNode.constructor === "function" ? sourceNode.constructor : null;
+        const SourceCtor = (typeof sourceNode.constructor === "function" && sourceNode.constructor !== Object)
+            ? sourceNode.constructor : null;
         if (SourceCtor) {
-            try {
-                floorNode = new SourceCtor(sourceNode.xindex, sourceNode.yindex, 1, 1);
-            } catch (_err) {
-                floorNode = null;
+            let ctorWorks = _floorNodeCtorWorkMap.get(SourceCtor);
+            if (ctorWorks === undefined) {
+                const probe = _tryMakeFloorNodeFromCtor(SourceCtor, 0, 0);
+                ctorWorks = (probe !== null && typeof probe === "object");
+                _floorNodeCtorWorkMap.set(SourceCtor, ctorWorks);
             }
+            if (ctorWorks) floorNode = new SourceCtor(sourceNode.xindex, sourceNode.yindex, 1, 1);
         }
         if (!floorNode || typeof floorNode !== "object") {
             floorNode = {};
@@ -974,7 +1952,13 @@ class GameMap {
         floorNode.visibilityObjects = [];
         floorNode.blockedByObjects = 0;
         floorNode.blocked = false;
-        floorNode.clearance = Number.isFinite(sourceNode.clearance) ? Number(sourceNode.clearance) : Infinity;
+        // Non-ground floor nodes must not inherit ground-level clearance — it reflects
+        // surface obstacles that are irrelevant underground (and missing underground walls).
+        // Ground floor nodes (level === 0) inherit normally since they share the surface plane.
+        const floorLevel = Number.isFinite(floorNode.level) ? floorNode.level : 0;
+        floorNode.clearance = (floorLevel === 0 && Number.isFinite(sourceNode.clearance))
+            ? Number(sourceNode.clearance)
+            : Infinity;
         return this.registerFloorNode(floorNode, fragment);
     }
 
@@ -1003,6 +1987,1193 @@ class GameMap {
         return normalized;
     }
 
+    normalizeStairPathPoint(point, label, stairId) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`stair ${stairId} has invalid ${label}`);
+        }
+        return { x, y };
+    }
+
+    normalizeStairPathTreads(treads, stairId) {
+        if (!Array.isArray(treads) || treads.length < 2) {
+            throw new Error(`stair ${stairId} requires at least two saved treads`);
+        }
+        return treads.map((tread, index) => {
+            const left = this.normalizeStairPathPoint(tread && tread.left, `tread ${index} left`, stairId);
+            const right = this.normalizeStairPathPoint(tread && tread.right, `tread ${index} right`, stairId);
+            const width = Math.hypot(right.x - left.x, right.y - left.y);
+            if (!(width > 1e-6)) throw new Error(`stair ${stairId} tread ${index} has coincident endpoints`);
+            const out = {
+                left,
+                right,
+                center: {
+                    x: (left.x + right.x) * 0.5,
+                    y: (left.y + right.y) * 0.5
+                }
+            };
+            if (Object.prototype.hasOwnProperty.call(tread || {}, "arcDeltaAngle")) {
+                const value = Number(tread.arcDeltaAngle);
+                if (!Number.isFinite(value)) throw new Error(`stair ${stairId} tread ${index} arcDeltaAngle must be finite`);
+                out.arcDeltaAngle = value;
+            }
+            if (Object.prototype.hasOwnProperty.call(tread || {}, "arcNearDeltaAngle")) {
+                const value = Number(tread.arcNearDeltaAngle);
+                if (!Number.isFinite(value)) throw new Error(`stair ${stairId} tread ${index} arcNearDeltaAngle must be finite`);
+                out.arcNearDeltaAngle = value;
+            }
+            return out;
+        });
+    }
+
+    registerStairRuntimeRecord(stair) {
+        if (!stair || typeof stair !== "object") return null;
+        if (!(this.stairsById instanceof Map)) this.stairsById = new Map();
+        const stairId = typeof stair.id === "string" && stair.id.length > 0 ? stair.id : "";
+        if (!stairId) throw new Error("stair runtime record missing id");
+        const lowerZ = Number(stair.lowerZ);
+        const higherZ = Number(stair.higherZ);
+        if (!Number.isFinite(lowerZ) || !Number.isFinite(higherZ) || !(higherZ > lowerZ)) {
+            throw new Error(`stair ${stairId} requires finite lowerZ and higherZ`);
+        }
+        const lowerPoint = this.normalizeStairPathPoint(stair.lowerPoint, "lowerPoint", stairId);
+        const higherPoint = this.normalizeStairPathPoint(stair.higherPoint, "higherPoint", stairId);
+        const treads = this.normalizeStairPathTreads(stair.treads, stairId);
+        const lowerLevel = Number.isFinite(Number(stair.lowerLevel)) ? Math.round(Number(stair.lowerLevel)) : 0;
+        const higherLevel = Number.isFinite(Number(stair.higherLevel)) ? Math.round(Number(stair.higherLevel)) : lowerLevel + 1;
+        const lowerFragmentId = typeof stair.lowerFragmentId === "string" ? stair.lowerFragmentId : "";
+        const higherFragmentId = typeof stair.higherFragmentId === "string" ? stair.higherFragmentId : "";
+        const lowerFragment = lowerFragmentId && this.floorsById instanceof Map ? this.floorsById.get(lowerFragmentId) : null;
+        const higherFragment = higherFragmentId && this.floorsById instanceof Map ? this.floorsById.get(higherFragmentId) : null;
+        if (lowerFragmentId && !lowerFragment) throw new Error(`stair ${stairId} references missing lower floor ${lowerFragmentId}`);
+        if (higherFragmentId && !higherFragment) throw new Error(`stair ${stairId} references missing higher floor ${higherFragmentId}`);
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : Math.max(1, treads.length - 1);
+        const riserDepth = Number(stair.riserDepth);
+        if (!Number.isFinite(riserDepth) || riserDepth < 0) {
+            throw new Error(`stair ${stairId} requires a non-negative riserDepth`);
+        }
+        const width = Number.isFinite(Number(stair.width))
+            ? Math.max(0.05, Number(stair.width))
+            : Math.max(0.05, Math.hypot(treads[0].right.x - treads[0].left.x, treads[0].right.y - treads[0].left.y));
+        const runtimeStair = {
+            ...stair,
+            id: stairId,
+            type: "stairs",
+            stairKind: "treadPath",
+            lowerFragmentId,
+            higherFragmentId,
+            lowerSurfaceId: typeof stair.lowerSurfaceId === "string" && stair.lowerSurfaceId.length > 0
+                ? stair.lowerSurfaceId
+                : (lowerFragment && typeof lowerFragment.surfaceId === "string" ? lowerFragment.surfaceId : ""),
+            higherSurfaceId: typeof stair.higherSurfaceId === "string" && stair.higherSurfaceId.length > 0
+                ? stair.higherSurfaceId
+                : (higherFragment && typeof higherFragment.surfaceId === "string" ? higherFragment.surfaceId : ""),
+            lowerLevel,
+            higherLevel,
+            lowerZ,
+            higherZ,
+            lowerPoint,
+            higherPoint,
+            width,
+            stepCount,
+            riserDepth,
+            treads,
+            texturePath: typeof stair.texturePath === "string" ? stair.texturePath : ""
+        };
+        runtimeStair.traversalFrame = this.createStairTraversalFrame(runtimeStair);
+        this.stairsById.set(stairId, runtimeStair);
+        return runtimeStair;
+    }
+
+    requireStairTraversal() {
+        const traversal = (typeof globalThis !== "undefined" && globalThis.StairTraversal)
+            ? globalThis.StairTraversal
+            : null;
+        if (!traversal || typeof traversal.createTreadPathFrame !== "function") {
+            throw new Error("stair traversal requires StairTraversal runtime");
+        }
+        return traversal;
+    }
+
+    createStairTraversalFrame(stair) {
+        const traversal = this.requireStairTraversal();
+        return traversal.createTreadPathFrame(stair);
+    }
+
+    getStairTraversalFrame(stair) {
+        if (!stair) return null;
+        if (!stair.traversalFrame) {
+            stair.traversalFrame = this.createStairTraversalFrame(stair);
+        }
+        return stair.traversalFrame;
+    }
+
+    isPointSupportedByFloorFragment(fragment, x, y) {
+        if (!fragment || fragment._floorEditEmpty === true) return false;
+        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) return false;
+        if (!pointInPolygon2D(Number(x), Number(y), fragment.outerPolygon)) return false;
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            if (Array.isArray(holes[i]) && holes[i].length >= 3 && pointInPolygon2D(Number(x), Number(y), holes[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    isCircleSupportedByFloorFragment(fragment, x, y, radius = 0) {
+        const cx = Number(x);
+        const cy = Number(y);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+        if (!this.isPointSupportedByFloorFragment(fragment, cx, cy)) return false;
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!(resolvedRadius > 0)) return true;
+        const radiusSq = resolvedRadius * resolvedRadius;
+        if (getPointPolygonBoundaryDistanceSq2D(cx, cy, fragment.outerPolygon) < radiusSq - 1e-9) {
+            return false;
+        }
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            const hole = holes[i];
+            if (!Array.isArray(hole) || hole.length < 3) continue;
+            if (pointInPolygon2D(cx, cy, hole)) return false;
+            if (getPointPolygonBoundaryDistanceSq2D(cx, cy, hole) < radiusSq - 1e-9) return false;
+        }
+        return true;
+    }
+
+    isActorFootprintSupportedAtWorldPosition(x, y, layer = 0, actor = null, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        let hasFragmentsAtLayer = false;
+        if (this.floorsById instanceof Map) {
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) continue;
+                if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+                hasFragmentsAtLayer = true;
+                if (this.isCircleSupportedByFloorFragment(fragment, x, y, radius)) return true;
+            }
+        }
+        return !hasFragmentsAtLayer && targetLayer === 0;
+    }
+
+    getFloorSupportAtWorldPosition(x, y, layer = 0, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const baseNode = typeof this.worldToNode === "function" ? this.worldToNode(x, y) : null;
+        let best = null;
+        let bestArea = Infinity;
+        if (this.floorsById instanceof Map) {
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) continue;
+                if (!this.isPointSupportedByFloorFragment(fragment, x, y)) continue;
+                const area = Math.abs(this.getPolygonSignedArea2D(fragment.outerPolygon));
+                if (!best || area < bestArea) {
+                    best = fragment;
+                    bestArea = area;
+                }
+            }
+        }
+        if (!best && targetLayer !== 0) return null;
+        if (!best && targetLayer === 0 && this.floorsById instanceof Map) {
+            let hasGroundFragments = false;
+            for (const fragment of this.floorsById.values()) {
+                if (!fragment) continue;
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer === 0 && Array.isArray(fragment.outerPolygon) && fragment.outerPolygon.length >= 3) {
+                    hasGroundFragments = true;
+                    break;
+                }
+            }
+            if (hasGroundFragments) return null;
+        }
+        if (!best && !baseNode) return null;
+        let node = baseNode;
+        if (best && targetLayer !== 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+            node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                fragmentId: best.fragmentId,
+                surfaceId: best.surfaceId,
+                sectionKey: best.ownerSectionKey || "",
+                worldX: x,
+                worldY: y,
+                allowScan: true
+            }) || null;
+        }
+        if (best && targetLayer === 0 && baseNode && typeof this.getFloorNodeAtLayer === "function") {
+            node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                fragmentId: best.fragmentId,
+                surfaceId: best.surfaceId,
+                sectionKey: best.ownerSectionKey || "",
+                worldX: x,
+                worldY: y,
+                allowScan: true
+            }) || baseNode;
+        }
+        const baseZ = best && Number.isFinite(best.nodeBaseZ)
+            ? Number(best.nodeBaseZ)
+            : this.getNodeBaseZ(node);
+        return {
+            type: "floor",
+            layer: targetLayer,
+            baseZ,
+            fragment: best,
+            fragmentId: best && typeof best.fragmentId === "string" ? best.fragmentId : "",
+            surfaceId: best && typeof best.surfaceId === "string" ? best.surfaceId : "",
+            node
+        };
+    }
+
+    getPolygonSignedArea2D(points) {
+        if (!Array.isArray(points) || points.length < 3) return 0;
+        let sum = 0;
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            sum += ax * by - bx * ay;
+        }
+        return sum * 0.5;
+    }
+
+    actorFootprintOverlapsPolygon(polygon, x, y, actor = null, options = {}) {
+        if (!Array.isArray(polygon) || polygon.length < 3) return false;
+        const cx = Number(x);
+        const cy = Number(y);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        if (pointInPolygon2D(cx, cy, polygon)) return true;
+        if (radius > 0 && getPointPolygonBoundaryDistanceSq2D(cx, cy, polygon) <= (radius * radius) + 1e-9) return true;
+        return false;
+    }
+
+    getStairLowClearanceUpDownRanges(stair) {
+        if (!stair) return [];
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const lowerZ = Number(stair.lowerZ);
+        const higherZ = Number(stair.higherZ);
+        const height = higherZ - lowerZ;
+        if (!Number.isFinite(height) || !(height > 0)) {
+            throw new Error(`stair ${stair.id || "(unknown)"} lower movement blocker requires positive height`);
+        }
+        const riserDepth = Number(stair.riserDepth);
+        if (!Number.isFinite(riserDepth) || riserDepth < 0) {
+            throw new Error(`stair ${stair.id || "(unknown)"} lower movement blocker requires non-negative riserDepth`);
+        }
+        const ranges = [];
+        let activeRange = null;
+        for (let index = 0; index < stepCount; index++) {
+            const treadHeight = height * (index / stepCount);
+            const blocked = treadHeight - riserDepth < 2 - 0.000001;
+            if (!blocked) {
+                if (activeRange) {
+                    ranges.push(activeRange);
+                    activeRange = null;
+                }
+                continue;
+            }
+            const min = index / stepCount;
+            const max = (index + 1) / stepCount;
+            if (activeRange) {
+                activeRange.max = max;
+            } else {
+                activeRange = { min, max };
+            }
+        }
+        if (activeRange) ranges.push(activeRange);
+        return ranges;
+    }
+
+    getStairUpperCutoutPolygons(stair) {
+        if (!stair || !(this.floorsById instanceof Map)) return [];
+        const higherFragmentId = typeof stair.higherFragmentId === "string" ? stair.higherFragmentId : "";
+        let fragment = higherFragmentId ? this.floorsById.get(higherFragmentId) : null;
+        if (!fragment && typeof stair.higherSurfaceId === "string" && stair.higherSurfaceId.length > 0) {
+            const higherLayer = Number.isFinite(Number(stair.higherLevel)) ? Math.round(Number(stair.higherLevel)) : null;
+            const higherZ = Number(stair.higherZ);
+            for (const candidate of this.floorsById.values()) {
+                if (!candidate || candidate.surfaceId !== stair.higherSurfaceId) continue;
+                if (higherLayer !== null && Math.round(Number(candidate.level) || 0) !== higherLayer) continue;
+                const candidateZ = Number.isFinite(Number(candidate.nodeBaseZ))
+                    ? Number(candidate.nodeBaseZ)
+                    : Number(candidate.baseZ);
+                if (Number.isFinite(higherZ) && Number.isFinite(candidateZ) && Math.abs(candidateZ - higherZ) > 0.000001) continue;
+                fragment = candidate;
+                break;
+            }
+        }
+        if (!fragment) throw new Error(`stair ${stair.id || "(unknown)"} references missing higher floor ${higherFragmentId}`);
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const footprint = traversal.pathPolygonForUpDownRange(frame, 0, 1);
+        if (!Array.isArray(footprint) || footprint.length < 3) {
+            throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires a footprint polygon`);
+        }
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const topStep = traversal.pathPolygonForUpDownRange(frame, 1 - (1 / stepCount), 1);
+        if (!Array.isArray(topStep) || topStep.length < 3) {
+            throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires a top-step polygon`);
+        }
+        if (holes.length === 0) {
+            const lowerZ = Number(stair.lowerZ);
+            const higherZ = Number(stair.higherZ);
+            const height = higherZ - lowerZ;
+            if (!Number.isFinite(height) || !(height > 0)) {
+                throw new Error(`stair ${stair.id || "(unknown)"} implicit upper movement blocker requires positive height`);
+            }
+            const thresholdZ = higherZ - 2;
+            const implicit = [];
+            for (let index = 0; index < stepCount; index++) {
+                if (index === stepCount - 1) continue;
+                const stepZ = lowerZ + height * ((index + 1) / (stepCount + 1));
+                if (stepZ < thresholdZ - 0.000001 || stepZ > higherZ + 0.000001) continue;
+                const polygon = traversal.pathPolygonForUpDownRange(frame, index / stepCount, (index + 1) / stepCount);
+                if (!Array.isArray(polygon) || polygon.length < 3) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} implicit upper movement blocker step ${index} requires a polygon`);
+                }
+                implicit.push(polygon);
+            }
+            return implicit;
+        }
+        const clipper = getPolygonClippingApi2D();
+        if (!clipper || typeof clipper.difference !== "function") {
+            throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker requires polygon-clipping`);
+        }
+        const topStepRing = polygonToClipRing2D(topStep);
+        if (!topStepRing) throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker has invalid top-step polygon`);
+        const blockers = [];
+        holes.forEach((hole, holeIndex) => {
+            if (!Array.isArray(hole) || hole.length < 3 || !polygonsOverlap2D(hole, footprint)) return;
+            const holeRing = polygonToClipRing2D(hole);
+            if (!holeRing) throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker has invalid hole ${holeIndex}`);
+            const clipped = clipper.difference([[holeRing]], [[topStepRing]]);
+            if (!Array.isArray(clipped)) {
+                throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker clipping failed`);
+            }
+            clipped.forEach((polygon, polygonIndex) => {
+                if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker produced malformed polygon ${polygonIndex}`);
+                }
+                if (polygon.length > 1) {
+                    throw new Error(`stair ${stair.id || "(unknown)"} upper movement blocker cannot contain holes after top-step exclusion`);
+                }
+                blockers.push(clipRingToPolygonPoints2D(
+                    polygon[0],
+                    `stair ${stair.id || "(unknown)"} upper movement blocker ${holeIndex}:${polygonIndex}`
+                ));
+            });
+        });
+        return blockers;
+    }
+
+    createStairMovementBlocker(stair, polygon, layer = 0, baseZ = null, endpoint = "", index = 0) {
+        if (!stair) return null;
+        const PolygonHitboxCtor = typeof PolygonHitbox === "function"
+            ? PolygonHitbox
+            : (typeof globalThis !== "undefined" && typeof globalThis.PolygonHitbox === "function"
+                ? globalThis.PolygonHitbox
+                : null);
+        if (typeof PolygonHitboxCtor !== "function") {
+            throw new Error("stair footprint movement blocking requires PolygonHitbox");
+        }
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+            throw new Error(`stair ${stair.id || "(unknown)"} footprint blocker requires a polygon`);
+        }
+        const bounds = getPolygonBounds2D(polygon);
+        if (!bounds) throw new Error(`stair ${stair.id || "(unknown)"} footprint blocker has invalid bounds`);
+        const traversalLayer = Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : 0;
+        const bottomZ = Number.isFinite(Number(baseZ)) ? Number(baseZ) : traversalLayer * 3;
+        if (!(stair._movementFootprintBlockersByLayer instanceof Map)) {
+            stair._movementFootprintBlockersByLayer = new Map();
+        }
+        const key = `${traversalLayer}:${bottomZ}:${endpoint}:${index}`;
+        const cached = stair._movementFootprintBlockersByLayer.get(key);
+        const polygonSignature = polygon.map(point => `${Number(point && point.x).toFixed(6)},${Number(point && point.y).toFixed(6)}`).join(";");
+        if (cached && cached._movementPolygonSignature === polygonSignature) return cached;
+        const blocker = {
+            type: "stairFootprintMovementBlocker",
+            id: `${stair.id || "stair"}:footprint:${key}`,
+            stairId: stair.id,
+            stairKind: stair.stairKind || "treadPath",
+            endpoint,
+            traversalLayer,
+            level: traversalLayer,
+            bottomZ,
+            height: Math.max(0.01, Math.abs(Number(stair.higherZ) - Number(stair.lowerZ)) || 3),
+            isPassable: false,
+            gone: false,
+            groundPlaneHitbox: new PolygonHitboxCtor(polygon),
+            _stairFootprintMovementBlocker: true,
+            _stairEndpoint: endpoint,
+            _stairRecord: stair,
+            _movementBounds: bounds,
+            _movementPolygon: polygon,
+            _movementPolygonSignature: polygonSignature
+        };
+        stair._movementFootprintBlockersByLayer.set(key, blocker);
+        return blocker;
+    }
+
+    getStairFootprintMovementBlockers(stair, floorSupport) {
+        if (!stair || !floorSupport) return [];
+        const endpoint = this.getStairEndpointForFloorSupport(floorSupport, stair);
+        if (!endpoint) return [];
+        const layer = Number.isFinite(Number(floorSupport.layer)) ? Math.round(Number(floorSupport.layer)) : 0;
+        const baseZ = Number.isFinite(Number(floorSupport.baseZ)) ? Number(floorSupport.baseZ) : layer * 3;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const polygons = [];
+        if (endpoint === "lower") {
+            const ranges = this.getStairLowClearanceUpDownRanges(stair);
+            for (let index = 0; index < ranges.length; index++) {
+                const range = ranges[index];
+                const polygon = traversal.pathPolygonForUpDownRange(frame, range.min, range.max);
+                polygons.push({ polygon, endpoint, index });
+            }
+        } else if (endpoint === "higher") {
+            const cutouts = this.getStairUpperCutoutPolygons(stair);
+            for (let index = 0; index < cutouts.length; index++) {
+                polygons.push({ polygon: cutouts[index], endpoint, index });
+            }
+        } else {
+            throw new Error(`unknown stair endpoint: ${endpoint}`);
+        }
+        return polygons
+            .map(entry => this.createStairMovementBlocker(stair, entry.polygon, layer, baseZ, entry.endpoint, entry.index))
+            .filter(Boolean);
+    }
+
+    collectStairFootprintMovementBlockersInBounds(bounds, actor = null, options = {}) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) return [];
+        const queryBounds = bounds && Number.isFinite(Number(bounds.minX)) && Number.isFinite(Number(bounds.minY)) &&
+            Number.isFinite(Number(bounds.maxX)) && Number.isFinite(Number(bounds.maxY))
+            ? {
+                minX: Number(bounds.minX),
+                minY: Number(bounds.minY),
+                maxX: Number(bounds.maxX),
+                maxY: Number(bounds.maxY)
+            }
+            : null;
+        if (!queryBounds) throw new Error("stair footprint movement blocker query requires finite bounds");
+        const layer = this.getActorTraversalLayer(actor, options);
+        const currentFloorSupport = this.getFloorSupportAtWorldPosition(
+            Number(actor && actor.x),
+            Number(actor && actor.y),
+            layer,
+            options
+        );
+        if (!currentFloorSupport) return [];
+        const blockers = [];
+        for (const stair of this.stairsById.values()) {
+            if (!stair) continue;
+            if (!this.getStairEndpointForFloorSupport(currentFloorSupport, stair)) continue;
+            const stairBlockers = this.getStairFootprintMovementBlockers(stair, currentFloorSupport);
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const blocker = stairBlockers[i];
+                if (!blocker) continue;
+                if (this.actorCanIgnoreStairFootprintMovementBlocker(blocker, actor, options)) continue;
+                if (!polygonBoundsOverlap2D(queryBounds, blocker._movementBounds)) continue;
+                blockers.push(blocker);
+            }
+        }
+        return blockers;
+    }
+
+    getStairTreadAtWorldPosition(x, y) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) return null;
+        const traversal = this.requireStairTraversal();
+        let best = null;
+        let bestDistance = Infinity;
+        for (const stair of this.stairsById.values()) {
+            if (!stair) continue;
+            const frame = this.getStairTraversalFrame(stair);
+            const local = traversal.localPointForPathFrame(frame, { x, y });
+            if (!traversal.localInsidePathFrame(frame, local, 0)) continue;
+            const distance = Number.isFinite(local.projectionError) ? Number(local.projectionError) : 0;
+            if (!best || distance < bestDistance) {
+                best = traversal.supportFromPathLocal(stair, frame, local);
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    getActorStairSupportAtWorldPosition(x, y, actor = null, options = {}) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) return null;
+        const traversal = this.requireStairTraversal();
+        const actorLayer = this.getActorTraversalLayer(actor, options);
+        let best = null;
+        let bestDistance = Infinity;
+        for (const stair of this.stairsById.values()) {
+            if (!stair) continue;
+            const lowerLayer = Number.isFinite(stair.lowerLevel) ? Math.round(Number(stair.lowerLevel)) : 0;
+            const higherLayer = Number.isFinite(stair.higherLevel) ? Math.round(Number(stair.higherLevel)) : lowerLayer + 1;
+            if (actorLayer !== lowerLayer && actorLayer !== higherLayer) continue;
+            const frame = this.getStairTraversalFrame(stair);
+            const local = traversal.localPointForPathFrame(frame, { x, y });
+            if (!traversal.localInsidePathFrame(frame, local, 0)) continue;
+            const distance = Number.isFinite(local.projectionError) ? Number(local.projectionError) : 0;
+            if (!best || distance < bestDistance) {
+                const support = traversal.supportFromPathLocal(stair, frame, this.clampStairLocalSide(frame, local, actor, options));
+                best = support;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    getStairTreadSupport(stair, treadIndex) {
+        if (!stair) return null;
+        const resolvedIndex = Math.round(Number(treadIndex));
+        const stepCount = Number.isFinite(Number(stair.stepCount)) ? Math.max(1, Math.round(Number(stair.stepCount))) : 1;
+        if (!Number.isInteger(resolvedIndex) || resolvedIndex < 0 || resolvedIndex >= stepCount) {
+            throw new Error(`stair runtime record ${stair.id || "(unknown)"} has invalid tread index ${resolvedIndex}`);
+        }
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const upDown = (resolvedIndex + 0.5) / stepCount;
+        const point = traversal.pointFromPathLocal(frame, upDown, 0.5);
+        const local = traversal.localPointForPathFrame(frame, point);
+        return traversal.supportFromPathLocal(stair, frame, {
+            ...local,
+            upDown,
+            leftRight: 0.5
+        });
+    }
+
+    getActorStairSupportFromState(actor) {
+        const state = actor && actor._stairSupport && typeof actor._stairSupport === "object"
+            ? actor._stairSupport
+            : null;
+        if (!state) return null;
+        const stairId = typeof state.stairId === "string" ? state.stairId : "";
+        if (!stairId) throw new Error("actor stair support is missing stairId");
+        if (!(this.stairsById instanceof Map)) throw new Error("actor stair support exists without stair runtime records");
+        const stair = this.stairsById.get(stairId);
+        if (!stair) throw new Error(`actor stair support references missing stair ${stairId}`);
+        if (Number.isFinite(state.upDown) && Number.isFinite(state.leftRight)) {
+            const traversal = this.requireStairTraversal();
+            const frame = this.getStairTraversalFrame(stair);
+            const upDown = Math.max(0, Math.min(1, Number(state.upDown)));
+            const leftRight = Math.max(0, Math.min(1, Number(state.leftRight)));
+            return traversal.supportFromPathLocal(stair, frame, {
+                upDown,
+                leftRight,
+                projectionError: 0
+            });
+        }
+        return this.getStairTreadSupport(stair, state.treadIndex);
+    }
+
+    getActorTraversalLayer(actor = null, options = {}) {
+        const candidates = [
+            options && options.traversalLayer,
+            options && options.currentLayer,
+            actor && actor.currentLayer,
+            actor && actor.traversalLayer,
+            actor && actor.level,
+            actor && actor.node && actor.node.traversalLayer,
+            actor && actor.node && actor.node.level
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const value = Number(candidates[i]);
+            if (Number.isFinite(value)) return Math.round(value);
+        }
+        return 0;
+    }
+
+    actorUsesLocalMovementZ(actor) {
+        if (!actor || typeof actor !== "object") return false;
+        if (actor.type === "wizard") return true;
+        if (actor.constructor && actor.constructor.name === "Wizard") return true;
+        return typeof actor.drawHat === "function" && typeof actor.drawShield === "function";
+    }
+
+    actorAppearsOnFloorSupport(actor, floorSupport) {
+        if (!floorSupport || floorSupport.type !== "floor") return false;
+        const actorZ = Number(actor && actor.z);
+        if (!Number.isFinite(actorZ)) return true;
+        const tolerance = 0.0001;
+        if (this.actorUsesLocalMovementZ(actor)) {
+            return Math.abs(actorZ) <= tolerance;
+        }
+        const floorBaseZ = Number(floorSupport.baseZ);
+        return Number.isFinite(floorBaseZ) && Math.abs(actorZ - floorBaseZ) <= tolerance;
+    }
+
+    getActorMovementSupportRadius(actor = null, options = {}) {
+        if (Number.isFinite(options && options.supportRadius)) return Math.max(0, Number(options.supportRadius));
+        if (actor && typeof actor.getVectorMovementCollisionRadius === "function") {
+            const radius = actor.getVectorMovementCollisionRadius(options);
+            if (Number.isFinite(radius)) return Math.max(0, Number(radius));
+        }
+        if (actor && Number.isFinite(actor.groundRadius)) return Math.max(0, Number(actor.groundRadius));
+        return 0;
+    }
+
+    actorFootprintOverlapsStairFloorBlocker(stair, floorSupport, x, y, actor = null, options = {}) {
+        if (!stair || !floorSupport) return false;
+        const blockers = this.getStairFootprintMovementBlockers(stair, floorSupport);
+        for (let i = 0; i < blockers.length; i++) {
+            if (this.actorFootprintOverlapsPolygon(blockers[i]._movementPolygon, x, y, actor, options)) return true;
+        }
+        return false;
+    }
+
+    actorCanIgnoreStairFootprintMovementBlocker(blocker, actor = null, options = {}) {
+        if (!blocker || blocker._stairFootprintMovementBlocker !== true) return false;
+        const stair = blocker._stairRecord || null;
+        if (!stair || !actor) return false;
+        const candidateX = Number(options && options.candidateX);
+        const candidateY = Number(options && options.candidateY);
+        if (!Number.isFinite(candidateX) || !Number.isFinite(candidateY)) return false;
+        if (blocker._stairEndpoint === "higher") {
+            return this.actorApproachesStairEndpointMouth(stair, actor, candidateX, candidateY, "higher", options) === true;
+        }
+        if (blocker._stairEndpoint === "lower") {
+            return this.actorMovesAwayFromStairEndpointMouth(stair, actor, candidateX, candidateY, "lower", options) === true;
+        }
+        return false;
+    }
+
+    getActorStairEndpointEntrySupport(stair, x, y, actor = null, options = {}) {
+        if (!stair) return null;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const endpoint = options && options.endpoint;
+        if (endpoint !== "lower" && endpoint !== "higher") {
+            throw new Error(`unknown stair endpoint: ${endpoint}`);
+        }
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const local = traversal.localPointForPathFrame(frame, { x, y }, localOptions);
+        const clamped = this.clampStairLocalSide(frame, {
+            ...local,
+            upDown: endpoint === "lower" ? 0 : 1,
+            projectionError: 0
+        }, actor, options);
+        return traversal.supportFromPathLocal(stair, frame, clamped);
+    }
+
+    getActorStairTopStepSideEntrySupport(stair, x, y, actor = null, options = {}) {
+        if (!stair || !actor) return null;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const range = this.getStairEndpointStepRange(stair, "higher");
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, "higher");
+        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, localOptions);
+        const nextLocal = traversal.localPointForPathFrame(frame, { x, y }, localOptions);
+        const previousUpDown = Number(previousLocal && previousLocal.upDown);
+        const nextUpDown = Number(nextLocal && nextLocal.upDown);
+        const nextLeftRight = Number(nextLocal && nextLocal.leftRight);
+        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown) || !Number.isFinite(nextLeftRight)) return null;
+        if (!(nextUpDown < previousUpDown - 0.000001)) return null;
+        if (nextUpDown < range.min - 0.000001 || nextUpDown > range.max + 0.000001) return null;
+        if (nextLeftRight < -0.000001 || nextLeftRight > 1.000001) return null;
+        const clamped = this.clampStairLocalSide(frame, {
+            ...nextLocal,
+            upDown: Math.max(range.min, Math.min(range.max, nextUpDown)),
+            projectionError: 0
+        }, actor, options);
+        return traversal.supportFromPathLocal(stair, frame, clamped);
+    }
+
+    stairEndpointProjectionOptions(stair, endpoint) {
+        if (endpoint !== "lower" && endpoint !== "higher") return {};
+        return endpoint === "lower"
+            ? { upDownHint: 0 }
+            : { upDownHint: 1 };
+    }
+
+    stairEndpointMouthProjectionOptions(stair, endpoint) {
+        return this.requireStairTraversal().endpointMouthProjectionOptions(stair, endpoint);
+    }
+
+    getStairEndpointStepRange(stair, endpoint) {
+        if (!stair || !endpoint) return null;
+        const stepCount = Number.isFinite(Number(stair.stepCount))
+            ? Math.max(1, Math.round(Number(stair.stepCount)))
+            : 1;
+        const stepSize = 1 / stepCount;
+        if (endpoint === "lower") {
+            return { min: 0, max: stepSize };
+        }
+        if (endpoint === "higher") {
+            return { min: 1 - stepSize, max: 1 };
+        }
+        throw new Error(`unknown stair endpoint: ${endpoint}`);
+    }
+
+    getStairSideLimits(frame, upDown, actor = null, options = {}) {
+        const traversal = this.requireStairTraversal();
+        const left = traversal.pointFromPathLocal(frame, upDown, 0);
+        const right = traversal.pointFromPathLocal(frame, upDown, 1);
+        const crosslineLength = Math.hypot(Number(right.x) - Number(left.x), Number(right.y) - Number(left.y));
+        if (!(crosslineLength > 1e-6)) {
+            throw new Error(`stair ${frame && frame.stairId ? frame.stairId : "(unknown)"} has a degenerate movement crossline`);
+        }
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        const inset = Math.max(0, Number(radius) || 0) / crosslineLength;
+        return {
+            min: inset,
+            max: 1 - inset
+        };
+    }
+
+    clampStairLocalSide(frame, local, actor = null, options = {}) {
+        if (!frame || !local || !Number.isFinite(Number(local.upDown)) || !Number.isFinite(Number(local.leftRight))) {
+            throw new Error("stair side clamp requires finite local coordinates");
+        }
+        const limits = this.getStairSideLimits(frame, local.upDown, actor, options);
+        if (limits.min > limits.max + 1e-6) {
+            throw new Error(`stair ${frame && frame.stairId ? frame.stairId : "(unknown)"} is too narrow for actor movement`);
+        }
+        return {
+            ...local,
+            upDown: Number(local.upDown),
+            leftRight: Math.max(limits.min, Math.min(limits.max, Number(local.leftRight))),
+            projectionError: 0
+        };
+    }
+
+    getActiveLayerForStairSupport(support) {
+        if (!support || support.type !== "stair" || !support.stair) return null;
+        const stair = support.stair;
+        if (!Number.isFinite(stair.higherLevel) || !Number.isFinite(stair.lowerLevel)) {
+            throw new Error(`stair runtime record ${stair.id || "(unknown)"} is missing endpoint levels`);
+        }
+        return Number(support.upDown) >= 1
+            ? Math.round(Number(stair.higherLevel) || 0)
+            : Math.round(Number(stair.lowerLevel) || 0);
+    }
+
+    getActiveBaseZForStairSupport(support) {
+        if (!support || support.type !== "stair" || !support.stair) return null;
+        const stair = support.stair;
+        const activeLayer = this.getActiveLayerForStairSupport(support);
+        return activeLayer === Math.round(Number(stair.higherLevel) || 0)
+            ? Number(stair.higherZ)
+            : Number(stair.lowerZ);
+    }
+
+    resolveActorMovementSupportAtWorldPosition(x, y, actor = null, options = {}) {
+        const layer = this.getActorTraversalLayer(actor, options);
+        return this.getFloorSupportAtWorldPosition(x, y, layer, options);
+    }
+
+    getActorFloorSupportForStairEntry(actor = null, worldX, worldY, layer = 0, options = {}) {
+        const actorX = Number(actor && actor.x);
+        const actorY = Number(actor && actor.y);
+        let support = this.getFloorSupportAtWorldPosition(actorX, actorY, layer, options);
+        if (support) return support;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        if (!(radius > 0) || !Number.isFinite(actorX) || !Number.isFinite(actorY) || !Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+            return null;
+        }
+        const dx = typeof this.shortestDeltaX === "function"
+            ? this.shortestDeltaX(actorX, worldX)
+            : (Number(worldX) - actorX);
+        const dy = typeof this.shortestDeltaY === "function"
+            ? this.shortestDeltaY(actorY, worldY)
+            : (Number(worldY) - actorY);
+        const distance = Math.hypot(dx, dy);
+        if (!(distance > 1e-6)) return null;
+        const sampleDistance = Math.min(radius, distance);
+        const sampleX = actorX - (dx / distance) * sampleDistance;
+        const sampleY = actorY - (dy / distance) * sampleDistance;
+        support = this.getFloorSupportAtWorldPosition(sampleX, sampleY, layer, options);
+        return support || null;
+    }
+
+    isFloorSupportConnectedToStair(floorSupport, stair) {
+        if (!floorSupport || !stair) return false;
+        return this.getStairEndpointForFloorSupport(floorSupport, stair) !== null;
+    }
+
+    getStairEndpointForFloorSupport(floorSupport, stair) {
+        if (!floorSupport || !stair) return null;
+        const floorFragmentId = typeof floorSupport.fragmentId === "string" ? floorSupport.fragmentId : "";
+        const floorSurfaceId = typeof floorSupport.surfaceId === "string" ? floorSupport.surfaceId : "";
+        const floorLayer = Number.isFinite(floorSupport.layer) ? Math.round(Number(floorSupport.layer)) : 0;
+        const floorBaseZ = Number.isFinite(floorSupport.baseZ) ? Number(floorSupport.baseZ) : NaN;
+        const lowerLayer = Number.isFinite(stair.lowerLevel) ? Math.round(Number(stair.lowerLevel)) : 0;
+        const higherLayer = Number.isFinite(stair.higherLevel) ? Math.round(Number(stair.higherLevel)) : 0;
+        const lowerBaseZ = Number(stair.lowerZ);
+        const higherBaseZ = Number(stair.higherZ);
+        const matchesLowerSurface = floorSurfaceId.length > 0 &&
+            typeof stair.lowerSurfaceId === "string" &&
+            stair.lowerSurfaceId.length > 0 &&
+            floorSurfaceId === stair.lowerSurfaceId;
+        const matchesHigherSurface = floorSurfaceId.length > 0 &&
+            typeof stair.higherSurfaceId === "string" &&
+            stair.higherSurfaceId.length > 0 &&
+            floorSurfaceId === stair.higherSurfaceId;
+        if (
+            floorLayer === lowerLayer &&
+            Number.isFinite(floorBaseZ) &&
+            Number.isFinite(lowerBaseZ) &&
+            Math.abs(floorBaseZ - lowerBaseZ) <= 1e-6 &&
+            (floorFragmentId === stair.lowerFragmentId || matchesLowerSurface)
+        ) {
+            return "lower";
+        }
+        if (
+            floorLayer === higherLayer &&
+            Number.isFinite(floorBaseZ) &&
+            Number.isFinite(higherBaseZ) &&
+            Math.abs(floorBaseZ - higherBaseZ) <= 1e-6 &&
+            (floorFragmentId === stair.higherFragmentId || matchesHigherSurface)
+        ) {
+            return "higher";
+        }
+        return null;
+    }
+
+    areActorMovementSupportsAdjacent(currentSupport, nextSupport) {
+        if (!currentSupport || !nextSupport) return false;
+        if (currentSupport.type === "floor" && nextSupport.type === "floor") {
+            return currentSupport.layer === nextSupport.layer;
+        }
+        if (currentSupport.type === "stair" && nextSupport.type === "stair") {
+            if (currentSupport.stairId !== nextSupport.stairId) return false;
+            return true;
+        }
+        const stairSupport = currentSupport.type === "stair" ? currentSupport : nextSupport;
+        const floorSupport = currentSupport.type === "floor" ? currentSupport : nextSupport;
+        const stair = stairSupport && stairSupport.stair;
+        if (!stair || !floorSupport) return false;
+        const endpoint = this.getStairEndpointForFloorSupport(floorSupport, stair);
+        if (Number(stairSupport.upDown) <= 1e-6 && endpoint === "lower") return true;
+        if (Number(stairSupport.upDown) >= 1 - 1e-6 && endpoint === "higher") return true;
+        return false;
+    }
+
+    didActorCrossStairEndpoint(stair, actor, worldX, worldY, endpoint) {
+        if (!actor || !stair) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        return traversal.endpointLineCrossed(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint);
+    }
+
+    actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options = {}) {
+        if (!actor || !stair || !endpoint) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const entry = traversal.pathEndpointEntryState(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint, {
+            actorRadius: this.getActorMovementSupportRadius(actor, options),
+            stair
+        });
+        return entry.enters === true;
+    }
+
+    actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options = {}) {
+        if (!actor || !stair || !endpoint) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const entry = traversal.pathEndpointEntryState(frame, { x: actor.x, y: actor.y }, { x: worldX, y: worldY }, endpoint, {
+            actorRadius: this.getActorMovementSupportRadius(actor, options),
+            stair
+        });
+        if (
+            endpoint === "higher" &&
+            entry.directionMatches === true &&
+            entry.crossesEndpointWidth === true &&
+            Number(entry.previousLocal && entry.previousLocal.upDown) >= 1 - 0.000001
+        ) {
+            return true;
+        }
+        return entry.enters !== true &&
+            entry.directionMatches === true &&
+            entry.footprintReachedEndpoint === true &&
+            entry.crossesEndpointWidth === true;
+    }
+
+    actorMovesAwayFromStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options = {}) {
+        if (!actor || !stair || !endpoint) return false;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const previousLocal = traversal.localPointForPathFrame(frame, { x: actor.x, y: actor.y }, localOptions);
+        const nextLocal = traversal.localPointForPathFrame(frame, { x: worldX, y: worldY }, localOptions);
+        const previousUpDown = Number(previousLocal && previousLocal.upDown);
+        const nextUpDown = Number(nextLocal && nextLocal.upDown);
+        const nextLeftRight = Number(nextLocal && nextLocal.leftRight);
+        if (!Number.isFinite(previousUpDown) || !Number.isFinite(nextUpDown) || !Number.isFinite(nextLeftRight)) return false;
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        const mouthTolerance = Math.max(0.02, radius / Math.max(0.001, Number(frame.pathLength) || 0) + 0.000001);
+        const movingAway = endpoint === "lower"
+            ? nextUpDown < previousUpDown - 0.000001
+            : endpoint === "higher"
+                ? nextUpDown > previousUpDown + 0.000001
+                : null;
+        if (movingAway === null) throw new Error(`unknown stair endpoint: ${endpoint}`);
+        if (!movingAway) return false;
+        const nearEndpoint = endpoint === "lower"
+            ? previousUpDown <= mouthTolerance
+            : previousUpDown >= 1 - mouthTolerance;
+        return nearEndpoint &&
+            nextLeftRight >= -0.000001 &&
+            nextLeftRight <= 1.000001;
+    }
+
+    resolveActorStairLocalMovement(currentStairSupport, worldX, worldY, actor = null, options = {}) {
+        if (!currentStairSupport || !currentStairSupport.stair) {
+            throw new Error("stair-local movement requires active stair support");
+        }
+        const stair = currentStairSupport.stair;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const currentLocal = this.clampStairLocalSide(frame, currentStairSupport, actor, options);
+        const dx = this.shortestDeltaX(Number(actor && actor.x), Number(worldX));
+        const dy = this.shortestDeltaY(Number(actor && actor.y), Number(worldY));
+        const distance = Math.hypot(dx, dy);
+        let nextLocal = currentLocal;
+        if (distance > 1e-9) {
+            nextLocal = traversal.movePathLocal(frame, currentLocal, { x: dx / distance, y: dy / distance }, 1, distance);
+            nextLocal = this.clampStairLocalSide(frame, nextLocal, actor, options);
+        }
+        if (nextLocal.upDown < 0 || nextLocal.upDown > 1) {
+            const endpoint = nextLocal.upDown < 0 ? "lower" : "higher";
+            const nextLayer = nextLocal.upDown < 0
+                ? Math.round(Number(stair.lowerLevel) || 0)
+                : Math.round(Number(stair.higherLevel) || 0);
+            const exitPoint = traversal.exitPointFromPathLocal(frame, nextLocal);
+            const floorSupport = this.getFloorSupportAtWorldPosition(exitPoint.x, exitPoint.y, nextLayer, options);
+            if (floorSupport && this.getStairEndpointForFloorSupport(floorSupport, stair) === endpoint) {
+                return {
+                    handled: true,
+                    allowed: true,
+                    support: {
+                        ...floorSupport,
+                        point: exitPoint
+                    },
+                    currentSupport: currentStairSupport
+                };
+            }
+            return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport };
+        }
+        return {
+            handled: true,
+            allowed: true,
+            support: traversal.supportFromPathLocal(stair, frame, nextLocal),
+            currentSupport: currentStairSupport
+        };
+    }
+
+    resolveActorStairMovementOccupancy(worldX, worldY, actor = null, options = {}) {
+        if (!(this.stairsById instanceof Map) || this.stairsById.size === 0) {
+            return { handled: false, allowed: false, support: null };
+        }
+        const currentStairSupport = this.getActorStairSupportFromState(actor);
+        const currentLayer = this.getActorTraversalLayer(actor, options);
+        const currentFloorSupport = currentStairSupport
+            ? null
+            : this.getActorFloorSupportForStairEntry(actor, worldX, worldY, currentLayer, options);
+        if (currentStairSupport) {
+            return this.resolveActorStairLocalMovement(currentStairSupport, worldX, worldY, actor, options);
+        }
+
+        if (currentFloorSupport) {
+            for (const stair of this.stairsById.values()) {
+                if (!stair) continue;
+                const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
+                if (!endpoint) continue;
+                if (this.actorMovesIntoStairEndpoint(stair, actor, worldX, worldY, endpoint, options)) {
+                    const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
+                        ...options,
+                        endpoint
+                    });
+                    if (entrySupport) {
+                        return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
+                    }
+                }
+                if (endpoint === "higher") {
+                    const topStepSideEntrySupport = this.getActorStairTopStepSideEntrySupport(stair, worldX, worldY, actor, options);
+                    if (topStepSideEntrySupport) {
+                        return { handled: true, allowed: true, support: topStepSideEntrySupport, currentSupport: currentFloorSupport };
+                    }
+                }
+                if (
+                    endpoint === "higher" &&
+                    this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options) &&
+                    !this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)
+                ) {
+                    return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
+                }
+                if (
+                    endpoint === "higher" &&
+                    this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options) &&
+                    !this.getFloorSupportAtWorldPosition(worldX, worldY, currentLayer, options)
+                ) {
+                    const entrySupport = this.getActorStairEndpointEntrySupport(stair, worldX, worldY, actor, {
+                        ...options,
+                        endpoint
+                    });
+                    if (entrySupport) {
+                        return { handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport };
+                    }
+                }
+            }
+        }
+
+        if (!this.actorUsesLocalMovementZ(actor) && !this.actorAppearsOnFloorSupport(actor, currentFloorSupport)) {
+            const reacquiredStairSupport = this.getActorStairSupportAtWorldPosition(
+                Number(actor && actor.x),
+                Number(actor && actor.y),
+                actor,
+                options
+            );
+            if (reacquiredStairSupport) {
+                return this.resolveActorStairLocalMovement(reacquiredStairSupport, worldX, worldY, actor, options);
+            }
+        }
+
+        if (currentFloorSupport) {
+            for (const stair of this.stairsById.values()) {
+                if (!stair) continue;
+                const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
+                if (!endpoint) continue;
+                if (!this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)) continue;
+                if (this.actorMovesAwayFromStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
+                    return {
+                        handled: true,
+                        allowed: true,
+                        support: {
+                            ...currentFloorSupport,
+                            point: { x: Number(worldX), y: Number(worldY) }
+                        },
+                        currentSupport: currentFloorSupport
+                    };
+                }
+                if (this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
+                    return {
+                        handled: true,
+                        allowed: true,
+                        support: {
+                            ...currentFloorSupport,
+                            point: { x: Number(worldX), y: Number(worldY) }
+                        },
+                        currentSupport: currentFloorSupport
+                    };
+                }
+                return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
+            }
+        }
+
+        if (currentFloorSupport) {
+            for (const stair of this.stairsById.values()) {
+                if (!stair) continue;
+                const endpoint = this.getStairEndpointForFloorSupport(currentFloorSupport, stair);
+                if (!endpoint) continue;
+                if (!this.didActorCrossStairEndpoint(stair, actor, worldX, worldY, endpoint)) continue;
+                if (this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)) {
+                    return { handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true };
+                }
+            }
+        }
+
+        return { handled: false, allowed: false, support: null, currentSupport: currentFloorSupport };
+    }
+
+    applyActorResolvedMovementSupport(actor, worldX, worldY, options = {}) {
+        if (!actor) return null;
+        let support = actor._pendingVectorMovementSupport || null;
+        actor._pendingVectorMovementSupport = null;
+        if (!support) {
+            const occupancy = this.resolveActorStairMovementOccupancy(worldX, worldY, actor, options);
+            if (occupancy && occupancy.handled === true && occupancy.allowed === true) {
+                support = occupancy.support || null;
+            }
+        }
+        if (!support) {
+            support = this.resolveActorMovementSupportAtWorldPosition(worldX, worldY, actor, options);
+        }
+        if (!support) return null;
+
+        const previousLayer = Number.isFinite(actor.currentLayer)
+            ? Math.round(Number(actor.currentLayer))
+            : (Number.isFinite(actor.traversalLayer) ? Math.round(Number(actor.traversalLayer)) : 0);
+        const previousBaseZ = Number.isFinite(actor.currentLayerBaseZ)
+            ? Number(actor.currentLayerBaseZ)
+            : previousLayer * 3;
+        let nextLayer = previousLayer;
+        let nextBaseZ = previousBaseZ;
+
+        if (support.type === "stair") {
+            nextLayer = this.getActiveLayerForStairSupport(support);
+            nextBaseZ = this.getActiveBaseZForStairSupport(support);
+            const localZ = Number(support.baseZ) - Number(nextBaseZ);
+            const stair = support.stair && typeof support.stair === "object" ? support.stair : null;
+            const lowerZ = Number(stair && stair.lowerZ);
+            const higherZ = Number(stair && stair.higherZ);
+            const upDown = Number.isFinite(Number(support.upDown))
+                ? Math.max(0, Math.min(1, Number(support.upDown)))
+                : null;
+            const continuousBaseZ = Number.isFinite(lowerZ) && Number.isFinite(higherZ) && upDown !== null
+                ? lowerZ + (higherZ - lowerZ) * upDown
+                : Number(support.baseZ);
+            const continuousLocalZ = Number(continuousBaseZ) - Number(nextBaseZ);
+            actor._stairSupport = {
+                stairId: support.stairId,
+                treadIndex: support.treadIndex,
+                upDown: support.upDown,
+                leftRight: support.leftRight,
+                baseZ: support.baseZ,
+                localZ,
+                continuousBaseZ,
+                continuousLocalZ
+            };
+            actor.z = this.actorUsesLocalMovementZ(actor) ? localZ : support.baseZ;
+        } else if (support.type === "floor") {
+            nextLayer = support.layer;
+            nextBaseZ = support.baseZ;
+            actor._stairSupport = null;
+            actor.z = this.actorUsesLocalMovementZ(actor) ? 0 : (Number.isFinite(nextBaseZ) ? nextBaseZ : 0);
+        }
+
+        actor.currentLayer = nextLayer;
+        actor.traversalLayer = nextLayer;
+        actor.currentLayerBaseZ = Number.isFinite(nextBaseZ) ? Number(nextBaseZ) : nextLayer * 3;
+        if (this.actorUsesLocalMovementZ(actor) && Number.isFinite(actor.prevZ)) {
+            const previousWorldZ = previousBaseZ + Number(actor.prevZ);
+            actor.prevZ = previousWorldZ - actor.currentLayerBaseZ;
+        }
+
+        if (support.node) actor.node = support.node;
+        if (support.surfaceId) actor.surfaceId = support.surfaceId;
+        if (support.fragmentId) actor.fragmentId = support.fragmentId;
+
+        const isGlobalWizard = typeof globalThis !== "undefined" && actor === globalThis.wizard;
+        if (previousLayer !== nextLayer && isGlobalWizard) {
+            actor._pendingLayerTransition = {
+                active: true,
+                fromLevel: previousLayer,
+                toLevel: nextLayer,
+                fromBaseZ: previousBaseZ,
+                toBaseZ: actor.currentLayerBaseZ,
+                startedAtMs: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now(),
+                durationMs: 500
+            };
+        }
+        actor._previousLayerBaseZForTransition = actor.currentLayerBaseZ;
+        return support;
+    }
+
     getFloorNodeBySurface(surfaceId, x, y) {
         if (!(this.floorFragmentsBySurfaceId instanceof Map) || !(this.floorNodeIndex instanceof Map)) return null;
         if (typeof surfaceId !== "string" || surfaceId.length === 0) return null;
@@ -1014,6 +3185,126 @@ class GameMap {
             if (floorNode) return floorNode;
         }
         return null;
+    }
+
+    getFloorNodeAtLayer(x, y, layer = 0, options = {}) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        const xi = Number(x);
+        const yi = Number(y);
+        if (!Number.isFinite(xi) || !Number.isFinite(yi)) return null;
+        if (targetLayer === 0) {
+            const baseNode = this.getNode(xi, yi, 0);
+            if (baseNode) return baseNode;
+        }
+        this._ensureFloorNodeLayerIndex();
+        if (!(this.floorNodesById instanceof Map)) return null;
+        const sectionKey = (options && typeof options.sectionKey === "string") ? options.sectionKey : "";
+        const surfaceId = (options && typeof options.surfaceId === "string") ? options.surfaceId : "";
+        const fragmentId = (options && typeof options.fragmentId === "string") ? options.fragmentId : "";
+        const allowScan = !options || options.allowScan !== false;
+        const explicitSourceNode = options && options.sourceNode &&
+            Number(options.sourceNode.xindex) === xi &&
+            Number(options.sourceNode.yindex) === yi
+            ? options.sourceNode
+            : null;
+
+        if (surfaceId || fragmentId) {
+            const directFragmentIds = fragmentId
+                ? [fragmentId]
+                : (this.floorFragmentsBySurfaceId instanceof Map && this.floorFragmentsBySurfaceId.get(surfaceId) instanceof Set
+                    ? Array.from(this.floorFragmentsBySurfaceId.get(surfaceId))
+                    : []);
+            for (let i = 0; i < directFragmentIds.length; i++) {
+                const directFragmentId = directFragmentIds[i];
+                const directSurfaceId = surfaceId || (
+                    this.floorsById instanceof Map && this.floorsById.get(directFragmentId)
+                        ? this.floorsById.get(directFragmentId).surfaceId
+                        : ""
+                );
+                if (!directSurfaceId) continue;
+                const directNode = this.floorNodeIndex instanceof Map
+                    ? this.floorNodeIndex.get(this.getFloorNodeKey(xi, yi, directSurfaceId, directFragmentId))
+                    : null;
+                if (directNode) return directNode;
+            }
+        }
+
+        const layerCandidates = this.floorNodeLayerIndex instanceof Map
+            ? (this.floorNodeLayerIndex.get(this.getFloorLayerNodeKey(xi, yi, targetLayer)) || [])
+            : [];
+        if (layerCandidates.length > 0) {
+            let fallback = null;
+            for (let i = 0; i < layerCandidates.length; i++) {
+                const candidate = layerCandidates[i];
+                if (!candidate) continue;
+                if (surfaceId && candidate.surfaceId !== surfaceId) continue;
+                if (fragmentId && candidate.fragmentId !== fragmentId) continue;
+                if (sectionKey && (
+                    candidate.ownerSectionKey === sectionKey ||
+                    candidate._prototypeSectionKey === sectionKey ||
+                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                )) {
+                    return candidate;
+                }
+                if (!fallback) fallback = candidate;
+            }
+            if (fallback) return fallback;
+        }
+
+        if (!allowScan) return null;
+
+        let fallback = null;
+        for (const nodes of this.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                const candidate = nodes[i];
+                if (!candidate) continue;
+                if (Number(candidate.xindex) !== xi || Number(candidate.yindex) !== yi) continue;
+                const candidateLayer = Number.isFinite(candidate.traversalLayer)
+                    ? Math.round(Number(candidate.traversalLayer))
+                    : (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0);
+                if (candidateLayer !== targetLayer) continue;
+                if (sectionKey && (
+                    candidate.ownerSectionKey === sectionKey ||
+                    candidate._prototypeSectionKey === sectionKey ||
+                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                )) {
+                    return candidate;
+                }
+                if (!fallback) fallback = candidate;
+            }
+        }
+        if (!fallback && fragmentId && this.floorsById instanceof Map) {
+            const fragment = this.floorsById.get(fragmentId) || null;
+            const fragmentLayer = Number.isFinite(fragment && fragment.level)
+                ? Math.round(Number(fragment.level))
+                : 0;
+            if (fragment && fragmentLayer === targetLayer) {
+                const sourceNode = explicitSourceNode || this.getNode(xi, yi, 0);
+                const supportX = Number.isFinite(options && options.worldX)
+                    ? Number(options.worldX)
+                    : (Number.isFinite(sourceNode && sourceNode.x) ? Number(sourceNode.x) : NaN);
+                const supportY = Number.isFinite(options && options.worldY)
+                    ? Number(options.worldY)
+                    : (Number.isFinite(sourceNode && sourceNode.y) ? Number(sourceNode.y) : NaN);
+                if (
+                    sourceNode &&
+                    Number.isFinite(supportX) &&
+                    Number.isFinite(supportY) &&
+                    this.isPointSupportedByFloorFragment(fragment, supportX, supportY)
+                ) {
+                    const created = this.createFloorNodeFromSource(sourceNode, fragment, {
+                        baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : targetLayer * 3,
+                        traversalLayer: targetLayer
+                    });
+                    if (created) {
+                        this._connectFloorNodesIncremental([created], new Set([created.id]));
+                        return created;
+                    }
+                }
+            }
+        }
+        return fallback;
     }
 
     connectFloorNodeNeighbors() {
@@ -1058,6 +3349,517 @@ class GameMap {
         }
 
         return connectionCount;
+    }
+
+    _connectFloorNodesIncremental(newFloorNodes, newNodeIdSet) {
+        if (!Array.isArray(newFloorNodes) || newFloorNodes.length === 0) return;
+        const wrapX = this.wrapX === true && Number.isFinite(this.width) && this.width > 0;
+        const wrapY = this.wrapY === true && Number.isFinite(this.height) && this.height > 0;
+        const mapWidth = wrapX ? this.width : 0;
+        const mapHeight = wrapY ? this.height : 0;
+        const nodeIndex = this.floorNodeIndex;
+        for (let i = 0; i < newFloorNodes.length; i++) {
+            const floorNode = newFloorNodes[i];
+            if (!floorNode || !Array.isArray(floorNode.neighborOffsets) || !Array.isArray(floorNode.neighbors)) continue;
+            const surfaceId = floorNode.surfaceId;
+            const fragmentId = floorNode.fragmentId;
+            const nx0 = floorNode.xindex;
+            const ny0 = floorNode.yindex;
+            for (let d = 0; d < floorNode.neighborOffsets.length; d++) {
+                const offset = floorNode.neighborOffsets[d];
+                if (!offset) continue;
+                let nx = nx0 + offset.x;
+                let ny = ny0 + offset.y;
+                if (wrapX) { nx = nx % mapWidth; if (nx < 0) nx += mapWidth; }
+                if (wrapY) { ny = ny % mapHeight; if (ny < 0) ny += mapHeight; }
+                // Fast path: try same fragment first (common case)
+                let neighborNode = nodeIndex.get(`${nx},${ny},${surfaceId},${fragmentId}`) || null;
+                // Slow path: scan other fragments on same surface
+                if (!neighborNode) neighborNode = this.getFloorNodeBySurface(surfaceId, nx, ny);
+                if (!neighborNode) continue;
+                floorNode.neighbors[d] = neighborNode;
+                // Skip back-link if neighbor is also new (its own forward pass will link back to us)
+                if (newNodeIdSet && newNodeIdSet.has(neighborNode.id)) continue;
+                if (Array.isArray(neighborNode.neighborOffsets) && Array.isArray(neighborNode.neighbors)) {
+                    for (let rd = 0; rd < neighborNode.neighborOffsets.length; rd++) {
+                        const reverseOffset = neighborNode.neighborOffsets[rd];
+                        if (!reverseOffset) continue;
+                        if (
+                            (neighborNode.xindex + reverseOffset.x) === nx0 &&
+                            (neighborNode.yindex + reverseOffset.y) === ny0
+                        ) {
+                            neighborNode.neighbors[rd] = floorNode;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Prepare fragment registration for a section without creating any floor nodes.
+    // Returns the array of registered fragments (including synthesized ground), or null if already registered.
+    prepareFloorSectionFragments(sectionKey, sectionState, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return null;
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return null;
+        if (this.floorFragmentsBySectionKey instanceof Map && this.floorFragmentsBySectionKey.has(sectionKey)) return null;
+        const asset = sectionState.sectionAssetsByKey.get(sectionKey);
+        if (!asset) return null;
+        const synthesizeGroundFragment = (typeof options.synthesizeGroundFragment === "function")
+            ? options.synthesizeGroundFragment : null;
+        const authoredFragments = Array.isArray(asset.floors) ? asset.floors.slice() : [];
+        const hasGroundFragment = authoredFragments.some((f) => Number(f && f.level) === 0);
+        if (!hasGroundFragment && synthesizeGroundFragment) {
+            const synthesized = synthesizeGroundFragment(asset);
+            if (synthesized) authoredFragments.unshift(synthesized);
+        }
+        const registeredFragments = [];
+        for (let i = 0; i < authoredFragments.length; i++) {
+            const registeredFragment = this.registerFloorFragment(authoredFragments[i]);
+            if (!registeredFragment) continue;
+            registeredFragments.push(registeredFragment);
+        }
+        // Store pending batch state under a staging key
+        if (!(this._pendingFloorSectionNodes instanceof Map)) this._pendingFloorSectionNodes = new Map();
+        this._pendingFloorSectionNodes.set(sectionKey, { fragments: registeredFragments, nodes: [] });
+        return registeredFragments;
+    }
+
+    // Add a batch of nodes (sourceNodes[start..start+count]) for a section that was prepared via prepareFloorSectionFragments.
+    // Returns the number of floor nodes created in this batch.
+    addFloorSectionNodeBatch(sectionKey, sectionState, sourceNodes, start, count, doesNodeBelongToFragment) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { fragments, nodes: pendingNodes } = pending;
+        const end = Math.min(start + count, sourceNodes.length);
+        const checkBelongs = (typeof doesNodeBelongToFragment === "function") ? doesNodeBelongToFragment : null;
+        let created = 0;
+        for (let n = start; n < end; n++) {
+            const sourceNode = sourceNodes[n];
+            for (let fi = 0; fi < fragments.length; fi++) {
+                const registeredFragment = fragments[fi];
+                // Skip level-0 floor nodes — getFloorNodeAtLayer(x, y, 0) returns getNode() directly,
+                // so level-0 floor nodes are never looked up via the floor node index.
+                if (Number(registeredFragment.level) === 0) continue;
+                if (checkBelongs && !checkBelongs(sourceNode, registeredFragment)) continue;
+                const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                    baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                    traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                });
+                if (!floorNode) continue;
+                if (this._isFloorNodeAtFragmentBoundary(sourceNode, registeredFragment)) {
+                    floorNode.clearance = -1;
+                }
+                pendingNodes.push(floorNode);
+                created += 1;
+            }
+        }
+        return created;
+    }
+
+    // Finalize: connect all pending nodes for the section and clear staging state.
+    // Returns total floor node count for the section.
+    // Step 1 of chunked connection: build the newNodeIdSet and store it. Returns node count.
+    prepareFloorSectionConnection(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i] && nodes[i].id) newNodeIdSet.add(nodes[i].id);
+        }
+        pending.newNodeIdSet = newNodeIdSet;
+        return nodes.length;
+    }
+
+    // Step 2: connect nodes[start..start+count] using the pre-built newNodeIdSet.
+    connectFloorSectionNodeBatch(sectionKey, start, count) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes, newNodeIdSet } = pending;
+        const end = Math.min(start + count, nodes.length);
+        const batch = nodes.slice(start, end);
+        this._connectFloorNodesIncremental(batch, newNodeIdSet);
+        return batch.length;
+    }
+
+    // Step 3: clean up pending state after all connection batches are done.
+    commitFloorSectionConnection(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return;
+        this._pendingFloorSectionNodes.delete(sectionKey);
+    }
+
+    // Monolithic finalize (used by initial load and registerFloorSection fallback).
+    finalizeFloorSectionNodes(sectionKey) {
+        if (!(this._pendingFloorSectionNodes instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionNodes.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i] && nodes[i].id) newNodeIdSet.add(nodes[i].id);
+        }
+        this._connectFloorNodesIncremental(nodes, newNodeIdSet);
+        this._pendingFloorSectionNodes.delete(sectionKey);
+        return nodes.length;
+    }
+
+    removeObjectsForDeletedFloorFragments(fragmentIds) {
+        const ids = fragmentIds instanceof Set
+            ? fragmentIds
+            : new Set(Array.isArray(fragmentIds) ? fragmentIds.filter(id => typeof id === "string" && id.length > 0) : []);
+        if (ids.size === 0) return { runtimeObjects: 0, savedRecords: 0 };
+
+        const runtimeObjects = new Set();
+        const addRuntimeObject = (obj) => {
+            if (!obj || obj.gone) return;
+            const fragmentId = typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (typeof obj.node?.fragmentId === "string" ? obj.node.fragmentId : "");
+            const manifestFragmentId = typeof obj._floorBuildingManifestFragmentId === "string"
+                ? obj._floorBuildingManifestFragmentId
+                : "";
+            if ((fragmentId && ids.has(fragmentId)) || (manifestFragmentId && ids.has(manifestFragmentId))) {
+                runtimeObjects.add(obj);
+            }
+        };
+
+        if (this.floorNodesById instanceof Map) {
+            ids.forEach((fragmentId) => {
+                const nodes = this.floorNodesById.get(fragmentId) || [];
+                if (!Array.isArray(nodes)) return;
+                for (let i = 0; i < nodes.length; i++) {
+                    const node = nodes[i];
+                    if (!node) continue;
+                    const objects = Array.isArray(node.objects) ? node.objects : [];
+                    for (let j = 0; j < objects.length; j++) addRuntimeObject(objects[j]);
+                    const visibilityObjects = Array.isArray(node.visibilityObjects) ? node.visibilityObjects : [];
+                    for (let j = 0; j < visibilityObjects.length; j++) addRuntimeObject(visibilityObjects[j]);
+                }
+            });
+        }
+        if (Array.isArray(this.objects)) {
+            for (let i = 0; i < this.objects.length; i++) addRuntimeObject(this.objects[i]);
+        }
+        const objectState = this._prototypeObjectState || null;
+        if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            for (const runtimeObj of objectState.activeRuntimeObjectsByRecordId.values()) addRuntimeObject(runtimeObj);
+        }
+
+        runtimeObjects.forEach((obj) => {
+            if (!obj || obj.gone) return;
+            if (typeof obj.removeFromGame === "function") {
+                obj.removeFromGame();
+            } else if (typeof obj.remove === "function") {
+                obj.remove();
+            } else if (typeof obj.delete === "function") {
+                obj.delete();
+            } else {
+                obj.gone = true;
+            }
+        });
+
+        let savedRecords = 0;
+        const sectionState = this._prototypeSectionState || null;
+        if (sectionState && sectionState.sectionAssetsByKey instanceof Map) {
+            for (const asset of sectionState.sectionAssetsByKey.values()) {
+                const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
+                if (!records || records.length === 0) continue;
+                const nextRecords = records.filter((record) => {
+                    const fragmentId = typeof record?.fragmentId === "string" ? record.fragmentId : "";
+                    if (!fragmentId || !ids.has(fragmentId)) return true;
+                    savedRecords += 1;
+                    return false;
+                });
+                if (nextRecords.length === records.length) continue;
+                asset.objects = nextRecords;
+                asset._prototypeNamedObjectRecordIdByName = null;
+                asset._prototypeNamedObjectConflictRecordIdsByName = null;
+                asset._prototypeClearanceDirty = true;
+            }
+        }
+
+        if (objectState && savedRecords > 0) {
+            objectState.captureScanNeeded = true;
+        }
+        if ((runtimeObjects.size > 0 || savedRecords > 0) && typeof this.markBuildingRenderCacheDirty === "function") {
+            this.markBuildingRenderCacheDirty();
+        }
+        return { runtimeObjects: runtimeObjects.size, savedRecords };
+    }
+
+    unregisterFloorFragments(fragmentIds, options = {}) {
+        const ids = fragmentIds instanceof Set
+            ? Array.from(fragmentIds)
+            : (Array.isArray(fragmentIds) ? fragmentIds.slice() : []);
+        if (ids.length === 0) return 0;
+        if (options && options.removeAttachedObjects === true) {
+            this.removeObjectsForDeletedFloorFragments(ids);
+        }
+        let removedCount = 0;
+        for (let idIndex = 0; idIndex < ids.length; idIndex++) {
+            const fragmentId = ids[idIndex];
+            if (typeof fragmentId !== "string" || fragmentId.length === 0) continue;
+            const floorNodes = (this.floorNodesById instanceof Map)
+                ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < floorNodes.length; i++) {
+                const floorNode = floorNodes[i];
+                if (!floorNode) continue;
+                this._unindexFloorNodeByLayer(floorNode);
+                if (this.floorNodeIndex instanceof Map) {
+                    this.floorNodeIndex.delete(floorNode.id);
+                }
+                if (Array.isArray(floorNode.neighbors)) {
+                    for (let d = 0; d < floorNode.neighbors.length; d++) {
+                        const neighbor = floorNode.neighbors[d];
+                        if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                        for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                            if (neighbor.neighbors[rd] === floorNode) {
+                                neighbor.neighbors[rd] = null;
+                            }
+                        }
+                    }
+                }
+                removedCount += 1;
+            }
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                if (frag && this.floorFragmentsBySectionKey instanceof Map) {
+                    const sectionSet = this.floorFragmentsBySectionKey.get(frag.ownerSectionKey);
+                    if (sectionSet instanceof Set) {
+                        sectionSet.delete(fragmentId);
+                        if (sectionSet.size === 0) this.floorFragmentsBySectionKey.delete(frag.ownerSectionKey);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        if (removedCount > 0 || ids.length > 0) {
+            this.markFloorObjectNodeCacheDirty();
+            this.markFloorBuildingsDirty();
+        }
+        return removedCount;
+    }
+
+    registerFloorFragmentsForSection(sectionKey, sectionState, fragmentRecords, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return { fragmentCount: 0, nodeCount: 0 };
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return { fragmentCount: 0, nodeCount: 0 };
+        if (!Array.isArray(fragmentRecords) || fragmentRecords.length === 0) return { fragmentCount: 0, nodeCount: 0 };
+        const sectionNodes = (sectionState.nodesBySectionKey instanceof Map)
+            ? (sectionState.nodesBySectionKey.get(sectionKey) || []) : [];
+        const nodesByCoordKey = (sectionState.allNodesByCoordKey instanceof Map)
+            ? sectionState.allNodesByCoordKey : null;
+        const doesNodeBelongToFragment = (typeof options.doesNodeBelongToFragment === "function")
+            ? options.doesNodeBelongToFragment : null;
+        const newNodes = [];
+        let fragmentCount = 0;
+        let nodeCount = 0;
+
+        const getSourceNode = (tileKey) => {
+            if (nodesByCoordKey && nodesByCoordKey.has(tileKey)) return nodesByCoordKey.get(tileKey);
+            const [xRaw, yRaw] = String(tileKey || "").split(",");
+            const x = Number(xRaw);
+            const y = Number(yRaw);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            if (typeof this.getNodeByIndex === "function") return this.getNodeByIndex(x, y);
+            for (let i = 0; i < sectionNodes.length; i++) {
+                const node = sectionNodes[i];
+                if (node && Number(node.xindex) === x && Number(node.yindex) === y) return node;
+            }
+            return null;
+        };
+
+        for (let i = 0; i < fragmentRecords.length; i++) {
+            const registeredFragment = this.registerFloorFragment(fragmentRecords[i]);
+            if (!registeredFragment) continue;
+            fragmentCount += 1;
+            const materializedNodeKeys = [];
+            const tileCoordKeys = Array.isArray(registeredFragment.tileCoordKeys)
+                ? registeredFragment.tileCoordKeys : [];
+            if (tileCoordKeys.length > 0) {
+                for (let t = 0; t < tileCoordKeys.length; t++) {
+                    const sourceNode = getSourceNode(tileCoordKeys[t]);
+                    if (!sourceNode) continue;
+                    const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                        baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                        traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                    });
+                    if (!floorNode) continue;
+                    newNodes.push(floorNode);
+                    nodeCount += 1;
+                    materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
+                }
+            } else if (doesNodeBelongToFragment) {
+                for (let n = 0; n < sectionNodes.length; n++) {
+                    const sourceNode = sectionNodes[n];
+                    if (!doesNodeBelongToFragment(sourceNode, registeredFragment)) continue;
+                    const floorNode = this.createFloorNodeFromSource(sourceNode, registeredFragment, {
+                        baseZ: Number.isFinite(registeredFragment.nodeBaseZ) ? Number(registeredFragment.nodeBaseZ) : 0,
+                        traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
+                    });
+                    if (!floorNode) continue;
+                    newNodes.push(floorNode);
+                    nodeCount += 1;
+                    materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
+                }
+            }
+            registeredFragment.materializedNodeKeys = materializedNodeKeys;
+        }
+
+        const newNodeIdSet = new Set();
+        for (let i = 0; i < newNodes.length; i++) {
+            if (newNodes[i] && newNodes[i].id) newNodeIdSet.add(newNodes[i].id);
+        }
+        this._connectFloorNodesIncremental(newNodes, newNodeIdSet);
+        if (fragmentCount > 0 || nodeCount > 0) this.markFloorBuildingsDirty();
+        return { fragmentCount, nodeCount };
+    }
+
+    // Collect all floor nodes for a section into staging for chunked removal. Returns node count.
+    prepareFloorSectionUnregister(sectionKey) {
+        if (!(this.floorFragmentsBySectionKey instanceof Map)) return 0;
+        const fragmentIds = this.floorFragmentsBySectionKey.get(sectionKey);
+        if (!fragmentIds || fragmentIds.size === 0) return 0;
+        const allNodes = [];
+        for (const fragmentId of fragmentIds) {
+            const nodes = (this.floorNodesById instanceof Map) ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i]) allNodes.push(nodes[i]);
+            }
+        }
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) this._pendingFloorSectionUnregister = new Map();
+        this._pendingFloorSectionUnregister.set(sectionKey, { nodes: allNodes, fragmentIds });
+        return allNodes.length;
+    }
+
+    // Remove nodes[start..start+count] from floorNodeIndex and null their back-refs in neighbors.
+    unregisterFloorSectionNodeBatch(sectionKey, start, count) {
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionUnregister.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes } = pending;
+        const end = Math.min(start + count, nodes.length);
+        for (let i = start; i < end; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            this._unindexFloorNodeByLayer(node);
+            if (this.floorNodeIndex instanceof Map) this.floorNodeIndex.delete(node.id);
+            if (!Array.isArray(node.neighbors)) continue;
+            for (let d = 0; d < node.neighbors.length; d++) {
+                const neighbor = node.neighbors[d];
+                if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                    if (neighbor.neighbors[rd] === node) { neighbor.neighbors[rd] = null; }
+                }
+            }
+        }
+        return end - start;
+    }
+
+    // Finalize removal: clean up floorsById/floorNodesById/floorFragmentsBySurfaceId/floorFragmentsBySectionKey.
+    commitFloorSectionUnregister(sectionKey) {
+        if (!(this._pendingFloorSectionUnregister instanceof Map)) return 0;
+        const pending = this._pendingFloorSectionUnregister.get(sectionKey);
+        if (!pending) return 0;
+        const { nodes, fragmentIds } = pending;
+        this._pendingFloorSectionUnregister.delete(sectionKey);
+        for (const fragmentId of fragmentIds) {
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        if (this.floorFragmentsBySectionKey instanceof Map) this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorObjectNodeCacheDirty();
+        this.markFloorBuildingsDirty();
+        return nodes.length;
+    }
+
+    // Monolithic version kept for initial load (setActiveCenter) and fallback.
+    registerFloorSection(sectionKey, sectionState, options = {}) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) return 0;
+        if (!sectionState || !(sectionState.sectionAssetsByKey instanceof Map)) return 0;
+        if (this.floorFragmentsBySectionKey instanceof Map && this.floorFragmentsBySectionKey.has(sectionKey)) return 0;
+        const asset = sectionState.sectionAssetsByKey.get(sectionKey);
+        if (!asset) return 0;
+        const sectionNodes = (sectionState.nodesBySectionKey instanceof Map)
+            ? (sectionState.nodesBySectionKey.get(sectionKey) || [])
+            : [];
+        const doesNodeBelongToFragment = (typeof options.doesNodeBelongToFragment === "function")
+            ? options.doesNodeBelongToFragment : null;
+        const fragments = this.prepareFloorSectionFragments(sectionKey, sectionState, options);
+        if (!fragments) return 0;
+        this.addFloorSectionNodeBatch(sectionKey, sectionState, sectionNodes, 0, sectionNodes.length, doesNodeBelongToFragment);
+        return this.finalizeFloorSectionNodes(sectionKey);
+    }
+
+    unregisterFloorSection(sectionKey) {
+        if (!(this.floorFragmentsBySectionKey instanceof Map)) return 0;
+        const fragmentIds = this.floorFragmentsBySectionKey.get(sectionKey);
+        if (!fragmentIds || fragmentIds.size === 0) {
+            this.floorFragmentsBySectionKey.delete(sectionKey);
+            return 0;
+        }
+        let removedCount = 0;
+        for (const fragmentId of fragmentIds) {
+            const floorNodes = (this.floorNodesById instanceof Map)
+                ? (this.floorNodesById.get(fragmentId) || []) : [];
+            for (let i = 0; i < floorNodes.length; i++) {
+                const floorNode = floorNodes[i];
+                if (!floorNode) continue;
+                this._unindexFloorNodeByLayer(floorNode);
+                if (this.floorNodeIndex instanceof Map) {
+                    this.floorNodeIndex.delete(floorNode.id);
+                }
+                if (Array.isArray(floorNode.neighbors)) {
+                    for (let d = 0; d < floorNode.neighbors.length; d++) {
+                        const neighbor = floorNode.neighbors[d];
+                        if (!neighbor || !Array.isArray(neighbor.neighbors)) continue;
+                        for (let rd = 0; rd < neighbor.neighbors.length; rd++) {
+                            if (neighbor.neighbors[rd] === floorNode) {
+                                neighbor.neighbors[rd] = null;
+                            }
+                        }
+                    }
+                }
+                removedCount += 1;
+            }
+            if (this.floorsById instanceof Map) {
+                const frag = this.floorsById.get(fragmentId);
+                if (frag && this.floorFragmentsBySurfaceId instanceof Map) {
+                    const surfaceSet = this.floorFragmentsBySurfaceId.get(frag.surfaceId);
+                    if (surfaceSet instanceof Set) {
+                        surfaceSet.delete(fragmentId);
+                        if (surfaceSet.size === 0) this.floorFragmentsBySurfaceId.delete(frag.surfaceId);
+                    }
+                }
+                this.floorsById.delete(fragmentId);
+            }
+            if (this.floorNodesById instanceof Map) this.floorNodesById.delete(fragmentId);
+        }
+        this.floorFragmentsBySectionKey.delete(sectionKey);
+        this.markFloorObjectNodeCacheDirty();
+        this.markFloorBuildingsDirty();
+        return removedCount;
     }
 
     resolveFloorTransitionEndpoint(endpoint) {
@@ -1141,6 +3943,24 @@ class GameMap {
         return connectionCount;
     }
 
+    // Hex node spacing is 1.0 world units → inradius = 0.5.
+    // A node whose center is within 0.5 units of the polygon boundary has a hex cell
+    // that extends outside the polygon, so it should not be a valid pathfinding destination.
+    _isFloorNodeAtFragmentBoundary(sourceNode, fragment) {
+        const HEX_INRADIUS_SQ = 0.25; // 0.5²
+        const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+        if (!poly || poly.length < 3) return false;
+        if (getPointPolygonBoundaryDistanceSq2D(sourceNode.x, sourceNode.y, poly) < HEX_INRADIUS_SQ) return true;
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            if (Array.isArray(holes[i]) && holes[i].length >= 3 &&
+                getPointPolygonBoundaryDistanceSq2D(sourceNode.x, sourceNode.y, holes[i]) < HEX_INRADIUS_SQ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     rebuildFloorRuntimeFromSectionState(sectionState, options = {}) {
         this.resetFloorRuntimeState();
         if (
@@ -1189,6 +4009,9 @@ class GameMap {
                         traversalLayer: Number.isFinite(registeredFragment.level) ? Number(registeredFragment.level) : 0
                     });
                     if (!floorNode) continue;
+                    if (this._isFloorNodeAtFragmentBoundary(sourceNode, registeredFragment)) {
+                        floorNode.clearance = -1;
+                    }
                     nodeCount += 1;
                     materializedNodeKeys.push(`${floorNode.xindex},${floorNode.yindex}`);
                 }
@@ -1224,8 +4047,13 @@ class GameMap {
 
     getNode(x, y, traversalLayer = 0) {
         const resolvedLayer = Number.isFinite(traversalLayer) ? Number(traversalLayer) : 0;
-        if (resolvedLayer !== 0) return null;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (resolvedLayer !== 0) {
+            if (typeof this.getFloorNodeAtLayer === "function") {
+                return this.getFloorNodeAtLayer(x, y, resolvedLayer, { allowScan: false }) || null;
+            }
+            return null;
+        }
         const tx = this.wrapX ? this.wrapIndexX(Math.round(x)) : Math.round(x);
         const ty = this.wrapY ? this.wrapIndexY(Math.round(y)) : Math.round(y);
         return (this.nodes[tx] && this.nodes[tx][ty]) ? this.nodes[tx][ty] : null;
@@ -1259,6 +4087,33 @@ class GameMap {
         return null;
     }
 
+    findLiveTraversalEdgeForWorkerEdge(fromNode, toNode, workerEdgeId = "") {
+        if (!fromNode || !toNode) return null;
+        const outgoingEdges = this.getOutgoingEdges(fromNode, {
+            includeBlocked: true,
+            traversalOptions: {
+                destinationNode: toNode,
+                allowBlockedDestination: true,
+                requiredClearance: 0,
+                clearanceReferenceNode: toNode
+            }
+        });
+        if (!Array.isArray(outgoingEdges) || outgoingEdges.length === 0) return null;
+        const exact = outgoingEdges.find(edge => edge && edge.id === workerEdgeId && edge.toNode === toNode);
+        if (exact) return exact;
+        const transitionMatch = (typeof workerEdgeId === "string" && workerEdgeId.includes("->portal:"))
+            ? outgoingEdges.find(edge => (
+                edge &&
+                edge.toNode === toNode &&
+                edge.metadata &&
+                typeof edge.metadata.transitionId === "string" &&
+                workerEdgeId.endsWith(`:${edge.metadata.transitionId}`)
+            ))
+            : null;
+        if (transitionMatch) return transitionMatch;
+        return outgoingEdges.find(edge => edge && edge.toNode === toNode) || null;
+    }
+
     // Convert a pathfinding worker path result into live traversal path items
     // (same format as findPathAStar).  Returns null when reconciliation fails
     // (e.g. map version changed between request and response).
@@ -1275,13 +4130,15 @@ class GameMap {
                 ? this.resolveNodeByKey(result.startNodeKey || "")
                 : this.resolveNodeByKey(result.pathNodeKeys[i - 1]);
             if (fromNode && options.returnPathSteps === true) {
-                const edge = this.createTraversalEdge(fromNode, toNode, {
-                    type: "async",
-                    allowed: true,
-                    penalty: 0,
-                    blockers: [],
-                    movementCost: 1
-                });
+                const workerEdgeId = Array.isArray(result.pathEdgeIds) ? (result.pathEdgeIds[i - 1] || "") : "";
+                const edge = this.findLiveTraversalEdgeForWorkerEdge(fromNode, toNode, workerEdgeId) ||
+                    this.createTraversalEdge(fromNode, toNode, {
+                        type: "async",
+                        allowed: true,
+                        penalty: 0,
+                        blockers: [],
+                        movementCost: 1
+                    });
                 path.push(this.createPathStep(edge, options));
             } else {
                 path.push(toNode);
@@ -1321,6 +4178,10 @@ class GameMap {
     sampleTraversalEdgePosition(edge, progress = 1) {
         if (!edge || !edge.fromNode || !edge.toNode) return null;
         const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        const stairId = edge.metadata && typeof edge.metadata.stairId === "string" ? edge.metadata.stairId : "";
+        if (stairId) {
+            return this.sampleStairPathPosition(stairId, edge.fromNode, t);
+        }
         const fromNode = edge.fromNode;
         const toNode = edge.toNode;
         const x = fromNode.x + this.shortestDeltaX(fromNode.x, toNode.x) * t;
@@ -1329,6 +4190,28 @@ class GameMap {
         const toZ = this.getNodeBaseZ(toNode);
         const z = fromZ + (toZ - fromZ) * t;
         return { x, y, z };
+    }
+
+    sampleStairPathPosition(stairId, fromNode, progress = 1) {
+        if (!(this.stairsById instanceof Map)) {
+            throw new Error(`missing stair runtime map for ${stairId}`);
+        }
+        const stair = this.stairsById.get(stairId);
+        if (!stair) {
+            throw new Error(`missing stair runtime record ${stairId}`);
+        }
+        const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        const fromId = fromNode ? (fromNode.id || this.getNodeKey(fromNode)) : "";
+        const lowerToHigher = !stair.lowerNodeId || fromId === stair.lowerNodeId;
+        const s = lowerToHigher ? t : (1 - t);
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const point = traversal.pointFromPathLocal(frame, s, 0.5);
+        return {
+            x: point.x,
+            y: point.y,
+            z: stair.lowerZ + (stair.higherZ - stair.lowerZ) * s
+        };
     }
 
     createPathStep(edge, options = {}) {
@@ -3166,6 +6049,60 @@ class GameMap {
         }
         
         return best;
+    }
+
+    // Like worldToNode but layer-aware for oblique-projection inputs.
+    //
+    // screenToWorld() always projects onto the ground plane (z = 0), so the
+    // worldY it returns is offset by -baseZ relative to any upper floor.
+    // This method corrects for that: for each registered floor fragment it
+    // adds fragment.baseZ to the incoming worldY before the polygon test, then
+    // returns the closest node in the first (topmost-level) fragment that
+    // contains the projected point.  Falls back to worldToNode when no
+    // fragment matches (i.e. the click is on the ground).
+    //
+    // Use this anywhere you want to map a raw screen click to the correct
+    // floor node regardless of which floor the player is targeting.
+    screenWorldToNode(worldX, worldY) {
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const wx = typeof this.wrapWorldX === "function" ? this.wrapWorldX(worldX) : worldX;
+        const wy = typeof this.wrapWorldY === "function" ? this.wrapWorldY(worldY) : worldY;
+        if (this.floorsById instanceof Map && this.floorsById.size > 0) {
+            const sorted = Array.from(this.floorsById.values())
+                .filter(f => f && Array.isArray(f.outerPolygon) && f.outerPolygon.length >= 3 && f._floorEditEmpty !== true)
+                .sort((a, b) => (Number(b.level) || 0) - (Number(a.level) || 0));
+            for (let fi = 0; fi < sorted.length; fi++) {
+                const fragment = sorted[fi];
+                const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ)
+                    : (Number.isFinite(fragment.baseZ) ? Number(fragment.baseZ) : 0);
+                const projY = wy + baseZ;
+                if (!pointInPolygon2D(wx, projY, fragment.outerPolygon)) continue;
+                const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+                let inHole = false;
+                for (let hi = 0; hi < holes.length; hi++) {
+                    if (Array.isArray(holes[hi]) && holes[hi].length >= 3 && pointInPolygon2D(wx, projY, holes[hi])) {
+                        inHole = true;
+                        break;
+                    }
+                }
+                if (inHole) continue;
+                const nodes = this.floorNodesById instanceof Map
+                    ? (this.floorNodesById.get(fragment.fragmentId) || [])
+                    : [];
+                let best = null;
+                let bestDist = Infinity;
+                for (let ni = 0; ni < nodes.length; ni++) {
+                    const n = nodes[ni];
+                    if (!n) continue;
+                    const dx = n.x - wx;
+                    const dy = n.y - projY;
+                    const dist = dx * dx + dy * dy;
+                    if (dist < bestDist) { bestDist = dist; best = n; }
+                }
+                if (best) return best;
+            }
+        }
+        return this.worldToNode(wx, wy);
     }
 
     worldToNodeOrMidpoint(worldX, worldY) {

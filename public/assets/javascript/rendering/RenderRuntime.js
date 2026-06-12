@@ -39,12 +39,17 @@
                     : (item.prevY + (item.y - item.prevY) * alpha)
             )
             : item.y;
+        const worldZ = (item && Number.isFinite(item.prevZ) && Number.isFinite(item.z))
+            ? (item.prevZ + (item.z - item.prevZ) * alpha)
+            : (item && Number.isFinite(item.z) ? item.z : 0);
+        const cameraZ = Number.isFinite(camera && camera.z) ? Number(camera.z) : 0;
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(camera.x, worldX)
             : (worldX - camera.x);
-        const dy = (map && typeof map.shortestDeltaY === "function")
+        const dyBase = (map && typeof map.shortestDeltaY === "function")
             ? map.shortestDeltaY(camera.y, worldY)
             : (worldY - camera.y);
+        const dy = dyBase - (worldZ - cameraZ);
         return {
             x: dx * viewscale,
             y: dy * viewscale * xyratio
@@ -131,6 +136,38 @@
         return { x: worldX, y: worldY };
     }
 
+    function resolveViewportFollowZ(obj) {
+        if (!obj) return null;
+        const layer = Number.isFinite(obj.currentLayer)
+            ? Math.round(Number(obj.currentLayer))
+            : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null);
+        const baseZ = Number.isFinite(obj.currentLayerBaseZ)
+            ? Number(obj.currentLayerBaseZ)
+            : (Number.isFinite(layer) ? layer * 3 : null);
+        if (!Number.isFinite(baseZ)) return null;
+        if (obj._floorFallState && obj._floorFallState.active && Number.isFinite(obj.z)) {
+            return baseZ + Number(obj.z);
+        }
+        if (
+            obj._stairSupport &&
+            typeof obj._stairSupport === "object"
+        ) {
+            if (Number.isFinite(obj._stairSupport.continuousLocalZ)) {
+                return baseZ + Number(obj._stairSupport.continuousLocalZ);
+            }
+            if (Number.isFinite(obj._stairSupport.continuousBaseZ)) {
+                return Number(obj._stairSupport.continuousBaseZ);
+            }
+            if (Number.isFinite(obj._stairSupport.localZ)) {
+                return baseZ + Number(obj._stairSupport.localZ);
+            }
+            if (Number.isFinite(obj._stairSupport.baseZ)) {
+                return Number(obj._stairSupport.baseZ);
+            }
+        }
+        return baseZ;
+    }
+
     function centerViewport(obj, margin, smoothing = null) {
         if (!obj || !viewport) return;
         if (global && global.triggerAreaCameraDetachActive === true) return;
@@ -214,6 +251,25 @@
 
         viewport.x = nextX;
         viewport.y = nextY;
+        const followZ = resolveViewportFollowZ(obj);
+        if (Number.isFinite(followZ)) {
+            if (viewport._cameraZInitializedFromFollow !== true) {
+                viewport.z = followZ;
+                viewport.prevZ = followZ;
+                viewport._cameraZInitializedFromFollow = true;
+            } else if (!Number.isFinite(viewport.z)) {
+                viewport.z = followZ;
+            } else {
+                const layerTransitionActive = !!(
+                    obj._floorFallState && obj._floorFallState.active ||
+                    obj._pendingLayerTransition && obj._pendingLayerTransition.active
+                );
+                if (!layerTransitionActive && Math.abs(Number(viewport.z) - followZ) > 1e-6) {
+                    viewport.z = followZ;
+                    viewport.prevZ = followZ;
+                }
+            }
+        }
 
         let seamShiftX = 0;
         let seamShiftY = 0;
@@ -636,7 +692,7 @@
         if (uiGameCursorOverlayElement || typeof document === "undefined" || !document.body) return uiGameCursorOverlayElement;
         const el = document.createElement("img");
         el.id = "uiGameCursorOverlay";
-        el.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-24 -24 48 48'%3E%3Cg stroke='%2344aaff' stroke-width='2' fill='none' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M 20 0 L 8.090169943749475 5.877852522924732 L 6.180339887498949 19.02113032590307 L -3.0901699437494736 9.510565162951536 L -16.180339887498945 11.755705045849465 L -10 0.0000000000000012246467991473533 L -16.180339887498953 -11.75570504584946 L -3.0901699437494754 -9.510565162951535 L 6.180339887498945 -19.021130325903073 L 8.090169943749473 -5.877852522924734 Z'/%3E%3C/g%3E%3C/svg%3E";
+        el.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-24 -24 48 48'%3E%3Cg stroke='%2344aaff' stroke-width='2' fill='none' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M 20 0 L 8.090169943749475 5.877852522924732 L 6.180339887498949 19.02113032590307 L -3.0901699437494736 9.510565162951536 L -16.180339887498945 11.755705045849465 L -10 0.0000000000000012246467991473533 L -16.180339887498953 -11.75570504584946 L -3.0901699437494754 -9.510565162951535 L 6.180339887498945 -19.021130325903073 L 8.090169943749473 -5.877852522924734 Z'/%3E%3C/g%3E%3Crect x='-0.5' y='-0.5' width='1' height='1' fill='%2344aaff'/%3E%3C/svg%3E";
         el.alt = "";
         el.style.position = "fixed";
         el.style.left = "0px";

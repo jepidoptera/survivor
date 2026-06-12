@@ -139,6 +139,12 @@ class Fireball extends globalThis.Spell {
         this.x = wizard.x;
         this.y = wizard.y;
         this.z = Fireball.FLIGHT_Z;
+        const casterWorldZ = (globalThis.Spell && typeof globalThis.Spell.getTargetWorldBaseZ === "function")
+            ? globalThis.Spell.getTargetWorldBaseZ(wizard)
+            : (Number.isFinite(wizard.currentLayerBaseZ) ? Number(wizard.currentLayerBaseZ) : 0);
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = this.visualStartZ;
+        if (this.forcedTarget && !Number.isFinite(this.visualTargetZ)) this.getForcedTargetAimPoint();
         
         let xdist = targetX - this.x;
         let ydist = targetY - this.y;
@@ -325,7 +331,12 @@ class Fireball extends globalThis.Spell {
             return false;
         };
 
-        for (let obj of onscreenObjects) {
+        const impactCandidates = Array.isArray(onscreenObjects) ? onscreenObjects.slice() : [];
+        if (directTarget && !impactCandidates.includes(directTarget)) {
+            impactCandidates.push(directTarget);
+        }
+
+        for (let obj of impactCandidates) {
             if (!obj || obj.gone || obj.vanishing) continue;
             if (globalThis.Spell.isGroundLayerTarget(obj)) continue;
             if (obj.type === "tree" && obj !== directTarget) continue;

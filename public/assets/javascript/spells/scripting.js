@@ -397,6 +397,90 @@
         return getObjectTouchRuntimeId(obj);
     }
 
+    function resolveTraversalContext(entity) {
+        if (!entity || typeof entity !== "object") {
+            return {
+                layer: null,
+                surfaceId: "",
+                fragmentId: ""
+            };
+        }
+
+        const node = (entity.node && typeof entity.node === "object") ? entity.node : null;
+        const layerCandidates = [
+            entity.traversalLayer,
+            entity.currentLayer,
+            entity.level,
+            node && node.traversalLayer,
+            node && node.level
+        ];
+        let layer = null;
+        for (let i = 0; i < layerCandidates.length; i++) {
+            const candidate = Number(layerCandidates[i]);
+            if (!Number.isFinite(candidate)) continue;
+            layer = Math.round(candidate);
+            break;
+        }
+
+        const surfaceId = (typeof entity.surfaceId === "string" && entity.surfaceId.length > 0)
+            ? entity.surfaceId
+            : ((node && typeof node.surfaceId === "string") ? node.surfaceId : "");
+        const fragmentId = (typeof entity.fragmentId === "string" && entity.fragmentId.length > 0)
+            ? entity.fragmentId
+            : ((node && typeof node.fragmentId === "string") ? node.fragmentId : "");
+
+        return {
+            layer,
+            surfaceId,
+            fragmentId
+        };
+    }
+
+    function isOnSameFloorFragment(actor, target) {
+        const actorContext = resolveTraversalContext(actor);
+        const targetContext = resolveTraversalContext(target);
+
+        if (
+            Number.isFinite(actorContext.layer) &&
+            Number.isFinite(targetContext.layer) &&
+            actorContext.layer !== targetContext.layer
+        ) {
+            return false;
+        }
+
+        // Only enforce fragment/surface matching when BOTH sides have an id.
+        // If only one side has an id (e.g. wizard is on a named ground fragment but
+        // the object is an untagged ground-level prop), the untagged side is on the
+        // default ground plane and the layer check above is the sole discriminator.
+        if (actorContext.fragmentId && targetContext.fragmentId) {
+            return actorContext.fragmentId === targetContext.fragmentId;
+        }
+
+        if (actorContext.surfaceId && targetContext.surfaceId) {
+            return actorContext.surfaceId === targetContext.surfaceId;
+        }
+
+        return true;
+    }
+
+    function isOnSameTriggerAreaTraversalPlane(actor, area) {
+        if (!isTriggerAreaObject(area)) return false;
+        const actorContext = resolveTraversalContext(actor);
+        const areaContext = resolveTraversalContext(area);
+        const actorLayer = Number.isFinite(actorContext.layer) ? actorContext.layer : 0;
+        const areaLayer = Number.isFinite(areaContext.layer) ? areaContext.layer : 0;
+
+        if (actorLayer !== areaLayer) {
+            return false;
+        }
+
+        if (areaContext.fragmentId || areaContext.surfaceId) {
+            return isOnSameFloorFragment(actor, area);
+        }
+
+        return true;
+    }
+
     function getNamedObjectRuntimeId(obj) {
         if (!obj || typeof obj !== "object") return "named:invalid";
         if (!obj._scriptNamedObjectRuntimeId) {
@@ -1034,7 +1118,7 @@
         if (!mountedSection) return 0;
 
         const loopSections = roofApi.findConvexWallLoopFromStartSection(
-            mountedSection, mapRef, wallCtor, 12);
+            mountedSection, mapRef, wallCtor, null);
         if (!Array.isArray(loopSections) || loopSections.length < 3) return 0;
 
         // Compute centroid of the loop vertices (one startPoint per section).
@@ -2809,6 +2893,7 @@
                 if (!obj || obj.gone || !hitbox) continue;
                 if (isDoorPlacedObject(obj)) continue;
                 if (isTriggerAreaObject(obj)) continue;
+                if (!isOnSameFloorFragment(wizardRef, obj)) continue;
                 if (!hasEventScriptForTarget(obj, PLAYER_TOUCH_EVENT_NAME) &&
                     !hasEventScriptForTarget(obj, PLAYER_UNTOUCH_EVENT_NAME)) continue;
 
@@ -2836,6 +2921,10 @@
 
             const touchedObj = touched && touched.obj;
             if (!touchedObj || touchedObj.gone) {
+                touchedByObjectId.delete(objectId);
+                continue;
+            }
+            if (!isOnSameFloorFragment(wizardRef, touchedObj)) {
                 touchedByObjectId.delete(objectId);
                 continue;
             }
@@ -2892,6 +2981,10 @@
                 stateByDoorId.delete(doorId);
                 continue;
             }
+            if (!isOnSameFloorFragment(wizardRef, trackedDoor)) {
+                stateByDoorId.delete(doorId);
+                continue;
+            }
             const trackedHitbox = trackedDoor.groundPlaneHitbox || trackedDoor.visualHitbox || trackedDoor.hitbox || state.hitbox || null;
             if (!trackedHitbox) continue;
             appendDoorEntry(trackedDoor, trackedHitbox);
@@ -2912,6 +3005,7 @@
             const door = entry && entry.obj;
             const hitbox = entry && entry.hitbox;
             if (!isDoorPlacedObject(door) || !hitbox) continue;
+            if (!isOnSameFloorFragment(wizardRef, door)) continue;
 
             const doorId = entry && entry.doorId ? entry.doorId : getDoorRuntimeId(door);
             activeIds.add(doorId);
@@ -3014,6 +3108,7 @@
                 const area = entry && entry.obj;
                 const hitbox = entry && entry.hitbox;
                 if (!isTriggerAreaObject(area) || !hitbox) continue;
+                if (!isOnSameTriggerAreaTraversalPlane(wizardRef, area)) continue;
                 if (
                     !hasEventScriptForTarget(area, "playerTouches") &&
                     !hasEventScriptForTarget(area, "playerUntouches") &&
@@ -3049,11 +3144,11 @@
                         insideTo: true,
                         reason: "load-enter"
                     });
-                    stateById.set(areaId, { inside: true });
+                    stateById.set(areaId, { inside: true, area });
                     continue;
                 }
                 if (prevInside === nextInside) {
-                    stateById.set(areaId, { inside: nextInside });
+                    stateById.set(areaId, { inside: nextInside, area });
                     continue;
                 }
                 const preferredEventName = nextInside
@@ -3068,12 +3163,17 @@
                     insideFrom: prevInside,
                     insideTo: nextInside
                 });
-                stateById.set(areaId, { inside: nextInside });
+                stateById.set(areaId, { inside: nextInside, area });
             }
         }
 
         for (const [areaId, state] of stateById.entries()) {
             if (activeIds.has(areaId)) continue;
+            const trackedArea = state && state.area;
+            if (trackedArea && !isOnSameTriggerAreaTraversalPlane(wizardRef, trackedArea)) {
+                stateById.delete(areaId);
+                continue;
+            }
             if (!state || !state.inside) {
                 stateById.delete(areaId);
             }
@@ -5708,6 +5808,9 @@
                 const typeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "type")) ? namedArgs.type : args[0];
                 const sizeValue = (Object.prototype.hasOwnProperty.call(namedArgs, "size")) ? namedArgs.size : args[1];
                 const locationValue = (Object.prototype.hasOwnProperty.call(namedArgs, "location")) ? namedArgs.location : args[2];
+                const layerValue = Object.prototype.hasOwnProperty.call(namedArgs, "traversalLayer")
+                    ? namedArgs.traversalLayer
+                    : (Object.prototype.hasOwnProperty.call(namedArgs, "level") ? namedArgs.level : undefined);
                 const hasNamedLocation = Object.prototype.hasOwnProperty.call(namedArgs, "location");
                 const hasNamedX = Object.prototype.hasOwnProperty.call(namedArgs, "x");
                 const hasNamedY = Object.prototype.hasOwnProperty.call(namedArgs, "y");
@@ -5735,7 +5838,27 @@
                 if (typeof mapRef.wrapWorldX === "function") spawnX = mapRef.wrapWorldX(spawnX);
                 if (typeof mapRef.wrapWorldY === "function") spawnY = mapRef.wrapWorldY(spawnY);
 
-                const spawnNode = mapRef.worldToNode(spawnX, spawnY);
+                const sourceLayer = Number.isFinite(target && target.traversalLayer)
+                    ? Math.round(Number(target.traversalLayer))
+                    : (Number.isFinite(target && target.currentLayer)
+                        ? Math.round(Number(target.currentLayer))
+                        : (Number.isFinite(wizardRef && wizardRef.traversalLayer)
+                            ? Math.round(Number(wizardRef.traversalLayer))
+                            : (Number.isFinite(wizardRef && wizardRef.currentLayer) ? Math.round(Number(wizardRef.currentLayer)) : 0)));
+                const spawnLayer = Number.isFinite(Number(layerValue)) ? Math.round(Number(layerValue)) : sourceLayer;
+                const baseNode = mapRef.worldToNode(spawnX, spawnY);
+                let spawnNode = baseNode;
+                if (baseNode && spawnLayer !== 0 && typeof mapRef.getFloorNodeAtLayer === "function") {
+                    const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                        ? baseNode._prototypeSectionKey
+                        : ((typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function")
+                            ? mapRef.getPrototypeSectionKeyForWorldPoint(spawnX, spawnY)
+                            : "");
+                    spawnNode = mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, spawnLayer, {
+                        sectionKey,
+                        allowScan: true
+                    });
+                }
                 if (!spawnNode) return false;
 
                 const CreatureCtor = getCreatureCtor(typeName);
@@ -5752,6 +5875,17 @@
                 applyCreatureSizeScale(creature, Number.isFinite(Number(sizeValue)) ? Number(sizeValue) : 1);
                 creature.x = spawnX;
                 creature.y = spawnY;
+                creature.node = spawnNode;
+                if (typeof creature.syncTraversalLayerFromNode === "function") {
+                    creature.syncTraversalLayerFromNode(spawnNode);
+                } else {
+                    creature.traversalLayer = spawnLayer;
+                    creature.currentLayer = spawnLayer;
+                    creature.currentLayerBaseZ = Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : spawnLayer * 3;
+                }
+                creature.z = typeof creature.getNodeStandingZ === "function"
+                    ? creature.getNodeStandingZ(spawnNode)
+                    : (Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : 0);
                 if (typeof creature.updateHitboxes === "function") {
                     creature.updateHitboxes();
                 }

@@ -247,7 +247,8 @@ if (typeof globalThis !== "undefined") {
 
 class Wizard extends Character {
     constructor(location, map) {
-        super('human', location, 1, map);
+        super('human', location, 1, map, { useExternalScheduler: true });
+        this.useExternalScheduler = true;
         this.useAStarPathfinding = true;
         this.speed = 3;
         this.roadSpeedMultiplier = 1.3;
@@ -323,8 +324,6 @@ class Wizard extends Character {
         this.shieldDebrisGraphics = new PIXI.Graphics();
         characterLayer.addChild(this.shieldDebrisGraphics);
         this.shieldWireframeMesh = null;
-        this.shadowGraphics = new PIXI.Graphics();
-        characterLayer.addChild(this.shadowGraphics);
         this.hatColor = 0x000099; // Royal Blue
         this.hatBandColor = 0xFFD700; // Gold
         this.redrawHatGeometry();
@@ -336,6 +335,8 @@ class Wizard extends Character {
         this.baseJumpDurationSec = 0.55;
         this.baseJumpMaxHeight = 0.5; // world units
         this.doubleJumpDurationSec = 1.2;
+        this.tripleJumpDurationSec = 1.6;
+        this.tripleJumpMaxHeight = 1.1; // world units — only via triple-tap
         this.jumpDurationSec = this.baseJumpDurationSec;
         this.jumpMaxHeight = this.baseJumpMaxHeight;
         this.jumpMode = "single";
@@ -346,6 +347,36 @@ class Wizard extends Character {
         this._doorTraversalStateById = new Map();
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
+        const initialTraversalLayer = Number.isFinite(this.traversalLayer)
+            ? Math.round(Number(this.traversalLayer))
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        this.currentLayer = initialTraversalLayer; // Floor layer the wizard is currently standing on (0 = ground)
+        Object.defineProperty(this, "selectedFloorEditLevel", {
+            configurable: true,
+            enumerable: true,
+            get: () => {
+                return Number.isFinite(this.currentLayer)
+                    ? Math.round(Number(this.currentLayer))
+                    : 0;
+            },
+            set: (value) => {
+                const normalized = Number.isFinite(value) ? Math.round(Number(value)) : 0;
+                this.currentLayer = normalized;
+                this.traversalLayer = normalized;
+                let layerBaseZ = normalized * 3;
+                const nodeLayer = Number.isFinite(this.node && this.node.traversalLayer)
+                    ? Math.round(Number(this.node.traversalLayer))
+                    : (Number.isFinite(this.node && this.node.level) ? Math.round(Number(this.node.level)) : null);
+                if (this.node && nodeLayer === normalized) {
+                    const nodeZ = this.getNodeStandingZ(this.node);
+                    if (Number.isFinite(nodeZ)) {
+                        layerBaseZ = Number(nodeZ);
+                    }
+                }
+                this.currentLayerBaseZ = layerBaseZ;
+            }
+        });
+        this.selectedFloorEditLevel = this.currentLayer;
         this.updateHitboxes();
         this.move();
         clearTimeout(this.moveTimeout);
@@ -505,19 +536,32 @@ class Wizard extends Character {
             this.jumpPolyC = h0;
         }
     }
+    isUsingHitboxMovement() {
+        return true;
+    }
+
+    shouldConstrainHitboxMovementToFloorSupport() {
+        return false;
+    }
+
     updateJump(dtSec) {
+        const supportZ = (
+            this._stairSupport &&
+            typeof this._stairSupport === "object" &&
+            Number.isFinite(this._stairSupport.localZ)
+        ) ? Number(this._stairSupport.localZ) : 0;
         if (typeof this.isFrozen === "function" && this.isFrozen()) {
-            this.z = Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0);
+            this.z = supportZ + (Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0));
             return;
         }
         if (!this.isJumping) {
-            this.z = 0;
+            this.z = supportZ;
             return;
         }
         const dt = Math.max(0, Number(dtSec) || 0);
         this.jumpElapsedSec += dt;
 
-        if (this.jumpMode === "double") {
+        if (this.jumpMode === "double" || this.jumpMode === "triple") {
             const t = Math.max(0, this.jumpElapsedSec);
             this.jumpHeight = Math.max(0, this.jumpPolyA * t * t + this.jumpPolyB * t + this.jumpPolyC);
         } else {
@@ -525,7 +569,7 @@ class Wizard extends Character {
             // Symmetric arc: 0 at ends, max at midpoint.
             this.jumpHeight = 4 * this.jumpMaxHeight * t * (1 - t);
         }
-        this.z = this.jumpHeight;
+        this.z = supportZ + this.jumpHeight;
 
         if (this.jumpElapsedSec >= this.jumpDurationSec || this.jumpHeight <= 0.0001) {
             this.isJumping = false;
@@ -534,8 +578,34 @@ class Wizard extends Character {
             this.jumpCount = 0;
             this.jumpMode = "single";
             this.jumpLockedMovingBackward = false;
-            this.z = 0;
+            this.z = supportZ;
         }
+    }
+    startTripleJump() {
+        if (typeof this.isFrozen === "function" && this.isFrozen()) return;
+        if (this.jumpCount !== 2 || !this.isJumping) return;
+        const h0 = Math.max(0, Number(this.jumpHeight) || 0);
+        const T = this.tripleJumpDurationSec;
+        const peakTime = T * 0.35;
+        const targetPeak = this.tripleJumpMaxHeight;
+        const denom = (peakTime * peakTime - peakTime * T);
+        let a = 0;
+        let b = 0;
+        if (Math.abs(denom) > 1e-6) {
+            a = (targetPeak - h0 + (peakTime * h0) / T) / denom;
+            b = (-h0 - a * T * T) / T;
+        } else {
+            a = -targetPeak / Math.max(1e-6, T * T);
+            b = 0;
+        }
+        this.isJumping = true;
+        this.jumpMode = "triple";
+        this.jumpCount = 3;
+        this.jumpElapsedSec = 0;
+        this.jumpDurationSec = T;
+        this.jumpPolyA = a;
+        this.jumpPolyB = b;
+        this.jumpPolyC = h0;
     }
     getInterpolatedPosition(alpha = null) {
         const clampedAlpha = Number.isFinite(alpha)
@@ -955,7 +1025,6 @@ class Wizard extends Character {
             overlayContainer.addChild(this.shieldGraphics);
         }
         const screenScale = Math.max(1e-6, Number(viewscale) || 1);
-        const screenRatio = Math.max(1e-6, Number(xyratio) || 1);
         const fade = Math.max(0, Math.min(1, (burstUntilMs - nowMs) / 150));
         this.shieldGraphics.clear();
         this.shieldGraphics.visible = true;
@@ -963,10 +1032,10 @@ class Wizard extends Character {
         for (let i = 0; i < burstSegments.length; i++) {
             const seg = burstSegments[i];
             if (!seg || !seg.start || !seg.end) continue;
-            const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y });
-            const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y });
-            this.shieldGraphics.moveTo(screenA.x, screenA.y - (seg.start.z * screenScale * screenRatio));
-            this.shieldGraphics.lineTo(screenB.x, screenB.y - (seg.end.z * screenScale * screenRatio));
+            const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y, z: seg.start.z });
+            const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y, z: seg.end.z });
+            this.shieldGraphics.moveTo(screenA.x, screenA.y);
+            this.shieldGraphics.lineTo(screenB.x, screenB.y);
         }
         if (overlayContainer.children.indexOf(this.shieldGraphics) !== overlayContainer.children.length - 1) {
             overlayContainer.setChildIndex(this.shieldGraphics, overlayContainer.children.length - 1);
@@ -987,7 +1056,6 @@ class Wizard extends Character {
         }
 
         const screenScale = Math.max(1e-6, Number(viewscale) || 1);
-        const screenRatio = Math.max(1e-6, Number(xyratio) || 1);
         const activeParticles = [];
 
         for (let i = 0; i < particles.length; i++) {
@@ -1025,11 +1093,11 @@ class Wizard extends Character {
             );
             if (!clipped) continue;
 
-            const screenA = worldToScreen({ x: clipped.start.x, y: clipped.start.y });
-            const screenB = worldToScreen({ x: clipped.end.x, y: clipped.end.y });
+            const screenA = worldToScreen({ x: clipped.start.x, y: clipped.start.y, z: clipped.start.z });
+            const screenB = worldToScreen({ x: clipped.end.x, y: clipped.end.y, z: clipped.end.z });
             this.shieldDebrisGraphics.lineStyle(Math.max(1.25, screenScale * 0.018 * fade), 0xFFFFFF, 0.9 * fade);
-            this.shieldDebrisGraphics.moveTo(screenA.x, screenA.y - (clipped.start.z * screenScale * screenRatio));
-            this.shieldDebrisGraphics.lineTo(screenB.x, screenB.y - (clipped.end.z * screenScale * screenRatio));
+            this.shieldDebrisGraphics.moveTo(screenA.x, screenA.y);
+            this.shieldDebrisGraphics.lineTo(screenB.x, screenB.y);
             activeParticles.push(particle);
         }
 
@@ -1048,12 +1116,19 @@ class Wizard extends Character {
         if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
-        const wizardZ = Number.isFinite(this.z) ? Number(this.z) : 0;
-        if (wizardZ > 0) {
-            const objBottomZ = Number.isFinite(obj.bottomZ) ? Number(obj.bottomZ) : 0;
+        const wizardLayerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0) * 3);
+        const wizardWorldZ = wizardLayerBaseZ + (Number.isFinite(this.z) ? Number(this.z) : 0);
+        if (wizardWorldZ > 0) {
+            const objBottomZ = Number.isFinite(obj.bottomZ)
+                ? Number(obj.bottomZ)
+                : ((Number.isFinite(obj.traversalLayer)
+                    ? Math.round(Number(obj.traversalLayer))
+                    : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0)) * 3);
             const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
             const objTopZ = objBottomZ + objHeight;
-            if (objTopZ > 0 && wizardZ >= objTopZ) {
+            if (objTopZ > 0 && wizardWorldZ >= objTopZ) {
                 return false;
             }
         }
@@ -1082,6 +1157,16 @@ class Wizard extends Character {
         const nearbyDoors = Array.isArray(this._movementNearbyDoors) ? this._movementNearbyDoors : [];
         nearbyDoors.length = 0;
         this._movementNearbyDoors = nearbyDoors;
+        const nearbyObjectSet = this._movementNearbyObjectSet instanceof Set
+            ? this._movementNearbyObjectSet
+            : new Set();
+        nearbyObjectSet.clear();
+        this._movementNearbyObjectSet = nearbyObjectSet;
+        const nearbyDoorSet = this._movementNearbyDoorSet instanceof Set
+            ? this._movementNearbyDoorSet
+            : new Set();
+        nearbyDoorSet.clear();
+        this._movementNearbyDoorSet = nearbyDoorSet;
 
         const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
             ? this._movementForceTouchedObjects
@@ -1091,6 +1176,12 @@ class Wizard extends Character {
 
         const padding = this.getVectorMovementSearchPadding(radius, options);
         const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
+        const wizardLayer = this.getCurrentMovementLayer();
+        const getNodeTraversalLayer = (node) => (
+            Number.isFinite(node && node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0)
+        );
         if (searchNodes.length > 0) {
             const xIndices = searchNodes.map(node => Number(node.xindex));
             const yIndices = searchNodes.map(node => Number(node.yindex));
@@ -1100,19 +1191,28 @@ class Wizard extends Character {
             const maxYIndex = Math.max(...yIndices);
             const collectFromNode = (node) => {
                 if (!node || !Array.isArray(node.objects)) return;
+                const nodeLayer = getNodeTraversalLayer(node);
+                if (nodeLayer !== wizardLayer) return;
                 const nodeObjects = node.objects;
                 for (let i = 0; i < nodeObjects.length; i++) {
                     const obj = nodeObjects[i];
                     if (!obj || obj.gone) continue;
+                    const objLayer = Number.isFinite(obj.traversalLayer)
+                        ? Math.round(Number(obj.traversalLayer))
+                        : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : nodeLayer);
+                    if (objLayer !== wizardLayer) continue;
                     const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
-                    if (doorCandidate) {
+                    if (doorCandidate && !nearbyDoorSet.has(obj)) {
                         const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
                         if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
                             const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
                             nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
+                            nearbyDoorSet.add(obj);
                         }
                     }
                     if (this.doesObjectBlockVectorMovement(obj, options)) {
+                        if (nearbyObjectSet.has(obj)) continue;
+                        nearbyObjectSet.add(obj);
                         nearbyObjects.push(obj);
                     }
                 }
@@ -1125,7 +1225,7 @@ class Wizard extends Character {
                 const yEnd = maxYIndex + 1;
                 const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
                 for (let i = 0; i < nearbyNodes.length; i++) {
-                    collectFromNode(nearbyNodes[i]);
+                    collectFromNode(this.resolveNodeForMovementLayer(nearbyNodes[i]));
                 }
             } else {
                 const xStart = Math.max(minXIndex - 1, 0);
@@ -1136,9 +1236,47 @@ class Wizard extends Character {
                 for (let x = xStart; x <= xEnd; x++) {
                     for (let y = yStart; y <= yEnd; y++) {
                         if (!this.map.nodes[x] || !this.map.nodes[x][y]) continue;
-                        collectFromNode(this.map.nodes[x][y]);
+                        collectFromNode(this.resolveNodeForMovementLayer(this.map.nodes[x][y]));
                     }
                 }
+            }
+        }
+
+        if (this.map && typeof this.map.collectPrototypeBuildingMovementBlockersInBounds === "function") {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const prototypeBlockers = this.map.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, wizardLayer);
+            for (let i = 0; i < prototypeBlockers.length; i++) {
+                const obj = prototypeBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (nearbyObjectSet.has(obj)) continue;
+                nearbyObjectSet.add(obj);
+                nearbyObjects.push(obj);
+            }
+        }
+
+        if (this.map && typeof this.map.collectStairFootprintMovementBlockersInBounds === "function") {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const obj = stairBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (nearbyObjectSet.has(obj)) continue;
+                nearbyObjectSet.add(obj);
+                nearbyObjects.push(obj);
             }
         }
 
@@ -1243,15 +1381,18 @@ class Wizard extends Character {
         );
         centerViewport(this, 0);
     }
-    
+
     moveDirection(vector, options = {}) {
         return super.moveDirection(vector, options);
     }
-    
+
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
         const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
-        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
+        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y, z: layerBaseZ });
         let wizardScreenX = screenCoors.x;
         const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
             ? interpolatedJumpHeight
@@ -1353,7 +1494,11 @@ class Wizard extends Character {
         const cameraX = Number.isFinite(viewport && viewport.x) ? Number(viewport.x) : Number(renderWorld.x) || 0;
         const cameraY = Number.isFinite(viewport && viewport.y) ? Number(viewport.y) : Number(renderWorld.y) || 0;
         const scale = Math.max(0.65, Number(this.visualRadius) || 0.5) * 0.95;
-        const centerZ = 0.45 + ((Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0)) * 0.55);
+        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
+            ? Number(this.currentLayerBaseZ)
+            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        const jumpZ = Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0);
+        const centerZ = layerBaseZ + 0.45 + (jumpZ * 0.55);
         const edgeThicknessPx = Math.max(1.25, (Number(viewscale) || 1) * 0.016);
         const model = getWizardShieldDodecahedronModel();
         const animationTime = (Number.isFinite(renderNowMs) ? Number(renderNowMs) : performance.now()) / 1000;
@@ -1385,7 +1530,7 @@ class Wizard extends Character {
             const [startIndex, endIndex] = model.edges[edgeIndex];
             const edgeStart = transformedVertices[startIndex];
             const edgeEnd = transformedVertices[endIndex];
-            const fullClipped = clipShieldSegmentToMinZ(edgeStart, edgeEnd, 0);
+            const fullClipped = clipShieldSegmentToMinZ(edgeStart, edgeEnd, layerBaseZ);
             if (fullClipped) {
                 fullOverlaySegments.push({ start: fullClipped.start, end: fullClipped.end });
             }
@@ -1396,7 +1541,7 @@ class Wizard extends Character {
                 if (segmentEndT <= cycleStartT + 1e-4) continue;
                 const rawA = interpolateShieldPoint(edgeStart, edgeEnd, cycleStartT);
                 const rawB = interpolateShieldPoint(edgeStart, edgeEnd, segmentEndT);
-                const clipped = clipShieldSegmentToMinZ(rawA, rawB, 0);
+                const clipped = clipShieldSegmentToMinZ(rawA, rawB, layerBaseZ);
                 if (!clipped) continue;
                 const a = clipped.start;
                 const b = clipped.end;
@@ -1504,10 +1649,10 @@ class Wizard extends Character {
             this.shieldGraphics.lineStyle(overlayLineWidth, overlayColor, overlayAlpha);
             for (let edgeIndex = 0; edgeIndex < overlaySegments.length; edgeIndex++) {
                 const seg = overlaySegments[edgeIndex];
-                const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y });
-                const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y });
-                this.shieldGraphics.moveTo(screenA.x, screenA.y - (seg.start.z * screenScale * (Number(xyratio) || 1)));
-                this.shieldGraphics.lineTo(screenB.x, screenB.y - (seg.end.z * screenScale * (Number(xyratio) || 1)));
+                const screenA = worldToScreen({ x: seg.start.x, y: seg.start.y, z: seg.start.z });
+                const screenB = worldToScreen({ x: seg.end.x, y: seg.end.y, z: seg.end.z });
+                this.shieldGraphics.moveTo(screenA.x, screenA.y);
+                this.shieldGraphics.lineTo(screenB.x, screenB.y);
             }
             if (overlayContainer && overlayContainer.children.indexOf(this.shieldGraphics) !== overlayContainer.children.length - 1) {
                 overlayContainer.setChildIndex(this.shieldGraphics, overlayContainer.children.length - 1);
@@ -1571,74 +1716,98 @@ class Wizard extends Character {
         this.updateModeToggleUi();
     }
     
-    draw() {
-        if (!this.pixiSprite) {
-            this.pixiSprite = new PIXI.Sprite(wizardFrames[0] || PIXI.Texture.WHITE);
-            characterLayer.addChild(this.pixiSprite);
+    getSavedMovementLayerState() {
+        const out = {};
+        if (Number.isFinite(this.z)) out.z = Number(this.z);
+        if (Number.isFinite(this.currentLayer)) out.currentLayer = Math.round(Number(this.currentLayer));
+        if (Number.isFinite(this.traversalLayer)) out.traversalLayer = Math.round(Number(this.traversalLayer));
+        if (Number.isFinite(this.currentLayerBaseZ)) out.currentLayerBaseZ = Number(this.currentLayerBaseZ);
+        if (typeof this.surfaceId === "string" && this.surfaceId.length > 0) out.surfaceId = this.surfaceId;
+        if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) out.fragmentId = this.fragmentId;
+        return out;
+    }
+
+    normalizeSavedStairSupportRecord(record, label = "wizard stair support") {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+            throw new Error(`${label} must be an object`);
         }
-
-        const renderWorld = this.getInterpolatedPosition();
-        const interpolatedJumpHeight = Number.isFinite(renderWorld.z) ? renderWorld.z : 0;
-
-        // Draw a ground shadow from the same interpolated world position as the sprite.
-        const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y });
-        const shadowCoors = {
-            x: screenCoors.x,
-            y: screenCoors.y + 0.2 * viewscale * xyratio
-        };
-        const shadowRadiusX = 0.2 * viewscale; // 0.3 map units wide (diameter)
-        const shadowRadiusY = shadowRadiusX * xyratio;
-        this.shadowGraphics.clear();
-        this.shadowGraphics.beginFill(0x000000, 0.3);
-        this.shadowGraphics.drawEllipse(shadowCoors.x, shadowCoors.y, shadowRadiusX, shadowRadiusY);
-        this.shadowGraphics.endFill();
-        if (this.pixiSprite && this.shadowGraphics.parent) {
-            const spriteIndex = characterLayer.children.indexOf(this.pixiSprite);
-            const shadowIndex = characterLayer.children.indexOf(this.shadowGraphics);
-            if (spriteIndex > 0 && shadowIndex >= spriteIndex) {
-                characterLayer.setChildIndex(this.shadowGraphics, spriteIndex - 1);
+        const stairId = typeof record.stairId === "string" ? record.stairId.trim() : "";
+        if (!stairId) throw new Error(`${label} is missing stairId`);
+        const out = { stairId };
+        const optionalFiniteFields = [
+            "treadIndex",
+            "upDown",
+            "leftRight",
+            "baseZ",
+            "localZ",
+            "continuousBaseZ",
+            "continuousLocalZ"
+        ];
+        optionalFiniteFields.forEach((field) => {
+            if (record[field] === undefined || record[field] === null) return;
+            const value = Number(record[field]);
+            if (!Number.isFinite(value)) {
+                throw new Error(`${label} has non-finite ${field}`);
+            }
+            out[field] = field === "treadIndex" ? Math.round(value) : value;
+        });
+        if (!Number.isFinite(out.upDown) || !Number.isFinite(out.leftRight)) {
+            if (!Number.isInteger(out.treadIndex)) {
+                throw new Error(`${label} must include finite upDown/leftRight or a treadIndex`);
             }
         }
-        
-        // Determine which row (direction) to use
-        const visualSpeed = Math.hypot(this.movementVector?.x || 0, this.movementVector?.y || 0);
-        const isDead = !!this.dead || (Number.isFinite(this.hp) && this.hp <= 0);
-        const isVisuallyMoving = !isDead && (this.moving || visualSpeed > 0.02);
-        if (this.lastDirectionRow === undefined) this.lastDirectionRow = 0;
-        const rowIndex = this.lastDirectionRow;
-        
-        // Determine which frame (column) to show for animation
-        let frameIndex = rowIndex * 9; // Start of this row
-        if (this.isJumping) {
-            // Keep a fixed airborne pose while jumping.
-            const airborneFrameCol = 2;
-            frameIndex = rowIndex * 9 + airborneFrameCol;
-        } else if (isVisuallyMoving) {
-            // Columns 1-8 = running animation (8 frames)
-            // Column 0 = standing still
-            const speedRatio = (this.speed > 0) ? (visualSpeed / this.speed) : 0;
-            const simTicks = (renderNowMs / 1000) * frameRate;
-            const animFrame = Math.floor(simTicks * this.animationSpeedMultiplier * speedRatio / 2) % 8;
-            const effectiveAnimFrame = this.isMovingBackward ? (7 - animFrame) : animFrame;
-            frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
-        }
-        
-        // Set the texture to the appropriate frame
-        if (wizardFrames[frameIndex]) {
-            this.pixiSprite.texture = wizardFrames[frameIndex];
-        }
-        
-        // Update wizard sprite position
-        const jumpOffsetPx = interpolatedJumpHeight * viewscale * xyratio;
-        
-        this.pixiSprite.x = screenCoors.x;
-        this.pixiSprite.y = screenCoors.y - jumpOffsetPx;
-        this.pixiSprite.anchor.set(0.5, 0.75);
-        this.pixiSprite.width = viewscale;
-        this.pixiSprite.height = viewscale;
+        return out;
+    }
 
-        this.drawShield(interpolatedJumpHeight, renderWorld);
-        this.drawHat(interpolatedJumpHeight, renderWorld);
+    getSavedStairSupportState() {
+        if (!this._stairSupport) return null;
+        return this.normalizeSavedStairSupportRecord(this._stairSupport, "wizard active stair support");
+    }
+
+    hasPendingSavedMovementSupport() {
+        return !!(this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object");
+    }
+
+    restoreSavedMovementSupport(options = {}) {
+        const pending = this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object"
+            ? this._pendingSavedStairSupport
+            : null;
+        if (!pending) return null;
+        const deferIfMissing = options && options.deferIfMissing === true;
+        if (!this.map || typeof this.map.getActorStairSupportFromState !== "function" || typeof this.map.applyActorResolvedMovementSupport !== "function") {
+            if (deferIfMissing) return null;
+            throw new Error("wizard save references stair support before movement support APIs are available");
+        }
+        if (!(this.map.stairsById instanceof Map) || !this.map.stairsById.has(pending.stairId)) {
+            if (deferIfMissing) return null;
+            throw new Error(`wizard save references missing stair ${pending.stairId}`);
+        }
+
+        this._stairSupport = { ...pending };
+        const support = this.map.getActorStairSupportFromState(this);
+        if (!support || support.type !== "stair") {
+            throw new Error(`wizard save could not resolve stair support for ${pending.stairId}`);
+        }
+        const supportPoint = support.point && Number.isFinite(support.point.x) && Number.isFinite(support.point.y)
+            ? support.point
+            : { x: this.x, y: this.y };
+        let resolvedX = Number(supportPoint.x);
+        let resolvedY = Number(supportPoint.y);
+        if (this.map && typeof this.map.wrapWorldX === "function") resolvedX = this.map.wrapWorldX(resolvedX);
+        if (this.map && typeof this.map.wrapWorldY === "function") resolvedY = this.map.wrapWorldY(resolvedY);
+        this.x = resolvedX;
+        this.y = resolvedY;
+        this._pendingVectorMovementSupport = support;
+        const applied = this.map.applyActorResolvedMovementSupport(this, resolvedX, resolvedY);
+        if (!applied || applied.type !== "stair" || applied.stairId !== pending.stairId) {
+            throw new Error(`wizard save restored ${pending.stairId} to non-stair movement support`);
+        }
+        this._pendingSavedStairSupport = null;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        if (typeof this.updateHitboxes === "function") this.updateHitboxes();
+        return applied;
     }
 
     saveJson() {
@@ -1648,10 +1817,11 @@ class Wizard extends Character {
         const viewportY = (this.map && typeof this.map.wrapWorldY === "function")
             ? this.map.wrapWorldY(viewport.y)
             : viewport.y;
-        return {
+        const data = {
             type: 'wizard',
             x: (this.map && typeof this.map.wrapWorldX === "function") ? this.map.wrapWorldX(this.x) : this.x,
             y: (this.map && typeof this.map.wrapWorldY === "function") ? this.map.wrapWorldY(this.y) : this.y,
+            ...this.getSavedMovementLayerState(),
             hp: this.hp,
             maxHp: this.maxHp,
             mp: this.mp,
@@ -1691,6 +1861,7 @@ class Wizard extends Character {
             selectedPowerupPlacementScale: this.selectedPowerupPlacementScale,
             selectedPowerupFileName: this.selectedPowerupFileName,
             selectedEditorCategory: this.selectedEditorCategory,
+            selectedFloorEditLevel: this.selectedFloorEditLevel,
             selectedWallHeight: this.selectedWallHeight,
             selectedWallThickness: this.selectedWallThickness,
             selectedRoadWidth: this.selectedRoadWidth,
@@ -1716,6 +1887,9 @@ class Wizard extends Character {
                 y: viewportY
             }
         };
+        const stairSupport = this.getSavedStairSupportState();
+        if (stairSupport) data.stairSupport = stairSupport;
+        return data;
     }
 
     loadJson(data) {
@@ -1746,6 +1920,19 @@ class Wizard extends Character {
 
         if (data.x !== undefined) this.x = data.x;
         if (data.y !== undefined) this.y = data.y;
+        if (Number.isFinite(data.z)) this.z = Number(data.z);
+        if (Number.isFinite(data.currentLayer)) this.currentLayer = Math.round(Number(data.currentLayer));
+        if (Number.isFinite(data.traversalLayer)) this.traversalLayer = Math.round(Number(data.traversalLayer));
+        if (Number.isFinite(data.currentLayerBaseZ)) this.currentLayerBaseZ = Number(data.currentLayerBaseZ);
+        if (typeof data.surfaceId === "string") this.surfaceId = data.surfaceId;
+        if (typeof data.fragmentId === "string") this.fragmentId = data.fragmentId;
+        this._stairSupport = null;
+        this._pendingSavedStairSupport = null;
+        if (Object.prototype.hasOwnProperty.call(data, "stairSupport") && data.stairSupport !== null) {
+            const stairSupport = this.normalizeSavedStairSupportRecord(data.stairSupport, "saved wizard stair support");
+            this._stairSupport = { ...stairSupport };
+            this._pendingSavedStairSupport = { ...stairSupport };
+        }
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
         this.ensureMagicPointsInitialized(true);
@@ -1837,6 +2024,7 @@ class Wizard extends Character {
         if (data.selectedPowerupPlacementScale !== undefined) this.selectedPowerupPlacementScale = data.selectedPowerupPlacementScale;
         if (data.selectedPowerupFileName !== undefined) this.selectedPowerupFileName = data.selectedPowerupFileName;
         if (data.selectedEditorCategory !== undefined) this.selectedEditorCategory = data.selectedEditorCategory;
+        if (data.selectedFloorEditLevel !== undefined) this.selectedFloorEditLevel = data.selectedFloorEditLevel;
         if (data.selectedWallHeight !== undefined) this.selectedWallHeight = data.selectedWallHeight;
         if (data.selectedWallThickness !== undefined) this.selectedWallThickness = data.selectedWallThickness;
         if (data.selectedRoadWidth !== undefined) this.selectedRoadWidth = data.selectedRoadWidth;
@@ -1912,6 +2100,7 @@ class Wizard extends Character {
         this.prevX = this.x;
         this.prevY = this.y;
         this.prevZ = this.z;
+        this.restoreSavedMovementSupport({ deferIfMissing: true });
         this.prevJumpHeight = Number.isFinite(this.jumpHeight) ? this.jumpHeight : 0;
         if (typeof mousePos !== "undefined") {
             if (

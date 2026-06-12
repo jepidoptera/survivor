@@ -451,6 +451,48 @@ test("persistence round-trip: trigger area definitions survive via the triggers 
     assert.equal(defsForSection[0].id, 42);
 });
 
+test("persistence round-trip: deleting a prototype trigger removes it from registry and saves", () => {
+    const triggerPoints = [
+        { x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 }
+    ];
+
+    const initialBundle = {
+        version: 2,
+        activeCenterKey: "0,0",
+        anchorCenter: { q: 0, r: 0 },
+        sectionCoords: [{ q: 0, r: 0 }],
+        sections: [
+            makeSectionDescriptor("0,0", { q: 0, r: 0 }, { q: 0, r: 0 }, { x: 0, y: 0 }, "0,0")
+        ],
+        triggers: [
+            {
+                id: 42,
+                type: "triggerArea",
+                x: 0, y: 0,
+                points: triggerPoints,
+                coverageSectionKeys: ["0,0"],
+                script: { playerTouches: "this.delete();" }
+            }
+        ]
+    };
+
+    const map1 = loadFreshMap(initialBundle);
+    const def = map1.getPrototypeTriggerDefById(42);
+    assert.ok(def, "trigger should load before deletion");
+    assert.equal(typeof def.delete, "function", "prototype trigger should expose delete()");
+
+    assert.equal(def.delete(), true, "delete() should remove the trigger definition");
+    assert.equal(map1.getPrototypeTriggerDefById(42), null, "trigger should no longer be retrievable");
+    assert.equal(map1.getPrototypeTriggerDefsForSectionKeys(["0,0"]).length, 0, "section lookup should no longer include trigger");
+    assert.equal(map1.exportPrototypeTriggerDefinitions().length, 0, "deleted trigger should not export");
+
+    const savedBundle = extractSaveBundle(map1);
+    assert.equal(savedBundle.triggers.length, 0, "deleted trigger should not save");
+
+    const map2 = loadFreshMap(savedBundle);
+    assert.equal(map2._prototypeTriggerState.triggerDefsById.size, 0, "deleted trigger should not return after load");
+});
+
 // ---------------------------------------------------------------------------
 // Test 3: trigger areas must NOT appear in any section's objects array
 // (they should only live in triggerDefsById / the triggers array of the bundle)

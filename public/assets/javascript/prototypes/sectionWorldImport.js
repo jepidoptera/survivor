@@ -222,7 +222,8 @@
                         clearanceByTile: {},
                         objects: [],
                         animals: [],
-                        powerups: []
+                        powerups: [],
+                        buildingRefs: []
                     };
                     orderedSectionAssets.push(asset);
                     sectionAssetsByKey.set(asset.key, asset);
@@ -249,7 +250,7 @@
                     objects: sectionObjects,
                     groundTiles: normalizePrototypeGroundTiles(rawAsset.groundTiles, rawAsset.tileCoordKeys, textureCount),
                     animals: dedupePrototypeAnimalRecords(rawAsset.animals)
-                }, map);
+                }, map, basis);
                 asset._prototypeBlockedEdgesDirty = blockedEdgesNeedCompute;
                 asset._prototypeClearanceDirty = Object.keys(asset.clearanceByTile).length !== asset.tileCoordKeys.length;
             }
@@ -289,6 +290,11 @@
                 manifest: (assetBundle && assetBundle.manifest && typeof assetBundle.manifest === "object")
                     ? assetBundle.manifest
                     : {},
+                buildingPlacements: Array.isArray(assetBundle && assetBundle.buildings)
+                    ? assetBundle.buildings.map((placement) => ({ ...placement }))
+                    : (Array.isArray(assetBundle && assetBundle.manifest && assetBundle.manifest.buildings)
+                        ? assetBundle.manifest.buildings.map((placement) => ({ ...placement }))
+                        : []),
                 loadedSectionAssetKeys: new Set(
                     orderedSectionAssets
                         .filter((asset) => !!(asset && asset._prototypeSectionHydrated === true))

@@ -31,7 +31,6 @@ X animals have health bars
 X fireballs should stop on walls
 X doors should have separate frame and door sprites
 X ice ball trails snow and explodes on impact
-
 X god mode/ adventure mode
 X treasures in the maze
 X choose spells from menu on startup
@@ -45,8 +44,10 @@ X choose spells from menu on startup
    -maze
    -invisibility
    -omnivision
-    imps?
-  
+   /imps? squirrels?
+    phase through walls
+    move
+
 X invisibility aura
 X shield spell
 X unify spells and auras
@@ -60,23 +61,46 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
+  phase through walls
+  placing a roof should designate a building
+  new building menu toolset
+  when a building is created, make a new floor fragment at the ground level.
+  stairs
+  height-aware LOS shadows
+  make omnivision use a floating eye
+  see over short walls or objects
 / incremental, non-lagging load
   upgradable spells
-  multiple floors!
+/ multiple floors!
   shop sells magic items
   holding the spell hotkey works to cast the spell just like spacebar
   mind control spells
   time-slowing aura
   trees should be transparent when the player is behind them
-  checkpoints
+/ checkpoints
   undo system for editor
-  refactor renderer
+X refactor renderer
   revamp maze mode
-  -acute wall corners clip to sight lines - no false corners in visible space.
-  -walls transition from upright to flat as the player changes angle to the wall
+    -acute wall corners clip to sight lines - no false corners in visible space.
+    -walls transition from upright to flat as the player changes angle to the wall
+
+building editor:
+X sliders should also have text input
+X click to move/ drag corners to resize windows/doors
+X include all window textures
+X keep size and aspect ratio settings in localstorage
+X copy default settings from last clicked object
+X deselect object when tool is selected.
+X make roofs optional
+X dedicated wall tool
+X multiple roof types
+/ add and subtract polygon tools are editable until you hit finalize. they can be resized without changing shape, rotated, and the edges are draggable.
+/ "snap direction" option
+X multiple save slots
+  posts and beams
 
 problems:
-X animals running through walls
+X animals running through walls (some node link blocks were missing)
 X windows visible through roof
 X rugs don't place correctly
 X walls don't always connect
@@ -98,31 +122,49 @@ X item messages not showing
 X spell images don't scale with zoom
 X walls sometimes connect sideways and get totally screwy
 X blodia fails to attack when you stand near a wall
-/ bears chase for a very long time
+X bears chase for a very long time
 X creatures escape from walls when their section leaves the active bubble
-  walls disappear when their section leaves the active bubble (separate problem)
-  built walls disappear on save
-  yetis don't stay aggro
-  trigger areas disappear
+X walls disappear when their section leaves the active bubble (separate problem)
+X built walls disappear on save
+X trigger areas disappear
+X doors on lower levels don't work
+X walls on level != 0 don't merge
+X character can't be placed on levels != 0
+X spells don't aim correctly
+X wizard draws on top of hat
+  yetis don't stay aggro or knock down doors
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
+  level editing (and probably other stuff) shouldn't be in spells.js
+  powerups come back once you leave the area
+/ section loading is too slow
+  npcs can't cross fragments
+X partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
+X cutting a hole in a floor causes walls to stop working
+X floor fragment edges slow but don't stop movement
+  trees can't place within building footprint rectangle
+X rugs on an upper floor are visible in the building overlay
+  inside and outside doors have opposite handles
+  delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads
+
+
 
 large trigger area architecture checklist:
-  [ ] add stable trigger ids to saved trigger-area records
-  [ ] add prototype trigger-definition registry state on map
-  [ ] build trigger registry from section asset records, not runtime objects
-  [ ] compute trigger bounds and coverage section keys from polygon footprints
-  [ ] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
-  [ ] change trigger traversal candidate gathering to query the trigger registry
-  [ ] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
-  [ ] preserve enter/exit state by stable trigger id instead of runtime-object residency
+  [x] add stable trigger ids to saved trigger-area records
+  [x] add prototype trigger-definition registry state on map
+  [x] build trigger registry from section asset records, not runtime objects
+  [x] compute trigger bounds and coverage section keys from polygon footprints
+  [x] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
+  [x] change trigger traversal candidate gathering to query the trigger registry
+  [x] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
+  [x] preserve enter/exit state by stable trigger id instead of runtime-object residency
   [ ] decide script policy: metadata-safe immediate execution vs hydrate/materialize-on-demand
   [ ] add temporary trigger script target materialization for `this` if needed
   [ ] keep ownerSectionKey as persistence home, separate from coverage authority
-  [ ] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
+  [x] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
   [ ] test: player enters trigger before owner section loads
   [ ] test: player exits trigger after owner section unloads
-  [ ] test: multi-section trigger coverage lookup returns the trigger from any covered section
-  [ ] test: large trigger does not double-fire enter or exit during continuous traversal
+  [x] test: multi-section trigger coverage lookup returns the trigger from any covered section
+  [x] test: large trigger does not double-fire enter or exit during continuous traversal
   [ ] test: trigger scripts using `this` still work when the owner section is not materialized
 
 

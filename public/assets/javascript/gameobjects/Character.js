@@ -152,6 +152,7 @@ class FrozenDeathBurstEffect {
 
 class Character {
     constructor(type, location, size, map, options = {}) {
+        const constructorOptions = (options && typeof options === "object") ? options : {};
         this.type = type;
         this.map = map;
         this.size = Number.isFinite(size) ? size : 1;
@@ -159,7 +160,7 @@ class Character {
         this.travelFrames = 0;
         this.travelZ = 0;
         this.moving = false;
-        this.useExternalScheduler = false;
+        this.useExternalScheduler = constructorOptions.useExternalScheduler === true;
         this.isOnFire = false;
         this.fireSprite = null;
         this.fireFrameIndex = 1;
@@ -169,7 +170,7 @@ class Character {
         this.groundRadius = this.size / 3; // Default hitbox radius in hex units
         this.visualRadius = this.size / 2; // Default visual hitbox radius in hex units
         this.frameRate = 1;
-        this.moveTimeout = this.nextMove();
+        this.moveTimeout = null;
         this.attackTimeout = null;
         this.acceleration = 50;
         this.movementVector = {x: 0, y: 0};
@@ -187,7 +188,15 @@ class Character {
 
         // Try to get node - if coords look like array indices (integers in map range), use them directly
         let node;
-        if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
+        if (
+            location &&
+            Number.isFinite(location.xindex) &&
+            Number.isFinite(location.yindex) &&
+            Number.isFinite(location.x) &&
+            Number.isFinite(location.y)
+        ) {
+            node = location;
+        } else if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
             // Treat as array indices
             node = map.nodes[location.x][location.y];
         } else {
@@ -196,6 +205,7 @@ class Character {
         }
         
         this.node = node;
+        this.syncTraversalLayerFromNode(this.node);
         this.x = this.node.x;
         this.y = this.node.y;
         this.z = this.getNodeStandingZ(this.node);
@@ -221,13 +231,70 @@ class Character {
             this.map.registerGameObject(this);
         }
 
-        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+        const suppressAutoScriptingName = !!constructorOptions.suppressAutoScriptingName;
         const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
             ? globalThis.Scripting
             : null;
         if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
             scriptingApi.ensureObjectScriptingName(this, { map: this.map });
         }
+
+        if (!this.useExternalScheduler && constructorOptions.startMoveLoop !== false) {
+            this.moveTimeout = this.nextMove();
+        }
+    }
+
+    getNodeTraversalLayer(node = this.node) {
+        if (Number.isFinite(node && node.traversalLayer)) {
+            return Math.round(Number(node.traversalLayer));
+        }
+        if (Number.isFinite(node && node.level)) {
+            return Math.round(Number(node.level));
+        }
+        if (Number.isFinite(this.traversalLayer)) {
+            return Math.round(Number(this.traversalLayer));
+        }
+        if (Number.isFinite(this.currentLayer)) {
+            return Math.round(Number(this.currentLayer));
+        }
+        return 0;
+    }
+
+    syncTraversalLayerFromNode(node = this.node) {
+        const layer = this.getNodeTraversalLayer(node);
+        this.traversalLayer = layer;
+        this.currentLayer = layer;
+        const baseZ = this.getNodeStandingZ(node);
+        this.currentLayerBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : layer * 3;
+        if (node && typeof node.surfaceId === "string") {
+            this.surfaceId = node.surfaceId;
+        }
+        if (node && typeof node.fragmentId === "string") {
+            this.fragmentId = node.fragmentId;
+        }
+        return layer;
+    }
+
+    resolveNodeForTraversalLayer(x, y, options = {}) {
+        if (!this.map || typeof this.map.worldToNode !== "function") return null;
+        const baseNode = this.map.worldToNode(x, y);
+        if (!baseNode) return null;
+        const layer = Number.isFinite(options && options.traversalLayer)
+            ? Math.round(Number(options.traversalLayer))
+            : this.getNodeTraversalLayer();
+        if (layer === 0) return baseNode;
+        if (typeof this.map.getFloorNodeAtLayer !== "function") return null;
+        const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
+            ? options.sectionKey
+            : (typeof baseNode._prototypeSectionKey === "string"
+                ? baseNode._prototypeSectionKey
+                : ((typeof this.map.getPrototypeSectionKeyForWorldPoint === "function")
+                    ? this.map.getPrototypeSectionKeyForWorldPoint(x, y)
+                    : ""));
+        return this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+            sectionKey,
+            allowScan: !(options && options.allowScan === false)
+        });
     }
 
     dropPowerup(powerupType, options = {}) {
@@ -627,12 +694,34 @@ class Character {
             this.map.worldToNode(newX + padding, newY - padding),
             this.map.worldToNode(newX + padding, newY + padding)
         ];
+
+        const layer = this.getCurrentMovementLayer();
+        const needsLayerResolution = layer !== 0 && this.map && (
+            typeof this.map.getFloorNodeAtLayer === "function" ||
+            typeof this.map.getNode === "function"
+        );
+
         const uniqueNodes = [];
         const seen = new Set();
         for (let i = 0; i < sampledNodes.length; i++) {
-            const node = sampledNodes[i];
-            if (!node) continue;
-            const key = `${Number(node.xindex)}:${Number(node.yindex)}`;
+            const baseNode = sampledNodes[i];
+            if (!baseNode) continue;
+            let node = baseNode;
+            if (needsLayerResolution) {
+                const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                    ? baseNode._prototypeSectionKey : "";
+                let layeredNode = null;
+                if (typeof this.map.getFloorNodeAtLayer === "function") {
+                    layeredNode = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                        sectionKey, allowScan: false
+                    });
+                }
+                if (!layeredNode && layer === 0 && typeof this.map.getNode === "function") {
+                    layeredNode = this.map.getNode(baseNode.xindex, baseNode.yindex, layer);
+                }
+                node = layeredNode || baseNode;
+            }
+            const key = `${Number(node.xindex)}:${Number(node.yindex)}:${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : layer}`;
             if (seen.has(key)) continue;
             seen.add(key);
             uniqueNodes.push(node);
@@ -667,40 +756,84 @@ class Character {
         const minYIndex = Math.min(...yIndices);
         const maxYIndex = Math.max(...yIndices);
 
-        if (typeof this.map.getNodesInIndexWindow === "function") {
-            const xStart = minXIndex - 1;
-            const xEnd = maxXIndex + 1;
-            const yStart = minYIndex - 1;
-            const yEnd = maxYIndex + 1;
-            const nearbyNodes = this.map.getNodesInIndexWindow(xStart, xEnd, yStart, yEnd);
-            for (let i = 0; i < nearbyNodes.length; i++) {
-                const node = nearbyNodes[i];
-                if (!node || !node.objects) continue;
-                for (const obj of node.objects) {
-                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
-                    nearbyObjects.push(obj);
-                }
+        const movementLayer = this.getCurrentMovementLayer(options);
+        const useLayerFilter = this.isUsingHitboxMovement() && movementLayer !== 0;
+        const getNodeLayer = (node) => Number.isFinite(node && node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
+        const seen = useLayerFilter ? new Set() : null;
+        const addExtraBlockers = () => {
+            if (!this.map || typeof this.map.collectStairFootprintMovementBlockersInBounds !== "function") return;
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const extraSeen = seen || new Set(nearbyObjects);
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, {
+                ...options,
+                candidateX: newX,
+                candidateY: newY
+            });
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const obj = stairBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (extraSeen.has(obj)) continue;
+                extraSeen.add(obj);
+                nearbyObjects.push(obj);
             }
+        };
+
+        const collectFromNode = (node) => {
+            if (!node || !Array.isArray(node.objects)) return;
+            if (useLayerFilter && getNodeLayer(node) !== movementLayer) return;
+            for (const obj of node.objects) {
+                if (useLayerFilter) {
+                    if (!obj || obj.gone) continue;
+                    const objLayer = Number.isFinite(obj.traversalLayer)
+                        ? Math.round(Number(obj.traversalLayer))
+                        : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : getNodeLayer(node));
+                    if (objLayer !== movementLayer) continue;
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                    if (seen.has(obj)) continue;
+                    seen.add(obj);
+                } else {
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                }
+                nearbyObjects.push(obj);
+            }
+        };
+
+        if (typeof this.map.getNodesInIndexWindow === "function") {
+            const nearbyNodes = this.map.getNodesInIndexWindow(minXIndex - 1, maxXIndex + 1, minYIndex - 1, maxYIndex + 1);
+            for (let i = 0; i < nearbyNodes.length; i++) {
+                const node = useLayerFilter
+                    ? this.resolveNodeForMovementLayer(nearbyNodes[i])
+                    : nearbyNodes[i];
+                collectFromNode(node);
+            }
+            addExtraBlockers();
             return nearbyObjects;
         }
 
         const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
         const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
-    const xStart = Math.max(minXIndex - 1, 0);
-    const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
-    const yStart = Math.max(minYIndex - 1, 0);
-    const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
-
+        const xStart = Math.max(minXIndex - 1, 0);
+        const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
+        const yStart = Math.max(minYIndex - 1, 0);
+        const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
         for (let x = xStart; x <= xEnd; x++) {
             for (let y = yStart; y <= yEnd; y++) {
-                if (!this.map.nodes[x] || !this.map.nodes[x][y] || !this.map.nodes[x][y].objects) continue;
-                const nodeObjects = this.map.nodes[x][y].objects;
-                for (const obj of nodeObjects) {
-                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
-                    nearbyObjects.push(obj);
-                }
+                const rawNode = this.map.nodes[x] && this.map.nodes[x][y];
+                if (!rawNode || !rawNode.objects) continue;
+                const node = useLayerFilter ? this.resolveNodeForMovementLayer(rawNode) : rawNode;
+                collectFromNode(node);
             }
         }
+        addExtraBlockers();
         return nearbyObjects;
     }
 
@@ -713,6 +846,47 @@ class Character {
 
     isUsingHitboxMovement() {
         return !!(this._closeCombatState && typeof this._closeCombatState === "object" && !this.gone && !this.dead);
+    }
+
+    shouldConstrainHitboxMovementToFloorSupport(options = {}) {
+        if (!this.isUsingHitboxMovement()) return false;
+        if (options.allowUnsupportedPosition === true) return false;
+        if (this.isJumping === true) return false;
+        if (this._floorFallState && this._floorFallState.active === true) return false;
+        const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        return layer !== 0;
+    }
+
+    getCurrentMovementLayer(_options = {}) {
+        if (Number.isFinite(this.currentLayer)) return Math.round(Number(this.currentLayer));
+        if (Number.isFinite(this.traversalLayer)) return Math.round(Number(this.traversalLayer));
+        if (this.node && Number.isFinite(this.node.traversalLayer)) return Math.round(Number(this.node.traversalLayer));
+        if (this.node && Number.isFinite(this.node.level)) return Math.round(Number(this.node.level));
+        return 0;
+    }
+
+    resolveNodeForMovementLayer(node) {
+        if (!node || !this.map) return node;
+        const layer = this.getCurrentMovementLayer();
+        const nodeLayer = Number.isFinite(node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+        if (nodeLayer === layer) return node;
+        const sourceNode = (node.sourceNode && typeof node.sourceNode === "object") ? node.sourceNode : node;
+        const xindex = Number(sourceNode.xindex);
+        const yindex = Number(sourceNode.yindex);
+        if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+        const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
+            ? sourceNode._prototypeSectionKey
+            : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        if (typeof this.map.getFloorNodeAtLayer === "function") {
+            const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, layer, { sectionKey, allowScan: false });
+            if (floorNode) return floorNode;
+        }
+        if (layer === 0 && typeof this.map.getNode === "function") {
+            return this.map.getNode(xindex, yindex, layer) || null;
+        }
+        return null;
     }
 
     getCharacterVectorMovementCandidates() {
@@ -926,6 +1100,63 @@ class Character {
         return changed;
     }
 
+    _getFloorFragmentBoundaryPush(cx, cy, radius) {
+        if (this.getCurrentMovementLayer() === 0) return null;
+        if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
+        if (!this.map || !(this.map.floorsById instanceof Map)) return null;
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!(resolvedRadius > 0)) return null;
+        const layer = this.getCurrentMovementLayer();
+        for (const fragment of this.map.floorsById.values()) {
+            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (fragmentLayer !== layer) continue;
+            const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+            if (!poly || poly.length < 3) continue;
+            let nearestDistSq = Infinity;
+            let nearestCloseX = cx;
+            let nearestCloseY = cy;
+            for (let i = 0; i < poly.length; i++) {
+                const a = poly[i];
+                const b = poly[(i + 1) % poly.length];
+                const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
+                if (!Number.isFinite(ax + ay + bx + by)) continue;
+                const abx = bx - ax, aby = by - ay;
+                const lenSq = abx * abx + aby * aby;
+                const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
+                const closeX = ax + abx * t;
+                const closeY = ay + aby * t;
+                const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
+                if (dSq < nearestDistSq) {
+                    nearestDistSq = dSq;
+                    nearestCloseX = closeX;
+                    nearestCloseY = closeY;
+                }
+            }
+            const dist = Math.sqrt(nearestDistSq);
+            if (!(dist > 1e-6)) continue;
+            const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
+                ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
+                : true;
+            if (isInside) {
+                // Normal: circle overlaps boundary from inside — push center away from edge.
+                const overlap = resolvedRadius - dist;
+                if (!(overlap > 1e-6)) continue;
+                return {
+                    pushX: (cx - nearestCloseX) / dist * overlap,
+                    pushY: (cy - nearestCloseY) / dist * overlap
+                };
+            } else {
+                // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
+                const pullMagnitude = dist + resolvedRadius;
+                return {
+                    pushX: (nearestCloseX - cx) / dist * pullMagnitude,
+                    pushY: (nearestCloseY - cy) / dist * pullMagnitude
+                };
+            }
+        }
+        return null;
+    }
+
     _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
         let testX = candidateX;
         let testY = candidateY;
@@ -936,6 +1167,143 @@ class Character {
         const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
             ? this._hitboxCollisionDebug.staticCollisions
             : [];
+        const shouldTestObjectHitbox = (obj, hitbox) => {
+            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") return false;
+            if (typeof obj.groundPlaneHitbox.getBounds !== "function") return true;
+            const bounds = obj.groundPlaneHitbox.getBounds();
+            if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+                !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+                return true;
+            }
+            const radius = Math.max(0, Number(hitbox.radius) || 0);
+            return !(
+                hitbox.x + radius < bounds.x ||
+                hitbox.x - radius > bounds.x + bounds.width ||
+                hitbox.y + radius < bounds.y ||
+                hitbox.y - radius > bounds.y + bounds.height
+            );
+        };
+        const fallbackCollisionPush = (obj, hitbox) => {
+            const velocityX = Number(this.movementVector && this.movementVector.x) || 0;
+            const velocityY = Number(this.movementVector && this.movementVector.y) || 0;
+            const velocityLen = Math.hypot(velocityX, velocityY);
+            if (velocityLen > 1e-6) {
+                return {
+                    pushX: -(velocityX / velocityLen) * 0.05,
+                    pushY: -(velocityY / velocityLen) * 0.05
+                };
+            }
+            if (obj && obj.groundPlaneHitbox && typeof obj.groundPlaneHitbox.getBounds === "function") {
+                const bounds = obj.groundPlaneHitbox.getBounds();
+                if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y) &&
+                    Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+                    const centerX = bounds.x + bounds.width * 0.5;
+                    const centerY = bounds.y + bounds.height * 0.5;
+                    const dx = Number(hitbox.x) - centerX;
+                    const dy = Number(hitbox.y) - centerY;
+                    const len = Math.hypot(dx, dy);
+                    if (len > 1e-6) {
+                        return { pushX: (dx / len) * 0.05, pushY: (dy / len) * 0.05 };
+                    }
+                }
+            }
+            const dx = Number(hitbox.x) - Number(this.x);
+            const dy = Number(hitbox.y) - Number(this.y);
+            const len = Math.hypot(dx, dy);
+            if (len > 1e-6) {
+                return { pushX: -(dx / len) * 0.05, pushY: -(dy / len) * 0.05 };
+            }
+            return { pushX: 0.05, pushY: 0 };
+        };
+        const resolveCollision = (obj, hitbox) => {
+            if (!shouldTestObjectHitbox(obj, hitbox)) return null;
+            const collision = obj.groundPlaneHitbox.intersects(hitbox);
+            if (!collision || collision.pushX === undefined) return null;
+            let pushX = Number(collision.pushX) || 0;
+            let pushY = Number(collision.pushY) || 0;
+            if (Math.hypot(pushX, pushY) <= 1e-9) {
+                const fallback = fallbackCollisionPush(obj, hitbox);
+                pushX = Number(fallback.pushX) || 0;
+                pushY = Number(fallback.pushY) || 0;
+            }
+            return { pushX, pushY };
+        };
+        const isStaticCollisionAt = (x, y) => {
+            if (!nearbyObjects.length) return false;
+            const hitbox = this._movementStartHitbox || { type: "circle", x, y, radius: movementRadius };
+            hitbox.x = x;
+            hitbox.y = y;
+            hitbox.radius = movementRadius;
+            this._movementStartHitbox = hitbox;
+            for (const obj of nearbyObjects) {
+                if (resolveCollision(obj, hitbox)) return true;
+            }
+            return false;
+        };
+        const findSweptCollision = (fromX, fromY, toX, toY) => {
+            if (!nearbyObjects.length) return null;
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const distance = Math.hypot(dx, dy);
+            if (!(distance > 1e-6)) return null;
+
+            const radius = Math.max(0, Number(movementRadius) || 0);
+            const stepSize = Math.max(0.03, Math.min(0.12, radius > 0 ? radius * 0.25 : 0.05));
+            const steps = Math.min(32, Math.max(1, Math.ceil(distance / stepSize)));
+            const sweepHitbox = this._movementSweepHitbox || { type: "circle", x: fromX, y: fromY, radius };
+            sweepHitbox.radius = radius;
+            this._movementSweepHitbox = sweepHitbox;
+
+            let lastClearX = fromX;
+            let lastClearY = fromY;
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                sweepHitbox.x = fromX + dx * t;
+                sweepHitbox.y = fromY + dy * t;
+
+                let totalPushX = 0;
+                let totalPushY = 0;
+                let maxPushLen = 0;
+                let hasCollision = false;
+
+                for (const obj of nearbyObjects) {
+                    const collision = resolveCollision(obj, sweepHitbox);
+                    if (!collision) continue;
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (movementContext.forceTouchedObjects instanceof Set) {
+                        movementContext.forceTouchedObjects.add(obj);
+                    }
+                    staticCollisionLog.push({
+                        label: this._getHitboxDebugLabel(obj),
+                        iteration: "sweep",
+                        sampleX: sweepHitbox.x,
+                        sampleY: sweepHitbox.y,
+                        pushX: Number(collision.pushX) || 0,
+                        pushY: Number(collision.pushY) || 0,
+                        overlap: pushLen
+                    });
+                }
+
+                if (hasCollision) {
+                    return {
+                        x: lastClearX,
+                        y: lastClearY,
+                        pushX: totalPushX,
+                        pushY: totalPushY,
+                        maxPushLen
+                    };
+                }
+
+                lastClearX = sweepHitbox.x;
+                lastClearY = sweepHitbox.y;
+            }
+
+            return null;
+        };
 
         while (iteration < maxIterations) {
             iteration++;
@@ -951,8 +1319,8 @@ class Character {
             let hasCollision = false;
 
             for (const obj of nearbyObjects) {
-                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-                if (collision && collision.pushX !== undefined) {
+                const collision = resolveCollision(obj, testHitbox);
+                if (collision) {
                     hasCollision = true;
                     totalPushX += collision.pushX;
                     totalPushY += collision.pushY;
@@ -972,8 +1340,48 @@ class Character {
                     });
                 }
             }
+            const boundaryPush = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+            if (boundaryPush) {
+                hasCollision = true;
+                totalPushX += boundaryPush.pushX;
+                totalPushY += boundaryPush.pushY;
+                maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPush.pushX, boundaryPush.pushY));
+            }
 
             if (!hasCollision) {
+                if (!isStaticCollisionAt(this.x, this.y)) {
+                    const sweptCollision = findSweptCollision(this.x, this.y, testX, testY);
+                    if (sweptCollision) {
+                        collided = true;
+                        let pushLen = Math.hypot(sweptCollision.pushX, sweptCollision.pushY);
+                        if (pushLen > sweptCollision.maxPushLen && sweptCollision.maxPushLen > 0) {
+                            const scale = sweptCollision.maxPushLen / pushLen;
+                            sweptCollision.pushX *= scale;
+                            sweptCollision.pushY *= scale;
+                            pushLen = sweptCollision.maxPushLen;
+                        }
+                        if (pushLen > 0) {
+                            const normalX = sweptCollision.pushX / pushLen;
+                            const normalY = sweptCollision.pushY / pushLen;
+                            if (this.movementVector && typeof this.movementVector === "object") {
+                                const vectorX = Number(this.movementVector.x) || 0;
+                                const vectorY = Number(this.movementVector.y) || 0;
+                                const normalComponent = vectorX * normalX + vectorY * normalY;
+                                if (normalComponent < 0) {
+                                    this.movementVector.x = vectorX - normalX * normalComponent;
+                                    this.movementVector.y = vectorY - normalY * normalComponent;
+                                }
+                            }
+                            const backoff = Math.max(0.005, Math.min(0.02, movementRadius * 0.05));
+                            return {
+                                x: sweptCollision.x + normalX * backoff,
+                                y: sweptCollision.y + normalY * backoff,
+                                collided
+                            };
+                        }
+                        return { x: sweptCollision.x, y: sweptCollision.y, collided };
+                    }
+                }
                 return { x: testX, y: testY, collided };
             }
 
@@ -1026,8 +1434,8 @@ class Character {
         let totalPushY = 0;
         let maxPushLen = 0;
         for (const obj of nearbyObjects) {
-            const collision = obj.groundPlaneHitbox.intersects(testHitbox);
-            if (collision && collision.pushX !== undefined) {
+            const collision = resolveCollision(obj, testHitbox);
+            if (collision) {
                 totalPushX += collision.pushX;
                 totalPushY += collision.pushY;
                 const pushLen = Math.hypot(collision.pushX, collision.pushY);
@@ -1045,6 +1453,12 @@ class Character {
                     overlap: pushLen
                 });
             }
+        }
+        const boundaryPushFinal = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+        if (boundaryPushFinal) {
+            totalPushX += boundaryPushFinal.pushX;
+            totalPushY += boundaryPushFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPushFinal.pushX, boundaryPushFinal.pushY));
         }
 
         if (maxPushLen > 0) {
@@ -1068,7 +1482,11 @@ class Character {
             }
         }
 
-        return { x: candidateX, y: candidateY, collided };
+        return {
+            x: collided ? testX : candidateX,
+            y: collided ? testY : candidateY,
+            collided
+        };
     }
 
     _resolveHitboxMovementConstraints(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
@@ -1111,19 +1529,72 @@ class Character {
         return resolved;
     }
 
+    _checkOccupancy(targetX, targetY, options) {
+        if (!this.map) return true;
+        if (this._pendingVectorMovementSupport && typeof this._pendingVectorMovementSupport === "object") {
+            return true;
+        }
+        if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
+            if (stairOccupancy && stairOccupancy.handled === true) {
+                if (stairOccupancy.allowed === true) {
+                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                }
+                return stairOccupancy.allowed === true;
+            }
+        }
+        if (this.shouldConstrainHitboxMovementToFloorSupport(options)) {
+            if (typeof this.map.isActorFootprintSupportedAtWorldPosition !== "function") {
+                throw new Error("hitbox floor movement requires isActorFootprintSupportedAtWorldPosition");
+            }
+            // Hitbox actors: check center-point containment only (radius=0), not circle-in-polygon.
+            // This allows positions near walls (where the circle extends outside the polygon)
+            // while still blocking off-edge positions where the center itself leaves the polygon.
+            // Boundary push in _resolveStaticVectorMovementCandidate handles smooth wall sliding.
+            const supportOptions = this.isUsingHitboxMovement()
+                ? { ...options, supportRadius: 0 }
+                : options;
+            return this.map.isActorFootprintSupportedAtWorldPosition(
+                targetX,
+                targetY,
+                this.getCurrentMovementLayer(options),
+                this,
+                supportOptions
+            ) === true;
+        }
+        if (this.isUsingHitboxMovement()) return true;
+        return typeof this.map.canOccupyWorldPosition !== "function" ||
+            this.map.canOccupyWorldPosition(targetX, targetY, this, options) === true;
+    }
+
     _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
-        if (
-            this.map &&
-            typeof this.map.canOccupyWorldPosition === "function" &&
-            this.map.canOccupyWorldPosition(targetX, targetY, this, options) !== true
-        ) {
+        if (options.allowUnsupportedPosition !== true && !this._checkOccupancy(targetX, targetY, options)) {
             if (this.movementVector && typeof this.movementVector === "object") {
                 this.movementVector.x = 0;
                 this.movementVector.y = 0;
             }
+            // _resolveHitboxMovementConstraints already moved this.x/y; undo that.
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                this.x = this.prevX;
+                this.y = this.prevY;
+                this.updateHitboxes();
+            }
             return false;
         }
+        const supportPoint = this._pendingVectorMovementSupport &&
+            this._pendingVectorMovementSupport.point &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.x)) &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.y))
+            ? this._pendingVectorMovementSupport.point
+            : null;
+        if (supportPoint) {
+            targetX = Number(supportPoint.x);
+            targetY = Number(supportPoint.y);
+        }
         const position = this._setVectorMovementPositionRaw(targetX, targetY);
+        if (this.map && typeof this.map.applyActorResolvedMovementSupport === "function") {
+            this.map.applyActorResolvedMovementSupport(this, position.wrappedX, position.wrappedY, options);
+        }
         this.onVectorMovementApplied({
             previousX: this.prevX,
             previousY: this.prevY,
@@ -1213,6 +1684,35 @@ class Character {
         const newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
         const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
         const movementRadius = this.getVectorMovementCollisionRadius(options);
+
+        if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+            if (stairOccupancy && stairOccupancy.handled === true) {
+                if (stairOccupancy.allowed === true) {
+                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                    const supportPoint = stairOccupancy.support &&
+                        stairOccupancy.support.point &&
+                        Number.isFinite(Number(stairOccupancy.support.point.x)) &&
+                        Number.isFinite(Number(stairOccupancy.support.point.y))
+                        ? stairOccupancy.support.point
+                        : null;
+                    return this._applyVectorMovementPosition(
+                        supportPoint ? Number(supportPoint.x) : newX,
+                        supportPoint ? Number(supportPoint.y) : newY,
+                        options
+                    );
+                }
+                if (stairOccupancy.slideAlongStairFootprint !== true) {
+                    if (this.movementVector && typeof this.movementVector === "object") {
+                        this.movementVector.x = 0;
+                        this.movementVector.y = 0;
+                    }
+                    this.moving = false;
+                    return false;
+                }
+            }
+        }
+
         const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
 
         if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {
@@ -2068,6 +2568,33 @@ class Character {
     nextMove() {
         return setTimeout(() => {this.move()}, 1000 / this.frameRate);
     }
+    regenerateHealth(deltaSeconds = null) {
+        if (
+            this.dead ||
+            !Number.isFinite(this.maxHp) ||
+            this.maxHp <= 0 ||
+            !Number.isFinite(this.hp) ||
+            this.hp >= this.maxHp
+        ) {
+            return 0;
+        }
+        const dtSec = Number.isFinite(deltaSeconds)
+            ? Math.max(0, Number(deltaSeconds))
+            : (1 / Math.max(1, Number(this.frameRate) || 1));
+        const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
+        const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
+        const healPerSecond = this.maxHp * healRate * healMult;
+        if (!(dtSec > 0) || !(healPerSecond > 0)) {
+            return 0;
+        }
+        const previousHp = this.hp;
+        this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
+        const healed = Math.max(0, this.hp - previousHp);
+        if (healed > 0 && typeof this.updateStatusBars === "function") {
+            this.updateStatusBars();
+        }
+        return healed;
+    }
     ensureMagicPointsInitialized(resetCurrent = false) {
         const fallbackHp = Number.isFinite(this.hp) ? Number(this.hp) : 0;
         const fallbackMaxHp = Math.max(
@@ -2267,13 +2794,6 @@ class Character {
             this.hatGraphics.destroy();
         }
         this.hatGraphics = null;
-        if (this.shadowGraphics && this.shadowGraphics.parent) {
-            this.shadowGraphics.parent.removeChild(this.shadowGraphics);
-        }
-        if (this.shadowGraphics && typeof this.shadowGraphics.destroy === "function") {
-            this.shadowGraphics.destroy();
-        }
-        this.shadowGraphics = null;
         if (this._healthBarGraphics && this._healthBarGraphics.parent) {
             this._healthBarGraphics.parent.removeChild(this._healthBarGraphics);
         }
@@ -2311,7 +2831,7 @@ class Character {
     goto(destinationNode) {
         if (!destinationNode) return;
         
-        this.node = this.map.worldToNode(this.x, this.y);
+        this.node = this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y);
         this.destination = destinationNode;
         const pathOptions = {};
         if (this.pathfindingClearance > 0) {
@@ -2355,21 +2875,7 @@ class Character {
             this.burn();
         }
 
-        if (
-            !this.dead &&
-            Number.isFinite(this.maxHp) &&
-            this.maxHp > 0 &&
-            Number.isFinite(this.hp) &&
-            this.hp < this.maxHp
-        ) {
-            const dtSec = 1 / Math.max(1, Number(this.frameRate) || 1);
-            const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
-            const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
-            const healPerSecond = this.maxHp * healRate * healMult;
-            if (healPerSecond > 0) {
-                this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
-            }
-        }
+        this.regenerateHealth(dtSeconds);
 
         if (this._closeCombatState && this._closeCombatState.target) {
             this.updateCloseCombat();
@@ -2391,7 +2897,7 @@ class Character {
             : !!this.node;
         if (!currentNodeIsActive) {
             this.node = (this.map && typeof this.map.worldToNode === "function")
-                ? this.map.worldToNode(this.x, this.y)
+                ? (this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y))
                 : this.node;
         }
         if (!this.node) {
@@ -2418,6 +2924,7 @@ class Character {
             if (this.nextNode) {
                 const arrivalPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1);
                 this.node = this.nextNode;
+                this.syncTraversalLayerFromNode(this.node);
                 this.x = arrivalPosition && Number.isFinite(arrivalPosition.x) ? arrivalPosition.x : this.node.x;
                 this.y = arrivalPosition && Number.isFinite(arrivalPosition.y) ? arrivalPosition.y : this.node.y;
                 this.z = arrivalPosition && Number.isFinite(arrivalPosition.z) ? arrivalPosition.z : this.getNodeStandingZ(this.node);

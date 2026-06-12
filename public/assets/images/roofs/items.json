@@ -1,1 +1,39 @@
-{}
+{
+  "category": "roofs",
+  "version": 1,
+  "defaults": {
+    "repeatsPerMapUnit": 0.125,
+    "repeatsPerMapUnitX": 0.125,
+    "repeatsPerMapUnitY": 0.125
+  },
+  "items": [
+    {
+      "file": "beads.jpg",
+      "texturePath": "/assets/images/roofs/beads.jpg",
+      "repeatsPerMapUnit": 0.6,
+      "repeatsPerMapUnitX": 0.6,
+      "repeatsPerMapUnitY": 0.6
+    },
+    {
+      "file": "slate.png",
+      "texturePath": "/assets/images/roofs/slate.png",
+      "repeatsPerMapUnit": 0.35,
+      "repeatsPerMapUnitX": 0.35,
+      "repeatsPerMapUnitY": 0.35
+    },
+    {
+      "file": "smallshingles.png",
+      "texturePath": "/assets/images/roofs/smallshingles.png",
+      "repeatsPerMapUnit": 0.125,
+      "repeatsPerMapUnitX": 0.125,
+      "repeatsPerMapUnitY": 0.125
+    },
+    {
+      "file": "thatch.png",
+      "texturePath": "/assets/images/roofs/thatch.png",
+      "repeatsPerMapUnit": 0.1,
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    }
+  ]
+}

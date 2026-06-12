@@ -70,6 +70,46 @@
       ],
       "repeatsPerMapUnitX": 0.4,
       "repeatsPerMapUnitY": 0.4
+    },
+    {
+      "file": "beads.jpg",
+      "texturePath": "/assets/images/flooring/beads.jpg"
+    },
+    {
+      "file": "beam.jpg",
+      "texturePath": "/assets/images/flooring/beam.jpg",
+      "repeatsPerMapUnitX": 0.2,
+      "repeatsPerMapUnitY": 0.2
+    },
+    {
+      "file": "brick.jpg",
+      "texturePath": "/assets/images/flooring/brick.jpg",
+      "repeatsPerMapUnitX": 0.2,
+      "repeatsPerMapUnitY": 0.2
+    },
+    {
+      "file": "concrete.jpg",
+      "texturePath": "/assets/images/flooring/concrete.jpg"
+    },
+    {
+      "file": "gravel.jpg",
+      "texturePath": "/assets/images/flooring/gravel.jpg"
+    },
+    {
+      "file": "stonewall20.png",
+      "texturePath": "/assets/images/flooring/stonewall20.png",
+      "repeatsPerMapUnitX": 0.2,
+      "repeatsPerMapUnitY": 0.2
+    },
+    {
+      "file": "stucco.jpg",
+      "texturePath": "/assets/images/flooring/stucco.jpg"
+    },
+    {
+      "file": "vertical wood.jpg",
+      "texturePath": "/assets/images/flooring/vertical wood.jpg",
+      "repeatsPerMapUnitX": 0.4,
+      "repeatsPerMapUnitY": 0.4
     }
   ]
 }

@@ -1,0 +1,2563 @@
+{
+  "schema": "survivor-building-v1",
+  "id": "building-15",
+  "name": "the house",
+  "origin": {
+    "x": 0,
+    "y": 0
+  },
+  "defaults": {
+    "floorTexture": "/assets/images/flooring/woodfloor.png",
+    "wallTexture": "/assets/images/walls/woodwall.png",
+    "roofTexture": "/assets/images/roofs/slate.png",
+    "roofMode": "peak",
+    "roofOverhang": 0,
+    "roofPeakHeight": 0,
+    "wallHeight": 3,
+    "wallThickness": 0.25
+  },
+  "floorFragments": [
+    {
+      "fragmentId": "floor-fragment-16",
+      "surfaceId": "floor-fragment-16",
+      "ownerSectionKey": "",
+      "name": "floor",
+      "level": 0,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 0,
+      "outerPolygon": [
+        {
+          "id": "vertex-17",
+          "x": -11.258,
+          "y": -7
+        },
+        {
+          "id": "vertex-24",
+          "x": 7.794,
+          "y": -7
+        },
+        {
+          "id": "vertex-23",
+          "x": 7.794,
+          "y": 10
+        },
+        {
+          "id": "vertex-22",
+          "x": 0.866,
+          "y": 10
+        },
+        {
+          "id": "vertex-21",
+          "x": 0.866,
+          "y": 15
+        },
+        {
+          "id": "vertex-20",
+          "x": -4.33,
+          "y": 15
+        },
+        {
+          "id": "vertex-19",
+          "x": -4.33,
+          "y": 10
+        },
+        {
+          "id": "vertex-18",
+          "x": -11.258,
+          "y": 10
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/cobblestones.png",
+      "roof": {
+        "type": "roof",
+        "id": "roof-25",
+        "floorId": "floor-fragment-16",
+        "mode": "peak",
+        "texturePath": "/assets/images/roofs/slate.png",
+        "overhang": 2,
+        "peakHeight": 4,
+        "domeLevels": 4,
+        "peakPoint": {
+          "x": -1.731999999999999,
+          "y": 1.4999999999999993
+        },
+        "elevationOffset": 0,
+        "shedDirection": {
+          "x": 0,
+          "y": -1
+        },
+        "contactPolygon": [
+          {
+            "id": "vertex-17",
+            "x": -11.258,
+            "y": -7
+          },
+          {
+            "id": "vertex-18",
+            "x": -11.258,
+            "y": 10
+          },
+          {
+            "id": "vertex-23",
+            "x": 7.794,
+            "y": 10
+          },
+          {
+            "id": "vertex-24",
+            "x": 7.794,
+            "y": -7
+          }
+        ],
+        "gables": []
+      },
+      "floorHeight": 4,
+      "defaultWallHeight": 3,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [
+        {
+          "type": "column",
+          "id": 11,
+          "floorId": "floor-fragment-16",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": -4.33,
+            "y": 15
+          },
+          "sideCount": 4,
+          "size": 0.25,
+          "width": 0.5,
+          "depth": 0.5,
+          "rotation": 2.356194490192345,
+          "height": 2,
+          "topHeights": [
+            2.885300018148837,
+            2.9467875643389716,
+            2.885300018148837,
+            2.8238124719587026
+          ],
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/brick.jpg"
+        },
+        {
+          "type": "column",
+          "id": 12,
+          "floorId": "floor-fragment-16",
+          "wallId": null,
+          "heightMode": "fixed",
+          "position": {
+            "x": 0.866,
+            "y": 15
+          },
+          "sideCount": 4,
+          "size": 0.25,
+          "width": 0.5,
+          "depth": 0.5,
+          "rotation": 0.7853981633974483,
+          "height": 2,
+          "topHeights": [
+            2.8238124719587026,
+            2.885300018148837,
+            2.9467875643389716,
+            2.885300018148837
+          ],
+          "bottomZ": 0,
+          "traversalLayer": 0,
+          "texturePath": "/assets/images/walls/brick.jpg"
+        }
+      ],
+      "roofs": [
+        {
+          "type": "roof",
+          "id": "roof-31",
+          "floorId": "floor-fragment-16",
+          "mode": "shed",
+          "texturePath": "/assets/images/roofs/slate.png",
+          "overhang": 1,
+          "peakHeight": 1,
+          "domeLevels": 4,
+          "peakPoint": {
+            "x": -1.731999999999999,
+            "y": 1.4999999999999993
+          },
+          "elevationOffset": -1.143699981851163,
+          "shedDirection": {
+            "x": 0,
+            "y": -1
+          },
+          "contactPolygon": [
+            {
+              "id": "roof-contact-34",
+              "x": 0.433,
+              "y": 9.25
+            },
+            {
+              "id": "roof-contact-35",
+              "x": 0.866,
+              "y": 15
+            },
+            {
+              "id": "roof-contact-36",
+              "x": -4.33,
+              "y": 15
+            },
+            {
+              "id": "roof-contact-37",
+              "x": -3.8970000000000002,
+              "y": 9.25
+            }
+          ],
+          "gables": []
+        }
+      ],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 5,
+          "stairKind": "straight",
+          "floorId": "floor-fragment-16",
+          "startPoint": {
+            "x": -0.6866669879826753,
+            "y": 3.2852696863494275
+          },
+          "endPoint": {
+            "x": -0.6917120878510573,
+            "y": 5.48533601716889
+          },
+          "treads": [
+            {
+              "left": {
+                "x": -0.6866669879826762,
+                "y": 2.1852696863494274
+              },
+              "right": {
+                "x": -0.6866669879826744,
+                "y": 4.385269686349428
+              },
+              "center": {
+                "x": -0.6866669879826753,
+                "y": 3.2852696863494275
+              }
+            },
+            {
+              "left": {
+                "x": 2.624817884720792,
+                "y": 4.3852696863494245
+              },
+              "right": {
+                "x": 2.62481788472079,
+                "y": 2.185269686349425
+              },
+              "center": {
+                "x": 2.624817884720791,
+                "y": 3.285269686349425
+              }
+            },
+            {
+              "left": {
+                "x": 4.824817884610792,
+                "y": 4.385247686349423
+              },
+              "right": {
+                "x": 2.624817884720792,
+                "y": 4.3852696863494245
+              },
+              "center": {
+                "x": 3.724817884665792,
+                "y": 4.385258686349424
+              },
+              "arcDeltaAngle": 1.5707963267948966
+            },
+            {
+              "left": {
+                "x": 2.624817884720792,
+                "y": 4.3852696863494245
+              },
+              "right": {
+                "x": 2.624861884720792,
+                "y": 6.5852696859094255
+              },
+              "center": {
+                "x": 2.624839884720792,
+                "y": 5.485269686129425
+              },
+              "arcDeltaAngle": 1.5707963267948966
+            },
+            {
+              "left": {
+                "x": -0.6916900878510578,
+                "y": 6.58533601694889
+              },
+              "right": {
+                "x": -0.6917340878510568,
+                "y": 4.385336017388889
+              },
+              "center": {
+                "x": -0.6917120878510573,
+                "y": 5.48533601716889
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "up",
+          "width": 2.2,
+          "bottomZ": 0,
+          "height": 4,
+          "stepCount": 20,
+          "riserDepth": 4,
+          "texturePath": "/assets/images/flooring/beam.jpg",
+          "treadTexturePath": "/assets/images/flooring/beam.jpg",
+          "riserTexturePath": "/assets/images/flooring/stucco.jpg",
+          "footprint": [
+            {
+              "x": -0.6866669879826762,
+              "y": 2.1852696863494274
+            },
+            {
+              "x": 2.624817884720792,
+              "y": 4.3852696863494245
+            },
+            {
+              "x": 4.824817884610792,
+              "y": 4.385247686349423
+            },
+            {
+              "x": 2.624817884720792,
+              "y": 4.3852696863494245
+            },
+            {
+              "x": -0.6916900878510578,
+              "y": 6.58533601694889
+            },
+            {
+              "x": -0.6917340878510568,
+              "y": 4.385336017388889
+            },
+            {
+              "x": 2.624861884720792,
+              "y": 6.5852696859094255
+            },
+            {
+              "x": 2.624817884720792,
+              "y": 4.3852696863494245
+            },
+            {
+              "x": 2.62481788472079,
+              "y": 2.185269686349425
+            },
+            {
+              "x": -0.6866669879826744,
+              "y": 4.385269686349428
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "fragmentId": "floor-fragment-26",
+      "surfaceId": "floor-fragment-26",
+      "ownerSectionKey": "",
+      "name": "floor",
+      "level": 1,
+      "nodeBaseZOffset": 1,
+      "nodeBaseZ": 4,
+      "outerPolygon": [
+        {
+          "id": "vertex-27",
+          "x": -8.66,
+          "y": -4
+        },
+        {
+          "id": "vertex-28",
+          "x": -8.66,
+          "y": 7
+        },
+        {
+          "id": "vertex-29",
+          "x": 5.196,
+          "y": 7
+        },
+        {
+          "id": "vertex-30",
+          "x": 5.196,
+          "y": -4
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/cobblestones.png",
+      "roof": {
+        "type": "roof",
+        "id": "roof-38",
+        "floorId": "floor-fragment-26",
+        "mode": "gabled",
+        "texturePath": "/assets/images/roofs/slate.png",
+        "overhang": 1,
+        "peakHeight": 5,
+        "domeLevels": 4,
+        "peakPoint": {
+          "x": -1.6901554621848744,
+          "y": 1.5488220040491443
+        },
+        "elevationOffset": -1,
+        "shedDirection": {
+          "x": 0,
+          "y": -1
+        },
+        "contactPolygon": [
+          {
+            "id": "roof-contact-39",
+            "x": -8.66,
+            "y": -5
+          },
+          {
+            "id": "roof-contact-40",
+            "x": 5.201708882710157,
+            "y": -5.091907427798054
+          },
+          {
+            "id": "roof-contact-41",
+            "x": 5.196,
+            "y": 8
+          },
+          {
+            "id": "roof-contact-42",
+            "x": -8.66,
+            "y": 8
+          }
+        ],
+        "gables": []
+      },
+      "floorHeight": 2,
+      "defaultWallHeight": 3,
+      "defaultWallTexturePath": "/assets/images/walls/concrete.jpg",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "roofs": [],
+      "stairs": []
+    }
+  ],
+  "wallSections": [
+    {
+      "type": "wallSection",
+      "id": 13,
+      "floorId": "floor-fragment-16",
+      "fragmentId": "floor-fragment-16",
+      "startPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-17",
+        "x": -11.133,
+        "y": -6.875
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-18",
+        "x": -11.133,
+        "y": 9.875
+      },
+      "height": 4,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -11.258,
+            "y": -7
+          },
+          "aRight": {
+            "x": -11.008,
+            "y": -6.75
+          },
+          "bLeft": {
+            "x": -11.258,
+            "y": 10
+          },
+          "bRight": {
+            "x": -11.008,
+            "y": 9.75
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -11.258,
+              "y": -7,
+              "z": 4
+            },
+            "right": {
+              "x": -11.008,
+              "y": -6.75,
+              "z": 4
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -11.258,
+              "y": 10,
+              "z": 4
+            },
+            "right": {
+              "x": -11.008,
+              "y": 9.75,
+              "z": 4
+            }
+          }
+        ],
+        "signature": "13;floor-fragment-16;0.000000;4.000000;0.250000;-11.258000,-7.000000|-11.258000,10.000000|-11.008000,9.750000|-11.008000,-6.750000;0.000000,-11.258000,-7.000000,4.000000,-11.008000,-6.750000,4.000000|1.000000,-11.258000,10.000000,4.000000,-11.008000,9.750000,4.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 14,
+      "floorId": "floor-fragment-16",
+      "fragmentId": "floor-fragment-16",
+      "startPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-18",
+        "x": -11.133,
+        "y": 9.875
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-23",
+        "x": 7.669,
+        "y": 9.875
+      },
+      "height": 4,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -11.258,
+            "y": 10
+          },
+          "aRight": {
+            "x": -11.008,
+            "y": 9.75
+          },
+          "bLeft": {
+            "x": 7.794,
+            "y": 10
+          },
+          "bRight": {
+            "x": 7.544,
+            "y": 9.75
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -11.258,
+              "y": 10,
+              "z": 4
+            },
+            "right": {
+              "x": -11.008,
+              "y": 9.75,
+              "z": 4
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 7.7940000000000005,
+              "y": 10,
+              "z": 4
+            },
+            "right": {
+              "x": 7.5440000000000005,
+              "y": 9.75,
+              "z": 4
+            }
+          }
+        ],
+        "signature": "14;floor-fragment-16;0.000000;4.000000;0.250000;-11.258000,10.000000|7.794000,10.000000|7.544000,9.750000|-11.008000,9.750000;0.000000,-11.258000,10.000000,4.000000,-11.008000,9.750000,4.000000|1.000000,7.794000,10.000000,4.000000,7.544000,9.750000,4.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 19,
+      "floorId": "floor-fragment-16",
+      "fragmentId": "floor-fragment-16",
+      "startPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-23",
+        "x": 7.669,
+        "y": 9.875
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-24",
+        "x": 7.6690000000000005,
+        "y": -6.875
+      },
+      "height": 4,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 7.794,
+            "y": 10
+          },
+          "aRight": {
+            "x": 7.544,
+            "y": 9.75
+          },
+          "bLeft": {
+            "x": 7.7940000000000005,
+            "y": -7
+          },
+          "bRight": {
+            "x": 7.5440000000000005,
+            "y": -6.75
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 7.794,
+              "y": 10,
+              "z": 4
+            },
+            "right": {
+              "x": 7.544,
+              "y": 9.75,
+              "z": 4
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 7.7940000000000005,
+              "y": -7,
+              "z": 4
+            },
+            "right": {
+              "x": 7.5440000000000005,
+              "y": -6.75,
+              "z": 4
+            }
+          }
+        ],
+        "signature": "19;floor-fragment-16;0.000000;4.000000;0.250000;7.794000,10.000000|7.794000,-7.000000|7.544000,-6.750000|7.544000,9.750000;0.000000,7.794000,10.000000,4.000000,7.544000,9.750000,4.000000|1.000000,7.794000,-7.000000,4.000000,7.544000,-6.750000,4.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 20,
+      "floorId": "floor-fragment-16",
+      "fragmentId": "floor-fragment-16",
+      "startPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-24",
+        "x": 7.6690000000000005,
+        "y": -6.875
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "inset": true,
+        "fragmentId": "floor-fragment-16",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-17",
+        "x": -11.133,
+        "y": -6.875
+      },
+      "height": 4,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "interior",
+      "attachment": null,
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 7.7940000000000005,
+            "y": -7
+          },
+          "aRight": {
+            "x": 7.5440000000000005,
+            "y": -6.75
+          },
+          "bLeft": {
+            "x": -11.258,
+            "y": -7
+          },
+          "bRight": {
+            "x": -11.008,
+            "y": -6.75
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 7.7940000000000005,
+              "y": -7,
+              "z": 4
+            },
+            "right": {
+              "x": 7.5440000000000005,
+              "y": -6.75,
+              "z": 4
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -11.258,
+              "y": -7,
+              "z": 4
+            },
+            "right": {
+              "x": -11.008,
+              "y": -6.75,
+              "z": 4
+            }
+          }
+        ],
+        "signature": "20;floor-fragment-16;0.000000;4.000000;0.250000;7.794000,-7.000000|-11.258000,-7.000000|-11.008000,-6.750000|7.544000,-6.750000;0.000000,7.794000,-7.000000,4.000000,7.544000,-6.750000,4.000000|1.000000,-11.258000,-7.000000,4.000000,-11.008000,-6.750000,4.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 22,
+      "floorId": "floor-fragment-26",
+      "fragmentId": "floor-fragment-26",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-27",
+        "x": -8.535,
+        "y": -3.875,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-28",
+        "x": -8.535,
+        "y": 6.875,
+        "inset": true
+      },
+      "height": 6.028998062848377,
+      "thickness": 0.25,
+      "topProfile": {
+        "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.9585111766633743,
+            "rightHeight": 1.9585111766633743
+          },
+          {
+            "t": 0.495623,
+            "leftHeight": 6.028160522554078,
+            "rightHeight": 6.028160522554078
+          },
+          {
+            "t": 0.495725,
+            "leftHeight": 6.028998062848377,
+            "rightHeight": 6.028998062848377
+          },
+          {
+            "t": 0.495822,
+            "leftHeight": 6.028205452754104,
+            "rightHeight": 6.028205452754104
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.888309467473996,
+            "rightHeight": 1.888309467473996
+          }
+        ]
+      },
+      "bottomZ": 4,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "startVertexId": "vertex-27",
+        "endVertexId": "vertex-28"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -8.66,
+            "y": -4
+          },
+          "aRight": {
+            "x": -8.41,
+            "y": -3.75
+          },
+          "bLeft": {
+            "x": -8.66,
+            "y": 7
+          },
+          "bRight": {
+            "x": -8.41,
+            "y": 6.75
+          }
+        },
+        "bottomZ": 4,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -8.66,
+              "y": -4,
+              "z": 5.958511176663374
+            },
+            "right": {
+              "x": -8.41,
+              "y": -3.75,
+              "z": 5.958511176663374
+            }
+          },
+          {
+            "t": 0.495623,
+            "left": {
+              "x": -8.66,
+              "y": 1.4518529999999998,
+              "z": 10.028160522554078
+            },
+            "right": {
+              "x": -8.41,
+              "y": 1.4540414999999998,
+              "z": 10.028160522554078
+            }
+          },
+          {
+            "t": 0.495725,
+            "left": {
+              "x": -8.66,
+              "y": 1.4529750000000003,
+              "z": 10.028998062848377
+            },
+            "right": {
+              "x": -8.41,
+              "y": 1.4551125000000003,
+              "z": 10.028998062848377
+            }
+          },
+          {
+            "t": 0.495822,
+            "left": {
+              "x": -8.66,
+              "y": 1.4540419999999994,
+              "z": 10.028205452754104
+            },
+            "right": {
+              "x": -8.41,
+              "y": 1.456131,
+              "z": 10.028205452754104
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -8.66,
+              "y": 7,
+              "z": 5.888309467473996
+            },
+            "right": {
+              "x": -8.41,
+              "y": 6.75,
+              "z": 5.888309467473996
+            }
+          }
+        ],
+        "signature": "22;floor-fragment-26;4.000000;6.028998;0.250000;-8.660000,-4.000000|-8.660000,7.000000|-8.410000,6.750000|-8.410000,-3.750000;0.000000,-8.660000,-4.000000,5.958511,-8.410000,-3.750000,5.958511|0.495623,-8.660000,1.451853,10.028161,-8.410000,1.454041,10.028161|0.495725,-8.660000,1.452975,10.028998,-8.410000,1.455113,10.028998|0.495822,-8.660000,1.454042,10.028205,-8.410000,1.456131,10.028205|1.000000,-8.660000,7.000000,5.888309,-8.410000,6.750000,5.888309"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 23,
+      "floorId": "floor-fragment-26",
+      "fragmentId": "floor-fragment-26",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-28",
+        "x": -8.535,
+        "y": 6.875,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-29",
+        "x": 5.071,
+        "y": 6.875,
+        "inset": true
+      },
+      "height": 1.9837882971933292,
+      "thickness": 0.25,
+      "topProfile": {
+        "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          }
+        ]
+      },
+      "bottomZ": 4,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "startVertexId": "vertex-28",
+        "endVertexId": "vertex-29"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -8.66,
+            "y": 7
+          },
+          "aRight": {
+            "x": -8.41,
+            "y": 6.75
+          },
+          "bLeft": {
+            "x": 5.196,
+            "y": 7
+          },
+          "bRight": {
+            "x": 4.946,
+            "y": 6.75
+          }
+        },
+        "bottomZ": 4,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -8.66,
+              "y": 7,
+              "z": 5.792830637754664
+            },
+            "right": {
+              "x": -8.41,
+              "y": 6.75,
+              "z": 5.983788297193329
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 5.196,
+              "y": 7,
+              "z": 5.792830637754664
+            },
+            "right": {
+              "x": 4.946,
+              "y": 6.75,
+              "z": 5.983788297193329
+            }
+          }
+        ],
+        "signature": "23;floor-fragment-26;4.000000;1.983788;0.250000;-8.660000,7.000000|5.196000,7.000000|4.946000,6.750000|-8.410000,6.750000;0.000000,-8.660000,7.000000,5.792831,-8.410000,6.750000,5.983788|1.000000,5.196000,7.000000,5.792831,4.946000,6.750000,5.983788"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 24,
+      "floorId": "floor-fragment-26",
+      "fragmentId": "floor-fragment-26",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-29",
+        "x": 5.071,
+        "y": 6.875,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-30",
+        "x": 5.071,
+        "y": -3.875,
+        "inset": true
+      },
+      "height": 6.028998062848375,
+      "thickness": 0.25,
+      "topProfile": {
+        "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.888309467473996,
+            "rightHeight": 1.888309467473996
+          },
+          {
+            "t": 0.504178,
+            "leftHeight": 6.028205452754104,
+            "rightHeight": 6.028205452754104
+          },
+          {
+            "t": 0.504275,
+            "leftHeight": 6.028998062848375,
+            "rightHeight": 6.028998062848375
+          },
+          {
+            "t": 0.504377,
+            "leftHeight": 6.028160522554078,
+            "rightHeight": 6.028160522554078
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.9585111766633743,
+            "rightHeight": 1.9585111766633743
+          }
+        ]
+      },
+      "bottomZ": 4,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "startVertexId": "vertex-29",
+        "endVertexId": "vertex-30"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 5.196,
+            "y": 7
+          },
+          "aRight": {
+            "x": 4.946,
+            "y": 6.75
+          },
+          "bLeft": {
+            "x": 5.196,
+            "y": -4
+          },
+          "bRight": {
+            "x": 4.946,
+            "y": -3.75
+          }
+        },
+        "bottomZ": 4,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 5.196,
+              "y": 7,
+              "z": 5.888309467473996
+            },
+            "right": {
+              "x": 4.946,
+              "y": 6.75,
+              "z": 5.888309467473996
+            }
+          },
+          {
+            "t": 0.504178,
+            "left": {
+              "x": 5.196,
+              "y": 1.4540419999999994,
+              "z": 10.028205452754104
+            },
+            "right": {
+              "x": 4.946,
+              "y": 1.456131,
+              "z": 10.028205452754104
+            }
+          },
+          {
+            "t": 0.504275,
+            "left": {
+              "x": 5.196,
+              "y": 1.4529749999999995,
+              "z": 10.028998062848375
+            },
+            "right": {
+              "x": 4.946,
+              "y": 1.4551124999999994,
+              "z": 10.028998062848375
+            }
+          },
+          {
+            "t": 0.504377,
+            "left": {
+              "x": 5.196,
+              "y": 1.4518530000000007,
+              "z": 10.028160522554078
+            },
+            "right": {
+              "x": 4.946,
+              "y": 1.4540415000000007,
+              "z": 10.028160522554078
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 5.196,
+              "y": -4,
+              "z": 5.958511176663374
+            },
+            "right": {
+              "x": 4.946,
+              "y": -3.75,
+              "z": 5.958511176663374
+            }
+          }
+        ],
+        "signature": "24;floor-fragment-26;4.000000;6.028998;0.250000;5.196000,7.000000|5.196000,-4.000000|4.946000,-3.750000|4.946000,6.750000;0.000000,5.196000,7.000000,5.888309,4.946000,6.750000,5.888309|0.504178,5.196000,1.454042,10.028205,4.946000,1.456131,10.028205|0.504275,5.196000,1.452975,10.028998,4.946000,1.455112,10.028998|0.504377,5.196000,1.451853,10.028161,4.946000,1.454042,10.028161|1.000000,5.196000,-4.000000,5.958511,4.946000,-3.750000,5.958511"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 25,
+      "floorId": "floor-fragment-26",
+      "fragmentId": "floor-fragment-26",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-30",
+        "x": 5.071,
+        "y": -3.875,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-27",
+        "x": -8.535,
+        "y": -3.875,
+        "inset": true
+      },
+      "height": 2.0539900063827066,
+      "thickness": 0.25,
+      "topProfile": {
+        "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          }
+        ]
+      },
+      "bottomZ": 4,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/concrete.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-26",
+        "ring": "outer",
+        "startVertexId": "vertex-30",
+        "endVertexId": "vertex-27"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 5.196,
+            "y": -4
+          },
+          "aRight": {
+            "x": 4.946,
+            "y": -3.75
+          },
+          "bLeft": {
+            "x": -8.66,
+            "y": -4
+          },
+          "bRight": {
+            "x": -8.41,
+            "y": -3.75
+          }
+        },
+        "bottomZ": 4,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 5.196,
+              "y": -4,
+              "z": 5.863032346944041
+            },
+            "right": {
+              "x": 4.946,
+              "y": -3.75,
+              "z": 6.053990006382707
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -8.66,
+              "y": -4,
+              "z": 5.863032346944041
+            },
+            "right": {
+              "x": -8.41,
+              "y": -3.75,
+              "z": 6.053990006382707
+            }
+          }
+        ],
+        "signature": "25;floor-fragment-26;4.000000;2.053990;0.250000;5.196000,-4.000000|-8.660000,-4.000000|-8.410000,-3.750000|4.946000,-3.750000;0.000000,5.196000,-4.000000,5.863032,4.946000,-3.750000,6.053990|1.000000,-8.660000,-4.000000,5.863032,-8.410000,-3.750000,6.053990"
+      }
+    }
+  ],
+  "mountedWallObjects": [
+    {
+      "type": "placedObject",
+      "id": 12,
+      "category": "doors",
+      "texturePath": "/assets/images/doors/door1.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 14,
+      "mountedSectionId": 14,
+      "mountedWallLineGroupId": 14,
+      "mountedWallSectionUnitId": 14,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.14,
+      "height": 2,
+      "zOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "renderDepthOffset": 0,
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [
+            0,
+            0.5
+          ]
+        },
+        {
+          "name": "door",
+          "uRegion": [
+            0.5,
+            1
+          ]
+        }
+      ],
+      "x": -1.7319999999999993,
+      "y": 10,
+      "z": 0,
+      "isOpen": false,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": true,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -2.6046494441547723,
+          "y": 10.0125
+        },
+        {
+          "x": -0.8593505558452262,
+          "y": 10.0125
+        },
+        {
+          "x": -0.8593505558452262,
+          "y": 9.7375
+        },
+        {
+          "x": -2.6046494441547723,
+          "y": 9.7375
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 14,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 24,
+      "mountedSectionId": 24,
+      "mountedWallLineGroupId": 24,
+      "mountedWallSectionUnitId": 24,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.2692307692307692,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 5.196,
+      "y": 3.980769230769231,
+      "z": 6.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 5.196,
+          "y": 4.675063386664179
+        },
+        {
+          "x": 5.196,
+          "y": 3.286475074874283
+        },
+        {
+          "x": 4.946,
+          "y": 3.286475074874283
+        },
+        {
+          "x": 4.946,
+          "y": 4.675063386664179
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 15,
+      "category": "doors",
+      "texturePath": "/assets/images/doors/door1.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 19,
+      "mountedSectionId": 19,
+      "mountedWallLineGroupId": 19,
+      "mountedWallSectionUnitId": 19,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.1486983549970349,
+      "height": 2,
+      "zOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "renderDepthOffset": 0,
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [
+            0,
+            0.5
+          ]
+        },
+        {
+          "name": "door",
+          "uRegion": [
+            0.5,
+            1
+          ]
+        }
+      ],
+      "x": 7.7940000000000005,
+      "y": 1.5,
+      "z": 0,
+      "isOpen": false,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": true,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.806500000000001,
+          "y": 1.9251369086907868
+        },
+        {
+          "x": 7.806500000000001,
+          "y": 1.0748630913092132
+        },
+        {
+          "x": 7.5315,
+          "y": 1.0748630913092132
+        },
+        {
+          "x": 7.5315,
+          "y": 1.9251369086907868
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 16,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 24,
+      "mountedSectionId": 24,
+      "mountedWallLineGroupId": 24,
+      "mountedWallSectionUnitId": 24,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.7307692307692307,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 5.196,
+      "y": -0.98076923076923,
+      "z": 6.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 5.196,
+          "y": -0.28647507487428214
+        },
+        {
+          "x": 5.196,
+          "y": -1.6750633866641778
+        },
+        {
+          "x": 4.946,
+          "y": -1.6750633866641778
+        },
+        {
+          "x": 4.946,
+          "y": -0.28647507487428214
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 17,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 24,
+      "mountedSectionId": 24,
+      "mountedWallLineGroupId": 24,
+      "mountedWallSectionUnitId": 24,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 5.196,
+      "y": 1.5,
+      "z": 5.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 5.196,
+          "y": 2.194294155894948
+        },
+        {
+          "x": 5.196,
+          "y": 0.8057058441050522
+        },
+        {
+          "x": 4.946,
+          "y": 0.8057058441050522
+        },
+        {
+          "x": 4.946,
+          "y": 2.194294155894948
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 18,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 22,
+      "mountedSectionId": 22,
+      "mountedWallLineGroupId": 22,
+      "mountedWallSectionUnitId": 22,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -8.66,
+      "y": 1.5,
+      "z": 6.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -8.66,
+          "y": 0.8057058441050522
+        },
+        {
+          "x": -8.66,
+          "y": 2.194294155894948
+        },
+        {
+          "x": -8.41,
+          "y": 2.194294155894948
+        },
+        {
+          "x": -8.41,
+          "y": 0.8057058441050522
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 19,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 22,
+      "mountedSectionId": 22,
+      "mountedWallLineGroupId": 22,
+      "mountedWallSectionUnitId": 22,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.2692307692307692,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -8.66,
+      "y": -0.9807692307692308,
+      "z": 6.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -8.66,
+          "y": -1.6750633866641786
+        },
+        {
+          "x": -8.66,
+          "y": -0.28647507487428303
+        },
+        {
+          "x": -8.41,
+          "y": -0.28647507487428303
+        },
+        {
+          "x": -8.41,
+          "y": -1.6750633866641786
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 20,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-26",
+      "wallId": 22,
+      "mountedSectionId": 22,
+      "mountedWallLineGroupId": 22,
+      "mountedWallSectionUnitId": 22,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.7307692307692307,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 2.50554457621355,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -8.66,
+      "y": 3.98076923076923,
+      "z": 6.50554457621355,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -8.66,
+          "y": 3.286475074874282
+        },
+        {
+          "x": -8.66,
+          "y": 4.675063386664178
+        },
+        {
+          "x": -8.41,
+          "y": 4.675063386664178
+        },
+        {
+          "x": -8.41,
+          "y": 3.286475074874282
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 21,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 13,
+      "mountedSectionId": 13,
+      "mountedWallLineGroupId": 13,
+      "mountedWallSectionUnitId": 13,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -11.258,
+      "y": 1.5,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -11.258,
+          "y": 0.8057058441050522
+        },
+        {
+          "x": -11.258,
+          "y": 2.194294155894948
+        },
+        {
+          "x": -11.008,
+          "y": 2.194294155894948
+        },
+        {
+          "x": -11.008,
+          "y": 0.8057058441050522
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 22,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 20,
+      "mountedSectionId": 20,
+      "mountedWallLineGroupId": 20,
+      "mountedWallSectionUnitId": 20,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 180,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -1.7319999999999993,
+      "y": -7,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -1.0377058441050515,
+          "y": -7
+        },
+        {
+          "x": -2.426294155894947,
+          "y": -7
+        },
+        {
+          "x": -2.426294155894947,
+          "y": -6.75
+        },
+        {
+          "x": -1.0377058441050515,
+          "y": -6.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 23,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 14,
+      "mountedSectionId": 14,
+      "mountedWallLineGroupId": 14,
+      "mountedWallSectionUnitId": 14,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.1,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -9.252799999999999,
+      "y": 10,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -9.947094155894947,
+          "y": 10
+        },
+        {
+          "x": -8.558505844105051,
+          "y": 10
+        },
+        {
+          "x": -8.558505844105051,
+          "y": 9.75
+        },
+        {
+          "x": -9.947094155894947,
+          "y": 9.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 24,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 14,
+      "mountedSectionId": 14,
+      "mountedWallLineGroupId": 14,
+      "mountedWallSectionUnitId": 14,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.3,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -5.492399999999999,
+      "y": 10,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -6.186694155894947,
+          "y": 10
+        },
+        {
+          "x": -4.798105844105051,
+          "y": 10
+        },
+        {
+          "x": -4.798105844105051,
+          "y": 9.75
+        },
+        {
+          "x": -6.186694155894947,
+          "y": 9.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 25,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 14,
+      "mountedSectionId": 14,
+      "mountedWallLineGroupId": 14,
+      "mountedWallSectionUnitId": 14,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.7,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 2.0283999999999995,
+      "y": 10,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 1.3341058441050517,
+          "y": 10
+        },
+        {
+          "x": 2.7226941558949473,
+          "y": 10
+        },
+        {
+          "x": 2.7226941558949473,
+          "y": 9.75
+        },
+        {
+          "x": 1.3341058441050517,
+          "y": 9.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 26,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 14,
+      "mountedSectionId": 14,
+      "mountedWallLineGroupId": 14,
+      "mountedWallSectionUnitId": 14,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.9,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 0,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 5.788800000000002,
+      "y": 10,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 5.094505844105054,
+          "y": 10
+        },
+        {
+          "x": 6.48309415589495,
+          "y": 10
+        },
+        {
+          "x": 6.48309415589495,
+          "y": 9.75
+        },
+        {
+          "x": 5.094505844105054,
+          "y": 9.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 27,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 20,
+      "mountedSectionId": 20,
+      "mountedWallLineGroupId": 20,
+      "mountedWallSectionUnitId": 20,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.1,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 180,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 5.7888,
+      "y": -7,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 6.483094155894948,
+          "y": -7
+        },
+        {
+          "x": 5.094505844105052,
+          "y": -7
+        },
+        {
+          "x": 5.094505844105052,
+          "y": -6.75
+        },
+        {
+          "x": 6.483094155894948,
+          "y": -6.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 28,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 20,
+      "mountedSectionId": 20,
+      "mountedWallLineGroupId": 20,
+      "mountedWallSectionUnitId": 20,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.3,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 180,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 2.0284000000000004,
+      "y": -7,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 2.7226941558949482,
+          "y": -7
+        },
+        {
+          "x": 1.3341058441050526,
+          "y": -7
+        },
+        {
+          "x": 1.3341058441050526,
+          "y": -6.75
+        },
+        {
+          "x": 2.7226941558949482,
+          "y": -6.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 29,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 20,
+      "mountedSectionId": 20,
+      "mountedWallLineGroupId": 20,
+      "mountedWallSectionUnitId": 20,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.7,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 180,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -5.492399999999998,
+      "y": -7,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -4.79810584410505,
+          "y": -7
+        },
+        {
+          "x": -6.186694155894946,
+          "y": -7
+        },
+        {
+          "x": -6.186694155894946,
+          "y": -6.75
+        },
+        {
+          "x": -4.79810584410505,
+          "y": -6.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 30,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 20,
+      "mountedSectionId": 20,
+      "mountedWallLineGroupId": 20,
+      "mountedWallSectionUnitId": 20,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.9,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 180,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -9.2528,
+      "y": -7,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -8.558505844105053,
+          "y": -7
+        },
+        {
+          "x": -9.947094155894948,
+          "y": -7
+        },
+        {
+          "x": -9.947094155894948,
+          "y": -6.75
+        },
+        {
+          "x": -8.558505844105053,
+          "y": -6.75
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 35,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 19,
+      "mountedSectionId": 19,
+      "mountedWallLineGroupId": 19,
+      "mountedWallSectionUnitId": 19,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.125,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 7.794,
+      "y": 7.78125,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.794,
+          "y": 8.475544155894948
+        },
+        {
+          "x": 7.794,
+          "y": 7.086955844105052
+        },
+        {
+          "x": 7.544,
+          "y": 7.086955844105052
+        },
+        {
+          "x": 7.544,
+          "y": 8.475544155894948
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 36,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 19,
+      "mountedSectionId": 19,
+      "mountedWallLineGroupId": 19,
+      "mountedWallSectionUnitId": 19,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.35714285714285715,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 7.794,
+      "y": 3.8928571428571423,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.794,
+          "y": 4.58715129875209
+        },
+        {
+          "x": 7.794,
+          "y": 3.1985629869621945
+        },
+        {
+          "x": 7.544,
+          "y": 3.1985629869621945
+        },
+        {
+          "x": 7.544,
+          "y": 4.58715129875209
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 37,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 19,
+      "mountedSectionId": 19,
+      "mountedWallLineGroupId": 19,
+      "mountedWallSectionUnitId": 19,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.6428571428571429,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 7.7940000000000005,
+      "y": -0.8928571428571441,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.7940000000000005,
+          "y": -0.19856298696219632
+        },
+        {
+          "x": 7.7940000000000005,
+          "y": -1.587151298752092
+        },
+        {
+          "x": 7.5440000000000005,
+          "y": -1.587151298752092
+        },
+        {
+          "x": 7.5440000000000005,
+          "y": -0.19856298696219632
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 38,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 19,
+      "mountedSectionId": 19,
+      "mountedWallLineGroupId": 19,
+      "mountedWallSectionUnitId": 19,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.875,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": -90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 7.7940000000000005,
+      "y": -4.78125,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.7940000000000005,
+          "y": -4.086955844105052
+        },
+        {
+          "x": 7.7940000000000005,
+          "y": -5.475544155894948
+        },
+        {
+          "x": 7.5440000000000005,
+          "y": -5.475544155894948
+        },
+        {
+          "x": 7.5440000000000005,
+          "y": -4.086955844105052
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 39,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 13,
+      "mountedSectionId": 13,
+      "mountedWallLineGroupId": 13,
+      "mountedWallSectionUnitId": 13,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.21428571428571427,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -11.258,
+      "y": -3.285714285714286,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -11.258,
+          "y": -3.980008441609234
+        },
+        {
+          "x": -11.258,
+          "y": -2.5914201298193382
+        },
+        {
+          "x": -11.008,
+          "y": -2.5914201298193382
+        },
+        {
+          "x": -11.008,
+          "y": -3.980008441609234
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 40,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/window.png",
+      "floorId": "floor-fragment-16",
+      "wallId": 13,
+      "mountedSectionId": 13,
+      "mountedWallLineGroupId": 13,
+      "mountedWallSectionUnitId": 13,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.7857142857142857,
+      "width": 1.3885883117898956,
+      "height": 1.6543134254174314,
+      "zOffset": 1.42353326469164,
+      "rotationAxis": "spatial",
+      "placementRotation": 90,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -11.258,
+      "y": 6.285714285714285,
+      "z": 1.42353326469164,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": -11.258,
+          "y": 5.591420129819337
+        },
+        {
+          "x": -11.258,
+          "y": 6.9800084416092325
+        },
+        {
+          "x": -11.008,
+          "y": 6.9800084416092325
+        },
+        {
+          "x": -11.008,
+          "y": 5.591420129819337
+        }
+      ]
+    }
+  ],
+  "roof": null
+}

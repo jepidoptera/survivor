@@ -16,6 +16,28 @@
         return loadedNodes;
     }
 
+    function updatePrototypeActiveBuildingSelection(map, activeSectionKeys) {
+        const buildingState = map && map._prototypeBuildingState;
+        if (!buildingState || typeof map.setPrototypeBuildingDesiredPlacementIds !== "function") return null;
+        const desiredBuildingIds = new Set();
+        const keys = activeSectionKeys instanceof Set ? activeSectionKeys : new Set();
+        keys.forEach((sectionKey) => {
+            const ids = buildingState.buildingIdsBySectionKey instanceof Map
+                ? buildingState.buildingIdsBySectionKey.get(sectionKey)
+                : null;
+            if (!(ids instanceof Set)) return;
+            ids.forEach((id) => desiredBuildingIds.add(id));
+        });
+        const result = map.setPrototypeBuildingDesiredPlacementIds(desiredBuildingIds);
+        if (desiredBuildingIds.size > 0 && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
+            map.ensurePrototypeBuildingPlacementsForSectionKeys(keys).catch((error) => {
+                buildingState.lastLoadError = error && error.message ? error.message : String(error);
+                console.error("[prototype building layout]", buildingState.lastLoadError);
+            });
+        }
+        return result;
+    }
+
     function setActiveCenter(map, nextCenterKey, deps) {
         const {
             SECTION_DIRECTIONS,
@@ -173,6 +195,7 @@
 
             state.activeSectionKeys = nextActiveKeys;
             state.actualActiveSectionKeys = new Set(nextActiveKeys);
+            updatePrototypeActiveBuildingSelection(map, nextActiveKeys);
             const rebuildLoadedStart = layoutNow();
             if (keysToDeactivateSet.size > 0) {
                 state.loadedNodes = state.loadedNodes.filter((node) => (
@@ -219,6 +242,7 @@
         }
 
         state.activeSectionKeys = nextActiveKeys;
+        updatePrototypeActiveBuildingSelection(map, nextActiveKeys);
         state.pendingLayoutTransition = {
             targetActiveKeys: new Set(nextActiveKeys),
             keysToActivate: keysToActivate.slice(),

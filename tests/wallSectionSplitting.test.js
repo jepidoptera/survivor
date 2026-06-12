@@ -439,6 +439,64 @@ test("_splitVertex endpoint survives _serializeEndpoint → _resolveSerializedEn
     assert.equal(resolved._splitVertex, true, "_splitVertex must survive round-trip");
 });
 
+test("WallSectionUnit save/load preserves generated gabled topProfile", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const WSU = globalThis.WallSectionUnit;
+    WSU._allSections.clear();
+
+    const topProfile = {
+        kind: "stations",
+        generatedBy: {
+            type: "roof",
+            mode: "gabled",
+            roofId: "roof-38",
+            floorId: "floor-fragment-26",
+            plane: {
+                kind: "shedPlane",
+                mode: "gabled",
+                direction: { x: 0, y: -1 },
+                minProjection: -7.7,
+                maxProjection: 4.7,
+                baseZ: 8.029,
+                peakHeight: 8,
+                clearance: 0.001
+            },
+            originalHeight: 4
+        },
+        stations: [
+            { t: 0, leftHeight: 4.1, rightHeight: 4.1 },
+            { t: 0.5, leftHeight: 11, rightHeight: 11 },
+            { t: 1, leftHeight: 4.1, rightHeight: 4.1 }
+        ]
+    };
+    const section = new WSU(
+        { x: -8.66, y: -4, _splitVertex: true },
+        { x: -8.66, y: 7, _splitVertex: true },
+        {
+            map: {},
+            id: 38,
+            height: 11,
+            thickness: 0.25,
+            bottomZ: 5,
+            traversalLayer: 1,
+            topProfile,
+            deferSetup: true
+        }
+    );
+
+    const saved = section.saveJson();
+    assert.deepEqual(saved.topProfile, topProfile);
+
+    WSU._allSections.clear();
+    const restored = WSU.loadJson(saved, {}, { deferSetup: true });
+    assert.ok(restored);
+    assert.deepEqual(restored.topProfile, topProfile);
+
+    const meshData = restored.rebuildMesh3d();
+    assert.equal(meshData.kind, "wallSectionProfiledPrism");
+});
+
 test("preserves scriptingName on all split pieces", () => {
     const nodeA = new TestNode(2, 3);
     nodeA._prototypeSectionKey = "A";
@@ -471,4 +529,107 @@ test("preserves scriptingName on all split pieces", () => {
     }
 });
 
+test("WallSectionUnit joinery ignores walls on different traversal layers", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const WSU = globalThis.WallSectionUnit;
+    WSU._allSections.clear();
 
+    const nodes = buildTestGrid(5, 5);
+    const a = nodes[1][2];
+    const shared = nodes[2][2];
+    const b = nodes[3][2];
+
+    const lower = new WSU(a, shared, {
+        deferSetup: true,
+        bottomZ: 0,
+        traversalLayer: 0,
+        level: 0
+    });
+    const upper = new WSU(shared, b, {
+        deferSetup: true,
+        bottomZ: 3,
+        traversalLayer: 1,
+        level: 1
+    });
+    const lowerNeighbor = new WSU(shared, b, {
+        deferSetup: true,
+        bottomZ: 0,
+        traversalLayer: 0,
+        level: 0
+    });
+
+    assert.equal(lower.sharesEndpointWith(upper), false);
+    assert.equal(lower.connectTo(upper), false);
+    assert.equal(lower.connectTo(lowerNeighbor), true);
+
+    lower.connections.clear();
+    lowerNeighbor.connections.clear();
+    WSU.batchHandleJoinery([lower, upper, lowerNeighbor]);
+
+    assert.equal(lower.connections.has(upper.id), false);
+    assert.equal(upper.connections.size, 0);
+    assert.equal(lower.connections.has(lowerNeighbor.id), true);
+
+    WSU._allSections.clear();
+});
+
+test("WallSectionUnit registers upper-layer walls to nodes touched by their ground hitbox", () => {
+    delete require.cache[require.resolve("../public/assets/javascript/gameobjects/wallSectionUnit.js")];
+    require("../public/assets/javascript/gameobjects/wallSectionUnit.js");
+    const WSU = globalThis.WallSectionUnit;
+    WSU._allSections.clear();
+
+    const baseNode = new TestNode(10, 10);
+    baseNode._prototypeSectionKey = "0,0";
+    const upperNode = new TestNode(10, 10);
+    upperNode.traversalLayer = 1;
+    upperNode.level = 1;
+    upperNode.sourceNode = baseNode;
+    upperNode.objects = [];
+    upperNode.addObject = function addObject(obj) {
+        this.objects.push(obj);
+    };
+    upperNode.removeObject = function removeObject(obj) {
+        const index = this.objects.indexOf(obj);
+        if (index >= 0) this.objects.splice(index, 1);
+    };
+    const outsideStart = new TestNode(99, 99);
+    const outsideEnd = new TestNode(100, 99);
+    const map = {
+        worldToNode() {
+            return baseNode;
+        },
+        getNodesInIndexWindow() {
+            return [baseNode];
+        },
+        getFloorNodeAtLayer(xindex, yindex, layer) {
+            return Number(xindex) === 10 && Number(yindex) === 10 && Number(layer) === 1
+                ? upperNode
+                : null;
+        }
+    };
+
+    const wall = new WSU(outsideStart, outsideEnd, {
+        deferSetup: true,
+        map,
+        bottomZ: 3,
+        traversalLayer: 1,
+        level: 1,
+        thickness: 0.35
+    });
+    wall._collectCenterlineMapNodes = () => [];
+    wall.groundPlaneHitbox = {
+        getBounds() {
+            return { x: baseNode.x - 0.1, y: baseNode.y - 0.1, width: 0.2, height: 0.2 };
+        }
+    };
+
+    wall.addToMapNodes({ applyDirectionalBlocking: false });
+
+    assert.equal(upperNode.objects.includes(wall), true);
+    assert.equal(wall.nodes.includes(upperNode), true);
+
+    wall.removeFromMapNodes();
+    WSU._allSections.clear();
+});

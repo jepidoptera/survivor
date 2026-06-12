@@ -10,6 +10,7 @@
             comparePrototypeTileCoordKeys,
             clonePrototypeFloorTransitions,
             computeSectionCenterAxial,
+            createPrototypeImplicitGroundFloorFragment,
             evenQOffsetToAxial,
             getSectionBasisVectors,
             getSectionCoordsInRingRange,
@@ -96,6 +97,9 @@
         }
 
         function buildPrototypeSectionAssets(sectionRecords, radius) {
+            const basis = (sectionRecords && sectionRecords.basis)
+                ? sectionRecords.basis
+                : getSectionBasisVectors(radius);
             const sectionsByKey = sectionRecords && sectionRecords.sectionsByKey instanceof Map
                 ? sectionRecords.sectionsByKey
                 : new Map();
@@ -141,13 +145,20 @@
                     groundTextureId: 0,
                     groundTiles: {},
                     floors: [],
+                    floorHoles: [],
+                    floorVoids: [],
                     walls: [],
                     blockedEdges: [],
                     clearanceByTile: {},
                     objects: [],
                     animals: [],
-                    powerups: []
+                    powerups: [],
+                    buildingRefs: []
                 };
+                const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
+                    ? createPrototypeImplicitGroundFloorFragment(asset, basis)
+                    : null;
+                if (groundFloor) asset.floors.push(groundFloor);
                 asset._prototypeBlockedEdgesDirty = false;
                 asset._prototypeClearanceDirty = true;
                 asset._prototypeNamedObjectRecordIdByName = new Map();
@@ -206,13 +217,20 @@
                 groundTextureId: 0,
                 groundTiles: normalizePrototypeGroundTiles(null, tileCoordKeys, getPrototypeGroundTextureCount(map)),
                 floors: [],
+                floorHoles: [],
+                floorVoids: [],
                 walls: [],
                 blockedEdges: [],
                 clearanceByTile: {},
                 objects: [],
                 animals: [],
-                powerups: []
+                powerups: [],
+                buildingRefs: []
             };
+            const groundFloor = typeof createPrototypeImplicitGroundFloorFragment === "function"
+                ? createPrototypeImplicitGroundFloorFragment(asset, basis)
+                : null;
+            if (groundFloor) asset.floors.push(groundFloor);
             asset._prototypeBlockedEdgesDirty = false;
             asset._prototypeClearanceDirty = true;
             asset._prototypeNamedObjectRecordIdByName = new Map();
@@ -299,6 +317,9 @@
                             ? record.coverageSectionKeys.slice()
                             : []
                     }))
+                    : [],
+                buildingPlacements: Array.isArray(sectionStateSource.buildingPlacements)
+                    ? sectionStateSource.buildingPlacements.map((record) => JSON.parse(JSON.stringify(record)))
                     : [],
                 hysteresisRatio: 0.1,
                 useSparseNodes: true,

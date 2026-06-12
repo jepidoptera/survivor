@@ -38,6 +38,8 @@ function loadDebugContext() {
                 return nowMs;
             }
         },
+        FLOOR_LAYER_DEFAULT_HEIGHT_UNITS: 3,
+        Character: class Character {},
         WallSectionUnit: {
             _showDirectionalBlockingDebug: false,
             _showBottomFaceOnlyDebug: false,
@@ -51,6 +53,7 @@ function loadDebugContext() {
     };
     context.window = context;
     context.globalThis = context;
+    context.Wizard = class Wizard extends context.Character {};
 
     vm.createContext(context);
     const debugSource = fs.readFileSync(
@@ -71,6 +74,32 @@ test("performance instrumentation stays off by default and exposes re-enable hel
     assert.match(helpText, /OFF by default/);
     assert.match(helpText, /Ctrl\+F/);
     assert.match(helpText, /DebugView\.setPerfInstrumentationEnabled\(true\)/);
+});
+
+test("debug hitbox projection keeps character z absolute on floor layers", () => {
+    const context = loadDebugContext();
+    const actor = new context.Character();
+    actor.z = -6;
+    actor.traversalLayer = -2;
+
+    assert.equal(context.resolveDebugHitboxWorldZ(actor), -6);
+});
+
+test("debug hitbox projection adds wizard floor base to local jump z", () => {
+    const context = loadDebugContext();
+    const wizard = new context.Wizard();
+    wizard.z = 0.5;
+    wizard.currentLayer = -2;
+    wizard.currentLayerBaseZ = -6;
+
+    assert.equal(context.resolveDebugHitboxWorldZ(wizard), -5.5);
+});
+
+test("debug hitbox projection adds layer base for non-character objects", () => {
+    const context = loadDebugContext();
+
+    assert.equal(context.resolveDebugHitboxWorldZ({ z: 0, traversalLayer: -2 }), -6);
+    assert.equal(context.resolveDebugHitboxWorldZ({ z: 0.5, traversalLayer: 1 }), 3.5);
 });
 
 test("performance samples are collected only after instrumentation is enabled", () => {

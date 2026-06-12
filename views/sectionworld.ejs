@@ -3,13 +3,19 @@
 <head>
     <script src="jquery/jquery.min.js"></script>
     <script src="pixi.js/pixi.js"></script>
+    <script src="/vendor/earcut/dist/earcut.min.js"></script>
+    <script src="/vendor/polygon-clipping/dist/polygon-clipping.umd.min.js"></script>
     <script src="assets/javascript/common.js"></script>
     <script src="assets/javascript/components.js"></script>
     <script src="assets/javascript/gameobjects/hitbox.js"></script>
     <script src="assets/javascript/gameobjects/powerup.js"></script>
+    <script src="assets/javascript/shared/StairTraversal.js"></script>
     <script src="assets/javascript/Map.js"></script>
     <script src="assets/javascript/gameobjects/staticObjects.js"></script>
+    <script src="assets/javascript/wallGeometry.js"></script>
     <script src="assets/javascript/gameobjects/wallSectionUnit.js"></script>
+    <script src="assets/javascript/gameobjects/columnUnit.js"></script>
+    <script src="assets/javascript/placeObjectPlacement.js"></script>
     <script src="assets/javascript/los.js"></script>
     <script src="assets/javascript/gameobjects/roof.js"></script>
     <script src="/vendor/lz-string/libs/lz-string.min.js"></script>
@@ -33,6 +39,8 @@
     <script src="assets/javascript/spells/AttackSquirrel.js"></script>
     <script src="assets/javascript/spells/SpawnAnimal.js"></script>
     <script src="assets/javascript/spells/NodeInspector.js"></script>
+    <script src="assets/javascript/spells/FloorFragmentEdit.js"></script>
+    <script src="assets/javascript/spells/FloorStairs.js"></script>
     <script src="assets/javascript/spells.js"></script>
     <script src="assets/javascript/debug.js"></script>
     <script src="assets/javascript/rendering/RenderRuntime.js"></script>
@@ -56,6 +64,7 @@
     <script src="assets/javascript/prototypes/sectionWorldAssets.js"></script>
     <script src="assets/javascript/prototypes/sectionWorldState.js"></script>
     <script src="assets/javascript/prototypes/sectionWorldImport.js"></script>
+    <script src="assets/javascript/prototypes/sectionWorldBuildings.js"></script>
     <script src="assets/javascript/prototypes/sectionWorld.js"></script>
     <script>
         window.RUNAROUND_STARTUP_CONFIG = {
@@ -78,6 +87,7 @@
     <script src="assets/javascript/rendering/Layers.js"></script>
     <script src="assets/javascript/rendering/mazeMode.js"></script>
     <script src="assets/javascript/rendering/ScenePicker.js"></script>
+    <script src="assets/javascript/rendering/BuildingInteriorView.js"></script>
     <script src="assets/javascript/rendering/Rendering.js"></script>
     <link rel="icon" type="image/png" href="assets/images/wizard-hat-favicon.png">
     <link rel="stylesheet" href="assets/css/survivor.css">

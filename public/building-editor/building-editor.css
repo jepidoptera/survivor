@@ -1,0 +1,881 @@
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #101820;
+    color: #f4f2e8;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+}
+
+.appShell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    width: 100%;
+    height: 100%;
+}
+
+.toolCluster {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-right: 4px;
+}
+
+button {
+    min-height: 34px;
+    border: 1px solid #566775;
+    border-radius: 6px;
+    background: #22313a;
+    color: #f4f2e8;
+    cursor: pointer;
+}
+
+button:hover,
+button[data-active="true"] {
+    border-color: #9fe4d5;
+    background: #2e4b4d;
+}
+
+button:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+.iconTool {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    min-width: 38px;
+    padding: 4px;
+}
+
+.iconTool img {
+    width: 23px;
+    height: 23px;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.texturePalette {
+    display: grid;
+    position: fixed;
+    z-index: 20;
+    grid-template-columns: repeat(var(--texture-column-count, 1), 76px);
+    gap: 6px;
+    padding: 7px;
+    width: max-content;
+    overflow: auto;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #101820;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36);
+}
+
+.textureSwatch {
+    display: grid;
+    place-items: center;
+    min-height: 68px;
+    width: 76px;
+    height: 76px;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.textureSwatch[data-selected="true"] {
+    border-color: #ffd27a;
+    background: #3c3323;
+}
+
+.textureSwatch img {
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 3px;
+    pointer-events: none;
+}
+
+.stairTextureButton {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    justify-content: center;
+    min-width: 66px;
+}
+
+.stairTextureIcon {
+    line-height: 1;
+}
+
+.contextMenu {
+    position: fixed;
+    z-index: 30;
+    display: grid;
+    gap: 2px;
+    min-width: 150px;
+    padding: 7px;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #101820;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36);
+}
+
+.contextMenu[hidden] {
+    display: none !important;
+}
+
+.contextMenuTitle {
+    padding: 3px 7px 5px;
+    color: #b8c5cc;
+    font-size: 12px;
+    text-transform: lowercase;
+}
+
+.contextMenuSeparator {
+    height: 1px;
+    margin: 1px 0 4px;
+    background: #44545f;
+}
+
+.contextMenu button {
+    min-height: 0;
+    padding: 3px 7px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #b8c5cc;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    text-transform: lowercase;
+}
+
+.contextMenu button:hover {
+    background: transparent;
+    color: #f4f2e8;
+}
+
+.workspace {
+    display: grid;
+    grid-template-rows: 62px minmax(0, 1fr) 34px;
+    min-width: 0;
+    min-height: 0;
+}
+
+.controlBar {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+    box-sizing: border-box;
+    height: 62px;
+    min-height: 62px;
+    max-height: 62px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #192730;
+    border-bottom: 1px solid #31424d;
+}
+
+label {
+    display: grid;
+    gap: 4px;
+    color: #b8c5cc;
+    font-size: 12px;
+}
+
+input,
+select,
+textarea {
+    border: 1px solid #566775;
+    border-radius: 4px;
+    background: #0f161c;
+    color: #f4f2e8;
+}
+
+input,
+select {
+    height: 30px;
+    padding: 0 8px;
+}
+
+input[type="number"] {
+    width: 96px;
+}
+
+input[type="range"] {
+    width: 130px;
+    padding: 0;
+}
+
+.toolValue {
+    align-self: center;
+    width: 70px;
+    min-width: 70px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.checkLabel {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    gap: 6px;
+    padding-bottom: 1px;
+}
+
+.checkLabel input {
+    width: 16px;
+    height: 16px;
+}
+
+.toolRadioGroup {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: #b8c5cc;
+    font-size: 12px;
+}
+
+.toolRadioGroup legend {
+    padding: 0;
+}
+
+.toolRadioGroup label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.toolRadioGroup label.toolRadioDisabled {
+    color: #6f818c;
+}
+
+.toolRadioGroup input {
+    width: 16px;
+    height: 16px;
+}
+
+#stageHost {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    touch-action: none;
+    outline: none;
+}
+
+.playtestFpsCounter {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    min-width: 56px;
+    padding: 3px 7px;
+    border: 1px solid rgba(159, 228, 213, 0.55);
+    border-radius: 4px;
+    background: rgba(10, 18, 24, 0.72);
+    color: #dff8f2;
+    font-size: 12px;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    pointer-events: none;
+    user-select: none;
+}
+
+.stageFrame {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+}
+
+.sideToolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px;
+    background: #17232b;
+    border-right: 1px solid #31424d;
+}
+
+.sideToolButton[data-active="true"] {
+    border-color: #ffd27a;
+    background: #3c3323;
+}
+
+.sideToolButton {
+    width: 91px;
+    min-width: 91px;
+    min-height: 91px;
+    padding: 8px;
+}
+
+.sideToolButton img {
+    width: 55px;
+    height: 55px;
+    object-fit: contain;
+}
+
+.structureToolIcon {
+    display: grid;
+    place-items: center;
+    width: 55px;
+    height: 55px;
+    pointer-events: none;
+}
+
+.structureToolIcon > * {
+    pointer-events: none;
+}
+
+.structureToolMenu {
+    position: fixed;
+    z-index: 35;
+    display: flex;
+    gap: 6px;
+    padding: 7px;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #101820;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36);
+}
+
+.structureToolMenuButton {
+    width: 54px;
+    min-width: 54px;
+    min-height: 54px;
+    padding: 5px;
+}
+
+.structureToolMenuButton[data-active="true"] {
+    border-color: #ffd27a;
+    background: #3c3323;
+}
+
+.structureToolMenuButton .wallToolIcon,
+.structureToolMenuButton .beamToolIcon,
+.structureToolMenuButton .columnToolIcon {
+    width: 40px;
+    height: 40px;
+}
+
+.structureToolMenuButton .beamToolIcon::after {
+    width: 36px;
+    height: 10px;
+}
+
+.structureToolMenuButton .columnToolIcon::after {
+    width: 14px;
+    height: 34px;
+}
+
+.playtestToolButton[data-active="true"] {
+    border-color: #9fe4d5;
+    background: #233b3c;
+}
+
+.playtestTopButton {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: auto;
+    box-shadow: -8px 0 12px #192730;
+}
+
+.wallToolIcon {
+    display: block;
+    width: 55px;
+    height: 55px;
+    border: 2px solid #d8e0d8;
+    border-radius: 4px;
+    background-color: #4d5653;
+    background-position: center;
+    background-size: cover;
+    box-shadow:
+        inset 0 0 0 4px rgba(16, 24, 28, 0.3),
+        inset 0 0 16px rgba(0, 0, 0, 0.32);
+}
+
+.roofToolIcon {
+    --roof-tool-texture: url("/assets/images/roofs/slate.png");
+    position: relative;
+    display: block;
+    width: 62px;
+    height: 52px;
+}
+
+.roofToolIcon::before,
+.roofToolIcon::after {
+    content: "";
+    position: absolute;
+    z-index: 4;
+    height: 2px;
+    background: #f4f2e8;
+    box-shadow: 0 1px 0 #111820;
+    transform-origin: left center;
+}
+
+.roofToolIcon::before {
+    left: 45px;
+    top: 2px;
+    width: 24px;
+    transform: rotate(57deg);
+}
+
+.roofToolIcon::after {
+    left: 31px;
+    top: 50px;
+    width: 39px;
+    transform: rotate(-47deg);
+}
+
+.roofToolFace {
+    position: absolute;
+    inset: 0;
+}
+
+.roofToolFaceTextured {
+    z-index: 1;
+    background-image: var(--roof-tool-texture);
+    background-position: center;
+    background-size: cover;
+    clip-path: polygon(18px 30px, 45px 2px, 58px 22px, 31px 50px);
+    filter: drop-shadow(0 0 0 #f4f2e8);
+}
+
+.roofToolFaceShade {
+    z-index: 2;
+    background: #697278;
+    clip-path: polygon(18px 30px, 5px 50px, 31px 50px);
+    filter:
+        drop-shadow(1px 0 0 #d8e0d8)
+        drop-shadow(-1px 0 0 #d8e0d8)
+        drop-shadow(0 -1px 0 #d8e0d8)
+        drop-shadow(0 1px 0 #111820);
+}
+
+.roofToolRidge {
+    position: absolute;
+    left: 18px;
+    top: 30px;
+    z-index: 4;
+    width: 39px;
+    height: 2px;
+    background: #f4f2e8;
+    box-shadow: 0 1px 0 #111820;
+    transform: rotate(-47deg);
+    transform-origin: left center;
+}
+
+.beamToolIcon {
+    --beam-tool-texture: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 55px;
+    height: 55px;
+}
+
+.beamToolIcon::after {
+    content: "";
+    display: block;
+    width: 49px;
+    height: 14px;
+    border: 2px solid #d8e0d8;
+    border-radius: 3px;
+    background-color: #4d5653;
+    background-image: var(--beam-tool-texture);
+    background-position: center;
+    background-size: cover;
+    box-shadow:
+        inset 0 0 0 3px rgba(16, 24, 28, 0.3),
+        inset 0 0 10px rgba(0, 0, 0, 0.32),
+        0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.columnToolIcon {
+    --column-tool-texture: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 55px;
+    height: 55px;
+}
+
+.columnToolIcon::after {
+    content: "";
+    display: block;
+    width: 18px;
+    height: 46px;
+    border: 2px solid #d8e0d8;
+    border-radius: 3px;
+    background-color: #4d5653;
+    background-image: var(--column-tool-texture);
+    background-position: center;
+    background-size: cover;
+    box-shadow:
+        inset 0 0 0 3px rgba(16, 24, 28, 0.3),
+        inset 0 0 10px rgba(0, 0, 0, 0.32),
+        2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.stairToolIcon {
+    --stair-tool-texture: none;
+    position: relative;
+    display: block;
+    width: 55px;
+    height: 55px;
+}
+
+.stairToolIcon::before,
+.stairToolIcon::after {
+    content: "";
+    position: absolute;
+    left: 6px;
+    width: 43px;
+    border: 2px solid #d8e0d8;
+    border-radius: 3px;
+    background-color: #4d5653;
+    background-image: var(--stair-tool-texture);
+    background-position: center;
+    background-size: cover;
+    box-shadow:
+        inset 0 0 0 3px rgba(16, 24, 28, 0.3),
+        inset 0 0 10px rgba(0, 0, 0, 0.32),
+        2px 2px 4px rgba(0, 0, 0, 0.5);
+    transform: skewY(-18deg);
+}
+
+.stairToolIcon::before {
+    top: 11px;
+    height: 13px;
+}
+
+.stairToolIcon::after {
+    top: 29px;
+    height: 13px;
+}
+
+.roofToolButton:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+#stageHost canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.statusBar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 0 12px;
+    background: #17222b;
+    border-top: 1px solid #31424d;
+    color: #b8c5cc;
+    font-size: 13px;
+}
+
+#statusText[data-error="true"] {
+    color: #ff9c85;
+}
+
+.inspector {
+    display: grid;
+    grid-template-rows: 360px minmax(0, 1fr);
+    gap: 14px;
+    min-height: 0;
+    padding: 12px;
+    background: #1d2b32;
+    border-left: 1px solid #31424d;
+}
+
+.inspector section {
+    display: grid;
+    gap: 8px;
+}
+
+.layerSection {
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+}
+
+.layerPanel {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #566775;
+    border-radius: 6px;
+    background: #0f161c;
+}
+
+.layerRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 30px;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.layerRow[data-dragging="true"] {
+    opacity: 0.48;
+}
+
+.layerRow[data-drop-position="before"] {
+    border-top: 2px solid #ffd27a;
+    padding-top: 4px;
+}
+
+.layerRow[data-drop-position="after"] {
+    border-bottom: 2px solid #ffd27a;
+    padding-bottom: 4px;
+}
+
+.layerCard {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-height: 58px;
+    width: 100%;
+    padding: 7px;
+    text-align: left;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #17232b;
+    cursor: pointer;
+}
+
+.layerCard svg,
+.layerCard polygon,
+.layerCard rect,
+.layerCard .layerMeta {
+    pointer-events: none;
+}
+
+.layerDeleteButton {
+    display: grid;
+    place-items: center;
+    align-self: stretch;
+    min-height: 58px;
+    width: 30px;
+    padding: 0;
+    border-color: #5c3e3b;
+    background: #221b1d;
+    color: #ffb2a3;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.layerDeleteButton:hover {
+    border-color: #ff9c85;
+    background: #422321;
+}
+
+.layerCard[data-selected="true"] {
+    border-color: #9fe4d5;
+    background: #213a3d;
+}
+
+.layerCard:hover {
+    border-color: #9fe4d5;
+    background: #20343a;
+}
+
+.layerCard[data-all-selected="true"] {
+    border-color: #d6cfb5;
+}
+
+.layerPreview {
+    display: block;
+    width: 92px;
+    height: 42px;
+    border: 1px solid #33444d;
+    border-radius: 4px;
+    background: #101820;
+}
+
+.layerName {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    color: #f4f2e8;
+    font-size: 12px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.layerCard[data-selected="true"] .layerName {
+    cursor: text;
+}
+
+.layerNameInput {
+    width: 100%;
+    min-width: 0;
+    height: 24px;
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.layerMeta {
+    display: block;
+    color: #93a5ad;
+    font-size: 11px;
+}
+
+h2 {
+    margin: 0;
+    color: #f4f2e8;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.jsonSection {
+    min-height: 0;
+}
+
+textarea {
+    width: 100%;
+    min-height: 0;
+    padding: 10px;
+    resize: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.buttonRow {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.modalOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    padding: 22px;
+    background: rgba(8, 12, 16, 0.72);
+}
+
+.modalPanel {
+    display: grid;
+    gap: 12px;
+    width: min(460px, 100%);
+    max-height: min(620px, calc(100vh - 44px));
+    padding: 16px;
+    border: 1px solid #566775;
+    border-radius: 8px;
+    background: #17232b;
+    box-shadow: 0 20px 54px rgba(0, 0, 0, 0.48);
+}
+
+.modalMessage {
+    min-height: 18px;
+    color: #b8c5cc;
+    font-size: 13px;
+}
+
+.modalMessage[data-error="true"] {
+    color: #ff9c85;
+}
+
+.buildingSaveList {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-height: 108px;
+    max-height: 360px;
+    overflow-y: auto;
+    padding: 8px;
+    border: 1px solid #44545f;
+    border-radius: 6px;
+    background: #0f161c;
+}
+
+.buildingSaveButton {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    padding: 9px 10px;
+    text-align: left;
+}
+
+.buildingSaveName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.buildingSaveMeta {
+    color: #93a5ad;
+    font-size: 12px;
+}
+
+.modalButtonRow {
+    display: flex;
+    justify-content: end;
+    gap: 8px;
+}
+
+.modalButtonRow button {
+    min-width: 96px;
+    padding: 0 12px;
+}
+
+.modalField {
+    gap: 7px;
+}
+
+.modalField input {
+    width: 100%;
+}
+
+@media (max-width: 900px) {
+    .appShell {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .inspector {
+        display: none;
+    }
+
+    .controlBar {
+        flex-wrap: nowrap;
+    }
+}

@@ -234,6 +234,196 @@ test("loadGameState re-syncs prototype animals and powerups after loading sectio
     assert.equal(counters.powerups, 1);
 });
 
+test("loadGameState skips stale upper-floor placed objects from legacy static object payload", () => {
+    const map = createRectMap();
+    const calls = {
+        ensureFloorBuildings: 0,
+        staticObjects: []
+    };
+    const liveFragmentId = "floor_area:-4,0:4:0";
+    const staleFragmentId = "floor_area:-4,0:7:0";
+    map.objects = [];
+    map.floorBuildingByFragmentId = new Map([[liveFragmentId, { placementId: "building:live" }]]);
+    map.ensureFloorBuildings = () => {
+        calls.ensureFloorBuildings += 1;
+    };
+    map.loadPrototypeSectionWorld = () => true;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = { loadJson() {} };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = {
+        loadJson(data) {
+            calls.staticObjects.push(data);
+            return null;
+        }
+    };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args);
+    try {
+        const loaded = filesystem.loadGameState({
+            wizard: { x: 0, y: 0 },
+            animals: [],
+            powerups: [],
+            staticObjects: [
+                {
+                    type: "placedObject",
+                    category: "Rugs",
+                    x: 12,
+                    y: 34,
+                    level: 1,
+                    fragmentId: staleFragmentId,
+                    surfaceId: staleFragmentId
+                },
+                {
+                    type: "placedObject",
+                    category: "Rugs",
+                    x: 16,
+                    y: 38,
+                    level: 1,
+                    fragmentId: liveFragmentId,
+                    surfaceId: liveFragmentId
+                }
+            ],
+            prototypeSectionWorld: {
+                version: 1,
+                activeCenterKey: "0,0",
+                sections: []
+            }
+        });
+
+        assert.equal(loaded, true);
+        assert.equal(calls.ensureFloorBuildings > 0, true);
+        assert.equal(calls.staticObjects.length, 1);
+        assert.equal(calls.staticObjects[0].fragmentId, liveFragmentId);
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0][0], "[static object restore] skipped orphaned upper-floor placed object records");
+        assert.deepEqual(warnings[0][1], {
+            count: 1,
+            samples: [{
+                type: "placedObject",
+                fragmentId: staleFragmentId,
+                surfaceId: staleFragmentId,
+                level: 1,
+                x: 12,
+                y: 34
+            }]
+        });
+    } finally {
+        console.warn = originalWarn;
+    }
+});
+
+test("loaded wizard stair support waits for pending prototype building geometry", async () => {
+    const counters = {
+        ensureBuildings: 0,
+        restore: 0,
+        geometry: 0
+    };
+    const map = createRectMap();
+    map.stairsById = new Map();
+    map.loadPrototypeSectionWorld = () => true;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+    map.syncPrototypeBuildingPlacementRefs = () => true;
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeBubbleSectionKeys = () => ["0,0", "1,0"];
+    map.getPrototypeSectionKeyForWorldPoint = () => "0,0";
+    map.ensurePrototypeBuildingPlacementsForSectionKeys = async (sectionKeys) => {
+        counters.ensureBuildings += 1;
+        assert.equal(sectionKeys.has("0,0"), true);
+        await Promise.resolve();
+        map.stairsById.set("building:house:stair:floor-0:0", { id: "building:house:stair:floor-0:0" });
+        return [{ id: "building:house" }];
+    };
+    map.syncPrototypeBuildingGeometryRuntime = () => {
+        counters.geometry += 1;
+        return { placements: 1, floors: 2, stairs: map.stairsById.size, pending: 0 };
+    };
+    map.updatePrototypeSectionBubble = () => true;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        loadJson(data) {
+            this.x = data.x;
+            this.y = data.y;
+            this._pendingSavedStairSupport = { stairId: data.stairSupport.stairId };
+        },
+        hasPendingSavedMovementSupport() {
+            return !!this._pendingSavedStairSupport;
+        },
+        restoreSavedMovementSupport(options = {}) {
+            counters.restore += 1;
+            const stairId = this._pendingSavedStairSupport && this._pendingSavedStairSupport.stairId;
+            if (!map.stairsById.has(stairId)) {
+                if (options.deferIfMissing === true) return null;
+                throw new Error(`wizard save references missing stair ${stairId}`);
+            }
+            this._pendingSavedStairSupport = null;
+            this._stairSupport = { stairId };
+            return { type: "stair", stairId };
+        }
+    };
+
+    globalThis.map = map;
+    globalThis.wizard = wizard;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const loaded = filesystem.loadGameState({
+        wizard: {
+            x: 12,
+            y: 34,
+            stairSupport: { stairId: "building:house:stair:floor-0:0" }
+        },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        prototypeSectionWorld: {
+            version: 1,
+            activeCenterKey: "0,0",
+            sections: []
+        }
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(wizard.hasPendingSavedMovementSupport(), true);
+    assert.equal(counters.restore, 1, "core load should only try a deferrable restore");
+
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(counters.ensureBuildings, 1);
+    assert.equal(counters.geometry, 1);
+    assert.equal(wizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(wizard._stairSupport.stairId, "building:house:stair:floor-0:0");
+});
+
 test("savePrototypeSectionWorldToServerSlot syncs animals and powerups before export", async () => {
     const calls = [];
 
@@ -368,4 +558,79 @@ test("saveGameState stores prototype trigger definitions at the world level", ()
         }
     ]);
     assert.deepEqual(saveData.prototypeSectionWorld.sections[0].objects, []);
+});
+
+test("saveGameState stores prototype building placements at the world level with section refs", () => {
+    const buildingRecord = {
+        schema: "survivor-building-placement-v1",
+        id: "building:test-house",
+        buildingSaveName: "test house",
+        transform: { x: 10, y: 20, rotation: 0 },
+        footprintPolygons: [[
+            { x: 8, y: 18 },
+            { x: 12, y: 18 },
+            { x: 12, y: 22 },
+            { x: 8, y: 22 }
+        ]],
+        overlappedSectionKeys: ["0,0"],
+        loadState: "unloaded"
+    };
+    const prototypeSectionAsset = {
+        id: "section-0",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: 0, y: 0 },
+        neighborKeys: [],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: [],
+        buildingRefs: [
+            { id: "building:test-house", buildingSaveName: "test house" }
+        ]
+    };
+
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 3,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]])
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = () => prototypeSectionAsset;
+    map.exportPrototypeBuildingPlacements = () => [buildingRecord];
+    map.syncPrototypeBuildingPlacementRefs = () => {
+        prototypeSectionAsset.buildingRefs = [
+            { id: "building:test-house", buildingSaveName: "test house" }
+        ];
+        return true;
+    };
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+
+    assert.deepEqual(saveData.prototypeSectionWorld.buildings, [buildingRecord]);
+    assert.deepEqual(saveData.prototypeSectionWorld.sections[0].buildingRefs, [
+        { id: "building:test-house", buildingSaveName: "test house" }
+    ]);
 });

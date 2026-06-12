@@ -360,6 +360,22 @@ function collectNodeSourcesForSave(mapRef, options = {}) {
             sources.push({ type: "prototype", nodes: prototypeNodes });
         }
     }
+    if (mapRef && mapRef.floorNodesById instanceof Map) {
+        const floorNodes = [];
+        const seenNodes = new Set();
+        for (const nodes of mapRef.floorNodesById.values()) {
+            if (!Array.isArray(nodes)) continue;
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                if (!node || seenNodes.has(node)) continue;
+                seenNodes.add(node);
+                floorNodes.push(node);
+            }
+        }
+        if (floorNodes.length > 0) {
+            sources.push({ type: "floor", nodes: floorNodes });
+        }
+    }
     return sources;
 }
 
@@ -1017,13 +1033,7 @@ function loadGameStateFromLocalStorageKey(saveKey) {
     if (!parsed.ok) return parsed;
     const loaded = loadGameState(parsed.data);
     if (!loaded) {
-        return {
-            ok: false,
-            reason: "load-failed",
-            error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                ? globalThis.lastLoadGameStateError
-                : null
-        };
+        return getLastLoadGameStateFailureResult();
     }
     setActiveLocalSaveSlotKey(parsed.key);
     if (wizard) {
@@ -1036,6 +1046,15 @@ function loadGameStateFromLocalStorageKey(saveKey) {
         }
     }
     return { ok: true, key: parsed.key, data: parsed.data };
+}
+
+async function loadGameStateFromLocalStorageKeyAsync(saveKey) {
+    const result = loadGameStateFromLocalStorageKey(saveKey);
+    if (!result || !result.ok) return result;
+    if (!await finalizeLoadedGameStateAsync()) {
+        return getLastLoadGameStateFailureResult();
+    }
+    return result;
 }
 
 function saveGameStateToIndexedDb(saveKey) {
@@ -1191,7 +1210,7 @@ function getIndexedDbSavedGameState(saveKey = null) {
 }
 
 function loadGameStateFromIndexedDbKey(saveKey) {
-    return getIndexedDbSavedGameState(saveKey).then(parsed => {
+    return getIndexedDbSavedGameState(saveKey).then(async parsed => {
         if (!parsed || !parsed.ok) return parsed || { ok: false, reason: "missing" };
         if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
             globalThis.markPrototypeStartupPerf("indexeddb-save-data-ready", {
@@ -1201,13 +1220,10 @@ function loadGameStateFromIndexedDbKey(saveKey) {
         }
         const loaded = loadGameState(parsed.data);
         if (!loaded) {
-            return {
-                ok: false,
-                reason: "load-failed",
-                error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                    ? globalThis.lastLoadGameStateError
-                    : null
-            };
+            return getLastLoadGameStateFailureResult();
+        }
+        if (!await finalizeLoadedGameStateAsync()) {
+            return getLastLoadGameStateFailureResult();
         }
         if (
             parsed.prototypeSectionStoreBacked &&
@@ -1329,7 +1345,7 @@ function saveGameState(options = {}) {
     for (let sourceIndex = 0; sourceIndex < nodeSources.length; sourceIndex++) {
         const source = nodeSources[sourceIndex];
         if (!source) continue;
-        if (source.type === "prototype" && Array.isArray(source.nodes)) {
+        if (Array.isArray(source.nodes)) {
             for (let i = 0; i < source.nodes.length; i++) {
                 const node = source.nodes[i];
                 if (!node || !node.objects || node.objects.length === 0) continue;
@@ -1412,6 +1428,9 @@ function saveGameState(options = {}) {
 
     if (map && map._prototypeSectionState) {
         const state = map._prototypeSectionState;
+        if (typeof map.syncPrototypeBuildingPlacementRefs === "function") {
+            map.syncPrototypeBuildingPlacementRefs();
+        }
         const activeKeys = (typeof map.getPrototypeActiveSectionKeys === "function")
             ? Array.from(map.getPrototypeActiveSectionKeys())
             : [];
@@ -1465,7 +1484,8 @@ function saveGameState(options = {}) {
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : []
+                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
+                    buildingRefs: Array.isArray(asset.buildingRefs) ? asset.buildingRefs.map((ref) => ({ ...ref })) : []
                 });
             }
         }
@@ -1480,6 +1500,9 @@ function saveGameState(options = {}) {
             sections,
             triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
                 ? map.exportPrototypeTriggerDefinitions()
+                : [],
+            buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
+                ? map.exportPrototypeBuildingPlacements()
                 : []
         };
     }
@@ -1638,6 +1661,44 @@ function isPrototypeLegacyStaticRecord(objData) {
     return type === "road" || type === "tree" || type === "roof" || type === "wallSection";
 }
 
+function getSavedStaticObjectTraversalLayer(objData) {
+    if (!objData || typeof objData !== "object") return 0;
+    if (Number.isFinite(objData.traversalLayer)) return Math.round(Number(objData.traversalLayer));
+    if (Number.isFinite(objData.level)) return Math.round(Number(objData.level));
+    return 0;
+}
+
+function summarizeOrphanedUpperFloorStaticRecord(objData) {
+    return {
+        type: typeof (objData && objData.type) === "string" ? objData.type : "",
+        fragmentId: typeof (objData && objData.fragmentId) === "string" ? objData.fragmentId : "",
+        surfaceId: typeof (objData && objData.surfaceId) === "string" ? objData.surfaceId : "",
+        level: getSavedStaticObjectTraversalLayer(objData),
+        x: Number.isFinite(objData && objData.x) ? Number(objData.x) : null,
+        y: Number.isFinite(objData && objData.y) ? Number(objData.y) : null
+    };
+}
+
+function isOrphanedUpperFloorStaticRecord(objData, mapInstance) {
+    if (!objData || typeof objData !== "object" || objData.type !== "placedObject") return false;
+    const layer = getSavedStaticObjectTraversalLayer(objData);
+    if (layer <= 0) return false;
+
+    const fragmentId = (typeof objData.fragmentId === "string" && objData.fragmentId.length > 0)
+        ? objData.fragmentId
+        : "";
+    if (!fragmentId) return true;
+
+    if (!mapInstance || typeof mapInstance !== "object") return false;
+    if (typeof mapInstance.ensureFloorBuildings === "function") {
+        mapInstance.ensureFloorBuildings();
+    }
+    if (mapInstance.floorBuildingByFragmentId instanceof Map) {
+        return !mapInstance.floorBuildingByFragmentId.has(fragmentId);
+    }
+    return false;
+}
+
 function summarizePrototypeSectionAssets(sectionAssets) {
     const summary = {
         sections: 0,
@@ -1690,6 +1751,76 @@ function getSavedGameState(saveKey = null) {
         return { ok: false, reason: "invalid-save-structure", key: resolvedKey };
     }
     return { ...parsed, key: resolvedKey };
+}
+
+function getLastLoadGameStateFailureResult(reason = "load-failed") {
+    return {
+        ok: false,
+        reason,
+        error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
+            ? globalThis.lastLoadGameStateError
+            : null
+    };
+}
+
+function collectSectionKeysForPendingWizardMovementSupport() {
+    const keys = new Set();
+    if (!map) return keys;
+    if (typeof map.getPrototypeActiveSectionKeys === "function") {
+        const activeKeys = map.getPrototypeActiveSectionKeys();
+        if (activeKeys && typeof activeKeys.forEach === "function") {
+            activeKeys.forEach((key) => {
+                if (typeof key === "string" && key.length > 0) keys.add(key);
+            });
+        }
+    }
+    if (typeof map.getPrototypeBubbleSectionKeys === "function") {
+        const bubbleKeys = map.getPrototypeBubbleSectionKeys();
+        if (bubbleKeys && typeof bubbleKeys.forEach === "function") {
+            bubbleKeys.forEach((key) => {
+                if (typeof key === "string" && key.length > 0) keys.add(key);
+            });
+        }
+    }
+    if (
+        wizard &&
+        Number.isFinite(wizard.x) &&
+        Number.isFinite(wizard.y) &&
+        typeof map.getPrototypeSectionKeyForWorldPoint === "function"
+    ) {
+        const key = map.getPrototypeSectionKeyForWorldPoint(wizard.x, wizard.y);
+        if (typeof key === "string" && key.length > 0) keys.add(key);
+    }
+    return keys;
+}
+
+async function finalizeLoadedGameStateAsync() {
+    if (!wizard || typeof wizard.hasPendingSavedMovementSupport !== "function" || !wizard.hasPendingSavedMovementSupport()) {
+        return true;
+    }
+    try {
+        if (map && typeof map.syncPrototypeBuildingPlacementRefs === "function") {
+            map.syncPrototypeBuildingPlacementRefs();
+        }
+        const sectionKeys = collectSectionKeysForPendingWizardMovementSupport();
+        if (map && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function" && sectionKeys.size > 0) {
+            await map.ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys);
+        }
+        if (map && typeof map.syncPrototypeBuildingGeometryRuntime === "function") {
+            map.syncPrototypeBuildingGeometryRuntime();
+        }
+        wizard.restoreSavedMovementSupport();
+        if (map && typeof map.updatePrototypeSectionBubble === "function") {
+            map.updatePrototypeSectionBubble(wizard, { force: true });
+        }
+        return true;
+    } catch (e) {
+        console.error("Error finalizing loaded wizard movement support:", e);
+        if (typeof globalThis !== "undefined") {
+            globalThis.lastLoadGameStateError = e;
+        }
+        return false;
+    }
 }
 
 function sanitizeSavedGameState(saveKey = null) {
@@ -1857,7 +1988,7 @@ function loadGameState(saveData) {
         for (let sourceIndex = 0; sourceIndex < clearNodeSources.length; sourceIndex++) {
             const source = clearNodeSources[sourceIndex];
             if (!source) continue;
-            if (source.type === "prototype" && Array.isArray(source.nodes)) {
+            if (Array.isArray(source.nodes)) {
                 for (let i = 0; i < source.nodes.length; i++) {
                     const node = source.nodes[i];
                     if (!node || !node.objects || node.objects.length === 0) continue;
@@ -1959,8 +2090,17 @@ function loadGameState(saveData) {
             const loadedWallSections = [];
             const loadedRoofs = [];
             const restoredKeys = new Set();
+            let skippedOrphanedUpperFloorStaticObjects = 0;
+            const orphanedUpperFloorStaticObjectSamples = [];
             saveData.staticObjects.forEach((objData, index) => {
                 if (hasPrototypeSectionWorld && isPrototypeLegacyStaticRecord(objData)) {
+                    return;
+                }
+                if (hasPrototypeSectionWorld && isOrphanedUpperFloorStaticRecord(objData, map)) {
+                    skippedOrphanedUpperFloorStaticObjects += 1;
+                    if (orphanedUpperFloorStaticObjectSamples.length < 5) {
+                        orphanedUpperFloorStaticObjectSamples.push(summarizeOrphanedUpperFloorStaticRecord(objData));
+                    }
                     return;
                 }
                 const key = buildRestoreStaticObjectKey(objData, index);
@@ -2008,6 +2148,12 @@ function loadGameState(saveData) {
                     // Objects handle their own node registration
                 }
             });
+            if (skippedOrphanedUpperFloorStaticObjects > 0) {
+                console.warn("[static object restore] skipped orphaned upper-floor placed object records", {
+                    count: skippedOrphanedUpperFloorStaticObjects,
+                    samples: orphanedUpperFloorStaticObjectSamples
+                });
+            }
             const _st1 = performance.now();
             console.log(`[LOAD TIMING]   forEach restore loop: ${(_st1 - _st0).toFixed(1)}ms`);
 
@@ -2046,6 +2192,13 @@ function loadGameState(saveData) {
                     globalThis.roof = loadedRoofs[loadedRoofs.length - 1] || null;
                 }
             }
+        }
+
+        if (wizard && typeof wizard.hasPendingSavedMovementSupport === "function" && wizard.hasPendingSavedMovementSupport()) {
+            if (typeof wizard.restoreSavedMovementSupport !== "function") {
+                throw new Error("saved wizard movement support is pending without a restore method");
+            }
+            wizard.restoreSavedMovementSupport({ deferIfMissing: true });
         }
 
         if (saveData.groundTiles) {
@@ -2278,7 +2431,13 @@ function importSaveFile(file) {
             }
 
             const loaded = loadGameState(parsed.data);
-            resolve(loaded ? { ok: true } : { ok: false, reason: "load-failed" });
+            if (!loaded) {
+                resolve(getLastLoadGameStateFailureResult());
+                return;
+            }
+            finalizeLoadedGameStateAsync().then((finalized) => {
+                resolve(finalized ? { ok: true } : getLastLoadGameStateFailureResult());
+            });
         };
         reader.onerror = () => resolve({ ok: false, reason: "read-failed", error: reader.error });
         reader.readAsText(file);
@@ -2359,10 +2518,29 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         Array.isArray(map._prototypeSectionState.sectionCoords) &&
         typeof map.hydratePrototypeSectionAssets === "function"
     ) {
+        // Protect sections that have active runtime walls from being overwritten by
+        // stale server data during hydration.  A section with active runtime walls is
+        // locally authoritative: the player has built or loaded walls there and the
+        // in-memory asset.walls reflects the current game state.  If we allowed
+        // hydratePrototypeSectionAssets to run for such a section it could fetch an
+        // older server snapshot and clobber the local walls before they are saved.
+        if (map._prototypeWallState && map._prototypeWallState.activeRuntimeWallsByRecordId instanceof Map) {
+            for (const runtimeWall of map._prototypeWallState.activeRuntimeWallsByRecordId.values()) {
+                if (!runtimeWall || runtimeWall.gone) continue;
+                const sectionKey = typeof runtimeWall._prototypeOwnerSectionKey === "string"
+                    ? runtimeWall._prototypeOwnerSectionKey : null;
+                if (!sectionKey) continue;
+                const asset = typeof map.getPrototypeSectionAsset === "function"
+                    ? map.getPrototypeSectionAsset(sectionKey) : null;
+                if (asset && asset._prototypeSectionHydrated !== true) {
+                    asset._prototypeSectionHydrated = true;
+                }
+            }
+        }
         const allSectionKeys = map._prototypeSectionState.sectionCoords
             .map((coord) => `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`);
         try {
-            await map.hydratePrototypeSectionAssets(allSectionKeys);
+            await map.hydratePrototypeSectionAssets(allSectionKeys, { materialize: false });
         } catch (error) {
             return { ok: false, reason: "prototype-hydration-failed", error };
         }
@@ -2403,6 +2581,9 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         },
         triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
             ? map.exportPrototypeTriggerDefinitions()
+            : [],
+        buildings: (typeof map.exportPrototypeBuildingPlacements === "function")
+            ? map.exportPrototypeBuildingPlacements()
             : [],
         sections: exportedSections
     };
@@ -2451,14 +2632,11 @@ async function loadGameStateFromServerFile(options = {}) {
             return { ok: false, reason: payload && payload.reason ? payload.reason : 'request-failed' };
         }
         const loaded = loadGameState(payload.data);
-        if (loaded) return { ok: true };
-        return {
-            ok: false,
-            reason: "load-failed",
-            error: (typeof globalThis !== "undefined" && globalThis.lastLoadGameStateError)
-                ? globalThis.lastLoadGameStateError
-                : null
-        };
+        if (!loaded) return getLastLoadGameStateFailureResult();
+        if (!await finalizeLoadedGameStateAsync()) {
+            return getLastLoadGameStateFailureResult();
+        }
+        return { ok: true };
     } catch (e) {
         return { ok: false, reason: "network-failed", error: e };
     }
@@ -2487,6 +2665,7 @@ if (typeof module !== 'undefined' && module.exports) {
         saveGameStateToLocalStorage,
         saveGameStateToIndexedDb,
         loadGameStateFromLocalStorageKey,
+        loadGameStateFromLocalStorageKeyAsync,
         loadGameStateFromIndexedDbKey,
         isReservedLocalSaveSlotKey,
         inferWizardDifficultyFromSaveData,
@@ -2494,6 +2673,7 @@ if (typeof module !== 'undefined' && module.exports) {
         downloadSaveFile,
         importSaveFile,
         pickAndLoadSaveFile,
+        finalizeLoadedGameStateAsync,
         saveGameStateToServerFile,
         savePrototypeSectionWorldToServerSlot,
         loadGameStateFromServerFile,

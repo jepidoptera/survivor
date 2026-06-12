@@ -1,10 +1,70 @@
 {
   "items": [
     {
+      "file": "beads.jpg",
+      "texturePath": "/assets/images/walls/beads.jpg",
+      "repeatsPerMapUnitX": 0.6,
+      "repeatsPerMapUnitY": 0.6
+    },
+    {
+      "file": "beam.jpg",
+      "texturePath": "/assets/images/walls/beam.jpg",
+      "repeatsPerMapUnitX": 0.25,
+      "repeatsPerMapUnitY": 0.08
+    },
+    {
+      "file": "brick.jpg",
+      "texturePath": "/assets/images/walls/brick.jpg",
+      "repeatsPerMapUnitX": 0.25,
+      "repeatsPerMapUnitY": 0.125
+    },
+    {
+      "file": "concrete.jpg",
+      "texturePath": "/assets/images/walls/concrete.jpg",
+      "repeatsPerMapUnitX": 0.15,
+      "repeatsPerMapUnitY": 0.15
+    },
+    {
+      "file": "gravel.jpg",
+      "texturePath": "/assets/images/walls/gravel.jpg",
+      "repeatsPerMapUnitX": 0.2,
+      "repeatsPerMapUnitY": 0.2
+    },
+    {
+      "file": "slats.jpg",
+      "texturePath": "/assets/images/walls/slats.jpg",
+      "repeatsPerMapUnitX": 0.5,
+      "repeatsPerMapUnitY": 0.5
+    },
+    {
       "file": "stonewall.png",
       "texturePath": "/assets/images/walls/stonewall.png",
       "repeatsPerMapUnitX": 0.4,
       "repeatsPerMapUnitY": 0.4
+    },
+    {
+      "file": "stonewall2.jpg",
+      "texturePath": "/assets/images/walls/stonewall2.jpg",
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    },
+    {
+      "file": "stonewall20.png",
+      "texturePath": "/assets/images/walls/stonewall20.png",
+      "repeatsPerMapUnitX": 0.1,
+      "repeatsPerMapUnitY": 0.1
+    },
+    {
+      "file": "stucco.jpg",
+      "texturePath": "/assets/images/walls/stucco.jpg",
+      "repeatsPerMapUnitX": 0.18,
+      "repeatsPerMapUnitY": 0.18
+    },
+    {
+      "file": "vertical wood.jpg",
+      "texturePath": "/assets/images/walls/vertical wood.jpg",
+      "repeatsPerMapUnitX": 0.35,
+      "repeatsPerMapUnitY": 0.35
     },
     {
       "file": "woodwall.png",

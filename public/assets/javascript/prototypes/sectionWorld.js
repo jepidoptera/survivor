@@ -37,7 +37,11 @@
         assignNodesToSections: sectionRuntimeAssignNodesToSections,
         buildPrototypeSeamSegmentEntriesForSections: sectionRuntimeBuildPrototypeSeamSegmentEntriesForSections,
         buildPrototypeSeamSegments: sectionRuntimeBuildPrototypeSeamSegments,
-        updatePrototypeSeamSegmentsForSections: sectionRuntimeUpdatePrototypeSeamSegmentsForSections
+        updatePrototypeSeamSegmentsForSections: sectionRuntimeUpdatePrototypeSeamSegmentsForSections,
+        startSparseNodeBuildStaging: sectionRuntimeStartSparseNodeBuildStaging,
+        addSparseNodeBuildBatch: sectionRuntimeAddSparseNodeBuildBatch,
+        commitSparseNodeBuildStaging: sectionRuntimeCommitSparseNodeBuildStaging,
+        connectSparseNodesForSectionBatch: sectionRuntimeConnectSparseNodesForSectionBatch
     } = sectionWorldSectionRuntime;
 
     const sectionWorldLayout = resolveSectionWorldModule(
@@ -113,6 +117,13 @@
         "sectionWorldImport.js"
     );
     const { createSectionWorldImportHelpers } = sectionWorldImport;
+
+    const sectionWorldBuildings = resolveSectionWorldModule(
+        "__sectionWorldBuildings",
+        "./sectionWorldBuildings.js",
+        "sectionWorldBuildings.js"
+    );
+    const { installSectionWorldBuildingApis } = sectionWorldBuildings;
 
     const sectionGeometry = resolveSectionWorldModule(
         "__sectionGeometry",
@@ -202,7 +213,8 @@
     const assetHelpers = createSectionWorldAssetHelpers({
         hashCoordinatePair,
         hashToUnitFloat,
-        offsetToWorld
+        offsetToWorld,
+        getSectionHexagonCorners: sectionGeometry.getSectionHexagonCorners
     });
     const {
         applyRawPrototypeSectionAssetToStateAsset,
@@ -210,6 +222,8 @@
         clonePrototypeBlockedEdges,
         clonePrototypeClearanceByTile,
         clonePrototypeFloorRecords,
+        clonePrototypeFloorHoleRecords,
+        clonePrototypeFloorVoidRecords,
         clonePrototypeFloorTransitions,
         createPrototypeImplicitGroundFloorFragment,
         getPrototypeGroundTextureCount,
@@ -224,6 +238,7 @@
         comparePrototypeTileCoordKeys,
         clonePrototypeFloorTransitions,
         computeSectionCenterAxial,
+        createPrototypeImplicitGroundFloorFragment,
         evenQOffsetToAxial,
         getSectionBasisVectors,
         getSectionCoordsInRingRange,
@@ -363,6 +378,32 @@
         });
     }
 
+    const _sparseChunkDeps = () => ({
+        globalScope,
+        getNeighborOffsetsForColumn,
+        getPrototypeGroundTextureCount,
+        normalizePrototypeGroundTiles,
+        pickPrototypeGroundTextureId
+    });
+
+    function startSparseNodeBuildForSection(state, sectionKey) {
+        const asset = (state.sectionAssetsByKey instanceof Map) ? state.sectionAssetsByKey.get(sectionKey) : null;
+        if (!asset) return false;
+        return sectionRuntimeStartSparseNodeBuildStaging(state, asset);
+    }
+
+    function addSparseNodeBuildBatchForSection(map, state, sectionKey, start, count) {
+        return sectionRuntimeAddSparseNodeBuildBatch(map, state, sectionKey, start, count, _sparseChunkDeps());
+    }
+
+    function commitSparseNodeBuildForSection(map, state, sectionKey) {
+        return sectionRuntimeCommitSparseNodeBuildStaging(map, state, sectionKey, _sparseChunkDeps());
+    }
+
+    function connectSparseNodesForSectionBatch(state, sectionKey, start, count) {
+        return sectionRuntimeConnectSparseNodesForSectionBatch(state, sectionKey, start, count);
+    }
+
     function ensurePrototypeSectionExists(map, prototypeState, sectionCoord) {
         return sectionRuntimeEnsurePrototypeSectionExists(map, prototypeState, sectionCoord, {
             makeSectionKey,
@@ -409,6 +450,9 @@
                     continue;
                 }
                 usedIds.add(recordId);
+                if (recordId >= nextIdRef.value) {
+                    nextIdRef.value = recordId + 1;
+                }
             }
             if (typeof options.afterRemap === "function" && remappedIds.size > 0) {
                 options.afterRemap(remappedIds);
@@ -683,10 +727,13 @@
             _prototypeDirty: false,
             pixiSprite: createPrototypeTriggerDisplaySprite(),
             removeFromGame() {
-                this.gone = true;
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
             },
             remove() {
-                this.gone = true;
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
+            },
+            delete() {
+                return removePrototypeTriggerDefinition(map, this._prototypeRecordId);
             },
             saveJson() {
                 const currentDef = this._prototypeTriggerDef || null;
@@ -805,6 +852,58 @@
             return displayObj;
         }
         return syncPrototypeTriggerDisplayObject(map, displayObj, def);
+    }
+
+    function removePrototypeTriggerDefinition(map, triggerId) {
+        if (!map || !map._prototypeTriggerState) return false;
+        const triggerState = map._prototypeTriggerState;
+        const recordId = Number(triggerId);
+        if (!Number.isInteger(recordId)) return false;
+        if (!(triggerState.triggerDefsById instanceof Map) || !triggerState.triggerDefsById.has(recordId)) {
+            return false;
+        }
+
+        const def = triggerState.triggerDefsById.get(recordId);
+        if (def && typeof def === "object") {
+            def.gone = true;
+            def._scriptDeactivated = true;
+        }
+        triggerState.triggerDefsById.delete(recordId);
+
+        if (triggerState.displayObjectsById instanceof Map) {
+            const displayObj = triggerState.displayObjectsById.get(recordId) || null;
+            if (displayObj && typeof displayObj === "object") {
+                displayObj.gone = true;
+                displayObj._scriptDeactivated = true;
+                if (displayObj.pixiSprite && displayObj.pixiSprite.parent) {
+                    displayObj.pixiSprite.parent.removeChild(displayObj.pixiSprite);
+                }
+            }
+            triggerState.displayObjectsById.delete(recordId);
+        }
+
+        if (typeof map.rebuildPrototypeTriggerRegistry === "function") {
+            map.rebuildPrototypeTriggerRegistry();
+        } else {
+            rebuildPrototypeTriggerRegistryState(map);
+        }
+        return true;
+    }
+
+    function attachPrototypeTriggerDefinitionRemoval(map, def) {
+        if (!map || !def || typeof def !== "object") return def;
+        const removeSelf = function removeSelf() {
+            return removePrototypeTriggerDefinition(map, this.id);
+        };
+        for (const methodName of ["delete", "remove", "removeFromGame"]) {
+            Object.defineProperty(def, methodName, {
+                configurable: true,
+                enumerable: false,
+                writable: true,
+                value: removeSelf
+            });
+        }
+        return def;
     }
 
     function collectUsedPrototypeObjectRecordIds(orderedSectionAssets) {
@@ -927,6 +1026,7 @@
                 ? Array.from(new Set(def.coverageSectionKeys.filter((key) => typeof key === "string" && key.length > 0))).sort()
                 : buildPrototypeTriggerCoverageSectionKeys(map._prototypeSectionState, def.points);
             def._prototypeTriggerHitbox = buildPrototypeTriggerTraversalHitbox(def.points);
+            attachPrototypeTriggerDefinitionRemoval(map, def);
             triggerState.triggerDefsById.set(recordId, def);
             for (let keyIndex = 0; keyIndex < def.coverageSectionKeys.length; keyIndex++) {
                 const sectionKey = def.coverageSectionKeys[keyIndex];
@@ -968,11 +1068,19 @@
 
     function rebuildPrototypeFloorRuntime(map, state) {
         if (map && typeof map.rebuildFloorRuntimeFromSectionState === "function") {
-            return map.rebuildFloorRuntimeFromSectionState(state, {
-                synthesizeGroundFragment: createPrototypeImplicitGroundFloorFragment,
+            const stats = map.rebuildFloorRuntimeFromSectionState(state, {
+                synthesizeGroundFragment: (asset) => createPrototypeImplicitGroundFloorFragment(asset, state.basis),
                 doesNodeBelongToFragment: doesPrototypeNodeBelongToFloorFragment,
                 transitions: Array.isArray(state && state.floorTransitions) ? state.floorTransitions : []
             });
+            if (
+                typeof map.syncPrototypeBuildingGeometryRuntime === "function" &&
+                typeof map.registerFloorFragment === "function" &&
+                typeof map.registerStairRuntimeRecord === "function"
+            ) {
+                map.syncPrototypeBuildingGeometryRuntime();
+            }
+            return stats;
         }
         if (!map || !state || !(state.sectionAssetsByKey instanceof Map) || !(state.nodesBySectionKey instanceof Map)) {
             return { fragmentCount: 0, nodeCount: 0, transitionCount: 0 };
@@ -1548,6 +1656,7 @@
             applyPrototypeBlockedEdgesForSection,
             applyPrototypeSectionClearanceChunk,
             applyPrototypeSectionClearanceToNodes,
+            backfillWallBlockedEdgesIntoAsset,
             ensurePrototypeBlockedEdgeState,
             ensurePrototypeBlockedEdges,
             markPrototypeBlockedEdgesDirty,
@@ -1570,6 +1679,12 @@
             refreshSparseNodesForSectionAsset,
             rebuildPrototypeAssetObjectNameRegistry,
             rebuildPrototypeFloorRuntime,
+            createPrototypeImplicitGroundFloorFragment,
+            doesPrototypeNodeBelongToFloorFragment,
+            startSparseNodeBuildForSection,
+            addSparseNodeBuildBatchForSection,
+            commitSparseNodeBuildForSection,
+            connectSparseNodesForSectionBatch,
             normalizePrototypeScriptingName: normalizeSectionWorldScriptingName,
             generatePrototypeBubbleUniqueObjectName,
             resolvePrototypeActiveNamedObject,
@@ -1578,6 +1693,8 @@
             applyPrototypeSectionClearanceToNodes,
             rebuildPrototypeSectionClearance,
             clonePrototypeFloorRecords,
+            clonePrototypeFloorHoleRecords,
+            clonePrototypeFloorVoidRecords,
             clonePrototypeBlockedEdges,
             clonePrototypeClearanceByTile,
             clonePrototypeFloorTransitions,
@@ -1588,6 +1705,7 @@
             assignNodesToSections,
             buildPrototypeSummary,
             initializePrototypeRuntimeState,
+            installSectionWorldBuildingApis,
             setActiveCenter
         });
         installSectionWorldTraversalApis(map, { globalScope });
@@ -1646,9 +1764,32 @@
         map.refreshPrototypeActiveTriggerSetForActor = function refreshPrototypeActiveTriggerSetForActor(actor, options = {}) {
             if (!actor || !this._prototypeTriggerState) return [];
             const force = !!(options && options.force === true);
-            const sectionKey = (typeof this.getPrototypeSectionKeyForWorldPoint === "function")
-                ? this.getPrototypeSectionKeyForWorldPoint(actor.x, actor.y)
-                : "";
+            const sectionKeys = new Set();
+            const addSectionKeyForPoint = (x, y) => {
+                if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
+                if (typeof this.getPrototypeSectionKeyForWorldPoint !== "function") return;
+                const key = this.getPrototypeSectionKeyForWorldPoint(Number(x), Number(y));
+                if (typeof key === "string" && key.length > 0) {
+                    sectionKeys.add(key);
+                }
+            };
+            const toX = Number.isFinite(Number(options && options.toX)) ? Number(options.toX) : Number(actor.x);
+            const toY = Number.isFinite(Number(options && options.toY)) ? Number(options.toY) : Number(actor.y);
+            const fromX = Number.isFinite(Number(options && options.fromX)) ? Number(options.fromX) : toX;
+            const fromY = Number.isFinite(Number(options && options.fromY)) ? Number(options.fromY) : toY;
+            addSectionKeyForPoint(toX, toY);
+            addSectionKeyForPoint(fromX, fromY);
+            const distance = Math.hypot(toX - fromX, toY - fromY);
+            const sampleStep = Math.max(0.5, Number(options && options.pathSampleStepWorld) || 2);
+            const steps = Math.max(1, Math.ceil(distance / sampleStep));
+            for (let step = 1; step < steps; step++) {
+                const t = step / steps;
+                addSectionKeyForPoint(
+                    fromX + ((toX - fromX) * t),
+                    fromY + ((toY - fromY) * t)
+                );
+            }
+            const sectionKey = Array.from(sectionKeys).sort().join("|");
             const registryVersion = Number(this._prototypeTriggerState.registryVersion) || 0;
             if (
                 !force &&
@@ -1658,7 +1799,7 @@
             ) {
                 return actor._prototypeActiveTriggerTraversalEntries;
             }
-            const defs = sectionKey ? this.getPrototypeTriggerDefsForSectionKeys([sectionKey]) : [];
+            const defs = sectionKeys.size > 0 ? this.getPrototypeTriggerDefsForSectionKeys(Array.from(sectionKeys)) : [];
             const entries = defs.map((def) => ({
                 obj: def,
                 hitbox: def && def._prototypeTriggerHitbox ? def._prototypeTriggerHitbox : buildPrototypeTriggerTraversalHitbox(def && def.points)
@@ -1750,6 +1891,7 @@
             upsertPrototypeObjectRecord
         });
         const {
+            enqueuePrototypeAsyncBuildingSync: enqueuePrototypeAsyncBuildingSyncPlanner,
             enqueuePrototypeAsyncObjectSync: enqueuePrototypeAsyncObjectSyncPlanner,
             enqueuePrototypeAsyncWallSync: enqueuePrototypeAsyncWallSyncPlanner,
             enqueuePrototypeAsyncAnimalSync: enqueuePrototypeAsyncAnimalSyncPlanner,
@@ -1758,6 +1900,7 @@
         attachFlushPrototypeBubbleShiftSession();
         attachBubbleShiftControlApis({
             updateActiveBubbleForActor,
+            enqueuePrototypeAsyncBuildingSync: enqueuePrototypeAsyncBuildingSyncPlanner,
             enqueuePrototypeAsyncWallSync: enqueuePrototypeAsyncWallSyncPlanner,
             enqueuePrototypeAsyncObjectSync: enqueuePrototypeAsyncObjectSyncPlanner,
             enqueuePrototypeAsyncAnimalSync: enqueuePrototypeAsyncAnimalSyncPlanner,
@@ -1781,6 +1924,7 @@
         });
         installSectionWorldEntitySyncApis(map, {
             applyPrototypeBlockedEdgesForSection,
+            backfillWallBlockedEdgesIntoAsset,
             buildPrototypeObjectPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
             canReusePrototypeParkedRuntimeObject: canReuseSectionWorldParkedRuntimeObject,
@@ -1862,6 +2006,8 @@
 
         assignNodesToSections(map, prototypeState);
         attachSectionWorldApis(map, prototypeState);
+        installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState(prototypeState.buildingPlacements || []);
         if (typeof map.ensurePrototypeBlockedEdges === "function") {
             map.ensurePrototypeBlockedEdges();
         }
@@ -1919,6 +2065,8 @@
             nextRecordIds: { walls: 1, objects: 1, animals: 1, powerups: 1 }
         }, makeSectionKey({ q: 0, r: 0 }));
         attachSectionWorldApis(map, emptyState);
+        installSectionWorldBuildingApis(map);
+        map.initializePrototypeBuildingState([]);
         globalScope.RUNAROUND_PROTOTYPE_WIZARD_STATE = null;
         globalScope.RUNAROUND_PROTOTYPE_SPAWN = {
             x: Math.max(0, Math.floor((Number(map.width) || 0) * 0.5)),
