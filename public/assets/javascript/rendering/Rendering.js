@@ -1109,6 +1109,7 @@ void main(void) {
             this.bakedLevel0SectionSignature = "";
             this.level0GroundSurfacePendingLoads = new Set();
             this.roadSpriteByObject = new Map();
+            this.roadPathGraphicsByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
             this.activeDepthBillboardMeshes = new Set();
@@ -3228,10 +3229,11 @@ void main(void) {
             let buildingTriggers = 0;
             let floorFallbackScanned = 0;
             let bubbleShiftActive = false;
+            let cutawayRefreshDuringBubble = false;
             const finish = (state) => {
                 if (ctx && typeof ctx === "object") ctx._renderingLayerCutawayState = state;
                 if (
-                    !bubbleShiftActive &&
+                    (!bubbleShiftActive || cutawayRefreshDuringBubble) &&
                     state &&
                     !state._doorwayPresentationTransition &&
                     !this.cutawayStateHasActiveInteriorRegion(state)
@@ -3252,10 +3254,15 @@ void main(void) {
             };
             const map = ctx && ctx.map ? ctx.map : global.map || null;
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
-            bubbleShiftActive = !!(
+            const bubbleShiftSession = (
                 map &&
                 map._prototypeBubbleShiftSession &&
                 map._prototypeBubbleShiftSession.completed !== true
+            ) ? map._prototypeBubbleShiftSession : null;
+            bubbleShiftActive = !!bubbleShiftSession;
+            cutawayRefreshDuringBubble = !!(
+                bubbleShiftSession &&
+                bubbleShiftSession.phase === "refresh"
             );
             if (!(map && map.floorsById instanceof Map) || !wizard) {
                 this.buildingDoorwayPresentationTransition = null;
@@ -3279,6 +3286,7 @@ void main(void) {
 
             const canHoldCutawayDuringBubble = !!(
                 bubbleShiftActive &&
+                !cutawayRefreshDuringBubble &&
                 wizardLayer <= 0 &&
                 !this.buildingDoorwayPresentationTransition
             );
@@ -8301,7 +8309,7 @@ void main(void) {
 
             let targetWidth = 0;
             let targetHeight = 0;
-            if (item.type === "road") {
+            if (item.type === "road" || item.type === "roadPath") {
                 targetWidth = (item.width || 1) * this.camera.viewscale * 1.1547;
                 targetHeight = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
             } else if (item.rotationAxis === "ground") {
@@ -8552,7 +8560,7 @@ void main(void) {
 
         isLosOccluder(item) {
             if (!item || !item.groundPlaneHitbox) return false;
-            if (item.type === "road" || item.type === "firewall" || item.type === "roof") return false;
+            if (item.type === "road" || item.type === "roadPath" || item.type === "firewall" || item.type === "roof") return false;
             if (typeof item.castsLosShadows === "boolean" && !item.castsLosShadows) return false;
             const isAnimal = (typeof Animal !== "undefined" && item instanceof Animal);
             if (isAnimal) return false;
@@ -9312,7 +9320,7 @@ void main(void) {
             if (typeof Animal !== "undefined" && item instanceof Animal) return "animals";
             const rawType = typeof item.type === "string" ? item.type : "";
             const type = rawType.trim().toLowerCase();
-            if (type === "road") return "roads";
+            if (type === "road" || type === "roadpath") return "roads";
             if (type === "tree") return "trees";
             if (type === "flower") return "flowers";
             if (type === "wallsection") return "walls";
@@ -9948,7 +9956,7 @@ void main(void) {
                 for (let i = 0; i < list.length; i++) {
                     const obj = list[i];
                     if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
-                    if (obj.type === "road") continue;
+                    if (obj.type === "road" || obj.type === "roadPath") continue;
                     return true;
                 }
                 return false;
@@ -9960,7 +9968,7 @@ void main(void) {
                     for (let i = 0; i < list.length; i++) {
                         const obj = list[i];
                         if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
-                        if (obj.type === "road") continue;
+                        if (obj.type === "road" || obj.type === "roadPath") continue;
                         return true;
                     }
                     return false;
@@ -10442,7 +10450,7 @@ void main(void) {
             if (item._flowerBurnFragmentContainer && Array.isArray(item._flowerBurnFragments) && item._flowerBurnFragments.length > 0) {
                 return false;
             }
-            if (item.type === "road" || item.type === "roof" || item.type === "wallSection") {
+            if (item.type === "road" || item.type === "roadPath" || item.type === "roof" || item.type === "wallSection") {
                 return false;
             }
             if (item.type === "triggerArea" || item.isTriggerArea === true) {
@@ -14568,8 +14576,22 @@ void main(void) {
                 this.roadSpriteByObject.delete(road);
                 roadDestroyedSprites += 1;
             };
+            const destroyRoadPathGraphics = (roadPath, graphics) => {
+                if (graphics) {
+                    if (graphics.parent) {
+                        graphics.parent.removeChild(graphics);
+                    }
+                    if (graphics.destroyed !== true && typeof graphics.destroy === "function") {
+                        graphics.destroy({ children: false, texture: false, baseTexture: false });
+                    }
+                }
+                if (this.roadPathGraphicsByObject instanceof Map) {
+                    this.roadPathGraphicsByObject.delete(roadPath);
+                }
+            };
 
             const visibleRoadObjects = new Set();
+            const visibleRoadPathObjects = new Set();
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const bakedLevel0SectionKeys = this.getBakedLevel0SectionKeys(ctx);
             let roadsSkippedForLevel0Bake = 0;
@@ -14578,11 +14600,16 @@ void main(void) {
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let i = 0; i < node.objects.length; i++) {
                     const obj = node.objects[i];
-                    if (!obj || obj.gone || obj.type !== "road") continue;
+                    if (!obj || obj.gone) continue;
+                    if (obj.type !== "road" && obj.type !== "roadPath") continue;
                     if (!this.isScriptVisible(obj)) continue;
                     const roadLayer = this.getLayerIndexForNode(obj && obj.node ? obj.node : node);
                     if (mazeLayerOnly && roadLayer !== wizardLayer && !this.isFallRevealHiddenLayer(roadLayer)) continue;
                     if (this.isRenderItemHiddenByLayerCutaway(obj, roadLayer, cutawayState, map)) continue;
+                    if (obj.type === "roadPath") {
+                        visibleRoadPathObjects.add(obj);
+                        continue;
+                    }
                     if (this.isRoadBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
                         const bakedSprite = this.roadSpriteByObject.get(obj);
                         if (bakedSprite) {
@@ -14598,6 +14625,81 @@ void main(void) {
                         continue;
                     }
                     visibleRoadObjects.add(obj);
+                }
+            }
+
+            if (!(this.roadPathGraphicsByObject instanceof Map)) {
+                this.roadPathGraphicsByObject = new Map();
+            }
+            const pathFillColor = 0x9b8162;
+            for (const roadPath of visibleRoadPathObjects) {
+                const geometry = roadPath && roadPath.generatedGeometry;
+                const segments = geometry && Array.isArray(geometry.segments) ? geometry.segments : null;
+                if (!segments || segments.length === 0) {
+                    throw new Error("Cannot render road path without generated segment geometry.");
+                }
+                let graphics = this.roadPathGraphicsByObject.get(roadPath);
+                if (!graphics) {
+                    graphics = new PIXI.Graphics();
+                    graphics.name = "renderingRoadPath";
+                    graphics.interactive = false;
+                    this.roadPathGraphicsByObject.set(roadPath, graphics);
+                }
+                if (graphics.parent !== container) {
+                    container.addChild(graphics);
+                }
+                graphics.clear();
+                graphics.beginFill(pathFillColor, 1);
+                for (let i = 0; i < segments.length; i++) {
+                    const polygon = segments[i] && Array.isArray(segments[i].polygon) ? segments[i].polygon : null;
+                    if (!polygon || polygon.length < 3) {
+                        throw new Error(`Cannot render road path segment ${i} without polygon geometry.`);
+                    }
+                    for (let p = 0; p < polygon.length; p++) {
+                        const point = polygon[p];
+                        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                            throw new Error(`Cannot render road path segment ${i} with non-finite polygon point.`);
+                        }
+                        const screen = cam.worldToScreen(Number(point.x), Number(point.y), 0);
+                        if (p === 0) graphics.moveTo(screen.x, screen.y);
+                        else graphics.lineTo(screen.x, screen.y);
+                    }
+                    const firstScreen = cam.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), 0);
+                    graphics.lineTo(firstScreen.x, firstScreen.y);
+                }
+                graphics.endFill();
+                graphics.alpha = (Number.isFinite(roadPath.alpha) ? roadPath.alpha : 1) * this.getLiveLayerFadeMultiplier(
+                    this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath),
+                    nowMs
+                );
+                graphics.visible = true;
+                if (Object.prototype.hasOwnProperty.call(graphics, "renderable")) {
+                    graphics.renderable = true;
+                }
+                graphics._lastVisibleAtMs = nowMs;
+                roadPath._renderingDisplayObject = graphics;
+                this.applyLayerDarknessToDisplayObject(graphics, this.getLayerDarknessMultiplier(
+                    this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath)
+                ));
+                this.addPickRenderItem(roadPath, graphics);
+            }
+            for (const [roadPath, graphics] of this.roadPathGraphicsByObject.entries()) {
+                if (!roadPath || roadPath.gone) {
+                    destroyRoadPathGraphics(roadPath, graphics);
+                    continue;
+                }
+                if (!visibleRoadPathObjects.has(roadPath) && graphics) {
+                    const lastVisibleAtMs = Number.isFinite(graphics._lastVisibleAtMs)
+                        ? Number(graphics._lastVisibleAtMs)
+                        : 0;
+                    if (lastVisibleAtMs > 0 && (nowMs - lastVisibleAtMs) > hiddenSpriteGraceMs) {
+                        destroyRoadPathGraphics(roadPath, graphics);
+                        continue;
+                    }
+                    graphics.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(graphics, "renderable")) {
+                        graphics.renderable = false;
+                    }
                 }
             }
 
@@ -16963,6 +17065,10 @@ void main(void) {
             if (this.roadPlacementPreviewContainer) {
                 this.roadPlacementPreviewContainer.visible = false;
             }
+            if (this.roadPlacementPreviewGraphics) {
+                this.roadPlacementPreviewGraphics.clear();
+                this.roadPlacementPreviewGraphics.visible = false;
+            }
             if (this.roadPlacementPreviewSpriteByKey && this.roadPlacementPreviewSpriteByKey.size > 0) {
                 for (const sprite of this.roadPlacementPreviewSpriteByKey.values()) {
                     if (!sprite) continue;
@@ -17157,24 +17263,40 @@ void main(void) {
             if (!this.roadPlacementPreviewSpriteByKey) {
                 this.roadPlacementPreviewSpriteByKey = new Map();
             }
+            if (!this.roadPlacementPreviewGraphics) {
+                this.roadPlacementPreviewGraphics = new PIXI.Graphics();
+                this.roadPlacementPreviewGraphics.name = "renderingRoadPathPlacementPreview";
+                this.roadPlacementPreviewGraphics.interactive = false;
+                this.roadPlacementPreviewContainer.addChild(this.roadPlacementPreviewGraphics);
+            } else if (this.roadPlacementPreviewGraphics.parent !== this.roadPlacementPreviewContainer) {
+                this.roadPlacementPreviewContainer.addChild(this.roadPlacementPreviewGraphics);
+            }
 
             const previewContainer = this.roadPlacementPreviewContainer;
             const previewSpriteByKey = this.roadPlacementPreviewSpriteByKey;
+            const g = this.roadPlacementPreviewGraphics;
+            g.clear();
+            for (const sprite of previewSpriteByKey.values()) {
+                if (!sprite) continue;
+                syncRoadRenderSpriteTextureRetention(sprite, null);
+                sprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                    sprite.renderable = false;
+                }
+            }
 
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
             const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
             const mousePosRef = this.getMousePosRef(ctx);
-            const RoadClass = (typeof global.Road !== "undefined") ? global.Road : null;
+            const RoadPathClass = (typeof global.RoadPath !== "undefined") ? global.RoadPath : null;
             if (
                 !wizard ||
                 wizard.currentSpell !== "buildroad" ||
                 !wizard.roadLayoutMode ||
                 !wizard.roadStartPoint ||
                 !mapRef ||
-                typeof mapRef.getHexLine !== "function" ||
-                typeof mapRef.worldToNode !== "function" ||
-                !RoadClass ||
-                typeof RoadClass._getTextureForMaskAndPhase !== "function" ||
+                !RoadPathClass ||
+                typeof RoadPathClass.computeGeometry !== "function" ||
                 !mousePosRef ||
                 !Number.isFinite(mousePosRef.worldX) ||
                 !Number.isFinite(mousePosRef.worldY)
@@ -17183,150 +17305,50 @@ void main(void) {
                 return;
             }
 
-            const startNode = wizard.roadStartPoint;
-            const endNode = mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY);
-            if (!startNode || !endNode) {
+            const startWorld = {
+                x: Number(wizard.roadStartPoint.x),
+                y: Number(wizard.roadStartPoint.y)
+            };
+            const endWorld = { x: Number(mousePosRef.worldX), y: Number(mousePosRef.worldY) };
+            if (
+                !Number.isFinite(startWorld.x) ||
+                !Number.isFinite(startWorld.y) ||
+                !Number.isFinite(endWorld.x) ||
+                !Number.isFinite(endWorld.y)
+            ) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+            const dx = endWorld.x - startWorld.x;
+            const dy = endWorld.y - startWorld.y;
+            if (Math.hypot(dx, dy) <= 1e-5) {
                 this.clearRoadPlacementPreview();
                 return;
             }
 
             const configuredRoadWidth = Number.isFinite(wizard.selectedRoadWidth)
-                ? Math.max(1, Math.min(5, Math.round(Number(wizard.selectedRoadWidth))))
+                ? Math.max(0.25, Number(wizard.selectedRoadWidth))
                 : (
                     (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
                         ? Number(roadWidth)
                         : ((Number.isFinite(global.roadWidth) ? Number(global.roadWidth) : 3))
                 );
-            const width = (startNode === endNode) ? 1 : configuredRoadWidth;
-            const roadNodes = mapRef.getHexLine(startNode, endNode, width);
-            if (!Array.isArray(roadNodes) || roadNodes.length === 0) {
-                this.clearRoadPlacementPreview();
-                return;
+            const geometry = RoadPathClass.computeGeometry([startWorld, endWorld], configuredRoadWidth);
+            g.beginFill(0x9b8162, 0.5);
+            g.lineStyle(2, 0xffd27a, 0.9);
+            for (let i = 0; i < geometry.segments.length; i++) {
+                const polygon = geometry.segments[i].polygon;
+                for (let p = 0; p < polygon.length; p++) {
+                    const screen = this.camera.worldToScreen(Number(polygon[p].x), Number(polygon[p].y), 0);
+                    if (p === 0) g.moveTo(screen.x, screen.y);
+                    else g.lineTo(screen.x, screen.y);
+                }
+                const first = this.camera.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), 0);
+                g.lineTo(first.x, first.y);
             }
-
-            const oddDirections = Array.isArray(RoadClass._oddDirections) && RoadClass._oddDirections.length > 0
-                ? RoadClass._oddDirections.slice()
-                : [1, 3, 5, 7, 9, 11];
-            const fillTexturePath = (
-                typeof wizard.selectedFlooringTexture === "string" &&
-                wizard.selectedFlooringTexture.length > 0
-            )
-                ? wizard.selectedFlooringTexture
-                : (
-                    (typeof RoadClass._defaultFillTexturePath === "string" && RoadClass._defaultFillTexturePath.length > 0)
-                        ? RoadClass._defaultFillTexturePath
-                        : "/assets/images/flooring/dirt.jpg"
-                );
-
-            const previewKeys = new Set();
-            const roadNodeByKey = new Map();
-            for (let i = 0; i < roadNodes.length; i++) {
-                const node = roadNodes[i];
-                if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
-                const key = `${node.xindex},${node.yindex}`;
-                if (previewKeys.has(key)) continue;
-                previewKeys.add(key);
-                roadNodeByKey.set(key, node);
-            }
-
-            const hasRoadObjectAtNode = (node) => {
-                if (!node || !Array.isArray(node.objects)) return false;
-                if (RoadClass && typeof RoadClass.hasMatchingRoadAtNode === "function") {
-                    return RoadClass.hasMatchingRoadAtNode(node, fillTexturePath);
-                }
-                for (let i = 0; i < node.objects.length; i++) {
-                    const obj = node.objects[i];
-                    if (obj && obj.type === "road" && !obj.gone && !obj.vanishing) return true;
-                }
-                return false;
-            };
-
-            const activeKeys = new Set();
-            for (const [key, node] of roadNodeByKey.entries()) {
-                const neighborDirections = [];
-                for (let i = 0; i < oddDirections.length; i++) {
-                    const dir = oddDirections[i];
-                    const neighbor = node.neighbors && node.neighbors[dir];
-                    if (!neighbor) continue;
-                    const neighborKey = `${neighbor.xindex},${neighbor.yindex}`;
-                    if (previewKeys.has(neighborKey) || hasRoadObjectAtNode(neighbor)) {
-                        neighborDirections.push(dir);
-                    }
-                }
-                const mask = (typeof RoadClass._getNeighborMask === "function")
-                    ? RoadClass._getNeighborMask(neighborDirections)
-                    : 0;
-                const roadScreenWidth = this.camera.viewscale * 1.1547;
-                const roadScreenHeight = this.camera.viewscale * this.camera.xyratio;
-                const lodMetric = (typeof RoadClass.getFillTextureLodMetric === "function")
-                    ? RoadClass.getFillTextureLodMetric(fillTexturePath, roadScreenWidth, roadScreenHeight)
-                    : Math.max(roadScreenWidth, roadScreenHeight);
-                const resolvedFillTexturePath = (typeof RoadClass.resolveFillTexturePathForSize === "function")
-                    ? RoadClass.resolveFillTexturePathForSize(fillTexturePath, lodMetric)
-                    : fillTexturePath;
-                const metrics = (typeof RoadClass._getTextureTileMetrics === "function")
-                    ? RoadClass._getTextureTileMetrics(resolvedFillTexturePath)
-                    : { tileW: 1, tileH: 1 };
-                const pixelsPerWorldUnit = Number.isFinite(RoadClass._pixelsPerWorldUnit)
-                    ? Number(RoadClass._pixelsPerWorldUnit)
-                    : ((128 * 2) / 1.1547);
-                const phaseX = (((Number(node.x) * pixelsPerWorldUnit) % metrics.tileW) + metrics.tileW) % metrics.tileW;
-                const phaseY = (((Number(node.y) * pixelsPerWorldUnit) % metrics.tileH) + metrics.tileH) % metrics.tileH;
-                const textureRef = RoadClass._getTextureForMaskAndPhase(mask, phaseX, phaseY, resolvedFillTexturePath);
-                const textureCacheKey = (textureRef && typeof textureRef.key === "string") ? textureRef.key : "";
-                const texture = (textureRef && textureRef.entry && isRenderablePixiTexture(textureRef.entry.texture))
-                    ? textureRef.entry.texture
-                    : null;
-                if (!texture) {
-                    const existingSprite = previewSpriteByKey.get(key);
-                    if (existingSprite) {
-                        syncRoadRenderSpriteTextureRetention(existingSprite, null);
-                        existingSprite.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(existingSprite, "renderable")) {
-                            existingSprite.renderable = false;
-                        }
-                    }
-                    continue;
-                }
-
-                let sprite = previewSpriteByKey.get(key);
-                if (!sprite) {
-                    sprite = new PIXI.Sprite(texture);
-                    sprite.anchor.set(0.5, 0.5);
-                    sprite.name = `renderingRoadPlacementTile:${key}`;
-                    previewSpriteByKey.set(key, sprite);
-                    previewContainer.addChild(sprite);
-                } else if (sprite.texture !== texture) {
-                    sprite.texture = texture;
-                }
-                syncRoadRenderSpriteTextureRetention(sprite, { _roadTextureCacheKey: textureCacheKey });
-                if (sprite.parent !== previewContainer) {
-                    previewContainer.addChild(sprite);
-                }
-
-                const center = this.camera.worldToScreen(Number(node.x), Number(node.y), 0);
-                sprite.x = center.x;
-                sprite.y = center.y;
-                sprite.width = this.camera.viewscale * 1.1547;
-                sprite.height = this.camera.viewscale * this.camera.xyratio;
-                sprite.alpha = 0.5;
-                sprite.visible = true;
-                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                    sprite.renderable = true;
-                }
-                activeKeys.add(key);
-            }
-
-            for (const [key, sprite] of previewSpriteByKey.entries()) {
-                if (!sprite || activeKeys.has(key)) continue;
-                syncRoadRenderSpriteTextureRetention(sprite, null);
-                sprite.visible = false;
-                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                    sprite.renderable = false;
-                }
-            }
-
-            previewContainer.visible = activeKeys.size > 0;
+            g.endFill();
+            g.visible = true;
+            previewContainer.visible = true;
             if (previewContainer.visible) this.promoteInteriorPresentationDisplayObject(previewContainer, ctx);
         }
 

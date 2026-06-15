@@ -820,7 +820,13 @@ class Wizard extends Character {
     isOnRoad() {
         const node = this.map.worldToNode(this.x, this.y);
         if (!node || !node.objects) return false;
-        if (node.objects.some(obj => obj.type === "road")) {
+        if (node.objects.some(obj => {
+            if (!obj || obj.gone || obj.vanishing) return false;
+            if (obj.type === "road") return true;
+            if (obj.type !== "roadPath") return false;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || null;
+            return !!(hitbox && typeof hitbox.containsPoint === "function" && hitbox.containsPoint(this.x, this.y));
+        })) {
             return true;
         }
 

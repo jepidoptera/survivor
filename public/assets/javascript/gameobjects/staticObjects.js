@@ -3773,6 +3773,10 @@ void main(void) {
                 }
                 return triggerObj;
             }
+            if (data.type === 'roadPath') {
+                if (typeof RoadPath !== 'function') return null;
+                return RoadPath.loadJson(data, map, options);
+            }
 
             const node = resolveStaticObjectLoadNode(map, data, options);
 
@@ -6386,6 +6390,273 @@ class TriggerArea extends StaticObject {
     }
 }
 
+class RoadPath extends StaticObject {
+    static DEFAULT_WIDTH = 3;
+    static MIN_SEGMENT_LENGTH = 1e-5;
+    static JOIN_PARALLEL_EPSILON = 1e-7;
+    static MAX_TURN_RADIANS = Math.PI / 2;
+
+    static normalizePoint(raw, label = "road path point") {
+        const x = Number(raw && raw.x);
+        const y = Number(raw && raw.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} requires finite x/y coordinates`);
+        }
+        return { x, y };
+    }
+
+    static normalizePoints(rawPoints) {
+        if (!Array.isArray(rawPoints)) {
+            throw new Error("road path requires an array of points");
+        }
+        const points = rawPoints.map((point, index) => RoadPath.normalizePoint(point, `road path point ${index}`));
+        if (points.length < 2) {
+            throw new Error("road path requires at least two points");
+        }
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            if (Math.hypot(dx, dy) <= RoadPath.MIN_SEGMENT_LENGTH) {
+                throw new Error(`road path segment ${i - 1} has zero length`);
+            }
+        }
+        return points;
+    }
+
+    static normalizeWidth(width) {
+        const resolved = Number.isFinite(Number(width)) ? Number(width) : RoadPath.DEFAULT_WIDTH;
+        if (!(resolved > 0)) {
+            throw new Error("road path width must be a positive number");
+        }
+        return resolved;
+    }
+
+    static normalizeFillTexturePath(texturePath) {
+        if (typeof Road !== "undefined" && Road && typeof Road._normalizeFillTexturePath === "function") {
+            return Road._normalizeFillTexturePath(texturePath);
+        }
+        if (typeof texturePath === "string" && texturePath.length > 0) return texturePath;
+        return "/assets/images/flooring/dirt.jpg";
+    }
+
+    static lineIntersection(a0, a1, b0, b1, label = "road path join") {
+        const rX = a1.x - a0.x;
+        const rY = a1.y - a0.y;
+        const sX = b1.x - b0.x;
+        const sY = b1.y - b0.y;
+        const denom = rX * sY - rY * sX;
+        if (Math.abs(denom) <= RoadPath.JOIN_PARALLEL_EPSILON) {
+            return null;
+        }
+        const qpx = b0.x - a0.x;
+        const qpy = b0.y - a0.y;
+        const t = (qpx * sY - qpy * sX) / denom;
+        const point = {
+            x: a0.x + rX * t,
+            y: a0.y + rY * t
+        };
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+            throw new Error(`${label} produced a non-finite intersection`);
+        }
+        return point;
+    }
+
+    static computeSegmentFrames(points, width) {
+        const halfWidth = width * 0.5;
+        const frames = [];
+        for (let i = 0; i < points.length - 1; i++) {
+            const start = points[i];
+            const end = points[i + 1];
+            const dx = end.x - start.x;
+            const dy = end.y - start.y;
+            const length = Math.hypot(dx, dy);
+            if (!(length > RoadPath.MIN_SEGMENT_LENGTH)) {
+                throw new Error(`road path segment ${i} has zero length`);
+            }
+            const nx = -dy / length;
+            const ny = dx / length;
+            frames.push({
+                index: i,
+                start,
+                end,
+                length,
+                leftStart: { x: start.x + nx * halfWidth, y: start.y + ny * halfWidth },
+                leftEnd: { x: end.x + nx * halfWidth, y: end.y + ny * halfWidth },
+                rightStart: { x: start.x - nx * halfWidth, y: start.y - ny * halfWidth },
+                rightEnd: { x: end.x - nx * halfWidth, y: end.y - ny * halfWidth }
+            });
+        }
+        return frames;
+    }
+
+    static validateTurnAngles(frames) {
+        for (let i = 1; i < frames.length; i++) {
+            const prev = frames[i - 1];
+            const next = frames[i];
+            const prevDx = (prev.end.x - prev.start.x) / prev.length;
+            const prevDy = (prev.end.y - prev.start.y) / prev.length;
+            const nextDx = (next.end.x - next.start.x) / next.length;
+            const nextDy = (next.end.y - next.start.y) / next.length;
+            const dot = Math.max(-1, Math.min(1, prevDx * nextDx + prevDy * nextDy));
+            const turnRadians = Math.acos(dot);
+            if (turnRadians > RoadPath.MAX_TURN_RADIANS + 1e-7) {
+                throw new Error(`road path join ${i} exceeds the 90 degree turn limit`);
+            }
+        }
+    }
+
+    static computeGeometry(rawPoints, rawWidth) {
+        const points = RoadPath.normalizePoints(rawPoints);
+        const width = RoadPath.normalizeWidth(rawWidth);
+        const frames = RoadPath.computeSegmentFrames(points, width);
+        RoadPath.validateTurnAngles(frames);
+        const leftEdgePoints = new Array(points.length);
+        const rightEdgePoints = new Array(points.length);
+
+        leftEdgePoints[0] = { ...frames[0].leftStart };
+        rightEdgePoints[0] = { ...frames[0].rightStart };
+        const lastFrame = frames[frames.length - 1];
+        leftEdgePoints[points.length - 1] = { ...lastFrame.leftEnd };
+        rightEdgePoints[points.length - 1] = { ...lastFrame.rightEnd };
+
+        for (let i = 1; i < points.length - 1; i++) {
+            const prev = frames[i - 1];
+            const next = frames[i];
+            const leftJoin = RoadPath.lineIntersection(
+                prev.leftStart,
+                prev.leftEnd,
+                next.leftStart,
+                next.leftEnd,
+                `road path left join ${i}`
+            ) || { ...prev.leftEnd };
+            const rightJoin = RoadPath.lineIntersection(
+                prev.rightStart,
+                prev.rightEnd,
+                next.rightStart,
+                next.rightEnd,
+                `road path right join ${i}`
+            ) || { ...prev.rightEnd };
+            leftEdgePoints[i] = leftJoin;
+            rightEdgePoints[i] = rightJoin;
+        }
+
+        const segments = [];
+        const triangles = [];
+        const outline = [];
+        for (let i = 0; i < frames.length; i++) {
+            const quad = [
+                { ...leftEdgePoints[i] },
+                { ...leftEdgePoints[i + 1] },
+                { ...rightEdgePoints[i + 1] },
+                { ...rightEdgePoints[i] }
+            ];
+            segments.push({
+                index: i,
+                startPoint: { ...points[i] },
+                endPoint: { ...points[i + 1] },
+                polygon: quad
+            });
+            triangles.push([quad[0], quad[1], quad[2]]);
+            triangles.push([quad[0], quad[2], quad[3]]);
+        }
+        for (let i = 0; i < leftEdgePoints.length; i++) outline.push({ ...leftEdgePoints[i] });
+        for (let i = rightEdgePoints.length - 1; i >= 0; i--) outline.push({ ...rightEdgePoints[i] });
+        return {
+            points: points.map(point => ({ ...point })),
+            width,
+            segments,
+            triangles,
+            outline
+        };
+    }
+
+    constructor(points, map, options = {}) {
+        const geometry = RoadPath.computeGeometry(points, options.width);
+        const seed = geometry.points[0];
+        super("roadPath", seed, 1, 1, [PIXI.Texture.WHITE], map, {
+            ...options,
+            suppressAutoScriptingName: options.suppressAutoScriptingName !== false
+        });
+        this.objectType = "roadPath";
+        this.blocksTile = false;
+        this.isPassable = true;
+        this.castsLosShadows = false;
+        this.flammable = false;
+        this.rotationAxis = "ground";
+        this.renderZ = 0;
+        this.pathPoints = geometry.points;
+        this.roadWidth = geometry.width;
+        this.width = geometry.width;
+        this.height = geometry.width;
+        this.fillTexturePath = RoadPath.normalizeFillTexturePath(options.fillTexturePath);
+        this.generatedGeometry = geometry;
+        this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
+        this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
+        this.visualRadius = Math.max(0.5, geometry.width * 0.5);
+        this.groundRadius = this.visualRadius;
+        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.groundPlaneHitbox = this.visualHitbox;
+        if (this.pixiSprite) {
+            this.pixiSprite.visible = false;
+            this.pixiSprite.renderable = false;
+            this.pixiSprite.alpha = 0;
+        }
+        this.refreshIndexedNodesFromHitbox({
+            forceExpanded: true,
+            sampleSpacing: Math.max(0.5, Math.min(1.5, geometry.width * 0.5)),
+            extraPoints: this.outlinePolygon
+        });
+        if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
+            this.map.objects.push(this);
+        }
+    }
+
+    setPathPoints(points) {
+        const geometry = RoadPath.computeGeometry(points, this.roadWidth);
+        this.pathPoints = geometry.points;
+        this.width = geometry.width;
+        this.height = geometry.width;
+        this.generatedGeometry = geometry;
+        this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
+        this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
+        this.x = this.pathPoints[0].x;
+        this.y = this.pathPoints[0].y;
+        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.groundPlaneHitbox = this.visualHitbox;
+        this.refreshIndexedNodesFromHitbox({
+            forceExpanded: true,
+            sampleSpacing: Math.max(0.5, Math.min(1.5, this.roadWidth * 0.5)),
+            extraPoints: this.outlinePolygon
+        });
+        return true;
+    }
+
+    setWidth(width) {
+        this.roadWidth = RoadPath.normalizeWidth(width);
+        return this.setPathPoints(this.pathPoints);
+    }
+
+    saveJson() {
+        const data = super.saveJson();
+        data.type = "roadPath";
+        data.points = this.pathPoints.map(point => ({ x: Number(point.x), y: Number(point.y) }));
+        data.width = Number(this.roadWidth);
+        data.fillTexturePath = this.fillTexturePath;
+        data.isPassable = true;
+        data.castsLosShadows = false;
+        return data;
+    }
+
+    static loadJson(data, map, options = {}) {
+        if (!data || !map) return null;
+        return new RoadPath(Array.isArray(data.points) ? data.points : [], map, {
+            width: data.width,
+            fillTexturePath: data.fillTexturePath,
+            suppressAutoScriptingName: !!options.suppressAutoScriptingName
+        });
+    }
+}
+
 class Road extends StaticObject {
     static _geometryCache = new Map();
     static _textureCache = new Map();
@@ -7475,6 +7746,7 @@ if (typeof globalThis !== "undefined") {
     globalThis.Tree = Tree;
     globalThis.Playground = Playground;
     globalThis.TriggerArea = TriggerArea;
+    globalThis.RoadPath = RoadPath;
     globalThis.Road = Road;
     globalThis.getMountedWallFaceCentersForObject = getMountedWallFaceCentersForObject;
 }

@@ -63,7 +63,7 @@ class Spell {
 
     static isGroundLayerTarget(target) {
         if (!target || target.gone || target.vanishing) return false;
-        if (target.type === "road") return true;
+        if (target.type === "road" || target.type === "roadPath") return true;
         if (target.type === "triggerArea" || target.isTriggerArea === true) return true;
         return target.rotationAxis === "ground";
     }
@@ -113,7 +113,7 @@ class Spell {
             if (Number.isFinite(target.heightFromGround)) return Number(target.heightFromGround);
             if (Number.isFinite(target.baseZ)) return Number(target.baseZ);
         }
-        if (target.type === "road" && Number.isFinite(target.z)) return Number(target.z);
+        if ((target.type === "road" || target.type === "roadPath") && Number.isFinite(target.z)) return Number(target.z);
         if (Spell.isCharacterWorldZTarget(target)) {
             const characterZ = Spell.getCharacterWorldZ(target);
             if (Number.isFinite(characterZ)) return characterZ;

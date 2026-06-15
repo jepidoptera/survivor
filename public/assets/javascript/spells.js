@@ -3642,11 +3642,11 @@ const SpellSystem = (() => {
         if (!item) {
             return { band: 1, depth: 0, y: 0, x: 0 };
         }
-        const band = (item.type === "road") ? 0 : 1;
+        const band = (item.type === "road" || item.type === "roadPath") ? 0 : 1;
         let depth = 0;
         if (Number.isFinite(item.renderZ)) {
             depth = Number(item.renderZ);
-        } else if (item.type === "road") {
+        } else if (item.type === "road" || item.type === "roadPath") {
             depth = 0;
         } else {
             const baseDepth = Number.isFinite(item.y) ? item.y : 0;
@@ -4550,12 +4550,18 @@ const SpellSystem = (() => {
         }
 
         if (spellName === "buildroad") {
+            const mapRef = wizardRef.map || null;
             const roadNode = (snapTarget && snapTarget.node)
                 ? snapTarget.node
-                : wizardRef.map.worldToNode(worldX, worldY);
-            if (!roadNode) return false;
+                : (mapRef && typeof mapRef.worldToNode === "function" ? mapRef.worldToNode(worldX, worldY) : null);
+            const startPoint = (snapTarget && snapTarget.point && Number.isFinite(snapTarget.point.x) && Number.isFinite(snapTarget.point.y))
+                ? { x: Number(snapTarget.point.x), y: Number(snapTarget.point.y) }
+                : (roadNode && Number.isFinite(roadNode.x) && Number.isFinite(roadNode.y)
+                    ? { x: Number(roadNode.x), y: Number(roadNode.y) }
+                    : wrapWorldPointForMap(mapRef, worldX, worldY));
+            if (!startPoint) return false;
             wizardRef.roadLayoutMode = true;
-            wizardRef.roadStartPoint = roadNode;
+            wizardRef.roadStartPoint = startPoint;
             ensureDragPreview(wizardRef, "buildroad");
             return true;
         }
@@ -4792,27 +4798,36 @@ const SpellSystem = (() => {
 
         if (spellName === "buildroad") {
             if (!isDragSpellActive(wizardRef, "buildroad")) return false;
-            const roadNode = wizardRef.map.worldToNode(worldX, worldY);
-            if (!roadNode) {
+            const mapRef = wizardRef.map || null;
+            const startPoint = wizardRef.roadStartPoint;
+            const endPoint = wrapWorldPointForMap(mapRef, worldX, worldY);
+            if (
+                !startPoint ||
+                !endPoint ||
+                !Number.isFinite(startPoint.x) ||
+                !Number.isFinite(startPoint.y) ||
+                !Number.isFinite(endPoint.x) ||
+                !Number.isFinite(endPoint.y)
+            ) {
                 cancelDragSpell(wizardRef, "buildroad");
                 return true;
             }
-            const nodeA = wizardRef.roadStartPoint;
-            const nodeB = roadNode;
-            const width = (nodeA === nodeB) ? 1 : getSelectedRoadWidth(wizardRef);
-            const roadNodes = wizardRef.map.getHexLine(nodeA, nodeB, width);
+            if (pointsMatchWorld(mapRef, startPoint, endPoint)) {
+                cancelDragSpell(wizardRef, "buildroad");
+                return true;
+            }
+            const width = getSelectedRoadWidth(wizardRef);
             const selectedFlooring = getSelectedFlooringTexture(wizardRef);
-            roadNodes.forEach(node => {
-                const hasRoad = (typeof Road !== "undefined" && typeof Road.hasMatchingRoadAtNode === "function")
-                    ? Road.hasMatchingRoadAtNode(node, selectedFlooring)
-                    : (node.objects && node.objects.some(obj => obj.type === "road"));
-                if (!hasRoad) {
-                    new Road({x: node.x, y: node.y}, [], wizardRef.map, {
-                        fillTexturePath: selectedFlooring
-                    });
-                    markLevel0SurfaceRoadDirtyForNode(wizardRef.map, node);
-                }
+            if (typeof RoadPath !== "function") {
+                throw new Error("Cannot place path road because RoadPath is unavailable.");
+            }
+            const roadPath = new RoadPath([startPoint, endPoint], mapRef, {
+                width,
+                fillTexturePath: selectedFlooring
             });
+            if (roadPath && mapRef && mapRef._prototypeObjectState) {
+                mapRef._prototypeObjectState.captureScanNeeded = true;
+            }
             if (!editorMode) {
                 wizardRef.magic -= 5;
             }
