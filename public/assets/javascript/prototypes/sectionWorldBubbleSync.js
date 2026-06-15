@@ -276,6 +276,10 @@
             addBubbleHotspot(hotspots, "objects.roadRefresh", stats.roadRefreshMs, {
                 count: Number(stats.roadRefreshCount) || 0
             });
+            addBubbleHotspot(hotspots, "objects.roadDirty", stats.roadDirtyMs, {
+                nodes: Number(stats.roadDirtyCount) || 0,
+                assets: Number(stats.roadDirtyAssetCount) || 0
+            });
             addBubbleHotspot(hotspots, "objects.load", stats.loadMs, {
                 loaded: Number(stats.loaded) || 0
             });
@@ -292,6 +296,7 @@
             const timings = Object.fromEntries(
                 [
                     ["roadRefresh", stats.roadRefreshMs],
+                    ["roadDirty", stats.roadDirtyMs],
                     ["load", stats.loadMs],
                     ["staticLoad", stats.staticLoadMs],
                     ["treeFinalize", stats.treeFinalizeMs],
@@ -312,6 +317,10 @@
                 removed: Number(stats.removed) || 0,
                 timings
             };
+            if ((Number(stats.roadDirtyCount) || 0) > 0) {
+                summary.roadDirtyCount = Number(stats.roadDirtyCount) || 0;
+                summary.roadDirtyAssetCount = Number(stats.roadDirtyAssetCount) || 0;
+            }
             const byType = buildBubbleByTypeList(stats.byType);
             if (byType.length > 0) {
                 summary.byType = byType;
@@ -385,6 +394,115 @@
                 : []
         });
 
+        const getPrototypeBubbleSettleFrameCount = (options = {}) => {
+            if (Number.isFinite(Number(options.settleFrames))) {
+                return Math.max(0, Math.floor(Number(options.settleFrames)));
+            }
+            return 1;
+        };
+
+        const getPrototypeBubbleSettleWizard = (options = {}) => {
+            if (options && options.actor && typeof options.actor === "object") return options.actor;
+            if (typeof globalThis !== "undefined" && globalThis.wizard && typeof globalThis.wizard === "object") {
+                return globalThis.wizard;
+            }
+            return null;
+        };
+
+        const getPrototypeBubbleSettleWizardLayer = (wizard) => {
+            if (!wizard || typeof wizard !== "object") return 0;
+            const candidates = [
+                wizard.currentLayer,
+                wizard.traversalLayer,
+                wizard.node && wizard.node.traversalLayer
+            ];
+            for (let i = 0; i < candidates.length; i++) {
+                const layer = Number(candidates[i]);
+                if (Number.isFinite(layer)) return Math.round(layer);
+            }
+            return 0;
+        };
+
+        const shouldBypassPrototypeBubbleSettle = (session, options = {}) => {
+            if (!session) return { bypass: true, reason: "missing-session" };
+            if (options && options.forceComplete === true) return { bypass: true, reason: "force-complete" };
+            if (options && options.skipSettle === true) return { bypass: true, reason: "skip-settle" };
+            if (getPrototypeBubbleSettleFrameCount(options) <= 0) return { bypass: true, reason: "zero-settle-frames" };
+            if (map && typeof map.getPrototypeWorldScope === "function") {
+                const scope = map.getPrototypeWorldScope();
+                if (scope && scope.type === "building") return { bypass: true, reason: "building-scope" };
+            }
+            const wizard = getPrototypeBubbleSettleWizard(options);
+            if (wizard) {
+                const support = wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                    ? wizard.currentMovementSupport
+                    : null;
+                if (support && support.ownerType === "building") {
+                    return { bypass: true, reason: "building-support" };
+                }
+                const wizardLayer = getPrototypeBubbleSettleWizardLayer(wizard);
+                if (wizardLayer !== 0) return { bypass: true, reason: "non-ground-layer" };
+            }
+            return { bypass: false, reason: "" };
+        };
+
+        const beginPrototypeBubbleSettlePhase = (session, options = {}) => {
+            if (!session || session.phase === "settle") return session;
+            const bypass = shouldBypassPrototypeBubbleSettle(session, options);
+            if (bypass.bypass) {
+                session.settleSkippedReason = bypass.reason;
+                return finalizePrototypeAsyncBubbleShiftSession(session);
+            }
+            session.phase = "settle";
+            session.settleFramesRemaining = getPrototypeBubbleSettleFrameCount(options);
+            session.settleFrameCount = 0;
+            session.settleStartedAtMs = prototypeNow();
+            return session;
+        };
+
+        const beginPrototypeBubbleCutawayRefreshPhase = (session) => {
+            if (!session) return session;
+            session.phase = "refresh";
+            session.cutawayRefreshStartedAtMs = prototypeNow();
+            session.cutawayRefreshFrameCount = 0;
+            session.cutawayRefreshReadyToComplete = true;
+            return session;
+        };
+
+        const advancePrototypeBubbleSettlePhase = (session, options = {}) => {
+            if (!session || session.phase !== "settle") return session;
+            const bypass = shouldBypassPrototypeBubbleSettle(session, options);
+            if (bypass.bypass) {
+                session.settleSkippedReason = bypass.reason;
+                return finalizePrototypeAsyncBubbleShiftSession(session);
+            }
+            const remaining = Math.max(0, Math.floor(Number(session.settleFramesRemaining) || 0));
+            if (remaining <= 0) {
+                return finalizePrototypeAsyncBubbleShiftSession(session);
+            }
+            session.settleFramesRemaining = remaining - 1;
+            session.settleFrameCount = (Number(session.settleFrameCount) || 0) + 1;
+            if (session.settleFramesRemaining <= 0) {
+                session.settleCompletedAtMs = prototypeNow();
+                return beginPrototypeBubbleCutawayRefreshPhase(session);
+            }
+            return session;
+        };
+
+        const advancePrototypeBubbleCutawayRefreshPhase = (session, options = {}) => {
+            if (!session || session.phase !== "refresh") return session;
+            if (options && options.forceComplete === true) {
+                return finalizePrototypeAsyncBubbleShiftSession(session);
+            }
+            if (session.cutawayRefreshReadyToComplete === true) {
+                session.cutawayRefreshFrameCount = (Number(session.cutawayRefreshFrameCount) || 0) + 1;
+                session.cutawayRefreshCompletedAtMs = prototypeNow();
+                return finalizePrototypeAsyncBubbleShiftSession(session);
+            }
+            session.cutawayRefreshReadyToComplete = true;
+            return session;
+        };
+
         const buildBubbleFloorObjectIndexSummary = (stats, hotspots) => {
             if (!stats || typeof stats !== "object") return null;
             addBubbleHotspot(hotspots, "floorObjectIndex", stats.ms, {
@@ -411,8 +529,18 @@
             shiftFrameMs: null,
             frameBudgetMs: Math.max(0.25, Number(options.frameBudgetMs) || 2),
             queue: [],
+            phase: "work",
             completed: false,
             workMs: Number(layoutMs) || 0,
+            settleFramesRemaining: 0,
+            settleFrameCount: 0,
+            settleStartedAtMs: null,
+            settleCompletedAtMs: null,
+            settleSkippedReason: "",
+            cutawayRefreshStartedAtMs: null,
+            cutawayRefreshCompletedAtMs: null,
+            cutawayRefreshFrameCount: 0,
+            cutawayRefreshReadyToComplete: false,
             maxFrameSliceMs: 0,
             frameSliceCount: 0,
             maxTaskExecution: null,
@@ -498,7 +626,10 @@
                             maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
                             sliceCount: Number(session.frameSliceCount) || 0,
                             workMs: toBubbleMs(session.workMs),
-                            totalMs: toBubbleMs(totalMs)
+                            totalMs: toBubbleMs(totalMs),
+                            settleFrames: Number(session.settleFrameCount) || 0,
+                            cutawayRefreshFrames: Number(session.cutawayRefreshFrameCount) || 0,
+                            settleSkippedReason: session.settleSkippedReason || ""
                         },
                         tasks: buildBubbleTaskSummary(session),
                         layout: buildBubbleLayoutSummary(
@@ -535,6 +666,10 @@
                     promiseWaitMs: toBubbleMs(session.promiseWaitMs),
                     sliceCount: Number(session.frameSliceCount) || 0,
                     maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
+                    settleFrames: Number(session.settleFrameCount) || 0,
+                    cutawayRefreshFrames: Number(session.cutawayRefreshFrameCount) || 0,
+                    settleSkippedReason: session.settleSkippedReason || "",
+                    tasks: buildBubbleTaskSummary(session),
                     render: buildBubbleRenderSummary(session.renderStats, []),
                     profileLogged,
                     profileBuildMs: toBubbleMs(profileBuildMs),
@@ -548,6 +683,12 @@
             if (!session || session.completed === true) return session;
             if (session.error) throw session.error;
             if (session.pendingPromise) return session;
+            if (session.phase === "settle") {
+                return advancePrototypeBubbleSettlePhase(session, options);
+            }
+            if (session.phase === "refresh") {
+                return advancePrototypeBubbleCutawayRefreshPhase(session, options);
+            }
             const budgetMs = Math.max(0.25, Number(options.frameBudgetMs) || Number(session.frameBudgetMs) || 2);
             const deadline = prototypeNow() + budgetMs;
             const sliceStart = prototypeNow();
@@ -571,7 +712,7 @@
                 }
             }
             if (!session.pendingPromise && session.queue.length === 0) {
-                return finalizePrototypeAsyncBubbleShiftSession(session);
+                return beginPrototypeBubbleSettlePhase(session, options);
             }
             return session;
         };
@@ -645,6 +786,11 @@
                 while (session && session.completed !== true && tasksRun < maxTasks) {
                     if (session.error) throw session.error;
                     if (session.pendingPromise) break;
+                    if (session.phase === "settle" || session.phase === "refresh") {
+                        finalizePrototypeAsyncBubbleShiftSession(session);
+                        session = this._prototypeBubbleShiftSession;
+                        break;
+                    }
                     if (!Array.isArray(session.queue) || session.queue.length === 0) {
                         finalizePrototypeAsyncBubbleShiftSession(session);
                         session = this._prototypeBubbleShiftSession;

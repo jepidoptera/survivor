@@ -68,6 +68,8 @@ const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile
 const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backups');
 const sectionWorldSavesRoot = path.join(__dirname, 'public', 'assets', 'saves');
 const buildingEditorSavesDir = path.join(__dirname, 'public', 'assets', 'saves', 'building-editor');
+const sectionWorldBuildingDirName = 'buildings';
+const sectionWorldBuildingIndexFileName = 'index.json';
 
 function normalizeSaveSlotName(rawSlot) {
     const slot = String(rawSlot === undefined || rawSlot === null ? '' : rawSlot).trim();
@@ -169,6 +171,101 @@ function buildSectionFileName(section) {
     return `${q},${r}.json`;
 }
 
+function normalizeSectionWorldBuildingId(rawId) {
+    const id = String(rawId === undefined || rawId === null ? '' : rawId).trim();
+    if (!id || id.length > 160) return '';
+    if (id.includes('/') || id.includes('\\')) return '';
+    return id;
+}
+
+function buildSectionWorldBuildingFileName(buildingId) {
+    const id = normalizeSectionWorldBuildingId(buildingId);
+    if (!id) return '';
+    return `${encodeURIComponent(id)}.json`;
+}
+
+function resolveSectionWorldBuildingDir(slotDir) {
+    return path.join(slotDir, sectionWorldBuildingDirName);
+}
+
+function writeSectionWorldBuildingRecords(slotDir, buildings) {
+    const buildingDir = resolveSectionWorldBuildingDir(slotDir);
+    fs.mkdirSync(buildingDir, { recursive: true });
+
+    const indexRecords = [];
+    const nextFileNames = new Set([sectionWorldBuildingIndexFileName]);
+    for (let i = 0; i < buildings.length; i++) {
+        const building = buildings[i];
+        if (!building || typeof building !== 'object' || Array.isArray(building)) {
+            throw new Error('sectionworld building record must be an object');
+        }
+        const buildingId = normalizeSectionWorldBuildingId(building.id);
+        if (!buildingId) {
+            throw new Error('sectionworld building record is missing id');
+        }
+        const fileName = buildSectionWorldBuildingFileName(buildingId);
+        if (!fileName) {
+            throw new Error(`sectionworld building ${buildingId} has invalid file name`);
+        }
+        const filePath = path.join(buildingDir, fileName);
+        fs.writeFileSync(filePath, JSON.stringify(building, null, 2), 'utf8');
+        indexRecords.push({ id: buildingId, file: fileName });
+        nextFileNames.add(fileName);
+    }
+
+    fs.writeFileSync(
+        path.join(buildingDir, sectionWorldBuildingIndexFileName),
+        JSON.stringify(indexRecords, null, 2),
+        'utf8'
+    );
+
+    for (const entry of fs.readdirSync(buildingDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+        if (nextFileNames.has(entry.name)) continue;
+        fs.unlinkSync(path.join(buildingDir, entry.name));
+    }
+}
+
+function readSectionWorldBuildingRecords(slotDir) {
+    const buildingDir = resolveSectionWorldBuildingDir(slotDir);
+    if (!fs.existsSync(buildingDir)) return null;
+
+    const readBuildingFile = (fileName) => {
+        if (typeof fileName !== 'string' || !fileName.endsWith('.json') || fileName.includes('/') || fileName.includes('\\')) {
+            return null;
+        }
+        const filePath = path.join(buildingDir, fileName);
+        if (!fs.existsSync(filePath)) return null;
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    };
+
+    const indexPath = path.join(buildingDir, sectionWorldBuildingIndexFileName);
+    if (fs.existsSync(indexPath)) {
+        const parsedIndex = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+        if (!Array.isArray(parsedIndex)) {
+            throw new Error('sectionworld building index must be an array');
+        }
+        const buildings = [];
+        for (let i = 0; i < parsedIndex.length; i++) {
+            const entry = parsedIndex[i];
+            const fileName = entry && typeof entry.file === 'string'
+                ? entry.file
+                : buildSectionWorldBuildingFileName(entry && entry.id);
+            const building = readBuildingFile(fileName);
+            if (building) buildings.push(building);
+        }
+        return buildings;
+    }
+
+    return fs.readdirSync(buildingDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+        .map(entry => entry.name)
+        .sort((a, b) => a.localeCompare(b))
+        .map(readBuildingFile)
+        .filter(Boolean);
+}
+
 function formatTimestampToSecond(date = new Date()) {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -204,8 +301,11 @@ function saveSectionWorldSlot(requestedSlot, payload) {
         fs.writeFileSync(triggersPath, JSON.stringify(triggers, null, 2), 'utf8');
     }
     if (hasBuildings) {
-        const buildingsPath = path.join(slotDir, 'buildings.json');
-        fs.writeFileSync(buildingsPath, JSON.stringify(buildings, null, 2), 'utf8');
+        writeSectionWorldBuildingRecords(slotDir, buildings);
+        const legacyBuildingsPath = path.join(slotDir, 'buildings.json');
+        if (fs.existsSync(legacyBuildingsPath)) {
+            fs.unlinkSync(legacyBuildingsPath);
+        }
     }
     const validSections = sections.filter(isValidSectionCoordRecord);
     for (let i = 0; i < validSections.length; i++) {
@@ -263,14 +363,15 @@ function loadSectionWorldSlot(requestedSlot) {
     }
 
     const buildingsPath = path.join(slotDir, 'buildings.json');
-    let buildings = [];
-    if (fs.existsSync(buildingsPath)) {
+    const fileBackedBuildings = readSectionWorldBuildingRecords(slotDir);
+    let buildings = Array.isArray(fileBackedBuildings) ? fileBackedBuildings : [];
+    if (!Array.isArray(fileBackedBuildings) && fs.existsSync(buildingsPath)) {
         const rawBuildings = fs.readFileSync(buildingsPath, 'utf8');
         const parsedBuildings = JSON.parse(rawBuildings);
         if (Array.isArray(parsedBuildings)) {
             buildings = parsedBuildings;
         }
-    } else if (Array.isArray(manifest.buildings)) {
+    } else if (!Array.isArray(fileBackedBuildings) && Array.isArray(manifest.buildings)) {
         buildings = manifest.buildings;
     }
 

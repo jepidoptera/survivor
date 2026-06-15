@@ -62,16 +62,16 @@ X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
   phase through walls
-  placing a roof should designate a building
-  new building menu toolset
-  when a building is created, make a new floor fragment at the ground level.
-  stairs
+X placing a roof should designate a building
+X new building menu toolset
+X when a building is created, make a new floor fragment at the ground level.
+X stairs
   height-aware LOS shadows
   make omnivision use a floating eye
   see over short walls or objects
 / incremental, non-lagging load
   upgradable spells
-/ multiple floors!
+X multiple floors!
   shop sells magic items
   holding the spell hotkey works to cast the spell just like spacebar
   mind control spells
@@ -97,7 +97,8 @@ X multiple roof types
 / add and subtract polygon tools are editable until you hit finalize. they can be resized without changing shape, rotated, and the edges are draggable.
 / "snap direction" option
 X multiple save slots
-  posts and beams
+/ posts and beams
+  multiple floor fragments allowed on the same continuous level
 
 problems:
 X animals running through walls (some node link blocks were missing)
@@ -132,19 +133,19 @@ X walls on level != 0 don't merge
 X character can't be placed on levels != 0
 X spells don't aim correctly
 X wizard draws on top of hat
-  yetis don't stay aggro or knock down doors
-  megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
-  level editing (and probably other stuff) shouldn't be in spells.js
-  powerups come back once you leave the area
-/ section loading is too slow
-  npcs can't cross fragments
 X partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
 X cutting a hole in a floor causes walls to stop working
 X floor fragment edges slow but don't stop movement
-  trees can't place within building footprint rectangle
 X rugs on an upper floor are visible in the building overlay
-  inside and outside doors have opposite handles
-  delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads
+X inside and outside doors have opposite handles
+X trees can't place within building footprint rectangle
+  yetis don't stay aggro or knock down doors
+  megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
+  level editing (and probably other stuff) shouldn't be in spells.js
+/ section loading is too slow
+  npcs can't cross fragments
+  powerups come back once you leave the area
+/ delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads (remove legacy loading capability, don't need it)
 
 
 

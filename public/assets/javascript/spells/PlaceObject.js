@@ -55,6 +55,15 @@ function resolveEditorLayerInfo(wizardRef) {
 
 function resolvePlaceObjectWorldPointOnLayer(wizardRef, fallbackX, fallbackY, options = {}) {
     const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+    const visibleTargetFn = (typeof globalThis !== "undefined" && typeof globalThis.resolveEditorPlacementTarget === "function")
+        ? globalThis.resolveEditorPlacementTarget
+        : null;
+    if (visibleTargetFn && !(options && options.useVisibleFloorTarget === false)) {
+        const target = visibleTargetFn(wizardRef, fallbackX, fallbackY, options);
+        if (target && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+            return target;
+        }
+    }
     const screenX = Number.isFinite(options && options.screenX)
         ? Number(options.screenX)
         : ((typeof globalThis !== "undefined" && globalThis.mousePos && Number.isFinite(globalThis.mousePos.screenX))
@@ -160,6 +169,11 @@ function resolveEditorNodeOnLayer(mapRef, worldX, worldY, layer = 0, options = {
                 : ""));
     const resolvedNode = mapRef.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
         sectionKey,
+        surfaceId: typeof (options && options.surfaceId) === "string" ? options.surfaceId : "",
+        fragmentId: typeof (options && options.fragmentId) === "string" ? options.fragmentId : "",
+        sourceNode: baseNode,
+        worldX,
+        worldY,
         allowScan: !(options && options.allowScan === false)
     });
     logPlaceObjectDebug("resolve-node-floor-lookup", {
@@ -174,11 +188,123 @@ function resolveEditorNodeOnLayer(mapRef, worldX, worldY, layer = 0, options = {
     return resolvedNode;
 }
 
+function getEditorPlacementFloorFragment(mapRef, placementTarget) {
+    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+    if (floorSupportApi && typeof floorSupportApi.getPlacementTargetFragment === "function") {
+        return floorSupportApi.getPlacementTargetFragment(mapRef, placementTarget);
+    }
+    const floorTarget = placementTarget && placementTarget.floorTarget && typeof placementTarget.floorTarget === "object"
+        ? placementTarget.floorTarget
+        : null;
+    if (floorTarget && floorTarget.fragment && typeof floorTarget.fragment === "object") {
+        return floorTarget.fragment;
+    }
+    const fragmentId = typeof placementTarget?.fragmentId === "string" && placementTarget.fragmentId.length > 0
+        ? placementTarget.fragmentId
+        : (floorTarget && floorTarget.fragment && typeof floorTarget.fragment.fragmentId === "string"
+            ? floorTarget.fragment.fragmentId
+            : "");
+    if (fragmentId && mapRef && mapRef.floorsById instanceof Map) {
+        return mapRef.floorsById.get(fragmentId) || null;
+    }
+    return null;
+}
+
+function isPrototypeBuildingPlacementFloorFragment(fragment) {
+    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+    if (floorSupportApi && typeof floorSupportApi.isPrototypeBuildingPlacementFloorFragment === "function") {
+        return floorSupportApi.isPrototypeBuildingPlacementFloorFragment(fragment);
+    }
+    if (!fragment || typeof fragment !== "object") return false;
+    const ownerType = typeof fragment.ownerType === "string" ? fragment.ownerType : "";
+    const ownerId = typeof fragment.ownerId === "string" ? fragment.ownerId : "";
+    return ownerType === "building" && ownerId.length > 0 && fragment.renderedByBuildingCutaway === true;
+}
+
+function shouldAddPlacedObjectToFloorBuildingManifest(mapRef, placedObject, placementTarget) {
+    if (!mapRef || !placedObject || typeof placedObject !== "object") return false;
+    const fragment = getEditorPlacementFloorFragment(mapRef, placementTarget) || (() => {
+        const fragmentId = typeof placedObject.fragmentId === "string" && placedObject.fragmentId.length > 0
+            ? placedObject.fragmentId
+            : (typeof placedObject.node?.fragmentId === "string" ? placedObject.node.fragmentId : "");
+        return fragmentId && mapRef.floorsById instanceof Map ? mapRef.floorsById.get(fragmentId) || null : null;
+    })();
+    return !isPrototypeBuildingPlacementFloorFragment(fragment);
+}
+
+function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementNode = null) {
+    if (!entity || !placementTarget || typeof placementTarget !== "object") return null;
+    const layer = Number.isFinite(placementTarget.layer) ? Math.round(Number(placementTarget.layer)) : 0;
+    const baseZ = Number.isFinite(placementTarget.baseZ) ? Number(placementTarget.baseZ) : layer * 3;
+    const floorTarget = placementTarget.floorTarget && typeof placementTarget.floorTarget === "object"
+        ? placementTarget.floorTarget
+        : null;
+    const fragment = getEditorPlacementFloorFragment(mapRef, placementTarget);
+    const node = placementNode || placementTarget.node || null;
+    const fragmentId = typeof (fragment && fragment.fragmentId) === "string"
+        ? fragment.fragmentId
+        : (typeof node?.fragmentId === "string" ? node.fragmentId : "");
+    const surfaceId = typeof (fragment && fragment.surfaceId) === "string"
+        ? fragment.surfaceId
+        : (typeof node?.surfaceId === "string" ? node.surfaceId : "");
+    const hasFloorSupport = !!(fragment || floorTarget || layer !== 0);
+    if (mapRef && typeof mapRef.setActorCurrentMovementSupport === "function") {
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const support = hasFloorSupport && floorSupportApi && typeof floorSupportApi.createFloorSupport === "function"
+            ? floorSupportApi.createFloorSupport({ layer, baseZ, fragment, fragmentId, surfaceId, node })
+            : (hasFloorSupport ? {
+                type: "floor",
+                layer,
+                baseZ,
+                fragment,
+                fragmentId,
+                surfaceId,
+                node
+            } : {
+                type: "ground",
+                layer: 0,
+                baseZ: 0,
+                node
+            });
+        return mapRef.setActorCurrentMovementSupport(entity, support, {
+            suppressLayerTransition: true
+        });
+    }
+    if (node) entity.node = node;
+    entity.currentLayer = layer;
+    entity.traversalLayer = layer;
+    entity.currentLayerBaseZ = baseZ;
+    if (surfaceId) entity.surfaceId = surfaceId;
+    if (fragmentId) entity.fragmentId = fragmentId;
+    if (hasFloorSupport) {
+        entity.currentMovementSupport = {
+            type: "floor",
+            layer,
+            baseZ,
+            fragmentId,
+            surfaceId,
+            ownerType: typeof fragment?.ownerType === "string" ? fragment.ownerType : "",
+            ownerId: typeof fragment?.ownerId === "string" ? fragment.ownerId : "",
+            sectionKey: typeof fragment?.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+            nodeId: node && typeof node.id === "string" ? node.id : ""
+        };
+        if (!Number.isFinite(entity.z)) entity.z = baseZ;
+    } else {
+        entity.currentMovementSupport = { type: "ground", layer: 0, baseZ: 0 };
+        if (!Number.isFinite(entity.z)) entity.z = 0;
+    }
+    return entity.currentMovementSupport;
+}
+
 if (typeof globalThis !== "undefined") {
+    globalThis.applyEditorPlacementSupport = applyEditorPlacementSupport;
     globalThis.describePlaceObjectNode = describePlaceObjectNode;
+    globalThis.getEditorPlacementFloorFragment = getEditorPlacementFloorFragment;
+    globalThis.isPrototypeBuildingPlacementFloorFragment = isPrototypeBuildingPlacementFloorFragment;
     globalThis.logPlaceObjectDebug = logPlaceObjectDebug;
     globalThis.resolveEditorLayerInfo = resolveEditorLayerInfo;
     globalThis.resolveEditorWorldPointOnLayer = resolveEditorWorldPointOnLayer;
+    globalThis.shouldAddPlacedObjectToFloorBuildingManifest = shouldAddPlacedObjectToFloorBuildingManifest;
     globalThis.resolveEditorNodeOnLayer = resolveEditorNodeOnLayer;
     globalThis.resolvePlaceObjectLayerInfo = resolvePlaceObjectLayerInfo;
     globalThis.resolvePlaceObjectWorldPointOnLayer = resolvePlaceObjectWorldPointOnLayer;
@@ -474,7 +600,18 @@ class PlaceObject extends globalThis.Spell {
             wizard &&
             wizard.map &&
             typeof resolveEditorNodeOnLayer === "function"
-        ) ? resolveEditorNodeOnLayer(wizard.map, placedX, placedY, placementLayer, { allowScan: true }) : null;
+        ) ? resolveEditorNodeOnLayer(wizard.map, placedX, placedY, placementLayer, {
+            allowScan: true,
+            sectionKey: typeof layerPoint.sectionKey === "string"
+                ? layerPoint.sectionKey
+                : (typeof layerPoint.floorTarget?.fragment?.ownerSectionKey === "string" ? layerPoint.floorTarget.fragment.ownerSectionKey : ""),
+            fragmentId: typeof layerPoint.fragmentId === "string"
+                ? layerPoint.fragmentId
+                : (typeof layerPoint.floorTarget?.fragment?.fragmentId === "string" ? layerPoint.floorTarget.fragment.fragmentId : ""),
+            surfaceId: typeof layerPoint.surfaceId === "string"
+                ? layerPoint.surfaceId
+                : (typeof layerPoint.floorTarget?.fragment?.surfaceId === "string" ? layerPoint.floorTarget.fragment.surfaceId : "")
+        }) : null;
         logPlaceObjectDebug("placement-target", {
             selectedCategory,
             selectedTexturePath,
@@ -541,14 +678,16 @@ class PlaceObject extends globalThis.Spell {
             placedObject._placeObjectDebugId = `placed-${Math.round(debugNow)}-${Math.floor(Math.random() * 100000)}`;
             placedObject._placeObjectDebugTraceUntilMs = debugNow + 5000;
         }
-        if (
-            useWallSnapPlacement &&
-            Number.isFinite(wallSnapPlacement.snappedZ) &&
-            placedObject
-        ) {
-            placedObject.z = Number(wallSnapPlacement.snappedZ);
-        }
         if (placedObject) {
+            if (typeof applyEditorPlacementSupport === "function") {
+                applyEditorPlacementSupport(placedObject, wizard.map || null, layerPoint, placementNode);
+            }
+            if (
+                useWallSnapPlacement &&
+                Number.isFinite(wallSnapPlacement.snappedZ)
+            ) {
+                placedObject.z = Number(wallSnapPlacement.snappedZ);
+            }
             placedObject.traversalLayer = placementLayer;
             placedObject.level = placementLayer;
             placedObject._renderTraversalLayer = placementLayer;
@@ -623,7 +762,8 @@ class PlaceObject extends globalThis.Spell {
             placedObject &&
             wizard &&
             wizard.map &&
-            typeof wizard.map.addObjectToFloorBuildingManifest === "function"
+            typeof wizard.map.addObjectToFloorBuildingManifest === "function" &&
+            shouldAddPlacedObjectToFloorBuildingManifest(wizard.map, placedObject, layerPoint)
         ) {
             wizard.map.addObjectToFloorBuildingManifest(placedObject, {
                 fragmentId: placedObject.fragmentId,

@@ -590,6 +590,143 @@ test("wizard save/load preserves stair support until runtime stairs are rebuilt"
     assert.equal(loadedWizard._stairSupport.stairId, "building:stairs-a");
 });
 
+test("wizard save omits generated outdoor ground floor fragment support", () => {
+    const groundFragment = {
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        level: 0,
+        ownerType: "section",
+        ownerId: "0,0",
+        _prototypeGroundFloor: true,
+        outerPolygon: [
+            { x: -10, y: -10 },
+            { x: 10, y: -10 },
+            { x: 10, y: 10 },
+            { x: -10, y: 10 }
+        ]
+    };
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        x: 1,
+        y: 2,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        surfaceId: groundFragment.surfaceId,
+        fragmentId: groundFragment.fragmentId,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragment: groundFragment,
+            fragmentId: groundFragment.fragmentId,
+            surfaceId: groundFragment.surfaceId
+        },
+        hp: 100,
+        maxHp: 100,
+        map: {
+            floorsById: new Map([[groundFragment.fragmentId, groundFragment]]),
+            wrapWorldX(value) { return value; },
+            wrapWorldY(value) { return value; },
+            isPointSupportedByFloorFragment() { return true; }
+        },
+        getTemperature() { return 0; },
+        getTemperatureBaseline() { return 0; },
+        serializeInventory() { return []; }
+    });
+
+    const saved = wizard.saveJson();
+
+    assert.equal(saved.currentLayer, 0);
+    assert.equal(saved.surfaceId, undefined);
+    assert.equal(saved.fragmentId, undefined);
+});
+
+test("wizard load restores stale generated outdoor ground fragment as ground support", () => {
+    const groundFragment = {
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        level: 0,
+        ownerType: "section",
+        ownerId: "0,0",
+        _prototypeGroundFloor: true,
+        outerPolygon: [
+            { x: -10, y: -10 },
+            { x: 10, y: -10 },
+            { x: 10, y: 10 },
+            { x: -10, y: 10 }
+        ]
+    };
+    const node = { xindex: 2, yindex: 3, traversalLayer: 0, baseZ: 0, objects: [] };
+    const loadedWizard = Object.create(Wizard.prototype);
+    Object.assign(loadedWizard, {
+        map: {
+            floorsById: new Map([[groundFragment.fragmentId, groundFragment]]),
+            wrapWorldX(value) { return value; },
+            wrapWorldY(value) { return value; },
+            worldToNode() { return node; },
+            getFloorSupportAtWorldPosition() { return null; },
+            isPointSupportedByFloorFragment() { return false; },
+            setActorCurrentMovementSupport(actor, support) {
+                actor.currentMovementSupport = support;
+                actor.currentLayer = support.layer;
+                actor.traversalLayer = support.layer;
+                actor.currentLayerBaseZ = support.baseZ;
+                if (support.type === "ground") {
+                    actor.surfaceId = "";
+                    actor.fragmentId = "";
+                }
+                return support;
+            }
+        },
+        node: null,
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        ensureMagicPointsInitialized() {},
+        getTemperatureBaseline() { return 0; },
+        setTemperature() {},
+        isFrozen() { return false; },
+        applyFrozenState() {},
+        setGameMode(value) { this.gameMode = value; },
+        setDifficulty(value) { this.difficulty = value; },
+        loadInventory() {},
+        updateHitboxes() {},
+        refreshSpellSelector() {},
+        refreshEditorSelector() {},
+        updateModeToggleUi() {}
+    });
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args);
+    try {
+        loadedWizard.loadJson({
+            x: 50,
+            y: 50,
+            z: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            surfaceId: groundFragment.surfaceId,
+            fragmentId: groundFragment.fragmentId,
+            viewport: { x: 0, y: 0 }
+        });
+    } finally {
+        console.warn = originalWarn;
+    }
+
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(loadedWizard.currentMovementSupport.type, "ground");
+    assert.equal(loadedWizard.fragmentId, "");
+    assert.equal(loadedWizard.surfaceId, "");
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0][0], /generated outdoor ground fragment/);
+});
+
 test("wizard draw keeps dead wizard on standing frame", () => {
     const wizard = Object.create(Wizard.prototype);
     wizard.pixiSprite = null;

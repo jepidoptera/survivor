@@ -147,11 +147,222 @@ test("saveGameState persists prototype animals in section data without duplicati
     const saveData = filesystem.saveGameState();
 
     assert.ok(saveData);
-    assert.deepEqual(saveData.animals, [{ type: "bear", x: 1, y: 2 }]);
+    assert.deepEqual(saveData.animals, []);
+    assert.equal(Object.prototype.hasOwnProperty.call(saveData, "staticObjects"), false);
     assert.equal(saveData.prototypeSectionWorld.sections.length, 1);
     assert.deepEqual(saveData.prototypeSectionWorld.sections[0].animals, [
         { id: 101, type: "goat", x: 7, y: 9 }
     ]);
+});
+
+test("saveGameState stores prototype static objects only in section data", () => {
+    const prototypeSectionAsset = {
+        id: "section-0",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: 0, y: 0 },
+        neighborKeys: [],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: []
+    };
+
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 3,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]])
+    };
+    map.nodes[0][0].objects.push({
+        gone: false,
+        vanishing: false,
+        saveJson() {
+            return { type: "placedObject", id: 500, x: 1, y: 2 };
+        }
+    });
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = () => prototypeSectionAsset;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => {
+        prototypeSectionAsset.objects = [
+            { type: "placedObject", id: 500, x: 1, y: 2 }
+        ];
+        return true;
+    };
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+
+    assert.ok(saveData);
+    assert.equal(Object.prototype.hasOwnProperty.call(saveData, "staticObjects"), false);
+    assert.deepEqual(saveData.prototypeSectionWorld.sections[0].objects, [
+        { type: "placedObject", id: 500, x: 1, y: 2 }
+    ]);
+});
+
+test("saveGameState refuses to save without section-world runtime", () => {
+    const map = createRectMap();
+    map.nodes[0][0].objects.push({
+        gone: false,
+        vanishing: false,
+        saveJson() {
+            return { type: "placedObject", id: 77, x: 3, y: 4 };
+        }
+    });
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const errors = [];
+    const originalError = console.error;
+    console.error = (...args) => errors.push(args);
+    let saveData = null;
+    try {
+        saveData = filesystem.saveGameState();
+    } finally {
+        console.error = originalError;
+    }
+
+    assert.equal(saveData, null);
+    assert.match(errors[0][0], /section-world runtime/);
+});
+
+test("saveGameState strips generated outdoor ground support from wizard payload", () => {
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 3,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]])
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = () => ({
+        id: "section-0",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: 0, y: 0 },
+        neighborKeys: [],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: []
+    });
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return {
+                name: "Merlin",
+                x: -137,
+                y: 213,
+                currentLayer: 0,
+                traversalLayer: 0,
+                currentLayerBaseZ: 0,
+                surfaceId: "overworld_ground_surface",
+                fragmentId: "section:0,0:ground"
+            };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+
+    assert.ok(saveData);
+    assert.equal(saveData.wizard.fragmentId, undefined);
+    assert.equal(saveData.wizard.surfaceId, undefined);
+    assert.equal(saveData.wizard.currentLayer, 0);
+});
+
+test("loadGameState strips generated outdoor ground support before wizard restore", () => {
+    const map = createRectMap();
+    map.loadPrototypeSectionWorld = () => true;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    let loadedWizardData = null;
+    globalThis.map = map;
+    globalThis.wizard = {
+        fragmentId: "section:0,0:ground",
+        surfaceId: "overworld_ground_surface",
+        loadJson(data) {
+            loadedWizardData = data;
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const loaded = filesystem.loadGameState({
+        wizard: {
+            x: -135,
+            y: 218,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            surfaceId: "overworld_ground_surface",
+            fragmentId: "section:0,0:ground"
+        },
+        animals: [],
+        powerups: [],
+        prototypeSectionWorld: {
+            version: 1,
+            activeCenterKey: "0,0",
+            sections: []
+        }
+    });
+
+    assert.equal(loaded, true);
+    assert.ok(loadedWizardData);
+    assert.equal(loadedWizardData.fragmentId, "");
+    assert.equal(loadedWizardData.surfaceId, "");
 });
 
 test("loadGameState re-syncs prototype animals and powerups after loading section world", () => {
@@ -455,7 +666,15 @@ test("savePrototypeSectionWorldToServerSlot syncs animals and powerups before ex
         x: 0,
         y: 0,
         saveJson() {
-            return { name: "Merlin", x: 0, y: 0 };
+            return {
+                name: "Merlin",
+                x: 0,
+                y: 0,
+                currentLayer: 0,
+                traversalLayer: 0,
+                surfaceId: "overworld_ground_surface",
+                fragmentId: "section:0,0:ground"
+            };
         }
     };
 
@@ -474,6 +693,8 @@ test("savePrototypeSectionWorldToServerSlot syncs animals and powerups before ex
 
     assert.deepEqual(calls, ["walls", "objects", "animals", "powerups", "export"]);
     assert.equal(result.ok, true);
+    assert.equal(postedBody.manifest.wizard.fragmentId, undefined);
+    assert.equal(postedBody.manifest.wizard.surfaceId, undefined);
     assert.equal(postedBody.sections.length, 1);
     assert.deepEqual(postedBody.sections[0].animals, [{ id: 1 }]);
     assert.deepEqual(postedBody.sections[0].powerups, [{ id: 2 }]);

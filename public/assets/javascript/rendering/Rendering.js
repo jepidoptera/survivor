@@ -3430,6 +3430,9 @@ void main(void) {
                         const groundProjectionPolygons = renderCache.groundProjectionPolygons;
                         const buildingAlpha = this.getBuildingCutawayEntryAlpha(building.buildingId, nowMs);
                         buildingBoundsTests += 1;
+                        if (!this.isCutawayPointInsideBounds(wizardProjection, renderCache.occlusionBounds)) {
+                            continue;
+                        }
                         buildingPointTests += 1;
                         const exteriorCache = this.getPrototypeBuildingExteriorBitmapForCutaway(ctx, map, placement);
                         if (!exteriorCache) continue;

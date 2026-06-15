@@ -153,6 +153,8 @@ Outdoor ground is also a support fragment:
 
 This lets a building contain many fragments with different textures and roles: living room, balcony, roof walk, stair landing, basement floor, etc. Walking from the living room onto the balcony can change support fragment without leaving the building world unit.
 
+Generated outdoor section-ground fragments are runtime support geometry, not durable wizard save anchors. A wizard standing on ordinary outdoor level-0 ground should save as ground support with no `fragmentId`/`surfaceId`. Older saves that recorded ids like `section:0,0:ground` are normalized during load so they restore as plain ground support instead of failing against a stale generated section footprint.
+
 ## Support Validation Rule
 
 When support validation is required:
@@ -329,9 +331,12 @@ For map-space/camera-following fades, fading geometry should remain live in worl
 - [x] Extend the existing building save format with placed-instance metadata and placeholder building-owned objects/NPCs/triggers arrays.
 - [x] Add building-instance save/load integration parallel to section files for IndexedDB saves (`slot_buildings`).
 - [x] Add dirty world-unit registry for sections and buildings.
-- [x] Add backward-compatible migration from old top-level `prototypeSectionWorld.buildings` placement records.
+- [x] Treat section-world as the canonical current game save model; current saves no longer write legacy top-level `staticObjects`.
+- [x] Keep top-level `animals`/`powerups` empty for section-world saves; current runtime entities persist through section/building owner records.
+- [x] Add compatibility migration from old top-level `prototypeSectionWorld.buildings` placement records.
+- [x] Normalize generated outdoor ground wizard support on save/load so `section:*:ground` does not survive as a durable wizard floor anchor.
 - [ ] Clear dirty world-unit entries after successful selective saves.
-- [ ] Add a true server/export building-file backend parallel to the IndexedDB building store.
+- [x] Add a true server/export building-file backend parallel to the IndexedDB building store.
 
 ### 2. Section Refs
 
@@ -369,20 +374,47 @@ For map-space/camera-following fades, fading geometry should remain live in worl
 - [x] Resume outdoor scope when support changes to outdoor ground or another section-owned fragment.
 - [x] Reduce outdoor streaming bubble to an unordered four-section active set.
 - [x] Apply a 10-meter hysteresis threshold only to loaded-section set changes; exact floor/support section resolution still switches immediately.
+- [x] Add a prototype bubble settle phase before marking shifts complete.
+
+Bubble settle phase handoff:
+
+- Current evidence: the async bubble queue can finish smoothly, but the first post-completion frame can still hitch. A captured bad frame showed `drawMs`/`presentMs` around `52ms`, with `draw.collectCutawayMs` around `14.6ms` and `present.pumpMs` around `32ms`, while the completed bubble profile itself looked modest.
+- Working theory: the queue is being marked complete too early. During the active shift, render protections hold expensive cutaway work; when `session.completed` flips, normal rendering resumes immediately and pays cutaway recomputation plus PIXI/browser present catch-up in one unprotected frame.
+- Newer four-section bubble evidence: shifts represent active-bubble coverage changes rather than exact outdoor section-boundary crossings. A later expensive capture showed the main spike in `objects.roadSurfaceDirty` (`~41ms`) during bubble pump/settle, with cutaway held and `collectCutawayMs: 0`; this came from road-surface dirty flushes recursively calling `presentGameFrame()` while the bubble pump was still running.
+- Minimal implementation: introduce a session phase such as `work -> settle -> complete`. When the queue drains, keep `_prototypeBubbleShiftSession` alive in `settle` for one or two render frames, keep the existing safe cutaway hold active, let present/display-tree changes settle, then mark complete.
+- Stronger implementation if needed: make post-shift cutaway refresh queue-owned, e.g. a `render.cutawayRefresh`/settle task that slices the building/floor cutaway scan under the bubble budget and swaps from held state to refreshed state before completing.
+- Safety constraints: do not hold stale cutaway state when the wizard is entering/inside a building, in a doorway transition, or on an upper/interior layer. Those cases need current cutaway/support state more than hitch smoothing.
 
 ### 6. Support Fragment Ownership
 
 - [x] Give every relevant floor/support fragment an owner world unit.
-- [ ] Add event-driven support validation.
-- [ ] Transfer object/NPC ownership when support owner changes.
+- [x] Add shared `FloorSupport` helpers for fragment/support/entity owner resolution.
+- [x] Add event-driven support validation.
+- [x] Route editor placement for objects, powerups, and NPCs through visible floor/support targeting so building interiors can receive placed entities.
+- [x] Transfer object ownership when support owner changes.
+- [x] Transfer NPC ownership when support owner changes.
+- [x] Transfer powerup ownership when support owner changes.
 - [ ] Implement void fall/loss when no support is found below.
+
+Event-driven support validation notes:
+
+- `GameMap.validateActorMovementSupport(actor, options)` keeps a still-valid current support, otherwise searches downward from the actor's current world `z` for the highest floor/support fragment under the footprint.
+- The validation result reports `ownerChanged`, `previousSupport`, `nextSupport`, and `lost` so persistence transfer can stay explicit in the next ownership slice.
+- `markLost: true` marks unsupported actors/objects as void-lost (`gone`/`lostToVoid`) when no lower support exists.
 
 ### 7. Object And NPC Persistence
 
 - [x] Store placeholder building-owned objects/NPCs/triggers arrays in the building instance save.
-- [ ] Persist runtime building-owned objects/NPCs/triggers into those arrays.
-- [ ] Keep section-owned objects/NPCs in section files.
-- [ ] Mark both old and new owners dirty on transfer.
+- [x] Persist runtime building-owned objects into building instance arrays.
+- [x] Persist runtime building-owned NPCs into building instance arrays.
+- [x] Persist runtime building-owned powerups into building instance arrays.
+- [ ] Persist runtime building-owned triggers into those arrays.
+- [x] Keep section-owned objects in section files.
+- [x] Keep section-owned NPCs in section files.
+- [x] Keep section-owned powerups in section files.
+- [x] Mark both old and new object owners dirty on transfer.
+- [x] Mark both old and new NPC owners dirty on transfer.
+- [x] Mark both old and new powerup owners dirty on transfer.
 - [ ] Validate thrown/pushed/teleported actors and objects.
 
 ### 8. Rendering And Cache Hardening
@@ -400,7 +432,10 @@ Persistence:
 - Place a building and verify a building instance save is created.
 - Verify touched section files contain only refs.
 - Modify building interior, leave building, save outdoors, reload, and verify interior changes persist.
-- Verify old top-level building placement saves migrate or load compatibly.
+- Place objects, NPCs, and powerups on upper building floors, save outside, reload, and verify they remain building-owned.
+- Save a section-world game and verify it has no legacy top-level `staticObjects` payload.
+- Load an old wizard save containing `fragmentId: "section:*:ground"` and verify the wizard restores to plain ground support without a recovery warning.
+- Verify old top-level building placement saves migrate or load compatibly as imports only.
 
 Streaming:
 
@@ -408,6 +443,7 @@ Streaming:
 - A multi-section building shell loads when any touched section is active.
 - Moving inside a multi-section building does not shift outdoor section bubble.
 - Leaving from a balcony/roof resumes outdoor section streaming.
+- Bubble completion does not produce a first-post-shift frame hitch from cutaway recompute or present catch-up.
 
 Support:
 
@@ -421,7 +457,9 @@ Ownership:
 
 - Move object outdoor -> building marks both units dirty.
 - Throw object building -> outdoor marks both units dirty.
+- Runtime object capture now compares persistence owner signatures as well as save JSON, so support-owner changes are saved even when object geometry is unchanged.
 - NPC displaced out of building transfers ownership when support changes.
+- Powerup placed or moved into a building transfers ownership to the building instance.
 - Quiet static objects do not perform continuous per-frame support checks.
 
 Rendering:

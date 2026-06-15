@@ -1451,163 +1451,60 @@ function saveGameState(options = {}) {
         console.error("Cannot save: wizard, map, or animals not initialized");
         return null;
     }
+    if (!map._prototypeSectionState) {
+        console.error("Cannot save: section-world runtime is not initialized");
+        return null;
+    }
     const includeAllPrototypeSections = options && options.includeAllPrototypeSections === true;
-
-    const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
-        ? globalThis.roofs
-        : [];
 
     if (map && typeof map.syncPrototypeWalls === "function") {
         try {
             map.syncPrototypeWalls();
         } catch (e) {
-            console.warn("Prototype wall sync before save failed:", e);
+            console.warn("Section-world wall sync before save failed:", e);
         }
     }
     if (map && typeof map.syncPrototypeObjects === "function") {
         try {
             map.syncPrototypeObjects();
         } catch (e) {
-            console.warn("Prototype object sync before save failed:", e);
+            console.warn("Section-world object sync before save failed:", e);
         }
     }
     if (map && typeof map.syncPrototypeAnimals === "function") {
         try {
             map.syncPrototypeAnimals();
         } catch (e) {
-            console.warn("Prototype animal sync before save failed:", e);
+            console.warn("Section-world animal sync before save failed:", e);
         }
     }
     if (map && typeof map.syncPrototypePowerups === "function") {
         try {
             map.syncPrototypePowerups();
         } catch (e) {
-            console.warn("Prototype powerup sync before save failed:", e);
+            console.warn("Section-world powerup sync before save failed:", e);
         }
     }
 
-    const savingPrototypeSectionWorld = !!(map && map._prototypeSectionState);
+    const wizardData = wizard.saveJson();
+    sanitizeWizardSaveMovementSupport(wizardData);
     const saveData = {
         version: 1,
         timestamp: new Date().toISOString(),
-        wizard: wizard.saveJson(),
+        wizard: wizardData,
         los: {
             mazeMode: getSavedLosMazeModeValue()
         },
-        animals: animals
-            .filter(animal => {
-                if (!animal || animal.gone || animal.vanishing) return false;
-                if (!savingPrototypeSectionWorld) return true;
-                return animal._prototypeRuntimeRecord !== true;
-            })
-            .map(animal => animal.saveJson()),
-        staticObjects: [],
+        animals: [],
         groundTiles: encodeGroundTiles(map),
         clearanceMap: (typeof map.serializeClearance === "function")
             ? map.serializeClearance()
             : null,
         roof: null,
-        powerups: (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
-            ? globalThis.powerups
-                .filter(p => {
-                    if (!p || p.gone || p.collected || typeof p.saveJson !== "function") return false;
-                    if (!savingPrototypeSectionWorld) return true;
-                    return p._prototypeRuntimeRecord !== true;
-                })
-                .map(p => p.saveJson())
-            : []
+        powerups: []
     };
 
-    const loadedRoadRecords = [];
-    const loadedTreeRecords = [];
-    // Collect all static objects from the map (dedupe by object identity)
-    const seenStaticObjects = new Set();
-    const nodeSources = collectNodeSourcesForSave(map);
-    for (let sourceIndex = 0; sourceIndex < nodeSources.length; sourceIndex++) {
-        const source = nodeSources[sourceIndex];
-        if (!source) continue;
-        if (Array.isArray(source.nodes)) {
-            for (let i = 0; i < source.nodes.length; i++) {
-                const node = source.nodes[i];
-                if (!node || !node.objects || node.objects.length === 0) continue;
-                node.objects.forEach(obj => {
-                    if (obj && !obj.gone && !obj.vanishing && !seenStaticObjects.has(obj)) {
-                        seenStaticObjects.add(obj);
-                        if (!savingPrototypeSectionWorld && obj.type === 'road') {
-                            const roadRecord = toRoadSaveRecord(obj);
-                            if (roadRecord) loadedRoadRecords.push(roadRecord);
-                            return;
-                        }
-                        if (!savingPrototypeSectionWorld && obj.type === 'tree') {
-                            const treeRecord = toTreeSaveRecord(obj);
-                            if (treeRecord) loadedTreeRecords.push(treeRecord);
-                            return;
-                        }
-                        if (
-                            map &&
-                            map._prototypeSectionState &&
-                            ((obj.type === "wallSection") || obj._prototypeObjectManaged === true)
-                        ) {
-                            return;
-                        }
-                        if (typeof obj.saveJson === "function") {
-                            saveData.staticObjects.push(obj.saveJson());
-                        }
-                    }
-                });
-            }
-            continue;
-        }
-        for (let x = 0; x < map.width; x++) {
-            for (let y = 0; y < map.height; y++) {
-                const node = map.nodes[x] && map.nodes[x][y] ? map.nodes[x][y] : null;
-                if (!node || !node.objects || node.objects.length === 0) continue;
-
-                node.objects.forEach(obj => {
-                    if (obj && !obj.gone && !obj.vanishing && !seenStaticObjects.has(obj)) {
-                        seenStaticObjects.add(obj);
-                        if (!savingPrototypeSectionWorld && obj.type === 'road') {
-                            const roadRecord = toRoadSaveRecord(obj);
-                            if (roadRecord) loadedRoadRecords.push(roadRecord);
-                            return;
-                        }
-                        if (!savingPrototypeSectionWorld && obj.type === 'tree') {
-                            const treeRecord = toTreeSaveRecord(obj);
-                            if (treeRecord) loadedTreeRecords.push(treeRecord);
-                            return;
-                        }
-                        if (
-                            map &&
-                            map._prototypeSectionState &&
-                            ((obj.type === "wallSection") || obj._prototypeObjectManaged === true)
-                        ) {
-                            return;
-                        }
-                        if (typeof obj.saveJson === "function") {
-                            saveData.staticObjects.push(obj.saveJson());
-                        }
-                    }
-                });
-            }
-        }
-    }
-    if (!savingPrototypeSectionWorld) {
-        saveData.staticObjects.push(...getAllRoadSaveRecords(loadedRoadRecords));
-        saveData.staticObjects.push(...getAllTreeSaveRecords(loadedTreeRecords));
-    }
-    const seenRoofs = new Set();
-    if (!savingPrototypeSectionWorld) {
-        for (let i = 0; i < roofList.length; i++) {
-            const roofObj = roofList[i];
-            if (!roofObj || roofObj.gone || roofObj.vanishing || seenRoofs.has(roofObj)) continue;
-            seenRoofs.add(roofObj);
-            if (typeof roofObj.saveJson === "function") {
-                saveData.staticObjects.push(roofObj.saveJson());
-            }
-        }
-    }
-
-    if (map && map._prototypeSectionState) {
+    {
         const state = map._prototypeSectionState;
         if (typeof map.syncPrototypeBuildingPlacementRefs === "function") {
             map.syncPrototypeBuildingPlacementRefs();
@@ -2018,6 +1915,38 @@ function sanitizeSavedGameState(saveKey = null) {
     return parsed;
 }
 
+function isGeneratedOutdoorGroundWizardFragmentId(fragmentId) {
+    return typeof fragmentId === "string" &&
+        fragmentId.startsWith("section:") &&
+        fragmentId.endsWith(":ground");
+}
+
+function sanitizeWizardSaveMovementSupport(wizardData) {
+    if (!wizardData || typeof wizardData !== "object") return wizardData;
+    const fragmentId = typeof wizardData.fragmentId === "string" ? wizardData.fragmentId : "";
+    if (!isGeneratedOutdoorGroundWizardFragmentId(fragmentId)) return wizardData;
+    const layer = Number.isFinite(wizardData.currentLayer)
+        ? Math.round(Number(wizardData.currentLayer))
+        : (Number.isFinite(wizardData.traversalLayer) ? Math.round(Number(wizardData.traversalLayer)) : 0);
+    if (layer !== 0) return wizardData;
+    delete wizardData.fragmentId;
+    delete wizardData.surfaceId;
+    return wizardData;
+}
+
+function sanitizeWizardLoadMovementSupport(wizardData) {
+    if (!wizardData || typeof wizardData !== "object") return wizardData;
+    const fragmentId = typeof wizardData.fragmentId === "string" ? wizardData.fragmentId : "";
+    if (!isGeneratedOutdoorGroundWizardFragmentId(fragmentId)) return wizardData;
+    const layer = Number.isFinite(wizardData.currentLayer)
+        ? Math.round(Number(wizardData.currentLayer))
+        : (Number.isFinite(wizardData.traversalLayer) ? Math.round(Number(wizardData.traversalLayer)) : 0);
+    if (layer !== 0) return wizardData;
+    wizardData.fragmentId = "";
+    wizardData.surfaceId = "";
+    return wizardData;
+}
+
 function loadGameState(saveData) {
     if (!saveData || !saveData.wizard || !map) {
         console.error("Invalid save data");
@@ -2077,7 +2006,9 @@ function loadGameState(saveData) {
         const _lt1 = performance.now();
         console.log(`[LOAD TIMING] cleanup: ${(_lt1 - _lt0).toFixed(1)}ms`);
         if (wizard) {
-            wizard.loadJson(saveData.wizard);
+            const wizardData = JSON.parse(JSON.stringify(saveData.wizard));
+            sanitizeWizardLoadMovementSupport(wizardData);
+            wizard.loadJson(wizardData);
         }
 
         const mazeModeFromSave = (
@@ -2746,13 +2677,13 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
     const wizardNode = (activeWizard && map && typeof map.worldToNode === "function")
         ? map.worldToNode(activeWizard.x, activeWizard.y)
         : null;
+    const wizardData = activeWizard ? activeWizard.saveJson() : null;
+    sanitizeWizardSaveMovementSupport(wizardData);
 
     const exportedSections = map.exportPrototypeSectionAssets();
     const payload = {
         manifest: {
-            wizard: activeWizard
-                ? activeWizard.saveJson()
-                : null,
+            wizard: wizardData,
             los: {
                 mazeMode: getSavedLosMazeModeValue()
             },
@@ -2800,6 +2731,8 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
         return { ok: false, reason: "network-failed", error: e };
     }
 }
+
+const saveSectionWorldToServerSlot = savePrototypeSectionWorldToServerSlot;
 
 async function loadGameStateFromServerFile(options = {}) {
     try {
@@ -2860,6 +2793,7 @@ if (typeof module !== 'undefined' && module.exports) {
         pickAndLoadSaveFile,
         finalizeLoadedGameStateAsync,
         saveGameStateToServerFile,
+        saveSectionWorldToServerSlot,
         savePrototypeSectionWorldToServerSlot,
         loadGameStateFromServerFile,
         hydrateVisibleLazyRoads,

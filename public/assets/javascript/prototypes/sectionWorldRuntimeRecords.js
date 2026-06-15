@@ -4,19 +4,84 @@
     function installSectionWorldRuntimeRecordApis(map, deps) {
         const {
             buildPrototypeObjectPersistenceSignature,
+            buildPrototypePowerupPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
+            capturePendingPrototypePowerups,
+            getPrototypeEntityOwnerSignature,
+            getPrototypeObjectOwnerSignature,
             isPrototypeSavableAnimal,
             isPrototypeSavableObject,
+            isPrototypeSavablePowerup,
             markPrototypeBlockedEdgesDirty,
             markPrototypeClearanceDirty,
             prototypeNow,
             prunePrototypeAnimalRuntimeRecord,
+            removePrototypePowerupRecordById,
             removePrototypeObjectRecordById,
             removePrototypeRecordById,
             settlePendingPrototypeLayoutTransition,
             upsertPrototypeAnimalRecord,
-            upsertPrototypeObjectRecord
+            upsertPrototypeObjectRecord,
+            upsertPrototypePowerupRecord
         } = deps;
+
+        const getPrototypeOwnedRecordSignature = (entry) => {
+            if (!entry || typeof entry !== "object") return "";
+            const recordId = Number(entry.record && entry.record.id);
+            const ownerType = typeof entry.ownerType === "string" && entry.ownerType.length > 0
+                ? entry.ownerType
+                : "section";
+            const ownerId = typeof entry.ownerId === "string" && entry.ownerId.length > 0
+                ? entry.ownerId
+                : (typeof entry.sectionKey === "string" ? entry.sectionKey : "");
+            return `${ownerType}:${ownerId}:${Number.isInteger(recordId) ? recordId : ""}`;
+        };
+
+        const collectPrototypeOwnedRecords = (fieldName, activeSectionKeys) => {
+            const desiredRecords = [];
+            const sectionKeys = activeSectionKeys instanceof Set
+                ? activeSectionKeys
+                : (typeof map.getPrototypeActiveSectionKeys === "function" ? map.getPrototypeActiveSectionKeys() : new Set());
+            sectionKeys.forEach((sectionKey) => {
+                const asset = map.getPrototypeSectionAsset(sectionKey);
+                const records = Array.isArray(asset && asset[fieldName]) ? asset[fieldName] : null;
+                if (!Array.isArray(records)) return;
+                for (let i = 0; i < records.length; i++) {
+                    const record = records[i];
+                    if (!record || typeof record !== "object") continue;
+                    desiredRecords.push({
+                        ownerType: "section",
+                        ownerId: sectionKey,
+                        sectionKey,
+                        record
+                    });
+                }
+            });
+            if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
+                const buildingState = map && map._prototypeBuildingState;
+                const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                    ? buildingState.buildingInstancesById
+                    : null;
+                if (buildingInstances) {
+                    map.collectPrototypeBuildingIdsForSectionKeys(sectionKeys).forEach((buildingId) => {
+                        const instance = buildingInstances.get(buildingId);
+                        const records = Array.isArray(instance && instance[fieldName]) ? instance[fieldName] : null;
+                        if (!Array.isArray(records)) return;
+                        for (let i = 0; i < records.length; i++) {
+                            const record = records[i];
+                            if (!record || typeof record !== "object") continue;
+                            desiredRecords.push({
+                                ownerType: "building",
+                                ownerId: buildingId,
+                                sectionKey: buildingId,
+                                record
+                            });
+                        }
+                    });
+                }
+            }
+            return desiredRecords;
+        };
 
         map.getPrototypeSectionKeyForWorldPoint = function getPrototypeSectionKeyForWorldPoint(worldX, worldY) {
             const node = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
@@ -222,7 +287,14 @@
                 if (objectState && objectState.dirtyRuntimeObjects instanceof Set) {
                     objectState.dirtyRuntimeObjects.delete(obj);
                 }
-                if (obj._prototypeRuntimeRecord === true && obj._prototypeDirty !== true) {
+                const currentOwnerSignature = typeof getPrototypeObjectOwnerSignature === "function"
+                    ? getPrototypeObjectOwnerSignature(obj)
+                    : "";
+                const previousOwnerSignature = (typeof obj._prototypeOwnerSignature === "string")
+                    ? obj._prototypeOwnerSignature
+                    : "";
+                const ownerSignatureChanged = currentOwnerSignature !== previousOwnerSignature;
+                if (obj._prototypeRuntimeRecord === true && obj._prototypeDirty !== true && !ownerSignatureChanged) {
                     dirtySkippedCount += 1;
                     return;
                 }
@@ -232,7 +304,7 @@
                 const previousSignature = (typeof obj._prototypePersistenceSignature === "string")
                     ? obj._prototypePersistenceSignature
                     : "";
-                if (!obj._prototypeRuntimeRecord || currentSignature !== previousSignature) {
+                if (!obj._prototypeRuntimeRecord || currentSignature !== previousSignature || ownerSignatureChanged) {
                     const upsertStart = prototypeNow();
                     if (upsertPrototypeObjectRecord(obj)) {
                         changed = true;
@@ -310,15 +382,25 @@
             for (let i = 0; i < candidateAnimals.length; i++) {
                 const runtimeAnimal = candidateAnimals[i];
                 if (!isPrototypeSavableAnimal(runtimeAnimal)) continue;
-                const currentSectionKey = this.getPrototypeSectionKeyForWorldPoint(runtimeAnimal.x, runtimeAnimal.y);
+                const currentOwnerSignature = typeof getPrototypeEntityOwnerSignature === "function"
+                    ? getPrototypeEntityOwnerSignature(runtimeAnimal)
+                    : "";
                 const previousSectionKey = (typeof runtimeAnimal._prototypeOwnerSectionKey === "string")
                     ? runtimeAnimal._prototypeOwnerSectionKey
                     : "";
-                if (!currentSectionKey) continue;
+                const previousOwnerSignature = (typeof runtimeAnimal._prototypeOwnerSignature === "string")
+                    ? runtimeAnimal._prototypeOwnerSignature
+                    : (previousSectionKey ? `section:${previousSectionKey}` : "");
+                const currentPersistenceSignature = buildPrototypeObjectPersistenceSignature(runtimeAnimal);
+                const previousPersistenceSignature = typeof runtimeAnimal._prototypePersistenceSignature === "string"
+                    ? runtimeAnimal._prototypePersistenceSignature
+                    : "";
+                if (!currentOwnerSignature) continue;
                 if (
-                    currentSectionKey !== previousSectionKey ||
+                    currentOwnerSignature !== previousOwnerSignature ||
                     runtimeAnimal._prototypeRuntimeRecord !== true ||
-                    runtimeAnimal._prototypeDirty === true
+                    runtimeAnimal._prototypeDirty === true ||
+                    currentPersistenceSignature !== previousPersistenceSignature
                 ) {
                     if (upsertPrototypeAnimalRecord(runtimeAnimal)) {
                         changed = true;
@@ -339,31 +421,28 @@
                 : false;
             const captureMs = prototypeNow() - captureStart;
             const activeSectionKeys = this.getPrototypeActiveSectionKeys();
+            const collectedRecords = collectPrototypeOwnedRecords("animals", activeSectionKeys);
             const desiredRecords = [];
             const desiredRecordIdsSeen = new Set();
             const desiredRecordSignaturesSeen = new Set();
-            activeSectionKeys.forEach((sectionKey) => {
-                const asset = this.getPrototypeSectionAsset(sectionKey);
-                const records = Array.isArray(asset && asset.animals) ? asset.animals : null;
-                if (!Array.isArray(records)) return;
-                for (let i = 0; i < records.length; i++) {
-                    const record = records[i];
-                    if (!record || typeof record !== "object") continue;
-                    const recordId = Number(record.id);
-                    const signature = (() => {
-                        const normalized = { ...record };
-                        delete normalized.id;
-                        return JSON.stringify(normalized);
-                    })();
-                    if (Number.isInteger(recordId) && desiredRecordIdsSeen.has(recordId)) continue;
-                    if (signature && desiredRecordSignaturesSeen.has(signature)) continue;
-                    if (Number.isInteger(recordId)) desiredRecordIdsSeen.add(recordId);
-                    if (signature) desiredRecordSignaturesSeen.add(signature);
-                    desiredRecords.push({ sectionKey, record });
-                }
-            });
+            for (let i = 0; i < collectedRecords.length; i++) {
+                const entry = collectedRecords[i];
+                const record = entry && entry.record;
+                if (!record || typeof record !== "object") continue;
+                const recordId = Number(record.id);
+                const signature = (() => {
+                    const normalized = { ...record };
+                    delete normalized.id;
+                    return `${entry.ownerType}:${entry.ownerId}:${JSON.stringify(normalized)}`;
+                })();
+                if (Number.isInteger(recordId) && desiredRecordIdsSeen.has(recordId)) continue;
+                if (signature && desiredRecordSignaturesSeen.has(signature)) continue;
+                if (Number.isInteger(recordId)) desiredRecordIdsSeen.add(recordId);
+                if (signature) desiredRecordSignaturesSeen.add(signature);
+                desiredRecords.push(entry);
+            }
             const desiredSignature = desiredRecords
-                .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
+                .map(getPrototypeOwnedRecordSignature)
                 .join("|");
             if (desiredSignature === animalState.activeRecordSignature) {
                 animalState.lastSyncStats = {
@@ -421,7 +500,11 @@
                 }
                 runtimeAnimal._prototypeRuntimeRecord = true;
                 runtimeAnimal._prototypeRecordId = recordId;
-                runtimeAnimal._prototypeOwnerSectionKey = entry.sectionKey;
+                runtimeAnimal._prototypeOwnerSectionKey = entry.ownerType === "section" ? entry.sectionKey : "";
+                runtimeAnimal._prototypeOwnerType = entry.ownerType || "section";
+                runtimeAnimal._prototypeOwnerId = entry.ownerId || entry.sectionKey || "";
+                runtimeAnimal._prototypeOwnerSignature = `${runtimeAnimal._prototypeOwnerType}:${runtimeAnimal._prototypeOwnerId}`;
+                runtimeAnimal._prototypePersistenceSignature = buildPrototypeObjectPersistenceSignature(entry.record);
                 animalState.activeRuntimeAnimalsByRecordId.set(recordId, runtimeAnimal);
                 loadedAny = true;
                 loadedCount += 1;
@@ -445,20 +528,25 @@
             const syncStart = prototypeNow();
             const powerupState = this._prototypePowerupState;
             if (!powerupState) return false;
+            const captureStart = prototypeNow();
+            const capturedAny = (typeof capturePendingPrototypePowerups === "function")
+                ? capturePendingPrototypePowerups()
+                : false;
+            const captureMs = prototypeNow() - captureStart;
             const activeSectionKeys = this.getPrototypeActiveSectionKeys();
-            const desiredRecords = [];
-            activeSectionKeys.forEach((sectionKey) => {
-                const asset = this.getPrototypeSectionAsset(sectionKey);
-                const records = Array.isArray(asset && asset.powerups) ? asset.powerups : null;
-                if (!Array.isArray(records)) return;
-                for (let i = 0; i < records.length; i++) {
-                    desiredRecords.push({ sectionKey, record: records[i] });
-                }
-            });
+            const desiredRecords = collectPrototypeOwnedRecords("powerups", activeSectionKeys);
             const desiredSignature = desiredRecords
-                .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
+                .map(getPrototypeOwnedRecordSignature)
                 .join("|");
-            if (desiredSignature === powerupState.activeRecordSignature) {
+            if (!capturedAny && desiredSignature === powerupState.activeRecordSignature) {
+                powerupState.lastSyncStats = {
+                    ms: Number((prototypeNow() - syncStart).toFixed(2)),
+                    desired: desiredRecords.length,
+                    loaded: 0,
+                    removed: 0,
+                    active: powerupState.activeRuntimePowerupsByRecordId instanceof Map ? powerupState.activeRuntimePowerupsByRecordId.size : 0,
+                    captureMs: Number(captureMs.toFixed(2))
+                };
                 return false;
             }
             if (!(powerupState.activeRuntimePowerupsByRecordId instanceof Map)) {
@@ -508,7 +596,11 @@
                 }
                 runtimePowerup._prototypeRuntimeRecord = true;
                 runtimePowerup._prototypeRecordId = recordId;
-                runtimePowerup._prototypeOwnerSectionKey = entry.sectionKey;
+                runtimePowerup._prototypeOwnerSectionKey = entry.ownerType === "section" ? entry.sectionKey : "";
+                runtimePowerup._prototypeOwnerType = entry.ownerType || "section";
+                runtimePowerup._prototypeOwnerId = entry.ownerId || entry.sectionKey || "";
+                runtimePowerup._prototypeOwnerSignature = `${runtimePowerup._prototypeOwnerType}:${runtimePowerup._prototypeOwnerId}`;
+                runtimePowerup._prototypePersistenceSignature = buildPrototypePowerupPersistenceSignature(entry.record);
                 powerupState.activeRuntimePowerupsByRecordId.set(recordId, runtimePowerup);
                 loadedAny = true;
                 loadedCount += 1;
@@ -521,9 +613,10 @@
                 desired: desiredRecords.length,
                 loaded: loadedCount,
                 removed: removedCount,
-                active: powerupState.activeRuntimePowerupsByRecordId.size
+                active: powerupState.activeRuntimePowerupsByRecordId.size,
+                captureMs: Number(captureMs.toFixed(2))
             };
-            return removedAny || loadedAny;
+            return capturedAny || removedAny || loadedAny;
         };
     }
 

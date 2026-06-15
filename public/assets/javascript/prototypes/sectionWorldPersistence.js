@@ -79,6 +79,8 @@
             return JSON.stringify(data);
         };
 
+        const buildPrototypePowerupPersistenceSignature = buildPrototypeObjectPersistenceSignature;
+
         const removePrototypeRuntimeObjectFully = (runtimeObj) => {
             if (!runtimeObj || runtimeObj.gone) return false;
             if (typeof runtimeObj.removeFromGame === "function") {
@@ -239,6 +241,34 @@
             const state = map._prototypeSectionState;
             if (!objectState || !state || !(state.sectionAssetsByKey instanceof Map) || !Number.isInteger(recordId)) return false;
             let removed = false;
+            const markSectionDirty = (sectionKey) => {
+                if (typeof sectionKey !== "string" || sectionKey.length === 0) return;
+                const buildingState = map && map._prototypeBuildingState;
+                if (!buildingState || typeof buildingState !== "object") return;
+                if (!buildingState.dirtyWorldUnits || typeof buildingState.dirtyWorldUnits !== "object") {
+                    buildingState.dirtyWorldUnits = { sections: new Set(), buildings: new Set() };
+                }
+                if (!(buildingState.dirtyWorldUnits.sections instanceof Set)) {
+                    buildingState.dirtyWorldUnits.sections = new Set(buildingState.dirtyWorldUnits.sections || []);
+                }
+                buildingState.dirtyWorldUnits.sections.add(sectionKey);
+            };
+            const markBuildingDirty = (buildingId) => {
+                if (typeof buildingId !== "string" || buildingId.length === 0) return;
+                if (map && typeof map.markPrototypeBuildingUnitDirty === "function") {
+                    map.markPrototypeBuildingUnitDirty(buildingId);
+                    return;
+                }
+                const buildingState = map && map._prototypeBuildingState;
+                if (!buildingState || typeof buildingState !== "object") return;
+                if (!buildingState.dirtyWorldUnits || typeof buildingState.dirtyWorldUnits !== "object") {
+                    buildingState.dirtyWorldUnits = { sections: new Set(), buildings: new Set() };
+                }
+                if (!(buildingState.dirtyWorldUnits.buildings instanceof Set)) {
+                    buildingState.dirtyWorldUnits.buildings = new Set(buildingState.dirtyWorldUnits.buildings || []);
+                }
+                buildingState.dirtyWorldUnits.buildings.add(buildingId);
+            };
             const triggerState = map._prototypeTriggerState;
             if (triggerState && triggerState.triggerDefsById instanceof Map && triggerState.triggerDefsById.has(recordId)) {
                 triggerState.triggerDefsById.delete(recordId);
@@ -256,6 +286,23 @@
                 asset.objects = nextRecords;
                 rebuildPrototypeAssetObjectNameRegistry(asset);
                 markPrototypeClearanceDirty(asset);
+                markSectionDirty(typeof asset.key === "string" ? asset.key : "");
+            }
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            if (buildingInstances) {
+                for (const [buildingId, instance] of buildingInstances.entries()) {
+                    const records = Array.isArray(instance && instance.objects) ? instance.objects : [];
+                    if (records.length === 0) continue;
+                    const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                    if (nextRecords.length === records.length) continue;
+                    removed = true;
+                    instance.objects = nextRecords;
+                    instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                    markBuildingDirty(buildingId);
+                }
             }
             return removed;
         };
@@ -383,6 +430,81 @@
             return "";
         };
 
+        const resolvePrototypeEntityPersistenceOwner = (runtimeObj) => {
+            if (!runtimeObj || typeof runtimeObj !== "object") return null;
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            if (floorSupportApi && typeof floorSupportApi.getEntityOwner === "function") {
+                const owner = floorSupportApi.getEntityOwner(runtimeObj, {
+                    map,
+                    sectionKeyResolver: resolvePrototypeObjectOwnerSectionKey
+                });
+                if (owner) return owner;
+            }
+            const ownerType = typeof runtimeObj._prototypeOwnerType === "string" ? runtimeObj._prototypeOwnerType : "";
+            const ownerId = typeof runtimeObj._prototypeOwnerId === "string" ? runtimeObj._prototypeOwnerId : "";
+            if (ownerType === "building" && ownerId) return { type: "building", id: ownerId };
+            const ownerSectionKey = resolvePrototypeObjectOwnerSectionKey(runtimeObj);
+            if (ownerSectionKey) return { type: "section", id: ownerSectionKey };
+            return null;
+        };
+
+        const resolvePrototypeObjectPersistenceOwner = resolvePrototypeEntityPersistenceOwner;
+
+        const getPrototypeObjectOwnerSignature = (runtimeObj) => {
+            const owner = resolvePrototypeEntityPersistenceOwner(runtimeObj);
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            if (floorSupportApi && typeof floorSupportApi.ownerSignature === "function") {
+                return floorSupportApi.ownerSignature(owner);
+            }
+            return owner ? `${owner.type}:${owner.id}` : "";
+        };
+
+        const getPrototypeEntityOwnerSignature = (runtimeObj) => {
+            const owner = resolvePrototypeEntityPersistenceOwner(runtimeObj);
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            if (floorSupportApi && typeof floorSupportApi.ownerSignature === "function") {
+                return floorSupportApi.ownerSignature(owner);
+            }
+            return owner ? `${owner.type}:${owner.id}` : "";
+        };
+
+        const getMutablePrototypeBuildingInstance = (buildingId) => {
+            if (typeof buildingId !== "string" || buildingId.length === 0) return null;
+            const buildingState = map && map._prototypeBuildingState;
+            if (!buildingState || !(buildingState.buildingInstancesById instanceof Map)) return null;
+            return buildingState.buildingInstancesById.get(buildingId) || null;
+        };
+
+        const markPrototypeSectionUnitDirtyForPersistence = (sectionKey) => {
+            if (typeof sectionKey !== "string" || sectionKey.length === 0) return;
+            const buildingState = map && map._prototypeBuildingState;
+            if (!buildingState || typeof buildingState !== "object") return;
+            if (!buildingState.dirtyWorldUnits || typeof buildingState.dirtyWorldUnits !== "object") {
+                buildingState.dirtyWorldUnits = { sections: new Set(), buildings: new Set() };
+            }
+            if (!(buildingState.dirtyWorldUnits.sections instanceof Set)) {
+                buildingState.dirtyWorldUnits.sections = new Set(buildingState.dirtyWorldUnits.sections || []);
+            }
+            buildingState.dirtyWorldUnits.sections.add(sectionKey);
+        };
+
+        const markPrototypeBuildingUnitDirtyForPersistence = (buildingId) => {
+            if (typeof buildingId !== "string" || buildingId.length === 0) return;
+            if (map && typeof map.markPrototypeBuildingUnitDirty === "function") {
+                map.markPrototypeBuildingUnitDirty(buildingId);
+                return;
+            }
+            const buildingState = map && map._prototypeBuildingState;
+            if (!buildingState || typeof buildingState !== "object") return;
+            if (!buildingState.dirtyWorldUnits || typeof buildingState.dirtyWorldUnits !== "object") {
+                buildingState.dirtyWorldUnits = { sections: new Set(), buildings: new Set() };
+            }
+            if (!(buildingState.dirtyWorldUnits.buildings instanceof Set)) {
+                buildingState.dirtyWorldUnits.buildings = new Set(buildingState.dirtyWorldUnits.buildings || []);
+            }
+            buildingState.dirtyWorldUnits.buildings.add(buildingId);
+        };
+
         const upsertPrototypeObjectRecord = (runtimeObj) => {
             if (!isPrototypeSavableObject(runtimeObj)) return false;
             const objectState = map._prototypeObjectState;
@@ -425,22 +547,44 @@
                 }
                 return true;
             }
-            const ownerSectionKey = resolvePrototypeObjectOwnerSectionKey(runtimeObj);
-            if (!ownerSectionKey) return false;
-            const asset = map.getPrototypeSectionAsset(ownerSectionKey);
-            if (!asset) return false;
-            asset.objects.push({
-                ...recordData,
-                id: recordId
-            });
-            rebuildPrototypeAssetObjectNameRegistry(asset);
-            markPrototypeClearanceDirty(asset);
+            const owner = resolvePrototypeObjectPersistenceOwner(runtimeObj);
+            if (!owner) return false;
+            let ownerSectionKey = "";
+            let ownerBuildingId = "";
+            if (owner.type === "building") {
+                ownerBuildingId = owner.id;
+                const instance = getMutablePrototypeBuildingInstance(ownerBuildingId);
+                if (!instance) return false;
+                if (!Array.isArray(instance.objects)) instance.objects = [];
+                instance.objects.push({
+                    ...recordData,
+                    id: recordId
+                });
+                instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                if (typeof map.markPrototypeBuildingUnitDirty === "function") {
+                    map.markPrototypeBuildingUnitDirty(ownerBuildingId);
+                }
+            } else {
+                ownerSectionKey = owner.id;
+                const asset = map.getPrototypeSectionAsset(ownerSectionKey);
+                if (!asset) return false;
+                asset.objects.push({
+                    ...recordData,
+                    id: recordId
+                });
+                rebuildPrototypeAssetObjectNameRegistry(asset);
+                markPrototypeClearanceDirty(asset);
+                markPrototypeSectionUnitDirtyForPersistence(ownerSectionKey);
+            }
 
             runtimeObj._prototypeObjectManaged = true;
             runtimeObj._prototypeRuntimeRecord = true;
             runtimeObj._prototypeRecordId = recordId;
             runtimeObj._prototypePersistenceSignature = nextSignature;
             runtimeObj._prototypeOwnerSectionKey = ownerSectionKey;
+            runtimeObj._prototypeOwnerType = owner.type;
+            runtimeObj._prototypeOwnerId = owner.id;
+            runtimeObj._prototypeOwnerSignature = `${owner.type}:${owner.id}`;
             runtimeObj._prototypeDirty = false;
             if (objectState.dirtyRuntimeObjects instanceof Set) {
                 objectState.dirtyRuntimeObjects.delete(runtimeObj);
@@ -468,6 +612,23 @@
                 if (nextRecords.length === records.length) continue;
                 removed = true;
                 asset.animals = nextRecords;
+                markPrototypeSectionUnitDirtyForPersistence(typeof asset.key === "string" ? asset.key : "");
+            }
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            if (buildingInstances) {
+                for (const [buildingId, instance] of buildingInstances.entries()) {
+                    const records = Array.isArray(instance && instance.animals) ? instance.animals : [];
+                    if (records.length === 0) continue;
+                    const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                    if (nextRecords.length === records.length) continue;
+                    removed = true;
+                    instance.animals = nextRecords;
+                    instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                    markPrototypeBuildingUnitDirtyForPersistence(buildingId);
+                }
             }
             return removed;
         };
@@ -488,6 +649,10 @@
                 runtimeAnimal._prototypeRuntimeRecord = false;
                 runtimeAnimal._prototypeRecordId = null;
                 runtimeAnimal._prototypeOwnerSectionKey = "";
+                runtimeAnimal._prototypeOwnerType = "";
+                runtimeAnimal._prototypeOwnerId = "";
+                runtimeAnimal._prototypeOwnerSignature = "";
+                runtimeAnimal._prototypePersistenceSignature = "";
                 runtimeAnimal._prototypeDirty = false;
             }
             return changed;
@@ -495,28 +660,48 @@
 
         const upsertPrototypeAnimalRecord = (runtimeAnimal) => {
             if (!isPrototypeSavableAnimal(runtimeAnimal)) return false;
-            const ownerSectionKey = map.getPrototypeSectionKeyForWorldPoint(runtimeAnimal.x, runtimeAnimal.y);
-            if (!ownerSectionKey) return false;
-            const asset = map.getPrototypeSectionAsset(ownerSectionKey);
-            if (!asset) return false;
             const animalState = map._prototypeAnimalState;
             if (!animalState) return false;
             const recordData = runtimeAnimal.saveJson();
             if (!recordData || typeof recordData !== "object") return false;
+            const nextSignature = buildPrototypeObjectPersistenceSignature(recordData);
 
             let recordId = Number(runtimeAnimal._prototypeRecordId);
             if (!Number.isInteger(recordId)) {
                 recordId = animalState.nextRecordId++;
             }
             removePrototypeAnimalRecordById(animalState, recordId);
-            asset.animals.push({
-                ...recordData,
-                id: recordId
-            });
+            const owner = resolvePrototypeEntityPersistenceOwner(runtimeAnimal);
+            if (!owner) return false;
+            let ownerSectionKey = "";
+            if (owner.type === "building") {
+                const instance = getMutablePrototypeBuildingInstance(owner.id);
+                if (!instance) return false;
+                if (!Array.isArray(instance.animals)) instance.animals = [];
+                instance.animals.push({
+                    ...recordData,
+                    id: recordId
+                });
+                instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                markPrototypeBuildingUnitDirtyForPersistence(owner.id);
+            } else {
+                ownerSectionKey = owner.id;
+                const asset = map.getPrototypeSectionAsset(ownerSectionKey);
+                if (!asset) return false;
+                asset.animals.push({
+                    ...recordData,
+                    id: recordId
+                });
+                markPrototypeSectionUnitDirtyForPersistence(ownerSectionKey);
+            }
 
             runtimeAnimal._prototypeRuntimeRecord = true;
             runtimeAnimal._prototypeRecordId = recordId;
             runtimeAnimal._prototypeOwnerSectionKey = ownerSectionKey;
+            runtimeAnimal._prototypeOwnerType = owner.type;
+            runtimeAnimal._prototypeOwnerId = owner.id;
+            runtimeAnimal._prototypeOwnerSignature = `${owner.type}:${owner.id}`;
+            runtimeAnimal._prototypePersistenceSignature = nextSignature;
             runtimeAnimal._prototypeDirty = false;
             if (animalState.activeRuntimeAnimalsByRecordId instanceof Map) {
                 animalState.activeRuntimeAnimalsByRecordId.set(recordId, runtimeAnimal);
@@ -527,16 +712,182 @@
             return true;
         };
 
+        const isPrototypeSavablePowerup = (powerup) => {
+            if (!powerup || powerup.gone || powerup.collected) return false;
+            if (typeof powerup.saveJson !== "function") return false;
+            return true;
+        };
+
+        const removePrototypePowerupRecordById = (powerupState, recordId) => {
+            const state = map._prototypeSectionState;
+            if (!powerupState || !state || !(state.sectionAssetsByKey instanceof Map) || !Number.isInteger(recordId)) return false;
+            let removed = false;
+            for (const asset of state.sectionAssetsByKey.values()) {
+                const records = Array.isArray(asset && asset.powerups) ? asset.powerups : [];
+                if (records.length === 0) continue;
+                const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                if (nextRecords.length === records.length) continue;
+                removed = true;
+                asset.powerups = nextRecords;
+                markPrototypeSectionUnitDirtyForPersistence(typeof asset.key === "string" ? asset.key : "");
+            }
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            if (buildingInstances) {
+                for (const [buildingId, instance] of buildingInstances.entries()) {
+                    const records = Array.isArray(instance && instance.powerups) ? instance.powerups : [];
+                    if (records.length === 0) continue;
+                    const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                    if (nextRecords.length === records.length) continue;
+                    removed = true;
+                    instance.powerups = nextRecords;
+                    instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                    markPrototypeBuildingUnitDirtyForPersistence(buildingId);
+                }
+            }
+            return removed;
+        };
+
+        const upsertPrototypePowerupRecord = (runtimePowerup) => {
+            if (!isPrototypeSavablePowerup(runtimePowerup)) return false;
+            const powerupState = map._prototypePowerupState;
+            if (!powerupState) return false;
+            const recordData = runtimePowerup.saveJson();
+            if (!recordData || typeof recordData !== "object") return false;
+            const nextSignature = buildPrototypePowerupPersistenceSignature(recordData);
+
+            let recordId = Number(runtimePowerup._prototypeRecordId);
+            if (!Number.isInteger(recordId)) {
+                recordId = powerupState.nextRecordId++;
+            }
+            removePrototypePowerupRecordById(powerupState, recordId);
+            const owner = resolvePrototypeEntityPersistenceOwner(runtimePowerup);
+            if (!owner) return false;
+            let ownerSectionKey = "";
+            if (owner.type === "building") {
+                const instance = getMutablePrototypeBuildingInstance(owner.id);
+                if (!instance) return false;
+                if (!Array.isArray(instance.powerups)) instance.powerups = [];
+                instance.powerups.push({
+                    ...recordData,
+                    id: recordId
+                });
+                instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                markPrototypeBuildingUnitDirtyForPersistence(owner.id);
+            } else {
+                ownerSectionKey = owner.id;
+                const asset = map.getPrototypeSectionAsset(ownerSectionKey);
+                if (!asset) return false;
+                if (!Array.isArray(asset.powerups)) asset.powerups = [];
+                asset.powerups.push({
+                    ...recordData,
+                    id: recordId
+                });
+                markPrototypeSectionUnitDirtyForPersistence(ownerSectionKey);
+            }
+
+            runtimePowerup._prototypeRuntimeRecord = true;
+            runtimePowerup._prototypeRecordId = recordId;
+            runtimePowerup._prototypeOwnerSectionKey = ownerSectionKey;
+            runtimePowerup._prototypeOwnerType = owner.type;
+            runtimePowerup._prototypeOwnerId = owner.id;
+            runtimePowerup._prototypeOwnerSignature = `${owner.type}:${owner.id}`;
+            runtimePowerup._prototypePersistenceSignature = nextSignature;
+            runtimePowerup._prototypeDirty = false;
+            if (powerupState.activeRuntimePowerupsByRecordId instanceof Map) {
+                powerupState.activeRuntimePowerupsByRecordId.set(recordId, runtimePowerup);
+            }
+            if (Array.isArray(powerupState.activeRuntimePowerups) && !powerupState.activeRuntimePowerups.includes(runtimePowerup)) {
+                powerupState.activeRuntimePowerups.push(runtimePowerup);
+            }
+            return true;
+        };
+
+        const capturePendingPrototypePowerups = () => {
+            const powerupState = map._prototypePowerupState;
+            if (!powerupState) return false;
+            if (!(powerupState.activeRuntimePowerupsByRecordId instanceof Map)) {
+                powerupState.activeRuntimePowerupsByRecordId = new Map();
+            }
+            let changed = false;
+            const candidatePowerups = [];
+            const seenPowerups = new Set();
+            const addCandidatePowerup = (runtimePowerup) => {
+                if (!runtimePowerup || seenPowerups.has(runtimePowerup)) return;
+                if (runtimePowerup.map && runtimePowerup.map !== map) return;
+                seenPowerups.add(runtimePowerup);
+                candidatePowerups.push(runtimePowerup);
+            };
+
+            for (const runtimePowerup of powerupState.activeRuntimePowerupsByRecordId.values()) {
+                addCandidatePowerup(runtimePowerup);
+            }
+
+            if (Array.isArray(globalScope.powerups)) {
+                for (let i = 0; i < globalScope.powerups.length; i++) {
+                    addCandidatePowerup(globalScope.powerups[i]);
+                }
+            }
+
+            for (const [recordId, runtimePowerup] of Array.from(powerupState.activeRuntimePowerupsByRecordId.entries())) {
+                const shouldPrune = (
+                    !runtimePowerup ||
+                    runtimePowerup.gone === true ||
+                    runtimePowerup.collected === true ||
+                    (runtimePowerup.map && runtimePowerup.map !== map) ||
+                    (Array.isArray(globalScope.powerups) && globalScope.powerups.indexOf(runtimePowerup) < 0)
+                );
+                if (!shouldPrune) continue;
+                if (removePrototypePowerupRecordById(powerupState, Number(recordId))) {
+                    changed = true;
+                }
+                powerupState.activeRuntimePowerupsByRecordId.delete(recordId);
+            }
+
+            for (let i = 0; i < candidatePowerups.length; i++) {
+                const runtimePowerup = candidatePowerups[i];
+                if (!isPrototypeSavablePowerup(runtimePowerup)) continue;
+                const currentOwnerSignature = getPrototypeEntityOwnerSignature(runtimePowerup);
+                const previousOwnerSignature = typeof runtimePowerup._prototypeOwnerSignature === "string"
+                    ? runtimePowerup._prototypeOwnerSignature
+                    : "";
+                const currentPersistenceSignature = buildPrototypePowerupPersistenceSignature(runtimePowerup);
+                const previousPersistenceSignature = typeof runtimePowerup._prototypePersistenceSignature === "string"
+                    ? runtimePowerup._prototypePersistenceSignature
+                    : "";
+                if (
+                    currentOwnerSignature !== previousOwnerSignature ||
+                    runtimePowerup._prototypeRuntimeRecord !== true ||
+                    runtimePowerup._prototypeDirty === true ||
+                    currentPersistenceSignature !== previousPersistenceSignature
+                ) {
+                    if (upsertPrototypePowerupRecord(runtimePowerup)) {
+                        changed = true;
+                    }
+                }
+            }
+            powerupState.activeRuntimePowerups = Array.from(powerupState.activeRuntimePowerupsByRecordId.values());
+            return changed;
+        };
+
         return {
             buildPrototypeWallPersistenceSignature,
             buildPrototypeObjectPersistenceSignature,
+            buildPrototypePowerupPersistenceSignature,
+            capturePendingPrototypePowerups,
             evictPrototypeParkedRuntimeObject,
             formatPrototypeObjectProfileMap,
+            getPrototypeEntityOwnerSignature,
             getPrototypeObjectProfileKey,
+            getPrototypeObjectOwnerSignature,
             isPrototypeSavableAnimal,
             isPrototypeSavableObject,
+            isPrototypeSavablePowerup,
             parkPrototypeRuntimeObject,
             prunePrototypeAnimalRuntimeRecord,
+            removePrototypePowerupRecordById,
             removePrototypeObjectRecordById,
             removePrototypeRecordById,
             removePrototypeRoofRuntime,
@@ -544,7 +895,8 @@
             sanitizePrototypeObjectRecords,
             trimPrototypeParkedRuntimeObjectCache,
             upsertPrototypeAnimalRecord,
-            upsertPrototypeObjectRecord
+            upsertPrototypeObjectRecord,
+            upsertPrototypePowerupRecord
         };
     }
 

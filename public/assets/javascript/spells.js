@@ -2052,7 +2052,10 @@ const SpellSystem = (() => {
     function buildBuildingPlacementTransform(wizardRef, worldX, worldY, options = {}) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : (typeof map !== "undefined" ? map : null);
         const layerPoint = typeof resolveEditorWorldPointOnLayer === "function"
-            ? resolveEditorWorldPointOnLayer(wizardRef, worldX, worldY, options)
+            ? resolveEditorWorldPointOnLayer(wizardRef, worldX, worldY, {
+                ...options,
+                useVisibleFloorTarget: false
+            })
             : { x: worldX, y: worldY };
         const xRaw = Number.isFinite(layerPoint && layerPoint.x) ? Number(layerPoint.x) : Number(worldX);
         const yRaw = Number.isFinite(layerPoint && layerPoint.y) ? Number(layerPoint.y) : Number(worldY);
@@ -6145,13 +6148,13 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
-    function isTeleportInteriorViewActive(wizardRef, mapRef) {
+    function isVisibleFloorInteriorViewActive(wizardRef, mapRef) {
         const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
         if (!renderingApi || typeof renderingApi.isBuildingInteriorPresentationActive !== "function") return false;
         return !!renderingApi.isBuildingInteriorPresentationActive({ wizard: wizardRef || null, map: mapRef || null });
     }
 
-    function getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef) {
+    function getVisibleFloorInteriorFragmentIds(wizardRef, mapRef) {
         const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
         if (!renderingApi || typeof renderingApi.getBuildingInteriorVisibleFloorFragmentIds !== "function") return null;
         const ids = renderingApi.getBuildingInteriorVisibleFloorFragmentIds({ wizard: wizardRef || null, map: mapRef || null });
@@ -6159,7 +6162,7 @@ const SpellSystem = (() => {
         return ids;
     }
 
-    function resolveTeleportNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
+    function resolveVisibleFloorNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
         if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
         const baseNode = mapRef.worldToNode(worldX, worldY);
         if (!baseNode) return null;
@@ -6185,7 +6188,7 @@ const SpellSystem = (() => {
         });
     }
 
-    function resolveTeleportVisualTarget(wizardRef, worldX, worldY, options = {}) {
+    function resolveVisibleFloorTarget(wizardRef, worldX, worldY, options = {}) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         const screenPoint = getSpellCastScreenPoint(options);
         let targetPoint = null;
@@ -6197,15 +6200,15 @@ const SpellSystem = (() => {
             : (Number.isFinite(wizardRef && wizardRef.traversalLayer)
                 ? Math.round(Number(wizardRef.traversalLayer))
                 : 0);
-        const isUndergroundTeleport = currentLayer < 0;
+        const isUndergroundTarget = currentLayer < 0;
 
         if (Number.isFinite(screenPoint.screenX) && Number.isFinite(screenPoint.screenY)) {
             const visibleFloorOptions = { includeGround: true };
-            if (isUndergroundTeleport) {
+            if (isUndergroundTarget) {
                 visibleFloorOptions.includeGround = false;
                 visibleFloorOptions.exactLevel = currentLayer;
-            } else if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
-                const interiorVisibleFragmentIds = getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef);
+            } else if (isVisibleFloorInteriorViewActive(wizardRef, mapRef)) {
+                const interiorVisibleFragmentIds = getVisibleFloorInteriorFragmentIds(wizardRef, mapRef);
                 if (interiorVisibleFragmentIds) {
                     visibleFloorOptions.visibleFragmentIds = interiorVisibleFragmentIds;
                 } else {
@@ -6223,13 +6226,13 @@ const SpellSystem = (() => {
                 targetLayer = Number.isFinite(floorTarget.level) ? Math.round(Number(floorTarget.level)) : 0;
                 targetBaseZ = Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : targetLayer * 3;
             } else {
-                targetLayer = isUndergroundTeleport ? currentLayer : 0;
-                targetBaseZ = isUndergroundTeleport
+                targetLayer = isUndergroundTarget ? currentLayer : 0;
+                targetBaseZ = isUndergroundTarget
                     ? (Number.isFinite(wizardRef && wizardRef.currentLayerBaseZ)
                         ? Number(wizardRef.currentLayerBaseZ)
                         : targetLayer * 3)
                     : 0;
-                targetPoint = isUndergroundTeleport
+                targetPoint = isUndergroundTarget
                     ? resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, targetBaseZ)
                     : resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
             }
@@ -6243,9 +6246,9 @@ const SpellSystem = (() => {
         const wrappedY = mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(resolvedY)
             ? mapRef.wrapWorldY(resolvedY)
             : resolvedY;
-        const destinationNode = (isUndergroundTeleport && !floorTarget)
+        const destinationNode = (isUndergroundTarget && !floorTarget)
             ? null
-            : resolveTeleportNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+            : resolveVisibleFloorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
 
         return {
             x: wrappedX,
@@ -6257,6 +6260,14 @@ const SpellSystem = (() => {
             screenX: screenPoint.screenX,
             screenY: screenPoint.screenY
         };
+    }
+
+    function resolveTeleportVisualTarget(wizardRef, worldX, worldY, options = {}) {
+        return resolveVisibleFloorTarget(wizardRef, worldX, worldY, options);
+    }
+
+    function resolveEditorPlacementTarget(wizardRef, worldX, worldY, options = {}) {
+        return resolveVisibleFloorTarget(wizardRef, worldX, worldY, options);
     }
 
     function resolveFloorEditorPaintWorldPoint(wizardRef, worldX, worldY, options = {}) {
@@ -8401,7 +8412,7 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell === "teleport") {
             const projectile = new globalThis.Teleport();
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
-            const teleportTarget = resolveTeleportVisualTarget(wizardRef, worldX, worldY, castOptions);
+            const teleportTarget = resolveVisibleFloorTarget(wizardRef, worldX, worldY, castOptions);
             if (typeof console !== "undefined" && typeof console.log === "function") {
                 const floorFragment = teleportTarget && teleportTarget.floorTarget && teleportTarget.floorTarget.fragment
                     ? teleportTarget.floorTarget.fragment
@@ -8481,18 +8492,30 @@ const SpellSystem = (() => {
 
         if (wizardRef.currentSpell === "blackdiamond") {
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
-            const placeBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
+            const placementTarget = typeof resolveEditorPlacementTarget === "function"
+                ? resolveEditorPlacementTarget(wizardRef, worldX, worldY, castOptions)
+                : {
+                    x: worldX,
+                    y: worldY,
+                    layer: Number.isFinite(wizardRef.currentLayer) ? Math.round(Number(wizardRef.currentLayer)) : 0,
+                    baseZ: Number.isFinite(wizardRef.currentLayerBaseZ) ? Number(wizardRef.currentLayerBaseZ) : 0,
+                    node: null,
+                    floorTarget: null
+                };
+            const placeBaseZ = Number.isFinite(placementTarget && placementTarget.baseZ)
+                ? Number(placementTarget.baseZ)
                 : 0;
-            const placeLayer = Number.isFinite(wizardRef.currentLayer)
-                ? Math.round(Number(wizardRef.currentLayer))
+            const placeLayer = Number.isFinite(placementTarget && placementTarget.layer)
+                ? Math.round(Number(placementTarget.layer))
                 : 0;
+            const targetX = Number.isFinite(placementTarget && placementTarget.x) ? Number(placementTarget.x) : worldX;
+            const targetY = Number.isFinite(placementTarget && placementTarget.y) ? Number(placementTarget.y) : worldY;
             const rawX = mapRef && typeof mapRef.wrapWorldX === "function"
-                ? mapRef.wrapWorldX(worldX)
-                : worldX;
+                ? mapRef.wrapWorldX(targetX)
+                : targetX;
             const rawY = mapRef && typeof mapRef.wrapWorldY === "function"
-                ? mapRef.wrapWorldY(worldY)
-                : worldY;
+                ? mapRef.wrapWorldY(targetY)
+                : targetY;
             const placeX = rawX;
             const placeY = rawY;
             const powerupPlacement = getPowerupPlacementPreviewConfig(wizardRef);
@@ -8509,8 +8532,33 @@ const SpellSystem = (() => {
                     radius: powerupPlacement.radius
                 });
                 if (placed) {
+                    if (typeof globalThis.applyEditorPlacementSupport === "function") {
+                        globalThis.applyEditorPlacementSupport(
+                            placed,
+                            mapRef,
+                            {
+                                ...placementTarget,
+                                x: placeX,
+                                y: placeY,
+                                layer: placeLayer,
+                                baseZ: placeBaseZ
+                            },
+                            placementTarget && placementTarget.node ? placementTarget.node : null
+                        );
+                    }
                     placed.traversalLayer = placeLayer;
+                    placed.currentLayer = placeLayer;
+                    placed.currentLayerBaseZ = placeBaseZ;
                     placed._floorBaseZ = placeBaseZ;
+                    if (placementTarget && placementTarget.node) {
+                        placed.node = placementTarget.node;
+                    }
+                    if (typeof placementTarget?.node?.surfaceId === "string") {
+                        placed.surfaceId = placementTarget.node.surfaceId;
+                    }
+                    if (typeof placementTarget?.node?.fragmentId === "string") {
+                        placed.fragmentId = placementTarget.node.fragmentId;
+                    }
                 }
             }
             const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
@@ -10949,6 +10997,8 @@ const SpellSystem = (() => {
         getFloorStairPlacementPreview,
         paintFloorPolygonAtWorldPoint,
         getVisibleFloorPolygonTargetAtScreenPoint,
+        resolveVisibleFloorTarget,
+        resolveEditorPlacementTarget,
         resolveTeleportVisualTarget,
         getDragStartSnapTargetForSpell,
         getPlaceObjectPlacementCandidate,
@@ -10965,4 +11015,6 @@ const SpellSystem = (() => {
 
 if (typeof globalThis !== "undefined") {
     globalThis.SpellSystem = SpellSystem;
+    globalThis.resolveVisibleFloorTarget = SpellSystem.resolveVisibleFloorTarget;
+    globalThis.resolveEditorPlacementTarget = SpellSystem.resolveEditorPlacementTarget;
 }

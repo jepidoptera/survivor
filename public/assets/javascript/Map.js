@@ -2870,6 +2870,193 @@ class GameMap {
         };
     }
 
+    getActorSupportWorldZ(actor = null, support = null, options = {}) {
+        const optionWorldZ = Number(options && options.worldZ);
+        if (Number.isFinite(optionWorldZ)) return optionWorldZ;
+        const actorZ = Number(actor && actor.z);
+        if (this.actorUsesLocalMovementZ(actor)) {
+            const baseZ = Number.isFinite(actor && actor.currentLayerBaseZ)
+                ? Number(actor.currentLayerBaseZ)
+                : (
+                    support && Number.isFinite(support.baseZ)
+                        ? Number(support.baseZ)
+                        : this.getActorTraversalLayer(actor, options) * 3
+                );
+            return baseZ + (Number.isFinite(actorZ) ? actorZ : 0);
+        }
+        if (Number.isFinite(actorZ)) return actorZ;
+        if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
+        return this.getActorTraversalLayer(actor, options) * 3;
+    }
+
+    getActorSupportOwnerKey(support) {
+        if (!support || typeof support !== "object") return "";
+        const ownerType = typeof support.ownerType === "string" ? support.ownerType : "";
+        const ownerId = typeof support.ownerId === "string" ? support.ownerId : "";
+        if (!ownerType && !ownerId && support.type === "ground") return "section:";
+        return `${ownerType}:${ownerId}`;
+    }
+
+    buildFloorSupportForFragmentAtWorldPosition(fragment, x, y, options = {}) {
+        if (!fragment || typeof fragment !== "object") return null;
+        const targetLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        const baseNode = typeof this.worldToNode === "function" ? this.worldToNode(x, y) : null;
+        let node = baseNode;
+        if (baseNode && typeof this.getFloorNodeAtLayer === "function") {
+            node = this.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                fragmentId: fragment.fragmentId,
+                surfaceId: fragment.surfaceId,
+                sectionKey: fragment.ownerSectionKey || "",
+                worldX: x,
+                worldY: y,
+                allowScan: options.allowScan !== false
+            }) || (targetLayer === 0 ? baseNode : null);
+        }
+        const baseZ = Number.isFinite(fragment.nodeBaseZ)
+            ? Number(fragment.nodeBaseZ)
+            : (node ? this.getNodeBaseZ(node) : targetLayer * 3);
+        return {
+            type: "floor",
+            layer: targetLayer,
+            baseZ,
+            fragment,
+            fragmentId: typeof fragment.fragmentId === "string" ? fragment.fragmentId : "",
+            surfaceId: typeof fragment.surfaceId === "string" ? fragment.surfaceId : "",
+            ownerType: typeof fragment.ownerType === "string" ? fragment.ownerType : "",
+            ownerId: typeof fragment.ownerId === "string" ? fragment.ownerId : "",
+            sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+            node
+        };
+    }
+
+    findActorMovementSupportBelow(actor, x, y, options = {}) {
+        const worldX = Number(x);
+        const worldY = Number(y);
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const currentSupport = actor && actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        const maxZ = this.getActorSupportWorldZ(actor, currentSupport, options);
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        let bestFragment = null;
+        let bestBaseZ = -Infinity;
+        let bestArea = Infinity;
+        const fragments = this.floorsById instanceof Map ? Array.from(this.floorsById.values()) : [];
+        for (let i = 0; i < fragments.length; i++) {
+            const fragment = fragments[i];
+            if (!fragment || !Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
+            const baseZ = Number.isFinite(fragment.nodeBaseZ)
+                ? Number(fragment.nodeBaseZ)
+                : ((Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0) * 3);
+            if (Number.isFinite(maxZ) && baseZ > maxZ + 1e-6) continue;
+            if (!this.isCircleSupportedByFloorFragment(fragment, worldX, worldY, radius)) continue;
+            const area = Math.abs(this.getPolygonSignedArea2D(fragment.outerPolygon));
+            if (baseZ > bestBaseZ + 1e-6 || (Math.abs(baseZ - bestBaseZ) <= 1e-6 && area < bestArea)) {
+                bestFragment = fragment;
+                bestBaseZ = baseZ;
+                bestArea = area;
+            }
+        }
+        if (bestFragment) {
+            return this.buildFloorSupportForFragmentAtWorldPosition(bestFragment, worldX, worldY, options);
+        }
+        if (options.allowOutdoorGround === false) return null;
+        const hasGroundFragments = fragments.some((fragment) => (
+            fragment &&
+            Number.isFinite(fragment.level) &&
+            Math.round(Number(fragment.level)) === 0 &&
+            Array.isArray(fragment.outerPolygon) &&
+            fragment.outerPolygon.length >= 3
+        ));
+        if (hasGroundFragments) return null;
+        const groundNode = typeof this.worldToNode === "function" ? this.worldToNode(worldX, worldY) : null;
+        if (!groundNode) return null;
+        return {
+            type: "ground",
+            layer: 0,
+            baseZ: 0,
+            node: groundNode,
+            ownerType: "section",
+            ownerId: typeof groundNode._prototypeSectionKey === "string" ? groundNode._prototypeSectionKey : "",
+            sectionKey: typeof groundNode._prototypeSectionKey === "string" ? groundNode._prototypeSectionKey : ""
+        };
+    }
+
+    validateActorMovementSupport(actor, options = {}) {
+        if (!actor || typeof actor !== "object") {
+            throw new Error("support validation requires an actor or object");
+        }
+        const optionWorldX = Number(options.worldX);
+        const optionWorldY = Number(options.worldY);
+        const worldX = Number.isFinite(optionWorldX) ? optionWorldX : Number(actor.x);
+        const worldY = Number.isFinite(optionWorldY) ? optionWorldY : Number(actor.y);
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+            throw new Error("support validation requires a finite world position");
+        }
+        const previousSupport = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        let currentStillValid = false;
+        if (previousSupport && previousSupport.type === "floor") {
+            const fragmentId = typeof previousSupport.fragmentId === "string" ? previousSupport.fragmentId : "";
+            const fragment = fragmentId && this.floorsById instanceof Map
+                ? this.floorsById.get(fragmentId) || null
+                : null;
+            if (fragmentId && !fragment) {
+                throw new Error(`support validation references missing floor fragment ${fragmentId}`);
+            }
+            currentStillValid = !!(
+                fragment &&
+                this.isCircleSupportedByFloorFragment(
+                    fragment,
+                    worldX,
+                    worldY,
+                    this.getActorMovementSupportRadius(actor, options)
+                )
+            );
+        } else if (previousSupport && previousSupport.type === "ground") {
+            currentStillValid = this.isActorFootprintSupportedAtWorldPosition(worldX, worldY, 0, actor, options);
+        }
+        if (currentStillValid) {
+            return {
+                changed: false,
+                ownerChanged: false,
+                lost: false,
+                previousSupport,
+                nextSupport: previousSupport
+            };
+        }
+        const nextSupport = this.findActorMovementSupportBelow(actor, worldX, worldY, options);
+        if (!nextSupport) {
+            if (options.markLost === true) {
+                actor.gone = true;
+                actor.lostToVoid = true;
+            }
+            return {
+                changed: false,
+                ownerChanged: false,
+                lost: true,
+                previousSupport,
+                nextSupport: null
+            };
+        }
+        const apply = options.apply !== false;
+        const appliedSupport = apply
+            ? this.setActorCurrentMovementSupport(actor, nextSupport, options)
+            : nextSupport;
+        const previousOwner = this.getActorSupportOwnerKey(previousSupport);
+        const nextOwner = this.getActorSupportOwnerKey(appliedSupport);
+        return {
+            changed: true,
+            ownerChanged: previousOwner !== nextOwner,
+            lost: false,
+            previousSupport,
+            nextSupport: appliedSupport,
+            previousOwner,
+            nextOwner
+        };
+    }
+
     setActorCurrentMovementSupport(actor, support, options = {}) {
         if (!actor || !support || typeof support !== "object") return null;
         const previousLayer = Number.isFinite(actor.currentLayer)
@@ -2926,9 +3113,15 @@ class GameMap {
         } else if (supportType === "floor") {
             nextLayer = Number.isFinite(support.layer) ? Math.round(Number(support.layer)) : 0;
             nextBaseZ = Number.isFinite(support.baseZ) ? Number(support.baseZ) : nextLayer * 3;
-            const fragment = support.fragment && typeof support.fragment === "object"
-                ? support.fragment
-                : (support.fragmentId && this.floorsById instanceof Map ? this.floorsById.get(support.fragmentId) || null : null);
+            const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+            const fragment = floorSupportApi && typeof floorSupportApi.getFragmentFromSupport === "function"
+                ? floorSupportApi.getFragmentFromSupport(this, support)
+                : (support.fragment && typeof support.fragment === "object"
+                    ? support.fragment
+                    : (support.fragmentId && this.floorsById instanceof Map ? this.floorsById.get(support.fragmentId) || null : null));
+            const owner = floorSupportApi && typeof floorSupportApi.getSupportOwner === "function"
+                ? floorSupportApi.getSupportOwner({ ...support, fragment }, this)
+                : null;
             actor._stairSupport = null;
             actor._activeFloorFragment = fragment || null;
             actor.z = this.actorUsesLocalMovementZ(actor) ? 0 : nextBaseZ;
@@ -2938,8 +3131,8 @@ class GameMap {
                 baseZ: nextBaseZ,
                 fragmentId: typeof support.fragmentId === "string" ? support.fragmentId : (fragment && fragment.fragmentId) || "",
                 surfaceId: typeof support.surfaceId === "string" ? support.surfaceId : (fragment && fragment.surfaceId) || "",
-                ownerType: typeof support.ownerType === "string" ? support.ownerType : (fragment && typeof fragment.ownerType === "string" ? fragment.ownerType : ""),
-                ownerId: typeof support.ownerId === "string" ? support.ownerId : (fragment && typeof fragment.ownerId === "string" ? fragment.ownerId : ""),
+                ownerType: owner ? owner.type : (typeof support.ownerType === "string" ? support.ownerType : (fragment && typeof fragment.ownerType === "string" ? fragment.ownerType : "")),
+                ownerId: owner ? owner.id : (typeof support.ownerId === "string" ? support.ownerId : (fragment && typeof fragment.ownerId === "string" ? fragment.ownerId : "")),
                 sectionKey: typeof (fragment && fragment.ownerSectionKey) === "string" ? fragment.ownerSectionKey : "",
                 nodeId: support.node && typeof support.node.id === "string" ? support.node.id : ""
             };

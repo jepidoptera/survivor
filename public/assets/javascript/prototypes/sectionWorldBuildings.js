@@ -586,6 +586,7 @@
         instance.overlappedSectionKeys = touchedSectionKeys.slice();
         instance.objects = Array.isArray(instance.objects) ? instance.objects : [];
         instance.animals = Array.isArray(instance.animals) ? instance.animals : [];
+        instance.powerups = Array.isArray(instance.powerups) ? instance.powerups : [];
         instance.triggers = Array.isArray(instance.triggers) ? instance.triggers : [];
         instance.loadState = typeof instance.loadState === "string" && instance.loadState.length > 0
             ? instance.loadState
@@ -638,6 +639,7 @@
         instance.overlappedSectionKeys = instance.touchedSectionKeys.slice();
         instance.objects = Array.isArray(options.objects) ? deepCloneJson(options.objects) : [];
         instance.animals = Array.isArray(options.animals) ? deepCloneJson(options.animals) : [];
+        instance.powerups = Array.isArray(options.powerups) ? deepCloneJson(options.powerups) : [];
         instance.triggers = Array.isArray(options.triggers) ? deepCloneJson(options.triggers) : [];
         instance.loadState = typeof options.loadState === "string" ? options.loadState : "unloaded";
         instance.contentVersion = Number.isFinite(Number(options.contentVersion)) ? Number(options.contentVersion) : 1;

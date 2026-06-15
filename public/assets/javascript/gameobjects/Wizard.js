@@ -1764,6 +1764,45 @@ class Wizard extends Character {
         $("#magicBar").css('width', (magicRatio * 100) + '%');
         this.updateModeToggleUi();
     }
+
+    isGeneratedOutdoorGroundFloorFragmentId(fragmentId) {
+        return typeof fragmentId === "string" &&
+            fragmentId.startsWith("section:") &&
+            fragmentId.endsWith(":ground");
+    }
+
+    isGeneratedOutdoorGroundFloorFragment(fragment) {
+        if (!fragment || typeof fragment !== "object") return false;
+        const layer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        if (layer !== 0) return false;
+        if (fragment.ownerType === "building") return false;
+        const fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
+        return fragment._prototypeGroundFloor === true ||
+            this.isGeneratedOutdoorGroundFloorFragmentId(fragmentId);
+    }
+
+    resolveMovementSupportFragment(support) {
+        if (!support || typeof support !== "object") return null;
+        if (support.fragment && typeof support.fragment === "object") return support.fragment;
+        const fragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+        if (!fragmentId || !this.map || !(this.map.floorsById instanceof Map)) return null;
+        return this.map.floorsById.get(fragmentId) || null;
+    }
+
+    shouldPersistFloorMovementFragment(fragment, fragmentId, layer) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        if (targetLayer !== 0) return true;
+        if (this.isGeneratedOutdoorGroundFloorFragment(fragment)) return false;
+        if (!fragment && this.isGeneratedOutdoorGroundFloorFragmentId(fragmentId)) return false;
+        return true;
+    }
+
+    validateSavedFloorMovementFragment(fragment, fragmentId) {
+        if (!fragment || !this.map || typeof this.map.isPointSupportedByFloorFragment !== "function") return;
+        if (!this.map.isPointSupportedByFloorFragment(fragment, this.x, this.y)) {
+            throw new Error(`wizard save point is outside active floor fragment ${fragmentId || "(unknown)"}`);
+        }
+    }
     
     getSavedMovementLayerState() {
         const out = {};
@@ -1771,8 +1810,39 @@ class Wizard extends Character {
         if (Number.isFinite(this.currentLayer)) out.currentLayer = Math.round(Number(this.currentLayer));
         if (Number.isFinite(this.traversalLayer)) out.traversalLayer = Math.round(Number(this.traversalLayer));
         if (Number.isFinite(this.currentLayerBaseZ)) out.currentLayerBaseZ = Number(this.currentLayerBaseZ);
-        if (typeof this.surfaceId === "string" && this.surfaceId.length > 0) out.surfaceId = this.surfaceId;
-        if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) out.fragmentId = this.fragmentId;
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        if (support && support.type === "ground") return out;
+        if (support && support.type === "stair") return out;
+        const layer = Number.isFinite(out.currentLayer) ? out.currentLayer : 0;
+        const supportFragment = support && support.type === "floor"
+            ? this.resolveMovementSupportFragment(support)
+            : null;
+        const supportFragmentId = support && support.type === "floor" && typeof support.fragmentId === "string"
+            ? support.fragmentId
+            : "";
+        if (support && support.type === "floor") {
+            const fragmentId = supportFragmentId ||
+                (supportFragment && typeof supportFragment.fragmentId === "string" ? supportFragment.fragmentId : "");
+            if (!this.shouldPersistFloorMovementFragment(supportFragment, fragmentId, layer)) return out;
+            this.validateSavedFloorMovementFragment(supportFragment, fragmentId);
+            const surfaceId = typeof support.surfaceId === "string" && support.surfaceId.length > 0
+                ? support.surfaceId
+                : (supportFragment && typeof supportFragment.surfaceId === "string" ? supportFragment.surfaceId : "");
+            if (surfaceId) out.surfaceId = surfaceId;
+            if (fragmentId) out.fragmentId = fragmentId;
+            return out;
+        }
+        const rawFragmentId = typeof this.fragmentId === "string" && this.fragmentId.length > 0 ? this.fragmentId : "";
+        const rawSurfaceId = typeof this.surfaceId === "string" && this.surfaceId.length > 0 ? this.surfaceId : "";
+        const rawFragment = rawFragmentId && this.map && this.map.floorsById instanceof Map
+            ? this.map.floorsById.get(rawFragmentId) || null
+            : null;
+        if (!this.shouldPersistFloorMovementFragment(rawFragment, rawFragmentId, layer)) return out;
+        this.validateSavedFloorMovementFragment(rawFragment, rawFragmentId);
+        if (rawSurfaceId) out.surfaceId = rawSurfaceId;
+        if (rawFragmentId) out.fragmentId = rawFragmentId;
         return out;
     }
 
@@ -1812,8 +1882,14 @@ class Wizard extends Character {
         const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
             ? this.currentMovementSupport
             : null;
-        if (!support || support.type !== "stair") return null;
-        return this.normalizeSavedStairSupportRecord(support, "wizard active stair support");
+        if (support && support.type === "stair") {
+            return this.normalizeSavedStairSupportRecord(support, "wizard active stair support");
+        }
+        const stairSupport = this._stairSupport && typeof this._stairSupport === "object"
+            ? this._stairSupport
+            : null;
+        if (!stairSupport) return null;
+        return this.normalizeSavedStairSupportRecord(stairSupport, "wizard active stair support");
     }
 
     normalizeSavedFloorMovementSupportRecord(record, label = "wizard floor support") {
@@ -1862,12 +1938,35 @@ class Wizard extends Character {
         const y = Number(record.y);
         const savedFragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
         const savedSurfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+        const savedGeneratedGroundId = targetLayer === 0 && this.isGeneratedOutdoorGroundFloorFragmentId(savedFragmentId);
+        const createGroundSupport = () => ({
+            type: "ground",
+            layer: 0,
+            baseZ: 0,
+            node: typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null
+        });
+        const warnGeneratedGroundRecovery = (reason) => {
+            if (typeof console !== "undefined" && typeof console.warn === "function") {
+                console.warn("[Wizard] saved generated outdoor ground fragment restored as ground support", {
+                    fragmentId: savedFragmentId,
+                    reason,
+                    x,
+                    y
+                });
+            }
+        };
         let support = null;
         if (typeof this.map.getFloorSupportAtWorldPosition === "function") {
             support = this.map.getFloorSupportAtWorldPosition(x, y, targetLayer) || null;
         }
         const supportFragmentId = support && typeof support.fragmentId === "string" ? support.fragmentId : "";
-        if (support && savedFragmentId && supportFragmentId !== savedFragmentId) {
+        if (support && savedGeneratedGroundId) {
+            const supportFragment = this.resolveMovementSupportFragment(support);
+            if (this.isGeneratedOutdoorGroundFloorFragment(supportFragment) ||
+                (!supportFragment && this.isGeneratedOutdoorGroundFloorFragmentId(supportFragmentId))) {
+                support = createGroundSupport();
+            }
+        } else if (support && savedFragmentId && supportFragmentId !== savedFragmentId) {
             support = null;
         }
         if (!support && savedFragmentId) {
@@ -1875,45 +1974,58 @@ class Wizard extends Character {
                 ? this.map.floorsById.get(savedFragmentId) || null
                 : null;
             if (!fragment) {
+                if (savedGeneratedGroundId) {
+                    warnGeneratedGroundRecovery("missing generated ground fragment");
+                    support = createGroundSupport();
+                }
+            }
+            if (!support && !fragment) {
                 if (deferIfMissing) return null;
                 throw new Error(`wizard save references missing floor fragment ${savedFragmentId}`);
             }
-            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
-            if (fragmentLayer !== targetLayer) {
-                throw new Error(`wizard save floor fragment ${savedFragmentId} is on layer ${fragmentLayer}, not saved layer ${targetLayer}`);
+            if (!support && fragment) {
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) {
+                    throw new Error(`wizard save floor fragment ${savedFragmentId} is on layer ${fragmentLayer}, not saved layer ${targetLayer}`);
+                }
+                if (savedGeneratedGroundId && this.isGeneratedOutdoorGroundFloorFragment(fragment)) {
+                    if (typeof this.map.isPointSupportedByFloorFragment === "function" &&
+                        !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
+                        warnGeneratedGroundRecovery("saved point outside generated ground fragment");
+                    }
+                    support = createGroundSupport();
+                }
+                if (!support && typeof this.map.isPointSupportedByFloorFragment === "function" &&
+                    !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
+                    throw new Error(`wizard save point is outside saved floor fragment ${savedFragmentId}`);
+                }
+                if (!support) {
+                    const baseNode = typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null;
+                    let node = baseNode;
+                    if (baseNode && typeof this.map.getFloorNodeAtLayer === "function") {
+                        node = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                            fragmentId: savedFragmentId,
+                            surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                            sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+                            worldX: x,
+                            worldY: y,
+                            allowScan: true
+                        }) || baseNode;
+                    }
+                    support = {
+                        type: "floor",
+                        layer: targetLayer,
+                        baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : Number(record.currentLayerBaseZ),
+                        fragment,
+                        fragmentId: savedFragmentId,
+                        surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                        node
+                    };
+                }
             }
-            if (typeof this.map.isPointSupportedByFloorFragment === "function" && !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
-                throw new Error(`wizard save point is outside saved floor fragment ${savedFragmentId}`);
-            }
-            const baseNode = typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null;
-            let node = baseNode;
-            if (baseNode && typeof this.map.getFloorNodeAtLayer === "function") {
-                node = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
-                    fragmentId: savedFragmentId,
-                    surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
-                    sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
-                    worldX: x,
-                    worldY: y,
-                    allowScan: true
-                }) || baseNode;
-            }
-            support = {
-                type: "floor",
-                layer: targetLayer,
-                baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : Number(record.currentLayerBaseZ),
-                fragment,
-                fragmentId: savedFragmentId,
-                surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
-                node
-            };
         }
         if (!support && targetLayer === 0 && !savedFragmentId) {
-            support = {
-                type: "ground",
-                layer: 0,
-                baseZ: 0,
-                node: typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null
-            };
+            support = createGroundSupport();
         }
         if (!support) {
             if (deferIfMissing) return null;
@@ -1922,7 +2034,7 @@ class Wizard extends Character {
         if (targetLayer !== 0 && support.type !== "floor") {
             throw new Error(`wizard save resolved layer ${targetLayer} to non-floor support`);
         }
-        if (savedFragmentId && support.type === "floor") {
+        if (savedFragmentId && !savedGeneratedGroundId && support.type === "floor") {
             const resolvedFragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
             if (resolvedFragmentId !== savedFragmentId) {
                 throw new Error(`wizard save restored floor ${savedFragmentId} to ${resolvedFragmentId || "no floor fragment"}`);

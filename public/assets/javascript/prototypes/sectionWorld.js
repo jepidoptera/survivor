@@ -1937,14 +1937,20 @@
         });
         const {
             buildPrototypeObjectPersistenceSignature,
+            buildPrototypePowerupPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
+            capturePendingPrototypePowerups,
             evictPrototypeParkedRuntimeObject,
             formatPrototypeObjectProfileMap,
+            getPrototypeEntityOwnerSignature,
             getPrototypeObjectProfileKey,
+            getPrototypeObjectOwnerSignature,
             isPrototypeSavableAnimal,
             isPrototypeSavableObject,
+            isPrototypeSavablePowerup,
             parkPrototypeRuntimeObject,
             prunePrototypeAnimalRuntimeRecord,
+            removePrototypePowerupRecordById,
             removePrototypeObjectRecordById,
             removePrototypeRecordById,
             removePrototypeRoofRuntime,
@@ -1952,16 +1958,20 @@
             sanitizePrototypeObjectRecords,
             trimPrototypeParkedRuntimeObjectCache,
             upsertPrototypeAnimalRecord,
-            upsertPrototypeObjectRecord
+            upsertPrototypeObjectRecord,
+            upsertPrototypePowerupRecord
         } = persistenceHelpers;
         const asyncSyncPlanners = createSectionWorldAsyncSyncPlanners(map, {
             applyPrototypeBlockedEdgesForSection,
             applyPrototypeSectionClearanceChunk,
             buildPrototypeObjectPersistenceSignature,
+            buildPrototypePowerupPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
             canReusePrototypeParkedRuntimeObject: canReuseSectionWorldParkedRuntimeObject,
+            capturePendingPrototypePowerups,
             evictPrototypeParkedRuntimeObject,
             getPrototypeObjectProfileKey,
+            getPrototypeObjectOwnerSignature,
             isPrototypeSavableObject,
             parkPrototypeRuntimeObject,
             createPrototypeTask,
@@ -1994,18 +2004,25 @@
         initializePrototypeRuntimeState(map, prototypeState);
         installSectionWorldRuntimeRecordApis(map, {
             buildPrototypeObjectPersistenceSignature,
+            buildPrototypePowerupPersistenceSignature,
             buildPrototypeWallPersistenceSignature,
+            capturePendingPrototypePowerups,
+            getPrototypeEntityOwnerSignature,
+            getPrototypeObjectOwnerSignature,
             isPrototypeSavableAnimal,
             isPrototypeSavableObject,
+            isPrototypeSavablePowerup,
             markPrototypeBlockedEdgesDirty,
             markPrototypeClearanceDirty,
             prototypeNow,
             prunePrototypeAnimalRuntimeRecord,
+            removePrototypePowerupRecordById,
             removePrototypeObjectRecordById,
             removePrototypeRecordById,
             settlePendingPrototypeLayoutTransition,
             upsertPrototypeAnimalRecord,
-            upsertPrototypeObjectRecord
+            upsertPrototypeObjectRecord,
+            upsertPrototypePowerupRecord
         });
         installSectionWorldEntitySyncApis(map, {
             applyPrototypeBlockedEdgesForSection,

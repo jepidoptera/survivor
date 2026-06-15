@@ -817,10 +817,14 @@ function logPrototypeBubbleAdjacentFrame(nowMs, stats) {
             queue: Array.isArray(session.queue) ? session.queue.length : 0,
             pendingPromise: !!session.pendingPromise,
             pendingPromiseLabel: typeof session.pendingPromiseLabel === "string" ? session.pendingPromiseLabel : "",
+            phase: typeof session.phase === "string" ? session.phase : "",
             slices: Number(session.frameSliceCount) || 0,
             workMs: Number(session.workMs || 0).toFixed(1),
             promiseWaitMs: Number(session.promiseWaitMs || 0).toFixed(1),
-            maxSliceMs: Number(session.maxFrameSliceMs || 0).toFixed(1)
+            maxSliceMs: Number(session.maxFrameSliceMs || 0).toFixed(1),
+            settleFrames: Number(session.settleFrameCount) || 0,
+            settleRemaining: Number(session.settleFramesRemaining) || 0,
+            cutawayRefreshFrames: Number(session.cutawayRefreshFrameCount) || 0
         } : (globalThis.__prototypeBubbleShiftLastSummary || null),
         sections: sectionState ? {
             active: sectionState.activeSectionKeys instanceof Set ? Array.from(sectionState.activeSectionKeys) : [],
@@ -894,6 +898,198 @@ function logPrototypeBubbleAdjacentFrame(nowMs, stats) {
             visible: !!minimapStats.visible
         } : null
     });
+}
+
+function numberOrZero(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+}
+
+function roundFrameMs(value) {
+    return Number(numberOrZero(value).toFixed(2));
+}
+
+function compactPrototypeBubbleDrawStats(drawBreakdown) {
+    if (!drawBreakdown || typeof drawBreakdown !== "object") return null;
+    return {
+        composeMs: roundFrameMs(drawBreakdown.composeMs),
+        collectMs: roundFrameMs(drawBreakdown.collectMs),
+        collectVisibleNodesMs: roundFrameMs(drawBreakdown.collectVisibleNodesMs),
+        collectCutawayMs: roundFrameMs(drawBreakdown.collectCutawayMs),
+        collectLayerCutawayMs: roundFrameMs(drawBreakdown.collectLayerCutawayMs),
+        collectInteriorPickerMs: roundFrameMs(drawBreakdown.collectInteriorPickerMs),
+        collectVisibleObjectsMs: roundFrameMs(drawBreakdown.collectVisibleObjectsMs),
+        collectOnscreenCacheMs: roundFrameMs(drawBreakdown.collectOnscreenCacheMs),
+        losMs: roundFrameMs(drawBreakdown.losMs),
+        passWorldMs: roundFrameMs(drawBreakdown.passWorldMs),
+        passObjectsMs: roundFrameMs(drawBreakdown.passObjectsMs),
+        passPostMs: roundFrameMs(drawBreakdown.passPostMs),
+        objects3dFilterMs: roundFrameMs(drawBreakdown.objects3dFilterMs),
+        objects3dDisplayMs: roundFrameMs(drawBreakdown.objects3dDisplayMs),
+        buildingCompositeMs: roundFrameMs(drawBreakdown.objects3dBuildingCompositeMs),
+        floorObjectNodeIndexBuildMs: roundFrameMs(drawBreakdown.floorObjectNodeIndexBuildMs),
+        roadsCreated: numberOrZero(drawBreakdown.roadsCreated),
+        floorVisualMeshesCreated: numberOrZero(drawBreakdown.floorVisualMeshesCreated),
+        floorVisualGeometryUploads: numberOrZero(drawBreakdown.floorVisualGeometryUploads)
+    };
+}
+
+function compactPrototypeBubblePresentStats(presentBreakdown) {
+    if (!presentBreakdown || typeof presentBreakdown !== "object") return null;
+    return {
+        pumpMs: roundFrameMs(presentBreakdown.pumpMs),
+        lazyRoadMs: roundFrameMs(presentBreakdown.lazyRoadMs),
+        lazyTreeMs: roundFrameMs(presentBreakdown.lazyTreeMs),
+        renderMs: roundFrameMs(presentBreakdown.renderMs),
+        cursorMs: roundFrameMs(presentBreakdown.cursorMs)
+    };
+}
+
+function compactPrototypeBubbleSession(session) {
+    if (!session || typeof session !== "object") return null;
+    return {
+        sessionId: typeof session.sessionId === "string" ? session.sessionId : "",
+        from: typeof session.from === "string" ? session.from : "",
+        to: typeof session.to === "string" ? session.to : "",
+        phase: typeof session.phase === "string" ? session.phase : "",
+        queue: Array.isArray(session.queue) ? session.queue.length : 0,
+        pendingPromise: !!session.pendingPromise,
+        pendingPromiseLabel: typeof session.pendingPromiseLabel === "string" ? session.pendingPromiseLabel : "",
+        slices: numberOrZero(session.frameSliceCount),
+        workMs: roundFrameMs(session.workMs),
+        promiseWaitMs: roundFrameMs(session.promiseWaitMs),
+        maxSliceMs: roundFrameMs(session.maxFrameSliceMs),
+        settleFrames: numberOrZero(session.settleFrameCount),
+        settleRemaining: numberOrZero(session.settleFramesRemaining),
+        cutawayRefreshFrames: numberOrZero(session.cutawayRefreshFrameCount)
+    };
+}
+
+function buildPrototypeBubbleFrameSample(nowMs, stats, session, stage) {
+    const present = compactPrototypeBubblePresentStats(stats && stats.presentBreakdown);
+    const draw = compactPrototypeBubbleDrawStats(
+        typeof globalThis !== "undefined" ? globalThis.drawPerfBreakdown : null
+    );
+    const frameMetrics = typeof globalThis !== "undefined" ? globalThis.renderingFrameMetrics : null;
+    return {
+        tMs: roundFrameMs(nowMs),
+        stage,
+        phase: session && typeof session.phase === "string" ? session.phase : "",
+        loopMs: roundFrameMs(stats && stats.loopMs),
+        cpuMs: roundFrameMs(stats && stats.cpuMs),
+        simMs: roundFrameMs(stats && stats.simMs),
+        drawMs: roundFrameMs(stats && stats.drawMs),
+        presentMs: roundFrameMs(stats && stats.presentMs),
+        simSteps: numberOrZero(stats && stats.simSteps),
+        accumulatorMs: roundFrameMs(stats && stats.accumulatorMs),
+        present,
+        draw,
+        renderMetrics: frameMetrics ? {
+            visibleNodes: numberOrZero(frameMetrics.visibleNodes),
+            visibleObjects: numberOrZero(frameMetrics.visibleObjectNodeRefs) + numberOrZero(frameMetrics.visibleObjectVisibilityRefs),
+            layerCutawayHeldDuringBubble: numberOrZero(frameMetrics.layerCutawayHeldDuringBubble),
+            layerCutawayBuildingsScanned: numberOrZero(frameMetrics.layerCutawayBuildingsScanned),
+            layerCutawayBuildingBoundsTests: numberOrZero(frameMetrics.layerCutawayBuildingBoundsTests),
+            layerCutawayBuildingPointTests: numberOrZero(frameMetrics.layerCutawayBuildingPointTests),
+            layerCutawayBuildingTriggers: numberOrZero(frameMetrics.layerCutawayBuildingTriggers),
+            layerCutawayFloorFallbackScanned: numberOrZero(frameMetrics.layerCutawayFloorFallbackScanned),
+            roadsCreated: numberOrZero(frameMetrics.roadsCreated),
+            floorVisualMeshesCreated: numberOrZero(frameMetrics.floorVisualMeshesCreated),
+            floorVisualGeometryUploads: numberOrZero(frameMetrics.floorVisualGeometryUploads)
+        } : null,
+        session: compactPrototypeBubbleSession(session)
+    };
+}
+
+function updatePrototypeBubbleCaptureMax(capture, key, sample, value) {
+    if (!capture || !sample) return;
+    const numericValue = numberOrZero(value);
+    if (!capture.maxFrames || typeof capture.maxFrames !== "object") capture.maxFrames = {};
+    const previous = capture.maxFrames[key];
+    if (!previous || numericValue > numberOrZero(previous[key])) {
+        capture.maxFrames[key] = {
+            [key]: roundFrameMs(numericValue),
+            sample
+        };
+    }
+}
+
+function finishPrototypeBubbleFrameCapture(nowMs, reason = "finished") {
+    if (typeof globalThis === "undefined") return null;
+    const capture = globalThis.__prototypeBubbleFrameCapture;
+    if (!capture || typeof capture !== "object") return null;
+    const frames = Array.isArray(capture.frames) ? capture.frames : [];
+    const summary = {
+        sessionId: capture.sessionId || "",
+        from: capture.from || "",
+        to: capture.to || "",
+        reason,
+        frameCount: frames.length,
+        durationMs: roundFrameMs(nowMs - numberOrZero(capture.startedAtMs)),
+        finishedAtMs: roundFrameMs(nowMs),
+        maxFrames: capture.maxFrames || {},
+        finalBubbleSummary: typeof globalThis.__prototypeBubbleShiftLastSummary === "object"
+            ? globalThis.__prototypeBubbleShiftLastSummary
+            : null
+    };
+    globalThis.__prototypeBubbleFrameLastSummary = summary;
+    globalThis.__prototypeBubbleFrameCapture = null;
+    if (
+        globalThis.prototypeBubbleHitchDiagnostics === true &&
+        typeof console !== "undefined" &&
+        typeof console.log === "function"
+    ) {
+        console.log("[prototype bubble frame summary]", summary);
+    }
+    return summary;
+}
+
+function recordPrototypeBubbleAdjacentFrame(nowMs, stats) {
+    if (typeof globalThis === "undefined" || !stats) return null;
+    const session = map && map._prototypeBubbleShiftSession && map._prototypeBubbleShiftSession.completed !== true
+        ? map._prototypeBubbleShiftSession
+        : null;
+    const lastFinishedAt = numberOrZero(globalThis.__prototypeBubbleShiftLastFinishedAtMs);
+    const recentlyFinished = !session && lastFinishedAt > 0 && (nowMs - lastFinishedAt) < 750;
+    let capture = globalThis.__prototypeBubbleFrameCapture || null;
+
+    if (session) {
+        const sessionId = typeof session.sessionId === "string" ? session.sessionId : "";
+        if (!capture || capture.sessionId !== sessionId) {
+            if (capture && capture.sessionId !== sessionId) {
+                finishPrototypeBubbleFrameCapture(nowMs, "superseded-by-new-session");
+            }
+            capture = {
+                sessionId,
+                from: typeof session.from === "string" ? session.from : "",
+                to: typeof session.to === "string" ? session.to : "",
+                startedAtMs: nowMs,
+                frames: [],
+                maxFrames: {}
+            };
+            globalThis.__prototypeBubbleFrameCapture = capture;
+        }
+    } else if (!capture) {
+        return null;
+    } else if (!recentlyFinished) {
+        return finishPrototypeBubbleFrameCapture(nowMs, "post-window-expired");
+    }
+
+    const stage = session
+        ? (session.phase === "settle" ? "settle" : (session.phase === "refresh" ? "refresh" : "work"))
+        : "post";
+    const sample = buildPrototypeBubbleFrameSample(nowMs, stats, session, stage);
+    capture.frames.push(sample);
+    if (capture.frames.length > 180) capture.frames.shift();
+    updatePrototypeBubbleCaptureMax(capture, "cpuMs", sample, sample.cpuMs);
+    updatePrototypeBubbleCaptureMax(capture, "loopMs", sample, sample.loopMs);
+    updatePrototypeBubbleCaptureMax(capture, "drawMs", sample, sample.drawMs);
+    updatePrototypeBubbleCaptureMax(capture, "presentMs", sample, sample.presentMs);
+    updatePrototypeBubbleCaptureMax(capture, "pumpMs", sample, sample.present && sample.present.pumpMs);
+    updatePrototypeBubbleCaptureMax(capture, "collectCutawayMs", sample, sample.draw && sample.draw.collectCutawayMs);
+    updatePrototypeBubbleCaptureMax(capture, "collectVisibleObjectsMs", sample, sample.draw && sample.draw.collectVisibleObjectsMs);
+    updatePrototypeBubbleCaptureMax(capture, "floorObjectNodeIndexBuildMs", sample, sample.draw && sample.draw.floorObjectNodeIndexBuildMs);
+    return capture;
 }
 
 function presentGameFrame(renderAnimalsOverride = null) {
@@ -1212,6 +1408,24 @@ function initRoadLayer() {
 
 // Character, Wizard, Animal and animal subclasses moved to gameobjects/ folder
 
+function cloneWizardLoadDataForRuntime(data) {
+    if (!data || typeof data !== "object") return data;
+    const cloned = JSON.parse(JSON.stringify(data));
+    if (typeof sanitizeWizardLoadMovementSupport === "function") {
+        sanitizeWizardLoadMovementSupport(cloned);
+        return cloned;
+    }
+    const fragmentId = typeof cloned.fragmentId === "string" ? cloned.fragmentId : "";
+    const layer = Number.isFinite(cloned.currentLayer)
+        ? Math.round(Number(cloned.currentLayer))
+        : (Number.isFinite(cloned.traversalLayer) ? Math.round(Number(cloned.traversalLayer)) : 0);
+    if (layer === 0 && fragmentId.startsWith("section:") && fragmentId.endsWith(":ground")) {
+        cloned.fragmentId = "";
+        cloned.surfaceId = "";
+    }
+    return cloned;
+}
+
 jQuery(() => {
     if (typeof sanitizeSavedGameState === 'function') {
         sanitizeSavedGameState();
@@ -1220,7 +1434,7 @@ jQuery(() => {
     const startupLoadDirectiveStorageKey = "survivor_startup_load_directive_v1";
     let lastSaveReloadDirective = null;
 
-    function isPrototypeIndexedDbRoute() {
+    function isSectionWorldIndexedDbRoute() {
         return !!(
             startupConfig &&
             startupConfig.prototypeBuilder &&
@@ -1228,19 +1442,24 @@ jQuery(() => {
         );
     }
 
+    function isPrototypeIndexedDbRoute() {
+        return isSectionWorldIndexedDbRoute();
+    }
+
     function shouldBootstrapPrototypeApisWithoutWorldLoad() {
-        return isPrototypeIndexedDbRoute();
+        return isSectionWorldIndexedDbRoute();
     }
 
     function normalizeSaveReloadDirective(directive) {
         if (!directive || typeof directive !== "object") return null;
-        const source = String(directive.source || "").trim().toLowerCase();
-        if (source !== "local" && source !== "server" && source !== "prototype-indexeddb") return null;
+        const rawSource = String(directive.source || "").trim().toLowerCase();
+        const source = rawSource === "prototype-indexeddb" ? "section-indexeddb" : rawSource;
+        if (source !== "server" && source !== "section-indexeddb") return null;
         const normalized = { source };
         if (source === "server" && typeof directive.fileName === "string" && directive.fileName.trim().length > 0) {
             normalized.fileName = directive.fileName.trim();
         }
-        if (source === "prototype-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
+        if (source === "section-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
             normalized.key = directive.key.trim();
         }
         return normalized;
@@ -1496,7 +1715,7 @@ jQuery(() => {
                 typeof bundle.manifest.wizard === "object"
             ) ? bundle.manifest.wizard : null;
             if (prototypeWizardState && typeof wizard.loadJson === "function") {
-                wizard.loadJson(prototypeWizardState);
+                wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
             }
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard, { force: true });
@@ -2366,7 +2585,7 @@ jQuery(() => {
             }
             markPrototypeStartupPerf("prototype-sync-complete");
             if (manifest && manifest.wizard && typeof manifest.wizard === "object" && typeof wizard.loadJson === "function") {
-                wizard.loadJson(manifest.wizard);
+                wizard.loadJson(cloneWizardLoadDataForRuntime(manifest.wizard));
             }
             const savedMazeMode = (
                 manifest &&
@@ -2398,8 +2617,8 @@ jQuery(() => {
             if (typeof setActivePrototypeSaveSlotKey === "function") {
                 setActivePrototypeSaveSlotKey(nextName);
             }
-            setLastSaveReloadDirective({ source: "prototype-indexeddb", key: nextName });
-            message(`Started new prototype game '${nextName}'`);
+            setLastSaveReloadDirective({ source: "section-indexeddb", key: nextName });
+            message(`Started new game '${nextName}'`);
             markPrototypeStartupPerf("start-new-complete", { key: nextName });
             return { ok: true, key: nextName };
         } catch (error) {
@@ -2434,7 +2653,7 @@ jQuery(() => {
         if (typeof loadGameStateFromIndexedDbKey !== "function") {
             return { ok: false, reason: "indexeddb-load-unavailable" };
         }
-        beginPrototypeStartupPerf("load-prototype-save", { key: saveKey });
+        beginPrototypeStartupPerf("load-section-world-save", { key: saveKey });
         showPrototypeLoadingOverlay("Loading");
         try {
             markPrototypeStartupPerf("indexeddb-load-begin", { key: saveKey });
@@ -2445,7 +2664,7 @@ jQuery(() => {
                 reason: result && result.reason ? String(result.reason) : ""
             });
             if (result && result.ok) {
-                setLastSaveReloadDirective({ source: "prototype-indexeddb", key: saveKey });
+                setLastSaveReloadDirective({ source: "section-indexeddb", key: saveKey });
             } else {
                 finishPrototypeStartupPerf("startup-perf-failed", {
                     key: saveKey,
@@ -2476,9 +2695,7 @@ jQuery(() => {
                         name: newGameChoice.name,
                         difficulty: newGameChoice.difficulty
                     };
-                    const startResult = isPrototypeIndexedDbRoute()
-                        ? await startNewPrototypeGame(newGameChoice)
-                        : await startNewGameFromServerTemplate(newGameChoice);
+                    const startResult = await startNewPrototypeGame(newGameChoice);
                     if (startResult && startResult.ok) {
                         clearDialogs();
                         return true;
@@ -2496,9 +2713,7 @@ jQuery(() => {
                 if (!loadChoice || loadChoice.action === "back") {
                     continue;
                 }
-                const loadResult = isPrototypeIndexedDbRoute()
-                    ? await loadNamedPrototypeSave(loadChoice.key)
-                    : await loadNamedLocalSave(loadChoice.key);
+                const loadResult = await loadNamedPrototypeSave(loadChoice.key);
                 if (loadResult && loadResult.ok) {
                     clearDialogs();
                     return true;
@@ -4784,22 +4999,24 @@ jQuery(() => {
             perfStats.drawMs = _tDrawEnd - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
             const bubbleAdjacentFrameNow = performance.now();
+            const simBreakdownForBubbleFrame = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                ? globalThis.simPerfBreakdown
+                : null;
+            const bubbleFrameStats = {
+                loopMs: perfStats.loopMs,
+                cpuMs: perfStats.simMs + perfStats.drawMs,
+                simMs: perfStats.simMs,
+                drawMs: perfStats.drawMs,
+                presentMs: perfStats.drawPresentMs,
+                simSteps: perfStats.simSteps,
+                accumulatorMs: simBreakdownForBubbleFrame ? Number(simBreakdownForBubbleFrame.accumulatorMs || 0) : 0,
+                presentBreakdown: (typeof globalThis !== "undefined" && globalThis.__prototypePresentFrameStats)
+                    ? { ...globalThis.__prototypePresentFrameStats }
+                    : null
+            };
+            recordPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, bubbleFrameStats);
             if (shouldLogPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, perfStats.simMs + perfStats.drawMs)) {
-                const simBreakdownForLog = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
-                    ? globalThis.simPerfBreakdown
-                    : null;
-                logPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, {
-                    loopMs: perfStats.loopMs,
-                    cpuMs: perfStats.simMs + perfStats.drawMs,
-                    simMs: perfStats.simMs,
-                    drawMs: perfStats.drawMs,
-                    presentMs: perfStats.drawPresentMs,
-                    simSteps: perfStats.simSteps,
-                    accumulatorMs: simBreakdownForLog ? Number(simBreakdownForLog.accumulatorMs || 0) : 0,
-                    presentBreakdown: (typeof globalThis !== "undefined" && globalThis.__prototypePresentFrameStats)
-                        ? { ...globalThis.__prototypePresentFrameStats }
-                        : null
-                });
+                logPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, bubbleFrameStats);
             }
             const perfInstrumentationActive = typeof isPerfInstrumentationEnabled === "function"
                 ? isPerfInstrumentationEnabled()
@@ -5189,7 +5406,7 @@ jQuery(() => {
         globalThis.wizard = wizard;
     }
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
-        wizard.loadJson(prototypeWizardState);
+        wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
     }
     if (map && typeof map.updatePrototypeSectionBubble === "function") {
         map.updatePrototypeSectionBubble(wizard, { force: true });
@@ -5217,7 +5434,7 @@ jQuery(() => {
     }, 100);
     SpellSystem.initWizardSpells(wizard);
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
-        wizard.loadJson(prototypeWizardState);
+        wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
         if (map && typeof map.updatePrototypeSectionBubble === "function") {
             map.updatePrototypeSectionBubble(wizard, { force: true });
         }
@@ -5311,31 +5528,26 @@ jQuery(() => {
         if (!directive || typeof directive.source !== "string") return false;
 
         const source = directive.source.trim().toLowerCase();
-        if (source === "local") {
-            tryAutoLoadLocalSaveOnStartup();
-            return true;
-        }
-
-        if (source === "prototype-indexeddb") {
+        if (source === "section-indexeddb") {
             const key = (typeof directive.key === "string") ? directive.key.trim() : "";
             if (!key.length || typeof loadGameStateFromIndexedDbKey !== "function") {
-                message("Prototype IndexedDB load is unavailable");
+                message("Section-world save load is unavailable");
                 return true;
             }
-            beginPrototypeStartupPerf("autoload-prototype-save", { key });
+            beginPrototypeStartupPerf("autoload-section-world-save", { key });
             const result = await loadGameStateFromIndexedDbKey(key);
             if (result && result.ok) {
-                setLastSaveReloadDirective({ source: "prototype-indexeddb", key });
-                message(`Loaded prototype save '${key}'`);
-                console.log(`Startup loaded prototype IndexedDB save '${key}'`);
+                setLastSaveReloadDirective({ source: "section-indexeddb", key });
+                message(`Loaded save '${key}'`);
+                console.log(`Startup loaded section-world IndexedDB save '${key}'`);
             } else {
                 finishPrototypeStartupPerf("startup-perf-failed", {
                     key,
                     reason: result && result.reason ? String(result.reason) : "load-failed"
                 });
                 const reason = (result && result.reason) ? String(result.reason) : "unknown";
-                message(`Failed to load prototype save '${key}' (${reason})`);
-                console.error(`Startup prototype IndexedDB load failed for '${key}':`, result);
+                message(`Failed to load save '${key}' (${reason})`);
+                console.error(`Startup section-world IndexedDB load failed for '${key}':`, result);
             }
             return true;
         }
@@ -6729,38 +6941,21 @@ jQuery(() => {
         // Save game to fixed server path with Ctrl+Shift+S
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
-            const isPrototypeSectionMode = !!(map && map._prototypeSectionState);
-            if (isPrototypeSectionMode) {
-                if (typeof savePrototypeSectionWorldToServerSlot === "function") {
-                    savePrototypeSectionWorldToServerSlot("maps").then(result => {
-                        if (result && result.ok) {
-                            message(`Saved ${result.count} section file(s) to maps/`);
-                            console.log('Prototype section-world save to maps complete:', result);
-                        } else {
-                            message('Prototype section save failed');
-                            console.error('Prototype section save to maps failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype section save failed');
-                        console.error('Prototype section save to maps failed:', err);
-                    });
-                } else {
-                    message('Prototype section save is unavailable');
-                }
-                return;
-            }
-            if (typeof saveGameStateToServerFile === 'function') {
-                saveGameStateToServerFile().then(result => {
+            if (typeof saveSectionWorldToServerSlot === "function") {
+                saveSectionWorldToServerSlot("maps").then(result => {
                     if (result && result.ok) {
-                        setLastSaveReloadDirective({ source: "server" });
-                        message('Saved to /assets/saves/savefile.json');
+                        message(`Saved ${result.count} section file(s) to maps/`);
+                        console.log('Section-world save to maps complete:', result);
                     } else {
-                        message('Failed to save file');
-                        console.error('Failed to save file:', result);
+                        message('Section-world save failed');
+                        console.error('Section-world save to maps failed:', result);
                     }
+                }).catch(err => {
+                    message('Section-world save failed');
+                    console.error('Section-world save to maps failed:', err);
                 });
             } else {
-                message('Server file save is unavailable');
+                message('Section-world save is unavailable');
             }
             return;
         }
@@ -6779,84 +6974,43 @@ jQuery(() => {
         // Save game with Ctrl+S
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey) {
             event.preventDefault();
-            const isPrototypeSectionMode = !!(map && map._prototypeSectionState);
-            if (isPrototypeSectionMode && isPrototypeIndexedDbRoute()) {
-                const prototypeKey = (typeof getActivePrototypeSaveSlotKey === "function")
-                    ? getActivePrototypeSaveSlotKey()
-                    : "";
-                if (!prototypeKey || !prototypeKey.length) {
-                    message("Start a new game or load a save first");
-                    return;
-                }
-                if (typeof saveGameStateToIndexedDb === "function") {
-                    saveGameStateToIndexedDb(prototypeKey).then(result => {
-                        if (result && result.ok) {
-                            setLastSaveReloadDirective({ source: "prototype-indexeddb", key: prototypeKey });
-                            message(`Saved prototype game to ${prototypeKey}`);
-                            console.log('Prototype IndexedDB save complete:', result);
-                        } else {
-                            message('Prototype save failed');
-                            console.error('Prototype IndexedDB save failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype save failed');
-                        console.error('Prototype IndexedDB save failed:', err);
-                    });
-                } else {
-                    message('Prototype save is unavailable');
-                }
+            const saveKey = (typeof getActivePrototypeSaveSlotKey === "function")
+                ? getActivePrototypeSaveSlotKey()
+                : "";
+            if (!saveKey || !saveKey.length) {
+                message("Start a new game or load a save first");
                 return;
             }
-            if (isPrototypeSectionMode) {
-                if (typeof savePrototypeSectionWorldToServerSlot === "function") {
-                    savePrototypeSectionWorldToServerSlot("testing").then(result => {
-                        if (result && result.ok) {
-                            message(`Saved ${result.count} section file(s) to testing/`);
-                            console.log('Prototype section-world save complete:', result);
-                        } else {
-                            message('Prototype section save failed');
-                            console.error('Prototype section save failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype section save failed');
-                        console.error('Prototype section save failed:', err);
-                    });
-                } else {
-                    message('Prototype section save is unavailable');
-                }
+            if (typeof saveGameStateToIndexedDb !== "function") {
+                message('Section-world save is unavailable');
                 return;
             }
-            if (typeof saveGameStateToLocalStorage === "function") {
-                const result = saveGameStateToLocalStorage();
+            saveGameStateToIndexedDb(saveKey).then(result => {
                 if (result && result.ok) {
-                    setLastSaveReloadDirective({ source: 'local' });
-                    message(`Game saved to ${result.key}`);
-                    console.log(`Game saved to localStorage key '${result.key}'`);
+                    setLastSaveReloadDirective({ source: "section-indexeddb", key: saveKey });
+                    message(`Saved game to ${saveKey}`);
+                    console.log('Section-world IndexedDB save complete:', result);
                 } else {
                     message('Save failed');
-                    console.error('Game save failed:', result);
+                    console.error('Section-world IndexedDB save failed:', result);
                 }
-            }
+            }).catch(err => {
+                message('Save failed');
+                console.error('Section-world IndexedDB save failed:', err);
+            });
+            return;
         }
 
         // Load game with Ctrl+L
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey) {
             event.preventDefault();
-            if (isPrototypeIndexedDbRoute()) {
-                const prototypeKey = (typeof getActivePrototypeSaveSlotKey === "function")
-                    ? getActivePrototypeSaveSlotKey()
-                    : "";
-                if (prototypeKey && reloadWithStartupLoadDirective({ source: "prototype-indexeddb", key: prototypeKey })) {
-                    message(`Reloading and loading prototype save '${prototypeKey}'...`);
-                } else {
-                    message('No active prototype save selected');
-                }
-                return;
-            }
-            if (reloadWithStartupLoadDirective({ source: "local" })) {
-                message('Reloading and loading local save...');
+            const saveKey = (typeof getActivePrototypeSaveSlotKey === "function")
+                ? getActivePrototypeSaveSlotKey()
+                : "";
+            if (saveKey && reloadWithStartupLoadDirective({ source: "section-indexeddb", key: saveKey })) {
+                message(`Reloading and loading save '${saveKey}'...`);
             } else {
-                message('Failed to queue reload for local save load');
+                message('No active save selected');
             }
             return;
         }

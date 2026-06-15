@@ -28,7 +28,7 @@ function resolvePrototypeSectionAssetForNode(mapRef, node) {
         : null;
 }
 
-function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset) {
+function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset, options = null) {
     if (!asset || asset._level0RoadSurfaceDirtyPending !== true) return false;
     const dirtyRects = Array.isArray(asset._level0RoadSurfaceDirtyRects)
         ? asset._level0RoadSurfaceDirtyRects
@@ -52,7 +52,10 @@ function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset) {
                 ? performance.now()
                 : Date.now()
         };
-        if (typeof globalThis.presentGameFrame === "function") {
+        if (
+            !(options && options.suppressPresent === true) &&
+            typeof globalThis.presentGameFrame === "function"
+        ) {
             globalThis.presentGameFrame();
         }
     }
