@@ -13,6 +13,7 @@ const {
     initializePrototypeRuntimeState,
     shouldParkPrototypeRuntimeObject
 } = require("../public/assets/javascript/prototypes/sectionWorld.js");
+const sectionGeometry = require("../public/assets/javascript/map/sectionGeometry.js");
 
 class TestNode {
     constructor(xindex, yindex) {
@@ -434,6 +435,99 @@ test("prototype bubble parked object reuse requires parked state, type match, an
     assert.equal(canReusePrototypeParkedRuntimeObject(parkedTree, "tree", "{\"id\":2}"), false);
     assert.equal(canReusePrototypeParkedRuntimeObject({ ...parkedTree, _prototypeParked: false }, "tree", "{\"id\":1}"), false);
     assert.equal(canReusePrototypeParkedRuntimeObject({ ...parkedTree, gone: true }, "tree", "{\"id\":1}"), false);
+});
+
+test("prototype section bubble is a hysteretic four-section set independent of exact section resolution", () => {
+    const map = createPrototypeMap();
+    map.prepareFloorSectionUnregister = () => 0;
+    map.commitFloorSectionUnregister = () => 0;
+    map.prepareFloorSectionFragments = () => [];
+    map.addFloorSectionNodeBatch = () => 0;
+    map.finalizeFloorSectionNodes = () => 0;
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const radius = 10;
+    const basis = sectionGeometry.getSectionBasisVectors(radius);
+    const anchorCenter = { q: 0, r: 0 };
+    const makeSection = (coord) => {
+        const key = sectionGeometry.makeSectionKey(coord);
+        const centerAxial = sectionGeometry.computeSectionCenterAxial(coord, basis, anchorCenter);
+        const centerOffset = sectionGeometry.axialToEvenQOffset(centerAxial);
+        return {
+            id: `section-${key}`,
+            key,
+            coord: { q: coord.q, r: coord.r },
+            centerAxial,
+            centerOffset,
+            centerWorld: sectionGeometry.offsetToWorld(centerOffset),
+            neighborKeys: [],
+            tileCoordKeys: [key],
+            groundTextureId: 0,
+            groundTiles: { [key]: 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: []
+        };
+    };
+    const coords = [
+        { q: -1, r: 0 },
+        { q: 0, r: -1 },
+        { q: 0, r: 0 },
+        { q: 0, r: 1 },
+        { q: 1, r: -1 },
+        { q: 1, r: 0 },
+        { q: 1, r: 1 },
+        { q: 2, r: -1 },
+        { q: 2, r: 0 }
+    ];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        radius,
+        anchorCenter,
+        sections: coords.map(makeSection)
+    })), true);
+    const resolveExactSectionKey = (point) => sectionGeometry.makeSectionKey(
+        sectionGeometry.resolvePrototypeSectionCoordForWorldPosition(
+            map._prototypeSectionState,
+            point.x,
+            point.y
+        )
+    );
+
+    const nearBoundaryActor = { x: 9, y: 1 };
+    assert.equal(resolveExactSectionKey(nearBoundaryActor), "1,0");
+    assert.equal(map.updatePrototypeSectionBubble(nearBoundaryActor, { force: true }), true);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["0,0", "0,1", "1,-1", "1,0"]
+    );
+    assert.equal(map.getPrototypeBubbleSectionKeys().size, 4);
+    assert.ok(map._prototypeBubbleShiftSession);
+    assert.equal(map._prototypeBubbleShiftSession.frameSliceCount, 0);
+    assert.equal(map.flushPrototypeBubbleShiftSession(), true);
+
+    const insideHysteresisActor = { x: 17, y: 1 };
+    assert.equal(resolveExactSectionKey(insideHysteresisActor), "1,0");
+    assert.equal(map.updatePrototypeSectionBubble(insideHysteresisActor), false);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["0,0", "0,1", "1,-1", "1,0"]
+    );
+
+    const pastHysteresisActor = { x: 25, y: 1 };
+    assert.equal(resolveExactSectionKey(pastHysteresisActor), "2,0");
+    assert.equal(map.updatePrototypeSectionBubble(pastHysteresisActor), true);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["1,0", "1,1", "2,-1", "2,0"]
+    );
+    assert.equal(map.getPrototypeBubbleSectionKeys().size, 4);
 });
 
 test("prototype canOccupyWorldPosition checks blockers on the actor floor layer", () => {
@@ -1124,6 +1218,10 @@ test("direct prototype runtime sync settles pending layout before syncing walls 
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
+    map.syncPrototypeWalls();
+    map.syncPrototypeObjects();
     assert.equal(map._prototypeSectionState.activeCenterKey, "0,0");
 
     assert.equal(map.setPrototypeActiveCenterKey("1,0"), true);
@@ -1138,6 +1236,92 @@ test("direct prototype runtime sync settles pending layout before syncing walls 
     assert.deepEqual(activeWallIds, [102, 103, 104]);
     assert.deepEqual(activeObjectIds, [202, 203, 204]);
     assert.equal(map._prototypeSectionState.pendingLayoutTransition, null);
+});
+
+test("bubble runtime sync hydrates store-backed active sections before collecting walls", async () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const removedWallIds = [];
+    globalThis.WallSectionUnit = {
+        loadJson(record, mapRef) {
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                remove() {
+                    this.gone = true;
+                    removedWallIds.push(this.id);
+                }
+            };
+        }
+    };
+
+    const makeSection = (key, q, r, wallId = null) => ({
+        id: `section-${key}`,
+        key,
+        coord: { q, r },
+        centerAxial: { q: q * 5, r: r * 5 },
+        centerOffset: { x: q * 5, y: r * 5 },
+        centerWorld: { x: q * 5 * 0.866, y: r * 5 },
+        neighborKeys: [],
+        tileCoordKeys: [key],
+        groundTextureId: 0,
+        groundTiles: { [key]: 0 },
+        walls: wallId === null ? [] : [{
+            id: wallId,
+            startPoint: { x: q * 10, y: 0 },
+            endPoint: { x: q * 10 + 1, y: 0 },
+            height: 1,
+            thickness: 0.1,
+            bottomZ: 0,
+            traversalLayer: 0,
+            level: 0
+        }],
+        objects: [],
+        animals: [],
+        powerups: []
+    });
+
+    const hydratedTwo = makeSection("2,0", 2, 0, 104);
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        sections: [
+            makeSection("-1,0", -1, 0),
+            makeSection("0,0", 0, 0),
+            makeSection("1,0", 1, 0),
+            hydratedTwo
+        ]
+    })), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
+    map.syncPrototypeWalls();
+
+    const placeholderTwo = map.getPrototypeSectionAsset("2,0");
+    placeholderTwo._prototypeSectionHydrated = false;
+    placeholderTwo.walls = [];
+    map._prototypeSectionState.loadedSectionAssetKeys.delete("2,0");
+    map.setPrototypeSectionAssetLoader(async (sectionKeys) => (
+        sectionKeys.includes("2,0") ? [hydratedTwo] : []
+    ));
+
+    assert.equal(map.setPrototypeActiveCenterKey("2,0"), true);
+    const session = map.schedulePrototypeRuntimeSync({ frameBudgetMs: 0.25 });
+    assert.equal(session.pendingPromise, undefined);
+    assert.equal(map.advancePrototypeBubbleShiftSession({ frameBudgetMs: 0.25 }), false);
+    assert.ok(session.pendingPromise);
+    await session.pendingPromise;
+    assert.equal(map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 }), true);
+
+    const rehydrated = map.getPrototypeSectionAsset("2,0");
+    assert.equal(rehydrated._prototypeSectionHydrated, true);
+    assert.equal(rehydrated.walls.length, 1);
+    assert.equal(map._prototypeWallState.activeRuntimeWallsByRecordId.has(104), true);
+    assert.deepEqual(removedWallIds, []);
 });
 
 test("schedulePrototypeRuntimeSync prunes animals from sections leaving the target bubble before async teardown completes", () => {
@@ -1196,6 +1380,8 @@ test("schedulePrototypeRuntimeSync prunes animals from sections leaving the targ
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeAnimals(), true);
     assert.equal(globalThis.animals.length, 1);
     assert.equal(map._prototypeAnimalState.activeRuntimeAnimalsByRecordId.size, 1);
@@ -1273,6 +1459,8 @@ test("schedulePrototypeRuntimeSync loads newly entering walls and unloads walls 
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeWalls(), true);
     assert.deepEqual(Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.keys()).sort((a, b) => a - b), [101, 102, 103]);
 
@@ -1385,6 +1573,8 @@ test("schedulePrototypeRuntimeSync leaves changed runtime walls intact during sc
             makeSection("2,0", 2, 0, 104)
         ]
     })), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeWalls(), true);
     map.getPrototypeSectionKeyForWorldPoint = () => "0,0";
     const changedRuntimeWall = map._prototypeWallState.activeRuntimeWallsByRecordId.get(102);

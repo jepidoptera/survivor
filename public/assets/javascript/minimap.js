@@ -437,6 +437,9 @@
 
     function drawPrototypeMinimap(target) {
         if (typeof map === "undefined" || !map || typeof map.getLoadedPrototypeNodes !== "function") return;
+        const startMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
 
         const mw = target.canvas.width;
         const mh = target.canvas.height;
@@ -514,11 +517,26 @@
             target.lineWidth = 1;
             target.strokeRect(topLeft.x, topLeft.y, vpW, vpH);
         }
+        if (typeof window !== "undefined") {
+            const elapsedMs = ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now()) - startMs;
+            window.prototypeMinimapPerfStats = {
+                ...(window.prototypeMinimapPerfStats || {}),
+                visible: visible === true,
+                prototypeDrawMs: elapsedMs,
+                loadedNodes: loadedNodes.length,
+                wallSections: wallSections.length
+            };
+        }
     }
 
     // ---- build the static layer (entire map, all nodes) ----
     function rebuildStatic() {
         if (typeof map === "undefined" || !map || !map.nodes) return;
+        const startMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
 
         const mw = staticCanvas.width;
         const mh = staticCanvas.height;
@@ -624,11 +642,29 @@
         }
 
         staticDirty = false;
+        if (typeof window !== "undefined") {
+            const elapsedMs = ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now()) - startMs;
+            const prototypeMap = typeof map.getLoadedPrototypeNodes === "function";
+            const allNodes = prototypeMap && typeof map.getAllPrototypeNodes === "function"
+                ? map.getAllPrototypeNodes().length
+                : (Number(map.width) || 0) * (Number(map.height) || 0);
+            window.prototypeMinimapPerfStats = {
+                ...(window.prototypeMinimapPerfStats || {}),
+                visible: visible === true,
+                rebuildMs: elapsedMs,
+                allNodes
+            };
+        }
     }
 
     // ---- main paint (called every frame while visible) ----
     function paint() {
         if (!visible || !canvas || typeof map === "undefined" || !map || !map.nodes) return;
+        const startMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
 
         if (map !== lastMapRef) {
             lastMapRef = map;
@@ -640,6 +676,16 @@
 
         if (typeof map.getLoadedPrototypeNodes === "function") {
             drawPrototypeMinimap(ctx);
+            if (typeof window !== "undefined") {
+                const elapsedMs = ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now()) - startMs;
+                window.prototypeMinimapPerfStats = {
+                    ...(window.prototypeMinimapPerfStats || {}),
+                    visible: true,
+                    paintMs: elapsedMs
+                };
+            }
             return;
         }
 
@@ -711,6 +757,16 @@
             ctx.strokeStyle = COL_VIEWPORT;
             ctx.lineWidth = 1;
             ctx.strokeRect(tlx, tly, vpW, vpH);
+        }
+        if (typeof window !== "undefined") {
+            const elapsedMs = ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now()) - startMs;
+            window.prototypeMinimapPerfStats = {
+                ...(window.prototypeMinimapPerfStats || {}),
+                visible: true,
+                paintMs: elapsedMs
+            };
         }
     }
 

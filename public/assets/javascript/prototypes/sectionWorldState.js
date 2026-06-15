@@ -322,6 +322,13 @@
                     ? sectionStateSource.buildingPlacements.map((record) => JSON.parse(JSON.stringify(record)))
                     : [],
                 hysteresisRatio: 0.1,
+                activeSectionLimit: 4,
+                bubbleHysteresisMeters: 10,
+                bubbleFocusWorldX: null,
+                bubbleFocusWorldY: null,
+                bubbleFocusSectionKey: "",
+                activeBubbleSectionKeys: new Set(),
+                bubbleTripletInitializedByActor: false,
                 useSparseNodes: true,
                 activeCenterKey: (typeof activeCenterKey === "string" && activeCenterKey.length > 0)
                     ? activeCenterKey

@@ -252,6 +252,61 @@ test("GameMap applies smaller overlapping floor support after walking from groun
     assert.equal(actor.currentMovementSupport.fragmentId, building.fragmentId);
 });
 
+test("GameMap floor support exposes owner world unit and notifies scope hook", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0 })]];
+    map.worldToNode = () => map.nodes[0][0];
+    map.resetFloorRuntimeState();
+
+    const building = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:floor-fragment-16",
+        surfaceId: "building:placed-5:surface:floor-fragment-16",
+        ownerSectionKey: "building:placed-5",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -2, y: -2 },
+            { x: 2, y: -2 },
+            { x: 2, y: 2 },
+            { x: -2, y: 2 }
+        ],
+        holes: []
+    });
+    const actor = {
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0
+    };
+    let scopeUpdate = null;
+    map.updatePrototypeWorldScopeForMovementSupport = (updatedActor, support, options) => {
+        scopeUpdate = { actor: updatedActor, support, options };
+        return { type: "building", id: support.ownerId };
+    };
+
+    const support = map.getFloorSupportAtWorldPosition(0, 0, 0);
+    const applied = map.setActorCurrentMovementSupport(actor, support);
+
+    assert.equal(building.ownerType, "building");
+    assert.equal(building.ownerId, "building:placed-5");
+    assert.equal(support.ownerType, "building");
+    assert.equal(support.ownerId, "building:placed-5");
+    assert.equal(applied.ownerType, "building");
+    assert.equal(applied.ownerId, "building:placed-5");
+    assert.equal(actor.currentMovementSupport.ownerType, "building");
+    assert.equal(actor.currentMovementSupport.ownerId, "building:placed-5");
+    assert.equal(scopeUpdate.actor, actor);
+    assert.equal(scopeUpdate.support.ownerId, "building:placed-5");
+});
+
 function createNode(xindex, yindex, overrides = {}) {
     return {
         xindex,

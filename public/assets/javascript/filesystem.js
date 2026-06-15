@@ -581,9 +581,26 @@ function parsePrototypeSectionKey(sectionKey) {
     };
 }
 
+function getPrototypeSectionCoordDistance(a, b) {
+    const aq = Number(a && a.q) || 0;
+    const ar = Number(a && a.r) || 0;
+    const bq = Number(b && b.q) || 0;
+    const br = Number(b && b.r) || 0;
+    const dq = aq - bq;
+    const dr = ar - br;
+    const ds = (-aq - ar) - (-bq - br);
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(ds));
+}
+
 function getPrototypeBubbleSectionKeysFromWorld(worldData) {
     const world = (worldData && typeof worldData === "object") ? worldData : null;
     if (!world) return [];
+    const explicitKeys = Array.isArray(world.loadedSectionKeys)
+        ? world.loadedSectionKeys
+        : (Array.isArray(world.activeSectionKeys) ? world.activeSectionKeys : null);
+    if (Array.isArray(explicitKeys) && explicitKeys.length > 0) {
+        return Array.from(new Set(explicitKeys.filter(key => typeof key === "string" && key.length > 0))).slice(0, 3);
+    }
     const activeCenterKey = (typeof world.activeCenterKey === "string" && world.activeCenterKey.length > 0)
         ? world.activeCenterKey
         : "";
@@ -601,22 +618,12 @@ function getPrototypeBubbleSectionKeysFromWorld(worldData) {
         availableKeys.add(activeCenterKey);
     }
     const centerCoord = parsePrototypeSectionKey(activeCenterKey);
-    const bubbleKeys = [];
-    const pushKey = (coord) => {
-        const key = makePrototypeSectionKey(coord);
-        if (!availableKeys.has(key)) return;
-        if (bubbleKeys.indexOf(key) >= 0) return;
-        bubbleKeys.push(key);
-    };
-    pushKey(centerCoord);
-    for (let i = 0; i < PROTOTYPE_SECTION_DIRECTIONS.length; i++) {
-        const direction = PROTOTYPE_SECTION_DIRECTIONS[i];
-        pushKey({
-            q: centerCoord.q + direction.q,
-            r: centerCoord.r + direction.r
-        });
-    }
-    return bubbleKeys;
+    return Array.from(availableKeys).sort((a, b) => {
+        const distanceA = getPrototypeSectionCoordDistance(parsePrototypeSectionKey(a), centerCoord);
+        const distanceB = getPrototypeSectionCoordDistance(parsePrototypeSectionKey(b), centerCoord);
+        if (distanceA !== distanceB) return distanceA - distanceB;
+        return String(a).localeCompare(String(b));
+    }).slice(0, 3);
 }
 
 function makePrototypeSectionStoreRecordId(slotKey, sectionKey) {
@@ -1204,9 +1211,13 @@ function saveGameStateToIndexedDb(saveKey) {
         const state = map._prototypeSectionState;
         explicitSectionCoords = Array.isArray(state.sectionCoords) ? state.sectionCoords.slice() : null;
         explicitActiveCenterKey = (typeof state.activeCenterKey === "string") ? state.activeCenterKey : null;
+        const runtimeActiveSectionKeys = (state.activeBubbleSectionKeys instanceof Set && state.activeBubbleSectionKeys.size > 0)
+            ? Array.from(state.activeBubbleSectionKeys)
+            : (state.activeSectionKeys instanceof Set ? Array.from(state.activeSectionKeys) : []);
         explicitLoadedSectionKeys = getPrototypeBubbleSectionKeysFromWorld({
             activeCenterKey: explicitActiveCenterKey,
-            sectionCoords: explicitSectionCoords
+            sectionCoords: explicitSectionCoords,
+            activeSectionKeys: runtimeActiveSectionKeys
         });
         if (typeof map.exportPrototypeSectionAssets === "function") {
             const hydratedKeys = (typeof map.getPrototypeHydratedSectionKeys === "function")

@@ -143,6 +143,8 @@
         makeSectionKey,
         parseSectionKey,
         addSectionCoords,
+        getSectionCenterWorldForCoord,
+        getNearestSectionKeysForWorldPosition,
         getBubbleKeysForCenter
     } = sectionGeometry;
     // Bubble shifts touch many records at once, but only a few object types are
@@ -184,19 +186,69 @@
         return SECTION_WORLD_SCRIPTING_NAME_PATTERN.test(trimmed) ? trimmed : "";
     }
 
+    function getPrototypeBubbleKeysForScope(state, centerSectionKey = null) {
+        if (!state) return new Set();
+        const key = (typeof centerSectionKey === "string" && centerSectionKey.length > 0)
+            ? centerSectionKey
+            : state.activeCenterKey;
+        if (
+            key === state.activeCenterKey &&
+            state.activeBubbleSectionKeys instanceof Set &&
+            state.activeBubbleSectionKeys.size > 0
+        ) {
+            return new Set(state.activeBubbleSectionKeys);
+        }
+        if (typeof key !== "string" || key.length === 0) return new Set();
+        return getBubbleKeysForCenter(state, key);
+    }
+
     function getSectionWorldLookaheadKeysForCenter(state, centerSectionKey) {
-        if (!state || typeof centerSectionKey !== "string" || centerSectionKey.length === 0) return new Set();
-        const bubbleKeys = getBubbleKeysForCenter(state, centerSectionKey);
-        const lookaheadKeys = new Set();
-        bubbleKeys.forEach((sectionKey) => {
-            const sectionBubble = getBubbleKeysForCenter(state, sectionKey);
-            sectionBubble.forEach((candidateKey) => {
-                if (!bubbleKeys.has(candidateKey)) {
-                    lookaheadKeys.add(candidateKey);
-                }
-            });
+        return new Set();
+    }
+
+    function areSectionKeySetsEqual(a, b) {
+        if (!(a instanceof Set) || !(b instanceof Set) || a.size !== b.size) return false;
+        for (const key of a) {
+            if (!b.has(key)) return false;
+        }
+        return true;
+    }
+
+    function choosePrototypeBubbleRepresentativeKey(sectionKeys, preferredKey = "") {
+        if (sectionKeys instanceof Set && typeof preferredKey === "string" && sectionKeys.has(preferredKey)) {
+            return preferredKey;
+        }
+        const orderedKeys = sectionKeys instanceof Set ? Array.from(sectionKeys).sort() : [];
+        return orderedKeys.length > 0 ? orderedKeys[0] : "";
+    }
+
+    function getPrototypeSectionSetFarthestDistance(state, sectionKeys, worldX, worldY) {
+        if (!state || !(sectionKeys instanceof Set) || sectionKeys.size === 0) return Infinity;
+        let farthest = 0;
+        sectionKeys.forEach((sectionKey) => {
+            const centerWorld = getSectionCenterWorldForCoord(state, parseSectionKey(sectionKey));
+            farthest = Math.max(
+                farthest,
+                Math.hypot((Number(worldX) || 0) - centerWorld.x, (Number(worldY) || 0) - centerWorld.y)
+            );
         });
-        return lookaheadKeys;
+        return farthest;
+    }
+
+    function shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, worldX, worldY, options = {}) {
+        if (!(candidateKeys instanceof Set) || candidateKeys.size === 0) return false;
+        if (!(currentKeys instanceof Set) || currentKeys.size === 0) return true;
+        if (areSectionKeySetsEqual(currentKeys, candidateKeys)) return false;
+        if (options.force === true || state.bubbleTripletInitializedByActor !== true) return true;
+        let overlaps = false;
+        candidateKeys.forEach((key) => {
+            if (currentKeys.has(key)) overlaps = true;
+        });
+        if (!overlaps) return true;
+        const hysteresis = Math.max(0, Number(state.bubbleHysteresisMeters) || 0);
+        const currentFarthest = getPrototypeSectionSetFarthestDistance(state, currentKeys, worldX, worldY);
+        const candidateFarthest = getPrototypeSectionSetFarthestDistance(state, candidateKeys, worldX, worldY);
+        return candidateFarthest + hysteresis < currentFarthest;
     }
 
     function hashCoordinatePair(x, y, seed) {
@@ -1197,7 +1249,7 @@
     function forEachPrototypeBubbleRuntimeTarget(map, state, centerSectionKey, visitor, options = {}) {
         if (!map || !state || !centerSectionKey || typeof visitor !== "function") return;
         ensurePrototypeBubbleSectionsExist(map, state, centerSectionKey);
-        const bubbleKeys = getBubbleKeysForCenter(state, centerSectionKey);
+        const bubbleKeys = getPrototypeBubbleKeysForScope(state, centerSectionKey);
         const ignoreRuntimeObj = options && options.ignoreRuntimeObj ? options.ignoreRuntimeObj : null;
         const ignoreRecordId = Number.isInteger(options && options.ignoreRecordId)
             ? Number(options.ignoreRecordId)
@@ -1273,9 +1325,15 @@
         }
         const centerSection = state.sectionsByKey.get(centerSectionKey);
         if (!centerSection) return;
-        for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
-            ensurePrototypeSectionExists(map, state, addSectionCoords(centerSection.coord, SECTION_DIRECTIONS[i]));
-        }
+        const bubbleKeys = (
+            centerSectionKey === state.activeCenterKey &&
+            state.activeBubbleSectionKeys instanceof Set &&
+            state.activeBubbleSectionKeys.size > 0
+        ) ? new Set(state.activeBubbleSectionKeys) : getBubbleKeysForCenter(state, centerSectionKey);
+        bubbleKeys.forEach((sectionKey) => {
+            if (state.sectionsByKey.has(sectionKey)) return;
+            ensurePrototypeSectionExists(map, state, parseSectionKey(sectionKey));
+        });
     }
 
     function collectPrototypeBubbleObjectNames(map, state, centerSectionKey, options = {}) {
@@ -1287,7 +1345,7 @@
             : null;
 
         ensurePrototypeBubbleSectionsExist(map, state, centerSectionKey);
-        const bubbleKeys = getBubbleKeysForCenter(state, centerSectionKey);
+        const bubbleKeys = getPrototypeBubbleKeysForScope(state, centerSectionKey);
 
         bubbleKeys.forEach((sectionKey) => {
             const asset = state.sectionAssetsByKey instanceof Map
@@ -1351,6 +1409,19 @@
             rebuildPrototypeFloorRuntime,
             updatePrototypeSeamSegmentsForSections
         });
+    }
+
+    function setActiveSectionBubble(map, nextSectionKeys, preferredRepresentativeKey = "") {
+        const state = map && map._prototypeSectionState;
+        if (!state || !(nextSectionKeys instanceof Set) || nextSectionKeys.size === 0) return false;
+        const representativeKey = choosePrototypeBubbleRepresentativeKey(nextSectionKeys, preferredRepresentativeKey);
+        if (typeof representativeKey !== "string" || representativeKey.length === 0) return false;
+        state.nextActiveSectionKeys = new Set(nextSectionKeys);
+        try {
+            return setActiveCenter(map, representativeKey);
+        } finally {
+            state.nextActiveSectionKeys = null;
+        }
     }
 
     function settlePendingPrototypeLayoutTransition(map) {
@@ -1628,14 +1699,28 @@
         const actorSectionCoord = resolvePrototypeSectionCoordForWorldPosition(state, actor.x, actor.y);
         if (!actorSectionCoord) return false;
         const actorSectionKey = makeSectionKey(actorSectionCoord);
-
-        if (force || !state.activeSectionKeys.has(actorSectionKey)) {
-            return setActiveCenter(map, actorSectionKey);
+        const activeLimit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
+        state.bubbleFocusWorldX = Number(actor.x) || 0;
+        state.bubbleFocusWorldY = Number(actor.y) || 0;
+        state.bubbleFocusSectionKey = actorSectionKey;
+        const candidateKeys = getNearestSectionKeysForWorldPosition(
+            state,
+            state.bubbleFocusWorldX,
+            state.bubbleFocusWorldY,
+            activeLimit,
+            [actorSectionKey]
+        );
+        const currentKeys = state.activeSectionKeys instanceof Set
+            ? new Set(state.activeSectionKeys)
+            : new Set();
+        if (!shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, actor.x, actor.y, { force })) {
+            return false;
         }
-        if (actorSectionKey !== state.activeCenterKey) {
-            return setActiveCenter(map, actorSectionKey);
+        const changed = setActiveSectionBubble(map, candidateKeys, actorSectionKey);
+        if (changed || force || state.bubbleTripletInitializedByActor !== true) {
+            state.bubbleTripletInitializedByActor = true;
         }
-        return false;
+        return changed;
     }
 
     function attachSectionWorldApis(map, prototypeState) {

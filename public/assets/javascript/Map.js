@@ -1379,6 +1379,14 @@ class GameMap {
                 ? fragment.surfaceId
                 : fragmentId,
             ownerSectionKey: (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "",
+            ownerType: (typeof fragment.ownerType === "string" && fragment.ownerType.length > 0)
+                ? fragment.ownerType
+                : ((typeof fragment.ownerSectionKey === "string" && fragment.ownerSectionKey.startsWith("building:"))
+                    ? "building"
+                    : ((typeof fragment.ownerSectionKey === "string" && fragment.ownerSectionKey.length > 0) ? "section" : "")),
+            ownerId: (typeof fragment.ownerId === "string" && fragment.ownerId.length > 0)
+                ? fragment.ownerId
+                : ((typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : ""),
             level,
             nodeBaseZOffset: resolvedOffset,
             nodeBaseZ: canonicalBaseZ + resolvedOffset,
@@ -2324,6 +2332,9 @@ class GameMap {
                 fragment: best,
                 fragmentId: best && typeof best.fragmentId === "string" ? best.fragmentId : "",
                 surfaceId: best && typeof best.surfaceId === "string" ? best.surfaceId : "",
+                ownerType: best && typeof best.ownerType === "string" ? best.ownerType : "",
+                ownerId: best && typeof best.ownerId === "string" ? best.ownerId : "",
+                sectionKey: best && typeof best.ownerSectionKey === "string" ? best.ownerSectionKey : "",
                 node
             });
         } finally {
@@ -2813,6 +2824,9 @@ class GameMap {
                     fragment,
                     fragmentId: currentSupport.fragmentId,
                     surfaceId: currentSupport.surfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                    ownerType: typeof currentSupport.ownerType === "string" ? currentSupport.ownerType : (typeof fragment.ownerType === "string" ? fragment.ownerType : ""),
+                    ownerId: typeof currentSupport.ownerId === "string" ? currentSupport.ownerId : (typeof fragment.ownerId === "string" ? fragment.ownerId : ""),
+                    sectionKey: typeof currentSupport.sectionKey === "string" ? currentSupport.sectionKey : (typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : ""),
                     node: actor.node && typeof actor.node === "object" ? actor.node : null
                 };
             }
@@ -2834,6 +2848,8 @@ class GameMap {
         const surfaceId = typeof fragment.surfaceId === "string" && fragment.surfaceId.length > 0
             ? fragment.surfaceId
             : (typeof actor.surfaceId === "string" ? actor.surfaceId : nodeSurfaceId);
+        const ownerType = typeof fragment.ownerType === "string" ? fragment.ownerType : "";
+        const ownerId = typeof fragment.ownerId === "string" ? fragment.ownerId : "";
         const baseZ = Number.isFinite(fragment.nodeBaseZ)
             ? Number(fragment.nodeBaseZ)
             : (Number.isFinite(actor.currentLayerBaseZ) ? Number(actor.currentLayerBaseZ) : targetLayer * 3);
@@ -2844,6 +2860,9 @@ class GameMap {
             fragment,
             fragmentId,
             surfaceId,
+            ownerType,
+            ownerId,
+            sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
             node: node && (
                 (fragmentId && nodeFragmentId === fragmentId) ||
                 (!fragmentId && surfaceId && nodeSurfaceId === surfaceId)
@@ -2919,6 +2938,8 @@ class GameMap {
                 baseZ: nextBaseZ,
                 fragmentId: typeof support.fragmentId === "string" ? support.fragmentId : (fragment && fragment.fragmentId) || "",
                 surfaceId: typeof support.surfaceId === "string" ? support.surfaceId : (fragment && fragment.surfaceId) || "",
+                ownerType: typeof support.ownerType === "string" ? support.ownerType : (fragment && typeof fragment.ownerType === "string" ? fragment.ownerType : ""),
+                ownerId: typeof support.ownerId === "string" ? support.ownerId : (fragment && typeof fragment.ownerId === "string" ? fragment.ownerId : ""),
                 sectionKey: typeof (fragment && fragment.ownerSectionKey) === "string" ? fragment.ownerSectionKey : "",
                 nodeId: support.node && typeof support.node.id === "string" ? support.node.id : ""
             };
@@ -2962,6 +2983,12 @@ class GameMap {
             }
         }
         actor._previousLayerBaseZForTransition = actor.currentLayerBaseZ;
+        if (
+            options.suppressWorldScopeUpdate !== true &&
+            typeof this.updatePrototypeWorldScopeForMovementSupport === "function"
+        ) {
+            this.updatePrototypeWorldScopeForMovementSupport(actor, normalized, options);
+        }
         return normalized;
     }
 

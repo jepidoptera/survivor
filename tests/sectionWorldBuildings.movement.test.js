@@ -474,6 +474,117 @@ test("active section building ensure loads only referenced placements", async ()
     assert.equal(map.getPrototypeBuildingCutawayBuildings().length, 1);
 });
 
+test("active section shell loading follows section refs and migrates old placements", async () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", []);
+    const sectionB = createSectionAsset("1,0", []);
+    installSectionAssets(map, [sectionA, sectionB]);
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([
+        {
+            ...createPlacement("building:ref-house"),
+            buildingSaveName: "ref house",
+            overlappedSectionKeys: ["1,0"],
+            loadState: "unloaded"
+        }
+    ]);
+    sectionA.buildingRefs = [{ id: "building:ref-house", shell: true }];
+    sectionB.buildingRefs = [];
+
+    const loaded = [];
+    map.loadPrototypeBuildingEditorSaveData = async (saveName) => {
+        loaded.push(saveName);
+        return createBuildingSaveWithDoorAndColumn();
+    };
+
+    await map.ensurePrototypeBuildingShellsForSectionKeys(new Set(["0,0"]));
+
+    const placement = map.getPrototypeBuildingPlacements()[0];
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.deepEqual(loaded, ["ref house"]);
+    assert.equal(placement.loadState, "shell");
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].schema, "survivor-building-v1");
+    assert.equal(instances[0].id, "building:ref-house");
+    assert.equal(instances[0].loadState, "shell");
+    assert.equal(map._prototypeBuildingState.loadedBuildingsById.has("building:ref-house"), true);
+});
+
+test("interior promotion survives later shell loads", async () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", []);
+    installSectionAssets(map, [sectionA]);
+    buildings.installSectionWorldBuildingApis(map);
+    const placement = map.addPrototypeBuildingPlacement({
+        id: "building:interior-house",
+        buildingSaveName: "interior house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    }, { buildingData: createBuildingSaveWithDoorAndColumn() });
+
+    await map.promotePrototypeBuildingInterior("building:interior-house");
+    await map.ensurePrototypeBuildingShellsForSectionKeys(new Set(["0,0"]));
+
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.equal(placement.loadState, "interior");
+    assert.equal(instances[0].loadState, "interior");
+});
+
+test("wizard building support switches world scope and suspends outdoor bubble shifting", async () => {
+    const previousWizard = globalThis.wizard;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:scope-house",
+            buildingSaveName: "scope house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStair() });
+
+        const buildingSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:scope-house:floor:floor-0",
+            surfaceId: "building:scope-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:scope-house",
+            sectionKey: "building:scope-house"
+        };
+        const buildingScope = map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+
+        assert.deepEqual(buildingScope, { type: "building", id: "building:scope-house" });
+        assert.deepEqual(map.getPrototypeWorldScope(), { type: "building", id: "building:scope-house" });
+        assert.equal(map.getPrototypeBuildingPlacements()[0].loadState, "interior");
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard), true);
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard, { force: true }), false);
+
+        const sectionSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "section:0,0:ground",
+            surfaceId: "section:0,0:ground",
+            ownerType: "section",
+            ownerId: "0,0",
+            sectionKey: "0,0"
+        };
+        const sectionScope = map.updatePrototypeWorldScopeForMovementSupport(wizard, sectionSupport);
+
+        assert.deepEqual(sectionScope, { type: "sectionWorld" });
+        assert.deepEqual(map.getPrototypeWorldScope(), { type: "sectionWorld" });
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard), false);
+    } finally {
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
+});
+
 test("building placements block walls and columns, not the whole base floor", () => {
     const previousPolygonHitbox = globalThis.PolygonHitbox;
     globalThis.PolygonHitbox = TestPolygonHitbox;

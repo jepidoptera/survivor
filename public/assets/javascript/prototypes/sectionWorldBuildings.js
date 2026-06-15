@@ -267,6 +267,135 @@
         return placement;
     }
 
+    function buildingLoadStateRank(loadState) {
+        switch (loadState) {
+            case "interior": return 4;
+            case "loading-interior": return 3;
+            case "shell": return 2;
+            case "loading-shell": return 1;
+            case "unloaded": return 0;
+            case "error": return -1;
+            default: return 0;
+        }
+    }
+
+    function setPrototypeBuildingLoadState(state, placement, loadState) {
+        if (!placement || typeof placement !== "object") {
+            throw new Error("cannot set building load state without a placement");
+        }
+        const nextState = nonEmptyString(loadState, `building placement ${placement.id} loadState`);
+        const previousState = typeof placement.loadState === "string" ? placement.loadState : "unloaded";
+        if (
+            nextState !== "error" &&
+            previousState !== "error" &&
+            buildingLoadStateRank(previousState) > buildingLoadStateRank(nextState)
+        ) {
+            return previousState;
+        }
+        placement.loadState = nextState;
+        const instance = getBuildingInstanceRecord(state, placement);
+        if (instance) instance.loadState = nextState;
+        return nextState;
+    }
+
+    function normalizePrototypeWorldScope(scope) {
+        if (scope === undefined || scope === null || scope === "sectionWorld") {
+            return { type: "sectionWorld" };
+        }
+        if (typeof scope === "string") {
+            return { type: "building", id: normalizePlacementId(scope, 0) };
+        }
+        if (!scope || typeof scope !== "object") {
+            throw new Error("prototype world scope must be an object");
+        }
+        const type = String(scope.type || "").trim();
+        if (type === "sectionWorld") return { type: "sectionWorld" };
+        if (type === "building") {
+            return { type: "building", id: normalizePlacementId(scope.id, 0) };
+        }
+        throw new Error(`unknown prototype world scope type: ${type || "(missing)"}`);
+    }
+
+    function samePrototypeWorldScope(a, b) {
+        return !!(
+            a &&
+            b &&
+            a.type === b.type &&
+            (a.type !== "building" || a.id === b.id)
+        );
+    }
+
+    function resolvePrototypeWorldScopeFromSupport(support) {
+        if (!support || typeof support !== "object") return { type: "sectionWorld" };
+        if (support.type === "floor") {
+            const ownerType = typeof support.ownerType === "string" ? support.ownerType : "";
+            const ownerId = typeof support.ownerId === "string" ? support.ownerId : "";
+            const sectionKey = typeof support.sectionKey === "string" ? support.sectionKey : "";
+            if (ownerType === "building" && ownerId) return { type: "building", id: normalizePlacementId(ownerId, 0) };
+            if (sectionKey.startsWith("building:")) return { type: "building", id: normalizePlacementId(sectionKey, 0) };
+            return { type: "sectionWorld" };
+        }
+        if (support.type === "stair") {
+            const stairId = typeof support.stairId === "string" ? support.stairId : "";
+            const marker = ":stair";
+            const markerIndex = stairId.indexOf(marker);
+            if (markerIndex > 0) {
+                const buildingId = stairId.slice(0, markerIndex);
+                if (buildingId.startsWith("building:")) return { type: "building", id: normalizePlacementId(buildingId, 0) };
+            }
+        }
+        return { type: "sectionWorld" };
+    }
+
+    function isPrototypeWizardActor(actor, options = {}) {
+        if (options && options.updateWorldScope === true) return true;
+        if (options && options.actorIsWizard === true) return true;
+        return typeof globalScope !== "undefined" && actor && actor === globalScope.wizard;
+    }
+
+    function collectPrototypeBuildingIdsFromSectionKeys(map, sectionKeys) {
+        const state = map && map._prototypeBuildingState;
+        const keys = sectionKeys instanceof Set ? Array.from(sectionKeys) : (Array.isArray(sectionKeys) ? sectionKeys : []);
+        const out = new Set();
+        if (!state || keys.length === 0) return out;
+        let sawSectionRefs = false;
+        for (let i = 0; i < keys.length; i++) {
+            const sectionKey = String(keys[i] || "").trim();
+            if (!sectionKey) continue;
+            const asset = typeof map.getPrototypeSectionAsset === "function"
+                ? map.getPrototypeSectionAsset(sectionKey)
+                : (
+                    map._prototypeSectionState && map._prototypeSectionState.sectionAssetsByKey instanceof Map
+                        ? map._prototypeSectionState.sectionAssetsByKey.get(sectionKey)
+                        : null
+                );
+            const refs = Array.isArray(asset && asset.buildingRefs) ? asset.buildingRefs : null;
+            if (refs) {
+                sawSectionRefs = true;
+                for (let r = 0; r < refs.length; r++) {
+                    const ref = refs[r];
+                    const id = normalizePlacementId(ref && ref.id, r);
+                    if (ref.shell === false) continue;
+                    if (!(state.placementsById instanceof Map) || !state.placementsById.has(id)) {
+                        throw new Error(`section ${sectionKey} references missing building ${id}`);
+                    }
+                    out.add(id);
+                }
+            }
+        }
+        if (sawSectionRefs) return out;
+        for (let i = 0; i < keys.length; i++) {
+            const sectionKey = String(keys[i] || "").trim();
+            if (!sectionKey) continue;
+            const ids = state.buildingIdsBySectionKey instanceof Map
+                ? state.buildingIdsBySectionKey.get(sectionKey)
+                : null;
+            if (!(ids instanceof Set)) continue;
+            ids.forEach((id) => out.add(id));
+        }
+        return out;
+    }
+
     function normalizeBuildingPlacementIdSet(ids, state) {
         const rawIds = ids instanceof Set ? Array.from(ids) : (Array.isArray(ids) ? ids : []);
         const out = new Set();
@@ -946,6 +1075,8 @@
             fragmentId,
             surfaceId,
             ownerSectionKey: placement.id,
+            ownerType: "building",
+            ownerId: placement.id,
             level: layer,
             nodeBaseZ: baseZ,
             nodeBaseZOffset: baseZ - (layer * 3),
@@ -1853,6 +1984,7 @@
             cutawayBuildingsByPlacementId: new Map(),
             runtimeFloorFragmentIdsByPlacementId: new Map(),
             runtimeStairIdsByPlacementId: new Map(),
+            currentWorldScope: { type: "sectionWorld" },
             lastCutawayGeometryStats: null,
             lastGeometryRuntimeStats: null,
             movementBlockersDirty: true,
@@ -2177,6 +2309,53 @@
             return markPrototypeBuildingUnitDirty(this._prototypeBuildingState, buildingId);
         };
 
+        map.getPrototypeWorldScope = function getPrototypeWorldScope() {
+            const state = this._prototypeBuildingState;
+            return normalizePrototypeWorldScope(state && state.currentWorldScope);
+        };
+
+        map.setPrototypeWorldScope = function setPrototypeWorldScope(scope, options = {}) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const nextScope = normalizePrototypeWorldScope(scope);
+            if (nextScope.type === "building" && !(state.placementsById instanceof Map && state.placementsById.has(nextScope.id))) {
+                throw new Error(`cannot enter missing building world scope ${nextScope.id}`);
+            }
+            const previousScope = normalizePrototypeWorldScope(state.currentWorldScope);
+            state.currentWorldScope = nextScope;
+            if (
+                nextScope.type === "building" &&
+                options.promoteInterior !== false &&
+                typeof this.promotePrototypeBuildingInterior === "function"
+            ) {
+                const promotion = this.promotePrototypeBuildingInterior(nextScope.id);
+                if (promotion && typeof promotion.catch === "function") {
+                    promotion.catch((error) => {
+                        state.lastScopeError = error && error.message ? error.message : String(error);
+                    });
+                }
+            }
+            return {
+                previous: previousScope,
+                current: nextScope,
+                changed: !samePrototypeWorldScope(previousScope, nextScope)
+            };
+        };
+
+        map.updatePrototypeWorldScopeForMovementSupport = function updatePrototypeWorldScopeForMovementSupport(actor, support, options = {}) {
+            if (!isPrototypeWizardActor(actor, options)) return this.getPrototypeWorldScope();
+            return this.setPrototypeWorldScope(resolvePrototypeWorldScopeFromSupport(support), options).current;
+        };
+
+        map.isPrototypeOutdoorBubbleSuspendedForActor = function isPrototypeOutdoorBubbleSuspendedForActor(actor, options = {}) {
+            if (options && options.force === true) return false;
+            if (!isPrototypeWizardActor(actor, options)) return false;
+            const scope = this.getPrototypeWorldScope();
+            return !!(scope && scope.type === "building");
+        };
+
         map.getPrototypeBuildingPlacements = function getPrototypeBuildingPlacements() {
             const state = this._prototypeBuildingState;
             return state && Array.isArray(state.orderedPlacements)
@@ -2186,6 +2365,10 @@
 
         map.syncPrototypeBuildingPlacementRefs = function syncPrototypeBuildingPlacementRefs() {
             return syncPrototypeBuildingPlacementRefsToSections(this);
+        };
+
+        map.collectPrototypeBuildingIdsForSectionKeys = function collectPrototypeBuildingIdsForSectionKeys(sectionKeys) {
+            return collectPrototypeBuildingIdsFromSectionKeys(this, sectionKeys);
         };
 
         map.setPrototypeBuildingDesiredPlacementIds = function setPrototypeBuildingDesiredPlacementIds(ids) {
@@ -2236,23 +2419,11 @@
             }
             const state = this._prototypeBuildingState;
             const keys = sectionKeys instanceof Set ? Array.from(sectionKeys) : (Array.isArray(sectionKeys) ? sectionKeys : []);
-            const desiredIds = new Set();
-            for (let i = 0; i < keys.length; i++) {
-                const key = String(keys[i] || "").trim();
-                if (!key) continue;
-                const ids = state.buildingIdsBySectionKey instanceof Map
-                    ? state.buildingIdsBySectionKey.get(key)
-                    : null;
-                if (!(ids instanceof Set)) continue;
-                ids.forEach((id) => desiredIds.add(id));
-            }
+            const desiredIds = collectPrototypeBuildingIdsFromSectionKeys(this, keys);
             const placementIds = normalizeBuildingPlacementIdSet(desiredIds, state);
             if (placementIds.size === 0) {
                 state.lastLoadStats = { requested: 0, cached: 0, pending: 0 };
                 return Promise.resolve([]);
-            }
-            if (typeof this.loadPrototypeBuildingEditorSaveData !== "function") {
-                throw new Error("prototype building streaming requires loadPrototypeBuildingEditorSaveData");
             }
             if (!(state.pendingLoadsById instanceof Map)) state.pendingLoadsById = new Map();
             const promises = [];
@@ -2265,9 +2436,7 @@
                 }
                 const cachedData = getBuildingDataForPlacement(state, placement);
                 if (cachedData) {
-                    placement.loadState = "shell";
-                    const instance = getBuildingInstanceRecord(state, placement);
-                    if (instance) instance.loadState = "shell";
+                    setPrototypeBuildingLoadState(state, placement, "shell");
                     state.loadedBuildingsById.set(placementId, placement);
                     cached += 1;
                     continue;
@@ -2278,12 +2447,13 @@
                     pending += 1;
                     continue;
                 }
-                placement.loadState = "loading-shell";
+                if (typeof this.loadPrototypeBuildingEditorSaveData !== "function") {
+                    throw new Error(`building placement ${placementId} requires template migration loader for shell load`);
+                }
+                setPrototypeBuildingLoadState(state, placement, "loading-shell");
                 const promise = this.loadPrototypeBuildingDataForPlacement(placement)
                     .then((buildingData) => {
-                        placement.loadState = "shell";
-                        const instance = getBuildingInstanceRecord(state, placement);
-                        if (instance) instance.loadState = "shell";
+                        setPrototypeBuildingLoadState(state, placement, "shell");
                         state.loadedBuildingsById.set(placementId, placement);
                         if (!placementHasCurrentMovementBlockerGeometry(placement)) {
                             setPlacementMovementBlockerPolygons(
@@ -2299,7 +2469,7 @@
                         return placement;
                     })
                     .catch((error) => {
-                        placement.loadState = "error";
+                        setPrototypeBuildingLoadState(state, placement, "error");
                         state.lastLoadError = error && error.message ? error.message : String(error);
                         throw error;
                     })
@@ -2316,6 +2486,32 @@
             }
             state.lastLoadStats = { requested: placementIds.size, cached, pending };
             return Promise.all(promises);
+        };
+
+        map.ensurePrototypeBuildingShellsForSectionKeys = function ensurePrototypeBuildingShellsForSectionKeys(sectionKeys) {
+            return this.ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys);
+        };
+
+        map.promotePrototypeBuildingInterior = function promotePrototypeBuildingInterior(id) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const placementId = normalizePlacementId(id, 0);
+            const placement = state.placementsById.get(placementId);
+            if (!placement) throw new Error(`cannot promote missing building ${placementId} to interior`);
+            setPrototypeBuildingLoadState(state, placement, "loading-interior");
+            return this.loadPrototypeBuildingDataForPlacement(placement)
+                .then((buildingData) => {
+                    setPrototypeBuildingLoadState(state, placement, "interior");
+                    state.loadedBuildingsById.set(placementId, placement);
+                    maybeSyncPrototypeBuildingGeometryRuntime(this);
+                    return buildingData;
+                })
+                .catch((error) => {
+                    setPrototypeBuildingLoadState(state, placement, "error");
+                    throw error;
+                });
         };
 
         map.computePrototypeBuildingFootprint = function computePrototypeBuildingFootprint(buildingData, placementRecord) {
@@ -2519,6 +2715,7 @@
             if (!appRef || !rendererRef) {
                 throw new Error("building exterior bitmap request requires a Pixi app and renderer");
             }
+            setPrototypeBuildingLoadState(state, placement, "shell");
             const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
                     const dataSignature = buildingDataSignature(buildingData);
@@ -2653,6 +2850,7 @@
             if (!appRef || !rendererRef) {
                 throw new Error("building interior bitmap request requires a Pixi app and renderer");
             }
+            setPrototypeBuildingLoadState(state, placement, "loading-interior");
             const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
                     const dataSignature = buildingDataSignature(buildingData);
@@ -2702,6 +2900,7 @@
                         placementRevision: state.contentVersion
                     };
                     state.interiorBitmapsByKey.set(key, entry);
+                    setPrototypeBuildingLoadState(state, placement, "interior");
                     return entry;
                 })
                 .catch((error) => {
@@ -2715,6 +2914,7 @@
                         error: error && error.message ? error.message : String(error)
                     };
                     state.interiorBitmapsByKey.set(key, entry);
+                    setPrototypeBuildingLoadState(state, placement, "error");
                     console.error("[building interior bitmap]", entry.error);
                     throw error;
                 })

@@ -68,6 +68,16 @@
         map.getPrototypeBubbleSectionKeys = function getPrototypeBubbleSectionKeys(centerSectionKey = null) {
             const state = this._prototypeSectionState;
             if (!state) return new Set();
+            if (
+                (
+                    !(typeof centerSectionKey === "string" && centerSectionKey.length > 0) ||
+                    centerSectionKey === state.activeCenterKey
+                ) &&
+                state.activeBubbleSectionKeys instanceof Set &&
+                state.activeBubbleSectionKeys.size > 0
+            ) {
+                return new Set(state.activeBubbleSectionKeys);
+            }
             const key = (typeof centerSectionKey === "string" && centerSectionKey.length > 0)
                 ? centerSectionKey
                 : state.activeCenterKey;
@@ -77,6 +87,16 @@
         map.collectPrototypeBubbleSectionKeys = function collectPrototypeBubbleSectionKeys(centerSectionKey = null) {
             const state = this._prototypeSectionState;
             if (!state) return new Set();
+            if (
+                (
+                    !(typeof centerSectionKey === "string" && centerSectionKey.length > 0) ||
+                    centerSectionKey === state.activeCenterKey
+                ) &&
+                state.activeBubbleSectionKeys instanceof Set &&
+                state.activeBubbleSectionKeys.size > 0
+            ) {
+                return new Set(state.activeBubbleSectionKeys);
+            }
             const key = (typeof centerSectionKey === "string" && centerSectionKey.length > 0)
                 ? centerSectionKey
                 : state.activeCenterKey;

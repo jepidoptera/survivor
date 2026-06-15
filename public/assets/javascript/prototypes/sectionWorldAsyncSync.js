@@ -1590,13 +1590,17 @@
                 const activeSectionKeys = typeof map.getPrototypeActiveSectionKeys === "function"
                     ? map.getPrototypeActiveSectionKeys()
                     : new Set();
-                activeSectionKeys.forEach((sectionKey) => {
-                    const ids = buildingState.buildingIdsBySectionKey instanceof Map
-                        ? buildingState.buildingIdsBySectionKey.get(sectionKey)
-                        : null;
-                    if (!(ids instanceof Set)) return;
-                    ids.forEach((id) => desiredBuildingIds.add(id));
-                });
+                if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
+                    map.collectPrototypeBuildingIdsForSectionKeys(activeSectionKeys).forEach((id) => desiredBuildingIds.add(id));
+                } else {
+                    activeSectionKeys.forEach((sectionKey) => {
+                        const ids = buildingState.buildingIdsBySectionKey instanceof Map
+                            ? buildingState.buildingIdsBySectionKey.get(sectionKey)
+                            : null;
+                        if (!(ids instanceof Set)) return;
+                        ids.forEach((id) => desiredBuildingIds.add(id));
+                    });
+                }
                 const result = typeof map.setPrototypeBuildingDesiredPlacementIds === "function"
                     ? map.setPrototypeBuildingDesiredPlacementIds(desiredBuildingIds)
                     : { changed: false, desired: desiredBuildingIds.size, unloaded: 0 };

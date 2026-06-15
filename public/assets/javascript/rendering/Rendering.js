@@ -2264,6 +2264,8 @@ void main(void) {
         }
 
         buildBuildingInteriorRenderPlan(ctx, cutawayState) {
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const planStartMs = diagnosticsEnabled ? performance.now() : 0;
             if (!this._buildingInteriorRenderPlan) {
                 this._buildingInteriorRenderPlan = {
                     active: false,
@@ -2278,8 +2280,16 @@ void main(void) {
             plan.wallTopFaceOnly.clear();
             if (!(plan.doorInteriorSide instanceof Map)) plan.doorInteriorSide = new Map();
             plan.doorInteriorSide.clear();
+            const finishPlan = () => {
+                if (diagnosticsEnabled) {
+                    const previousMs = Number(this.currentFrameMetrics.buildingInteriorPlanMs) || 0;
+                    this.setFrameMetric("buildingInteriorPlanMs", previousMs + (performance.now() - planStartMs));
+                    this.setFrameMetric("buildingInteriorPlanItems", plan.items instanceof Set ? plan.items.size : 0);
+                }
+                return plan;
+            };
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
-            if (triggers.length === 0) return plan;
+            if (triggers.length === 0) return finishPlan();
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const presentationWizardRef = this.getDoorwayTransitionPresentationWizard(cutawayState) || wizardRef;
             const mapRef = (ctx && ctx.map) || global.map || null;
@@ -2388,7 +2398,7 @@ void main(void) {
                 }
             }
             plan.active = plan.items.size > 0;
-            return plan;
+            return finishPlan();
         }
 
         isPrototypeBuildingInteriorBitmapReady(ctx, trigger) {
@@ -3211,15 +3221,27 @@ void main(void) {
             if (ctx && ctx._renderingLayerCutawayState) return ctx._renderingLayerCutawayState;
             const diagnosticsEnabled = !!this.currentFrameMetrics;
             const cutawayStartMs = diagnosticsEnabled ? performance.now() : 0;
+            let cutawayHeldDuringBubble = 0;
             let buildingsScanned = 0;
             let buildingBoundsTests = 0;
             let buildingPointTests = 0;
             let buildingTriggers = 0;
             let floorFallbackScanned = 0;
+            let bubbleShiftActive = false;
             const finish = (state) => {
                 if (ctx && typeof ctx === "object") ctx._renderingLayerCutawayState = state;
+                if (
+                    !bubbleShiftActive &&
+                    state &&
+                    !state._doorwayPresentationTransition &&
+                    !this.cutawayStateHasActiveInteriorRegion(state)
+                ) {
+                    const stableState = this.cloneBuildingDoorwayStablePresentationState(state);
+                    if (stableState) this._prototypeBubbleStableCutawayState = stableState;
+                }
                 if (diagnosticsEnabled) {
                     this.setFrameMetric("layerCutawayStateMs", performance.now() - cutawayStartMs);
+                    this.setFrameMetric("layerCutawayHeldDuringBubble", cutawayHeldDuringBubble);
                     this.setFrameMetric("layerCutawayBuildingsScanned", buildingsScanned);
                     this.setFrameMetric("layerCutawayBuildingBoundsTests", buildingBoundsTests);
                     this.setFrameMetric("layerCutawayBuildingPointTests", buildingPointTests);
@@ -3230,6 +3252,11 @@ void main(void) {
             };
             const map = ctx && ctx.map ? ctx.map : global.map || null;
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            bubbleShiftActive = !!(
+                map &&
+                map._prototypeBubbleShiftSession &&
+                map._prototypeBubbleShiftSession.completed !== true
+            );
             if (!(map && map.floorsById instanceof Map) || !wizard) {
                 this.buildingDoorwayPresentationTransition = null;
                 this.clearBuildingInteriorFloorTransitionState();
@@ -3249,6 +3276,34 @@ void main(void) {
             const nowMs = Number.isFinite(ctx && ctx.renderNowMs)
                 ? Number(ctx.renderNowMs)
                 : Date.now();
+
+            const canHoldCutawayDuringBubble = !!(
+                bubbleShiftActive &&
+                wizardLayer <= 0 &&
+                !this.buildingDoorwayPresentationTransition
+            );
+            if (canHoldCutawayDuringBubble) {
+                const stableState = this._prototypeBubbleStableCutawayState || null;
+                let heldState = stableState && !this.cutawayStateHasActiveInteriorRegion(stableState)
+                    ? this.cloneBuildingDoorwayStablePresentationState(stableState)
+                    : null;
+                if (!heldState) {
+                    heldState = {
+                        active: false,
+                        wizardLayer,
+                        wizardBaseZ: wizardWorldZ,
+                        wizardX: x,
+                        wizardY: y,
+                        triggers: [],
+                        hiddenFromLevel: Infinity,
+                        hiddenSurfaceIds: new Set(),
+                        hiddenFragmentIds: new Set()
+                    };
+                }
+                heldState._heldDuringPrototypeBubbleShift = true;
+                cutawayHeldDuringBubble = 1;
+                return finish(heldState);
+            }
 
             if (wizardLayer < 0) {
                 this.buildingDoorwayPresentationTransition = null;
@@ -20087,8 +20142,12 @@ void main(void) {
             const visibleNodes = this.profileDrawPassSection("collectVisibleNodes", () =>
                 this.collectVisibleNodes(ctx, 4, 4)
             );
+            let preparedCutawayState = null;
             this.profileDrawPassSection("prepareLayerCutawayFrame", () => {
-                const cutawayState = this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
+                preparedCutawayState = this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
+            });
+            this.profileDrawPassSection("prepareBuildingInteriorPickerFrame", () => {
+                const cutawayState = preparedCutawayState || this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
                 this.prepareBuildingInteriorPickerFrame(ctx, cutawayState);
             });
             const visibleObjects = this.profileDrawPassSection("collectVisibleObjects", () =>
@@ -20362,7 +20421,13 @@ void main(void) {
                 globalThis.drawPerfBreakdown = {
                     lazyMs: 0,
                     prepMs: getMs("resetWallDepthGeometryBudget") + getMs("camera.update"),
-                    collectMs: getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache"),
+                    collectMs: getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache"),
+                    collectVisibleNodesMs: getMs("collectVisibleNodes"),
+                    collectCutawayMs: getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame"),
+                    collectLayerCutawayMs: getMs("prepareLayerCutawayFrame"),
+                    collectInteriorPickerMs: getMs("prepareBuildingInteriorPickerFrame"),
+                    collectVisibleObjectsMs: getMs("collectVisibleObjects"),
+                    collectOnscreenCacheMs: getMs("syncOnscreenObjectsCache"),
                     losMs: getMs("updateLosState") + getMs("updateWallLosIlluminationTallies"),
                     composeMs: frameElapsedMs,
                     passWorldMs:
@@ -20610,6 +20675,67 @@ void main(void) {
                 addTypeBreakdownMetrics("objects3dRenderItems");
                 addTypeBreakdownMetrics("buildingRenderCacheCandidates");
                 globalThis.renderingFrameMetrics = { ...metrics };
+                const bubbleSession = ctx && ctx.map && ctx.map._prototypeBubbleShiftSession &&
+                    ctx.map._prototypeBubbleShiftSession.completed !== true
+                    ? ctx.map._prototypeBubbleShiftSession
+                    : null;
+                if (bubbleSession) {
+                    if (!bubbleSession.renderStats || typeof bubbleSession.renderStats !== "object") {
+                        bubbleSession.renderStats = {
+                            frames: 0,
+                            composeMs: 0,
+                            collectMs: 0,
+                            cutawayMs: 0,
+                            layerCutawayMs: 0,
+                            layerCutawayStateMs: 0,
+                            buildingFlagMs: 0,
+                            interiorPickerMs: 0,
+                            interiorPlanMs: 0,
+                            cutawayHeldFrames: 0,
+                            visibleObjectsMax: 0,
+                            visibleNodesMax: 0,
+                            maxFrameMs: 0,
+                            maxCutawayMs: 0,
+                            maxCutawayFrame: null
+                        };
+                    }
+                    const renderStats = bubbleSession.renderStats;
+                    const collectMs = getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache");
+                    const layerCutawayMs = getMs("prepareLayerCutawayFrame");
+                    const interiorPickerMs = getMs("prepareBuildingInteriorPickerFrame");
+                    const cutawayMs = layerCutawayMs + interiorPickerMs;
+                    renderStats.frames += 1;
+                    renderStats.composeMs += frameElapsedMs;
+                    renderStats.collectMs += collectMs;
+                    renderStats.cutawayMs += cutawayMs;
+                    renderStats.layerCutawayMs += layerCutawayMs;
+                    renderStats.layerCutawayStateMs += getMetric("layerCutawayStateMs");
+                    renderStats.buildingFlagMs += getMetric("objects3dBuildingFlagMs");
+                    renderStats.interiorPickerMs += interiorPickerMs;
+                    renderStats.interiorPlanMs += getMetric("buildingInteriorPlanMs");
+                    renderStats.cutawayHeldFrames += getMetric("layerCutawayHeldDuringBubble") > 0 ? 1 : 0;
+                    renderStats.visibleObjectsMax = Math.max(renderStats.visibleObjectsMax || 0, visibleObjectsCount);
+                    renderStats.visibleNodesMax = Math.max(renderStats.visibleNodesMax || 0, getMetric("visibleNodes"));
+                    if (frameElapsedMs > (Number(renderStats.maxFrameMs) || 0)) {
+                        renderStats.maxFrameMs = frameElapsedMs;
+                    }
+                    if (cutawayMs > (Number(renderStats.maxCutawayMs) || 0)) {
+                        renderStats.maxCutawayMs = cutawayMs;
+                        renderStats.maxCutawayFrame = {
+                            composeMs: frameElapsedMs,
+                            collectMs,
+                            cutawayMs,
+                            layerCutawayMs,
+                            layerCutawayStateMs: getMetric("layerCutawayStateMs"),
+                            buildingFlagMs: getMetric("objects3dBuildingFlagMs"),
+                            interiorPickerMs,
+                            interiorPlanMs: getMetric("buildingInteriorPlanMs"),
+                            cutawayHeldDuringBubble: getMetric("layerCutawayHeldDuringBubble"),
+                            visibleNodes: getMetric("visibleNodes"),
+                            visibleObjects: visibleObjectsCount
+                        };
+                    }
+                }
             } else if (typeof globalThis !== "undefined") {
                 globalThis.drawPerfBreakdown = null;
                 globalThis.renderingFrameMetrics = null;

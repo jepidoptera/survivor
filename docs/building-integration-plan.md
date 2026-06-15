@@ -326,63 +326,72 @@ For map-space/camera-following fades, fading geometry should remain live in worl
 
 ### 1. Save Format And Registry
 
-- Extend the existing building save format with placed-instance metadata and building-owned objects/NPCs/triggers.
-- Add building-instance save/load integration parallel to section files.
-- Add dirty world-unit registry for sections and buildings.
-- Add backward-compatible migration from old top-level `prototypeSectionWorld.buildings` records.
+- [x] Extend the existing building save format with placed-instance metadata and placeholder building-owned objects/NPCs/triggers arrays.
+- [x] Add building-instance save/load integration parallel to section files for IndexedDB saves (`slot_buildings`).
+- [x] Add dirty world-unit registry for sections and buildings.
+- [x] Add backward-compatible migration from old top-level `prototypeSectionWorld.buildings` placement records.
+- [ ] Clear dirty world-unit entries after successful selective saves.
+- [ ] Add a true server/export building-file backend parallel to the IndexedDB building store.
 
 ### 2. Section Refs
 
-- Change outdoor sections so they store only lightweight `buildingRefs`.
-- Build an index from section key to building ids.
-- Ensure saving an outdoor section never duplicates full building data.
+- [x] Change outdoor sections so they store only lightweight `buildingRefs`.
+- [x] Build an index from section key to building ids.
+- [x] Ensure saving an outdoor section never duplicates full building data.
 
 ### 3. Building Placement
 
-- On placement, deep-copy the editor save into a new building instance.
-- Compute touched outdoor sections.
-- Add refs to touched sections.
-- Mark building and touched sections dirty.
+- [x] On placement, deep-copy the editor save into a new building instance.
+- [x] Compute touched outdoor sections.
+- [x] Add refs to touched sections.
+- [x] Mark building and touched sections dirty.
 
 ### 4. Shell Loading
 
-- Active outdoor section set gathers building refs.
-- Load/unload building shells independently from full interiors.
-- Keep shell rendering/collision available whenever any touched active section requires it.
+- [x] Active outdoor section set gathers building refs from section assets, with the placement index as a derived fallback.
+- [x] Load building shells through explicit `shell` load state and migrate old placements on shell load.
+- [x] Keep shell rendering/collision available whenever any touched active section requires it.
+- [ ] Unload shell data independently from full interiors when no active section requires it.
+- [ ] Split shell data hydration from full structural/interior hydration more aggressively.
 
 ### 5. Interior Scope
 
-- Add current world scope:
+- [x] Add current world scope:
 
 ```js
 { type: "sectionWorld" }
 { type: "building", id: "building:placed-12" }
 ```
 
-- Promote building to interior on entry.
-- Suspend outdoor bubble shifting while the wizard remains building-supported.
-- Resume outdoor scope when support changes to outdoor ground or another section-owned fragment.
+- [x] Add explicit `interior` load-state promotion hooks.
+- [x] Promote building scope to interior on entry/support change.
+- [x] Suspend outdoor bubble shifting while the wizard remains building-supported.
+- [x] Resume outdoor scope when support changes to outdoor ground or another section-owned fragment.
+- [x] Reduce outdoor streaming bubble to an unordered four-section active set.
+- [x] Apply a 10-meter hysteresis threshold only to loaded-section set changes; exact floor/support section resolution still switches immediately.
 
 ### 6. Support Fragment Ownership
 
-- Give every relevant floor/support fragment an owner world unit.
-- Add event-driven support validation.
-- Transfer object/NPC ownership when support owner changes.
-- Implement void fall/loss when no support is found below.
+- [x] Give every relevant floor/support fragment an owner world unit.
+- [ ] Add event-driven support validation.
+- [ ] Transfer object/NPC ownership when support owner changes.
+- [ ] Implement void fall/loss when no support is found below.
 
 ### 7. Object And NPC Persistence
 
-- Store building-owned objects/NPCs in the building instance save.
-- Keep section-owned objects/NPCs in section files.
-- Mark both old and new owners dirty on transfer.
-- Validate thrown/pushed/teleported actors and objects.
+- [x] Store placeholder building-owned objects/NPCs/triggers arrays in the building instance save.
+- [ ] Persist runtime building-owned objects/NPCs/triggers into those arrays.
+- [ ] Keep section-owned objects/NPCs in section files.
+- [ ] Mark both old and new owners dirty on transfer.
+- [ ] Validate thrown/pushed/teleported actors and objects.
 
 ### 8. Rendering And Cache Hardening
 
-- Add or adapt exterior shell composite.
-- Preserve and retarget the existing per-floor interior bitmap/composite path for building instances.
-- Add hard diagnostics for missing render/cache invariants.
-- Add narrow invalidation by building/floor/content version.
+- [ ] Add or adapt exterior shell composite.
+- [x] Preserve and retarget the existing per-floor interior bitmap/composite path for building instances.
+- [x] Add hard diagnostics for missing render/cache invariants in touched shell/interior bitmap paths.
+- [x] Include building instance id/content version in building bitmap cache signatures.
+- [ ] Add narrow invalidation by building/floor/content version for all building-owned runtime edits.
 
 ## Test Plan
 

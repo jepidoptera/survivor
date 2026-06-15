@@ -781,13 +781,141 @@ function pumpPrototypeBubbleShiftForFrame() {
     map.advancePrototypeBubbleShiftSession({ frameBudgetMs: 1.25 });
 }
 
+function shouldLogPrototypeBubbleAdjacentFrame(nowMs, frameCpuMs = 0) {
+    if (typeof globalThis === "undefined") return false;
+    if (globalThis.prototypeBubbleHitchDiagnostics !== true) return false;
+    const session = map && map._prototypeBubbleShiftSession;
+    const bubbleActive = !!(session && session.completed !== true);
+    const lastFinishedAt = Number(globalThis.__prototypeBubbleShiftLastFinishedAtMs) || 0;
+    const bubbleRecentlyFinished = lastFinishedAt > 0 && (nowMs - lastFinishedAt) < 750;
+    if (!bubbleActive && !bubbleRecentlyFinished) return false;
+    if (Number(frameCpuMs) >= 24) return true;
+    const lastLogAt = Number(globalThis.__prototypeBubbleHitchLastLogAtMs) || 0;
+    return lastLogAt <= 0 || (nowMs - lastLogAt) > 120;
+}
+
+function logPrototypeBubbleAdjacentFrame(nowMs, stats) {
+    if (typeof globalThis === "undefined" || !stats || typeof console === "undefined" || typeof console.log !== "function") return;
+    globalThis.__prototypeBubbleHitchLastLogAtMs = nowMs;
+    const drawBreakdown = globalThis.drawPerfBreakdown || null;
+    const minimapStats = globalThis.prototypeMinimapPerfStats || null;
+    const session = map && map._prototypeBubbleShiftSession ? map._prototypeBubbleShiftSession : null;
+    const sectionState = map && map._prototypeSectionState ? map._prototypeSectionState : null;
+    const frameMetrics = globalThis.renderingFrameMetrics || null;
+    console.log("[prototype bubble adjacent frame]", {
+        frame: {
+            loopMs: Number(stats.loopMs || 0).toFixed(1),
+            cpuMs: Number(stats.cpuMs || 0).toFixed(1),
+            simMs: Number(stats.simMs || 0).toFixed(1),
+            drawMs: Number(stats.drawMs || 0).toFixed(1),
+            presentMs: Number(stats.presentMs || 0).toFixed(1),
+            simSteps: Number(stats.simSteps || 0),
+            accumulatorMs: Number(stats.accumulatorMs || 0).toFixed(1)
+        },
+        present: stats.presentBreakdown || null,
+        bubble: session ? {
+            queue: Array.isArray(session.queue) ? session.queue.length : 0,
+            pendingPromise: !!session.pendingPromise,
+            pendingPromiseLabel: typeof session.pendingPromiseLabel === "string" ? session.pendingPromiseLabel : "",
+            slices: Number(session.frameSliceCount) || 0,
+            workMs: Number(session.workMs || 0).toFixed(1),
+            promiseWaitMs: Number(session.promiseWaitMs || 0).toFixed(1),
+            maxSliceMs: Number(session.maxFrameSliceMs || 0).toFixed(1)
+        } : (globalThis.__prototypeBubbleShiftLastSummary || null),
+        sections: sectionState ? {
+            active: sectionState.activeSectionKeys instanceof Set ? Array.from(sectionState.activeSectionKeys) : [],
+            actual: sectionState.actualActiveSectionKeys instanceof Set ? Array.from(sectionState.actualActiveSectionKeys) : [],
+            loadedNodes: Array.isArray(sectionState.loadedNodes) ? sectionState.loadedNodes.length : 0,
+            pendingLayout: !!sectionState.pendingLayoutTransition
+        } : null,
+        draw: drawBreakdown ? {
+            composeMs: Number(drawBreakdown.composeMs || 0).toFixed(1),
+            collectMs: Number(drawBreakdown.collectMs || 0).toFixed(1),
+            collectVisibleNodesMs: Number(drawBreakdown.collectVisibleNodesMs || 0).toFixed(1),
+            collectCutawayMs: Number(drawBreakdown.collectCutawayMs || 0).toFixed(1),
+            collectLayerCutawayMs: Number(drawBreakdown.collectLayerCutawayMs || 0).toFixed(1),
+            collectInteriorPickerMs: Number(drawBreakdown.collectInteriorPickerMs || 0).toFixed(1),
+            collectVisibleObjectsMs: Number(drawBreakdown.collectVisibleObjectsMs || 0).toFixed(1),
+            collectOnscreenCacheMs: Number(drawBreakdown.collectOnscreenCacheMs || 0).toFixed(1),
+            losMs: Number(drawBreakdown.losMs || 0).toFixed(1),
+            worldMs: Number(drawBreakdown.passWorldMs || 0).toFixed(1),
+            objectsMs: Number(drawBreakdown.passObjectsMs || 0).toFixed(1),
+            postMs: Number(drawBreakdown.passPostMs || 0).toFixed(1),
+            floorVisualCollectMs: Number(drawBreakdown.floorVisualCollectMs || 0).toFixed(1),
+            floorVisualGeometryMs: Number(drawBreakdown.floorVisualGeometryMs || 0).toFixed(1),
+            floorLevel0BakeMisses: Number(drawBreakdown.floorLevel0BakeMisses || 0),
+            floorLevel0BakePixels: Number(drawBreakdown.floorLevel0BakePixels || 0),
+            floorObjectNodeIndexBuildMs: Number(drawBreakdown.floorObjectNodeIndexBuildMs || 0).toFixed(1),
+            objects3dFilterMs: Number(drawBreakdown.objects3dFilterMs || 0).toFixed(1),
+            objects3dDisplayMs: Number(drawBreakdown.objects3dDisplayMs || 0).toFixed(1),
+            buildingCompositeMs: Number(drawBreakdown.objects3dBuildingCompositeMs || 0).toFixed(1)
+        } : null,
+        renderMetrics: frameMetrics ? {
+            visibleNodes: Number(frameMetrics.visibleNodes || 0),
+            visibleLoadedNodes: Number(frameMetrics.visibleLoadedNodes || 0),
+            visibleNodeCoordIndexSize: Number(frameMetrics.visibleNodeCoordIndexSize || 0),
+            visibleNodeFallbackUsed: Number(frameMetrics.visibleNodeFallbackUsed || 0),
+            visibleObjects: Number(frameMetrics.visibleObjectNodeRefs || 0) + Number(frameMetrics.visibleObjectVisibilityRefs || 0),
+            visibleObjectNodeRefs: Number(frameMetrics.visibleObjectNodeRefs || 0),
+            visibleObjectVisibilityRefs: Number(frameMetrics.visibleObjectVisibilityRefs || 0),
+            cvoFloorScanMs: Number(frameMetrics.cvoFloorScanMs || 0).toFixed(1),
+            cvoNodeScanMs: Number(frameMetrics.cvoNodeScanMs || 0).toFixed(1),
+            cvoWallsMs: Number(frameMetrics.cvoWallsMs || 0).toFixed(1),
+            cvoMountedMs: Number(frameMetrics.cvoMountedMs || 0).toFixed(1),
+            cvoStairsMs: Number(frameMetrics.cvoStairsMs || 0).toFixed(1),
+            floorObjectNodeCandidates: Number(frameMetrics.floorObjectNodeCandidates || 0),
+            floorObjectNodeCandidatesScanned: Number(frameMetrics.floorObjectNodeCandidatesScanned || 0),
+            floorObjectNodeSectionsScanned: Number(frameMetrics.floorObjectNodeSectionsScanned || 0),
+            floorObjectNodeYRowsScanned: Number(frameMetrics.floorObjectNodeYRowsScanned || 0),
+            visibleGlobalWallsConsidered: Number(frameMetrics.visibleGlobalWallsConsidered || 0),
+            visibleGlobalWallsAdded: Number(frameMetrics.visibleGlobalWallsAdded || 0),
+            layerCutawayStateMs: Number(frameMetrics.layerCutawayStateMs || 0).toFixed(1),
+            objects3dBuildingFlagMs: Number(frameMetrics.objects3dBuildingFlagMs || 0).toFixed(1),
+            buildingInteriorPlanMs: Number(frameMetrics.buildingInteriorPlanMs || 0).toFixed(1),
+            buildingInteriorPlanItems: Number(frameMetrics.buildingInteriorPlanItems || 0),
+            layerCutawayHeldDuringBubble: Number(frameMetrics.layerCutawayHeldDuringBubble || 0),
+            layerCutawayBuildingsScanned: Number(frameMetrics.layerCutawayBuildingsScanned || 0),
+            layerCutawayBuildingBoundsTests: Number(frameMetrics.layerCutawayBuildingBoundsTests || 0),
+            layerCutawayBuildingPointTests: Number(frameMetrics.layerCutawayBuildingPointTests || 0),
+            layerCutawayBuildingTriggers: Number(frameMetrics.layerCutawayBuildingTriggers || 0),
+            layerCutawayFloorFallbackScanned: Number(frameMetrics.layerCutawayFloorFallbackScanned || 0),
+            roadsCreated: Number(frameMetrics.roadsCreated || 0),
+            floorVisualMeshesCreated: Number(frameMetrics.floorVisualMeshesCreated || 0),
+            floorVisualGeometryUploads: Number(frameMetrics.floorVisualGeometryUploads || 0),
+            groundTileSpritesVisible: Number(frameMetrics.groundTileSpritesVisible || 0),
+            depthCandidates: Number(frameMetrics.depthCandidates || 0)
+        } : null,
+        minimap: minimapStats ? {
+            paintMs: Number(minimapStats.paintMs || 0).toFixed(1),
+            prototypeDrawMs: Number(minimapStats.prototypeDrawMs || 0).toFixed(1),
+            rebuildMs: Number(minimapStats.rebuildMs || 0).toFixed(1),
+            loadedNodes: Number(minimapStats.loadedNodes || 0),
+            allNodes: Number(minimapStats.allNodes || 0),
+            visible: !!minimapStats.visible
+        } : null
+    });
+}
+
 function presentGameFrame(renderAnimalsOverride = null) {
+    const presentStats = {
+        pumpMs: 0,
+        lazyRoadMs: 0,
+        lazyTreeMs: 0,
+        renderMs: 0,
+        cursorMs: 0
+    };
+    let sectionStartMs = performance.now();
     pumpPrototypeBubbleShiftForFrame();
+    presentStats.pumpMs = performance.now() - sectionStartMs;
     if (typeof hydrateVisibleLazyRoads === "function") {
+        sectionStartMs = performance.now();
         hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
+        presentStats.lazyRoadMs = performance.now() - sectionStartMs;
     }
     if (typeof hydrateVisibleLazyTrees === "function") {
+        sectionStartMs = performance.now();
         hydrateVisibleLazyTrees({ maxPerFrame: 64, paddingWorld: 12 });
+        presentStats.lazyTreeMs = performance.now() - sectionStartMs;
     }
     if (
         typeof globalThis !== "undefined" &&
@@ -806,6 +934,7 @@ function presentGameFrame(renderAnimalsOverride = null) {
         const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
             ? globalThis.roofs
             : [];
+        sectionStartMs = performance.now();
         const rendered = renderingApi.renderFrame({
             app,
             gameContainer,
@@ -825,9 +954,15 @@ function presentGameFrame(renderAnimalsOverride = null) {
             frameRate,
             renderAlpha
         });
+        presentStats.renderMs = performance.now() - sectionStartMs;
         if (rendered) {
             if (typeof updateCursor === "function") {
+                sectionStartMs = performance.now();
                 updateCursor();
+                presentStats.cursorMs = performance.now() - sectionStartMs;
+            }
+            if (typeof globalThis !== "undefined") {
+                globalThis.__prototypePresentFrameStats = presentStats;
             }
             return true;
         }
@@ -4648,6 +4783,24 @@ jQuery(() => {
             perfStats.drawPresentMs = _tDrawEnd - _tPresent;
             perfStats.drawMs = _tDrawEnd - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
+            const bubbleAdjacentFrameNow = performance.now();
+            if (shouldLogPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, perfStats.simMs + perfStats.drawMs)) {
+                const simBreakdownForLog = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                    ? globalThis.simPerfBreakdown
+                    : null;
+                logPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, {
+                    loopMs: perfStats.loopMs,
+                    cpuMs: perfStats.simMs + perfStats.drawMs,
+                    simMs: perfStats.simMs,
+                    drawMs: perfStats.drawMs,
+                    presentMs: perfStats.drawPresentMs,
+                    simSteps: perfStats.simSteps,
+                    accumulatorMs: simBreakdownForLog ? Number(simBreakdownForLog.accumulatorMs || 0) : 0,
+                    presentBreakdown: (typeof globalThis !== "undefined" && globalThis.__prototypePresentFrameStats)
+                        ? { ...globalThis.__prototypePresentFrameStats }
+                        : null
+                });
+            }
             const perfInstrumentationActive = typeof isPerfInstrumentationEnabled === "function"
                 ? isPerfInstrumentationEnabled()
                 : false;

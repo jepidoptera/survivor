@@ -29,6 +29,38 @@
             return task;
         };
 
+        const isPromiseLike = (value) => !!(
+            value &&
+            (typeof value === "object" || typeof value === "function") &&
+            typeof value.then === "function"
+        );
+
+        const pausePrototypeSessionForPromise = (session, promise, task) => {
+            if (!session || !isPromiseLike(promise)) return false;
+            const promiseStartMs = prototypeNow();
+            const promiseLabel = task && typeof task._prototypeTaskLabel === "string"
+                ? task._prototypeTaskLabel
+                : "prototype bubble task";
+            session.pendingPromiseLabel = promiseLabel;
+            session.pendingPromise = Promise.resolve(promise)
+                .then((result) => {
+                    session.promiseWaitMs = (Number(session.promiseWaitMs) || 0) + (prototypeNow() - promiseStartMs);
+                    session.pendingPromise = null;
+                    session.pendingPromiseLabel = "";
+                    return result;
+                })
+                .catch((error) => {
+                    session.promiseWaitMs = (Number(session.promiseWaitMs) || 0) + (prototypeNow() - promiseStartMs);
+                    session.pendingPromise = null;
+                    session.pendingPromiseLabel = "";
+                    session.error = error;
+                    if (typeof console !== "undefined" && typeof console.error === "function") {
+                        console.error(`[${promiseLabel}]`, error && error.message ? error.message : error);
+                    }
+                });
+            return true;
+        };
+
         const toBubbleMs = (value) => Number((Number(value) || 0).toFixed(2));
 
         const hasBubbleValue = (value, minimum = 0.05) => {
@@ -118,6 +150,68 @@
                         ["seam", stats.seamMs]
                     ].filter(([, value]) => hasBubbleValue(value)).map(([label, value]) => [label, toBubbleMs(value)])
                 )
+            };
+        };
+
+        const buildBubbleRenderSummary = (renderStats, hotspots) => {
+            const stats = (renderStats && typeof renderStats === "object") ? renderStats : null;
+            if (!stats || !(Number(stats.frames) > 0)) return null;
+            const frames = Math.max(1, Number(stats.frames) || 0);
+            addBubbleHotspot(hotspots, "render.cutawayDuringBubble", stats.cutawayMs, {
+                frames,
+                max: Number(stats.maxCutawayMs) || 0
+            });
+            addBubbleHotspot(hotspots, "render.interiorPickerDuringBubble", stats.interiorPickerMs, {
+                frames
+            });
+            addBubbleHotspot(hotspots, "render.layerCutawayDuringBubble", stats.layerCutawayMs, {
+                frames
+            });
+            const maxCutawayFrame = (stats.maxCutawayFrame && typeof stats.maxCutawayFrame === "object")
+                ? stats.maxCutawayFrame
+                : null;
+            const summarizeFrame = (frame) => {
+                if (!frame) return null;
+                return {
+                    composeMs: toBubbleMs(frame.composeMs),
+                    collectMs: toBubbleMs(frame.collectMs),
+                    cutawayMs: toBubbleMs(frame.cutawayMs),
+                    layerCutawayMs: toBubbleMs(frame.layerCutawayMs),
+                    layerCutawayStateMs: toBubbleMs(frame.layerCutawayStateMs),
+                    buildingFlagMs: toBubbleMs(frame.buildingFlagMs),
+                    interiorPickerMs: toBubbleMs(frame.interiorPickerMs),
+                    interiorPlanMs: toBubbleMs(frame.interiorPlanMs),
+                    cutawayHeldDuringBubble: Number(frame.cutawayHeldDuringBubble) || 0,
+                    visibleNodes: Number(frame.visibleNodes) || 0,
+                    visibleObjects: Number(frame.visibleObjects) || 0
+                };
+            };
+            return {
+                frames,
+                composeMs: toBubbleMs(stats.composeMs),
+                collectMs: toBubbleMs(stats.collectMs),
+                cutawayMs: toBubbleMs(stats.cutawayMs),
+                layerCutawayMs: toBubbleMs(stats.layerCutawayMs),
+                layerCutawayStateMs: toBubbleMs(stats.layerCutawayStateMs),
+                buildingFlagMs: toBubbleMs(stats.buildingFlagMs),
+                interiorPickerMs: toBubbleMs(stats.interiorPickerMs),
+                interiorPlanMs: toBubbleMs(stats.interiorPlanMs),
+                avg: {
+                    composeMs: toBubbleMs(stats.composeMs / frames),
+                    collectMs: toBubbleMs(stats.collectMs / frames),
+                    cutawayMs: toBubbleMs(stats.cutawayMs / frames),
+                    layerCutawayMs: toBubbleMs(stats.layerCutawayMs / frames),
+                    layerCutawayStateMs: toBubbleMs(stats.layerCutawayStateMs / frames),
+                    buildingFlagMs: toBubbleMs(stats.buildingFlagMs / frames),
+                    interiorPickerMs: toBubbleMs(stats.interiorPickerMs / frames),
+                    interiorPlanMs: toBubbleMs(stats.interiorPlanMs / frames)
+                },
+                maxFrameMs: toBubbleMs(stats.maxFrameMs),
+                maxCutawayMs: toBubbleMs(stats.maxCutawayMs),
+                cutawayHeldFrames: Number(stats.cutawayHeldFrames) || 0,
+                visibleNodesMax: Number(stats.visibleNodesMax) || 0,
+                visibleObjectsMax: Number(stats.visibleObjectsMax) || 0,
+                maxCutawayFrame: summarizeFrame(maxCutawayFrame)
             };
         };
 
@@ -331,10 +425,47 @@
             floorObjectNodeIndexStats: null
         });
 
+        const enqueuePrototypeActiveSectionHydration = (session) => {
+            if (!session || !map || typeof map.hydratePrototypeSectionAssets !== "function") return;
+            prependPrototypeTasks(session, [createPrototypeTask("layout.hydrateActiveSections", () => {
+                const state = map && map._prototypeSectionState;
+                if (!state) return null;
+                const transition = state.pendingLayoutTransition;
+                const activeKeys = transition && transition.targetActiveKeys instanceof Set
+                    ? Array.from(transition.targetActiveKeys)
+                    : (typeof map.getPrototypeActiveSectionKeys === "function"
+                        ? Array.from(map.getPrototypeActiveSectionKeys())
+                        : []);
+                const keysToHydrate = activeKeys.filter((sectionKey) => {
+                    if (typeof sectionKey !== "string" || sectionKey.length === 0) return false;
+                    const asset = typeof map.getPrototypeSectionAsset === "function"
+                        ? map.getPrototypeSectionAsset(sectionKey)
+                        : null;
+                    return !asset || asset._prototypeSectionHydrated !== true;
+                });
+                if (keysToHydrate.length === 0) {
+                    session.sectionHydrationStats = { requested: 0, loaded: 0 };
+                    return null;
+                }
+                return map.hydratePrototypeSectionAssets(keysToHydrate, { materialize: false })
+                    .then((loadedKeys) => {
+                        session.sectionHydrationStats = {
+                            requested: keysToHydrate.length,
+                            loaded: Array.isArray(loadedKeys) ? loadedKeys.length : 0,
+                            keys: Array.isArray(loadedKeys) ? loadedKeys.slice() : []
+                        };
+                        return loadedKeys;
+                    });
+            })]);
+        };
+
         const finalizePrototypeAsyncBubbleShiftSession = (session) => {
             if (!session || session.completed === true) return session;
             session.completed = true;
             const totalMs = prototypeNow() - session.startedAtMs;
+            let profileBuildMs = 0;
+            let profileLogMs = 0;
+            let profileLogged = false;
             const wallStats = map._prototypeWallState && map._prototypeWallState.lastSyncStats
                 ? map._prototypeWallState.lastSyncStats
                 : null;
@@ -349,45 +480,74 @@
                 : null;
             updatePrototypeGpuDebugStats(map);
             try {
-                const loadedNodes = map._prototypeSectionState && Array.isArray(map._prototypeSectionState.loadedNodes)
-                    ? map._prototypeSectionState.loadedNodes.length
-                    : 0;
-                const hotspots = [];
-                const powerupSummary = buildBubblePowerupSummary(powerupStats, session.powerupsChanged, hotspots);
-                console.log("[prototype bubble shift]", {
-                    from: session.from,
-                    to: session.to,
-                    frame: {
-                        budgetMs: toBubbleMs(session.frameBudgetMs),
-                        shiftFrameMs: toBubbleMs(session.shiftFrameMs),
-                        maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
-                        sliceCount: Number(session.frameSliceCount) || 0,
-                        workMs: toBubbleMs(session.workMs),
-                        totalMs: toBubbleMs(totalMs)
-                    },
-                    tasks: buildBubbleTaskSummary(session),
-                    layout: buildBubbleLayoutSummary(
-                        map._prototypeSectionState && map._prototypeSectionState.lastLayoutStats
-                            ? map._prototypeSectionState.lastLayoutStats
-                            : null,
-                        loadedNodes,
-                        hotspots
-                    ),
-                    walls: buildBubbleWallSummary(wallStats, session.wallsChanged, hotspots),
-                    objects: buildBubbleObjectSummary(objectStats, session.objectsChanged, powerupSummary, hotspots),
-                    animals: buildBubbleAnimalSummary(animalStats, session.animalsChanged, hotspots),
-                    floorObjectIndex: buildBubbleFloorObjectIndexSummary(session.floorObjectNodeIndexStats, hotspots),
-                    hotspots: sortBubbleHotspots(hotspots)
-                });
+                const shouldLogProfile = typeof globalThis === "undefined" ||
+                    globalThis.prototypeBubbleShiftProfile !== false;
+                if (shouldLogProfile) {
+                    const profileBuildStartMs = prototypeNow();
+                    const loadedNodes = map._prototypeSectionState && Array.isArray(map._prototypeSectionState.loadedNodes)
+                        ? map._prototypeSectionState.loadedNodes.length
+                        : 0;
+                    const hotspots = [];
+                    const powerupSummary = buildBubblePowerupSummary(powerupStats, session.powerupsChanged, hotspots);
+                    const profile = {
+                        from: session.from,
+                        to: session.to,
+                        frame: {
+                            budgetMs: toBubbleMs(session.frameBudgetMs),
+                            shiftFrameMs: toBubbleMs(session.shiftFrameMs),
+                            maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
+                            sliceCount: Number(session.frameSliceCount) || 0,
+                            workMs: toBubbleMs(session.workMs),
+                            totalMs: toBubbleMs(totalMs)
+                        },
+                        tasks: buildBubbleTaskSummary(session),
+                        layout: buildBubbleLayoutSummary(
+                            map._prototypeSectionState && map._prototypeSectionState.lastLayoutStats
+                                ? map._prototypeSectionState.lastLayoutStats
+                                : null,
+                            loadedNodes,
+                            hotspots
+                        ),
+                        walls: buildBubbleWallSummary(wallStats, session.wallsChanged, hotspots),
+                        objects: buildBubbleObjectSummary(objectStats, session.objectsChanged, powerupSummary, hotspots),
+                        animals: buildBubbleAnimalSummary(animalStats, session.animalsChanged, hotspots),
+                        floorObjectIndex: buildBubbleFloorObjectIndexSummary(session.floorObjectNodeIndexStats, hotspots),
+                        render: buildBubbleRenderSummary(session.renderStats, hotspots),
+                        hotspots: sortBubbleHotspots(hotspots)
+                    };
+                    profileBuildMs = prototypeNow() - profileBuildStartMs;
+                    const profileLogStartMs = prototypeNow();
+                    console.log("[prototype bubble shift]", profile);
+                    profileLogMs = prototypeNow() - profileLogStartMs;
+                    profileLogged = true;
+                }
             } catch (_err) {
                 // ignore debug logging failures
             }
             map._prototypeBubbleShiftSession = null;
+            if (typeof globalThis !== "undefined") {
+                globalThis.__prototypeBubbleShiftLastFinishedAtMs = prototypeNow();
+                globalThis.__prototypeBubbleShiftLastSummary = {
+                    from: session.from,
+                    to: session.to,
+                    totalMs: toBubbleMs(totalMs),
+                    workMs: toBubbleMs(session.workMs),
+                    promiseWaitMs: toBubbleMs(session.promiseWaitMs),
+                    sliceCount: Number(session.frameSliceCount) || 0,
+                    maxSliceMs: toBubbleMs(session.maxFrameSliceMs),
+                    render: buildBubbleRenderSummary(session.renderStats, []),
+                    profileLogged,
+                    profileBuildMs: toBubbleMs(profileBuildMs),
+                    profileLogMs: toBubbleMs(profileLogMs)
+                };
+            }
             return session;
         };
 
         const advancePrototypeAsyncBubbleShiftSession = (session, options = {}) => {
             if (!session || session.completed === true) return session;
+            if (session.error) throw session.error;
+            if (session.pendingPromise) return session;
             const budgetMs = Math.max(0.25, Number(options.frameBudgetMs) || Number(session.frameBudgetMs) || 2);
             const deadline = prototypeNow() + budgetMs;
             const sliceStart = prototypeNow();
@@ -396,10 +556,11 @@
                 const task = session.queue.shift();
                 if (typeof task === "function") {
                     const taskStart = prototypeNow();
-                    task();
+                    const result = task();
                     const taskMs = prototypeNow() - taskStart;
                     session.workMs += taskMs;
                     recordPrototypeTaskExecution(session, task, taskMs, sliceIndex);
+                    if (pausePrototypeSessionForPromise(session, result, task)) break;
                 }
             }
             const sliceMs = prototypeNow() - sliceStart;
@@ -409,7 +570,7 @@
                     session.maxFrameSliceMs = sliceMs;
                 }
             }
-            if (session.queue.length === 0) {
+            if (!session.pendingPromise && session.queue.length === 0) {
                 return finalizePrototypeAsyncBubbleShiftSession(session);
             }
             return session;
@@ -482,6 +643,8 @@
                 const maxTasks = Math.max(1, Math.floor(Number(options.maxTasks) || 200000));
                 let tasksRun = 0;
                 while (session && session.completed !== true && tasksRun < maxTasks) {
+                    if (session.error) throw session.error;
+                    if (session.pendingPromise) break;
                     if (!Array.isArray(session.queue) || session.queue.length === 0) {
                         finalizePrototypeAsyncBubbleShiftSession(session);
                         session = this._prototypeBubbleShiftSession;
@@ -490,14 +653,15 @@
                     const task = session.queue.shift();
                     if (typeof task === "function") {
                         const taskStart = prototypeNow();
-                        task();
+                        const result = task();
                         const taskMs = prototypeNow() - taskStart;
                         session.workMs += taskMs;
                         recordPrototypeTaskExecution(session, task, taskMs, 0);
+                        if (pausePrototypeSessionForPromise(session, result, task)) break;
                     }
                     tasksRun += 1;
                 }
-                if (session && session.completed !== true && Array.isArray(session.queue) && session.queue.length === 0) {
+                if (session && session.completed !== true && !session.pendingPromise && Array.isArray(session.queue) && session.queue.length === 0) {
                     finalizePrototypeAsyncBubbleShiftSession(session);
                 }
                 return !this._prototypeBubbleShiftSession || this._prototypeBubbleShiftSession.completed === true;
@@ -957,6 +1121,12 @@
             map.updatePrototypeSectionBubble = function updatePrototypeSectionBubble(actor, options = {}) {
                 const totalStart = prototypeNow();
                 const previousCenterKey = this._prototypeSectionState && this._prototypeSectionState.activeCenterKey;
+                const outdoorBubbleSuspended = typeof this.isPrototypeOutdoorBubbleSuspendedForActor === "function" &&
+                    this.isPrototypeOutdoorBubbleSuspendedForActor(actor, options);
+                if (outdoorBubbleSuspended) {
+                    updatePrototypeGpuDebugStats(this);
+                    return false;
+                }
                 const bubbleChanged = updateActiveBubbleForActor(this, actor, options);
                 const layoutMs = prototypeNow() - totalStart;
                 if (bubbleChanged) {
@@ -973,9 +1143,10 @@
                         enqueuePrototypeAsyncBuildingSync(asyncSession);
                     }
                     enqueuePrototypeAsyncLayoutSync(asyncSession);
+                    enqueuePrototypeActiveSectionHydration(asyncSession);
                     this._prototypeBubbleShiftSession = asyncSession;
                 }
-                if (this._prototypeBubbleShiftSession) {
+                if (this._prototypeBubbleShiftSession && options && options.advanceImmediately === true) {
                     advancePrototypeAsyncBubbleShiftSession(this._prototypeBubbleShiftSession, options);
                 }
                 const callMs = prototypeNow() - totalStart;
@@ -1003,8 +1174,11 @@
                 if (typeof enqueuePrototypeAsyncBuildingSync === "function") {
                     enqueuePrototypeAsyncBuildingSync(asyncSession);
                 }
+                enqueuePrototypeActiveSectionHydration(asyncSession);
                 this._prototypeBubbleShiftSession = asyncSession;
-                advancePrototypeAsyncBubbleShiftSession(asyncSession, options);
+                if (options && options.advanceImmediately === true) {
+                    advancePrototypeAsyncBubbleShiftSession(asyncSession, options);
+                }
                 updatePrototypeGpuDebugStats(this);
                 return asyncSession;
             };
