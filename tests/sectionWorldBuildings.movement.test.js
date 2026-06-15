@@ -585,6 +585,60 @@ test("wizard building support switches world scope and suspends outdoor bubble s
     }
 });
 
+test("repeated building support updates do not re-promote an already active interior", async () => {
+    const previousWizard = globalThis.wizard;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:scope-house",
+            buildingSaveName: "scope house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStair() });
+
+        const originalRegisterFloorFragment = map.registerFloorFragment.bind(map);
+        let floorRegistrations = 0;
+        map.registerFloorFragment = function registerFloorFragmentWithCount(fragment) {
+            floorRegistrations += 1;
+            return originalRegisterFloorFragment(fragment);
+        };
+
+        const buildingSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:scope-house:floor:floor-0",
+            surfaceId: "building:scope-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:scope-house",
+            sectionKey: "building:scope-house"
+        };
+
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(map.getPrototypeBuildingPlacements()[0].loadState, "interior");
+        assert.ok(floorRegistrations > 0);
+        const registrationsAfterPromotion = floorRegistrations;
+
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(floorRegistrations, registrationsAfterPromotion);
+    } finally {
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
+});
+
 test("building placements block walls and columns, not the whole base floor", () => {
     const previousPolygonHitbox = globalThis.PolygonHitbox;
     globalThis.PolygonHitbox = TestPolygonHitbox;

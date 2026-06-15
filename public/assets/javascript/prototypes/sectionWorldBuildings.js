@@ -2324,12 +2324,19 @@
                 throw new Error(`cannot enter missing building world scope ${nextScope.id}`);
             }
             const previousScope = normalizePrototypeWorldScope(state.currentWorldScope);
+            const changed = !samePrototypeWorldScope(previousScope, nextScope);
             state.currentWorldScope = nextScope;
-            if (
+            const placement = nextScope.type === "building" && state.placementsById instanceof Map
+                ? state.placementsById.get(nextScope.id)
+                : null;
+            const loadState = typeof (placement && placement.loadState) === "string" ? placement.loadState : "";
+            const needsInteriorPromotion = !!(
                 nextScope.type === "building" &&
                 options.promoteInterior !== false &&
-                typeof this.promotePrototypeBuildingInterior === "function"
-            ) {
+                typeof this.promotePrototypeBuildingInterior === "function" &&
+                (changed || (loadState !== "interior" && loadState !== "loading-interior" && loadState !== "error"))
+            );
+            if (needsInteriorPromotion) {
                 const promotion = this.promotePrototypeBuildingInterior(nextScope.id);
                 if (promotion && typeof promotion.catch === "function") {
                     promotion.catch((error) => {
@@ -2340,7 +2347,7 @@
             return {
                 previous: previousScope,
                 current: nextScope,
-                changed: !samePrototypeWorldScope(previousScope, nextScope)
+                changed
             };
         };
 
@@ -2500,6 +2507,14 @@
             const placementId = normalizePlacementId(id, 0);
             const placement = state.placementsById.get(placementId);
             if (!placement) throw new Error(`cannot promote missing building ${placementId} to interior`);
+            if (placement.loadState === "interior") {
+                const existingData = getBuildingDataForPlacement(state, placement);
+                if (existingData) return Promise.resolve(existingData);
+            }
+            if (placement.loadState === "loading-interior") {
+                const existingData = getBuildingDataForPlacement(state, placement);
+                if (existingData) return Promise.resolve(existingData);
+            }
             setPrototypeBuildingLoadState(state, placement, "loading-interior");
             return this.loadPrototypeBuildingDataForPlacement(placement)
                 .then((buildingData) => {
