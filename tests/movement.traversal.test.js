@@ -435,6 +435,67 @@ test("GameMap support validation falls to highest lower support and reports owne
     assert.equal(scopeSupport.ownerType, "section");
 });
 
+test("GameMap support validation keeps placed object z local when it falls", () => {
+    const map = createSupportValidationMap();
+    const lower = map.registerFloorFragment({
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -3, y: -3 },
+            { x: 3, y: -3 },
+            { x: 3, y: 3 },
+            { x: -3, y: 3 }
+        ],
+        holes: []
+    });
+    const upper = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:upper",
+        surfaceId: "building:placed-5:surface:upper",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const object = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 2,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: upper.fragmentId,
+            surfaceId: upper.surfaceId,
+            ownerType: upper.ownerType,
+            ownerId: upper.ownerId,
+            sectionKey: upper.ownerSectionKey
+        },
+        groundRadius: 0.25
+    };
+
+    const result = map.validateActorMovementSupport(object);
+
+    assert.equal(result.changed, true);
+    assert.equal(result.nextSupport.fragmentId, lower.fragmentId);
+    assert.equal(object.currentLayerBaseZ, 0);
+    assert.equal(object.z, 0);
+});
+
 test("GameMap support validation reports void loss when no lower support exists", () => {
     const map = createSupportValidationMap();
     const upper = map.registerFloorFragment({

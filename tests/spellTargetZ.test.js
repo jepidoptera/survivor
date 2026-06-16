@@ -49,6 +49,7 @@ function loadSpellContext() {
     vm.createContext(context);
 
     const files = [
+        path.join(__dirname, "../public/assets/javascript/gameobjects/hitbox.js"),
         path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
         path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
@@ -89,6 +90,670 @@ test("building placement rotation wraps around the negative boundary", () => {
 
     assertNearlyEqual(next, 35 * Math.PI / 36);
     assertNearlyEqual(wizard.selectedBuildingRotation, 35 * Math.PI / 36);
+});
+
+test("move object drag temporarily excludes prototype building objects from interior bakes", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(
+                target &&
+                target !== wizardRef &&
+                !target.gone &&
+                !target.vanishing &&
+                Number.isFinite(target.x) &&
+                Number.isFinite(target.y)
+            );
+        }
+    };
+
+    let removeCalls = 0;
+    let restoreCalls = 0;
+    let nodeDirtyCalls = 0;
+    const startNode = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+            if (obj._suppressBuildingRenderCacheDirty !== true) nodeDirtyCalls += 1;
+        }
+    };
+    const nextNode = {
+        objects: [],
+        addObject(obj) {
+            this.objects.push(obj);
+            if (obj._suppressBuildingRenderCacheDirty !== true) nodeDirtyCalls += 1;
+        }
+    };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return x >= 5 ? nextNode : startNode;
+        },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            removeCalls += 1;
+            assert.equal(obj._suppressBuildingRenderCacheDirty, undefined);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 77,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap(obj) {
+            restoreCalls += 1;
+            assert.equal(obj._suppressBuildingRenderCacheDirty, undefined);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 77,
+                changed: true
+            };
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "doors",
+        rotationAxis: "spatial",
+        x: 2,
+        y: 3,
+        map,
+        node: startNode,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        _prototypeRecordId: 77,
+        fragmentId: "building:test-house:floor:floor-1",
+        surfaceId: "building:test-house:surface:floor-1"
+    };
+    startNode.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(target._suppressBuildingRenderCacheDirty, true);
+
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 7, 9), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(restoreCalls, 0);
+    assert.equal(nodeDirtyCalls, 0);
+    assert.equal(target.x, 7);
+    assert.equal(target.y, 9);
+    assert.equal(startNode.objects.includes(target), false);
+    assert.equal(nextNode.objects.includes(target), true);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 8, 10), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(restoreCalls, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(target, "_suppressBuildingRenderCacheDirty"), false);
+    assert.equal(wizard.moveObjectDragState, null);
+});
+
+test("move object drag registers fresh prototype building objects before bake exclusion", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.activeSimObjects = new context.Set();
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    let ensureCalls = 0;
+    let removeCalls = 0;
+    const node = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+        },
+        addObject(obj) {
+            if (!this.objects.includes(obj)) this.objects.push(obj);
+        }
+    };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        ensurePrototypeObjectRuntimeRecord(obj) {
+            ensureCalls += 1;
+            assert.equal(obj._prototypeRecordId, undefined);
+            obj._prototypeRuntimeRecord = true;
+            obj._prototypeRecordId = 88;
+            return 88;
+        },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            removeCalls += 1;
+            assert.equal(obj._prototypeRecordId, 88);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 88,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap() {
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 88,
+                changed: true
+            };
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "furniture",
+        x: 2,
+        y: 3,
+        map,
+        node,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        fragmentId: "building:test-house:floor:floor-1",
+        surfaceId: "building:test-house:surface:floor-1"
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(ensureCalls, 1);
+    assert.equal(removeCalls, 1);
+    assert.equal(target._prototypeRecordId, 88);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(wizard.moveObjectDragState, null);
+});
+
+test("move object drag applies force toward the mouse instead of teleporting", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        getNodesInIndexWindow() { return [node]; }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 16;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 10, 0), true);
+    assert.ok(target.x > 0, "object should begin moving toward the mouse");
+    assert.ok(target.x < 10, "object should not teleport to the mouse");
+});
+
+test("move object force drag is resisted by wall hitboxes", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        moveObjectForceStrength: 2000,
+        moveObjectMaxSpeed: 50,
+        moveObjectForceDamping: 0,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    const wall = {
+        type: "wallSection",
+        isPassable: false,
+        traversalLayer: 0,
+        groundPlaneHitbox: new context.PolygonHitbox([
+            { x: 1.0, y: -2 },
+            { x: 1.2, y: -2 },
+            { x: 1.2, y: 2 },
+            { x: 1.0, y: 2 }
+        ])
+    };
+    node.objects.push(target, wall);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.ok(target.x > 0, "object should move toward the wall");
+    assert.ok(target.x < 1.0, "object should remain on the near side of the wall");
+});
+
+test("move object force drag is resisted by prototype building movement blockers", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const buildingBlocker = {
+        type: "prototypeBuildingMovementBlocker",
+        isPassable: false,
+        traversalLayer: 0,
+        groundPlaneHitbox: new context.PolygonHitbox([
+            { x: 1.0, y: -2 },
+            { x: 1.2, y: -2 },
+            { x: 1.2, y: 2 },
+            { x: 1.0, y: 2 }
+        ])
+    };
+    let buildingBlockerQueries = 0;
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; },
+        collectPrototypeBuildingMovementBlockersInBounds(bounds, layer) {
+            buildingBlockerQueries += 1;
+            assert.equal(layer, 0);
+            assert.ok(bounds.minX <= 1.0 && bounds.maxX >= 1.2);
+            return [buildingBlocker];
+        }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        moveObjectForceStrength: 2000,
+        moveObjectMaxSpeed: 50,
+        moveObjectForceDamping: 0,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(buildingBlockerQueries, 1);
+    assert.ok(target.x > 0, "object should move toward the building wall");
+    assert.ok(target.x < 1.0, "object should remain on the near side of the building wall");
+});
+
+test("god mode move object drag preserves grab offset and ignores blockers", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    let buildingBlockerQueries = 0;
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; },
+        collectPrototypeBuildingMovementBlockersInBounds() {
+            buildingBlockerQueries += 1;
+            return [{
+                type: "prototypeBuildingMovementBlocker",
+                isPassable: false,
+                traversalLayer: 0,
+                groundPlaneHitbox: new context.PolygonHitbox([
+                    { x: 1.0, y: -2 },
+                    { x: 1.2, y: -2 },
+                    { x: 1.2, y: 2 },
+                    { x: 1.0, y: 2 }
+                ])
+            }];
+        }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false,
+        isGodMode() { return true; }
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0.75, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(target.x, 4.25);
+    assert.equal(target.y, 0);
+    assert.equal(buildingBlockerQueries, 0);
+});
+
+test("moved placed object falls to lower support after leaving its original surface", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.activeSimObjects = new context.Set();
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    let validateCalls = 0;
+    let captureCalls = 0;
+    let restoreRef = null;
+    const node = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+        },
+        addObject(obj) {
+            if (!this.objects.includes(obj)) this.objects.push(obj);
+        }
+    };
+    const objectState = {
+        dirtyRuntimeObjects: new context.Set(),
+        captureScanNeeded: false
+    };
+    const map = {
+        _prototypeObjectState: objectState,
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            return {
+                placementId: obj._prototypeOwnerId,
+                floorId: "upper",
+                recordId: obj._prototypeRecordId,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap(ref) {
+            restoreRef = ref;
+            return {
+                placementId: ref.placementId,
+                floorId: ref.floorId,
+                recordId: ref.recordId,
+                changed: true
+            };
+        },
+        validateActorMovementSupport(actor) {
+            validateCalls += 1;
+            const previousSupport = actor.currentMovementSupport;
+            actor.currentMovementSupport = {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "section:0,0:ground",
+                surfaceId: "section:0,0:ground",
+                ownerType: "section",
+                ownerId: "0,0",
+                sectionKey: "0,0"
+            };
+            actor.currentLayer = 0;
+            actor.traversalLayer = 0;
+            actor.currentLayerBaseZ = 0;
+            actor.fragmentId = actor.currentMovementSupport.fragmentId;
+            actor.surfaceId = actor.currentMovementSupport.surfaceId;
+            actor.z = 0;
+            return {
+                changed: true,
+                ownerChanged: true,
+                lost: false,
+                previousSupport,
+                nextSupport: actor.currentMovementSupport,
+                previousOwner: "building:building:test-house",
+                nextOwner: "section:0,0"
+            };
+        },
+        capturePendingPrototypeObjects() {
+            captureCalls += 1;
+            assert.equal(target._prototypeDirty, true);
+            assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+            return true;
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "furniture",
+        x: 0,
+        y: 0,
+        z: 0,
+        map,
+        node,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
+        _prototypeRecordId: 99,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        _prototypeOwnerSignature: "building:building:test-house",
+        fragmentId: "building:test-house:floor:upper",
+        surfaceId: "building:test-house:surface:upper",
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: "building:test-house:floor:upper",
+            surfaceId: "building:test-house:surface:upper",
+            ownerType: "building",
+            ownerId: "building:test-house"
+        }
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false,
+        isGodMode() { return true; }
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(target.x, 5);
+    assert.equal(validateCalls, 0);
+    assert.equal(captureCalls, 0);
+    assert.equal(target.currentLayer, 1);
+    assert.equal(target.currentLayerBaseZ, 3);
+    assert.equal(target.z, 0);
+    assert.equal(target._prototypeOwnerType, "building");
+    assert.equal(target._prototypeOwnerId, "building:test-house");
+    assert.equal(target._prototypeOwnerSignature, "building:building:test-house");
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), false);
+    assert.equal(objectState.captureScanNeeded, false);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 5, 0), true);
+    assert.equal(validateCalls, 1);
+    assert.equal(target.currentLayer, 0);
+    assert.equal(target.currentLayerBaseZ, 0);
+    assert.equal(target.z, 3);
+    assert.equal(target.falling, true);
+    assert.equal(target._floorFallState.active, true);
+    assert.equal(context.activeSimObjects.has(target), true);
+    assert.equal(target._prototypeOwnerType, "section");
+    assert.equal(target._prototypeOwnerId, "0,0");
+    assert.equal(target._prototypeOwnerSignature, "section:0,0");
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+    assert.equal(objectState.captureScanNeeded, true);
+    assert.equal(captureCalls, 1);
+    assert.deepEqual(restoreRef, {
+        placementId: "building:test-house",
+        floorId: "upper",
+        recordId: 99,
+        changed: true
+    });
+});
+
+test("simulation loop advances active move object drags without pointer movement", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/runaround.js"),
+        "utf8"
+    );
+    const runStep = source.slice(
+        source.indexOf("function runSimulationStep()"),
+        source.indexOf("// Calculate desired movement direction from input")
+    );
+
+    assert.match(runStep, /SpellSystem\.updateDragPreview\(wizard,\s*mousePos\.worldX,\s*mousePos\.worldY\)/);
+});
+
+test("map node building cache dirtying honors transient move suppression flag", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/Map.js"),
+        "utf8"
+    );
+
+    assert.match(source, /obj\._suppressBuildingRenderCacheDirty !== true/);
+    assert.match(source, /removed\._suppressBuildingRenderCacheDirty !== true/);
 });
 
 function loadVanishContext() {
@@ -1533,6 +2198,7 @@ test("placed objects use rendered building floor support under the cursor", () =
     const placed = createdObjects[0];
     assert.equal(placed.x, 2);
     assert.equal(placed.y, 2);
+    assert.equal(placed.z, 0);
     assert.equal(placed.traversalLayer, 1);
     assert.equal(placed.currentLayerBaseZ, 3);
     assert.equal(placed.node, floorNode);
@@ -1732,6 +2398,7 @@ test("powerup placement uses rendered building floor support under the cursor", 
     const placed = placedPowerups[0];
     assert.equal(placed.x, 2);
     assert.equal(placed.y, 2);
+    assert.equal(placed.z, 0);
     assert.equal(placed.traversalLayer, 1);
     assert.equal(placed.currentLayerBaseZ, 3);
     assert.equal(placed.node, floorNode);

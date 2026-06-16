@@ -12,6 +12,17 @@ function pointInPolygon2D(x, y, points) {
     return inside;
 }
 
+function recordMoveObjectPerfEvent(name, data = null, elapsedMs = null) {
+    if (
+        typeof globalThis === "undefined" ||
+        !globalThis.__moveObjectPerf ||
+        typeof globalThis.__recordMoveObjectPerf !== "function"
+    ) {
+        return;
+    }
+    globalThis.__recordMoveObjectPerf(name, data, elapsedMs);
+}
+
 function getPolygonBounds2D(points) {
     if (!Array.isArray(points) || points.length < 3) return null;
     let minX = Infinity;
@@ -531,8 +542,15 @@ class MapNode {
             obj &&
             obj !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
             obj.type !== "powerup" &&
-            !(animalCtor && obj instanceof animalCtor)
+            !(animalCtor && obj instanceof animalCtor) &&
+            obj._suppressBuildingRenderCacheDirty !== true
         );
+        recordMoveObjectPerfEvent("mapNode.addObject", {
+            objectType: obj && obj.type || "",
+            suppressedBuildingDirty: !!(obj && obj._suppressBuildingRenderCacheDirty === true),
+            dirtyBuildingCache: shouldDirtyBuildingCache,
+            nodeId: this.id || ""
+        });
         if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
             mapRef.markBuildingRenderCacheDirty();
         }
@@ -580,8 +598,15 @@ class MapNode {
             removed &&
             removed !== (typeof globalThis !== "undefined" ? globalThis.wizard : null) &&
             removed.type !== "powerup" &&
-            !(animalCtor && removed instanceof animalCtor)
+            !(animalCtor && removed instanceof animalCtor) &&
+            removed._suppressBuildingRenderCacheDirty !== true
         );
+        recordMoveObjectPerfEvent("mapNode.removeObject", {
+            objectType: removed && removed.type || "",
+            suppressedBuildingDirty: !!(removed && removed._suppressBuildingRenderCacheDirty === true),
+            dirtyBuildingCache: shouldDirtyBuildingCache,
+            nodeId: this.id || ""
+        });
         if (shouldDirtyBuildingCache && mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
             mapRef.markBuildingRenderCacheDirty();
         }
@@ -1424,6 +1449,27 @@ class GameMap {
     }
 
     markBuildingRenderCacheDirty() {
+        if (
+            typeof globalThis !== "undefined" &&
+            globalThis.__moveObjectPerf &&
+            typeof globalThis.__recordMoveObjectPerf === "function"
+        ) {
+            let stack = "";
+            try {
+                stack = (new Error()).stack || "";
+            } catch (_err) {
+                stack = "";
+            }
+            const stackLines = stack
+                .split("\n")
+                .slice(2, 7)
+                .map(line => line.trim())
+                .filter(Boolean);
+            globalThis.__recordMoveObjectPerf("map.markBuildingRenderCacheDirty", {
+                previousVersion: Number(this._buildingRenderCacheVersion) || 0,
+                stack: stackLines
+            });
+        }
         this._buildingRenderCacheVersion = (Number(this._buildingRenderCacheVersion) || 0) + 1;
     }
 
@@ -2774,6 +2820,15 @@ class GameMap {
         if (!actor || typeof actor !== "object") return false;
         if (actor.type === "wizard") return true;
         if (actor.constructor && actor.constructor.name === "Wizard") return true;
+        if (
+            actor.isPlacedObject === true &&
+            !Number.isInteger(actor.mountedWallLineGroupId) &&
+            !Number.isInteger(actor.mountedSectionId) &&
+            !Number.isInteger(actor.mountedWallSectionUnitId) &&
+            !(typeof actor.isWindowObject === "function" && actor.isWindowObject())
+        ) {
+            return true;
+        }
         return typeof actor.drawHat === "function" && typeof actor.drawShield === "function";
     }
 

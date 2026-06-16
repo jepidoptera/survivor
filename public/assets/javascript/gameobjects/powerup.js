@@ -206,6 +206,49 @@
         };
     }
 
+    function resolvePowerupActorLayer(actor) {
+        if (!actor || typeof actor !== "object") return 0;
+        const support = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        const candidates = [
+            support && support.layer,
+            actor.currentLayer,
+            actor.traversalLayer,
+            actor.level
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const value = Number(candidates[i]);
+            if (Number.isFinite(value)) return Math.round(value);
+        }
+        return 0;
+    }
+
+    function resolvePowerupActorOwnerSignature(actor) {
+        if (!actor || typeof actor !== "object") return "";
+        const support = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        const ownerType = typeof (support && support.ownerType) === "string" && support.ownerType.length > 0
+            ? support.ownerType
+            : (typeof actor._prototypeOwnerType === "string" ? actor._prototypeOwnerType : "");
+        const ownerId = typeof (support && support.ownerId) === "string" && support.ownerId.length > 0
+            ? support.ownerId
+            : (typeof actor._prototypeOwnerId === "string" ? actor._prototypeOwnerId : "");
+        if (ownerType && ownerId) return `${ownerType}:${ownerId}`;
+        return "";
+    }
+
+    function canPowerupInteractWithWizardLayer(powerup, wizard) {
+        if (!powerup || !wizard) return false;
+        const powerupLayer = resolvePowerupActorLayer(powerup);
+        const wizardLayer = resolvePowerupActorLayer(wizard);
+        if (powerupLayer !== wizardLayer) return false;
+        const powerupOwner = resolvePowerupActorOwnerSignature(powerup);
+        const wizardOwner = resolvePowerupActorOwnerSignature(wizard);
+        return !powerupOwner || !wizardOwner || powerupOwner === wizardOwner;
+    }
+
     class Powerup {
         constructor(imageFileName, options = {}) {
             const opts = (options && typeof options === "object") ? options : {};
@@ -493,6 +536,7 @@
 
         intersectsWizard(wizard) {
             if (!wizard || this.gone || this.collected) return false;
+            if (!canPowerupInteractWithWizardLayer(this, wizard)) return false;
             const wizardHitbox = wizard.groundPlaneHitbox || wizard.visualHitbox || null;
             if (!wizardHitbox || !this.groundPlaneHitbox || typeof this.groundPlaneHitbox.intersects !== "function") {
                 return false;
@@ -517,7 +561,7 @@
             if (this.gone || this.collected) return false;
             const delta = Number.isFinite(dt) && dt > 0 ? Number(dt) : 0;
             if (!(delta > 0)) return false;
-            const floorZ = Number.isFinite(this._floorBaseZ) ? Number(this._floorBaseZ) : 0;
+            const floorZ = 0;
             const currentZ = Number.isFinite(this.z) ? Number(this.z) : 0;
             const currentVz = Number.isFinite(this.vz) ? Number(this.vz) : 0;
             if (currentZ <= floorZ && Math.abs(currentVz) <= 1e-6) {
@@ -542,8 +586,8 @@
 
         collect(wizard) {
             if (this.gone || this.collected) return false;
-            const _collectFloorZ = Number.isFinite(this._floorBaseZ) ? Number(this._floorBaseZ) : 0;
-            if (Number.isFinite(this.z) && Number(this.z) > _collectFloorZ + 0.01) return false;
+            if (wizard && !canPowerupInteractWithWizardLayer(this, wizard)) return false;
+            if (Number.isFinite(this.z) && Number(this.z) > 0.01) return false;
             const scriptingApi = (typeof global.Scripting === "object" && global.Scripting)
                 ? global.Scripting
                 : null;
@@ -594,9 +638,14 @@
                 x: this.x,
                 y: this.y,
                 z: this.z,
+                zMode: "local",
                 vz: this.vz,
                 traversalLayer: Number.isFinite(this.traversalLayer) ? Number(this.traversalLayer) : undefined,
+                currentLayer: Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : undefined,
+                currentLayerBaseZ: Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : undefined,
                 _floorBaseZ: Number.isFinite(this._floorBaseZ) && this._floorBaseZ !== 0 ? Number(this._floorBaseZ) : undefined,
+                surfaceId: (typeof this.surfaceId === "string" && this.surfaceId.length > 0) ? this.surfaceId : undefined,
+                fragmentId: (typeof this.fragmentId === "string" && this.fragmentId.length > 0) ? this.fragmentId : undefined,
                 gravity: this.gravity,
                 size: this.size,
                 imagePath: this.imagePath,
@@ -626,16 +675,31 @@
             };
         }
 
-        static loadJson(data) {
+        static loadJson(data, mapRef = null) {
             if (!data || typeof data !== "object") return null;
             const fileName = (typeof data.file === "string" && data.file.trim().length > 0)
                 ? data.file.trim()
                 : DEFAULT_IMAGE_FILE;
+            const savedLayer = Number.isFinite(data.traversalLayer)
+                ? Math.round(Number(data.traversalLayer))
+                : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0);
+            const savedFloorBaseZ = Number.isFinite(data._floorBaseZ)
+                ? Number(data._floorBaseZ)
+                : (Number.isFinite(data.currentLayerBaseZ)
+                    ? Number(data.currentLayerBaseZ)
+                    : savedLayer * 3);
+            const savedZ = Number.isFinite(data.z) ? Number(data.z) : 0;
+            const localZ = data.zMode === "local"
+                ? savedZ
+                : (savedFloorBaseZ !== 0 && savedZ >= savedFloorBaseZ - 0.001
+                    ? savedZ - savedFloorBaseZ
+                    : savedZ);
             const powerup = new Powerup(fileName, {
                 x: data.x,
                 y: data.y,
-                z: data.z,
+                z: localZ,
                 vz: data.vz,
+                map: mapRef || global.map || null,
                 gravity: data.gravity,
                 size: data.size,
                 imagePath: data.imagePath,
@@ -656,8 +720,33 @@
             if (powerup && Number.isFinite(data.traversalLayer)) {
                 powerup.traversalLayer = Number(data.traversalLayer);
             }
-            if (powerup && Number.isFinite(data._floorBaseZ)) {
-                powerup._floorBaseZ = Number(data._floorBaseZ);
+            if (powerup) {
+                powerup.currentLayer = savedLayer;
+                powerup.currentLayerBaseZ = savedFloorBaseZ;
+                powerup._floorBaseZ = savedFloorBaseZ;
+                if (typeof data.surfaceId === "string") powerup.surfaceId = data.surfaceId;
+                if (typeof data.fragmentId === "string") powerup.fragmentId = data.fragmentId;
+                const fragment = powerup.fragmentId && powerup.map && powerup.map.floorsById instanceof Map
+                    ? powerup.map.floorsById.get(powerup.fragmentId) || null
+                    : null;
+                const floorSupportApi = (typeof global !== "undefined" && global.FloorSupport) ? global.FloorSupport : null;
+                if (savedLayer !== 0 || fragment || savedFloorBaseZ !== 0) {
+                    powerup.currentMovementSupport = floorSupportApi && typeof floorSupportApi.createFloorSupport === "function"
+                        ? floorSupportApi.createFloorSupport({
+                            layer: savedLayer,
+                            baseZ: savedFloorBaseZ,
+                            fragment,
+                            fragmentId: powerup.fragmentId || "",
+                            surfaceId: powerup.surfaceId || ""
+                        })
+                        : {
+                            type: "floor",
+                            layer: savedLayer,
+                            baseZ: savedFloorBaseZ,
+                            fragmentId: powerup.fragmentId || "",
+                            surfaceId: powerup.surfaceId || ""
+                        };
+                }
             }
             if (powerup && Array.isArray(data._scriptMessages)) {
                 powerup._scriptMessages = data._scriptMessages

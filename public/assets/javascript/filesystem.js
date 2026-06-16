@@ -1515,6 +1515,13 @@ function saveGameState(options = {}) {
         const exportedSections = (typeof map.exportPrototypeSectionWorld === "function")
             ? map.exportPrototypeSectionWorld()
             : null;
+        const clonePrototypeSectionWithoutExperimentalObjects = (section) => {
+            const cloned = JSON.parse(JSON.stringify(section));
+            if (cloned && Array.isArray(cloned.objects)) {
+                cloned.objects = cloned.objects.filter((obj) => !(obj && obj.type === "roadPath"));
+            }
+            return cloned;
+        };
         const loadedSectionKeys = includeAllPrototypeSections
             ? ((state.sectionAssetsByKey instanceof Map)
                 ? Array.from(state.sectionAssetsByKey.keys())
@@ -1527,7 +1534,7 @@ function saveGameState(options = {}) {
             for (let i = 0; i < exportedSections.length; i++) {
                 const section = exportedSections[i];
                 if (!section || typeof section !== "object") continue;
-                sections.push(JSON.parse(JSON.stringify(section)));
+                sections.push(clonePrototypeSectionWithoutExperimentalObjects(section));
             }
         } else {
             for (let i = 0; i < loadedSectionKeys.length; i++) {
@@ -1560,7 +1567,11 @@ function saveGameState(options = {}) {
                     groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
                     groundTiles,
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
-                    objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
+                    objects: Array.isArray(asset.objects)
+                        ? asset.objects
+                            .filter((obj) => !(obj && obj.type === "roadPath"))
+                            .map((obj) => ({ ...obj }))
+                        : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
                     powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
                     buildingRefs: clonePrototypeBuildingSectionRefs(asset.buildingRefs, `section ${asset.key} buildingRefs`)
@@ -2090,7 +2101,7 @@ function loadGameState(saveData) {
                 saveData.powerups.forEach(pData => {
                     if (!pData || typeof pData !== "object") return;
                     if (typeof Powerup !== "undefined" && typeof Powerup.loadJson === "function") {
-                        const p = Powerup.loadJson(pData);
+                        const p = Powerup.loadJson(pData, map);
                         if (p) globalThis.powerups.push(p);
                     }
                 });

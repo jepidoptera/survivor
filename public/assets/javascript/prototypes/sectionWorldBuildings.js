@@ -460,6 +460,69 @@
         return `${id}|${sourceFloorId}`;
     }
 
+    function recordMoveObjectPerfEvent(name, data = null, elapsedMs = null) {
+        if (
+            typeof globalScope === "undefined" ||
+            !globalScope.__moveObjectPerf ||
+            typeof globalScope.__recordMoveObjectPerf !== "function"
+        ) {
+            return;
+        }
+        globalScope.__recordMoveObjectPerf(name, data, elapsedMs);
+    }
+
+    function getInteriorBitmapObjectExclusionSet(state, placementId, floorId, create = false) {
+        if (!state || typeof state !== "object") return null;
+        const key = interiorBitmapKey(placementId, floorId);
+        if (!(state.interiorBitmapObjectExclusionsByKey instanceof Map)) {
+            if (!create) return null;
+            state.interiorBitmapObjectExclusionsByKey = new Map();
+        }
+        let set = state.interiorBitmapObjectExclusionsByKey.get(key) || null;
+        if (!set && create) {
+            set = new Set();
+            state.interiorBitmapObjectExclusionsByKey.set(key, set);
+        }
+        return set;
+    }
+
+    function getInteriorBitmapObjectExclusionSignature(state, placementId, floorId) {
+        const set = getInteriorBitmapObjectExclusionSet(state, placementId, floorId, false);
+        if (!(set instanceof Set) || set.size === 0) return "";
+        return Array.from(set)
+            .map((recordId) => Number(recordId))
+            .filter(Number.isInteger)
+            .sort((a, b) => a - b)
+            .join(",");
+    }
+
+    function invalidatePrototypeBuildingInteriorBitmapEntry(state, placementId, floorId) {
+        if (!state || !(state.interiorBitmapsByKey instanceof Map)) return false;
+        const key = interiorBitmapKey(placementId, floorId);
+        const entry = state.interiorBitmapsByKey.get(key) || null;
+        if (!entry) return false;
+        if (entry.status === "ready" && entry.texture) {
+            entry.stale = true;
+            entry.staleReason = "object-bake-membership";
+            return true;
+        }
+        destroyPrototypeBuildingBitmapEntry(entry);
+        state.interiorBitmapsByKey.delete(key);
+        return true;
+    }
+
+    function cloneBuildingDataWithoutInteriorBitmapExcludedObjects(state, placementId, floorId, buildingData) {
+        const set = getInteriorBitmapObjectExclusionSet(state, placementId, floorId, false);
+        if (!(set instanceof Set) || set.size === 0) return buildingData;
+        if (!buildingData || typeof buildingData !== "object") {
+            throw new Error(`building ${placementId} interior bitmap ${floorId} cannot apply object exclusions without building data`);
+        }
+        const clone = deepCloneJson(buildingData);
+        const records = Array.isArray(clone.objects) ? clone.objects : [];
+        clone.objects = records.filter((record) => !set.has(Number(record && record.id)));
+        return clone;
+    }
+
     function interiorBitmapSettingsSignature(placement, floorId, options = {}, dataSignature = "") {
         const transform = placement && placement.transform ? placement.transform : {};
         const pixelsPerWorldUnit = Number.isFinite(Number(options.pixelsPerWorldUnit))
@@ -479,6 +542,7 @@
             String(placement && placement.id || ""),
             String(placement && placement.contentVersion || ""),
             String(floorId || ""),
+            String(options.exclusionSignature || ""),
             Number(transform.rotation || 0).toFixed(6),
             pixelsPerWorldUnit.toFixed(3),
             paddingPixels,
@@ -1981,6 +2045,7 @@
             pendingExteriorBitmapLoadsById: new Map(),
             interiorBitmapsByKey: new Map(),
             pendingInteriorBitmapLoadsByKey: new Map(),
+            interiorBitmapObjectExclusionsByKey: new Map(),
             movementBlockersByPlacementId: new Map(),
             pendingMovementGeometryByPlacementId: new Map(),
             cutawayBuildingsByPlacementId: new Map(),
@@ -2703,6 +2768,106 @@
                 });
         };
 
+        const resolveInteriorBitmapObjectBakeRef = (targetOrRef, options = {}) => {
+            const ref = targetOrRef && typeof targetOrRef === "object" ? targetOrRef : {};
+            const explicitPlacementId = typeof (options && options.placementId) === "string"
+                ? options.placementId
+                : (typeof ref.placementId === "string"
+                    ? ref.placementId
+                    : (typeof ref.buildingId === "string"
+                        ? ref.buildingId
+                        : (typeof ref._prototypeOwnerId === "string" ? ref._prototypeOwnerId : "")));
+            const recordId = Number.isInteger(Number(options && options.recordId))
+                ? Number(options.recordId)
+                : (Number.isInteger(Number(ref.recordId))
+                    ? Number(ref.recordId)
+                    : (Number.isInteger(Number(ref._prototypeRecordId)) ? Number(ref._prototypeRecordId) : NaN));
+            if (!Number.isInteger(recordId)) {
+                throw new Error("prototype building baked texture exclusion requires an object record id");
+            }
+            if (
+                ref._prototypeOwnerType &&
+                ref._prototypeOwnerType !== "building"
+            ) {
+                throw new Error(`prototype object ${recordId} is not owned by a building and cannot be removed from a building baked texture`);
+            }
+            const placementId = normalizePlacementId(explicitPlacementId, 0);
+            const parseFloorId = (source) => {
+                if (!source || typeof source !== "object") return "";
+                const floorPrefix = `${placementId}:floor:`;
+                const surfacePrefix = `${placementId}:surface:`;
+                const candidates = [
+                    source.floorId,
+                    source.sourceFloorId,
+                    source.fragmentId,
+                    source.surfaceId
+                ];
+                for (let i = 0; i < candidates.length; i++) {
+                    const value = typeof candidates[i] === "string" ? candidates[i] : "";
+                    if (!value) continue;
+                    if (value.startsWith(floorPrefix) && value.length > floorPrefix.length) return value.slice(floorPrefix.length);
+                    if (value.startsWith(surfacePrefix) && value.length > surfacePrefix.length) return value.slice(surfacePrefix.length);
+                    if (value.indexOf(":") < 0) return value;
+                }
+                return "";
+            };
+            const floorId = parseFloorId(options) ||
+                parseFloorId(ref) ||
+                parseFloorId(ref.currentMovementSupport) ||
+                parseFloorId(ref._activeFloorFragment) ||
+                parseFloorId(ref.node);
+            if (!floorId) {
+                throw new Error(`prototype object ${recordId} cannot be removed from a building baked texture without a floor id`);
+            }
+            return { placementId, floorId, recordId };
+        };
+
+        map.removePrototypeBuildingObjectFromInteriorBitmap = function removePrototypeBuildingObjectFromInteriorBitmap(targetOrRef, options = {}) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const ref = resolveInteriorBitmapObjectBakeRef(targetOrRef, options);
+            const set = getInteriorBitmapObjectExclusionSet(state, ref.placementId, ref.floorId, true);
+            const changed = !set.has(ref.recordId);
+            if (changed) {
+                set.add(ref.recordId);
+                invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
+                if (typeof this.markBuildingRenderCacheDirty === "function") {
+                    this.markBuildingRenderCacheDirty();
+                }
+            }
+            if (targetOrRef && typeof targetOrRef === "object") {
+                targetOrRef._prototypeInteriorBitmapExcluded = true;
+                targetOrRef._prototypeInteriorBitmapExclusion = { ...ref };
+            }
+            return { ...ref, changed };
+        };
+
+        map.restorePrototypeBuildingObjectToInteriorBitmap = function restorePrototypeBuildingObjectToInteriorBitmap(targetOrRef, options = {}) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const ref = resolveInteriorBitmapObjectBakeRef(targetOrRef, options);
+            const set = getInteriorBitmapObjectExclusionSet(state, ref.placementId, ref.floorId, false);
+            const changed = !!(set && set.delete(ref.recordId));
+            if (set && set.size === 0 && state.interiorBitmapObjectExclusionsByKey instanceof Map) {
+                state.interiorBitmapObjectExclusionsByKey.delete(interiorBitmapKey(ref.placementId, ref.floorId));
+            }
+            if (changed) {
+                invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
+                if (typeof this.markBuildingRenderCacheDirty === "function") {
+                    this.markBuildingRenderCacheDirty();
+                }
+            }
+            if (targetOrRef && typeof targetOrRef === "object") {
+                targetOrRef._prototypeInteriorBitmapExcluded = false;
+                targetOrRef._prototypeInteriorBitmapExclusion = null;
+            }
+            return { ...ref, changed };
+        };
+
         map.requestPrototypeBuildingExteriorBitmap = function requestPrototypeBuildingExteriorBitmap(placementOrId, options = {}) {
             if (!this._prototypeBuildingState) {
                 this.initializePrototypeBuildingState([]);
@@ -2733,7 +2898,8 @@
                 throw new Error("building exterior bitmap request requires a Pixi app and renderer");
             }
             setPrototypeBuildingLoadState(state, placement, "shell");
-            const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
+            let loadPromise = null;
+            loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
                     const dataSignature = buildingDataSignature(buildingData);
                     const signature = exteriorBitmapSettingsSignature(placement, options, dataSignature);
@@ -2852,14 +3018,31 @@
             if (!(state.pendingInteriorBitmapLoadsByKey instanceof Map)) state.pendingInteriorBitmapLoadsByKey = new Map();
             const cached = state.interiorBitmapsByKey.get(key) || null;
             const pending = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
-            const settingsSignature = interiorBitmapSettingsSignature(placement, sourceFloorId, options);
-            if (cached && cached.status === "ready" && cached.settingsSignature === settingsSignature) {
+            const exclusionSignature = getInteriorBitmapObjectExclusionSignature(state, placementId, sourceFloorId);
+            const signatureOptions = { ...options, exclusionSignature };
+            const settingsSignature = interiorBitmapSettingsSignature(placement, sourceFloorId, signatureOptions);
+            if (cached && cached.status === "ready" && cached.stale !== true && cached.settingsSignature === settingsSignature) {
+                recordMoveObjectPerfEvent("prototypeInteriorBitmap.cacheHit", {
+                    placementId,
+                    floorId: sourceFloorId,
+                    status: "ready"
+                });
                 return cached;
             }
             if (cached && cached.status === "error" && cached.settingsSignature === settingsSignature) {
+                recordMoveObjectPerfEvent("prototypeInteriorBitmap.cacheHit", {
+                    placementId,
+                    floorId: sourceFloorId,
+                    status: "error"
+                });
                 return cached;
             }
             if (pending && pending.settingsSignature === settingsSignature) {
+                recordMoveObjectPerfEvent("prototypeInteriorBitmap.pendingHit", {
+                    placementId,
+                    floorId: sourceFloorId,
+                    hasCachedPlaceholder: !!cached
+                });
                 return cached || { status: "loading", id: key, placementId, floorId: sourceFloorId, settingsSignature };
             }
             const appRef = (options && options.app) || globalScope.app || null;
@@ -2867,20 +3050,41 @@
             if (!appRef || !rendererRef) {
                 throw new Error("building interior bitmap request requires a Pixi app and renderer");
             }
+            recordMoveObjectPerfEvent("prototypeInteriorBitmap.request", {
+                placementId,
+                floorId: sourceFloorId,
+                exclusionSignature,
+                hadCachedEntry: !!cached,
+                hadPendingEntry: !!pending
+            });
             setPrototypeBuildingLoadState(state, placement, "loading-interior");
             const loadPromise = this.loadPrototypeBuildingDataForPlacement(placement)
                 .then(async (buildingData) => {
-                    const dataSignature = buildingDataSignature(buildingData);
-                    const signature = interiorBitmapSettingsSignature(placement, sourceFloorId, options, dataSignature);
+                    const renderStartMs = (
+                        typeof performance !== "undefined" &&
+                        performance &&
+                        typeof performance.now === "function"
+                    ) ? performance.now() : 0;
+                    const renderBuildingData = cloneBuildingDataWithoutInteriorBitmapExcludedObjects(
+                        state,
+                        placementId,
+                        sourceFloorId,
+                        buildingData
+                    );
+                    const dataSignature = buildingDataSignature(renderBuildingData);
+                    const signature = interiorBitmapSettingsSignature(placement, sourceFloorId, signatureOptions, dataSignature);
                     const existing = state.interiorBitmapsByKey.get(key);
                     if (existing && existing.status === "ready" && existing.signature === signature) {
+                        existing.stale = false;
+                        delete existing.staleReason;
+                        delete existing.pendingSettingsSignature;
                         return existing;
                     }
                     const module = await import("/building-editor/BuildingRenderer.js");
                     if (!module || typeof module.renderBuildingInteriorBitmap !== "function") {
                         throw new Error("BuildingRenderer.js missing renderBuildingInteriorBitmap export");
                     }
-                    const result = await module.renderBuildingInteriorBitmap(buildingData, {
+                    const result = await module.renderBuildingInteriorBitmap(renderBuildingData, {
                         app: appRef,
                         renderer: rendererRef,
                         floorId: sourceFloorId,
@@ -2896,11 +3100,26 @@
                             ? Number(options.maxDimension)
                             : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION
                     });
+                    if (renderStartMs > 0) {
+                        recordMoveObjectPerfEvent("prototypeInteriorBitmap.render", {
+                            placementId,
+                            floorId: sourceFloorId,
+                            exclusionSignature,
+                            objectCount: Array.isArray(renderBuildingData.objects) ? renderBuildingData.objects.length : null
+                        }, performance.now() - renderStartMs);
+                    }
                     if (!result || !result.texture) {
                         throw new Error(`building interior bitmap render returned no texture for ${placementId} floor ${sourceFloorId}`);
                     }
                     if (!result.depthMetricTexture || !result.depthMetric || !(Number(result.depthMetric.span) > 0)) {
                         throw new Error(`building interior bitmap render returned no depth metric texture for ${placementId} floor ${sourceFloorId}`);
+                    }
+                    const pendingAtCommit = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
+                    if (pendingAtCommit && pendingAtCommit.promise !== loadPromise) {
+                        destroyPrototypeBuildingBitmapEntry(result);
+                        const current = state.interiorBitmapsByKey.get(key);
+                        if (current) return current;
+                        throw new Error(`obsolete building interior bitmap render had no current cache for ${placementId} floor ${sourceFloorId}`);
                     }
                     const previous = state.interiorBitmapsByKey.get(key);
                     if (previous && previous !== result) destroyPrototypeBuildingBitmapEntry(previous);
@@ -2921,6 +3140,10 @@
                     return entry;
                 })
                 .catch((error) => {
+                    const pendingAtError = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
+                    if (pendingAtError && pendingAtError.promise !== loadPromise) {
+                        throw error;
+                    }
                     const entry = {
                         id: key,
                         placementId,
@@ -2936,22 +3159,32 @@
                     throw error;
                 })
                 .finally(() => {
-                    state.pendingInteriorBitmapLoadsByKey.delete(key);
+                    const pendingAtFinish = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
+                    if (!pendingAtFinish || pendingAtFinish.promise === loadPromise) {
+                        state.pendingInteriorBitmapLoadsByKey.delete(key);
+                    }
                 });
             state.pendingInteriorBitmapLoadsByKey.set(key, {
                 settingsSignature,
                 promise: loadPromise
             });
-            state.interiorBitmapsByKey.set(key, {
+            if (cached && cached.status === "ready" && cached.texture) {
+                cached.stale = true;
+                cached.pendingSettingsSignature = settingsSignature;
+                loadPromise.catch(() => {});
+                return cached;
+            }
+            const loadingEntry = {
                 id: key,
                 placementId,
                 floorId: sourceFloorId,
                 status: "loading",
                 settingsSignature,
                 buildingSaveName: placement.buildingSaveName
-            });
+            };
+            state.interiorBitmapsByKey.set(key, loadingEntry);
             loadPromise.catch(() => {});
-            return state.interiorBitmapsByKey.get(key);
+            return loadingEntry;
         };
 
         map.getPrototypeBuildingCutawayBuildings = function getPrototypeBuildingCutawayBuildings() {

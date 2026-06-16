@@ -1180,6 +1180,8 @@ void main(void) {
                 this._buildingInteriorPickerFrame.active = false;
                 this._buildingInteriorPickerFrame.buildingItems.clear();
                 this._buildingInteriorPickerFrame.allowedItems.clear();
+                this._buildingInteriorPickerFrame.triggers = [];
+                this._buildingInteriorPickerFrame.mapRef = null;
             }
         }
 
@@ -1199,7 +1201,9 @@ void main(void) {
                 this._buildingInteriorPickerFrame = {
                     active: false,
                     buildingItems: new Set(),
-                    allowedItems: new Set()
+                    allowedItems: new Set(),
+                    triggers: [],
+                    mapRef: null
                 };
             }
             return this._buildingInteriorPickerFrame;
@@ -1210,6 +1214,17 @@ void main(void) {
             if (!state || state.active !== true || !item) return true;
             if (state.allowedItems.has(item)) return true;
             if (state.buildingItems.has(item)) return false;
+            const mapRef = state.mapRef || global.map || null;
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef);
+            if (this.hasBuildingInteriorFloorRefs(refs)) {
+                const triggers = Array.isArray(state.triggers) ? state.triggers : [];
+                for (let i = 0; i < triggers.length; i++) {
+                    const trigger = triggers[i];
+                    if (!trigger || !trigger.building || !trigger.activeInteriorRegion) continue;
+                    if (!this.renderItemMatchesCutawayTrigger(item, trigger, mapRef)) continue;
+                    return this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef, refs);
+                }
+            }
             return true;
         }
 
@@ -1232,6 +1247,8 @@ void main(void) {
             state.active = false;
             state.buildingItems.clear();
             state.allowedItems.clear();
+            state.triggers = [];
+            state.mapRef = null;
 
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
             if (triggers.length === 0) return state;
@@ -1245,6 +1262,8 @@ void main(void) {
             }
 
             const mapRef = (ctx && ctx.map) || global.map || null;
+            state.triggers = triggers;
+            state.mapRef = mapRef;
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const dynamicCharacters = this.getBuildingInteriorDynamicCharacterCandidates(ctx, wizardRef);
 
@@ -1266,7 +1285,16 @@ void main(void) {
                     state.buildingItems.add(item);
                     const entryLevel = this.getBuildingInteriorEntryLayer(item, entry, activeLevel);
                     if (entryLevel === activeLevel) {
-                        state.allowedItems.add(item);
+                        const refs = Array.isArray(entry && entry.refs)
+                            ? entry.refs
+                            : this.collectFloorRefsForRenderItem(item, mapRef);
+                        if (
+                            this.isBuildingCutawayStructuralItem(item) ||
+                            !this.hasBuildingInteriorFloorRefs(refs) ||
+                            this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef, refs)
+                        ) {
+                            state.allowedItems.add(item);
+                        }
                     }
                 }
                 for (let j = 0; j < dynamicCharacters.length; j++) {
@@ -1815,6 +1843,31 @@ void main(void) {
             return true;
         }
 
+        renderItemRefsMatchBuildingInteriorRegion(refs, region) {
+            if (!region || !Array.isArray(refs) || refs.length === 0) return false;
+            const regionFragmentId = typeof region.fragmentId === "string" ? region.fragmentId : "";
+            const regionSurfaceId = typeof region.surfaceId === "string" ? region.surfaceId : "";
+            for (let i = 0; i < refs.length; i++) {
+                const ref = refs[i];
+                if (!ref) continue;
+                if (ref.fragmentId && regionFragmentId) {
+                    if (regionFragmentId === ref.fragmentId) return true;
+                    continue;
+                }
+                if (regionSurfaceId && ref.surfaceId && regionSurfaceId === ref.surfaceId) return true;
+            }
+            return false;
+        }
+
+        hasBuildingInteriorFloorRefs(refs) {
+            if (!Array.isArray(refs)) return false;
+            for (let i = 0; i < refs.length; i++) {
+                const ref = refs[i];
+                if (ref && (ref.fragmentId || ref.surfaceId)) return true;
+            }
+            return false;
+        }
+
         isBuildingInteriorOverlaySurfaceItem(item) {
             if (!item) return false;
             const type = typeof item.type === "string" ? item.type.trim().toLowerCase() : "";
@@ -1855,24 +1908,13 @@ void main(void) {
             if (regions.length === 0) return;
             const itemLevel = this.getLayerIndexFromValue(entry.level, 0);
             const refList = Array.isArray(refs) ? refs : [];
+            const hasFloorRefs = this.hasBuildingInteriorFloorRefs(refList);
             for (let i = 0; i < regions.length; i++) {
                 const region = regions[i];
                 if (!region || this.getLayerIndexFromValue(region.level, 0) !== itemLevel) continue;
-                let matches = false;
-                if (region.kind === "floorFragment") {
-                    for (let r = 0; r < refList.length; r++) {
-                        const ref = refList[r];
-                        if (!ref) continue;
-                        if (region.fragmentId && ref.fragmentId && region.fragmentId === ref.fragmentId) {
-                            matches = true;
-                            break;
-                        }
-                        if (region.surfaceId && ref.surfaceId && region.surfaceId === ref.surfaceId) {
-                            matches = true;
-                            break;
-                        }
-                    }
-                }
+                let matches = this.renderItemRefsMatchBuildingInteriorRegion(refList, region);
+                if (!matches && hasFloorRefs && region.kind === "floorFragment") continue;
+                if (!matches && hasFloorRefs && region.kind !== "floorFragment" && item.type !== "wallSection") continue;
                 if (!matches && region.polygon) {
                     matches = this.renderItemSamplesMatchPolygons(item, [region.polygon], map);
                 }
@@ -1880,15 +1922,20 @@ void main(void) {
             }
         }
 
-        renderItemMatchesBuildingInteriorRegion(cache, item, level, map) {
+        renderItemMatchesBuildingInteriorRegion(cache, item, level, map, refs = null) {
             if (!cache || !item || item.type === "roof") return false;
             if (this.isBuildingInteriorOverlaySurfaceItem(item)) return false;
             const regions = Array.isArray(cache.interiorRegions) ? cache.interiorRegions : [];
             if (regions.length === 0) return false;
             const itemLevel = this.getLayerIndexFromValue(level, 0);
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, map);
+            const hasFloorRefs = this.hasBuildingInteriorFloorRefs(refList);
             for (let i = 0; i < regions.length; i++) {
                 const region = regions[i];
                 if (!region || this.getLayerIndexFromValue(region.level, 0) !== itemLevel) continue;
+                if (this.renderItemRefsMatchBuildingInteriorRegion(refList, region)) return true;
+                if (hasFloorRefs && region.kind === "floorFragment") continue;
+                if (hasFloorRefs && region.kind !== "floorFragment" && item.type !== "wallSection") continue;
                 if (this.renderItemSamplesMatchPolygons(item, [region.polygon], map)) return true;
             }
             return false;
@@ -2430,10 +2477,15 @@ void main(void) {
                 Array.isArray(building.renderCache.occlusionPolygons)
             ) {
                 this.incrementFrameMetric("buildingRenderCacheHits", 1);
+                this.recordMoveObjectPerf("rendering.buildingRenderCache.hit", {
+                    buildingId: building.buildingId || "",
+                    items: Array.isArray(building.renderCache.renderItems) ? building.renderCache.renderItems.length : null
+                });
                 return building.renderCache;
             }
             this.incrementFrameMetric("buildingRenderCacheMisses", 1);
-            const buildStartMs = diagnosticsEnabled ? performance.now() : 0;
+            const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+            const buildStartMs = (diagnosticsEnabled || movePerfEnabled) ? performance.now() : 0;
 
             const fragments = this.getBuildingFragments(map, building);
             const roofs = this.getRoofsForBuilding(ctx, map, building);
@@ -2548,6 +2600,15 @@ void main(void) {
             this.incrementFrameMetric("buildingRenderCacheGroundWalls", cache.groundProjectionWalls.length);
             if (diagnosticsEnabled) {
                 this.incrementFrameMetric("buildingRenderCacheBuildMs", performance.now() - buildStartMs);
+            }
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.buildingRenderCache.build", {
+                    buildingId: building.buildingId || "",
+                    candidates: candidates.length,
+                    items: cache.renderItems.length,
+                    walls: cache.wallSections.length,
+                    manifestEntries: manifestEntries.length
+                }, performance.now() - buildStartMs);
             }
             return cache;
         }
@@ -3775,6 +3836,8 @@ void main(void) {
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 if (!trigger || !trigger.building) return false;
+                if (trigger.activeInteriorRegion) return false;
+                if (this.isPrototypeBuildingCutawayTrigger(trigger)) return false;
             }
             return true;
         }
@@ -3839,6 +3902,8 @@ void main(void) {
             };
 
             pushRef(item);
+            pushRef(item && item.currentMovementSupport);
+            pushRef(item && item._activeFloorFragment);
             pushNode(item && item.node);
             if (Array.isArray(item && item._indexedNodes)) {
                 item._indexedNodes.forEach(pushNode);
@@ -4036,14 +4101,8 @@ void main(void) {
             const itemLevel = this.getBuildingInteriorEntryLayer(item, null, regionLevel);
             if (itemLevel !== regionLevel) return false;
             const refs = this.collectFloorRefsForRenderItem(item, mapRef || (ctx && ctx.map) || global.map || null);
-            const regionFragmentId = typeof region.fragmentId === "string" ? region.fragmentId : "";
-            const regionSurfaceId = typeof region.surfaceId === "string" ? region.surfaceId : "";
-            for (let i = 0; i < refs.length; i++) {
-                const ref = refs[i];
-                if (!ref) continue;
-                if (regionFragmentId && ref.fragmentId === regionFragmentId) return true;
-                if (regionSurfaceId && ref.surfaceId === regionSurfaceId) return true;
-            }
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs) && region.kind === "floorFragment") return false;
             if (region.polygon) {
                 return this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || (ctx && ctx.map) || global.map || null);
             }
@@ -4092,6 +4151,72 @@ void main(void) {
                 : [];
             if (polygons.length === 0) return false;
             return this.renderItemSamplesMatchPolygons(item, polygons, mapRef || global.map || null);
+        }
+
+        renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef = null, refs = null) {
+            if (!item || !trigger || !trigger.activeInteriorRegion) return false;
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            if (!this.hasBuildingInteriorFloorRefs(refList)) return false;
+            const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
+            const visibleRegions = regions.length > 0 ? regions : [trigger.activeInteriorRegion];
+            for (let i = 0; i < visibleRegions.length; i++) {
+                if (this.renderItemRefsMatchBuildingInteriorRegion(refList, visibleRegions[i])) return true;
+            }
+            return false;
+        }
+
+        shouldHideRenderItemForExteriorBuildingCutaway(item, trigger, refs = null, mapRef = null) {
+            if (!item || !trigger || !trigger.building || trigger.activeInteriorRegion) return false;
+            if (item.type === "roof") return false;
+            if (this.isBuildingCutawayStructuralItem(item)) return false;
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            if (refList.length === 0) return false;
+            if (!this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null)) return false;
+            if (this.shouldRenderBuildingExteriorGroundDoorItem(item, null, trigger, null, null)) return false;
+            return true;
+        }
+
+        shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null) {
+            if (!item || item.type === "roof") return false;
+            if (this.isBuildingCutawayStructuralItem(item)) return false;
+            const ownerType = typeof item._prototypeOwnerType === "string" ? item._prototypeOwnerType : "";
+            const ownerId = typeof item._prototypeOwnerId === "string" ? item._prototypeOwnerId : "";
+            if (ownerType === "building" && ownerId.startsWith("building:placed-")) return true;
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            for (let i = 0; i < refs.length; i++) {
+                const ref = refs[i];
+                const fragmentId = typeof (ref && ref.fragmentId) === "string" ? ref.fragmentId : "";
+                const surfaceId = typeof (ref && ref.surfaceId) === "string" ? ref.surfaceId : "";
+                if (fragmentId.startsWith("building:placed-") || surfaceId.startsWith("building:placed-")) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState = null, mapRef = null) {
+            if (!item) return false;
+            const state = cutawayState || this.getLayerCutawayState(null);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            if (triggers.length === 0) return false;
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            if (!this.hasBuildingInteriorFloorRefs(refs)) return false;
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) continue;
+                if (!this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null)) continue;
+                if (this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef || global.map || null, refs)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState = null, mapRef = null) {
+            return !!(
+                this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef) &&
+                this.shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState, mapRef)
+            );
         }
 
         renderItemSamplesMatchPolygons(item, polygons, mapRef = null) {
@@ -4168,6 +4293,20 @@ void main(void) {
                 this.incrementFrameMetric("layerCutawayRenderItemFastPath", 1);
                 return false;
             }
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            const triggers = Array.isArray(state.triggers) ? state.triggers : [];
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.building || !trigger.activeInteriorRegion) continue;
+                if (item.type === "roof") continue;
+                if (refs.length === 0 || !this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null)) continue;
+                return !this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef || global.map || null, refs);
+            }
+            for (let i = 0; i < triggers.length; i++) {
+                if (this.shouldHideRenderItemForExteriorBuildingCutaway(item, triggers[i], refs, mapRef || global.map || null)) {
+                    return true;
+                }
+            }
             const currentBuildingCacheKey = mapRef
                 ? this.getBuildingRenderCacheKey(null, mapRef)
                 : null;
@@ -4179,8 +4318,6 @@ void main(void) {
             ) {
                 return false;
             }
-            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            const triggers = Array.isArray(state.triggers) ? state.triggers : [];
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 if (!trigger || itemLevel < this.getLayerIndexFromValue(trigger.level, Infinity)) continue;
@@ -4232,6 +4369,7 @@ void main(void) {
                     const entry = items[j];
                     const item = entry && entry.item;
                     if (!item || item.gone || item.vanishing) continue;
+                    if (!this.isBuildingCutawayStructuralItem(item)) continue;
                     const level = this.getLayerIndexFromValue(entry.level, 0);
                     if (this.shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef)) {
                         continue;
@@ -6321,6 +6459,8 @@ void main(void) {
         }
 
         renderBuildingCutawayComposites(ctx, cutawayState, container = null, maskDisplayObjects = null, foregroundPlan = null) {
+            const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+            const compositeStartMs = movePerfEnabled ? performance.now() : 0;
             const triggers = this.getBuildingCutawayCompositeTriggers(cutawayState);
             if (triggers.length === 0) {
                 const rawTriggers = Array.isArray(cutawayState && cutawayState.triggers)
@@ -6365,6 +6505,11 @@ void main(void) {
                     this.setFrameMetric("objects3dBuildingCompositeCacheHits", 1);
                     this.setFrameMetric("objects3dBuildingCompositeCacheMisses", 1);
                     this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.cutawayComposite.staleMissingTrigger", {
+                            displayObjects: displayObjects.size
+                        }, performance.now() - compositeStartMs);
+                    }
                     return billboardMesh;
                 }
                 this.hideBuildingCutawayCompositeBillboard();
@@ -6376,6 +6521,11 @@ void main(void) {
                 this.setFrameMetric("objects3dBuildingCompositeCacheHits", 0);
                 this.setFrameMetric("objects3dBuildingCompositeCacheMisses", 0);
                 this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+                if (movePerfEnabled) {
+                    this.recordMoveObjectPerf("rendering.cutawayComposite.none", {
+                        rawTriggers: rawTriggers.length
+                    }, performance.now() - compositeStartMs);
+                }
                 return null;
             }
             this.buildingCutawayCompositeMissingTriggerFrames = 0;
@@ -6402,6 +6552,15 @@ void main(void) {
             );
             const displayObjects = this.getBuildingCutawayCompositeDisplayObjects(cutawayState);
             const originalDisplayObjects = this.getBuildingCutawayCompositeOriginalDisplayObjects(cutawayState);
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.cutawayComposite.frame", {
+                    triggers: triggers.length,
+                    cacheUsable,
+                    staleCachePresentable,
+                    displayObjects: displayObjects.size,
+                    originalDisplayObjects: originalDisplayObjects.size
+                });
+            }
             let captureAnchor = cacheUsable
                 ? (this.buildingCutawayCompositeCache && this.buildingCutawayCompositeCache.anchor)
                 : this.getBuildingCutawayCompositeAnchor(cutawayState);
@@ -6545,6 +6704,7 @@ void main(void) {
             let rendered = cacheUsable;
             let dataRendered = cacheUsable && !!(this.buildingCutawayCompositeCache && this.buildingCutawayCompositeCache.dataTexture);
             if (!cacheUsable) {
+                const captureStartMs = movePerfEnabled ? performance.now() : 0;
                 const restoreWallCaptureGeometry = this.applyBuildingCutawayCompositeFullWallCaptureGeometry(ctx, foregroundPlan);
                 const restoreTree = this.isolateBuildingCutawayCompositeDisplayTree(displayObjects);
                 const restoreCaptureState = this.applyBuildingCutawayCompositeLocalCaptureState(
@@ -6584,6 +6744,13 @@ void main(void) {
                     restoreCaptureState();
                     restoreTree();
                     restoreWallCaptureGeometry();
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.cutawayComposite.capture", {
+                            displayObjects: displayObjects.size,
+                            resourceWidth: resources.width,
+                            resourceHeight: resources.height
+                        }, performance.now() - captureStartMs);
+                    }
                 }
             }
             if (!rendered) {
@@ -6674,6 +6841,13 @@ void main(void) {
             this.setFrameMetric("objects3dBuildingCompositeCacheHits", cacheUsable ? 1 : 0);
             this.setFrameMetric("objects3dBuildingCompositeCacheMisses", cacheUsable ? 0 : 1);
             this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.cutawayComposite.total", {
+                    cacheUsable,
+                    displayObjects: displayObjects.size,
+                    hiddenOriginals
+                }, performance.now() - compositeStartMs);
+            }
             return billboardMesh;
         }
 
@@ -6823,6 +6997,7 @@ void main(void) {
                 this.setFrameMetric("objects3dBuildingInteriorPromoted", 0);
                 return 0;
             }
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const promotedSet = new Set();
             let promoted = 0;
             const promoteItem = (item) => {
@@ -6849,7 +7024,17 @@ void main(void) {
                     if (!visibleRegion) continue;
                     const entries = Array.isArray(visibleRegion.staticObjects) ? visibleRegion.staticObjects : [];
                     for (let j = 0; j < entries.length; j++) {
-                        const item = entries[j] && entries[j].item;
+                        const entry = entries[j];
+                        const item = entry && entry.item;
+                        if (
+                            item &&
+                            item.type !== "wallSection" &&
+                            !this.isBuildingCutawayDoorItem(item) &&
+                            !this.isBuildingInteriorOverlaySurfaceItem(item) &&
+                            !this.shouldRenderBuildingInteriorOverlayItem(item, visibleRegion, entry, ctx, wizardRef)
+                        ) {
+                            continue;
+                        }
                         promoteItem(item);
                     }
                 }
@@ -7204,7 +7389,17 @@ void main(void) {
             const itemLevel = Number.isFinite(entry && entry.level)
                 ? this.getLayerIndexFromValue(entry.level, regionLevel)
                 : this.getLayerIndexForObject(item, regionLevel);
-            return itemLevel === regionLevel;
+            if (itemLevel !== regionLevel) return false;
+            const refs = Array.isArray(entry && entry.refs)
+                ? entry.refs
+                : this.collectFloorRefsForRenderItem(item, (ctx && ctx.map) || global.map || null);
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs)) return false;
+            if (!Array.isArray(refs) || refs.length === 0) return true;
+            if (region && region.polygon) {
+                return this.renderItemSamplesMatchPolygons(item, [region.polygon], (ctx && ctx.map) || global.map || null);
+            }
+            return false;
         }
 
         getBuildingInteriorDynamicCharacterCandidates(ctx = null, wizardRef = null) {
@@ -7236,16 +7431,8 @@ void main(void) {
             const itemLevel = this.getLayerIndexForObject(item, regionLevel);
             if (itemLevel !== regionLevel) return false;
             const refs = this.collectFloorRefsForRenderItem(item, mapRef || (ctx && ctx.map) || global.map || null);
-            const regionFragmentId = region && typeof region.fragmentId === "string" ? region.fragmentId : "";
-            const regionSurfaceId = region && typeof region.surfaceId === "string" ? region.surfaceId : "";
-            if (refs.length > 0) {
-                for (let i = 0; i < refs.length; i++) {
-                    const ref = refs[i];
-                    if (!ref) continue;
-                    if (regionFragmentId && ref.fragmentId === regionFragmentId) return true;
-                    if (regionSurfaceId && ref.surfaceId === regionSurfaceId) return true;
-                }
-            }
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs) && region.kind === "floorFragment") return false;
             if (region && region.polygon) {
                 return this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || (ctx && ctx.map) || global.map || null);
             }
@@ -14585,7 +14772,7 @@ void main(void) {
                         graphics.parent.removeChild(graphics);
                     }
                     if (graphics.destroyed !== true && typeof graphics.destroy === "function") {
-                        graphics.destroy({ children: false, texture: false, baseTexture: false });
+                        graphics.destroy({ children: false });
                     }
                 }
                 if (this.roadPathGraphicsByObject instanceof Map) {
@@ -14653,6 +14840,9 @@ void main(void) {
                 }
                 graphics.clear();
                 graphics.beginFill(pathFillColor, 1);
+                const roadPathRenderZ = Number.isFinite(roadPath.renderZ)
+                    ? Number(roadPath.renderZ)
+                    : 0.001;
                 for (let i = 0; i < segments.length; i++) {
                     const polygon = segments[i] && Array.isArray(segments[i].polygon) ? segments[i].polygon : null;
                     if (!polygon || polygon.length < 3) {
@@ -14663,11 +14853,11 @@ void main(void) {
                         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
                             throw new Error(`Cannot render road path segment ${i} with non-finite polygon point.`);
                         }
-                        const screen = cam.worldToScreen(Number(point.x), Number(point.y), 0);
+                        const screen = cam.worldToScreen(Number(point.x), Number(point.y), roadPathRenderZ);
                         if (p === 0) graphics.moveTo(screen.x, screen.y);
                         else graphics.lineTo(screen.x, screen.y);
                     }
-                    const firstScreen = cam.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), 0);
+                    const firstScreen = cam.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), roadPathRenderZ);
                     graphics.lineTo(firstScreen.x, firstScreen.y);
                 }
                 graphics.endFill();
@@ -15379,7 +15569,22 @@ void main(void) {
                     });
                     return false;
                 }
-                const layerAlpha = this.getLiveLayerFadeMultiplier(itemLayer, renderNowMs);
+                const planHasItem = buildingInteriorRenderPlan.items.has(item);
+                const prototypeInteriorLiveFullAlpha = !planHasItem &&
+                    this.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState, mapRef);
+                if (
+                    !planHasItem &&
+                    this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef) &&
+                    !prototypeInteriorLiveFullAlpha
+                ) {
+                    this.logPlaceObjectRenderDebug("filter-drop-prototype-building-interior-live", item, {
+                        itemLayer
+                    });
+                    return false;
+                }
+                const layerAlpha = prototypeInteriorLiveFullAlpha
+                    ? 1
+                    : this.getLiveLayerFadeMultiplier(itemLayer, renderNowMs);
                 const cutawayAlpha = this.getBuildingCutawayAlphaForItem(item);
                 const renderAlpha = this.getRenderAlphaForObjectItem(item, layerAlpha, cutawayAlpha, buildingInteriorRenderPlan);
                 item._renderLayerIndex = itemLayer;
@@ -16284,7 +16489,20 @@ void main(void) {
                 const point = this.camera.worldToScreen(
                     powerup.x,
                     powerup.y,
-                    Number.isFinite(powerup.z) ? powerup.z : 0
+                    (() => {
+                        const support = powerup.currentMovementSupport && typeof powerup.currentMovementSupport === "object"
+                            ? powerup.currentMovementSupport
+                            : null;
+                        const floorBaseZ = Number.isFinite(support && support.baseZ)
+                            ? Number(support.baseZ)
+                            : (Number.isFinite(powerup.currentLayerBaseZ)
+                                ? Number(powerup.currentLayerBaseZ)
+                                : (Number.isFinite(powerup._floorBaseZ)
+                                    ? Number(powerup._floorBaseZ)
+                                    : this.getLayerBaseZForLevel(powerupLayer)));
+                        powerup._renderLayerBaseZ = floorBaseZ;
+                        return floorBaseZ + (Number.isFinite(powerup.z) ? Number(powerup.z) : 0);
+                    })()
                 );
                 const w = Number.isFinite(powerup.width) ? Math.max(0.01, Number(powerup.width)) : 0.8;
                 const h = Number.isFinite(powerup.height) ? Math.max(0.01, Number(powerup.height)) : 0.8;
@@ -17292,11 +17510,13 @@ void main(void) {
             const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
             const mousePosRef = this.getMousePosRef(ctx);
             const RoadPathClass = (typeof global.RoadPath !== "undefined") ? global.RoadPath : null;
+            const draft = wizard && wizard.roadPathDraft ? wizard.roadPathDraft : null;
+            const draftPoints = draft && Array.isArray(draft.points) ? draft.points : [];
             if (
                 !wizard ||
                 wizard.currentSpell !== "buildroad" ||
                 !wizard.roadLayoutMode ||
-                !wizard.roadStartPoint ||
+                draftPoints.length < 1 ||
                 !mapRef ||
                 !RoadPathClass ||
                 typeof RoadPathClass.computeGeometry !== "function" ||
@@ -17308,48 +17528,108 @@ void main(void) {
                 return;
             }
 
-            const startWorld = {
-                x: Number(wizard.roadStartPoint.x),
-                y: Number(wizard.roadStartPoint.y)
-            };
-            const endWorld = { x: Number(mousePosRef.worldX), y: Number(mousePosRef.worldY) };
-            if (
-                !Number.isFinite(startWorld.x) ||
-                !Number.isFinite(startWorld.y) ||
-                !Number.isFinite(endWorld.x) ||
-                !Number.isFinite(endWorld.y)
-            ) {
-                this.clearRoadPlacementPreview();
-                return;
-            }
-            const dx = endWorld.x - startWorld.x;
-            const dy = endWorld.y - startWorld.y;
-            if (Math.hypot(dx, dy) <= 1e-5) {
-                this.clearRoadPlacementPreview();
-                return;
-            }
-
-            const configuredRoadWidth = Number.isFinite(wizard.selectedRoadWidth)
+            const configuredRoadWidth = Number.isFinite(draft.width)
+                ? Math.max(0.25, Number(draft.width))
+                : (Number.isFinite(wizard.selectedRoadWidth)
                 ? Math.max(0.25, Number(wizard.selectedRoadWidth))
                 : (
                     (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
                         ? Number(roadWidth)
                         : ((Number.isFinite(global.roadWidth) ? Number(global.roadWidth) : 3))
-                );
-            const geometry = RoadPathClass.computeGeometry([startWorld, endWorld], configuredRoadWidth);
-            g.beginFill(0x9b8162, 0.5);
-            g.lineStyle(2, 0xffd27a, 0.9);
-            for (let i = 0; i < geometry.segments.length; i++) {
-                const polygon = geometry.segments[i].polygon;
-                for (let p = 0; p < polygon.length; p++) {
-                    const screen = this.camera.worldToScreen(Number(polygon[p].x), Number(polygon[p].y), 0);
-                    if (p === 0) g.moveTo(screen.x, screen.y);
-                    else g.lineTo(screen.x, screen.y);
-                }
-                const first = this.camera.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), 0);
-                g.lineTo(first.x, first.y);
+                ));
+
+            const wrapPreviewPoint = (x, y) => {
+                let outX = Number(x);
+                let outY = Number(y);
+                if (!Number.isFinite(outX) || !Number.isFinite(outY)) return null;
+                if (typeof mapRef.wrapWorldX === "function") outX = mapRef.wrapWorldX(outX);
+                if (typeof mapRef.wrapWorldY === "function") outY = mapRef.wrapWorldY(outY);
+                return { x: outX, y: outY };
+            };
+            const pointsMatch = (a, b, epsilon = 1e-5) => {
+                if (!a || !b) return false;
+                const ax = Number(a.x);
+                const ay = Number(a.y);
+                const bx = Number(b.x);
+                const by = Number(b.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
+                const dx = (typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(ax, bx)
+                    : (bx - ax);
+                const dy = (typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(ay, by)
+                    : (by - ay);
+                return Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon;
+            };
+            const candidateNode = typeof mapRef.worldToNode === "function"
+                ? mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY)
+                : null;
+            const candidatePoint = candidateNode && Number.isFinite(candidateNode.x) && Number.isFinite(candidateNode.y)
+                ? wrapPreviewPoint(candidateNode.x, candidateNode.y)
+                : wrapPreviewPoint(mousePosRef.worldX, mousePosRef.worldY);
+            if (!candidatePoint) {
+                this.clearRoadPlacementPreview();
+                return;
             }
-            g.endFill();
+
+            const committedPoints = draftPoints.map((point, index) => {
+                const wrapped = wrapPreviewPoint(point && point.x, point && point.y);
+                if (!wrapped) {
+                    throw new Error(`Cannot preview road path because draft point ${index} is invalid.`);
+                }
+                return wrapped;
+            });
+            const lastPoint = committedPoints[committedPoints.length - 1];
+            const previewPoints = pointsMatch(lastPoint, candidatePoint)
+                ? committedPoints.slice()
+                : committedPoints.concat(candidatePoint);
+            const renderZ = 0.001;
+            const drawGeometry = (geometry, fillAlpha, strokeColor, strokeAlpha) => {
+                if (!geometry || !Array.isArray(geometry.segments)) return;
+                g.beginFill(0x9b8162, fillAlpha);
+                g.lineStyle(2, strokeColor, strokeAlpha);
+                for (let i = 0; i < geometry.segments.length; i++) {
+                    const polygon = geometry.segments[i].polygon;
+                    if (!Array.isArray(polygon) || polygon.length < 3) {
+                        throw new Error(`Cannot preview road path segment ${i} without polygon geometry.`);
+                    }
+                    for (let p = 0; p < polygon.length; p++) {
+                        const screen = this.camera.worldToScreen(Number(polygon[p].x), Number(polygon[p].y), renderZ);
+                        if (p === 0) g.moveTo(screen.x, screen.y);
+                        else g.lineTo(screen.x, screen.y);
+                    }
+                    const first = this.camera.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), renderZ);
+                    g.lineTo(first.x, first.y);
+                }
+                g.endFill();
+            };
+            const drawPointMarker = (point, color, radius = 4) => {
+                const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                g.lineStyle(2, 0x1d140c, 0.85);
+                g.beginFill(color, 0.95);
+                g.drawCircle(screen.x, screen.y, radius);
+                g.endFill();
+            };
+
+            let candidateWasInvalid = false;
+            if (previewPoints.length >= 2) {
+                try {
+                    drawGeometry(RoadPathClass.computeGeometry(previewPoints, configuredRoadWidth), 0.5, 0xffd27a, 0.9);
+                } catch (error) {
+                    candidateWasInvalid = true;
+                    if (committedPoints.length >= 2) {
+                        drawGeometry(RoadPathClass.computeGeometry(committedPoints, configuredRoadWidth), 0.42, 0xffd27a, 0.75);
+                    }
+                }
+            }
+            for (let i = 0; i < committedPoints.length; i++) {
+                drawPointMarker(committedPoints[i], i === committedPoints.length - 1 ? 0xffd27a : 0xf4efe5, 4);
+            }
+            if (candidateWasInvalid) {
+                drawPointMarker(candidatePoint, 0xff5656, 5);
+            } else if (!pointsMatch(lastPoint, candidatePoint)) {
+                drawPointMarker(candidatePoint, 0xffd27a, 4);
+            }
             g.visible = true;
             previewContainer.visible = true;
             if (previewContainer.visible) this.promoteInteriorPresentationDisplayObject(previewContainer, ctx);
@@ -19416,6 +19696,11 @@ void main(void) {
                     throw new Error(`prototype building interior ${cache.id || placement.id} bitmap failed: ${cache.error || "unknown error"}`);
                 }
                 if ((!cache || cache.status === "loading") && typeof mapRef.requestPrototypeBuildingInteriorBitmap === "function") {
+                    this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.requestCall", {
+                        placementId: placement.id || "",
+                        floorId,
+                        previousStatus: cache && cache.status || "missing"
+                    });
                     cache = mapRef.requestPrototypeBuildingInteriorBitmap(placement, floorId, {
                         app: (ctx && ctx.app) || global.app || null,
                         renderer: (ctx && ctx.app && ctx.app.renderer) || (global.app && global.app.renderer) || null,
@@ -19434,7 +19719,17 @@ void main(void) {
                 if (!this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return null;
                 const cache = resolveInteriorCache(placement, floorId);
                 if (cache && cache.status === "ready") {
+                    const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+                    const renderStartMs = movePerfEnabled ? performance.now() : 0;
                     const mesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache, options);
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.renderMesh", {
+                            placementId: placement.id || "",
+                            floorId,
+                            cacheId: cache.id || "",
+                            hasMesh: !!mesh
+                        }, performance.now() - renderStartMs);
+                    }
                     if (mesh) {
                         activeIds.add(cache.id);
                         renderedMeshes.add(mesh);
@@ -19822,7 +20117,7 @@ void main(void) {
             const worldY = (projectedPoint && Number.isFinite(projectedPoint.y))
                 ? projectedPoint.y
                 : mousePosRef.worldY;
-            const worldZ = placementLayerBaseZ;
+            const worldZ = 0;
             const width = Number.isFinite(previewConfig && previewConfig.width)
                 ? Math.max(0.01, Number(previewConfig.width))
                 : 0.8;
@@ -19867,6 +20162,10 @@ void main(void) {
             previewItem.y = worldY;
             previewItem.z = worldZ;
             previewItem.traversalLayer = placementLayer;
+            previewItem.currentLayer = placementLayer;
+            previewItem.currentLayerBaseZ = placementLayerBaseZ;
+            previewItem._floorBaseZ = placementLayerBaseZ;
+            previewItem._renderLayerBaseZ = placementLayerBaseZ;
             previewItem.width = width;
             previewItem.height = height;
             previewItem.renderZ = worldY;
@@ -20002,6 +20301,17 @@ void main(void) {
             if (!this.currentFrameMetrics || !metricName) return value;
             this.currentFrameMetrics[metricName] = value;
             return value;
+        }
+
+        recordMoveObjectPerf(name, data = null, elapsedMs = null) {
+            if (
+                typeof globalThis === "undefined" ||
+                !globalThis.__moveObjectPerf ||
+                typeof globalThis.__recordMoveObjectPerf !== "function"
+            ) {
+                return;
+            }
+            globalThis.__recordMoveObjectPerf(name, data, elapsedMs);
         }
 
         incrementFrameMetric(metricName, delta = 1) {
@@ -20395,6 +20705,25 @@ void main(void) {
             }
             const frameElapsedMs = performance.now() - frameStartMs;
             this.recordDrawPassSection("renderFrame.total", frameElapsedMs);
+            if (typeof globalThis !== "undefined" && globalThis.__moveObjectPerf) {
+                const sections = this.currentFrameDrawSections || Object.create(null);
+                const metrics = this.currentFrameMetrics || Object.create(null);
+                const getMs = (name) => Number(sections[name] || 0);
+                const getMetric = (name) => Number(metrics[name] || 0);
+                this.recordMoveObjectPerf("rendering.frame", {
+                    visibleNodes: getMetric("visibleNodes"),
+                    visibleObjects: Array.isArray(visibleObjects) ? visibleObjects.length : null,
+                    collectVisibleObjectsMs: getMs("collectVisibleObjects"),
+                    prepareLayerCutawayFrameMs: getMs("prepareLayerCutawayFrame"),
+                    prepareBuildingInteriorPickerFrameMs: getMs("prepareBuildingInteriorPickerFrame"),
+                    renderObjects3DMs: getMs("renderObjects3D"),
+                    renderPrototypeBuildingExteriorsMs: getMs("renderPrototypeBuildingExteriors"),
+                    scenePickerHoverMs: getMs("scenePicker.renderHoverHighlight"),
+                    buildingRenderCacheBuildMs: getMetric("buildingRenderCacheBuildMs"),
+                    objects3dBuildingCompositeMs: getMetric("objects3dBuildingCompositeMs"),
+                    buildingInteriorPlanMs: getMetric("buildingInteriorPlanMs")
+                }, frameElapsedMs);
+            }
             if (typeof globalThis !== "undefined") {
                 globalThis.renderingLiveStats = {
                     groundCached: this.groundSpriteByNodeKey instanceof Map

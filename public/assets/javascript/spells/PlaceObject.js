@@ -232,8 +232,23 @@ function shouldAddPlacedObjectToFloorBuildingManifest(mapRef, placedObject, plac
     return !isPrototypeBuildingPlacementFloorFragment(fragment);
 }
 
-function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementNode = null) {
+function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementNode = null, options = {}) {
     if (!entity || !placementTarget || typeof placementTarget !== "object") return null;
+    const opts = (options && typeof options === "object") ? options : {};
+    const stampPrototypeBuildingOwner = (support) => {
+        if (
+            !support ||
+            support.ownerType !== "building" ||
+            typeof support.ownerId !== "string" ||
+            support.ownerId.length === 0
+        ) {
+            return;
+        }
+        entity._prototypeOwnerType = "building";
+        entity._prototypeOwnerId = support.ownerId;
+        entity._prototypeOwnerSectionKey = "";
+        entity._prototypeOwnerSignature = `building:${support.ownerId}`;
+    };
     const layer = Number.isFinite(placementTarget.layer) ? Math.round(Number(placementTarget.layer)) : 0;
     const baseZ = Number.isFinite(placementTarget.baseZ) ? Number(placementTarget.baseZ) : layer * 3;
     const floorTarget = placementTarget.floorTarget && typeof placementTarget.floorTarget === "object"
@@ -266,9 +281,14 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
                 baseZ: 0,
                 node
             });
-        return mapRef.setActorCurrentMovementSupport(entity, support, {
+        const appliedSupport = mapRef.setActorCurrentMovementSupport(entity, support, {
             suppressLayerTransition: true
         });
+        stampPrototypeBuildingOwner(appliedSupport);
+        if (opts.useLocalZ === true) {
+            entity.z = Number.isFinite(opts.localZ) ? Number(opts.localZ) : 0;
+        }
+        return appliedSupport;
     }
     if (node) entity.node = node;
     entity.currentLayer = layer;
@@ -288,10 +308,15 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
             sectionKey: typeof fragment?.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
             nodeId: node && typeof node.id === "string" ? node.id : ""
         };
-        if (!Number.isFinite(entity.z)) entity.z = baseZ;
+        if (opts.useLocalZ === true) {
+            entity.z = Number.isFinite(opts.localZ) ? Number(opts.localZ) : 0;
+        } else if (!Number.isFinite(entity.z)) {
+            entity.z = baseZ;
+        }
+        stampPrototypeBuildingOwner(entity.currentMovementSupport);
     } else {
         entity.currentMovementSupport = { type: "ground", layer: 0, baseZ: 0 };
-        if (!Number.isFinite(entity.z)) entity.z = 0;
+        if (!Number.isFinite(entity.z) || opts.useLocalZ === true) entity.z = Number.isFinite(opts.localZ) ? Number(opts.localZ) : 0;
     }
     return entity.currentMovementSupport;
 }
@@ -680,7 +705,10 @@ class PlaceObject extends globalThis.Spell {
         }
         if (placedObject) {
             if (typeof applyEditorPlacementSupport === "function") {
-                applyEditorPlacementSupport(placedObject, wizard.map || null, layerPoint, placementNode);
+                applyEditorPlacementSupport(placedObject, wizard.map || null, layerPoint, placementNode, {
+                    useLocalZ: !useWallSnapPlacement,
+                    localZ: 0
+                });
             }
             if (
                 useWallSnapPlacement &&

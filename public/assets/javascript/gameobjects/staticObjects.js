@@ -2910,6 +2910,7 @@ void main(void) {
     static FIRE_FRAME_COUNT_X = 5;
     static FIRE_FRAME_COUNT_Y = 5;
     static FIRE_FPS = 12;
+    static FLOOR_FALL_GRAVITY = -9;
     static _fireFramesCache = null;
 
     static getFireFrames() {
@@ -3026,6 +3027,7 @@ void main(void) {
     }
 
     update() {
+        this.updateFloorFall();
         this.updateSpriteAnimation();
 
         // Initialize max HP on first fire ignition
@@ -3103,6 +3105,45 @@ void main(void) {
                     delete this.fireFadeDelayFrames;
                     delete this.fireFadeDurationFrames;
                 }
+            }
+        }
+    }
+
+    updateFloorFall() {
+        const state = this._floorFallState && typeof this._floorFallState === "object"
+            ? this._floorFallState
+            : null;
+        if (!state || state.active !== true) return;
+        const simFps = Math.max(1, Number(typeof frameRate !== "undefined" ? frameRate : 60) || 60);
+        const dt = 1 / simFps;
+        const gravity = Number.isFinite(state.gravity) ? Number(state.gravity) : StaticObject.FLOOR_FALL_GRAVITY;
+        this.prevZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        state.velocityZ = (Number.isFinite(state.velocityZ) ? Number(state.velocityZ) : 0) + gravity * dt;
+        this.z = (Number.isFinite(this.z) ? Number(this.z) : 0) + state.velocityZ * dt;
+        const landZ = Number.isFinite(state.landZ) ? Number(state.landZ) : 0;
+        if (this.z > landZ) return;
+
+        this.z = landZ;
+        this.prevZ = landZ;
+        this._floorFallState = null;
+        this.falling = false;
+        if (state.bakeExclusion && this.map && typeof this.map.restorePrototypeBuildingObjectToInteriorBitmap === "function") {
+            this.map.restorePrototypeBuildingObjectToInteriorBitmap(state.bakeExclusion);
+            this._prototypeInteriorBitmapExcluded = false;
+            this._prototypeInteriorBitmapExclusion = null;
+        } else if (state.bakeExclusion) {
+            throw new Error("placed object floor fall landing requires map.restorePrototypeBuildingObjectToInteriorBitmap");
+        }
+
+        if (this._prototypeRuntimeRecord === true) {
+            this._prototypeDirty = true;
+            const objectState = this.map && this.map._prototypeObjectState;
+            if (objectState) {
+                if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+                    objectState.dirtyRuntimeObjects = new Set();
+                }
+                objectState.dirtyRuntimeObjects.add(this);
+                objectState.captureScanNeeded = true;
             }
         }
     }
@@ -3757,7 +3798,7 @@ void main(void) {
             : (typeof (this.node && this.node.fragmentId) === "string" ? this.node.fragmentId : "");
         if (surfaceId) data.surfaceId = surfaceId;
         if (fragmentId) data.fragmentId = fragmentId;
-        if (this.falling) data.falling = true;
+        if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (typeof this.fallDirection === "string") data.fallDirection = this.fallDirection;
         if (typeof this.script !== "undefined") {
             try {
@@ -5197,7 +5238,7 @@ class PlacedObject extends StaticObject {
         if (this._scriptDoorLocked === true) data._scriptDoorLocked = true;
         if (typeof this.isPassable === "boolean") data.isPassable = this.isPassable;
         if (typeof this.blocksTile === "boolean") data.blocksTile = this.blocksTile;
-        if (this.falling) data.falling = true;
+        if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (Number.isFinite(this.doorFallAngle)) {
             data.doorFallAngle = Math.max(0, Math.min(90, Number(this.doorFallAngle)));
         }

@@ -142,7 +142,7 @@
       "visualHitbox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": 0,
         "radiusFromMaxDimensionMultiplier": 0.3
       }
     },

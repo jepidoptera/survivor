@@ -1486,6 +1486,43 @@
         );
     }
 
+    function getMaxPrototypeRecordIdFromRecords(records) {
+        if (!Array.isArray(records)) return 0;
+        let maxId = 0;
+        for (let i = 0; i < records.length; i++) {
+            const id = Number(records[i] && records[i].id);
+            if (Number.isInteger(id)) maxId = Math.max(maxId, id);
+        }
+        return maxId;
+    }
+
+    function getMaxPrototypeEntityRecordId(map, prototypeState, fieldName) {
+        let maxId = 0;
+        const assets = Array.isArray(prototypeState && prototypeState.orderedSectionAssets)
+            ? prototypeState.orderedSectionAssets
+            : [];
+        for (let i = 0; i < assets.length; i++) {
+            maxId = Math.max(maxId, getMaxPrototypeRecordIdFromRecords(assets[i] && assets[i][fieldName]));
+        }
+        const buildingState = map && map._prototypeBuildingState;
+        const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+            ? buildingState.buildingInstancesById
+            : null;
+        if (buildingInstances) {
+            for (const instance of buildingInstances.values()) {
+                maxId = Math.max(maxId, getMaxPrototypeRecordIdFromRecords(instance && instance[fieldName]));
+            }
+        }
+        return maxId;
+    }
+
+    function getNextPrototypeRecordId(map, prototypeState, counterName, fieldName) {
+        const savedNextId = Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds[counterName])
+            ? Number(prototypeState.nextRecordIds[counterName])
+            : 1;
+        return Math.max(savedNextId, getMaxPrototypeEntityRecordId(map, prototypeState, fieldName) + 1);
+    }
+
     function initializePrototypeRuntimeState(map, prototypeState) {
         if (!map) return;
         map._prototypeWallState = {
@@ -1501,9 +1538,7 @@
             blockerTokensByRecordId: new Map()
         };
         map._prototypeObjectState = {
-            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.objects)
-                ? Number(prototypeState.nextRecordIds.objects)
-                : 1,
+            nextRecordId: getNextPrototypeRecordId(map, prototypeState, "objects", "objects"),
             activeRuntimeObjects: [],
             activeRuntimeObjectsByRecordId: new Map(),
             parkedRuntimeObjectsByRecordId: new Map(),
@@ -1512,17 +1547,13 @@
             captureScanNeeded: true
         };
         map._prototypeAnimalState = {
-            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.animals)
-                ? Number(prototypeState.nextRecordIds.animals)
-                : 1,
+            nextRecordId: getNextPrototypeRecordId(map, prototypeState, "animals", "animals"),
             activeRuntimeAnimals: [],
             activeRuntimeAnimalsByRecordId: new Map(),
             activeRecordSignature: ""
         };
         map._prototypePowerupState = {
-            nextRecordId: Number.isInteger(prototypeState && prototypeState.nextRecordIds && prototypeState.nextRecordIds.powerups)
-                ? Number(prototypeState.nextRecordIds.powerups)
-                : 1,
+            nextRecordId: getNextPrototypeRecordId(map, prototypeState, "powerups", "powerups"),
             activeRuntimePowerups: [],
             activeRuntimePowerupsByRecordId: new Map(),
             activeRecordSignature: ""
@@ -2110,6 +2141,13 @@
         attachSectionWorldApis(map, prototypeState);
         installSectionWorldBuildingApis(map);
         map.initializePrototypeBuildingState(prototypeState.buildingPlacements || []);
+        if (
+            typeof map.syncPrototypeBuildingGeometryRuntime === "function" &&
+            typeof map.registerFloorFragment === "function" &&
+            typeof map.registerStairRuntimeRecord === "function"
+        ) {
+            map.syncPrototypeBuildingGeometryRuntime();
+        }
         if (typeof map.ensurePrototypeBlockedEdges === "function") {
             map.ensurePrototypeBlockedEdges();
         }

@@ -330,7 +330,184 @@
             return hasViewport && hasWizardFields;
         };
 
-        const isOrphanedUpperFloorPlacedObjectRecord = (record) => {
+        const getBuildingIdFromRuntimeFloorFragmentId = (fragmentId) => {
+            if (typeof fragmentId !== "string" || fragmentId.length === 0) return "";
+            const marker = ":floor:";
+            const index = fragmentId.lastIndexOf(marker);
+            if (index <= 0) return "";
+            return fragmentId.slice(0, index);
+        };
+
+        const getPrototypeBuildingInstances = () => {
+            const buildingState = map && map._prototypeBuildingState;
+            return buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+        };
+
+        const createBuildingFloorReference = (buildingId, instance, floor, index) => {
+            if (!buildingId || !floor || typeof floor !== "object") return null;
+            const sourceFloorIdValue = floor.fragmentId || floor.surfaceId || floor.id || index;
+            if (!sourceFloorIdValue && sourceFloorIdValue !== 0) return null;
+            const sourceFloorId = String(sourceFloorIdValue);
+            const sourceSurfaceId = String(floor.surfaceId || sourceFloorId);
+            return {
+                buildingId,
+                instance,
+                sourceFloorId,
+                sourceSurfaceId,
+                runtimeFragmentId: `${buildingId}:floor:${sourceFloorId}`,
+                runtimeSurfaceId: `${buildingId}:surface:${sourceSurfaceId}`
+            };
+        };
+
+        const buildingFloorReferenceMatchesRecord = (reference, record) => {
+            if (!reference || !record || typeof record !== "object") return false;
+            const fragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
+            const surfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+            return (
+                (fragmentId.length > 0 && (
+                    fragmentId === reference.runtimeFragmentId ||
+                    fragmentId === reference.sourceFloorId
+                )) ||
+                (surfaceId.length > 0 && (
+                    surfaceId === reference.runtimeSurfaceId ||
+                    surfaceId === reference.sourceSurfaceId
+                ))
+            );
+        };
+
+        const findBuildingFloorReferenceForRecord = (record, preferredBuildingId = "") => {
+            const buildingInstances = getPrototypeBuildingInstances();
+            if (!buildingInstances || !record || typeof record !== "object") return null;
+            const fragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
+            const encodedBuildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId);
+            const matches = [];
+            const seen = new Set();
+            const scanBuilding = (buildingId) => {
+                if (!buildingId || seen.has(buildingId)) return;
+                seen.add(buildingId);
+                const instance = buildingInstances.get(buildingId) || null;
+                const floors = Array.isArray(instance && instance.floorFragments) ? instance.floorFragments : null;
+                if (!Array.isArray(floors)) return;
+                for (let i = 0; i < floors.length; i++) {
+                    const reference = createBuildingFloorReference(buildingId, instance, floors[i], i);
+                    if (buildingFloorReferenceMatchesRecord(reference, record)) {
+                        matches.push(reference);
+                    }
+                }
+            };
+            if (encodedBuildingId) {
+                scanBuilding(encodedBuildingId);
+                return matches.length === 1 ? matches[0] : null;
+            }
+            if (preferredBuildingId) {
+                scanBuilding(preferredBuildingId);
+                if (matches.length === 1) return matches[0];
+                if (matches.length > 1) return null;
+            }
+            for (const buildingId of buildingInstances.keys()) {
+                scanBuilding(typeof buildingId === "string" ? buildingId : String(buildingId));
+            }
+            if (matches.length !== 1) return null;
+            return matches[0];
+        };
+
+        const findBuildingFloorReferenceForRecordPosition = (record, buildingId = "") => {
+            if (!record || typeof record !== "object" || !buildingId || !(map && map.floorsById instanceof Map)) return null;
+            const layer = Number.isFinite(Number(record.traversalLayer))
+                ? Math.round(Number(record.traversalLayer))
+                : (Number.isFinite(Number(record.level)) ? Math.round(Number(record.level)) : 0);
+            if (layer <= 0) return null;
+            const x = Number(record.x);
+            const y = Number(record.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            const matches = [];
+            for (const fragment of map.floorsById.values()) {
+                if (!fragment || fragment.renderedByBuildingCutaway !== true) continue;
+                if (fragment.ownerType !== "building" || fragment.ownerId !== buildingId) continue;
+                const fragmentLayer = Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== layer) continue;
+                if (
+                    typeof map.isPointSupportedByFloorFragment === "function" &&
+                    !map.isPointSupportedByFloorFragment(fragment, x, y)
+                ) continue;
+                matches.push(fragment);
+            }
+            if (matches.length !== 1) return null;
+            const fragment = matches[0];
+            const buildingInstances = getPrototypeBuildingInstances();
+            return {
+                buildingId,
+                instance: buildingInstances ? buildingInstances.get(buildingId) || null : null,
+                sourceFloorId: "",
+                sourceSurfaceId: "",
+                runtimeFragmentId: typeof fragment.fragmentId === "string" ? fragment.fragmentId : "",
+                runtimeSurfaceId: typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""
+            };
+        };
+
+        const normalizePlacedObjectBuildingFloorRecord = (record, reference) => {
+            if (!record || typeof record !== "object" || !reference) return { record, changed: false };
+            let changed = false;
+            const normalized = { ...record };
+            if (typeof reference.runtimeFragmentId === "string" && normalized.fragmentId !== reference.runtimeFragmentId) {
+                normalized.fragmentId = reference.runtimeFragmentId;
+                changed = true;
+            }
+            if (typeof reference.runtimeSurfaceId === "string" && normalized.surfaceId !== reference.runtimeSurfaceId) {
+                normalized.surfaceId = reference.runtimeSurfaceId;
+                changed = true;
+            }
+            return { record: changed ? normalized : record, changed };
+        };
+
+        const isLiveNonBuildingFloorFragmentId = (fragmentId) => {
+            if (!fragmentId || !(map && map.floorsById instanceof Map)) return false;
+            const fragment = map.floorsById.get(fragmentId) || null;
+            if (!fragment) return false;
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            const isPrototypeBuildingFragment = floorSupportApi && typeof floorSupportApi.isPrototypeBuildingPlacementFloorFragment === "function"
+                ? floorSupportApi.isPrototypeBuildingPlacementFloorFragment(fragment)
+                : !!(
+                    fragment &&
+                    fragment.renderedByBuildingCutaway === true &&
+                    fragment.ownerType === "building" &&
+                    typeof fragment.ownerId === "string" &&
+                    fragment.ownerId.length > 0
+                );
+            return !isPrototypeBuildingFragment;
+        };
+
+        const buildingInstanceHasRuntimeFloorFragmentId = (buildingId, fragmentId) => {
+            if (!buildingId || !fragmentId) return false;
+            const buildingInstances = getPrototypeBuildingInstances();
+            const instance = buildingInstances ? buildingInstances.get(buildingId) || null : null;
+            const floors = Array.isArray(instance && instance.floorFragments) ? instance.floorFragments : null;
+            if (!Array.isArray(floors)) return false;
+            for (let i = 0; i < floors.length; i++) {
+                const reference = createBuildingFloorReference(buildingId, instance, floors[i], i);
+                if (
+                    reference &&
+                    (reference.sourceFloorId === fragmentId || reference.runtimeFragmentId === fragmentId)
+                ) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        const getMutableBuildingInstanceForEncodedFragment = (fragmentId) => {
+            const buildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId);
+            if (!buildingId || !buildingInstanceHasRuntimeFloorFragmentId(buildingId, fragmentId)) return null;
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            return buildingInstances ? buildingInstances.get(buildingId) || null : null;
+        };
+
+        const isOrphanedUpperFloorPlacedObjectRecord = (record, ownerInfo = null) => {
             if (!record || typeof record !== "object" || record.type !== "placedObject") return false;
             const layer = Number.isFinite(Number(record.traversalLayer))
                 ? Math.round(Number(record.traversalLayer))
@@ -339,7 +516,46 @@
             const fragmentId = typeof record.fragmentId === "string" && record.fragmentId.length > 0
                 ? record.fragmentId
                 : "";
-            if (!fragmentId) return true;
+            if (!fragmentId) {
+                const positionedBuildingFloor = findBuildingFloorReferenceForRecordPosition(
+                    record,
+                    ownerInfo && ownerInfo.ownerType === "building" && typeof ownerInfo.buildingId === "string"
+                        ? ownerInfo.buildingId
+                        : ""
+                );
+                return !positionedBuildingFloor;
+            }
+            const encodedBuildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId);
+            if (encodedBuildingId && buildingInstanceHasRuntimeFloorFragmentId(encodedBuildingId, fragmentId)) {
+                return false;
+            }
+            const matchedBuildingFloor = findBuildingFloorReferenceForRecord(
+                record,
+                ownerInfo && ownerInfo.ownerType === "building" && typeof ownerInfo.buildingId === "string"
+                    ? ownerInfo.buildingId
+                    : ""
+            );
+            if (matchedBuildingFloor) return false;
+            if (
+                ownerInfo &&
+                ownerInfo.ownerType === "building" &&
+                typeof ownerInfo.buildingId === "string" &&
+                buildingInstanceHasRuntimeFloorFragmentId(ownerInfo.buildingId, fragmentId)
+            ) {
+                return false;
+            }
+            const fragment = map && map.floorsById instanceof Map ? map.floorsById.get(fragmentId) || null : null;
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            const isPrototypeBuildingFragment = floorSupportApi && typeof floorSupportApi.isPrototypeBuildingPlacementFloorFragment === "function"
+                ? floorSupportApi.isPrototypeBuildingPlacementFloorFragment(fragment)
+                : !!(
+                    fragment &&
+                    fragment.renderedByBuildingCutaway === true &&
+                    fragment.ownerType === "building" &&
+                    typeof fragment.ownerId === "string" &&
+                    fragment.ownerId.length > 0
+                );
+            if (isPrototypeBuildingFragment) return false;
             if (typeof map.ensureFloorBuildings === "function") {
                 map.ensureFloorBuildings();
             }
@@ -352,17 +568,71 @@
             if (!state || !(state.sectionAssetsByKey instanceof Map)) return false;
             let removedAny = false;
             let orphanedUpperFloorObjects = 0;
+            let migratedBuildingFloorObjects = 0;
+            let normalizedBuildingFloorObjects = 0;
             const orphanedSamples = [];
-            for (const asset of state.sectionAssetsByKey.values()) {
-                const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
-                if (!Array.isArray(records) || records.length === 0) continue;
+            const filterRecords = (records, ownerInfo, onChanged) => {
+                if (!Array.isArray(records) || records.length === 0) return records;
                 const nextRecords = records.filter((record) => {
                     if (isInvalidPrototypeObjectRecord(record)) return false;
-                    if (isOrphanedUpperFloorPlacedObjectRecord(record)) {
+                    const recordFragmentId = record && typeof record.fragmentId === "string" ? record.fragmentId : "";
+                    const matchedBuildingFloor = findBuildingFloorReferenceForRecord(
+                        record,
+                        ownerInfo && ownerInfo.ownerType === "building" && typeof ownerInfo.buildingId === "string"
+                            ? ownerInfo.buildingId
+                            : ""
+                    ) || findBuildingFloorReferenceForRecordPosition(
+                        record,
+                        ownerInfo && ownerInfo.ownerType === "building" && typeof ownerInfo.buildingId === "string"
+                            ? ownerInfo.buildingId
+                            : ""
+                    );
+                    if (
+                        ownerInfo &&
+                        ownerInfo.ownerType === "section" &&
+                        (recordFragmentId || matchedBuildingFloor) &&
+                        !isLiveNonBuildingFloorFragmentId(recordFragmentId)
+                    ) {
+                        const encodedInstance = recordFragmentId ? getMutableBuildingInstanceForEncodedFragment(recordFragmentId) : null;
+                        const instance = (matchedBuildingFloor && matchedBuildingFloor.instance) || encodedInstance;
+                        if (instance) {
+                            const recordId = Number(record && record.id);
+                            const normalized = normalizePlacedObjectBuildingFloorRecord(
+                                record,
+                                matchedBuildingFloor || findBuildingFloorReferenceForRecord(record, instance.id)
+                            ).record;
+                            if (!Array.isArray(instance.objects)) instance.objects = [];
+                            const alreadyPresent = Number.isInteger(recordId) && instance.objects.some((candidate) => (
+                                Number(candidate && candidate.id) === recordId
+                            ));
+                            if (!alreadyPresent) {
+                                instance.objects.push({ ...normalized });
+                                instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                                markPrototypeBuildingUnitDirtyForPersistence(instance.id);
+                            }
+                            migratedBuildingFloorObjects += 1;
+                            return false;
+                        }
+                    }
+                    if (ownerInfo && ownerInfo.ownerType === "building" && matchedBuildingFloor) {
+                        const normalized = normalizePlacedObjectBuildingFloorRecord(record, matchedBuildingFloor);
+                        if (normalized.changed) {
+                            Object.assign(record, normalized.record);
+                            normalizedBuildingFloorObjects += 1;
+                            if (matchedBuildingFloor.instance) {
+                                matchedBuildingFloor.instance.contentVersion = (Number(matchedBuildingFloor.instance.contentVersion) || 1) + 1;
+                            }
+                            markPrototypeBuildingUnitDirtyForPersistence(ownerInfo.buildingId);
+                            removedAny = true;
+                        }
+                    }
+                    if (isOrphanedUpperFloorPlacedObjectRecord(record, ownerInfo)) {
                         orphanedUpperFloorObjects += 1;
                         if (orphanedSamples.length < 5) {
                             orphanedSamples.push({
-                                sectionKey: typeof asset.key === "string" ? asset.key : "",
+                                ownerType: ownerInfo && typeof ownerInfo.ownerType === "string" ? ownerInfo.ownerType : "section",
+                                sectionKey: ownerInfo && typeof ownerInfo.sectionKey === "string" ? ownerInfo.sectionKey : "",
+                                buildingId: ownerInfo && typeof ownerInfo.buildingId === "string" ? ownerInfo.buildingId : "",
                                 recordId: Number.isInteger(Number(record && record.id)) ? Number(record.id) : null,
                                 fragmentId: typeof record?.fragmentId === "string" ? record.fragmentId : ""
                             });
@@ -371,16 +641,54 @@
                     }
                     return true;
                 });
-                if (nextRecords.length === records.length) continue;
-                asset.objects = nextRecords;
-                rebuildPrototypeAssetObjectNameRegistry(asset);
-                markPrototypeClearanceDirty(asset);
+                if (nextRecords.length === records.length) return records;
+                if (typeof onChanged === "function") onChanged(nextRecords);
                 removedAny = true;
+                return nextRecords;
+            };
+            for (const asset of state.sectionAssetsByKey.values()) {
+                const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
+                filterRecords(records, {
+                    ownerType: "section",
+                    sectionKey: typeof asset.key === "string" ? asset.key : ""
+                }, (nextRecords) => {
+                    asset.objects = nextRecords;
+                    rebuildPrototypeAssetObjectNameRegistry(asset);
+                    markPrototypeClearanceDirty(asset);
+                    markPrototypeSectionUnitDirtyForPersistence(typeof asset.key === "string" ? asset.key : "");
+                });
+            }
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            if (buildingInstances) {
+                for (const [buildingId, instance] of buildingInstances.entries()) {
+                    const records = Array.isArray(instance && instance.objects) ? instance.objects : null;
+                    filterRecords(records, {
+                        ownerType: "building",
+                        buildingId: typeof buildingId === "string" ? buildingId : ""
+                    }, (nextRecords) => {
+                        instance.objects = nextRecords;
+                        instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                        markPrototypeBuildingUnitDirtyForPersistence(typeof buildingId === "string" ? buildingId : "");
+                    });
+                }
             }
             if (orphanedUpperFloorObjects > 0 && typeof console !== "undefined" && typeof console.warn === "function") {
                 console.warn("[prototype object sanitize] removed orphaned upper-floor placed objects", {
                     count: orphanedUpperFloorObjects,
                     samples: orphanedSamples
+                });
+            }
+            if (migratedBuildingFloorObjects > 0 && typeof console !== "undefined" && typeof console.info === "function") {
+                console.info("[prototype object sanitize] moved section-owned building-floor objects into building records", {
+                    count: migratedBuildingFloorObjects
+                });
+            }
+            if (normalizedBuildingFloorObjects > 0 && typeof console !== "undefined" && typeof console.info === "function") {
+                console.info("[prototype object sanitize] normalized building-floor object floor refs", {
+                    count: normalizedBuildingFloorObjects
                 });
             }
             return removedAny;
@@ -389,6 +697,7 @@
         const isPrototypeSavableObject = (obj) => {
             if (!obj || obj.gone || obj.vanishing) return false;
             if (typeof obj.saveJson !== "function") return false;
+            if (obj.type === "roadPath") return false;
             if (obj.type === "wallSection") return false;
             if (isPrototypeWizardRuntimeObject(obj)) return false;
             return true;

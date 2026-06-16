@@ -88,6 +88,48 @@
             return node && typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : null;
         };
 
+        map.ensurePrototypeObjectRuntimeRecord = function ensurePrototypeObjectRuntimeRecord(obj) {
+            if (!obj || typeof obj !== "object") {
+                throw new Error("Cannot register prototype object runtime record without an object");
+            }
+            const objectState = this._prototypeObjectState;
+            if (!objectState) {
+                throw new Error("Cannot register prototype object runtime record without prototype object state");
+            }
+            if (typeof isPrototypeSavableObject !== "function" || !isPrototypeSavableObject(obj)) {
+                throw new Error("Cannot register unsavable prototype object runtime record");
+            }
+
+            const existingRecordId = Number(obj._prototypeRecordId);
+            if (obj._prototypeRuntimeRecord === true && Number.isInteger(existingRecordId)) {
+                if (!(objectState.activeRuntimeObjectsByRecordId instanceof Map)) {
+                    objectState.activeRuntimeObjectsByRecordId = new Map();
+                }
+                objectState.activeRuntimeObjectsByRecordId.set(existingRecordId, obj);
+                if (Array.isArray(objectState.activeRuntimeObjects)) {
+                    objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+                }
+                return existingRecordId;
+            }
+
+            if (typeof upsertPrototypeObjectRecord !== "function") {
+                throw new Error("Cannot register prototype object runtime record without upsertPrototypeObjectRecord");
+            }
+            if (!upsertPrototypeObjectRecord(obj)) {
+                throw new Error("Unable to register prototype object runtime record");
+            }
+
+            const recordId = Number(obj._prototypeRecordId);
+            if (!Number.isInteger(recordId)) {
+                throw new Error("Prototype object runtime record registration did not assign a record id");
+            }
+            if (objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+                objectState.activeRuntimeObjectsByRecordId.set(recordId, obj);
+                objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+            }
+            return recordId;
+        };
+
         map.capturePrototypeWall = function capturePrototypeWall(wall) {
             if (!wall || wall.gone || wall._prototypeWallManaged === true) return false;
             if (typeof wall._collectOrderedLineAnchors !== "function" || typeof wall.saveJson !== "function") return false;
@@ -254,9 +296,7 @@
             const state = this._prototypeSectionState;
             if (!state || !(state.activeSectionKeys instanceof Set) || !(state.nodesBySectionKey instanceof Map)) return false;
             const objectState = this._prototypeObjectState;
-            if (objectState && objectState.captureScanNeeded !== true) {
-                return false;
-            }
+            if (!objectState) return false;
             let changed = false;
             let pruneGoneMs = 0;
             let dirtyListBuildMs = 0;

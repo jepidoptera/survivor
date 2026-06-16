@@ -529,6 +529,116 @@ test("interior promotion survives later shell loads", async () => {
     assert.equal(instances[0].loadState, "interior");
 });
 
+test("building interior bitmap object exclusions are floor scoped and retain stale cached bakes", () => {
+    let dirtyCount = 0;
+    const map = {
+        markBuildingRenderCacheDirty() {
+            dirtyCount += 1;
+        }
+    };
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([createPlacement("building:bake-house")]);
+
+    const state = map._prototypeBuildingState;
+    let destroyedTextures = 0;
+    const cachedEntry = {
+        status: "ready",
+        texture: { destroy() { destroyedTextures += 1; } },
+        depthMetricTexture: { destroy() { destroyedTextures += 1; } }
+    };
+    state.interiorBitmapsByKey.set("building:bake-house|floor-1", cachedEntry);
+
+    const object = {
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _prototypeRecordId: 101,
+        fragmentId: "building:bake-house:floor:floor-1",
+        surfaceId: "building:bake-house:surface:floor-1"
+    };
+
+    const removed = map.removePrototypeBuildingObjectFromInteriorBitmap(object);
+    assert.deepEqual(removed, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101,
+        changed: true
+    });
+    assert.equal(object._prototypeInteriorBitmapExcluded, true);
+    assert.deepEqual(object._prototypeInteriorBitmapExclusion, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101
+    });
+    assert.equal(destroyedTextures, 0);
+    assert.equal(dirtyCount, 1);
+    assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
+    assert.equal(cachedEntry.stale, true);
+    assert.equal(cachedEntry.staleReason, "object-bake-membership");
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.get("building:bake-house|floor-1").has(101), true);
+
+    const repeated = map.removePrototypeBuildingObjectFromInteriorBitmap(object);
+    assert.equal(repeated.changed, false);
+    assert.equal(dirtyCount, 1);
+
+    const restored = map.restorePrototypeBuildingObjectToInteriorBitmap(object);
+    assert.deepEqual(restored, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101,
+        changed: true
+    });
+    assert.equal(object._prototypeInteriorBitmapExcluded, false);
+    assert.equal(object._prototypeInteriorBitmapExclusion, null);
+    assert.equal(destroyedTextures, 0);
+    assert.equal(dirtyCount, 2);
+    assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
+    assert.equal(cachedEntry.stale, true);
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.has("building:bake-house|floor-1"), false);
+
+    const surfaceOnlyObject = {
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _prototypeRecordId: 102,
+        surfaceId: "building:bake-house:surface:floor-2"
+    };
+    const surfaceOnlyRemoved = map.removePrototypeBuildingObjectFromInteriorBitmap(surfaceOnlyObject);
+    assert.equal(surfaceOnlyRemoved.floorId, "floor-2");
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.get("building:bake-house|floor-2").has(102), true);
+});
+
+test("building interior bitmap object exclusions require building ownership and floor identity", () => {
+    const map = {};
+    buildings.installSectionWorldBuildingApis(map);
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "section",
+            _prototypeOwnerId: "section:0,0",
+            _prototypeRecordId: 5,
+            fragmentId: "section:0,0:floor:floor-1"
+        }),
+        /not owned by a building/
+    );
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "building",
+            _prototypeOwnerId: "building:bake-house",
+            _prototypeRecordId: 5
+        }),
+        /without a floor id/
+    );
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "building",
+            _prototypeOwnerId: "building:bake-house",
+            fragmentId: "building:bake-house:floor:floor-1"
+        }),
+        /requires an object record id/
+    );
+});
+
 test("wizard building support switches world scope and suspends outdoor bubble shifting", async () => {
     const previousWizard = globalThis.wizard;
     try {
