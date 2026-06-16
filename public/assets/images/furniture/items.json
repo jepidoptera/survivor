@@ -188,6 +188,23 @@
     {
       "file": "redrug.png",
       "texturePath": "/assets/images/furniture/redrug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/redrug.png"
+        }
+      ],
       "width": 4,
       "height": 3,
       "baseSize": 4,
@@ -214,6 +231,23 @@
     {
       "file": "hexrug.png",
       "texturePath": "/assets/images/furniture/hexrug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/hexrug.png"
+        }
+      ],
       "width": 0.866,
       "height": 1,
       "baseSize": 4,
@@ -242,6 +276,23 @@
     {
       "file": "circlerug.png",
       "texturePath": "/assets/images/furniture/circlerug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/circlerug.png"
+        }
+      ],
       "width": 1,
       "height": 1,
       "baseSize": 4,
