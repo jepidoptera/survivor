@@ -4053,6 +4053,80 @@ test("prototype building interior placed objects are suppressed from live exteri
     assert.equal(renderer.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(sectionObject, activeInteriorState, {}), false);
 });
 
+test("prototype building interior live items recover active-region visibility from position when floor refs are stale", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const activeRegion = {
+        id: "fragment:building:placed-1:floor:floor-fragment-2",
+        kind: "floorFragment",
+        level: 1,
+        fragmentId: "building:placed-1:floor:floor-fragment-2",
+        surfaceId: "building:placed-1:surface:floor-fragment-2",
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ],
+            holes: []
+        }
+    };
+    const staleRefObject = {
+        type: "placedObject",
+        category: "furniture",
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:placed-1",
+        fragmentId: "building:placed-1:floor:old-runtime-fragment",
+        surfaceId: "building:placed-1:surface:old-runtime-fragment",
+        traversalLayer: 1,
+        level: 1,
+        x: 5,
+        y: 5
+    };
+    const outsideObject = {
+        ...staleRefObject,
+        x: 15,
+        y: 5
+    };
+    const trigger = {
+        building: {
+            buildingId: "building:placed-1",
+            _prototypeBuildingPlacement: { id: "building:placed-1" }
+        },
+        activeInteriorRegion: activeRegion,
+        fragmentIds: new Set(["building:placed-1:floor:floor-fragment-2"]),
+        surfaceIds: new Set(["building:placed-1:surface:floor-fragment-2"]),
+        renderCache: {
+            interiorRegions: [activeRegion],
+            renderItems: [
+                { item: staleRefObject, level: 1, refs: [{ fragmentId: staleRefObject.fragmentId, surfaceId: staleRefObject.surfaceId }] },
+                { item: outsideObject, level: 1, refs: [{ fragmentId: outsideObject.fragmentId, surfaceId: outsideObject.surfaceId }] }
+            ]
+        }
+    };
+    const activeInteriorState = {
+        active: true,
+        triggers: [trigger]
+    };
+
+    assert.equal(renderer.renderItemRefsMatchBuildingInteriorRegion(
+        [{ fragmentId: staleRefObject.fragmentId, surfaceId: staleRefObject.surfaceId }],
+        activeRegion
+    ), false);
+    assert.equal(renderer.shouldAllowPrototypeBuildingInteriorLiveRenderItem(staleRefObject, activeInteriorState, {}), true);
+    assert.equal(renderer.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(staleRefObject, activeInteriorState, {}), true);
+    assert.equal(renderer.shouldAllowPrototypeBuildingInteriorLiveRenderItem(outsideObject, activeInteriorState, {}), false);
+
+    const displayObj = { visible: true, parent: {} };
+    renderer.prepareBuildingInteriorPickerFrame({ map: {} }, activeInteriorState, { items: new Set() });
+    renderer.addPickRenderItem(staleRefObject, displayObj);
+    renderer.addPickRenderItem(outsideObject, displayObj);
+
+    assert.equal(renderer.pickRenderItems.length, 1);
+    assert.equal(renderer.pickRenderItems[0].item, staleRefObject);
+});
+
 test("building interior promotion lifts foreground plan character meshes", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();

@@ -161,6 +161,50 @@ function assertApproxEqual(actual, expected, epsilon = 0.000001) {
     assert.ok(Math.abs(Number(actual) - Number(expected)) <= epsilon, `${actual} should be within ${epsilon} of ${expected}`);
 }
 
+function rectCircleIntersects(rect, circle) {
+    const closestX = Math.max(rect.minX, Math.min(rect.maxX, circle.x));
+    const closestY = Math.max(rect.minY, Math.min(rect.maxY, circle.y));
+    const dx = circle.x - closestX;
+    const dy = circle.y - closestY;
+    return dx * dx + dy * dy <= circle.radius * circle.radius;
+}
+
+test("GameMap stair fast-path movement is blocked by swept building wall blockers", () => {
+    const map = Object.create(GameMap.prototype);
+    map.wrapX = false;
+    map.wrapY = false;
+    const wallRect = { minX: -10, minY: -0.25, maxX: 4, maxY: 0 };
+    const queriedLayers = [];
+    map.collectPrototypeBuildingMovementBlockersInBounds = (bounds, layer) => {
+        queriedLayers.push(layer);
+        assert.ok(bounds.minX <= -3.95 && bounds.maxX >= -3.95);
+        return [{
+            gone: false,
+            groundPlaneHitbox: {
+                intersects(hitbox) {
+                    return rectCircleIntersects(wallRect, hitbox);
+                }
+            }
+        }];
+    };
+    const actor = {
+        x: -3.95,
+        y: 0.5,
+        currentLayer: 0,
+        groundRadius: 0.3
+    };
+    const support = {
+        type: "stair",
+        stair: { lowerLevel: 0, higherLevel: 1 },
+        upDown: 0.05,
+        point: { x: -3.95, y: 0.8 }
+    };
+
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(-3.95, 0.5, -3.95, 0.8, support, actor), true);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(-3.95, 0.5, -3.95, -0.1, support, actor), false);
+    assert.deepEqual(queriedLayers, [0, 0]);
+});
+
 test("GameMap applies smaller overlapping floor support after walking from ground into a building", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 1;

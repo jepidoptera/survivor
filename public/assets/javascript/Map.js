@@ -3265,6 +3265,73 @@ class GameMap {
         return false;
     }
 
+    actorStairFastPathClearsBuildingBlockers(fromX, fromY, requestedX, requestedY, support, actor = null, options = {}) {
+        if (typeof this.collectPrototypeBuildingMovementBlockersInBounds !== "function") return true;
+        const startX = Number(fromX);
+        const startY = Number(fromY);
+        const targetX = Number(requestedX);
+        const targetY = Number(requestedY);
+        if (!Number.isFinite(startX) || !Number.isFinite(startY) || !Number.isFinite(targetX) || !Number.isFinite(targetY)) {
+            throw new Error("stair fast-path blocker validation requires finite movement coordinates");
+        }
+        const supportPoint = support &&
+            support.point &&
+            Number.isFinite(Number(support.point.x)) &&
+            Number.isFinite(Number(support.point.y))
+            ? { x: Number(support.point.x), y: Number(support.point.y) }
+            : { x: targetX, y: targetY };
+        const radius = this.getActorMovementSupportRadius(actor, options);
+        const queryPadding = Math.max(0.01, radius + 0.05);
+        const queryBounds = {
+            minX: Math.min(startX, targetX, supportPoint.x) - queryPadding,
+            minY: Math.min(startY, targetY, supportPoint.y) - queryPadding,
+            maxX: Math.max(startX, targetX, supportPoint.x) + queryPadding,
+            maxY: Math.max(startY, targetY, supportPoint.y) + queryPadding
+        };
+        const layer = support && support.type === "stair"
+            ? this.getActiveLayerForStairSupport(support)
+            : (Number.isFinite(support && support.layer)
+                ? Math.round(Number(support.layer))
+                : this.getActorTraversalLayer(actor, options));
+        const blockers = this.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, layer, options);
+        if (!Array.isArray(blockers) || blockers.length === 0) return true;
+
+        const hitbox = { type: "circle", x: targetX, y: targetY, radius };
+        const collidesAt = (x, y) => {
+            hitbox.x = x;
+            hitbox.y = y;
+            for (let i = 0; i < blockers.length; i++) {
+                const blocker = blockers[i];
+                if (
+                    !blocker ||
+                    blocker.gone ||
+                    !blocker.groundPlaneHitbox ||
+                    typeof blocker.groundPlaneHitbox.intersects !== "function"
+                ) {
+                    continue;
+                }
+                if (blocker.groundPlaneHitbox.intersects(hitbox)) return true;
+            }
+            return false;
+        };
+        const segmentCollides = (ax, ay, bx, by) => {
+            const dx = bx - ax;
+            const dy = by - ay;
+            const distance = Math.hypot(dx, dy);
+            if (!(distance > 1e-6)) return collidesAt(bx, by);
+            const stepSize = Math.max(0.03, Math.min(0.12, radius > 0 ? radius * 0.25 : 0.05));
+            const steps = Math.min(32, Math.max(1, Math.ceil(distance / stepSize)));
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                if (collidesAt(ax + dx * t, ay + dy * t)) return true;
+            }
+            return false;
+        };
+
+        return !segmentCollides(startX, startY, targetX, targetY) &&
+            !segmentCollides(startX, startY, supportPoint.x, supportPoint.y);
+    }
+
     getActorStairEndpointEntrySupport(stair, x, y, actor = null, options = {}) {
         if (!stair) return null;
         const traversal = this.requireStairTraversal();
@@ -3568,22 +3635,46 @@ class GameMap {
             const exitPoint = traversal.exitPointFromPathLocal(frame, nextLocal);
             const floorSupport = this.getFloorSupportAtWorldPosition(exitPoint.x, exitPoint.y, nextLayer, options);
             if (floorSupport && this.getStairEndpointForFloorSupport(floorSupport, stair) === endpoint) {
+                const nextSupport = {
+                    ...floorSupport,
+                    point: exitPoint
+                };
+                if (!this.actorStairFastPathClearsBuildingBlockers(
+                    Number(actor && actor.x),
+                    Number(actor && actor.y),
+                    worldX,
+                    worldY,
+                    nextSupport,
+                    actor,
+                    options
+                )) {
+                    return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport, blockedByBuildingMovement: true };
+                }
                 return {
                     handled: true,
                     allowed: true,
-                    support: {
-                        ...floorSupport,
-                        point: exitPoint
-                    },
+                    support: nextSupport,
                     currentSupport: currentStairSupport
                 };
             }
             return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport };
         }
+        const nextSupport = traversal.supportFromPathLocal(stair, frame, nextLocal);
+        if (!this.actorStairFastPathClearsBuildingBlockers(
+            Number(actor && actor.x),
+            Number(actor && actor.y),
+            worldX,
+            worldY,
+            nextSupport,
+            actor,
+            options
+        )) {
+            return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport, blockedByBuildingMovement: true };
+        }
         return {
             handled: true,
             allowed: true,
-            support: traversal.supportFromPathLocal(stair, frame, nextLocal),
+            support: nextSupport,
             currentSupport: currentStairSupport
         };
     }
@@ -3650,13 +3741,35 @@ class GameMap {
                             ...options,
                             endpoint
                         });
-                        if (entrySupport) {
+                        if (
+                            entrySupport &&
+                            this.actorStairFastPathClearsBuildingBlockers(
+                                Number(actor && actor.x),
+                                Number(actor && actor.y),
+                                worldX,
+                                worldY,
+                                entrySupport,
+                                actor,
+                                options
+                            )
+                        ) {
                             return cacheOccupancyResult({ handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport });
                         }
                     }
                     if (endpoint === "higher") {
                         const topStepSideEntrySupport = this.getActorStairTopStepSideEntrySupport(stair, worldX, worldY, actor, options);
-                        if (topStepSideEntrySupport) {
+                        if (
+                            topStepSideEntrySupport &&
+                            this.actorStairFastPathClearsBuildingBlockers(
+                                Number(actor && actor.x),
+                                Number(actor && actor.y),
+                                worldX,
+                                worldY,
+                                topStepSideEntrySupport,
+                                actor,
+                                options
+                            )
+                        ) {
                             return cacheOccupancyResult({ handled: true, allowed: true, support: topStepSideEntrySupport, currentSupport: currentFloorSupport });
                         }
                     }
@@ -3676,7 +3789,18 @@ class GameMap {
                             ...options,
                             endpoint
                         });
-                        if (entrySupport) {
+                        if (
+                            entrySupport &&
+                            this.actorStairFastPathClearsBuildingBlockers(
+                                Number(actor && actor.x),
+                                Number(actor && actor.y),
+                                worldX,
+                                worldY,
+                                entrySupport,
+                                actor,
+                                options
+                            )
+                        ) {
                             return cacheOccupancyResult({ handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport });
                         }
                     }

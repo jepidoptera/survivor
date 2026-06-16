@@ -2131,8 +2131,19 @@
         return buildingState.lastSectionRefStats;
     }
 
+    function isPrototypeBuildingPlacementCurrentWorldScope(state, placementOrId) {
+        if (!state || !placementOrId) return false;
+        const placementId = typeof placementOrId === "string"
+            ? placementOrId
+            : (typeof placementOrId.id === "string" ? placementOrId.id : "");
+        if (!placementId) return false;
+        const scope = normalizePrototypeWorldScope(state.currentWorldScope);
+        return scope.type === "building" && scope.id === placementId;
+    }
+
     function isPrototypeBuildingPlacementDesired(state, placement) {
         if (!placement || !placement.id) return false;
+        if (isPrototypeBuildingPlacementCurrentWorldScope(state, placement)) return true;
         if (!state || state.hasActiveBuildingSelection !== true) return true;
         return state.desiredBuildingIds instanceof Set && state.desiredBuildingIds.has(placement.id);
     }
@@ -2393,6 +2404,16 @@
             const previousScope = normalizePrototypeWorldScope(state.currentWorldScope);
             const changed = !samePrototypeWorldScope(previousScope, nextScope);
             state.currentWorldScope = nextScope;
+            if (changed && state.hasActiveBuildingSelection === true) {
+                markPrototypeBuildingMovementBlockersDirty(this);
+                maybeSyncPrototypeBuildingGeometryRuntime(this);
+                if (hasPrototypeBuildingMovementNodeRegistry(this)) {
+                    syncPrototypeBuildingMovementBlockers(this);
+                }
+                if (typeof this.markBuildingRenderCacheDirty === "function") {
+                    this.markBuildingRenderCacheDirty();
+                }
+            }
             const placement = nextScope.type === "building" && state.placementsById instanceof Map
                 ? state.placementsById.get(nextScope.id)
                 : null;
@@ -2462,6 +2483,7 @@
             if (state.loadedBuildingsById instanceof Map) {
                 for (const id of Array.from(state.loadedBuildingsById.keys())) {
                     if (desiredIds.has(id)) continue;
+                    if (isPrototypeBuildingPlacementCurrentWorldScope(state, id)) continue;
                     clearPrototypeBuildingGeometryRuntime(this, id);
                     state.loadedBuildingsById.delete(id);
                     if (state.cutawayBuildingsByPlacementId instanceof Map) {

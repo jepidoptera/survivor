@@ -695,6 +695,58 @@ test("wizard building support switches world scope and suspends outdoor bubble s
     }
 });
 
+test("loaded wizard inside a building cannot walk through ground-floor walls when outdoor selection misses that building", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    const previousWizard = globalThis.wizard;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:loaded-inside-house",
+            buildingSaveName: "loaded inside house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithDoorAndColumn() });
+
+        const loadedInsideSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:loaded-inside-house:floor:floor-0",
+            surfaceId: "building:loaded-inside-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:loaded-inside-house",
+            sectionKey: "building:loaded-inside-house"
+        };
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, loadedInsideSupport, { promoteInterior: false });
+
+        map.setPrototypeBuildingDesiredPlacementIds(new Set());
+
+        const blockers = map.collectPrototypeBuildingMovementBlockersInBounds({
+            minX: -0.5,
+            minY: -0.5,
+            maxX: 0.75,
+            maxY: 4.5
+        }, 0);
+        const canWalkThroughWall = blockers.length === 0;
+
+        assert.equal(canWalkThroughWall, false, "loaded-inside ground-floor wall blockers should still be active");
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
+});
+
 test("repeated building support updates do not re-promote an already active interior", async () => {
     const previousWizard = globalThis.wizard;
     try {
