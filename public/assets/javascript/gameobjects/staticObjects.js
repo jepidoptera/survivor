@@ -4,6 +4,10 @@ const LEVEL0_ROAD_SURFACE_REBAKE_THROTTLE_MS = 1000;
 
 function destroyPixiDisplayObjectPreservingTexture(displayObj, options) {
     if (!displayObj || displayObj.destroyed === true || typeof displayObj.destroy !== "function") return false;
+    if (typeof PIXI !== "undefined" && PIXI.Graphics && displayObj instanceof PIXI.Graphics) {
+        displayObj.destroy({ children: !!(options && options.children) });
+        return true;
+    }
     // Pixi Sprite.destroy() calls this._texture.off(...). Road render sprites can
     // have had that private slot nulled after texture-cache churn, so restore a
     // non-owning sentinel before destruction.
@@ -1217,6 +1221,18 @@ function attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data) {
     if (!fragmentId) {
         throw new Error("Cannot restore upper-floor placed object without a saved floor fragment id.");
     }
+    const fragment = map.floorsById instanceof Map ? map.floorsById.get(fragmentId) || null : null;
+    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+    const isPrototypeBuildingFragment = floorSupportApi && typeof floorSupportApi.isPrototypeBuildingPlacementFloorFragment === "function"
+        ? floorSupportApi.isPrototypeBuildingPlacementFloorFragment(fragment)
+        : !!(
+            fragment &&
+            fragment.renderedByBuildingCutaway === true &&
+            fragment.ownerType === "building" &&
+            typeof fragment.ownerId === "string" &&
+            fragment.ownerId.length > 0
+        );
+    if (isPrototypeBuildingFragment) return false;
     if (typeof map.addObjectToFloorBuildingManifest !== "function") {
         throw new Error("Cannot restore upper-floor placed object because floor building manifests are unavailable.");
     }
@@ -2690,16 +2706,6 @@ void main(void) {
 
     setIndexedNodes(nodes, primaryNode = null) {
         const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes : [];
-        for (let i = 0; i < previousNodes.length; i++) {
-            const node = previousNodes[i];
-            if (node && typeof node.removeObject === "function") {
-                node.removeObject(this);
-            }
-        }
-        if (typeof this.clearVisibilityRegistration === "function") {
-            this.clearVisibilityRegistration();
-        }
-
         const nextNodes = [];
         const nodeKeys = new Set();
         const nodeList = Array.isArray(nodes) ? nodes : [];
@@ -2711,9 +2717,32 @@ void main(void) {
             nodeKeys.add(key);
             nextNodes.push(node);
         }
+        const nextPrimaryNode = primaryNode || nextNodes[0] || null;
+        let nodesUnchanged = previousNodes.length === nextNodes.length;
+        if (nodesUnchanged) {
+            for (let i = 0; i < previousNodes.length; i++) {
+                if (previousNodes[i] !== nextNodes[i]) {
+                    nodesUnchanged = false;
+                    break;
+                }
+            }
+        }
+        if (nodesUnchanged && this.node === nextPrimaryNode) {
+            return;
+        }
+
+        for (let i = 0; i < previousNodes.length; i++) {
+            const node = previousNodes[i];
+            if (node && typeof node.removeObject === "function") {
+                node.removeObject(this);
+            }
+        }
+        if (typeof this.clearVisibilityRegistration === "function") {
+            this.clearVisibilityRegistration();
+        }
 
         this._indexedNodes = nextNodes;
-        this.node = primaryNode || nextNodes[0] || null;
+        this.node = nextPrimaryNode;
         if (this.node) {
             this.surfaceId = typeof this.node.surfaceId === "string" ? this.node.surfaceId : "";
             this.fragmentId = typeof this.node.fragmentId === "string" ? this.node.fragmentId : "";
@@ -3777,10 +3806,8 @@ void main(void) {
                 return triggerObj;
             }
             if (data.type === 'roadPath') {
-                if (typeof RoadPath !== 'function') return null;
-                return RoadPath.loadJson(data, map, options);
+                return null;
             }
-
             const node = resolveStaticObjectLoadNode(map, data, options);
 
             if (!node) return null;
@@ -3916,9 +3943,42 @@ void main(void) {
                     obj.traversalLayer = loadedTraversalLayer;
                     obj.level = loadedTraversalLayer;
                     obj._renderTraversalLayer = loadedTraversalLayer;
+                    obj.currentLayer = loadedTraversalLayer;
+                    obj.currentLayerBaseZ = Number.isFinite(data.currentLayerBaseZ)
+                        ? Number(data.currentLayerBaseZ)
+                        : loadedTraversalLayer * 3;
                 }
                 if (Number.isFinite(data.z)) {
                     obj.z = Number(data.z);
+                    const loadedLayer = Number.isFinite(data.traversalLayer)
+                        ? Math.round(Number(data.traversalLayer))
+                        : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : 0);
+                    const loadedLayerBaseZ = Number.isFinite(data.currentLayerBaseZ)
+                        ? Number(data.currentLayerBaseZ)
+                        : loadedLayer * 3;
+                    const isWallMountedPlacedObject = !!(
+                        data.type === "placedObject" &&
+                        (
+                            Number.isInteger(data.mountedWallLineGroupId) ||
+                            Number.isInteger(data.mountedSectionId) ||
+                            Number.isInteger(data.mountedWallSectionUnitId)
+                        )
+                    );
+                    const isWindowPlacedObject = !!(
+                        data.type === "placedObject" &&
+                        typeof data.category === "string" &&
+                        data.category.trim().toLowerCase() === "windows"
+                    );
+                    if (
+                        data.type === "placedObject" &&
+                        data.zMode !== "local" &&
+                        !isWallMountedPlacedObject &&
+                        !isWindowPlacedObject &&
+                        loadedLayerBaseZ !== 0 &&
+                        Number(data.z) >= loadedLayerBaseZ - 0.001
+                    ) {
+                        obj.z = Number(data.z) - loadedLayerBaseZ;
+                    }
                 } else if (
                     data.type === "placedObject" &&
                     typeof data.category === "string" &&
@@ -5157,6 +5217,16 @@ class PlacedObject extends StaticObject {
         }
         if (typeof this.castsLosShadows === "boolean") {
             data.castsLosShadows = this.castsLosShadows;
+        }
+        const hasMountedWallTarget = !!(
+            Number.isInteger(this.mountedWallLineGroupId) ||
+            Number.isInteger(this.mountedSectionId) ||
+            Number.isInteger(this.mountedWallSectionUnitId)
+        );
+        if (!hasMountedWallTarget && !this.isWindowObject()) {
+            data.zMode = "local";
+            if (Number.isFinite(this.currentLayerBaseZ)) data.currentLayerBaseZ = Number(this.currentLayerBaseZ);
+            else if (Number.isFinite(this._renderLayerBaseZ)) data.currentLayerBaseZ = Number(this._renderLayerBaseZ);
         }
         if (Number.isInteger(this.mountedWallLineGroupId)) {
             data.mountedWallLineGroupId = this.mountedWallLineGroupId;
@@ -6586,7 +6656,7 @@ class RoadPath extends StaticObject {
         this.castsLosShadows = false;
         this.flammable = false;
         this.rotationAxis = "ground";
-        this.renderZ = 0;
+        this.renderZ = 0.001;
         this.pathPoints = geometry.points;
         this.roadWidth = geometry.width;
         this.width = geometry.width;
@@ -6640,23 +6710,11 @@ class RoadPath extends StaticObject {
     }
 
     saveJson() {
-        const data = super.saveJson();
-        data.type = "roadPath";
-        data.points = this.pathPoints.map(point => ({ x: Number(point.x), y: Number(point.y) }));
-        data.width = Number(this.roadWidth);
-        data.fillTexturePath = this.fillTexturePath;
-        data.isPassable = true;
-        data.castsLosShadows = false;
-        return data;
+        throw new Error("roadPath persistence is disabled until path roads are proven stable");
     }
 
     static loadJson(data, map, options = {}) {
-        if (!data || !map) return null;
-        return new RoadPath(Array.isArray(data.points) ? data.points : [], map, {
-            width: data.width,
-            fillTexturePath: data.fillTexturePath,
-            suppressAutoScriptingName: !!options.suppressAutoScriptingName
-        });
+        throw new Error("roadPath loading is disabled until path roads are proven stable");
     }
 }
 

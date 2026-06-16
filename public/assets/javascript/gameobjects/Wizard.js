@@ -306,6 +306,7 @@ class Wizard extends Character {
         // Road placement state
         this.roadLayoutMode = false;
         this.roadStartPoint = null;
+        this.roadPathDraft = null;
         this.phantomRoad = null;
         
         // Firewall placement state

@@ -4671,6 +4671,15 @@ jQuery(() => {
                 }
             }
             facingMs = performance.now() - facingStartMs;
+
+            if (
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.updateDragPreview === "function" &&
+                Number.isFinite(mousePos.worldX) &&
+                Number.isFinite(mousePos.worldY)
+            ) {
+                SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
+            }
             
             // Calculate desired movement direction from input
             let moveVector = null;
@@ -6406,6 +6415,20 @@ jQuery(() => {
             event.key === "Escape" &&
             wizard &&
             typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelDragSpell === "function" &&
+            typeof SpellSystem.isDragSpellActive === "function" &&
+            wizard.currentSpell === "buildroad" &&
+            SpellSystem.isDragSpellActive(wizard, "buildroad")
+        ) {
+            event.preventDefault();
+            SpellSystem.cancelDragSpell(wizard, "buildroad");
+            return;
+        }
+
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.cancelTriggerAreaPlacement === "function" &&
             SpellSystem.cancelTriggerAreaPlacement(wizard)
         ) {
@@ -7046,7 +7069,6 @@ jQuery(() => {
             }
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
                 SpellSystem.cancelDragSpell(wizard, "wall");
-                SpellSystem.cancelDragSpell(wizard, "buildroad");
                 SpellSystem.cancelDragSpell(wizard, "firewall");
                 SpellSystem.cancelDragSpell(wizard, "moveobject");
                 SpellSystem.cancelDragSpell(wizard, "vanish");
