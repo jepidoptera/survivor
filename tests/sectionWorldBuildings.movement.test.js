@@ -606,6 +606,63 @@ test("building interior bitmap object exclusions are floor scoped and retain sta
     assert.equal(state.interiorBitmapObjectExclusionsByKey.get("building:bake-house|floor-2").has(102), true);
 });
 
+test("building interior bitmap invalidation is floor scoped and blocks obsolete loading commits", () => {
+    let dirtyCount = 0;
+    const map = {
+        markBuildingRenderCacheDirty() {
+            dirtyCount += 1;
+        }
+    };
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([createPlacement("building:bake-house")]);
+    const state = map._prototypeBuildingState;
+    const readyEntry = {
+        status: "ready",
+        texture: { destroy() {} }
+    };
+    const loadingEntry = {
+        status: "loading",
+        settingsSignature: "old"
+    };
+    const stalePromise = Promise.resolve();
+    state.interiorBitmapsByKey.set("building:bake-house|floor-1", readyEntry);
+    state.interiorBitmapsByKey.set("building:bake-house|floor-2", loadingEntry);
+    state.pendingInteriorBitmapLoadsByKey.set("building:bake-house|floor-2", {
+        settingsSignature: "old",
+        promise: stalePromise
+    });
+
+    const readyInvalidated = map.invalidatePrototypeBuildingInteriorBitmap({
+        placementId: "building:bake-house",
+        floorId: "floor-1"
+    });
+    const loadingInvalidated = map.invalidatePrototypeBuildingInteriorBitmap({
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:bake-house",
+            floorId: "floor-2",
+            level: 1
+        }
+    });
+
+    assert.deepEqual(readyInvalidated, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        changed: true
+    });
+    assert.deepEqual(loadingInvalidated, {
+        placementId: "building:bake-house",
+        floorId: "floor-2",
+        changed: true
+    });
+    assert.equal(readyEntry.stale, true);
+    assert.equal(loadingEntry.stale, true);
+    assert.equal(state.pendingInteriorBitmapLoadsByKey.has("building:bake-house|floor-2"), false);
+    assert.equal(dirtyCount, 2);
+});
+
 test("building interior bitmap object exclusions require building ownership and floor identity", () => {
     const map = {};
     buildings.installSectionWorldBuildingApis(map);
@@ -626,7 +683,7 @@ test("building interior bitmap object exclusions require building ownership and 
             _prototypeOwnerId: "building:bake-house",
             _prototypeRecordId: 5
         }),
-        /without a floor id/
+        /requires a floor id/
     );
 
     assert.throws(

@@ -338,6 +338,16 @@
             return fragmentId.slice(0, index);
         };
 
+        const getSourceFloorIdFromRuntimeFloorRef = (value, buildingId, marker = ":floor:") => {
+            if (typeof value !== "string" || value.length === 0) return "";
+            if (typeof buildingId === "string" && buildingId.length > 0) {
+                const prefix = `${buildingId}${marker}`;
+                if (value.startsWith(prefix) && value.length > prefix.length) return value.slice(prefix.length);
+            }
+            const index = value.indexOf(marker);
+            return index >= 0 && index + marker.length < value.length ? value.slice(index + marker.length) : "";
+        };
+
         const getPrototypeBuildingInstances = () => {
             const buildingState = map && map._prototypeBuildingState;
             return buildingState && buildingState.buildingInstancesById instanceof Map
@@ -365,6 +375,15 @@
             if (!reference || !record || typeof record !== "object") return false;
             const fragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
             const surfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+            const membership = getFloorMembershipForPrototypeObjectRecord(record);
+            if (
+                membership &&
+                membership.ownerType === "building" &&
+                membership.ownerId === reference.buildingId &&
+                membership.floorId === reference.sourceFloorId
+            ) {
+                return true;
+            }
             return (
                 (fragmentId.length > 0 && (
                     fragmentId === reference.runtimeFragmentId ||
@@ -377,9 +396,80 @@
             );
         };
 
+        const getFloorMembershipForPrototypeObjectRecord = (record, ownerInfo = null) => {
+            if (!record || typeof record !== "object") return null;
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            const fragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
+            const surfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+            const encodedBuildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId) ||
+                (surfaceId.includes(":surface:")
+                    ? surfaceId.slice(0, surfaceId.indexOf(":surface:"))
+                    : "");
+            const ownerType = encodedBuildingId
+                ? "building"
+                : (ownerInfo && ownerInfo.ownerType === "building" ? "building" : "");
+            const ownerId = encodedBuildingId ||
+                (ownerInfo && ownerInfo.ownerType === "building" && typeof ownerInfo.buildingId === "string"
+                    ? ownerInfo.buildingId
+                    : "");
+            if (floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function") {
+                const membership = floorSupportApi.getEntityFloorMembership(record, {
+                    record,
+                    ownerType,
+                    ownerId
+                });
+                if (membership) return membership;
+            }
+            if (record.floorMembership && typeof record.floorMembership === "object") {
+                const membershipOwnerType = typeof record.floorMembership.ownerType === "string" ? record.floorMembership.ownerType : "";
+                const membershipOwnerId = typeof record.floorMembership.ownerId === "string" ? record.floorMembership.ownerId : "";
+                const floorId = typeof record.floorMembership.floorId === "string" ? record.floorMembership.floorId : "";
+                if (membershipOwnerType && membershipOwnerId && floorId) {
+                    return {
+                        ownerType: membershipOwnerType,
+                        ownerId: membershipOwnerId,
+                        floorId,
+                        level: Number.isFinite(Number(record.floorMembership.level)) ? Math.round(Number(record.floorMembership.level)) : undefined
+                    };
+                }
+            }
+            if (!ownerId) return null;
+            const floorId = getSourceFloorIdFromRuntimeFloorRef(fragmentId, ownerId, ":floor:") ||
+                getSourceFloorIdFromRuntimeFloorRef(surfaceId, ownerId, ":surface:");
+            if (!floorId) return null;
+            return {
+                ownerType: "building",
+                ownerId,
+                floorId,
+                level: Number.isFinite(Number(record.traversalLayer))
+                    ? Math.round(Number(record.traversalLayer))
+                    : (Number.isFinite(Number(record.level)) ? Math.round(Number(record.level)) : undefined)
+            };
+        };
+
+        const findBuildingFloorReferenceForMembership = (membership) => {
+            if (!membership || membership.ownerType !== "building" || !membership.ownerId || !membership.floorId) return null;
+            const buildingInstances = getPrototypeBuildingInstances();
+            const instance = buildingInstances ? buildingInstances.get(membership.ownerId) || null : null;
+            const floors = Array.isArray(instance && instance.floorFragments) ? instance.floorFragments : null;
+            if (!Array.isArray(floors)) return null;
+            const matches = [];
+            for (let i = 0; i < floors.length; i++) {
+                const reference = createBuildingFloorReference(membership.ownerId, instance, floors[i], i);
+                if (reference && reference.sourceFloorId === membership.floorId) matches.push(reference);
+            }
+            return matches.length === 1 ? matches[0] : null;
+        };
+
         const findBuildingFloorReferenceForRecord = (record, preferredBuildingId = "") => {
             const buildingInstances = getPrototypeBuildingInstances();
             if (!buildingInstances || !record || typeof record !== "object") return null;
+            const membership = getFloorMembershipForPrototypeObjectRecord(record, preferredBuildingId ? {
+                ownerType: "building",
+                buildingId: preferredBuildingId
+            } : null);
+            const membershipReference = findBuildingFloorReferenceForMembership(membership);
+            if (membershipReference) return membershipReference;
             const fragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
             const encodedBuildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId);
             const matches = [];
@@ -451,6 +541,29 @@
             if (!record || typeof record !== "object" || !reference) return { record, changed: false };
             let changed = false;
             const normalized = { ...record };
+            const expectedMembership = {
+                ownerType: "building",
+                ownerId: reference.buildingId,
+                floorId: reference.sourceFloorId
+            };
+            if (Number.isFinite(Number(normalized.traversalLayer))) {
+                expectedMembership.level = Math.round(Number(normalized.traversalLayer));
+            } else if (Number.isFinite(Number(normalized.level))) {
+                expectedMembership.level = Math.round(Number(normalized.level));
+            }
+            const currentMembership = normalized.floorMembership && typeof normalized.floorMembership === "object"
+                ? normalized.floorMembership
+                : null;
+            if (
+                !currentMembership ||
+                currentMembership.ownerType !== expectedMembership.ownerType ||
+                currentMembership.ownerId !== expectedMembership.ownerId ||
+                currentMembership.floorId !== expectedMembership.floorId ||
+                (Number.isFinite(expectedMembership.level) && Math.round(Number(currentMembership.level)) !== expectedMembership.level)
+            ) {
+                normalized.floorMembership = expectedMembership;
+                changed = true;
+            }
             if (typeof reference.runtimeFragmentId === "string" && normalized.fragmentId !== reference.runtimeFragmentId) {
                 normalized.fragmentId = reference.runtimeFragmentId;
                 changed = true;
@@ -528,6 +641,17 @@
             const encodedBuildingId = getBuildingIdFromRuntimeFloorFragmentId(fragmentId);
             if (encodedBuildingId && buildingInstanceHasRuntimeFloorFragmentId(encodedBuildingId, fragmentId)) {
                 return false;
+            }
+            const membership = getFloorMembershipForPrototypeObjectRecord(record, ownerInfo);
+            if (membership && membership.ownerType === "building" && membership.ownerId && membership.floorId) {
+                const membershipReference = findBuildingFloorReferenceForMembership(membership);
+                if (membershipReference) return false;
+                const buildingInstances = getPrototypeBuildingInstances();
+                if (!buildingInstances || !buildingInstances.has(membership.ownerId)) return false;
+                const instance = buildingInstances.get(membership.ownerId) || null;
+                const floors = Array.isArray(instance && instance.floorFragments) ? instance.floorFragments : null;
+                if (!Array.isArray(floors) || floors.length === 0) return false;
+                throw new Error(`building-owned upper-floor placed object ${record.id || "(unknown)"} references unknown canonical floor ${membership.ownerId}:${membership.floorId}`);
             }
             const matchedBuildingFloor = findBuildingFloorReferenceForRecord(
                 record,
@@ -784,6 +908,34 @@
             return buildingState.buildingInstancesById.get(buildingId) || null;
         };
 
+        const markPrototypeBuildingInstanceContentChanged = (buildingId, instance) => {
+            if (typeof buildingId !== "string" || buildingId.length === 0 || !instance) return;
+            const buildingState = map && map._prototypeBuildingState;
+            if (!buildingState || typeof buildingState !== "object") return;
+            const version = Number.isFinite(Number(instance.contentVersion))
+                ? Number(instance.contentVersion)
+                : 1;
+            const placement = buildingState.placementsById instanceof Map
+                ? buildingState.placementsById.get(buildingId) || null
+                : null;
+            if (placement) {
+                placement.contentVersion = version;
+            }
+            if (buildingState.interiorBitmapsByKey instanceof Map) {
+                const prefix = `${buildingId}|`;
+                for (const [key, entry] of buildingState.interiorBitmapsByKey.entries()) {
+                    if (typeof key !== "string" || !key.startsWith(prefix) || !entry) continue;
+                    if (entry.status === "ready" && entry.texture) {
+                        entry.stale = true;
+                        entry.staleReason = "building-content";
+                    } else if (entry.status !== "loading") {
+                        buildingState.interiorBitmapsByKey.delete(key);
+                    }
+                }
+            }
+            buildingState.contentVersion = (Number(buildingState.contentVersion) || 0) + 1;
+        };
+
         const markPrototypeSectionUnitDirtyForPersistence = (sectionKey) => {
             if (typeof sectionKey !== "string" || sectionKey.length === 0) return;
             const buildingState = map && map._prototypeBuildingState;
@@ -870,6 +1022,7 @@
                     id: recordId
                 });
                 instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                markPrototypeBuildingInstanceContentChanged(ownerBuildingId, instance);
                 if (typeof map.markPrototypeBuildingUnitDirty === "function") {
                     map.markPrototypeBuildingUnitDirty(ownerBuildingId);
                 }

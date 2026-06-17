@@ -1342,6 +1342,11 @@ void main(void) {
 
         getLayerIndexForObject(item, fallback = 0) {
             if (!item) return this.getLayerIndexFromValue(fallback, 0);
+            const membership = this.normalizeRenderFloorMembership(item._floorMembership) ||
+                this.normalizeRenderFloorMembership(item.floorMembership);
+            if (membership && Number.isFinite(Number(membership.level))) {
+                return this.getLayerIndexFromValue(membership.level, fallback);
+            }
             if (item.type === "wallSection" && item._prototypeBuildingPlacementId && Number.isFinite(item.traversalLayer)) {
                 return this.getLayerIndexFromValue(item.traversalLayer, fallback);
             }
@@ -1350,9 +1355,6 @@ void main(void) {
                     ? Number(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
                     : 3;
                 return this.getLayerIndexFromValue(Math.floor((Number(item.bottomZ) / layerHeight) + 1e-6), fallback);
-            }
-            if (Number.isFinite(item._renderTraversalLayer)) {
-                return this.getLayerIndexFromValue(item._renderTraversalLayer, fallback);
             }
             if (Number.isFinite(item.traversalLayer)) {
                 return this.getLayerIndexFromValue(item.traversalLayer, fallback);
@@ -1858,6 +1860,95 @@ void main(void) {
                 if (regionSurfaceId && ref.surfaceId && regionSurfaceId === ref.surfaceId) return true;
             }
             return false;
+        }
+
+        normalizeRenderFloorMembership(membership) {
+            if (!membership || typeof membership !== "object") return null;
+            const ownerType = typeof membership.ownerType === "string" ? membership.ownerType : "";
+            const ownerId = typeof membership.ownerId === "string" ? membership.ownerId : "";
+            const floorId = typeof membership.floorId === "string" && membership.floorId.length > 0
+                ? membership.floorId
+                : (typeof membership.sourceFloorId === "string" ? membership.sourceFloorId : "");
+            if (!ownerType || !ownerId || !floorId) return null;
+            const out = { ownerType, ownerId, floorId };
+            if (Number.isFinite(Number(membership.level))) out.level = Math.round(Number(membership.level));
+            return out;
+        }
+
+        getRenderItemFloorMembership(item, mapRef = null, refs = null) {
+            if (!item) return null;
+            const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+            if (floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function") {
+                const membership = floorSupportApi.getEntityFloorMembership(item, { map: mapRef || global.map || null });
+                if (membership) return this.normalizeRenderFloorMembership(membership);
+            }
+            return this.normalizeRenderFloorMembership(item._floorMembership) ||
+                this.normalizeRenderFloorMembership(item.floorMembership);
+        }
+
+        getBuildingInteriorRegionFloorMembership(region, trigger = null) {
+            if (!region) return null;
+            const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+            const triggerBuildingId = typeof (trigger && trigger.buildingId) === "string" && trigger.buildingId.length > 0
+                ? trigger.buildingId
+                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string" && trigger.building.buildingId.length > 0
+                    ? trigger.building.buildingId
+                    : (typeof (trigger && trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
+                        ? trigger.building._prototypeBuildingPlacement.id
+                        : ""));
+            const fragment = region.fragment && typeof region.fragment === "object" ? region.fragment : null;
+            const ownerId = typeof (fragment && fragment.ownerId) === "string" && fragment.ownerId.length > 0
+                ? fragment.ownerId
+                : triggerBuildingId;
+            const ownerType = typeof (fragment && fragment.ownerType) === "string" && fragment.ownerType.length > 0
+                ? fragment.ownerType
+                : (ownerId && ownerId.startsWith("building:") ? "building" : "");
+            if (floorSupportApi && typeof floorSupportApi.createFloorMembership === "function") {
+                return this.normalizeRenderFloorMembership(floorSupportApi.createFloorMembership({
+                    fragment,
+                    ownerType,
+                    ownerId,
+                    fragmentId: typeof region.fragmentId === "string" ? region.fragmentId : "",
+                    surfaceId: typeof region.surfaceId === "string" ? region.surfaceId : "",
+                    floorId: typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : "",
+                    level: Number.isFinite(Number(region.level)) ? Math.round(Number(region.level)) : undefined
+                }));
+            }
+            const floorId = typeof (fragment && fragment._prototypeBuildingSourceFragmentId) === "string" && fragment._prototypeBuildingSourceFragmentId.length > 0
+                ? fragment._prototypeBuildingSourceFragmentId
+                : (typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : "");
+            return this.normalizeRenderFloorMembership({ ownerType, ownerId, floorId, level: region.level });
+        }
+
+        floorMembershipsMatchForRender(itemMembership, regionMembership) {
+            const itemFloor = this.normalizeRenderFloorMembership(itemMembership);
+            const regionFloor = this.normalizeRenderFloorMembership(regionMembership);
+            if (!itemFloor || !regionFloor) return false;
+            if (itemFloor.ownerType !== regionFloor.ownerType) return false;
+            if (itemFloor.ownerId !== regionFloor.ownerId) return false;
+            if (itemFloor.floorId !== regionFloor.floorId) return false;
+            if (Number.isFinite(itemFloor.level) && Number.isFinite(regionFloor.level) && itemFloor.level !== regionFloor.level) return false;
+            return true;
+        }
+
+        renderItemMembershipMatchesCutawayTrigger(item, trigger, mapRef = null, refs = null) {
+            const membership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs);
+            if (!membership || membership.ownerType !== "building") return false;
+            const triggerBuildingId = typeof (trigger && trigger.buildingId) === "string" && trigger.buildingId.length > 0
+                ? trigger.buildingId
+                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string" && trigger.building.buildingId.length > 0
+                    ? trigger.building.buildingId
+                    : (typeof (trigger && trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
+                        ? trigger.building._prototypeBuildingPlacement.id
+                        : ""));
+            return !!triggerBuildingId && membership.ownerId === triggerBuildingId;
+        }
+
+        renderItemMembershipMatchesBuildingInteriorRegion(item, trigger, region, mapRef = null, refs = null) {
+            return this.floorMembershipsMatchForRender(
+                this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs),
+                this.getBuildingInteriorRegionFloorMembership(region, trigger)
+            );
         }
 
         hasBuildingInteriorFloorRefs(refs) {
@@ -2369,6 +2460,30 @@ void main(void) {
                     for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
                         const region = regions[regionIndex];
                         if (!region) continue;
+                        const isActiveRegion = region === activeRegion || (
+                            activeRegionId &&
+                            typeof region.id === "string" &&
+                            region.id === activeRegionId
+                        );
+                        if (isActiveRegion) {
+                            const entries = Array.isArray(region.staticObjects) ? region.staticObjects : [];
+                            for (let j = 0; j < entries.length; j++) {
+                                const entry = entries[j];
+                                const item = entry && entry.item;
+                                if (
+                                    this.shouldRenderActiveInteriorItemLiveOverReadyBitmap(item, region, entry, ctx, wizardRef) &&
+                                    !this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)
+                                ) {
+                                    plan.items.add(item);
+                                }
+                            }
+                            const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
+                            for (let j = 0; j < floorRenderItems.length; j++) {
+                                const item = floorRenderItems[j];
+                                if (!item || this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)) continue;
+                                plan.items.add(item);
+                            }
+                        }
                         for (let j = 0; j < dynamicCharacters.length; j++) {
                             const character = dynamicCharacters[j];
                             if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
@@ -2440,7 +2555,7 @@ void main(void) {
                             plan.items.add(character);
                         }
                     }
-                    const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef);
+                    const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
                     for (let j = 0; j < floorRenderItems.length; j++) {
                         if (floorRenderItems[j]) plan.items.add(floorRenderItems[j]);
                     }
@@ -2462,6 +2577,7 @@ void main(void) {
             if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return false;
             const cache = mapRef.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
             if (!cache || cache.status !== "ready") return false;
+            if (cache.stale === true) return false;
             if (!cache.texture) {
                 throw new Error(`prototype building interior ${cache.id || placement.id} ready cache is missing its texture`);
             }
@@ -4007,7 +4123,6 @@ void main(void) {
             item.level = lowerLevel;
             item.traversalLayer = lowerLevel;
             item.currentLayer = lowerLevel;
-            item._renderTraversalLayer = lowerLevel;
             item.fragmentId = lowerFragmentId;
             item.surfaceId = lowerFragment && typeof lowerFragment.surfaceId === "string" ? lowerFragment.surfaceId : "";
             item.lowerFragmentId = lowerFragmentId;
@@ -4110,18 +4225,140 @@ void main(void) {
             return false;
         }
 
-        collectBuildingInteriorFloorRenderItems(ctx, region, mapRef = null) {
+        collectBuildingInteriorFloorRenderItems(ctx, region, mapRef = null, trigger = null) {
             const out = [];
+            const seen = new Set();
+            const add = (item) => {
+                if (!item || seen.has(item)) return;
+                seen.add(item);
+                out.push(item);
+            };
             const map = mapRef || (ctx && ctx.map) || global.map || null;
-            if (!map || !(map.stairsById instanceof Map)) return out;
-            for (const stair of map.stairsById.values()) {
-                if (stair && stair.renderedByBuildingCutaway === true) continue;
-                const item = this.getStairRenderObject(stair, map);
-                if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) {
-                    out.push(item);
+            if (!map) return out;
+            const canonicalObjects = this.getCanonicalFloorObjectsForBuildingInteriorRegion(region, map, trigger);
+            for (let i = 0; i < canonicalObjects.length; i++) {
+                const item = canonicalObjects[i];
+                if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) add(item);
+            }
+            if (map.stairsById instanceof Map) {
+                for (const stair of map.stairsById.values()) {
+                    if (stair && stair.renderedByBuildingCutaway === true) continue;
+                    const item = this.getStairRenderObject(stair, map);
+                    if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) {
+                        add(item);
+                    }
                 }
             }
             return out;
+        }
+
+        getCanonicalFloorObjectsForBuildingInteriorRegion(region, mapRef = null, trigger = null) {
+            const map = mapRef || global.map || null;
+            if (!map || typeof map.getObjectsForFloorMembership !== "function" || !region) return [];
+            const membership = this.getBuildingInteriorRegionFloorMembership(region, trigger);
+            if (!membership) return [];
+            return map.getObjectsForFloorMembership(membership);
+        }
+
+        getFloorObjectRenderSignature(item) {
+            if (!item || typeof item !== "object") return "";
+            const numberOrNull = (value) => Number.isFinite(Number(value)) ? Number(Number(value).toFixed(4)) : null;
+            const membership = item._floorMembership && typeof item._floorMembership === "object" ? item._floorMembership : null;
+            return JSON.stringify({
+                type: typeof item.type === "string" ? item.type : "",
+                objectType: typeof item.objectType === "string" ? item.objectType : "",
+                category: typeof item.category === "string" ? item.category : "",
+                texturePath: typeof item.texturePath === "string" ? item.texturePath : "",
+                x: numberOrNull(item.x),
+                y: numberOrNull(item.y),
+                z: numberOrNull(item.z),
+                width: numberOrNull(item.width),
+                height: numberOrNull(item.height),
+                traversalLayer: numberOrNull(item.traversalLayer),
+                level: numberOrNull(item.level),
+                rotationAxis: typeof item.rotationAxis === "string" ? item.rotationAxis : "",
+                placementRotation: numberOrNull(item.placementRotation),
+                isOpen: item.isOpen === true,
+                visible: item.visible !== false,
+                scriptVisible: this.isScriptVisible(item),
+                ownerType: membership && typeof membership.ownerType === "string" ? membership.ownerType : "",
+                ownerId: membership && typeof membership.ownerId === "string" ? membership.ownerId : "",
+                floorId: membership && typeof membership.floorId === "string" ? membership.floorId : "",
+                floorLevel: membership && Number.isFinite(Number(membership.level)) ? Math.round(Number(membership.level)) : null
+            });
+        }
+
+        getFloorObjectPickerSignature(item) {
+            if (!item || typeof item !== "object") return "";
+            const hitbox = item.groundPlaneHitbox || item.visualHitbox || null;
+            const hitboxSignature = hitbox ? JSON.stringify({
+                type: hitbox.constructor && hitbox.constructor.name ? hitbox.constructor.name : "",
+                x: Number.isFinite(Number(hitbox.x)) ? Number(Number(hitbox.x).toFixed(4)) : null,
+                y: Number.isFinite(Number(hitbox.y)) ? Number(Number(hitbox.y).toFixed(4)) : null,
+                radius: Number.isFinite(Number(hitbox.radius)) ? Number(Number(hitbox.radius).toFixed(4)) : null,
+                points: Array.isArray(hitbox.points)
+                    ? hitbox.points.map(p => ({
+                        x: Number.isFinite(Number(p && p.x)) ? Number(Number(p.x).toFixed(4)) : null,
+                        y: Number.isFinite(Number(p && p.y)) ? Number(Number(p.y).toFixed(4)) : null
+                    }))
+                    : null
+            }) : "";
+            return `${this.getFloorObjectRenderSignature(item)}|picker:${hitboxSignature}`;
+        }
+
+        ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache) {
+            if (!cache || cache.status !== "ready") return cache;
+            if (!cache.texture) {
+                throw new Error(`prototype building interior ${cache.id || "(unknown)"} ready cache is missing its texture`);
+            }
+            if (cache.coveredObjectSet instanceof Set && cache.objectRenderSignatures instanceof Map && cache.objectPickerSignatures instanceof Map) {
+                return cache;
+            }
+            const coveredObjectSet = new Set();
+            const objectRenderSignatures = new Map();
+            const objectPickerSignatures = new Map();
+            const explicitCoveredObjects = Array.isArray(cache.coveredObjects)
+                ? cache.coveredObjects
+                : (Array.isArray(cache.coveredObjectEntries) ? cache.coveredObjectEntries.map(entry => entry && entry.item) : []);
+            for (let i = 0; i < explicitCoveredObjects.length; i++) {
+                const item = explicitCoveredObjects[i];
+                if (!item || item.gone || item.vanishing) continue;
+                coveredObjectSet.add(item);
+                objectRenderSignatures.set(item, this.getFloorObjectRenderSignature(item));
+                objectPickerSignatures.set(item, this.getFloorObjectPickerSignature(item));
+            }
+            cache.coveredObjectSet = coveredObjectSet;
+            cache.objectRenderSignatures = objectRenderSignatures;
+            cache.objectPickerSignatures = objectPickerSignatures;
+            return cache;
+        }
+
+        isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState = null, mapRef = null, ctx = null) {
+            if (!item || item.gone || item.vanishing) return false;
+            const state = cutawayState || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const map = mapRef || (ctx && ctx.map) || global.map || null;
+            if (!map || typeof map.getPrototypeBuildingInteriorBitmap !== "function") return false;
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!this.isPrototypeBuildingCutawayTrigger(trigger) || !trigger.activeInteriorRegion) continue;
+                const placement = trigger.building && trigger.building._prototypeBuildingPlacement;
+                if (!placement || !placement.id) continue;
+                const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
+                if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) continue;
+                const cache = map.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
+                if (!cache || cache.status !== "ready" || cache.stale === true) continue;
+                this.ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache);
+                if (!(cache.coveredObjectSet instanceof Set) || !cache.coveredObjectSet.has(item)) continue;
+                if (!(cache.objectRenderSignatures instanceof Map) || !(cache.objectPickerSignatures instanceof Map)) {
+                    throw new Error(`prototype building interior ${cache.id || placement.id} coverage is missing object signatures`);
+                }
+                return (
+                    cache.objectRenderSignatures.get(item) === this.getFloorObjectRenderSignature(item) &&
+                    cache.objectPickerSignatures.get(item) === this.getFloorObjectPickerSignature(item)
+                );
+            }
+            return false;
         }
 
         renderItemMatchesCutawayTrigger(item, trigger, mapRef = null) {
@@ -4154,110 +4391,17 @@ void main(void) {
             return this.renderItemSamplesMatchPolygons(item, polygons, mapRef || global.map || null);
         }
 
-        isPrototypeBuildingInteriorRuntimeItem(item, refs = null, mapRef = null) {
-            if (!item || item.type === "roof" || this.isBuildingCutawayStructuralItem(item)) return false;
-            const ownerType = typeof item._prototypeOwnerType === "string" ? item._prototypeOwnerType : "";
-            const ownerId = typeof item._prototypeOwnerId === "string" ? item._prototypeOwnerId : "";
-            if (ownerType === "building" && ownerId.startsWith("building:placed-")) return true;
-            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            for (let i = 0; i < refList.length; i++) {
-                const ref = refList[i];
-                const fragmentId = typeof (ref && ref.fragmentId) === "string" ? ref.fragmentId : "";
-                const surfaceId = typeof (ref && ref.surfaceId) === "string" ? ref.surfaceId : "";
-                if (fragmentId.startsWith("building:placed-") || surfaceId.startsWith("building:placed-")) return true;
-            }
-            return false;
-        }
-
-        getPrototypeBuildingRuntimeItemOwnerId(item, refs = null, mapRef = null) {
-            if (!item) return "";
-            const ownerType = typeof item._prototypeOwnerType === "string" ? item._prototypeOwnerType : "";
-            const ownerId = typeof item._prototypeOwnerId === "string" ? item._prototypeOwnerId : "";
-            if (ownerType === "building" && ownerId.startsWith("building:placed-")) return ownerId;
-            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            for (let i = 0; i < refList.length; i++) {
-                const ref = refList[i];
-                const fragmentId = typeof (ref && ref.fragmentId) === "string" ? ref.fragmentId : "";
-                const surfaceId = typeof (ref && ref.surfaceId) === "string" ? ref.surfaceId : "";
-                const fragmentMatch = /^(building:placed-\d+):floor:/.exec(fragmentId);
-                if (fragmentMatch) return fragmentMatch[1];
-                const surfaceMatch = /^(building:placed-\d+):surface:/.exec(surfaceId);
-                if (surfaceMatch) return surfaceMatch[1];
-            }
-            return "";
-        }
-
-        prototypeBuildingRuntimeItemMatchesTrigger(item, trigger, refs = null, mapRef = null) {
-            if (!this.isPrototypeBuildingInteriorRuntimeItem(item, refs, mapRef || global.map || null)) return false;
-            const itemOwnerId = this.getPrototypeBuildingRuntimeItemOwnerId(item, refs, mapRef || global.map || null);
-            if (!itemOwnerId) return false;
-            const triggerBuildingId = typeof (trigger && trigger.buildingId) === "string" && trigger.buildingId.length > 0
-                ? trigger.buildingId
-                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string"
-                    ? trigger.building.buildingId
-                    : (typeof (trigger && trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
-                        ? trigger.building._prototypeBuildingPlacement.id
-                        : ""));
-            return triggerBuildingId === itemOwnerId;
-        }
-
-        warnPrototypeBuildingInteriorPositionRecovery(item, trigger, region, refs = null) {
-            if (!item || typeof console === "undefined" || typeof console.warn !== "function") return;
-            const triggerId = typeof (trigger && trigger.buildingId) === "string"
-                ? trigger.buildingId
-                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string" ? trigger.building.buildingId : "");
-            const regionId = typeof (region && region.id) === "string" ? region.id : "";
-            const key = `${triggerId}|${regionId}`;
-            if (item._prototypeBuildingInteriorPositionRecoveryKey === key) return;
-            item._prototypeBuildingInteriorPositionRecoveryKey = key;
-            console.warn("[building interior render] prototype building item floor refs missed active region; recovered by owner and position", {
-                itemType: typeof item.type === "string" ? item.type : "",
-                category: typeof item.category === "string" ? item.category : "",
-                recordId: Number.isInteger(Number(item._prototypeRecordId)) ? Number(item._prototypeRecordId) : null,
-                ownerType: typeof item._prototypeOwnerType === "string" ? item._prototypeOwnerType : "",
-                ownerId: typeof item._prototypeOwnerId === "string" ? item._prototypeOwnerId : "",
-                triggerId,
-                regionId,
-                x: Number.isFinite(item.x) ? Number(item.x) : null,
-                y: Number.isFinite(item.y) ? Number(item.y) : null,
-                refs: Array.isArray(refs) ? refs.slice(0, 4) : []
-            });
-        }
-
-        renderItemPositionMatchesBuildingInteriorRegion(item, region, mapRef = null) {
-            if (!item || !region) return false;
-            const regionLevel = this.getLayerIndexFromValue(region.level, 0);
-            const itemLevel = this.getLayerIndexForObject(item, regionLevel);
-            if (itemLevel !== regionLevel) return false;
-            if (region.kind === "floorFragment" && region.fragment) {
-                const pos = this.resolveInterpolatedItemWorldPosition(item, mapRef || global.map || null);
-                if (pos) {
-                    return isPointInsideFloorVisibilityFragment(region.fragment, pos.x, pos.y) ||
-                        isPointSupportedByFloorFragment(region.fragment, pos.x, pos.y) ||
-                        this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || global.map || null);
-                }
-            }
-            if (region.polygon) {
-                return this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || global.map || null);
-            }
-            return false;
-        }
-
         renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef = null, refs = null) {
             if (!item || !trigger || !trigger.activeInteriorRegion) return false;
             const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            if (!this.hasBuildingInteriorFloorRefs(refList)) return false;
+            const hasRefs = this.hasBuildingInteriorFloorRefs(refList);
+            const itemMembership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refList);
+            if (!hasRefs && !itemMembership) return false;
             const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
             const visibleRegions = regions.length > 0 ? regions : [trigger.activeInteriorRegion];
             for (let i = 0; i < visibleRegions.length; i++) {
-                if (this.renderItemRefsMatchBuildingInteriorRegion(refList, visibleRegions[i])) return true;
-                if (
-                    this.prototypeBuildingRuntimeItemMatchesTrigger(item, trigger, refList, mapRef || global.map || null) &&
-                    this.renderItemPositionMatchesBuildingInteriorRegion(item, visibleRegions[i], mapRef || global.map || null)
-                ) {
-                    this.warnPrototypeBuildingInteriorPositionRecovery(item, trigger, visibleRegions[i], refList);
-                    return true;
-                }
+                if (hasRefs && this.renderItemRefsMatchBuildingInteriorRegion(refList, visibleRegions[i])) return true;
+                if (itemMembership && this.floorMembershipsMatchForRender(itemMembership, this.getBuildingInteriorRegionFloorMembership(visibleRegions[i], trigger))) return true;
             }
             return false;
         }
@@ -4273,22 +4417,10 @@ void main(void) {
             return true;
         }
 
-        shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null) {
+        shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null, cutawayState = null, ctx = null) {
             if (!item || item.type === "roof") return false;
             if (this.isBuildingCutawayStructuralItem(item)) return false;
-            const ownerType = typeof item._prototypeOwnerType === "string" ? item._prototypeOwnerType : "";
-            const ownerId = typeof item._prototypeOwnerId === "string" ? item._prototypeOwnerId : "";
-            if (ownerType === "building" && ownerId.startsWith("building:placed-")) return true;
-            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            for (let i = 0; i < refs.length; i++) {
-                const ref = refs[i];
-                const fragmentId = typeof (ref && ref.fragmentId) === "string" ? ref.fragmentId : "";
-                const surfaceId = typeof (ref && ref.surfaceId) === "string" ? ref.surfaceId : "";
-                if (fragmentId.startsWith("building:placed-") || surfaceId.startsWith("building:placed-")) {
-                    return true;
-                }
-            }
-            return false;
+            return this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx);
         }
 
         shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState = null, mapRef = null) {
@@ -4297,13 +4429,14 @@ void main(void) {
             const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
             if (triggers.length === 0) return false;
             const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            if (!this.hasBuildingInteriorFloorRefs(refs)) return false;
+            const membership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs);
+            if (!this.hasBuildingInteriorFloorRefs(refs) && !membership) return false;
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) continue;
                 if (
                     !this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null) &&
-                    !this.prototypeBuildingRuntimeItemMatchesTrigger(item, trigger, refs, mapRef || global.map || null)
+                    !this.renderItemMembershipMatchesCutawayTrigger(item, trigger, mapRef || global.map || null, refs)
                 ) {
                     continue;
                 }
@@ -4316,7 +4449,7 @@ void main(void) {
 
         shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState = null, mapRef = null) {
             return !!(
-                this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef) &&
+                !this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef, cutawayState) &&
                 this.shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState, mapRef)
             );
         }
@@ -7148,6 +7281,47 @@ void main(void) {
             return promoted;
         }
 
+        promotePrototypeBuildingInteriorLiveRenderItems(ctx, cutawayState, container, currentDisplayObjects = null, renderItems = [], foregroundPlan = null) {
+            const plannedItems = foregroundPlan &&
+                foregroundPlan.items instanceof Set &&
+                foregroundPlan.items.size > 0
+                ? foregroundPlan.items
+                : null;
+            const fallbackCandidates = Array.isArray(renderItems) ? renderItems : [];
+            const candidateCount = plannedItems ? plannedItems.size : fallbackCandidates.length;
+            if (!container || candidateCount === 0) {
+                this.setFrameMetric("objects3dPrototypeInteriorLivePromoted", 0);
+                return 0;
+            }
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            const promotedSet = new Set();
+            let promoted = 0;
+            const promoteCandidate = (item) => {
+                if (!item || item.gone || item.vanishing) return;
+                if (!this.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState, mapRef)) {
+                    return;
+                }
+                const displayObjects = this.collectBuildingInteriorDisplayObjectsForItem(item);
+                for (let d = 0; d < displayObjects.length; d++) {
+                    const displayObj = displayObjects[d];
+                    if (!displayObj || displayObj.visible === false || displayObj.renderable === false) continue;
+                    if (this.promoteDisplayObjectForBuildingInterior(displayObj, container, currentDisplayObjects, promotedSet)) {
+                        promoted += 1;
+                    }
+                    this.addPickRenderItem(item, displayObj, { forceInclude: true });
+                }
+            };
+            if (plannedItems) {
+                plannedItems.forEach(item => promoteCandidate(item));
+            } else {
+                for (let i = 0; i < fallbackCandidates.length; i++) {
+                    promoteCandidate(fallbackCandidates[i]);
+                }
+            }
+            this.setFrameMetric("objects3dPrototypeInteriorLivePromoted", promoted);
+            return promoted;
+        }
+
         ensureBuildingInteriorOverlayContainer(container = null) {
             const target = container || (this.layers && this.layers.objects3d) || null;
             if (!target || typeof PIXI === "undefined" || !PIXI.Container) return null;
@@ -7502,6 +7676,20 @@ void main(void) {
                 return this.renderItemSamplesMatchPolygons(item, [region.polygon], (ctx && ctx.map) || global.map || null);
             }
             return false;
+        }
+
+        shouldRenderActiveInteriorItemLiveOverReadyBitmap(item, region, entry, ctx, wizardRef) {
+            if (!item || item.gone || item.vanishing) return false;
+            const isPlacedStaticObject = !!(
+                item.isPlacedObject === true ||
+                item.objectType === "placedObject" ||
+                item.type === "placedObject" ||
+                (item._floorMembership && typeof item._floorMembership === "object")
+            );
+            if (!isPlacedStaticObject) return false;
+            if (item.rotationAxis === "ground") return false;
+            if (this.isBuildingInteriorOverlaySurfaceItem(item)) return false;
+            return this.shouldRenderBuildingInteriorOverlayItem(item, region, entry, ctx, wizardRef);
         }
 
         getBuildingInteriorDynamicCharacterCandidates(ctx = null, wizardRef = null) {
@@ -9758,12 +9946,12 @@ void main(void) {
                             duplicateRefsSkipped += 1;
                             continue;
                         }
-                        obj._renderTraversalLayer = Number.isFinite(obj.traversalLayer)
+                        const objRenderLayer = Number.isFinite(obj.traversalLayer)
                             ? this.getLayerIndexFromValue(obj.traversalLayer, nodeLayer)
                             : (Number.isFinite(obj.level)
                                 ? this.getLayerIndexFromValue(obj.level, nodeLayer)
                                 : nodeLayer);
-                        if (obj.type === "wallSection") addMountedWallCandidate(obj, obj._renderTraversalLayer);
+                        if (obj.type === "wallSection") addMountedWallCandidate(obj, objRenderLayer);
                         this.logPlaceObjectRenderDebug(
                             n >= nodes.length ? "collected-from-floor-node" : "collected-from-visible-node",
                             obj,
@@ -9893,7 +10081,6 @@ void main(void) {
                     }
                     addMountedWallCandidate(wall, wallLayer);
                     if (seen.has(wall)) continue;
-                    wall._renderTraversalLayer = wallLayer;
                     seen.add(wall);
                     out.push(wall);
                     globalWallsAdded += 1;
@@ -9934,7 +10121,8 @@ void main(void) {
                         skippedBuildingCutaway += 1;
                         continue;
                     }
-                    obj._renderTraversalLayer = wallLayer;
+                    if (!Number.isFinite(obj.traversalLayer)) obj.traversalLayer = wallLayer;
+                    if (!Number.isFinite(obj.level)) obj.level = wallLayer;
                     seen.add(obj);
                     out.push(obj);
                     mountedObjectsAdded += 1;
@@ -9958,11 +10146,6 @@ void main(void) {
                     continue;
                 }
                 if (seen.has(animal)) continue;
-                animal._renderTraversalLayer = Number.isFinite(animal.traversalLayer)
-                    ? Number(animal.traversalLayer)
-                    : (Number.isFinite(animal.currentLayer)
-                        ? Number(animal.currentLayer)
-                        : 0);
                 seen.add(animal);
                 out.push(animal);
                 animalsAdded += 1;
@@ -10269,20 +10452,25 @@ void main(void) {
             };
             const shouldScanFloorObjectNode = (node) => {
                 if (!node) return false;
-                const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                const ownerSectionKey = typeof node.ownerSectionKey === "string" && node.ownerSectionKey.length > 0
+                    ? node.ownerSectionKey
+                    : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
+                const activitySectionKey = typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+                    ? node._prototypeSectionKey
+                    : (typeof node.sourceNode?._prototypeSectionKey === "string" ? node.sourceNode._prototypeSectionKey : "");
                 if (
-                    sectionKey &&
+                    ownerSectionKey &&
                     useViewportSectionFilter &&
-                    !viewportSectionKeys.has(sectionKey)
+                    !viewportSectionKeys.has(ownerSectionKey)
                 ) {
                     return false;
                 }
                 if (
                     !useViewportSectionFilter &&
-                    sectionKey &&
+                    activitySectionKey &&
                     activeSectionKeys instanceof Set &&
                     activeSectionKeys.size > 0 &&
-                    !activeSectionKeys.has(sectionKey)
+                    !activeSectionKeys.has(activitySectionKey)
                 ) {
                     return false;
                 }
@@ -10334,7 +10522,9 @@ void main(void) {
                         if (!shouldCacheFloorObjectNode(node)) return;
                         const yKey = Number.isFinite(node.yindex) ? Math.round(Number(node.yindex)) : null;
                         if (!Number.isFinite(yKey)) return;
-                        const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                        const sectionKey = typeof node.ownerSectionKey === "string" && node.ownerSectionKey.length > 0
+                            ? node.ownerSectionKey
+                            : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
                         let sectionRows = bySectionY.get(sectionKey);
                         if (!(sectionRows instanceof Map)) {
                             sectionRows = new Map();
@@ -15676,7 +15866,7 @@ void main(void) {
                     this.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState, mapRef);
                 if (
                     !planHasItem &&
-                    this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef) &&
+                    this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef, cutawayState, ctx) &&
                     !prototypeInteriorLiveFullAlpha
                 ) {
                     this.logPlaceObjectRenderDebug("filter-drop-prototype-building-interior-live", item, {
@@ -16064,6 +16254,14 @@ void main(void) {
                     if (mesh) currentDisplayObjects.add(mesh);
                 });
             }
+            this.promotePrototypeBuildingInteriorLiveRenderItems(
+                ctx,
+                cutawayState,
+                container,
+                currentDisplayObjects,
+                renderItems,
+                buildingInteriorRenderPlan
+            );
             this.renderPrototypeBuildingExteriorGroundDoors(
                 ctx,
                 cutawayState,
@@ -18291,7 +18489,6 @@ void main(void) {
                 previewItem.centerSnapGuide = null;
                 previewItem.traversalLayer = placementLayer;
                 previewItem.level = placementLayer;
-                previewItem._renderTraversalLayer = placementLayer;
                 previewItem._renderLayerBaseZ = placementLayerBaseZ;
                 return previewItem;
             }
@@ -18383,7 +18580,6 @@ void main(void) {
             previewItem.category = selectedCategory;
             previewItem.traversalLayer = placementLayer;
             previewItem.level = placementLayer;
-            previewItem._renderTraversalLayer = placementLayer;
             previewItem._renderLayerBaseZ = placementLayerBaseZ;
             
             if (wizard.selectedPlaceableCompositeLayersByTexture && wizard.selectedPlaceableCompositeLayersByTexture[texturePath]) {

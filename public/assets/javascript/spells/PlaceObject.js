@@ -232,6 +232,34 @@ function shouldAddPlacedObjectToFloorBuildingManifest(mapRef, placedObject, plac
     return !isPrototypeBuildingPlacementFloorFragment(fragment);
 }
 
+function invalidatePlacedObjectPrototypeBuildingInteriorBitmap(mapRef, placedObject) {
+    if (!mapRef || !placedObject || typeof placedObject !== "object") return false;
+    const membership = placedObject._floorMembership && typeof placedObject._floorMembership === "object"
+        ? placedObject._floorMembership
+        : (placedObject.floorMembership && typeof placedObject.floorMembership === "object" ? placedObject.floorMembership : null);
+    if (
+        !membership ||
+        membership.ownerType !== "building" ||
+        typeof membership.ownerId !== "string" ||
+        membership.ownerId.length === 0 ||
+        typeof membership.floorId !== "string" ||
+        membership.floorId.length === 0
+    ) {
+        return false;
+    }
+    if (typeof mapRef.invalidatePrototypeBuildingInteriorBitmap !== "function") {
+        if (mapRef._prototypeBuildingState) {
+            throw new Error(`placed object on ${membership.ownerId} floor ${membership.floorId} cannot invalidate missing prototype interior bitmap cache API`);
+        }
+        return false;
+    }
+    mapRef.invalidatePrototypeBuildingInteriorBitmap({
+        placementId: membership.ownerId,
+        floorId: membership.floorId
+    });
+    return true;
+}
+
 function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementNode = null, options = {}) {
     if (!entity || !placementTarget || typeof placementTarget !== "object") return null;
     const opts = (options && typeof options === "object") ? options : {};
@@ -248,6 +276,28 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
         entity._prototypeOwnerId = support.ownerId;
         entity._prototypeOwnerSectionKey = "";
         entity._prototypeOwnerSignature = `building:${support.ownerId}`;
+    };
+    const stampFloorMembership = (support) => {
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const membership = support && support.floorMembership
+            ? support.floorMembership
+            : (floorSupportApi && typeof floorSupportApi.createFloorMembership === "function"
+                ? floorSupportApi.createFloorMembership({
+                    layer,
+                    fragment,
+                    fragmentId,
+                    surfaceId,
+                    ownerType: support && support.ownerType,
+                    ownerId: support && support.ownerId,
+                    sectionKey: support && support.sectionKey
+                })
+                : null);
+        if (membership && floorSupportApi && typeof floorSupportApi.stampEntityFloorMembership === "function") {
+            floorSupportApi.stampEntityFloorMembership(entity, membership);
+        } else if (membership) {
+            entity._floorMembership = { ...membership };
+        }
+        return membership;
     };
     const layer = Number.isFinite(placementTarget.layer) ? Math.round(Number(placementTarget.layer)) : 0;
     const baseZ = Number.isFinite(placementTarget.baseZ) ? Number(placementTarget.baseZ) : layer * 3;
@@ -284,6 +334,7 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
         const appliedSupport = mapRef.setActorCurrentMovementSupport(entity, support, {
             suppressLayerTransition: true
         });
+        stampFloorMembership(appliedSupport || support);
         stampPrototypeBuildingOwner(appliedSupport);
         if (opts.useLocalZ === true) {
             entity.z = Number.isFinite(opts.localZ) ? Number(opts.localZ) : 0;
@@ -308,6 +359,7 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
             sectionKey: typeof fragment?.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
             nodeId: node && typeof node.id === "string" ? node.id : ""
         };
+        stampFloorMembership(entity.currentMovementSupport);
         if (opts.useLocalZ === true) {
             entity.z = Number.isFinite(opts.localZ) ? Number(opts.localZ) : 0;
         } else if (!Number.isFinite(entity.z)) {
@@ -325,6 +377,7 @@ if (typeof globalThis !== "undefined") {
     globalThis.applyEditorPlacementSupport = applyEditorPlacementSupport;
     globalThis.describePlaceObjectNode = describePlaceObjectNode;
     globalThis.getEditorPlacementFloorFragment = getEditorPlacementFloorFragment;
+    globalThis.invalidatePlacedObjectPrototypeBuildingInteriorBitmap = invalidatePlacedObjectPrototypeBuildingInteriorBitmap;
     globalThis.isPrototypeBuildingPlacementFloorFragment = isPrototypeBuildingPlacementFloorFragment;
     globalThis.logPlaceObjectDebug = logPlaceObjectDebug;
     globalThis.resolveEditorLayerInfo = resolveEditorLayerInfo;
@@ -718,13 +771,20 @@ class PlaceObject extends globalThis.Spell {
             }
             placedObject.traversalLayer = placementLayer;
             placedObject.level = placementLayer;
-            placedObject._renderTraversalLayer = placementLayer;
             placedObject._renderLayerBaseZ = placementLayerBaseZ;
             if (placementNode) {
                 placedObject.node = placementNode;
                 placedObject.surfaceId = typeof placementNode.surfaceId === "string" ? placementNode.surfaceId : "";
                 placedObject.fragmentId = typeof placementNode.fragmentId === "string" ? placementNode.fragmentId : "";
             }
+            if (
+                placedObject._floorMembership &&
+                wizard.map &&
+                typeof wizard.map.registerFloorObject === "function"
+            ) {
+                wizard.map.registerFloorObject(placedObject);
+            }
+            invalidatePlacedObjectPrototypeBuildingInteriorBitmap(wizard.map || null, placedObject);
         }
         logPlaceObjectDebug("object-created", {
             created: !!placedObject,

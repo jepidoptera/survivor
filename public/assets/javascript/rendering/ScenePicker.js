@@ -1170,7 +1170,10 @@ void main(void) {
 
         getObjectPickLayerIndex(item, fallback = 0) {
             if (!item) return Number.isFinite(fallback) ? Math.round(Number(fallback)) : 0;
-            if (Number.isFinite(item._renderTraversalLayer)) return Math.round(Number(item._renderTraversalLayer));
+            const membership = (item._floorMembership && typeof item._floorMembership === "object")
+                ? item._floorMembership
+                : (item.floorMembership && typeof item.floorMembership === "object" ? item.floorMembership : null);
+            if (membership && Number.isFinite(Number(membership.level))) return Math.round(Number(membership.level));
             if (Number.isFinite(item.traversalLayer)) return Math.round(Number(item.traversalLayer));
             if (Number.isFinite(item.level)) return Math.round(Number(item.level));
             return Number.isFinite(fallback) ? Math.round(Number(fallback)) : 0;

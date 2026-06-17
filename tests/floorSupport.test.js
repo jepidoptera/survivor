@@ -43,6 +43,24 @@ test("FloorSupport resolves section and building owners from fragments and suppo
     assert.equal(support.baseZ, 9);
     assert.equal(support.ownerType, "building");
     assert.equal(support.ownerId, "building:placed-3");
+    assert.deepEqual(support.floorMembership, {
+        ownerType: "building",
+        ownerId: "building:placed-3",
+        floorId: "top",
+        level: 3
+    });
+    assert.deepEqual(FloorSupport.getEntityFloorMembership({
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:placed-3",
+        fragmentId: "building:placed-3:floor:top",
+        surfaceId: "building:placed-3:surface:top",
+        traversalLayer: 3
+    }), {
+        ownerType: "building",
+        ownerId: "building:placed-3",
+        floorId: "top",
+        level: 3
+    });
     assert.deepEqual(FloorSupport.getSupportOwner({ fragmentId: sectionFragment.fragmentId }, map), { type: "section", id: "0,0" });
 });
 

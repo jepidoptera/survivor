@@ -1419,7 +1419,10 @@ function isDebugWizardObject(obj) {
 
 function getDebugTraversalLayer(obj, fallback = 0) {
     if (!obj) return Number(fallback) || 0;
-    if (Number.isFinite(obj._renderTraversalLayer)) return Math.round(Number(obj._renderTraversalLayer));
+    const membership = (obj._floorMembership && typeof obj._floorMembership === "object")
+        ? obj._floorMembership
+        : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+    if (membership && Number.isFinite(Number(membership.level))) return Math.round(Number(membership.level));
     if (Number.isFinite(obj.traversalLayer)) return Math.round(Number(obj.traversalLayer));
     if (Number.isFinite(obj.currentLayer)) return Math.round(Number(obj.currentLayer));
     if (Number.isFinite(obj.level)) return Math.round(Number(obj.level));

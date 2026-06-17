@@ -169,6 +169,149 @@ function rectCircleIntersects(rect, circle) {
     return dx * dx + dy * dy <= circle.radius * circle.radius;
 }
 
+test("GameMap object registry includes upper-floor node-only placed objects", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.objects = [];
+    map.gameObjects = [];
+    map.nodes = [[{ objects: [], visibilityObjects: [] }]];
+    map.floorNodesById = new Map();
+    map.markBuildingRenderCacheDirty = () => {};
+
+    const placedObject = {
+        map,
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        texturePath: "/assets/images/furniture/crystal%20ball.png",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-fragment-34",
+            level: 1
+        }
+    };
+    const floorNode = {
+        xindex: -153,
+        yindex: 206,
+        traversalLayer: 1,
+        ownerSectionKey: "building:placed-4",
+        _prototypeSectionKey: "-4,0",
+        surfaceId: "building:placed-4:surface:floor-fragment-34",
+        fragmentId: "building:placed-4:floor:floor-fragment-34",
+        objects: [placedObject],
+        visibilityObjects: []
+    };
+    map.floorNodesById.set(floorNode.fragmentId, [floorNode]);
+
+    assert.equal(map.getGameObjects({ refresh: true }).includes(placedObject), true);
+
+    map.objects.push(placedObject);
+    const refreshed = map.getGameObjects({ refresh: true });
+    assert.equal(refreshed.filter((obj) => obj === placedObject).length, 1);
+
+    const spatialIndex = map.ensureFloorObjectNodeSpatialIndex();
+    assert.equal(spatialIndex.bySectionY.has("building:placed-4"), true);
+    assert.equal(spatialIndex.bySectionY.has("-4,0"), false);
+});
+
+test("GameMap tracks canonical floor objects by floor membership", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    map.markBuildingRenderCacheDirty = () => {};
+    const item = {
+        type: "placedObject",
+        objectType: "placedObject",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-fragment-34",
+            level: 1
+        }
+    };
+
+    assert.deepEqual(map.registerFloorObject(item), item._floorMembership);
+    const registeredObjects = map.getObjectsForFloorMembership(item._floorMembership);
+    assert.equal(registeredObjects.length, 1);
+    assert.equal(registeredObjects[0], item);
+    assert.equal(map.unregisterFloorObject(item), true);
+    assert.equal(map.getObjectsForFloorMembership(item._floorMembership).length, 0);
+    assert.throws(
+        () => map.registerFloorObject({ type: "placedObject" }),
+        /requires canonical floor membership/
+    );
+});
+
+test("GameMap updates registered floor object membership when movement support changes", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    map.markBuildingRenderCacheDirty = () => {};
+    map.actorUsesLocalMovementZ = () => true;
+    map.floorsById.set("floor-a-runtime", {
+        fragmentId: "floor-a-runtime",
+        surfaceId: "surface-a-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        _prototypeBuildingSourceFragmentId: "floor-a",
+        level: 1,
+        nodeBaseZ: 3,
+        renderedByBuildingCutaway: true
+    });
+    map.floorsById.set("floor-b-runtime", {
+        fragmentId: "floor-b-runtime",
+        surfaceId: "surface-b-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        _prototypeBuildingSourceFragmentId: "floor-b",
+        level: 2,
+        nodeBaseZ: 6,
+        renderedByBuildingCutaway: true
+    });
+    const item = {
+        type: "placedObject",
+        objectType: "placedObject",
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-a",
+            level: 1
+        }
+    };
+    map.registerFloorObject(item);
+
+    map.setActorCurrentMovementSupport(item, {
+        type: "floor",
+        layer: 2,
+        baseZ: 6,
+        fragmentId: "floor-b-runtime",
+        surfaceId: "surface-b-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        node: { id: "floor-b-node" }
+    });
+
+    assert.equal(map.getObjectsForFloorMembership({
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        floorId: "floor-a",
+        level: 1
+    }).length, 0);
+    const movedObjects = map.getObjectsForFloorMembership({
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        floorId: "floor-b",
+        level: 2
+    });
+    assert.equal(movedObjects.length, 1);
+    assert.equal(movedObjects[0], item);
+});
+
 test("GameMap stair fast-path movement is blocked by swept building wall blockers", () => {
     const map = Object.create(GameMap.prototype);
     map.wrapX = false;

@@ -4917,7 +4917,13 @@ test("syncPrototypeObjects preserves building-owned upper-floor records when run
                 traversalLayer: 1,
                 level: 1,
                 fragmentId,
-                surfaceId: `${buildingId}:surface:upper-surface`
+                surfaceId: `${buildingId}:surface:upper-surface`,
+                floorMembership: {
+                    ownerType: "building",
+                    ownerId: buildingId,
+                    floorId: "upper",
+                    level: 1
+                }
             }],
             animals: [],
             powerups: [],
@@ -4965,6 +4971,12 @@ test("syncPrototypeObjects preserves building-owned upper-floor records when run
     assert.equal(instance.objects.length, 1);
     assert.equal(instance.objects[0].id, 703);
     assert.equal(instance.objects[0].fragmentId, fragmentId);
+    assert.deepEqual(instance.objects[0].floorMembership, {
+        ownerType: "building",
+        ownerId: buildingId,
+        floorId: "upper",
+        level: 1
+    });
     assert.equal(warning, null);
 });
 

@@ -2815,6 +2815,9 @@ void main(void) {
         if (this.map && typeof this.map.removeObjectFromFloorBuildingManifest === "function") {
             this.map.removeObjectFromFloorBuildingManifest(this);
         }
+        if (this.map && typeof this.map.unregisterFloorObject === "function") {
+            this.map.unregisterFloorObject(this);
+        }
         this.gone = true;
         this.vanishing = false;
         const pixiSprite = this.pixiSprite || null;
@@ -3798,6 +3801,20 @@ void main(void) {
             : (typeof (this.node && this.node.fragmentId) === "string" ? this.node.fragmentId : "");
         if (surfaceId) data.surfaceId = surfaceId;
         if (fragmentId) data.fragmentId = fragmentId;
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const floorMembership = floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function"
+            ? floorSupportApi.getEntityFloorMembership(this, { map: this.map || null })
+            : (this._floorMembership && typeof this._floorMembership === "object" ? this._floorMembership : null);
+        if (floorMembership && typeof floorMembership === "object") {
+            data.floorMembership = {
+                ownerType: floorMembership.ownerType,
+                ownerId: floorMembership.ownerId,
+                floorId: floorMembership.floorId
+            };
+            if (Number.isFinite(Number(floorMembership.level))) {
+                data.floorMembership.level = Math.round(Number(floorMembership.level));
+            }
+        }
         if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (typeof this.fallDirection === "string") data.fallDirection = this.fallDirection;
         if (typeof this.script !== "undefined") {
@@ -3983,7 +4000,6 @@ void main(void) {
                 if (Number.isFinite(loadedTraversalLayer)) {
                     obj.traversalLayer = loadedTraversalLayer;
                     obj.level = loadedTraversalLayer;
-                    obj._renderTraversalLayer = loadedTraversalLayer;
                     obj.currentLayer = loadedTraversalLayer;
                     obj.currentLayerBaseZ = Number.isFinite(data.currentLayerBaseZ)
                         ? Number(data.currentLayerBaseZ)
@@ -4035,6 +4051,17 @@ void main(void) {
                 }
                 if (typeof data.fragmentId === "string" && data.fragmentId.length > 0) {
                     obj.fragmentId = data.fragmentId;
+                }
+                if (data.floorMembership && typeof data.floorMembership === "object") {
+                    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+                    if (floorSupportApi && typeof floorSupportApi.stampEntityFloorMembership === "function") {
+                        floorSupportApi.stampEntityFloorMembership(obj, data.floorMembership);
+                    } else {
+                        obj._floorMembership = { ...data.floorMembership };
+                    }
+                    if (map && typeof map.registerFloorObject === "function") {
+                        map.registerFloorObject(obj);
+                    }
                 }
                 attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data);
                 if (data.hp !== undefined) obj.hp = data.hp;

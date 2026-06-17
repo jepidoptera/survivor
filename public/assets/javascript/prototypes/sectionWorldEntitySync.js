@@ -72,73 +72,28 @@
         if (!map || !runtimeObj || !entry || entry.ownerType !== "building") return false;
         const buildingId = typeof entry.ownerId === "string" ? entry.ownerId : "";
         if (!buildingId) return false;
-        const layer = Number.isFinite(Number(runtimeObj.traversalLayer))
+        const initialLayer = Number.isFinite(Number(runtimeObj.traversalLayer))
             ? Math.round(Number(runtimeObj.traversalLayer))
             : (Number.isFinite(Number(runtimeObj.level)) ? Math.round(Number(runtimeObj.level)) : 0);
-        if (layer <= 0) return false;
-        if (!(map.floorsById instanceof Map)) return false;
-        const existingFragmentId = typeof runtimeObj.fragmentId === "string" ? runtimeObj.fragmentId : "";
-        const existingSurfaceId = typeof runtimeObj.surfaceId === "string" ? runtimeObj.surfaceId : "";
-        let fragment = existingFragmentId ? map.floorsById.get(existingFragmentId) || null : null;
-        if (fragment) {
-            if (fragment.renderedByBuildingCutaway !== true || fragment.ownerType !== "building" || fragment.ownerId !== buildingId) {
-                console.warn("[prototype object sync] building-owned upper-floor object references a non-building floor fragment", {
-                    recordId: Number.isInteger(Number(entry.record && entry.record.id)) ? Number(entry.record.id) : null,
-                    buildingId,
-                    layer,
-                    fragmentId: existingFragmentId
-                });
-                return false;
-            }
-            const fragmentLayer = Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : 0;
-            if (fragmentLayer !== layer) {
-                console.warn("[prototype object sync] building-owned upper-floor object references a floor on a different layer", {
-                    recordId: Number.isInteger(Number(entry.record && entry.record.id)) ? Number(entry.record.id) : null,
-                    buildingId,
-                    layer,
-                    fragmentId: existingFragmentId,
-                    fragmentLayer
-                });
-                return false;
-            }
-        } else {
-            const matches = [];
-            for (const candidate of map.floorsById.values()) {
-                if (!candidate || candidate.renderedByBuildingCutaway !== true) continue;
-                if (candidate.ownerType !== "building" || candidate.ownerId !== buildingId) continue;
-                const fragmentLayer = Number.isFinite(Number(candidate.level)) ? Math.round(Number(candidate.level)) : 0;
-                if (fragmentLayer !== layer) continue;
-                if (existingSurfaceId && candidate.surfaceId !== existingSurfaceId) continue;
-                if (
-                    !existingSurfaceId &&
-                    typeof map.isPointSupportedByFloorFragment === "function" &&
-                    !map.isPointSupportedByFloorFragment(candidate, runtimeObj.x, runtimeObj.y)
-                ) continue;
-                matches.push(candidate);
-            }
-            if (matches.length === 0) {
-                console.warn("[prototype object sync] building-owned upper-floor object has no matching floor fragment", {
-                    recordId: Number.isInteger(Number(entry.record && entry.record.id)) ? Number(entry.record.id) : null,
-                    buildingId,
-                    layer,
-                    x: Number(runtimeObj.x),
-                    y: Number(runtimeObj.y),
-                    fragmentId: existingFragmentId,
-                    surfaceId: existingSurfaceId
-                });
-                return false;
-            }
-            if (matches.length > 1) {
-                console.warn("[prototype object sync] building-owned upper-floor object matched multiple floor fragments", {
-                    recordId: Number.isInteger(Number(entry.record && entry.record.id)) ? Number(entry.record.id) : null,
-                    buildingId,
-                    layer,
-                    fragments: matches.map(candidate => candidate && candidate.fragmentId).filter(Boolean)
-                });
-                return false;
-            }
-            fragment = matches[0];
+        if (initialLayer <= 0) return false;
+        const floorSupportApi = globalScope && globalScope.FloorSupport;
+        if (!floorSupportApi || typeof floorSupportApi.getEntityFloorMembership !== "function" || typeof floorSupportApi.resolvePrototypeBuildingFloorFragment !== "function") {
+            throw new Error("prototype building object restore requires FloorSupport floor membership helpers");
         }
+        const membership = floorSupportApi.getEntityFloorMembership(runtimeObj, {
+            map,
+            record: entry.record,
+            ownerType: "building",
+            ownerId: buildingId
+        });
+        if (!membership || membership.ownerType !== "building" || membership.ownerId !== buildingId || typeof membership.floorId !== "string" || membership.floorId.length === 0) {
+            throw new Error(`prototype building object ${entry.record && entry.record.id || "(unknown)"} is missing canonical floor membership for building ${buildingId}`);
+        }
+        const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(map, membership);
+        const layer = Number.isFinite(Number(membership.level))
+            ? Math.round(Number(membership.level))
+            : (Number.isFinite(Number(fragment && fragment.level)) ? Math.round(Number(fragment.level)) : 0);
+        if (layer <= 0) return false;
         const baseNode = runtimeObj.node && typeof runtimeObj.node === "object"
             ? runtimeObj.node
             : (typeof map.worldToNode === "function" ? map.worldToNode(runtimeObj.x, runtimeObj.y) : null);
@@ -191,9 +146,11 @@
             surfaceId: runtimeObj.surfaceId,
             ownerType: "building",
             ownerId: buildingId,
+            floorMembership: membership,
             node: floorNode,
             nodeId: floorNode && typeof floorNode.id === "string" ? floorNode.id : ""
         };
+        floorSupportApi.stampEntityFloorMembership(runtimeObj, membership);
         if (typeof runtimeObj.setIndexedNodes === "function") {
             runtimeObj.setIndexedNodes([floorNode], floorNode);
         } else {
@@ -208,6 +165,7 @@
             surfaceId: runtimeObj.surfaceId,
             ownerType: "building",
             ownerId: buildingId,
+            floorMembership: membership,
             nodeId: support.nodeId
         };
         runtimeObj.currentLayer = layer;
@@ -216,6 +174,9 @@
         runtimeObj._activeFloorFragment = fragment;
         if (typeof map.setActorCurrentMovementSupport === "function") {
             map.setActorCurrentMovementSupport(runtimeObj, support);
+        }
+        if (typeof map.registerFloorObject === "function") {
+            map.registerFloorObject(runtimeObj);
         }
         if (
             entry &&

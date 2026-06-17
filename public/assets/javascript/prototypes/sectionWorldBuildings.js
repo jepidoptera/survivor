@@ -499,9 +499,17 @@
     function invalidatePrototypeBuildingInteriorBitmapEntry(state, placementId, floorId) {
         if (!state || !(state.interiorBitmapsByKey instanceof Map)) return false;
         const key = interiorBitmapKey(placementId, floorId);
+        if (state.pendingInteriorBitmapLoadsByKey instanceof Map) {
+            state.pendingInteriorBitmapLoadsByKey.delete(key);
+        }
         const entry = state.interiorBitmapsByKey.get(key) || null;
         if (!entry) return false;
         if (entry.status === "ready" && entry.texture) {
+            entry.stale = true;
+            entry.staleReason = "object-bake-membership";
+            return true;
+        }
+        if (entry.status === "loading") {
             entry.stale = true;
             entry.staleReason = "object-bake-membership";
             return true;
@@ -2790,7 +2798,7 @@
                 });
         };
 
-        const resolveInteriorBitmapObjectBakeRef = (targetOrRef, options = {}) => {
+        const resolveInteriorBitmapFloorBakeRef = (targetOrRef, options = {}) => {
             const ref = targetOrRef && typeof targetOrRef === "object" ? targetOrRef : {};
             const explicitPlacementId = typeof (options && options.placementId) === "string"
                 ? options.placementId
@@ -2799,19 +2807,11 @@
                     : (typeof ref.buildingId === "string"
                         ? ref.buildingId
                         : (typeof ref._prototypeOwnerId === "string" ? ref._prototypeOwnerId : "")));
-            const recordId = Number.isInteger(Number(options && options.recordId))
-                ? Number(options.recordId)
-                : (Number.isInteger(Number(ref.recordId))
-                    ? Number(ref.recordId)
-                    : (Number.isInteger(Number(ref._prototypeRecordId)) ? Number(ref._prototypeRecordId) : NaN));
-            if (!Number.isInteger(recordId)) {
-                throw new Error("prototype building baked texture exclusion requires an object record id");
-            }
             if (
                 ref._prototypeOwnerType &&
                 ref._prototypeOwnerType !== "building"
             ) {
-                throw new Error(`prototype object ${recordId} is not owned by a building and cannot be removed from a building baked texture`);
+                throw new Error(`prototype object is not owned by a building and cannot affect a building baked texture`);
             }
             const placementId = normalizePlacementId(explicitPlacementId, 0);
             const parseFloorId = (source) => {
@@ -2821,6 +2821,8 @@
                 const candidates = [
                     source.floorId,
                     source.sourceFloorId,
+                    source.floorMembership && source.floorMembership.floorId,
+                    source._floorMembership && source._floorMembership.floorId,
                     source.fragmentId,
                     source.surfaceId
                 ];
@@ -2839,9 +2841,38 @@
                 parseFloorId(ref._activeFloorFragment) ||
                 parseFloorId(ref.node);
             if (!floorId) {
-                throw new Error(`prototype object ${recordId} cannot be removed from a building baked texture without a floor id`);
+                throw new Error(`prototype building baked texture invalidation for ${placementId} requires a floor id`);
             }
+            return { placementId, floorId };
+        };
+
+        const resolveInteriorBitmapObjectBakeRef = (targetOrRef, options = {}) => {
+            const ref = targetOrRef && typeof targetOrRef === "object" ? targetOrRef : {};
+            const recordId = Number.isInteger(Number(options && options.recordId))
+                ? Number(options.recordId)
+                : (Number.isInteger(Number(ref.recordId))
+                    ? Number(ref.recordId)
+                    : (Number.isInteger(Number(ref._prototypeRecordId)) ? Number(ref._prototypeRecordId) : NaN));
+            if (!Number.isInteger(recordId)) {
+                throw new Error("prototype building baked texture exclusion requires an object record id");
+            }
+            const floorRef = resolveInteriorBitmapFloorBakeRef(targetOrRef, options);
+            const placementId = floorRef.placementId;
+            const floorId = floorRef.floorId;
             return { placementId, floorId, recordId };
+        };
+
+        map.invalidatePrototypeBuildingInteriorBitmap = function invalidatePrototypeBuildingInteriorBitmap(targetOrRef, options = {}) {
+            if (!this._prototypeBuildingState) {
+                this.initializePrototypeBuildingState([]);
+            }
+            const state = this._prototypeBuildingState;
+            const ref = resolveInteriorBitmapFloorBakeRef(targetOrRef, options);
+            const changed = invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
+            if (changed && typeof this.markBuildingRenderCacheDirty === "function") {
+                this.markBuildingRenderCacheDirty();
+            }
+            return { ...ref, changed };
         };
 
         map.removePrototypeBuildingObjectFromInteriorBitmap = function removePrototypeBuildingObjectFromInteriorBitmap(targetOrRef, options = {}) {
@@ -3137,7 +3168,7 @@
                         throw new Error(`building interior bitmap render returned no depth metric texture for ${placementId} floor ${sourceFloorId}`);
                     }
                     const pendingAtCommit = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
-                    if (pendingAtCommit && pendingAtCommit.promise !== loadPromise) {
+                    if (!pendingAtCommit || pendingAtCommit.promise !== loadPromise) {
                         destroyPrototypeBuildingBitmapEntry(result);
                         const current = state.interiorBitmapsByKey.get(key);
                         if (current) return current;
@@ -3163,7 +3194,7 @@
                 })
                 .catch((error) => {
                     const pendingAtError = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
-                    if (pendingAtError && pendingAtError.promise !== loadPromise) {
+                    if (!pendingAtError || pendingAtError.promise !== loadPromise) {
                         throw error;
                     }
                     const entry = {

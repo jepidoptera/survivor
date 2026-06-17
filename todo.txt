@@ -99,6 +99,7 @@ X multiple roof types
 X multiple save slots
 / posts and beams
   multiple floor fragments allowed on the same continuous level
+  reduce to one building model.
 
 problems:
 X animals running through walls (some node link blocks were missing)

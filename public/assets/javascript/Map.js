@@ -1037,6 +1037,22 @@ class GameMap {
             }
         }
 
+        // Upper-floor runtime objects are attached to floor nodes, not the
+        // base grid. They must be part of the canonical object registry for
+        // scripting, targeting, debug lookup, and render-side object scans.
+        if (this.floorNodesById instanceof Map) {
+            for (const floorNodes of this.floorNodesById.values()) {
+                if (!Array.isArray(floorNodes)) continue;
+                for (let i = 0; i < floorNodes.length; i++) {
+                    const node = floorNodes[i];
+                    if (!node || !Array.isArray(node.objects)) continue;
+                    for (let j = 0; j < node.objects.length; j++) {
+                        addObject(node.objects[j]);
+                    }
+                }
+            }
+        }
+
         // Wall sections are authoritative in their own map.
         const wallCtor = (typeof globalThis !== "undefined" && globalThis.WallSectionUnit)
             ? globalThis.WallSectionUnit
@@ -1098,6 +1114,9 @@ class GameMap {
         this.floorFragmentsByLayer = new Map();
         this._floorFragmentLayerIndexDirty = false;
         this._floorFragmentLayerIndexSize = 0;
+        this.floorObjectsByMembershipKey = new Map();
+        this.floorObjectMembershipsByKey = new Map();
+        this._floorObjectMembershipKeyByObject = new WeakMap();
         this.floorFragmentsBySurfaceId = new Map();
         this.floorFragmentsBySectionKey = new Map();
         this.floorNodesById = new Map();
@@ -1111,6 +1130,160 @@ class GameMap {
         this.transitionsById = new Map();
         this.stairsById = new Map();
         this.markFloorObjectNodeCacheDirty();
+    }
+
+    normalizeFloorObjectMembership(membership, options = {}) {
+        const opts = options && typeof options === "object" ? options : {};
+        const required = opts.required !== false;
+        const sourceLabel = typeof opts.sourceLabel === "string" && opts.sourceLabel.length > 0
+            ? opts.sourceLabel
+            : "floor object";
+        const candidate = membership && typeof membership === "object" ? membership : null;
+        const ownerType = typeof (candidate && candidate.ownerType) === "string" ? candidate.ownerType : "";
+        const ownerId = typeof (candidate && candidate.ownerId) === "string" ? candidate.ownerId : "";
+        const floorId = typeof (candidate && candidate.floorId) === "string" ? candidate.floorId : "";
+        const level = Number(candidate && candidate.level);
+        if (ownerType && ownerId && floorId && Number.isFinite(level)) {
+            return {
+                ownerType,
+                ownerId,
+                floorId,
+                level: Math.round(level)
+            };
+        }
+        if (required) {
+            throw new Error(`${sourceLabel} requires canonical floor membership with ownerType, ownerId, floorId, and level`);
+        }
+        return null;
+    }
+
+    getFloorObjectMembershipKey(membership, options = {}) {
+        const normalized = this.normalizeFloorObjectMembership(membership, options);
+        if (!normalized) return "";
+        return `${normalized.ownerType}|${normalized.ownerId}|${normalized.floorId}|${normalized.level}`;
+    }
+
+    getFloorObjectMembershipForObject(obj, options = {}) {
+        const opts = options && typeof options === "object" ? options : {};
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        let membership = floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function"
+            ? floorSupportApi.getEntityFloorMembership(obj, { map: this })
+            : null;
+        if (!membership && obj && typeof obj === "object") {
+            membership = obj._floorMembership && typeof obj._floorMembership === "object"
+                ? obj._floorMembership
+                : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+        }
+        if (membership && !Number.isFinite(Number(membership.level)) && obj && typeof obj === "object") {
+            const level = Number.isFinite(Number(obj.traversalLayer))
+                ? Math.round(Number(obj.traversalLayer))
+                : (Number.isFinite(Number(obj.level))
+                    ? Math.round(Number(obj.level))
+                    : (Number.isFinite(Number(obj.currentLayer)) ? Math.round(Number(obj.currentLayer)) : NaN));
+            if (Number.isFinite(level)) membership = { ...membership, level };
+        }
+        return this.normalizeFloorObjectMembership(membership, {
+            required: opts.required !== false,
+            sourceLabel: opts.sourceLabel || "floor object registration"
+        });
+    }
+
+    registerFloorObject(obj) {
+        if (!obj || typeof obj !== "object") {
+            throw new Error("floor object registration requires an object");
+        }
+        const membership = this.getFloorObjectMembershipForObject(obj, { required: true });
+        const key = this.getFloorObjectMembershipKey(membership);
+        if (!key) {
+            throw new Error("floor object registration produced an empty membership key");
+        }
+        if (!(this.floorObjectsByMembershipKey instanceof Map)) this.floorObjectsByMembershipKey = new Map();
+        if (!(this.floorObjectMembershipsByKey instanceof Map)) this.floorObjectMembershipsByKey = new Map();
+        if (!(this._floorObjectMembershipKeyByObject instanceof WeakMap)) this._floorObjectMembershipKeyByObject = new WeakMap();
+        const previousKey = this._floorObjectMembershipKeyByObject.get(obj) || "";
+        if (previousKey && previousKey !== key) {
+            const previousSet = this.floorObjectsByMembershipKey.get(previousKey);
+            if (previousSet instanceof Set) {
+                previousSet.delete(obj);
+                if (previousSet.size === 0) {
+                    this.floorObjectsByMembershipKey.delete(previousKey);
+                    this.floorObjectMembershipsByKey.delete(previousKey);
+                }
+            }
+        }
+        let set = this.floorObjectsByMembershipKey.get(key);
+        if (!(set instanceof Set)) {
+            set = new Set();
+            this.floorObjectsByMembershipKey.set(key, set);
+        }
+        const hadObject = set.has(obj);
+        set.add(obj);
+        this.floorObjectMembershipsByKey.set(key, membership);
+        this._floorObjectMembershipKeyByObject.set(obj, key);
+        obj._floorMembership = { ...membership };
+        if (!hadObject || previousKey !== key) {
+            this.markFloorObjectNodeCacheDirty();
+            if (typeof this.markBuildingRenderCacheDirty === "function") this.markBuildingRenderCacheDirty();
+        }
+        return membership;
+    }
+
+    unregisterFloorObject(obj) {
+        if (!obj || typeof obj !== "object") return false;
+        const key = this._floorObjectMembershipKeyByObject instanceof WeakMap
+            ? (this._floorObjectMembershipKeyByObject.get(obj) || "")
+            : "";
+        const fallbackKey = key || this.getFloorObjectMembershipKey(
+            this.getFloorObjectMembershipForObject(obj, { required: false }),
+            { required: false }
+        );
+        if (!fallbackKey || !(this.floorObjectsByMembershipKey instanceof Map)) return false;
+        const set = this.floorObjectsByMembershipKey.get(fallbackKey);
+        if (!(set instanceof Set) || !set.delete(obj)) return false;
+        if (this._floorObjectMembershipKeyByObject instanceof WeakMap) {
+            this._floorObjectMembershipKeyByObject.delete(obj);
+        }
+        if (set.size === 0) {
+            this.floorObjectsByMembershipKey.delete(fallbackKey);
+            if (this.floorObjectMembershipsByKey instanceof Map) this.floorObjectMembershipsByKey.delete(fallbackKey);
+        }
+        this.markFloorObjectNodeCacheDirty();
+        if (typeof this.markBuildingRenderCacheDirty === "function") this.markBuildingRenderCacheDirty();
+        return true;
+    }
+
+    getObjectsForFloorMembership(membership) {
+        const key = this.getFloorObjectMembershipKey(membership, { required: false });
+        if (!key || !(this.floorObjectsByMembershipKey instanceof Map)) return [];
+        const set = this.floorObjectsByMembershipKey.get(key);
+        if (!(set instanceof Set) || set.size === 0) return [];
+        const out = [];
+        for (const obj of set.values()) {
+            if (!obj || obj.gone || obj.vanishing) continue;
+            out.push(obj);
+        }
+        return out;
+    }
+
+    getObjectsForFloorFragment(fragmentOrMembership) {
+        if (!fragmentOrMembership || typeof fragmentOrMembership !== "object") return [];
+        if (fragmentOrMembership.ownerType && fragmentOrMembership.ownerId && fragmentOrMembership.floorId) {
+            return this.getObjectsForFloorMembership(fragmentOrMembership);
+        }
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const owner = floorSupportApi && typeof floorSupportApi.getFragmentOwner === "function"
+            ? floorSupportApi.getFragmentOwner(fragmentOrMembership)
+            : null;
+        const floorId = floorSupportApi && typeof floorSupportApi.getSourceFloorIdFromFragment === "function"
+            ? floorSupportApi.getSourceFloorIdFromFragment(fragmentOrMembership)
+            : (typeof fragmentOrMembership.fragmentId === "string" ? fragmentOrMembership.fragmentId : "");
+        const membership = {
+            ownerType: owner && owner.type ? owner.type : (typeof fragmentOrMembership.ownerType === "string" ? fragmentOrMembership.ownerType : ""),
+            ownerId: owner && owner.id ? owner.id : (typeof fragmentOrMembership.ownerId === "string" ? fragmentOrMembership.ownerId : ""),
+            floorId,
+            level: Number.isFinite(Number(fragmentOrMembership.level)) ? Math.round(Number(fragmentOrMembership.level)) : NaN
+        };
+        return this.getObjectsForFloorMembership(membership);
     }
 
     markFloorFragmentLayerIndexDirty() {
@@ -1203,7 +1376,9 @@ class GameMap {
         if (!job || !node || !this.floorObjectNodeHasIndexedRenderEntries(node)) return;
         const yKey = Number.isFinite(node.yindex) ? Math.round(Number(node.yindex)) : null;
         if (!Number.isFinite(yKey)) return;
-        const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+        const sectionKey = typeof node.ownerSectionKey === "string" && node.ownerSectionKey.length > 0
+            ? node.ownerSectionKey
+            : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
         let sectionRows = job.bySectionY.get(sectionKey);
         if (!(sectionRows instanceof Map)) {
             sectionRows = new Map();
@@ -3191,6 +3366,22 @@ class GameMap {
                 sectionKey: typeof (fragment && fragment.ownerSectionKey) === "string" ? fragment.ownerSectionKey : "",
                 nodeId: support.node && typeof support.node.id === "string" ? support.node.id : ""
             };
+            const floorSupportApiForMembership = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+            const floorMembership = floorSupportApiForMembership && typeof floorSupportApiForMembership.createFloorMembership === "function"
+                ? floorSupportApiForMembership.createFloorMembership({
+                    fragment,
+                    ownerType: normalized.ownerType,
+                    ownerId: normalized.ownerId,
+                    sectionKey: normalized.sectionKey,
+                    fragmentId: normalized.fragmentId,
+                    surfaceId: normalized.surfaceId,
+                    layer: nextLayer
+                })
+                : null;
+            if (floorMembership) {
+                normalized.floorMembership = floorMembership;
+                actor._floorMembership = { ...floorMembership };
+            }
         } else {
             nextLayer = 0;
             nextBaseZ = 0;
@@ -3213,6 +3404,17 @@ class GameMap {
         else if (supportType === "ground") actor.surfaceId = "";
         if (normalized.fragmentId) actor.fragmentId = normalized.fragmentId;
         else if (supportType === "ground") actor.fragmentId = "";
+
+        if (
+            this._floorObjectMembershipKeyByObject instanceof WeakMap &&
+            this._floorObjectMembershipKeyByObject.has(actor)
+        ) {
+            if (supportType === "floor") {
+                this.registerFloorObject(actor);
+            } else {
+                this.unregisterFloorObject(actor);
+            }
+        }
 
         if (options.suppressLayerTransition !== true) {
             const isGlobalWizard = typeof globalThis !== "undefined" && actor === globalThis.wizard;

@@ -118,6 +118,12 @@ class Spell {
             const characterZ = Spell.getCharacterWorldZ(target);
             if (Number.isFinite(characterZ)) return characterZ;
         }
+        const membership = (target._floorMembership && typeof target._floorMembership === "object")
+            ? target._floorMembership
+            : (target.floorMembership && typeof target.floorMembership === "object" ? target.floorMembership : null);
+        if (membership && Number.isFinite(Number(membership.level))) {
+            return Spell.getLayerBaseZForLevel(Number(membership.level)) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
         if (Number.isFinite(target.currentLayerBaseZ)) {
             return Number(target.currentLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
         }
@@ -128,13 +134,11 @@ class Spell {
         if (node && Number.isFinite(node.baseZ)) {
             return Number(node.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
         }
-        const layer = Number.isFinite(target._renderTraversalLayer)
-            ? Number(target._renderTraversalLayer)
-            : (Number.isFinite(target.traversalLayer)
-                ? Number(target.traversalLayer)
-                : (Number.isFinite(target.level)
-                    ? Number(target.level)
-                    : (Number.isFinite(target.currentLayer) ? Number(target.currentLayer) : 0)));
+        const layer = Number.isFinite(target.traversalLayer)
+            ? Number(target.traversalLayer)
+            : (Number.isFinite(target.level)
+                ? Number(target.level)
+                : (Number.isFinite(target.currentLayer) ? Number(target.currentLayer) : 0));
         return Spell.getLayerBaseZForLevel(layer) + (Number.isFinite(target.z) ? Number(target.z) : 0);
     }
 
