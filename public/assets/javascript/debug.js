@@ -1454,6 +1454,20 @@ function resolveDebugHitboxWorldZ(owner) {
             );
         return layerBaseZ + localZ;
     }
+    if (isDebugCharacterObject(owner)) {
+        const support = owner.currentMovementSupport && typeof owner.currentMovementSupport === "object"
+            ? owner.currentMovementSupport
+            : null;
+        if (
+            support &&
+            support.type === "floor" &&
+            Number.isFinite(Number(support.baseZ)) &&
+            Math.abs(localZ) <= 0.0001
+        ) {
+            return Number(support.baseZ);
+        }
+        return localZ;
+    }
     return localZ + getDebugLayerBaseZForObject(owner, 0);
 }
 

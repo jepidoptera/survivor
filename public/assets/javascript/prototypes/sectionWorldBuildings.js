@@ -2238,6 +2238,648 @@
         return removed;
     }
 
+    function getPrototypeBuildingNeighborOffsetsForColumn(x) {
+        const isEven = Number(x) % 2 === 0;
+        if (isEven) {
+            return [
+                { x: -2, y: 0 }, { x: -1, y: 0 }, { x: -1, y: -1 },
+                { x: 0, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 0 },
+                { x: 2, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 2 },
+                { x: 0, y: 1 }, { x: -1, y: 2 }, { x: -1, y: 1 }
+            ];
+        }
+        return [
+            { x: -2, y: 0 }, { x: -1, y: -1 }, { x: -1, y: -2 },
+            { x: 0, y: -1 }, { x: 1, y: -2 }, { x: 1, y: -1 },
+            { x: 2, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 },
+            { x: 0, y: 1 }, { x: -1, y: 1 }, { x: -1, y: 0 }
+        ];
+    }
+
+    function getPrototypeBuildingNodeWorldPoint(xindex, yindex) {
+        const xi = Number(xindex);
+        const yi = Number(yindex);
+        return {
+            x: xi * 0.866,
+            y: yi + (xi % 2 === 0 ? 0.5 : 0)
+        };
+    }
+
+    function getPrototypeBuildingPolygonBounds(points) {
+        if (!Array.isArray(points) || points.length < 3) return null;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) return null;
+        return { minX, maxX, minY, maxY };
+    }
+
+    function getPrototypeBuildingPointSegmentDistanceSq(px, py, ax, ay, bx, by) {
+        const abx = bx - ax;
+        const aby = by - ay;
+        const lenSq = abx * abx + aby * aby;
+        if (!(lenSq > 1e-12)) {
+            const dx = px - ax;
+            const dy = py - ay;
+            return dx * dx + dy * dy;
+        }
+        const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+        const cx = ax + abx * t;
+        const cy = ay + aby * t;
+        const dx = px - cx;
+        const dy = py - cy;
+        return dx * dx + dy * dy;
+    }
+
+    function getPrototypeBuildingPointPolygonBoundaryDistanceSq(px, py, points) {
+        if (!Array.isArray(points) || points.length < 3) return Infinity;
+        let best = Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            best = Math.min(best, getPrototypeBuildingPointSegmentDistanceSq(px, py, ax, ay, bx, by));
+        }
+        return best;
+    }
+
+    function getPrototypeBuildingFloorNodeClearance(fragment, x, y) {
+        const outer = Array.isArray(fragment && fragment.outerPolygon) ? fragment.outerPolygon : null;
+        if (!outer || outer.length < 3) return Infinity;
+        let distanceSq = getPrototypeBuildingPointPolygonBoundaryDistanceSq(x, y, outer);
+        const holes = Array.isArray(fragment.holes) ? fragment.holes : [];
+        for (let i = 0; i < holes.length; i++) {
+            if (Array.isArray(holes[i]) && holes[i].length >= 3) {
+                distanceSq = Math.min(distanceSq, getPrototypeBuildingPointPolygonBoundaryDistanceSq(x, y, holes[i]));
+            }
+        }
+        if (!Number.isFinite(distanceSq)) return Infinity;
+        const distance = Math.sqrt(distanceSq);
+        if (distance < 0.5) return -1;
+        return Math.max(1, Math.floor(distance / 0.5));
+    }
+
+    function getPrototypeBuildingFloorNodeCtor(map) {
+        if (map && map.nodes && map.nodes[0] && map.nodes[0][0] && typeof map.nodes[0][0].constructor === "function") {
+            return map.nodes[0][0].constructor;
+        }
+        const sectionState = map && map._prototypeSectionState;
+        if (sectionState && Array.isArray(sectionState.allNodes) && sectionState.allNodes.length > 0) {
+            const node = sectionState.allNodes[0];
+            if (node && typeof node.constructor === "function") return node.constructor;
+        }
+        return null;
+    }
+
+    function ensurePrototypeBuildingFloorNodeMethods(node) {
+        if (!node || typeof node !== "object") return node;
+        if (typeof node.addObject !== "function") {
+            node.addObject = function addObject(obj) {
+                if (!obj) return;
+                if (!Array.isArray(this.objects)) this.objects = [];
+                if (!this.objects.includes(obj)) this.objects.push(obj);
+            };
+        }
+        if (typeof node.removeObject !== "function") {
+            node.removeObject = function removeObject(obj) {
+                if (!Array.isArray(this.objects)) return;
+                const index = this.objects.indexOf(obj);
+                if (index >= 0) this.objects.splice(index, 1);
+            };
+        }
+        if (typeof node.addVisibilityObject !== "function") {
+            node.addVisibilityObject = function addVisibilityObject(obj) {
+                if (!obj) return;
+                if (!Array.isArray(this.visibilityObjects)) this.visibilityObjects = [];
+                if (!this.visibilityObjects.includes(obj)) this.visibilityObjects.push(obj);
+            };
+        }
+        if (typeof node.removeVisibilityObject !== "function") {
+            node.removeVisibilityObject = function removeVisibilityObject(obj) {
+                if (!Array.isArray(this.visibilityObjects)) return;
+                const index = this.visibilityObjects.indexOf(obj);
+                if (index >= 0) this.visibilityObjects.splice(index, 1);
+            };
+        }
+        if (typeof node.hasObjects !== "function") {
+            node.hasObjects = function hasObjects() {
+                return !!(this.objects && this.objects.length > 0);
+            };
+        }
+        if (typeof node.hasBlockingObject !== "function") {
+            node.hasBlockingObject = function hasBlockingObject() {
+                return !!(this.blockedByObjects > 0);
+            };
+        }
+        if (typeof node.isBlocked !== "function") {
+            node.isBlocked = function isBlocked() {
+                return !!(this.blocked || (typeof this.hasBlockingObject === "function" && this.hasBlockingObject()));
+            };
+        }
+        return node;
+    }
+
+    function createPrototypeBuildingFloorNode(map, placement, fragment, xindex, yindex) {
+        if (!map || !placement || !fragment || typeof map.registerFloorNode !== "function" || typeof map.getFloorNodeKey !== "function") {
+            return null;
+        }
+        const xi = Number(xindex);
+        const yi = Number(yindex);
+        if (!Number.isFinite(xi) || !Number.isFinite(yi)) return null;
+        const nodeKey = map.getFloorNodeKey(xi, yi, fragment.surfaceId, fragment.fragmentId);
+        const existingNode = map.floorNodeIndex instanceof Map ? (map.floorNodeIndex.get(nodeKey) || null) : null;
+        if (existingNode) return existingNode;
+        const NodeCtor = getPrototypeBuildingFloorNodeCtor(map);
+        const node = NodeCtor ? new NodeCtor(xi, yi, 1, 1) : {};
+        const point = getPrototypeBuildingNodeWorldPoint(xi, yi);
+        const layer = Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : 0;
+        const baseZ = Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3;
+        node.xindex = xi;
+        node.yindex = yi;
+        node.x = point.x;
+        node.y = point.y;
+        node.sourceNode = {
+            xindex: xi,
+            yindex: yi,
+            x: point.x,
+            y: point.y,
+            traversalLayer: 0,
+            baseZ: 0,
+            id: `${xi},${yi},0`,
+            neighborOffsets: getPrototypeBuildingNeighborOffsetsForColumn(xi),
+            neighbors: new Array(12).fill(null),
+            objects: [],
+            visibilityObjects: [],
+            blockedNeighbors: new Map(),
+            blockedByObjects: 0,
+            blocked: false,
+            clearance: Infinity,
+            _prototypeBuildingFloorSource: true
+        };
+        node.surfaceId = typeof fragment.surfaceId === "string" ? fragment.surfaceId : "";
+        node.fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
+        node.ownerSectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : placement.id;
+        node.level = layer;
+        node.traversalLayer = layer;
+        node.baseZ = baseZ;
+        node.portalEdges = [];
+        node.neighbors = new Array(12).fill(null);
+        node.neighborOffsets = getPrototypeBuildingNeighborOffsetsForColumn(xi);
+        node.blockedNeighbors = new Map();
+        node.objects = [];
+        node.visibilityObjects = [];
+        node.blockedByObjects = 0;
+        node.blocked = false;
+        node.clearance = getPrototypeBuildingFloorNodeClearance(fragment, point.x, point.y);
+        node._prototypeBuildingFloorNode = true;
+        node._prototypeOwnerType = "building";
+        node._prototypeOwnerId = placement.id;
+        node._prototypeSectionActive = true;
+        node._prototypeVoid = false;
+        ensurePrototypeBuildingFloorNodeMethods(node);
+        const registered = map.registerFloorNode(node, fragment);
+        if (!registered) {
+            throw new Error(`building placement ${placement.id} failed to register floor node ${nodeKey}`);
+        }
+        return registered;
+    }
+
+    function materializePrototypeBuildingFloorNodesForFragment(map, placement, fragment, materializedNodes) {
+        if (!map || !placement || !fragment || !Array.isArray(materializedNodes)) return 0;
+        const polygon = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : [];
+        if (polygon.length < 3) return 0;
+        const bounds = getPrototypeBuildingPolygonBounds(polygon);
+        if (!bounds) return 0;
+        const minXi = Math.floor(bounds.minX / 0.866) - 3;
+        const maxXi = Math.ceil(bounds.maxX / 0.866) + 3;
+        const minYi = Math.floor(bounds.minY) - 3;
+        const maxYi = Math.ceil(bounds.maxY) + 3;
+        const materializedNodeKeys = [];
+        let floorNodes = 0;
+        for (let xi = minXi; xi <= maxXi; xi++) {
+            for (let yi = minYi; yi <= maxYi; yi++) {
+                const point = getPrototypeBuildingNodeWorldPoint(xi, yi);
+                if (!map.isPointSupportedByFloorFragment(fragment, point.x, point.y)) continue;
+                const floorNode = createPrototypeBuildingFloorNode(map, placement, fragment, xi, yi);
+                if (!floorNode) {
+                    throw new Error(`building placement ${placement.id} failed to materialize floor node ${xi},${yi},${fragment.fragmentId}`);
+                }
+                materializedNodes.push(floorNode);
+                materializedNodeKeys.push(`${xi},${yi}`);
+                floorNodes += 1;
+            }
+        }
+        fragment.materializedNodeKeys = materializedNodeKeys;
+        return floorNodes;
+    }
+
+    function materializePrototypeBuildingFloorNodes(map, placement, fragments) {
+        if (
+            !map ||
+            !placement ||
+            !Array.isArray(fragments) ||
+            typeof map.registerFloorNode !== "function" ||
+            typeof map.isPointSupportedByFloorFragment !== "function" ||
+            typeof map.getFloorNodeKey !== "function"
+        ) {
+            return { floorNodes: 0 };
+        }
+        const materializedNodes = [];
+        let floorNodes = 0;
+        for (let f = 0; f < fragments.length; f++) {
+            const fragment = fragments[f];
+            if (!fragment || Math.round(Number(fragment.level) || 0) === 0) continue;
+            floorNodes += materializePrototypeBuildingFloorNodesForFragment(map, placement, fragment, materializedNodes);
+        }
+        if (materializedNodes.length > 0) {
+            const newNodeIdSet = new Set();
+            for (let i = 0; i < materializedNodes.length; i++) {
+                if (materializedNodes[i] && materializedNodes[i].id) newNodeIdSet.add(materializedNodes[i].id);
+            }
+            if (typeof map._connectFloorNodesIncremental === "function") {
+                map._connectFloorNodesIncremental(materializedNodes, newNodeIdSet);
+            } else if (typeof map.connectFloorNodeNeighbors === "function") {
+                map.connectFloorNodeNeighbors();
+            } else {
+                throw new Error(`building placement ${placement.id} materialized floor nodes without a floor-node connector`);
+            }
+        }
+        return { floorNodes };
+    }
+
+    function collectPrototypeBuildingRuntimeFloorObjects(map, placementId, fragmentIds) {
+        const objects = new Set();
+        const fragmentSet = new Set(Array.isArray(fragmentIds) ? fragmentIds : []);
+        const addObject = (obj) => {
+            if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) return;
+            const membership = obj._floorMembership && typeof obj._floorMembership === "object"
+                ? obj._floorMembership
+                : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+            const ownsObject = !!(
+                membership &&
+                membership.ownerType === "building" &&
+                membership.ownerId === placementId
+            );
+            const referencesFragment = !!(
+                (typeof obj.fragmentId === "string" && fragmentSet.has(obj.fragmentId)) ||
+                (obj.node && typeof obj.node.fragmentId === "string" && fragmentSet.has(obj.node.fragmentId))
+            );
+            if (ownsObject || referencesFragment) objects.add(obj);
+        };
+        if (map && map.floorNodesById instanceof Map) {
+            for (const fragmentId of fragmentSet) {
+                const nodes = map.floorNodesById.get(fragmentId);
+                if (!Array.isArray(nodes)) continue;
+                for (let i = 0; i < nodes.length; i++) {
+                    const node = nodes[i];
+                    const nodeObjects = Array.isArray(node && node.objects) ? node.objects : [];
+                    for (let j = 0; j < nodeObjects.length; j++) addObject(nodeObjects[j]);
+                    const visibilityObjects = Array.isArray(node && node.visibilityObjects) ? node.visibilityObjects : [];
+                    for (let j = 0; j < visibilityObjects.length; j++) addObject(visibilityObjects[j]);
+                }
+            }
+        }
+        if (map && map._prototypeObjectState && map._prototypeObjectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            for (const obj of map._prototypeObjectState.activeRuntimeObjectsByRecordId.values()) addObject(obj);
+        }
+        if (map && Array.isArray(map.objects)) {
+            for (let i = 0; i < map.objects.length; i++) addObject(map.objects[i]);
+        }
+        return Array.from(objects);
+    }
+
+    function getPrototypeBuildingObjectLabel(obj) {
+        return obj && (obj.scriptingName || obj.objectType || obj.type) || "(unknown)";
+    }
+
+    function getPrototypeBuildingObjectFloorNodeSnapLimit(obj) {
+        const radiusCandidates = [
+            Number(obj && obj.groundRadius),
+            Number(obj && obj.visualRadius),
+            Number(obj && obj.groundPlaneHitbox && obj.groundPlaneHitbox.radius),
+            Number(obj && obj.visualHitbox && obj.visualHitbox.radius),
+            Number(obj && obj.width) * 0.5,
+            Number(obj && obj.height) * 0.5
+        ].filter((value) => Number.isFinite(value) && value > 0);
+        const radius = radiusCandidates.length > 0 ? Math.max(...radiusCandidates) : 0.5;
+        return Math.max(1.5, radius + 1.25);
+    }
+
+    function findNearestPrototypeBuildingFloorNode(map, fragment, obj, layer) {
+        if (!map || !fragment || !(map.floorNodesById instanceof Map)) return null;
+        const nodes = map.floorNodesById.get(fragment.fragmentId);
+        if (!Array.isArray(nodes) || nodes.length === 0) return null;
+        const x = Number(obj && obj.x);
+        const y = Number(obj && obj.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        let best = null;
+        let bestDistanceSq = Infinity;
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            const nodeLayer = Number.isFinite(Number(node.traversalLayer))
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(Number(node.level)) ? Math.round(Number(node.level)) : 0);
+            if (nodeLayer !== layer) continue;
+            const dx = Number(node.x) - x;
+            const dy = Number(node.y) - y;
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq < bestDistanceSq) {
+                best = node;
+                bestDistanceSq = distanceSq;
+            }
+        }
+        if (!best) return null;
+        const snapLimit = getPrototypeBuildingObjectFloorNodeSnapLimit(obj);
+        if (bestDistanceSq > snapLimit * snapLimit) return null;
+        return best;
+    }
+
+    function roundPrototypeBuildingDiagnosticNumber(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return null;
+        return Math.round(number * 1000) / 1000;
+    }
+
+    function getPrototypeBuildingDiagnosticBounds(points) {
+        const bounds = getPrototypeBuildingPolygonBounds(points);
+        if (!bounds) return null;
+        return {
+            minX: roundPrototypeBuildingDiagnosticNumber(bounds.minX),
+            minY: roundPrototypeBuildingDiagnosticNumber(bounds.minY),
+            maxX: roundPrototypeBuildingDiagnosticNumber(bounds.maxX),
+            maxY: roundPrototypeBuildingDiagnosticNumber(bounds.maxY)
+        };
+    }
+
+    function getPrototypeBuildingHitboxDiagnostic(hitbox) {
+        if (!hitbox || typeof hitbox !== "object") return null;
+        const out = {
+            type: typeof hitbox.type === "string" ? hitbox.type : ""
+        };
+        if (Number.isFinite(Number(hitbox.x))) out.x = roundPrototypeBuildingDiagnosticNumber(hitbox.x);
+        if (Number.isFinite(Number(hitbox.y))) out.y = roundPrototypeBuildingDiagnosticNumber(hitbox.y);
+        if (Number.isFinite(Number(hitbox.radius))) out.radius = roundPrototypeBuildingDiagnosticNumber(hitbox.radius);
+        if (typeof hitbox.getBounds === "function") {
+            const bounds = hitbox.getBounds();
+            if (bounds) {
+                out.bounds = {
+                    minX: roundPrototypeBuildingDiagnosticNumber(bounds.minX),
+                    minY: roundPrototypeBuildingDiagnosticNumber(bounds.minY),
+                    maxX: roundPrototypeBuildingDiagnosticNumber(bounds.maxX),
+                    maxY: roundPrototypeBuildingDiagnosticNumber(bounds.maxY)
+                };
+            }
+        }
+        return out;
+    }
+
+    function findNearestPrototypeBuildingFloorNodeDiagnostic(map, fragment, obj, layer) {
+        if (!map || !fragment || !(map.floorNodesById instanceof Map)) return null;
+        const nodes = map.floorNodesById.get(fragment.fragmentId);
+        if (!Array.isArray(nodes) || nodes.length === 0) return null;
+        const x = Number(obj && obj.x);
+        const y = Number(obj && obj.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        let best = null;
+        let bestDistanceSq = Infinity;
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            const nodeLayer = Number.isFinite(Number(node.traversalLayer))
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(Number(node.level)) ? Math.round(Number(node.level)) : 0);
+            if (nodeLayer !== layer) continue;
+            const dx = Number(node.x) - x;
+            const dy = Number(node.y) - y;
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq < bestDistanceSq) {
+                best = node;
+                bestDistanceSq = distanceSq;
+            }
+        }
+        if (!best) return null;
+        return {
+            id: best.id || "",
+            xindex: Number(best.xindex),
+            yindex: Number(best.yindex),
+            x: roundPrototypeBuildingDiagnosticNumber(best.x),
+            y: roundPrototypeBuildingDiagnosticNumber(best.y),
+            traversalLayer: Number.isFinite(Number(best.traversalLayer)) ? Math.round(Number(best.traversalLayer)) : null,
+            surfaceId: best.surfaceId || "",
+            fragmentId: best.fragmentId || "",
+            clearance: Number.isFinite(Number(best.clearance)) ? Number(best.clearance) : null,
+            neighborCount: Array.isArray(best.neighbors) ? best.neighbors.filter(Boolean).length : 0,
+            distance: roundPrototypeBuildingDiagnosticNumber(Math.sqrt(bestDistanceSq)),
+            distanceSq: roundPrototypeBuildingDiagnosticNumber(bestDistanceSq),
+            withinSnapLimit: bestDistanceSq <= getPrototypeBuildingObjectFloorNodeSnapLimit(obj) * getPrototypeBuildingObjectFloorNodeSnapLimit(obj)
+        };
+    }
+
+    function getPrototypeBuildingRehomeFailureDiagnostic(map, placementId, obj, fragment, baseNode, layer) {
+        const nodes = map && map.floorNodesById instanceof Map && fragment
+            ? (map.floorNodesById.get(fragment.fragmentId) || [])
+            : [];
+        const membership = obj && obj._floorMembership && typeof obj._floorMembership === "object"
+            ? obj._floorMembership
+            : (obj && obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+        const expectedKey = map && typeof map.getFloorNodeKey === "function" && baseNode && fragment
+            ? map.getFloorNodeKey(baseNode.xindex, baseNode.yindex, fragment.surfaceId, fragment.fragmentId)
+            : "";
+        return {
+            placementId,
+            object: {
+                label: getPrototypeBuildingObjectLabel(obj),
+                type: obj && obj.type || "",
+                objectType: obj && obj.objectType || "",
+                category: obj && obj.category || "",
+                scriptingName: obj && obj.scriptingName || "",
+                texturePath: obj && obj.texturePath || "",
+                x: roundPrototypeBuildingDiagnosticNumber(obj && obj.x),
+                y: roundPrototypeBuildingDiagnosticNumber(obj && obj.y),
+                width: roundPrototypeBuildingDiagnosticNumber(obj && obj.width),
+                height: roundPrototypeBuildingDiagnosticNumber(obj && obj.height),
+                groundRadius: roundPrototypeBuildingDiagnosticNumber(obj && obj.groundRadius),
+                visualRadius: roundPrototypeBuildingDiagnosticNumber(obj && obj.visualRadius),
+                traversalLayer: Number.isFinite(Number(obj && obj.traversalLayer)) ? Math.round(Number(obj.traversalLayer)) : null,
+                level: Number.isFinite(Number(obj && obj.level)) ? Math.round(Number(obj.level)) : null,
+                fragmentId: obj && obj.fragmentId || "",
+                surfaceId: obj && obj.surfaceId || "",
+                membership,
+                groundPlaneHitbox: getPrototypeBuildingHitboxDiagnostic(obj && obj.groundPlaneHitbox),
+                visualHitbox: getPrototypeBuildingHitboxDiagnostic(obj && obj.visualHitbox)
+            },
+            baseNode: baseNode ? {
+                id: baseNode.id || "",
+                xindex: Number(baseNode.xindex),
+                yindex: Number(baseNode.yindex),
+                x: roundPrototypeBuildingDiagnosticNumber(baseNode.x),
+                y: roundPrototypeBuildingDiagnosticNumber(baseNode.y),
+                traversalLayer: Number.isFinite(Number(baseNode.traversalLayer)) ? Math.round(Number(baseNode.traversalLayer)) : null
+            } : null,
+            floor: fragment ? {
+                fragmentId: fragment.fragmentId || "",
+                surfaceId: fragment.surfaceId || "",
+                sourceFloorId: fragment._prototypeBuildingSourceFragmentId || "",
+                ownerId: fragment.ownerId || "",
+                ownerSectionKey: fragment.ownerSectionKey || "",
+                level: Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : null,
+                nodeBaseZ: roundPrototypeBuildingDiagnosticNumber(fragment.nodeBaseZ),
+                bounds: getPrototypeBuildingDiagnosticBounds(fragment.outerPolygon),
+                holeBounds: Array.isArray(fragment.holes)
+                    ? fragment.holes.map((hole) => getPrototypeBuildingDiagnosticBounds(hole)).filter(Boolean)
+                    : [],
+                objectPointInside: !!(map && typeof map.isPointSupportedByFloorFragment === "function" && obj && map.isPointSupportedByFloorFragment(fragment, obj.x, obj.y)),
+                materializedNodeKeyCount: Array.isArray(fragment.materializedNodeKeys) ? fragment.materializedNodeKeys.length : 0,
+                registeredNodeCount: Array.isArray(nodes) ? nodes.length : 0
+            } : null,
+            expectedNodeKey: expectedKey,
+            expectedNodeIndexed: !!(expectedKey && map && map.floorNodeIndex instanceof Map && map.floorNodeIndex.has(expectedKey)),
+            snapLimit: roundPrototypeBuildingDiagnosticNumber(getPrototypeBuildingObjectFloorNodeSnapLimit(obj)),
+            nearestNode: findNearestPrototypeBuildingFloorNodeDiagnostic(map, fragment, obj, layer)
+        };
+    }
+
+    function deleteUnrehomeablePrototypeBuildingRuntimeFloorObject(map, placementId, obj, diagnostic) {
+        const objectState = map && map._prototypeObjectState;
+        const buildingState = map && map._prototypeBuildingState;
+        const recordId = Number.isInteger(Number(obj && obj._prototypeRecordId))
+            ? Number(obj._prototypeRecordId)
+            : (Number.isInteger(Number(obj && obj._prototypeRecord && obj._prototypeRecord.id))
+                ? Number(obj._prototypeRecord.id)
+                : NaN);
+        console.warn("[prototype building floor object quarantine] deleting unrehomeable object", diagnostic);
+        if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            if (Number.isInteger(recordId)) {
+                objectState.activeRuntimeObjectsByRecordId.delete(recordId);
+            } else {
+                for (const [candidateId, runtimeObj] of objectState.activeRuntimeObjectsByRecordId.entries()) {
+                    if (runtimeObj === obj) objectState.activeRuntimeObjectsByRecordId.delete(candidateId);
+                }
+            }
+            objectState.activeRuntimeObjects = Array.from(objectState.activeRuntimeObjectsByRecordId.values());
+        }
+        if (objectState && objectState.parkedRuntimeObjectsByRecordId instanceof Map && Number.isInteger(recordId)) {
+            objectState.parkedRuntimeObjectsByRecordId.delete(recordId);
+        }
+        if (objectState && objectState.dirtyRuntimeObjects instanceof Set) {
+            objectState.dirtyRuntimeObjects.delete(obj);
+        }
+        if (buildingState && buildingState.buildingInstancesById instanceof Map && Number.isInteger(recordId)) {
+            const instance = buildingState.buildingInstancesById.get(placementId) || null;
+            const records = Array.isArray(instance && instance.objects) ? instance.objects : null;
+            if (records) {
+                const nextRecords = records.filter((record) => Number(record && record.id) !== recordId);
+                if (nextRecords.length !== records.length) {
+                    instance.objects = nextRecords;
+                    instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
+                    const placement = buildingState.placementsById instanceof Map
+                        ? buildingState.placementsById.get(placementId) || null
+                        : null;
+                    if (placement) placement.contentVersion = instance.contentVersion;
+                    markPrototypeBuildingUnitDirty(buildingState, placementId);
+                }
+            }
+        }
+        if (typeof obj.removeFromGame === "function") {
+            obj.removeFromGame();
+        } else {
+            if (typeof obj.removeFromNodes === "function") obj.removeFromNodes();
+            obj.gone = true;
+            if (Array.isArray(map && map.objects)) {
+                const index = map.objects.indexOf(obj);
+                if (index >= 0) map.objects.splice(index, 1);
+            }
+        }
+        if (typeof map.markFloorObjectNodeCacheDirty === "function") map.markFloorObjectNodeCacheDirty();
+        if (typeof map.markBuildingRenderCacheDirty === "function") map.markBuildingRenderCacheDirty();
+        return true;
+    }
+
+    function rehomePrototypeBuildingRuntimeFloorObjects(map, placementId, objects) {
+        if (!Array.isArray(objects) || objects.length === 0) return 0;
+        if (typeof map.worldToNode !== "function" || typeof map.getFloorNodeAtLayer !== "function") {
+            throw new Error(`building placement ${placementId} cannot rehome floor objects without floor-node lookup APIs`);
+        }
+        let rehomed = 0;
+        for (let i = 0; i < objects.length; i++) {
+            const obj = objects[i];
+            if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
+            const membership = obj._floorMembership && typeof obj._floorMembership === "object"
+                ? obj._floorMembership
+                : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+            const fragmentId = typeof obj.fragmentId === "string" && obj.fragmentId.length > 0
+                ? obj.fragmentId
+                : (membership && typeof membership.floorId === "string" ? `${placementId}:floor:${membership.floorId}` : "");
+            const fragment = fragmentId && map.floorsById instanceof Map ? (map.floorsById.get(fragmentId) || null) : null;
+            if (!fragment) {
+                throw new Error(`building placement ${placementId} cannot rehome object ${getPrototypeBuildingObjectLabel(obj)} without runtime floor fragment ${fragmentId || "(missing)"}`);
+            }
+            const layer = Number.isFinite(Number(fragment.level))
+                ? Math.round(Number(fragment.level))
+                : (Number.isFinite(Number(obj.traversalLayer)) ? Math.round(Number(obj.traversalLayer)) : 0);
+            if (layer <= 0) continue;
+            const baseNode = map.worldToNode(obj.x, obj.y);
+            if (!baseNode) {
+                throw new Error(`building placement ${placementId} cannot rehome object ${getPrototypeBuildingObjectLabel(obj)} without a base node`);
+            }
+            let floorNode = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                fragmentId: fragment.fragmentId,
+                surfaceId: fragment.surfaceId,
+                sourceNode: baseNode,
+                worldX: obj.x,
+                worldY: obj.y,
+                allowScan: true
+            });
+            if (!floorNode) {
+                floorNode = findNearestPrototypeBuildingFloorNode(map, fragment, obj, layer);
+            }
+            if (!floorNode) {
+                const diagnostic = getPrototypeBuildingRehomeFailureDiagnostic(map, placementId, obj, fragment, baseNode, layer);
+                deleteUnrehomeablePrototypeBuildingRuntimeFloorObject(map, placementId, obj, diagnostic);
+                continue;
+            }
+            obj.fragmentId = fragment.fragmentId;
+            obj.surfaceId = fragment.surfaceId;
+            obj.traversalLayer = layer;
+            obj.level = layer;
+            obj.currentLayer = layer;
+            obj.currentLayerBaseZ = Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3;
+            obj._activeFloorFragment = fragment;
+            if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
+                obj.refreshIndexedNodesFromHitbox({
+                    traversalLayer: layer,
+                    minExtent: 1.5,
+                    sampleSpacing: 1.0,
+                    fallbackNode: floorNode,
+                    requireTraversalLayerNode: true
+                });
+            } else if (typeof obj.setIndexedNodes === "function") {
+                obj.setIndexedNodes([floorNode], floorNode);
+            } else if (typeof floorNode.addObject === "function") {
+                floorNode.addObject(obj);
+                obj.node = floorNode;
+                obj._indexedNodes = [floorNode];
+            }
+            rehomed += 1;
+        }
+        return rehomed;
+    }
+
     function syncPrototypeBuildingGeometryRuntime(map) {
         const state = map && map._prototypeBuildingState;
         if (!state || !Array.isArray(state.orderedPlacements)) return { placements: 0, floors: 0, stairs: 0, pending: 0 };
@@ -2248,6 +2890,8 @@
             state.runtimeStairIdsByPlacementId = new Map();
         }
         let floors = 0;
+        let floorNodes = 0;
+        let floorObjectsRehomed = 0;
         let stairs = 0;
         let pending = 0;
         for (let i = 0; i < state.orderedPlacements.length; i++) {
@@ -2259,6 +2903,8 @@
                 continue;
             }
             const buildingData = getBuildingDataForPlacement(state, placement);
+            const previousFragmentIds = state.runtimeFloorFragmentIdsByPlacementId.get(placement.id) || [];
+            const floorObjectsToRehome = collectPrototypeBuildingRuntimeFloorObjects(map, placement.id, previousFragmentIds);
             clearPrototypeBuildingGeometryRuntime(map, placement.id);
             if (!buildingData) {
                 pending += 1;
@@ -2279,6 +2925,8 @@
                 if (!registered) throw new Error(`building placement ${placement.id} failed to register floor ${fragment.fragmentId}`);
                 fragments.push(registered);
             }
+            const nodeStats = materializePrototypeBuildingFloorNodes(map, placement, fragments);
+            floorNodes += Number(nodeStats.floorNodes) || 0;
             const runtimeStairs = createPrototypeBuildingStairRuntimeRecords(buildingData, placement, fragments);
             const stairIds = [];
             for (let s = 0; s < runtimeStairs.length; s++) {
@@ -2290,11 +2938,14 @@
             state.runtimeStairIdsByPlacementId.set(placement.id, stairIds);
             if (state.loadedBuildingsById instanceof Map) state.loadedBuildingsById.set(placement.id, placement);
             floors += fragments.length;
+            floorObjectsRehomed += rehomePrototypeBuildingRuntimeFloorObjects(map, placement.id, floorObjectsToRehome);
             stairs += stairIds.length;
         }
         state.lastGeometryRuntimeStats = {
             placements: state.orderedPlacements.length,
             floors,
+            floorNodes,
+            floorObjectsRehomed,
             stairs,
             pending
         };

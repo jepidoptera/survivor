@@ -1260,6 +1260,10 @@ test("spawn animal uses visible building floor support for editor placement", ()
     assert.equal(context.animals[0].node, floorNode);
     assert.equal(context.animals[0].currentMovementSupport.ownerType, "building");
     assert.equal(context.animals[0].currentMovementSupport.ownerId, "building:house");
+    assert.equal(context.animals[0]._floorMembership.ownerType, "building");
+    assert.equal(context.animals[0]._floorMembership.ownerId, "building:house");
+    assert.equal(context.animals[0]._floorMembership.floorId, "upper");
+    assert.equal(context.animals[0]._floorMembership.level, 1);
 });
 
 test("spawn animal refuses nonzero layer placement without a floor node", () => {

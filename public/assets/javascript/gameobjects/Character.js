@@ -299,6 +299,57 @@ class Character {
         return layer;
     }
 
+    getFloorNodeResolutionOptions(options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const currentSupport = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const currentMembership = this._floorMembership && typeof this._floorMembership === "object"
+            ? this._floorMembership
+            : (this.floorMembership && typeof this.floorMembership === "object" ? this.floorMembership : null);
+        const currentNode = this.node && typeof this.node === "object" ? this.node : null;
+        const fragmentId = (typeof opts.fragmentId === "string" && opts.fragmentId.length > 0)
+            ? opts.fragmentId
+            : (currentSupport && typeof currentSupport.fragmentId === "string" && currentSupport.fragmentId.length > 0)
+                ? currentSupport.fragmentId
+                : (typeof this.fragmentId === "string" && this.fragmentId.length > 0)
+                    ? this.fragmentId
+                    : (currentNode && typeof currentNode.fragmentId === "string" ? currentNode.fragmentId : "");
+        const surfaceId = (typeof opts.surfaceId === "string" && opts.surfaceId.length > 0)
+            ? opts.surfaceId
+            : (currentSupport && typeof currentSupport.surfaceId === "string" && currentSupport.surfaceId.length > 0)
+                ? currentSupport.surfaceId
+                : (typeof this.surfaceId === "string" && this.surfaceId.length > 0)
+                    ? this.surfaceId
+                    : (currentNode && typeof currentNode.surfaceId === "string" ? currentNode.surfaceId : "");
+        const sectionKey = (typeof opts.sectionKey === "string" && opts.sectionKey.length > 0)
+            ? opts.sectionKey
+            : (currentSupport && typeof currentSupport.sectionKey === "string" && currentSupport.sectionKey.length > 0)
+                ? currentSupport.sectionKey
+                : (currentSupport && currentSupport.ownerType === "building" && typeof currentSupport.ownerId === "string")
+                    ? currentSupport.ownerId
+                    : (currentNode && typeof currentNode.ownerSectionKey === "string" && currentNode.ownerSectionKey.length > 0)
+                        ? currentNode.ownerSectionKey
+                        : (currentNode && typeof currentNode._prototypeSectionKey === "string" ? currentNode._prototypeSectionKey : "");
+        const ownerType = (typeof opts.ownerType === "string" && opts.ownerType.length > 0)
+            ? opts.ownerType
+            : (currentSupport && typeof currentSupport.ownerType === "string" && currentSupport.ownerType.length > 0)
+                ? currentSupport.ownerType
+                : (currentMembership && typeof currentMembership.ownerType === "string" ? currentMembership.ownerType : "");
+        const ownerId = (typeof opts.ownerId === "string" && opts.ownerId.length > 0)
+            ? opts.ownerId
+            : (currentSupport && typeof currentSupport.ownerId === "string" && currentSupport.ownerId.length > 0)
+                ? currentSupport.ownerId
+                : (currentMembership && typeof currentMembership.ownerId === "string" ? currentMembership.ownerId : "");
+        return {
+            sectionKey,
+            surfaceId,
+            fragmentId,
+            ownerType,
+            ownerId
+        };
+    }
+
     resolveNodeForTraversalLayer(x, y, options = {}) {
         if (!this.map || typeof this.map.worldToNode !== "function") return null;
         const baseNode = this.map.worldToNode(x, y);
@@ -308,8 +359,9 @@ class Character {
             : this.getNodeTraversalLayer();
         if (layer === 0) return baseNode;
         if (typeof this.map.getFloorNodeAtLayer !== "function") return null;
-        const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
-            ? options.sectionKey
+        const floorOptions = this.getFloorNodeResolutionOptions(options);
+        const sectionKey = (typeof floorOptions.sectionKey === "string" && floorOptions.sectionKey.length > 0)
+            ? floorOptions.sectionKey
             : (typeof baseNode._prototypeSectionKey === "string"
                 ? baseNode._prototypeSectionKey
                 : ((typeof this.map.getPrototypeSectionKeyForWorldPoint === "function")
@@ -317,6 +369,12 @@ class Character {
                     : ""));
         return this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
             sectionKey,
+            surfaceId: floorOptions.surfaceId,
+            fragmentId: floorOptions.fragmentId,
+            ownerType: floorOptions.ownerType,
+            ownerId: floorOptions.ownerId,
+            worldX: x,
+            worldY: y,
             allowScan: !(options && options.allowScan === false)
         });
     }
@@ -2945,8 +3003,19 @@ class Character {
     }
     goto(destinationNode) {
         if (!destinationNode) return;
-        
-        this.node = this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y);
+        const startLayer = this.getNodeTraversalLayer();
+        const resolvedStartNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+        this.node = resolvedStartNode || (startLayer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+        if (!this.node) {
+            this.destination = null;
+            this.path = [];
+            this.travelFrames = 0;
+            this.travelZ = 0;
+            this.nextNode = null;
+            this.currentPathStep = null;
+            this.moving = false;
+            return;
+        }
         this.destination = destinationNode;
         const pathOptions = {};
         if (this.pathfindingClearance > 0) {
@@ -3011,9 +3080,11 @@ class Character {
             ? this.map.isPrototypeNodeActive(this.node)
             : !!this.node;
         if (!currentNodeIsActive) {
-            this.node = (this.map && typeof this.map.worldToNode === "function")
-                ? (this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y))
-                : this.node;
+            if (this.map && typeof this.map.worldToNode === "function") {
+                const layer = this.getNodeTraversalLayer();
+                const resolvedNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+                this.node = resolvedNode || (layer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+            }
         }
         if (!this.node) {
             this._movementSuspendedByStreaming = true;

@@ -126,6 +126,107 @@ function createPrototypeNodeMap(width = 12, height = 12, options = {}) {
     };
 }
 
+function installBuildingFloorMaterializationTestApis(map) {
+    const offsets = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+    ];
+    map.floorNodeIndex = new Map();
+    map.getFloorNodeKey = (nodeOrX, y = null, surfaceId = "", fragmentId = "") => {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            return `${Number(nodeOrX.xindex)},${Number(nodeOrX.yindex)},${nodeOrX.surfaceId || ""},${nodeOrX.fragmentId || ""}`;
+        }
+        return `${Number(nodeOrX)},${Number(y)},${surfaceId || ""},${fragmentId || ""}`;
+    };
+    map.isPointSupportedByFloorFragment = (fragment, x, y) => {
+        const poly = Array.isArray(fragment && fragment.outerPolygon) ? fragment.outerPolygon : [];
+        if (poly.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = Number(poly[i].x);
+            const yi = Number(poly[i].y);
+            const xj = Number(poly[j].x);
+            const yj = Number(poly[j].y);
+            const intersects = ((yi > y) !== (yj > y)) &&
+                (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi);
+            if (intersects) inside = !inside;
+        }
+        return inside;
+    };
+    map.registerFloorNode = function registerFloorNode(node, fragment) {
+        node.surfaceId = fragment.surfaceId;
+        node.fragmentId = fragment.fragmentId;
+        node.ownerSectionKey = fragment.ownerSectionKey || "";
+        node.id = this.getFloorNodeKey(node);
+        if (!this.floorNodesById.has(fragment.fragmentId)) this.floorNodesById.set(fragment.fragmentId, []);
+        this.floorNodesById.get(fragment.fragmentId).push(node);
+        this.floorNodeIndex.set(node.id, node);
+        const layerKey = this.getFloorLayerNodeKey(node.xindex, node.yindex, node.traversalLayer);
+        if (!this.floorNodeLayerIndex.has(layerKey)) this.floorNodeLayerIndex.set(layerKey, []);
+        this.floorNodeLayerIndex.get(layerKey).push(node);
+        return node;
+    };
+    map._connectFloorNodesIncremental = function connectFloorNodesIncremental(nodes) {
+        for (const node of nodes) {
+            for (let i = 0; i < node.neighborOffsets.length; i++) {
+                const offset = node.neighborOffsets[i];
+                const key = this.getFloorNodeKey(
+                    node.xindex + offset.x,
+                    node.yindex + offset.y,
+                    node.surfaceId,
+                    node.fragmentId
+                );
+                node.neighbors[i] = this.floorNodeIndex.get(key) || null;
+            }
+        }
+    };
+    map.unregisterFloorFragments = function unregisterFloorFragments(fragmentIds) {
+        for (const fragmentId of fragmentIds) {
+            const nodes = this.floorNodesById.get(fragmentId) || [];
+            for (const node of nodes) {
+                this.floorNodeIndex.delete(node.id);
+                const layerKey = this.getFloorLayerNodeKey(node.xindex, node.yindex, node.traversalLayer);
+                const layerNodes = this.floorNodeLayerIndex.get(layerKey) || [];
+                const index = layerNodes.indexOf(node);
+                if (index >= 0) layerNodes.splice(index, 1);
+            }
+            this.floorNodesById.delete(fragmentId);
+            this.floorsById.delete(fragmentId);
+        }
+        return fragmentIds.length;
+    };
+    map.worldToNode = function worldToNode(x, y) {
+        let best = null;
+        let bestDist = Infinity;
+        for (const node of this._prototypeSectionState.allNodesByCoordKey.values()) {
+            const dx = Number(node.x) - Number(x);
+            const dy = Number(node.y) - Number(y);
+            const dist = dx * dx + dy * dy;
+            if (dist < bestDist) {
+                best = node;
+                bestDist = dist;
+            }
+        }
+        if (best) return best;
+        const xi = Math.round(Number(x) / 0.866);
+        const yi = Math.round(Number(y) - (xi % 2 === 0 ? 0.5 : 0));
+        return {
+            xindex: xi,
+            yindex: yi,
+            x: xi * 0.866,
+            y: yi + (xi % 2 === 0 ? 0.5 : 0),
+            neighborOffsets: offsets.slice(),
+            objects: []
+        };
+    };
+    map.getFloorNodeAtLayer = function getFloorNodeAtLayer(x, y, layer, options = {}) {
+        const key = this.getFloorNodeKey(x, y, options.surfaceId || "", options.fragmentId || "");
+        return this.floorNodeIndex.get(key) || null;
+    };
+}
+
 function createPlacement(id = "building:test-house") {
     return {
         schema: "survivor-building-placement-v1",
@@ -1111,6 +1212,108 @@ test("building placements register imported floor polygons and tread-path stairs
         assert.deepEqual(stairEntry.item.stair.lowerPoint, stair.lowerPoint);
         assert.deepEqual(stairEntry.item.stair.higherPoint, stair.higherPoint);
         assert.equal(stairEntry.item.stair.stepCount, stair.stepCount);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building geometry sync materializes upper-floor nodes and rehomes stale floor objects", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(6, 6, { materializeFloorNodes: false });
+        installBuildingFloorMaterializationTestApis(map);
+        buildings.installSectionWorldBuildingApis(map);
+        const placement = {
+            ...createPlacement("building:node-house"),
+            transform: { x: -130, y: 200, rotation: 0 },
+            touchedSectionKeys: ["far-section"]
+        };
+        map.initializePrototypeBuildingState([placement]);
+        map._prototypeBuildingState.buildingDataBySaveName.set(
+            placement.buildingSaveName,
+            createBuildingSaveWithUpperFloorBlockers()
+        );
+
+        const fragmentId = "building:node-house:floor:floor-1";
+        const surfaceId = "building:node-house:surface:floor-1";
+        const staleNode = {
+            xindex: 5,
+            yindex: 2,
+            x: -125.67,
+            y: 202,
+            traversalLayer: 1,
+            level: 1,
+            surfaceId,
+            fragmentId,
+            id: `5,2,${surfaceId},${fragmentId}`,
+            objects: [],
+            removeObject(obj) {
+                const index = this.objects.indexOf(obj);
+                if (index >= 0) this.objects.splice(index, 1);
+            }
+        };
+        const object = {
+            type: "furniture",
+            scriptingName: "upper-chair",
+            x: -126.1,
+            y: 202.4,
+            groundRadius: 0.7,
+            traversalLayer: 1,
+            level: 1,
+            fragmentId,
+            surfaceId,
+            _floorMembership: {
+                ownerType: "building",
+                ownerId: "building:node-house",
+                floorId: "floor-1",
+                level: 1
+            },
+            _indexedNodes: [staleNode],
+            node: staleNode,
+            setIndexedNodes(nodes, primaryNode) {
+                for (const previous of this._indexedNodes) {
+                    if (previous && typeof previous.removeObject === "function") previous.removeObject(this);
+                }
+                this._indexedNodes = nodes;
+                this.node = primaryNode;
+                for (const next of nodes) {
+                    if (next && typeof next.addObject === "function") next.addObject(this);
+                }
+            },
+            refreshIndexedNodesFromHitbox(options = {}) {
+                const baseNode = map.worldToNode(this.x, this.y);
+                const floorNode = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, options.traversalLayer, {
+                    fragmentId: this.fragmentId,
+                    surfaceId: this.surfaceId
+                });
+                const indexedNode = floorNode || options.fallbackNode || null;
+                this.setIndexedNodes(indexedNode ? [indexedNode] : [], indexedNode);
+            }
+        };
+        staleNode.objects.push(object);
+        map.floorNodesById.set(fragmentId, [staleNode]);
+        map.floorNodeIndex.set(staleNode.id, staleNode);
+        map._prototypeObjectState = {
+            activeRuntimeObjectsByRecordId: new Map([[10, object]])
+        };
+        map._prototypeBuildingState.runtimeFloorFragmentIdsByPlacementId.set("building:node-house", [fragmentId]);
+
+        const stats = map.syncPrototypeBuildingGeometryRuntime();
+        const canonicalNode = object.node;
+
+        assert.ok(stats.floorNodes > 1);
+        assert.equal(stats.floorObjectsRehomed, 1);
+        assert.ok(canonicalNode);
+        assert.equal(canonicalNode.fragmentId, fragmentId);
+        assert.equal(map.floorNodeIndex.get(canonicalNode.id), canonicalNode);
+        assert.equal(canonicalNode.objects.includes(object), true);
+        assert.equal(staleNode.objects.includes(object), false);
+        assert.equal(canonicalNode.neighbors.some(Boolean), true);
     } finally {
         if (previousPolygonHitbox === undefined) {
             delete globalThis.PolygonHitbox;

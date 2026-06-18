@@ -1569,7 +1569,13 @@ class Animal extends Character {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
             const wanderNode = (typeof this.resolveNodeForTraversalLayer === "function")
-                ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                ? this.resolveNodeForTraversalLayer(
+                    wanderX,
+                    wanderY,
+                    typeof this.getFloorNodeResolutionOptions === "function"
+                        ? this.getFloorNodeResolutionOptions()
+                        : {}
+                )
                 : this.map.worldToNode(wanderX, wanderY);
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
@@ -2464,6 +2470,13 @@ class Animal extends Character {
         if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) {
             data.fragmentId = this.fragmentId;
         }
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const floorMembership = floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function"
+            ? floorSupportApi.getEntityFloorMembership(this)
+            : (this._floorMembership && typeof this._floorMembership === "object" ? this._floorMembership : null);
+        if (floorMembership && typeof floorMembership === "object") {
+            data.floorMembership = { ...floorMembership };
+        }
         if (Number.isFinite(this.brightness)) {
             data.brightness = Number(this.brightness);
         }
@@ -2524,22 +2537,75 @@ class Animal extends Character {
             ? performance.now()
             : Date.now();
         const baseNode = map.worldToNode(data.x, data.y);
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const savedFloorMembership = data.floorMembership && typeof data.floorMembership === "object"
+            ? data.floorMembership
+            : null;
+        const resolveSavedFloorFragment = () => {
+            const directFragmentId = typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                ? data.fragmentId
+                : "";
+            if (directFragmentId && map.floorsById instanceof Map) {
+                const direct = map.floorsById.get(directFragmentId) || null;
+                if (direct) return direct;
+            }
+            if (
+                savedFloorMembership &&
+                floorSupportApi &&
+                typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function" &&
+                savedFloorMembership.ownerType === "building"
+            ) {
+                const resolved = floorSupportApi.resolvePrototypeBuildingFloorFragment(map, savedFloorMembership, { required: false });
+                if (resolved) return resolved;
+            }
+            if (
+                savedFloorMembership &&
+                map.floorsById instanceof Map &&
+                floorSupportApi &&
+                typeof floorSupportApi.createFloorMembership === "function" &&
+                typeof floorSupportApi.floorMembershipMatches === "function"
+            ) {
+                for (const fragment of map.floorsById.values()) {
+                    const membership = floorSupportApi.createFloorMembership({ fragment });
+                    if (floorSupportApi.floorMembershipMatches(membership, savedFloorMembership)) return fragment;
+                }
+            }
+            return null;
+        };
+        const savedFloorFragment = resolveSavedFloorFragment();
+        const savedFloorMembershipLevel = savedFloorMembership && Number.isFinite(Number(savedFloorMembership.level))
+            ? Math.round(Number(savedFloorMembership.level))
+            : NaN;
         const traversalLayer = Number.isFinite(data.traversalLayer)
             ? Math.round(Number(data.traversalLayer))
-            : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0);
+            : (Number.isFinite(savedFloorMembershipLevel)
+                ? savedFloorMembershipLevel
+                : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0));
         let node = baseNode;
         if (baseNode && traversalLayer !== 0 && typeof map.getFloorNodeAtLayer === "function") {
             const sectionKey = targetSectionKey || (
-                typeof baseNode._prototypeSectionKey === "string"
-                    ? baseNode._prototypeSectionKey
-                    : ((typeof map.getPrototypeSectionKeyForWorldPoint === "function")
-                        ? map.getPrototypeSectionKeyForWorldPoint(data.x, data.y)
-                        : "")
+                savedFloorFragment && typeof savedFloorFragment.ownerSectionKey === "string" && savedFloorFragment.ownerSectionKey.length > 0
+                    ? savedFloorFragment.ownerSectionKey
+                    : (savedFloorFragment && savedFloorFragment.ownerType === "building" && typeof savedFloorFragment.ownerId === "string"
+                        ? savedFloorFragment.ownerId
+                        : (typeof baseNode._prototypeSectionKey === "string"
+                            ? baseNode._prototypeSectionKey
+                            : ((typeof map.getPrototypeSectionKeyForWorldPoint === "function")
+                                ? map.getPrototypeSectionKeyForWorldPoint(data.x, data.y)
+                                : "")))
             );
             node = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, traversalLayer, {
                 sectionKey,
-                surfaceId: typeof data.surfaceId === "string" ? data.surfaceId : "",
-                fragmentId: typeof data.fragmentId === "string" ? data.fragmentId : "",
+                surfaceId: typeof data.surfaceId === "string" && data.surfaceId.length > 0
+                    ? data.surfaceId
+                    : (savedFloorFragment && typeof savedFloorFragment.surfaceId === "string" ? savedFloorFragment.surfaceId : ""),
+                fragmentId: typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                    ? data.fragmentId
+                    : (savedFloorFragment && typeof savedFloorFragment.fragmentId === "string" ? savedFloorFragment.fragmentId : ""),
+                ownerType: savedFloorMembership && typeof savedFloorMembership.ownerType === "string" ? savedFloorMembership.ownerType : "",
+                ownerId: savedFloorMembership && typeof savedFloorMembership.ownerId === "string" ? savedFloorMembership.ownerId : "",
+                worldX: data.x,
+                worldY: data.y,
                 allowScan: true
             });
         }
@@ -2622,6 +2688,13 @@ class Animal extends Character {
                 animalInstance.z = typeof animalInstance.getNodeStandingZ === "function"
                     ? animalInstance.getNodeStandingZ(node)
                     : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                if (
+                    savedFloorMembership &&
+                    floorSupportApi &&
+                    typeof floorSupportApi.stampEntityFloorMembership === "function"
+                ) {
+                    floorSupportApi.stampEntityFloorMembership(animalInstance, savedFloorMembership);
+                }
                 if (data.hp !== undefined) animalInstance.hp = data.hp;
                 if (data.maxHp !== undefined) animalInstance.maxHp = data.maxHp;
                 animalInstance.ensureMagicPointsInitialized(true);
@@ -3880,7 +3953,13 @@ class Blodia extends Animal {
                 const wanderX = this.x + (Math.random() - 0.5) * 10;
                 const wanderY = this.y + (Math.random() - 0.5) * 10;
                 const wNode = (typeof this.resolveNodeForTraversalLayer === "function")
-                    ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                    ? this.resolveNodeForTraversalLayer(
+                        wanderX,
+                        wanderY,
+                        typeof this.getFloorNodeResolutionOptions === "function"
+                            ? this.getFloorNodeResolutionOptions()
+                            : {}
+                    )
                     : this.map.worldToNode(wanderX, wanderY);
                 if (wNode) this.goto(wNode);
                 this.speed = this.walkSpeed;
